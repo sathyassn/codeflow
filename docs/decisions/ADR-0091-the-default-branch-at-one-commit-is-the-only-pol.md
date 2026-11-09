@@ -242,3 +242,13 @@ the pull request into `main` that removes the job cannot satisfy a
 `release impact` requirement either. Until then the head-built job's weaker
 trust stays on that name. The rest of the enablement order is unchanged.
 The accepted text above is unchanged.
+
+## Note of 2026-11-08: merge queue entries (ADR-0100)
+
+The shipped policy workflow also runs on `merge_group`, with no job-level
+`if`. For a queue entry it judges from the queue's base, which must be on
+the default branch, and fetches the queue commit as data. GitHub runs a
+queue entry's workflow file from the queue commit, so for that event the
+guarantee that the judging job comes from the default branch rests on the
+pull request's own `pull_request_target` run having judged any workflow
+edit first (ADR-0100, TSK-1396).

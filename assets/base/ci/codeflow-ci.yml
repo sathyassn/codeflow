@@ -21,10 +21,22 @@
 #
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
+#
+# A merge queue entry (`merge_group`, git.require_up_to_date:
+# "merge_queue", ADR-0100) runs every job a pull request runs, on the queue
+# commit, so each required check reports for it and none is skipped. The
+# trusted commit there is the queue's base (merge_group.base_sha), never the
+# queue commit: the installed release, the secret scan's exemptions and the
+# security policy come from it, and an event without a base fails closed
+# ('unset' names no commit). The gate runs full for a queue entry. The
+# workflow has no concurrency group, so no run cancels another, a queue
+# entry's included.
 name: codeflow-ci
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main, master]
   # The weekly and manual runs scan the full history of the default branch
@@ -56,7 +68,7 @@ jobs:
 
       - name: Install codeflow (target-pinned, checksum-verified)
         env:
-          PIN_REF: ${{ github.event.pull_request.base.sha || github.sha }}
+          PIN_REF: ${{ github.event_name == 'merge_group' && (github.event.merge_group.base_sha || 'unset') || github.event.pull_request.base.sha || github.sha }}
         run: |
           # SPC-013 R-113: install the codeflow version the target pins in
           # .codeflow/project.toml (scaffold_version). When the same file pins
@@ -204,7 +216,7 @@ jobs:
   # the head pins, verified the same way, without enforcing with it.
   candidate:
     name: candidate codeflow
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -215,8 +227,8 @@ jobs:
       - name: Compare the target and head pins
         id: pins
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           pin() { git show "$1:.codeflow/project.toml" 2>/dev/null | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1; }
           if [ "$(pin "$BASE_SHA")" = "$(pin "$HEAD_SHA")" ]; then
@@ -229,7 +241,7 @@ jobs:
       - name: Install candidate codeflow (head-pinned, checksum-verified)
         if: steps.pins.outputs.changed == 'true'
         env:
-          PIN_REF: ${{ github.event.pull_request.head.sha }}
+          PIN_REF: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           # SPC-013 R-113: install the codeflow version the target pins in
           # .codeflow/project.toml (scaffold_version). When the same file pins
@@ -461,8 +473,8 @@ jobs:
       # reads no commit.
       - name: gitleaks
         env:
-          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          TRUSTED_SHA: ${{ github.event_name == 'merge_group' && (github.event.merge_group.base_sha || 'unset') || github.event.pull_request.base.sha || github.sha }}
+          SCAN_FROM: ${{ github.event_name == 'merge_group' && (github.event.merge_group.base_sha || 'unset') || github.event.pull_request.base.sha || github.event.before || '' }}
         run: |
           case ${TRUSTED_SHA:-} in
             '' | *[!0-9a-f]*)
@@ -995,7 +1007,7 @@ jobs:
       # commit's, so a pull request cannot accept its own findings.
       - name: dependency audit (osv-scanner)
         env:
-          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          TRUSTED_SHA: ${{ github.event_name == 'merge_group' && (github.event.merge_group.base_sha || 'unset') || github.event.pull_request.base.sha || github.sha }}
         run: |
           set -u
           case ${TRUSTED_SHA:-} in

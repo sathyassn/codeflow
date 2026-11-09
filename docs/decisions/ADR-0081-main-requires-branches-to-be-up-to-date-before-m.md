@@ -3,7 +3,7 @@ id: ADR-0081
 uid: 8336ca3b-7fed-4415-a2d0-d4155b7145b9
 title: "Main requires branches to be up to date before merging"
 date: 2026-10-08
-status: accepted          # proposed | accepted | superseded
+status: accepted          # amended by ADR-0100 (2026-11-08): the rule below is the default; proposed | accepted | superseded
 superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
 architecture_impact: docs/architecture.md, the doctor check table names remote-perimeter # none | one line naming what in architecture.md changes
 ---
@@ -66,3 +66,13 @@ stands. Integration lines keep `codeflow integrate` and the batch candidate.
 
 `docs/architecture.md`: the doctor check table names `remote-perimeter`
 (22 checks).
+
+## Note of 2026-11-08: amended by ADR-0100
+
+The up-to-date rule is now the default, not the only setting.
+`git.require_up_to_date` keeps it (`true`, the default), turns it off
+(`false`) or replaces it on the default branch with a merge queue
+(`"merge_queue"`, organization-owned GitHub repositories only). A relaxing
+value counts only when committed on the remote's default branch, and
+doctor accepts what it chooses. This repository's own `main` rules are
+unchanged (ADR-0100, TSK-1396).

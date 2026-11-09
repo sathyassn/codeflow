@@ -20,6 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 # Absent means the commit the run is for; this expression says so explicitly.
 SAME_COMMIT = "${{ github.sha }}"
+# TSK-1396: a verdict job that also runs for a merge queue entry checks out
+# the default branch's commit, which on `merge_group` is the queue's base,
+# never the queue commit. The job names it once as AUTHORITY_SHA, and only
+# that exact definition makes this ref allowed.
+AUTHORITY_REF = "${{ env.AUTHORITY_SHA }}"
+AUTHORITY_DEFINITION = ("AUTHORITY_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha"
+                        " || github.event_name != 'merge_group' && github.sha || '' }}")
 # Git commands that replace the working tree with another commit. `git fetch` is
 # allowed: it brings another ref in as data, and these then find any step using it.
 SWITCHES_TREE = re.compile(
@@ -55,8 +62,12 @@ def checkout_steps(text):
 def crossings(text):
     """Why this workflow text could run another ref's code, one reason per finding."""
     found = []
+    definitions = {line.strip() for line in text.splitlines() if line.strip().startswith("AUTHORITY_SHA:")}
+    authority = definitions == {AUTHORITY_DEFINITION}
     for keys in checkout_steps(text):
         ref = keys.get("ref")
+        if ref == AUTHORITY_REF and authority:
+            continue
         if ref is not None and ref != SAME_COMMIT:
             found.append(f"checks out {ref}; only {SAME_COMMIT} or no ref is allowed")
         if "repository" in keys:

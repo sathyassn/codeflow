@@ -8,8 +8,8 @@ use clap::{Args, Subcommand};
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::registry;
 use codeflow_core::remote::{
-    provider_for, Adopt, AuthorityPlan, Profile, ProtectReport, ProtectionPlan, Scope,
-    DEFAULT_LINES,
+    provider_for, up_to_date_choice, Adopt, AuthorityPlan, Profile, ProtectReport, ProtectionPlan,
+    Scope, DEFAULT_LINES,
 };
 
 /// Arguments for `codeflow remote`.
@@ -170,7 +170,14 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     if tracked {
         plan = plan.with_registry_profile();
     }
-    plan = plan.with_authority(authority).with_scope(scope);
+    // Whether branches must be up to date comes from the policy authority,
+    // never from the working copy read above or the environment: a value
+    // that relaxes the rule counts only once it is committed on the
+    // remote's default branch (TSK-1396).
+    plan = plan
+        .with_authority(authority)
+        .with_scope(scope)
+        .with_up_to_date(up_to_date_choice(&root));
 
     let report = protect(provider, *dry_run, &plan, &root)?;
 

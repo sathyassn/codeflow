@@ -190,6 +190,64 @@ fn without_a_readable_host_the_dry_run_names_the_intended_rulesets() {
     );
 }
 
+/// TSK-1396 AC-1: a working copy that sets `git.require_up_to_date` to
+/// `false` while HEAD holds `true`, with environment values that name the
+/// key, still plans strict checks and says the working value is ignored.
+#[cfg(unix)]
+#[test]
+fn a_working_copy_or_environment_value_never_relaxes_the_plan() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let policy = dir.path().join(".codeflow/policy.json");
+    std::fs::write(
+        &policy,
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "require_up_to_date": true } }"#,
+    )
+    .unwrap();
+    git(dir.path(), &["add", ".codeflow/policy.json"]);
+    git(dir.path(), &["commit", "-q", "-m", "chore: policy"]);
+    std::fs::write(
+        &policy,
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "require_up_to_date": false } }"#,
+    )
+    .unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("gh"),
+        "#!/bin/sh\necho 'gh: no host here' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["remote", "protect", "--dry-run"])
+        .current_dir(dir.path())
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("PATH", path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_REQUIRE_UP_TO_DATE", "false")
+        .env("CODEFLOW_GIT_REQUIRE_UP_TO_DATE", "false")
+        .env("GIT_REQUIRE_UP_TO_DATE", "false")
+        .output()
+        .unwrap();
+    let report = text(&out);
+    assert!(out.status.success(), "{report}");
+    assert!(
+        report.contains("strict status checks on an up-to-date branch"),
+        "{report}"
+    );
+    assert!(
+        report.contains("git.require_up_to_date: true ("),
+        "{report}"
+    );
+    assert!(!report.contains("not strict"), "{report}");
+}
+
 #[cfg(unix)]
 /// The policy workflow on the recorded default branch, with the `trusted:`
 /// names TSK-336 declares.

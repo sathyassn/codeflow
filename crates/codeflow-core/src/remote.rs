@@ -57,9 +57,189 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
-use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
+use crate::hooks::policy::{UpToDate, DEFAULT_REQUIRED_CHECKS};
 
 mod fnmatch;
+
+// ---------------------------------------------------------------------------
+// Whether branches must be up to date (TSK-1396)
+// ---------------------------------------------------------------------------
+
+/// The policy key that chooses the up-to-date rule.
+pub const UP_TO_DATE_KEY: &str = "git.require_up_to_date";
+
+/// The `git.require_up_to_date` value a run applies, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpToDateChoice {
+    /// The value applied.
+    pub value: UpToDate,
+    /// Where the value was read, or why the default applies, as one clause.
+    pub reason: String,
+    /// What a reader should know beside it, such as a working-copy value
+    /// that was ignored.
+    pub notes: Vec<String>,
+}
+
+impl Default for UpToDateChoice {
+    fn default() -> Self {
+        Self::strict("the default applies".to_string())
+    }
+}
+
+impl UpToDateChoice {
+    fn strict(reason: String) -> Self {
+        Self {
+            value: UpToDate::Strict,
+            reason,
+            notes: Vec::new(),
+        }
+    }
+
+    /// The choice in one line for a report: the value and why.
+    #[must_use]
+    pub fn line(&self) -> String {
+        format!(
+            "{UP_TO_DATE_KEY}: {} ({})",
+            self.value.as_str(),
+            self.reason
+        )
+    }
+}
+
+/// The `git.require_up_to_date` value to apply for the repository at
+/// `root`.
+///
+/// Any value other than `true` relaxes a protection, so it is honoured
+/// only from the policy authority, the remote's default branch as last
+/// fetched, read without asking the remote
+/// ([`crate::hooks::landed_policy::load_local`]), and only when it was read
+/// from plain remote-tracking refs, as `security.text_guard: relaxed` is.
+/// An authority that cannot be read, a repository without a remote, a
+/// local branch, a ref file that is a symbolic link and the environment
+/// never relax it. The working copy can only keep the strict rule: one
+/// that sets `true` keeps it, one that names another value is ignored and
+/// noted, and one that cannot be read keeps it.
+#[must_use]
+pub fn up_to_date_choice(root: &Path) -> UpToDateChoice {
+    let working = working_up_to_date(root);
+    let landed = match crate::hooks::landed_policy::load_local(root) {
+        Ok(landed) => landed,
+        Err(why) => {
+            return UpToDateChoice::strict(format!(
+                "the policy authority cannot be read ({why}), so the default applies"
+            ))
+        }
+    };
+    let committed = landed.policy.git.require_up_to_date;
+    let source = &landed.source;
+    let shown = |value: UpToDate| format!("{UP_TO_DATE_KEY} is {}", value.as_str());
+    if committed.is_strict() {
+        let mut choice = UpToDateChoice::strict(format!("read from {source}"));
+        if let Ok(Some(value)) = &working {
+            if !value.is_strict() {
+                choice.notes.push(format!(
+                    "the working copy sets {UP_TO_DATE_KEY} to {}, which is ignored: only the value committed on the remote's default branch relaxes the rule",
+                    value.as_str()
+                ));
+            }
+        }
+        return choice;
+    }
+    if let Some(doubt) = &landed.tracking_doubt {
+        return UpToDateChoice::strict(format!(
+            "{} at {source}, but {doubt}, so it is not honoured",
+            shown(committed)
+        ));
+    }
+    if !landed.remote_tracked {
+        return UpToDateChoice::strict(format!(
+            "{} at {source}, which is not a remote-tracking ref, so it is not honoured",
+            shown(committed)
+        ));
+    }
+    match working {
+        Err(why) => UpToDateChoice::strict(format!(
+            "{} at {source}, but the working copy's policy cannot be read ({why}), so the strict rule is kept",
+            shown(committed)
+        )),
+        Ok(Some(UpToDate::Strict)) => UpToDateChoice::strict(format!(
+            "{} at {source}, but the working copy sets it to true, which keeps the strict rule",
+            shown(committed)
+        )),
+        Ok(other) => {
+            let mut choice = UpToDateChoice {
+                value: committed,
+                reason: format!("read from {source}"),
+                notes: Vec::new(),
+            };
+            if let Some(value) = other.filter(|value| *value != committed) {
+                choice.notes.push(format!(
+                    "the working copy sets {UP_TO_DATE_KEY} to {}, which is ignored: the value committed on the remote's default branch applies",
+                    value.as_str()
+                ));
+            }
+            choice
+        }
+    }
+}
+
+/// The working copy's `git.require_up_to_date` as written: `None` when the
+/// file or the key is absent.
+fn working_up_to_date(root: &Path) -> Result<Option<UpToDate>, String> {
+    let path = root.join(".codeflow").join("policy.json");
+    if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let policy: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("not JSON: {}", crate::scaffold::json_error(&error)))?;
+    match policy.pointer("/git/require_up_to_date") {
+        None => Ok(None),
+        Some(value) => serde_json::from_value::<UpToDate>(value.clone())
+            .map(Some)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+/// GitHub's merge queue rule, with GitHub's own defaults for its required
+/// parameters and merge commits, as the pull request merge this
+/// repository's lines use, except that one entry builds at a time. The
+/// policy workflow refuses an entry whose base is not on the default
+/// branch, and an entry built behind another has the earlier entry's queue
+/// commit as its base, so a deeper build would fail every entry after the
+/// first.
+fn merge_queue_rule() -> Value {
+    json!({
+        "type": "merge_queue",
+        "parameters": {
+            "check_response_timeout_minutes": 60,
+            "grouping_strategy": "ALLGREEN",
+            "max_entries_to_build": 1,
+            "max_entries_to_merge": 5,
+            "merge_method": "MERGE",
+            "min_entries_to_merge": 1,
+            "min_entries_to_merge_wait_minutes": 5
+        }
+    })
+}
+
+/// How ruleset B holds the up-to-date rule: whether its checks are strict
+/// and whether it carries the merge queue rule. A refused queue keeps the
+/// strict rule.
+fn default_branch_mode(value: UpToDate, queue_refused: bool) -> (bool, bool) {
+    match value {
+        UpToDate::Strict => (true, false),
+        UpToDate::Off => (false, false),
+        UpToDate::MergeQueue if queue_refused => (true, false),
+        UpToDate::MergeQueue => (false, true),
+    }
+}
+
+/// Whether the checks of C and the policy patterns are strict: only
+/// `false` turns it off; the merge queue is the default branch's alone.
+fn other_branches_strict(value: UpToDate) -> bool {
+    value != UpToDate::Off
+}
 
 /// The GitHub App id of GitHub Actions. Ruleset status checks pin it, so a
 /// required check passes only when GitHub Actions reported it, as the
@@ -325,8 +505,13 @@ impl AuthorityPlan {
     }
 
     /// What A, B and C require, ruleset by ruleset, for the dry run and
-    /// the manual checklist, without reading the host.
-    fn intents(&self) -> Vec<(String, Vec<String>)> {
+    /// the manual checklist, without reading the host; `queue_refused` is
+    /// why a merge queue cannot be added, when it cannot.
+    fn intents(
+        &self,
+        up_to_date: UpToDate,
+        queue_refused: Option<&str>,
+    ) -> Vec<(String, Vec<String>)> {
         let (role_id, role) = self.profile.update_role();
         let checks = match self.check_app {
             Some(app) => format!(
@@ -338,6 +523,33 @@ impl AuthorityPlan {
                 DEFAULT_BRANCH_TEST_VERDICTS.join(", ")
             ),
         };
+        let (strict, queue) = default_branch_mode(up_to_date, queue_refused.is_some());
+        let checks_line = |strict: bool, checks: &str| {
+            if strict {
+                format!("strict status checks on an up-to-date branch: {checks}")
+            } else {
+                format!(
+                    "status checks, not strict ({UP_TO_DATE_KEY} is {}): {checks}",
+                    up_to_date.as_str()
+                )
+            }
+        };
+        let mut b_rules = vec![checks_line(strict, &checks)];
+        if queue {
+            b_rules.push(
+                "a merge queue (GitHub's merge_queue rule), which tests each entry on the base it lands on; GitHub offers it only to organization-owned repositories"
+                    .to_string(),
+            );
+        }
+        if let Some(why) = queue_refused {
+            b_rules.push(format!(
+                "no merge queue ({why}), so branches must still be up to date"
+            ));
+        }
+        let line_checks = format!(
+            "the trusted: names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
+            LINE_TEST_VERDICTS.join(", ")
+        );
         let approvals = match self.profile {
             Profile::SoloAdministrator => "a pull request, no approval required".to_string(),
             Profile::IndependentReview => {
@@ -353,22 +565,21 @@ impl AuthorityPlan {
             ),
             (
                 format!("{RULESET_AUTHORITY_CHECKS} on ~DEFAULT_BRANCH"),
-                vec![
-                    approvals,
-                    format!("strict status checks on an up-to-date branch: {checks}"),
-                    "block force pushes".into(),
-                    "block branch deletion".into(),
-                    "no bypass".into(),
-                ],
+                [approvals]
+                    .into_iter()
+                    .chain(b_rules)
+                    .chain([
+                        "block force pushes".into(),
+                        "block branch deletion".into(),
+                        "no bypass".into(),
+                    ])
+                    .collect(),
             ),
             (
                 format!("{RULESET_LINE_CHECKS} on refs/heads/{}", self.lines),
                 vec![
                     "a pull request, no approval required".into(),
-                    format!(
-                        "strict status checks on an up-to-date branch: the trusted: names the policy workflow declares and the declared test verdicts ({}), pinned to GitHub Actions",
-                        LINE_TEST_VERDICTS.join(", ")
-                    ),
+                    checks_line(other_branches_strict(up_to_date), &line_checks),
                     "block force pushes".into(),
                     "block branch deletion".into(),
                     "no bypass".into(),
@@ -437,7 +648,7 @@ impl BranchRule {
         format!("codeflow protect {}", self.pattern)
     }
 
-    fn intent_lines(&self) -> Vec<String> {
+    fn intent_lines(&self, strict: bool) -> Vec<String> {
         let mut v = Vec::new();
         if self.data_profile {
             v.push("data profile: no pull request and no status checks".to_string());
@@ -445,9 +656,14 @@ impl BranchRule {
         if self.require_pr {
             v.push("require a pull request before merging".to_string());
         }
-        if self.requires_checks() {
+        if self.requires_checks() && strict {
             v.push(format!(
                 "require status checks to pass on a branch that is up to date with its base: {}",
+                self.required_checks.join(", ")
+            ));
+        } else if self.requires_checks() {
+            v.push(format!(
+                "require status checks to pass, not on an up-to-date branch ({UP_TO_DATE_KEY} is false): {}",
                 self.required_checks.join(", ")
             ));
         }
@@ -460,8 +676,9 @@ impl BranchRule {
         v
     }
 
-    /// The ruleset rules the policy intends for the pattern.
-    fn rules(&self) -> Vec<Value> {
+    /// The ruleset rules the policy intends for the pattern, its checks
+    /// strict when `strict` holds.
+    fn rules(&self, strict: bool) -> Vec<Value> {
         let mut rules = Vec::new();
         if self.require_pr {
             rules.push(pull_request_rule(0, false));
@@ -472,6 +689,7 @@ impl BranchRule {
                     .iter()
                     .map(|name| (name.clone(), GITHUB_ACTIONS_APP_ID)),
                 true,
+                strict,
             ));
         }
         if self.block_force_push {
@@ -494,6 +712,9 @@ pub struct ProtectionPlan {
     /// Which branch the run is limited to and which foreign rulesets the
     /// operator hands over.
     pub scope: Scope,
+    /// Whether branches must be up to date, read from the policy authority
+    /// ([`up_to_date_choice`]); strict unless set.
+    pub up_to_date: UpToDateChoice,
 }
 
 /// What `--branch` and `--adopt` ask of a run.
@@ -680,11 +901,43 @@ impl ProtectionPlan {
                 required_checks: required_checks.clone(),
             })
             .collect();
+        // `git.require_up_to_date` is never read from this file: a value
+        // that relaxes the rule counts only from the policy authority, which
+        // the caller reads with `up_to_date_choice` (TSK-1396).
         Ok(Self {
             rules,
             authority: None,
             scope: Scope::default(),
+            up_to_date: UpToDateChoice::default(),
         })
+    }
+
+    /// Apply `choice` for whether branches must be up to date.
+    #[must_use]
+    pub fn with_up_to_date(mut self, choice: UpToDateChoice) -> Self {
+        self.up_to_date = choice;
+        self
+    }
+
+    /// Why this run adds no merge queue without reading the host, for the
+    /// dry run and the checklist of a provider without an adapter.
+    fn queue_refused_offline(&self, provider: &str) -> Option<String> {
+        if self.up_to_date.value != UpToDate::MergeQueue {
+            return None;
+        }
+        if provider != "github" {
+            return Some(format!(
+                "provider '{provider}' has no adapter, and CodeFlow adds a merge queue only on GitHub"
+            ));
+        }
+        self.authority
+            .as_ref()
+            .and_then(|authority| authority.check_app)
+            .map(|app| {
+                format!(
+                    "--check-app {app}: the authority: checks come from that App, which is not known to report for merge-queue entries"
+                )
+            })
     }
 
     /// Add the registry data profile when the repository tracks durable
@@ -736,7 +989,10 @@ impl ProtectionPlan {
                 authority.profile.as_str(),
                 authority.mode()
             ));
-            for (ruleset, intents) in authority.intents() {
+            lines.push(self.up_to_date.line());
+            lines.extend(self.up_to_date.notes.iter().cloned());
+            let refused = self.queue_refused_offline(provider);
+            for (ruleset, intents) in authority.intents(self.up_to_date.value, refused.as_deref()) {
                 lines.push(format!("ruleset {ruleset}:"));
                 for intent in intents {
                     lines.push(format!("  - {intent}"));
@@ -749,7 +1005,7 @@ impl ProtectionPlan {
         for rule in self.pattern_rules(None) {
             // The pattern is policy text: a fixed label starts the line.
             lines.push(format!("ruleset {}:", rule.ruleset_name()));
-            for intent in rule.intent_lines() {
+            for intent in rule.intent_lines(other_branches_strict(self.up_to_date.value)) {
                 lines.push(format!("  - {intent}"));
             }
         }
@@ -765,19 +1021,20 @@ impl ProtectionPlan {
         }
     }
 
-    /// Manual checklist covering the whole plan.
+    /// Manual checklist covering the whole plan, for `provider`.
     #[must_use]
-    pub fn manual_checklist(&self) -> Vec<String> {
+    pub fn manual_checklist(&self, provider: &str) -> Vec<String> {
         let mut items = Vec::new();
         if let Some(authority) = &self.authority {
-            for (ruleset, intents) in authority.intents() {
+            let refused = self.queue_refused_offline(provider);
+            for (ruleset, intents) in authority.intents(self.up_to_date.value, refused.as_deref()) {
                 for intent in intents {
                     items.push(format!("[ ] {ruleset}: {intent}"));
                 }
             }
         }
         for rule in self.pattern_rules(None) {
-            for intent in rule.intent_lines() {
+            for intent in rule.intent_lines(other_branches_strict(self.up_to_date.value)) {
                 items.push(format!("[ ] {}: {intent}", rule.ruleset_name()));
             }
         }
@@ -799,15 +1056,20 @@ fn pull_request_rule(approvals: u64, independent: bool) -> Value {
     })
 }
 
-/// A strict `required_status_checks` rule, each name pinned to its app.
-/// With `on_create` false the checks are not required when the branch is
-/// created: the host otherwise refuses a new ref whose commit has no
-/// passing run of every name (scratch repository, 2026-10-30).
-fn status_checks_rule(checks: impl IntoIterator<Item = (String, u64)>, on_create: bool) -> Value {
+/// A `required_status_checks` rule, each name pinned to its app, strict
+/// when `strict` holds. With `on_create` false the checks are not required
+/// when the branch is created: the host otherwise refuses a new ref whose
+/// commit has no passing run of every name (scratch repository,
+/// 2026-10-30).
+fn status_checks_rule(
+    checks: impl IntoIterator<Item = (String, u64)>,
+    on_create: bool,
+    strict: bool,
+) -> Value {
     json!({
         "type": "required_status_checks",
         "parameters": {
-            "strict_required_status_checks_policy": true,
+            "strict_required_status_checks_policy": strict,
             "do_not_enforce_on_create": !on_create,
             "required_status_checks": checks
                 .into_iter()
@@ -1125,6 +1387,10 @@ struct Owned {
     /// The one branch a policy pattern names, when it names one that must
     /// exist on the host before a ruleset is planned for it.
     literal_branch: Option<String>,
+    /// B with a merge queue only: the rules written instead, strict and
+    /// without the queue, when the host refuses the queue rule, so a
+    /// refusal never leaves the default branch without the up-to-date rule.
+    fallback_rules: Option<Vec<Value>>,
 }
 
 /// An owned ruleset that cannot be written, with what it targets and why.
@@ -1433,12 +1699,17 @@ fn strengthen(current: &mut Value, intended: &Value) -> Result<(), String> {
 
 /// The owned rulesets of a plan: A, B and C first, then the policy
 /// patterns, each with its body or why it cannot be written.
+#[allow(clippy::too_many_lines)]
 fn owned_rulesets(
     plan: &ProtectionPlan,
     default_branch: Option<&str>,
     declared: Option<&Result<Declared, String>>,
+    queue_refused: bool,
 ) -> Vec<Result<Owned, Refused>> {
     let mut owned = Vec::new();
+    let up_to_date = plan.up_to_date.value;
+    let (b_strict, b_queue) = default_branch_mode(up_to_date, queue_refused);
+    let others_strict = other_branches_strict(up_to_date);
     if let Some(authority) = &plan.authority {
         let default = vec!["~DEFAULT_BRANCH".to_string()];
         owned.push(Ok(Owned {
@@ -1452,6 +1723,7 @@ fn owned_rulesets(
             bypass: BypassIntent::OnCreate(vec![authority.profile.bypass_actor()]),
             no_update_rule: false,
             literal_branch: None,
+            fallback_rules: None,
         }));
         let (checks_b, checks_c) = match declared {
             Some(Ok(declared)) => planned_checks(authority, declared),
@@ -1464,19 +1736,29 @@ fn owned_rulesets(
         let independent = authority.profile == Profile::IndependentReview;
         owned.push(
             checks_b
-                .map(|checks| Owned {
-                    name: RULESET_AUTHORITY_CHECKS.into(),
-                    target: "~DEFAULT_BRANCH".into(),
-                    include: default.clone(),
-                    rules: vec![
-                        pull_request_rule(authority.profile.approvals(), independent),
-                        status_checks_rule(checks, true),
-                        json!({ "type": "non_fast_forward" }),
-                        json!({ "type": "deletion" }),
-                    ],
-                    bypass: BypassIntent::Exactly(Vec::new()),
-                    no_update_rule: true,
-                    literal_branch: None,
+                .map(|checks| {
+                    let rules = |strict: bool, queue: bool| {
+                        let mut rules = vec![
+                            pull_request_rule(authority.profile.approvals(), independent),
+                            status_checks_rule(checks.clone(), true, strict),
+                        ];
+                        if queue {
+                            rules.push(merge_queue_rule());
+                        }
+                        rules.push(json!({ "type": "non_fast_forward" }));
+                        rules.push(json!({ "type": "deletion" }));
+                        rules
+                    };
+                    Owned {
+                        name: RULESET_AUTHORITY_CHECKS.into(),
+                        target: "~DEFAULT_BRANCH".into(),
+                        include: default.clone(),
+                        rules: rules(b_strict, b_queue),
+                        bypass: BypassIntent::Exactly(Vec::new()),
+                        no_update_rule: true,
+                        literal_branch: None,
+                        fallback_rules: b_queue.then(|| rules(true, false)),
+                    }
                 })
                 .map_err(|why| Refused {
                     name: RULESET_AUTHORITY_CHECKS.to_string(),
@@ -1495,13 +1777,14 @@ fn owned_rulesets(
                         pull_request_rule(0, false),
                         // Cutting a line stays allowed (operator,
                         // 2026-10-27): its checks bind every later update.
-                        status_checks_rule(checks, false),
+                        status_checks_rule(checks, false, others_strict),
                         json!({ "type": "non_fast_forward" }),
                         json!({ "type": "deletion" }),
                     ],
                     bypass: BypassIntent::Exactly(Vec::new()),
                     no_update_rule: true,
                     literal_branch: None,
+                    fallback_rules: None,
                 })
                 .map_err(|why| Refused {
                     name: RULESET_LINE_CHECKS.to_string(),
@@ -1515,7 +1798,7 @@ fn owned_rulesets(
             name: rule.ruleset_name(),
             target: format!("refs/heads/{}", rule.pattern),
             include: vec![format!("refs/heads/{}", rule.pattern)],
-            rules: rule.rules(),
+            rules: rule.rules(others_strict),
             bypass: BypassIntent::OnCreate(Vec::new()),
             no_update_rule: false,
             // The registry's data profile holds before its branch exists
@@ -1524,6 +1807,7 @@ fn owned_rulesets(
                 && !rule.data_profile
                 && Some(rule.pattern.as_str()) != default_branch)
                 .then(|| rule.pattern.clone()),
+            fallback_rules: None,
         }));
     }
     owned
@@ -1566,6 +1850,7 @@ fn describe(body: &Value) -> String {
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
+            "merge_queue" => parts.push("a merge queue".into()),
             "non_fast_forward" => parts.push("no force push".into()),
             "deletion" => parts.push("no deletion".into()),
             other => parts.push(other.to_string()),
@@ -1804,7 +2089,7 @@ impl RemoteProvider for ManualChecklistProvider {
                 "provider '{}' is not implemented (only github); nothing was applied",
                 self.provider
             )],
-            checklist: plan.manual_checklist(),
+            checklist: plan.manual_checklist(&self.provider),
         }
     }
 }
@@ -1912,7 +2197,10 @@ impl GithubProvider {
         if let Some(target) = &target {
             args.push(target);
         }
-        args.extend(["--json", "nameWithOwner,isPrivate,defaultBranchRef"]);
+        args.extend([
+            "--json",
+            "nameWithOwner,isPrivate,defaultBranchRef,isInOrganization",
+        ]);
         let out = self.run_gh(&args, None)?;
         let v: Value =
             serde_json::from_str(&out).map_err(|e| format!("gh repo view parse: {e}"))?;
@@ -1931,10 +2219,12 @@ impl GithubProvider {
             .pointer("/defaultBranchRef/name")
             .and_then(Value::as_str)
             .map(ToString::to_string);
+        let in_organization = v.get("isInOrganization").and_then(Value::as_bool);
         Ok(RepoInfo {
             nwo,
             private,
             default_branch,
+            in_organization,
         })
     }
 
@@ -2087,10 +2377,41 @@ impl GithubProvider {
             .map_err(|why| format!("ruleset {label} could not be read ({why})"))
     }
 
+    /// [`Self::plan_one`], with the strict write a run sends instead when
+    /// the host refuses B's merge queue rule.
+    fn plan_owned(
+        nwo: &str,
+        summaries: &[Value],
+        owned: &Owned,
+        adopted: Option<&Value>,
+        read: &dyn Fn(u64) -> Result<Value, String>,
+        default_branch: Option<&str>,
+    ) -> Result<Step, String> {
+        let step = Self::plan_one(nwo, summaries, owned, adopted, read, default_branch)?;
+        let (mut write, rules) = match (step, owned.fallback_rules.clone()) {
+            (Step::Write(write), Some(rules)) => (write, rules),
+            (step, _) => return Ok(step),
+        };
+        let strict = Owned {
+            rules,
+            fallback_rules: None,
+            ..owned.clone()
+        };
+        write.fallback = Some(Box::new(Self::plan_one(
+            nwo,
+            summaries,
+            &strict,
+            adopted,
+            read,
+            default_branch,
+        )?));
+        Ok(Step::Write(write))
+    }
+
     /// What a run does with one owned ruleset: create it, bring the one with
     /// its name (or the adopted one) up to it, or leave it when it already
     /// is. Nothing is sent here.
-    fn plan_owned(
+    fn plan_one(
         nwo: &str,
         summaries: &[Value],
         owned: &Owned,
@@ -2111,6 +2432,7 @@ impl GithubProvider {
                 target: owned.target.clone(),
                 id: Some(id),
                 adopted: Some(ruleset_label(live)),
+                fallback: None,
                 request: HostRequest {
                     method: "PUT",
                     path: format!("repos/{nwo}/rulesets/{id}"),
@@ -2128,6 +2450,7 @@ impl GithubProvider {
                 target: owned.target.clone(),
                 id: None,
                 adopted: None,
+                fallback: None,
                 request: HostRequest {
                     method: "POST",
                     path: format!("repos/{nwo}/rulesets"),
@@ -2159,6 +2482,7 @@ impl GithubProvider {
                     target: owned.target.clone(),
                     id: Some(id),
                     adopted: None,
+                    fallback: None,
                     request: HostRequest {
                         method: "PUT",
                         path: format!("repos/{nwo}/rulesets/{id}"),
@@ -2227,12 +2551,20 @@ impl GithubProvider {
             steps: Vec::new(),
             private: repo.private,
         };
+        let queue_refused = repo.queue_refused(plan);
         if let Some(authority) = &plan.authority {
             out.lines.push(format!(
                 "profile {}; {}",
                 authority.profile.as_str(),
                 authority.mode()
             ));
+            out.lines.push(plan.up_to_date.line());
+            out.lines.extend(plan.up_to_date.notes.iter().cloned());
+            if let Some(why) = &queue_refused {
+                out.limitations.push(format!(
+                    "{UP_TO_DATE_KEY} is merge_queue, but no merge queue is added: {why}; '{RULESET_AUTHORITY_CHECKS}' keeps strict checks, so branches must still be up to date"
+                ));
+            }
         }
         let declared = match (&plan.authority, default) {
             (Some(_), Some(branch)) => {
@@ -2241,7 +2573,7 @@ impl GithubProvider {
             }
             _ => None,
         };
-        let mut owned = owned_rulesets(plan, default, declared.as_ref());
+        let mut owned = owned_rulesets(plan, default, declared.as_ref(), queue_refused.is_some());
         if let Some(branch) = &plan.scope.branch {
             owned.retain(|entry| match entry {
                 Ok(o) => covers(&o.include, branch, default),
@@ -2398,6 +2730,33 @@ struct RepoInfo {
     nwo: String,
     private: bool,
     default_branch: Option<String>,
+    /// Whether an organization owns it; `None` when `gh` did not say.
+    in_organization: Option<bool>,
+}
+
+impl RepoInfo {
+    /// Why this repository cannot have a merge queue, or `None` when the
+    /// host can be asked for one. The host decides the rest: a plan
+    /// without merge queues for a private repository refuses the rule.
+    fn queue_refused(&self, plan: &ProtectionPlan) -> Option<String> {
+        if plan.up_to_date.value != UpToDate::MergeQueue {
+            return None;
+        }
+        if let Some(why) = plan.queue_refused_offline("github") {
+            return Some(why);
+        }
+        match self.in_organization {
+            Some(true) => None,
+            Some(false) => Some(format!(
+                "{} is owned by a user account, and GitHub offers merge queues only to repositories an organization owns",
+                self.nwo
+            )),
+            None => Some(format!(
+                "gh did not say whether an organization owns {}, and GitHub offers merge queues only to repositories an organization owns",
+                self.nwo
+            )),
+        }
+    }
 }
 
 /// How a full ruleset relates to a branch or pattern.
@@ -2604,6 +2963,9 @@ struct Write {
     /// `'name' (id)`.
     adopted: Option<String>,
     request: HostRequest,
+    /// What is sent instead when the host refuses this write: B without
+    /// its merge queue rule, strict.
+    fallback: Option<Box<Step>>,
 }
 
 impl Write {
@@ -2664,7 +3026,7 @@ impl Prepared {
             self.limitations
                 .push(GithubProvider::limitation_for(name, why, self.private));
             self.checklist.extend(
-                plan.manual_checklist()
+                plan.manual_checklist("github")
                     .into_iter()
                     .filter(|item| item.starts_with(&format!("[ ] {name}"))),
             );
@@ -2708,16 +3070,32 @@ impl RemoteProvider for GithubProvider {
                     limitations: vec![
                         "no rules were applied; the repo could not be resolved via gh".to_string(),
                     ],
-                    checklist: plan.manual_checklist(),
+                    checklist: plan.manual_checklist("github"),
                 };
             }
         };
         for step in std::mem::take(&mut prepared.steps) {
             match step {
                 Step::Unchanged(line) => prepared.lines.push(line),
-                Step::Write(write) => match self.send(&write) {
-                    Ok(line) => prepared.lines.push(line),
-                    Err(why) => prepared.fail(plan, &write.name, &why, false),
+                Step::Write(write) => match (self.send(&write), write.fallback.as_deref()) {
+                    (Ok(line), _) => prepared.lines.push(line),
+                    (Err(why), None) => prepared.fail(plan, &write.name, &why, false),
+                    (Err(why), Some(fallback)) => {
+                        // The host refused the merge queue rule: the strict
+                        // rule is written instead, never nothing.
+                        prepared.limitations.push(format!(
+                            "{}: the host refused the merge queue rule ({}), so the strict up-to-date rule was written instead; GitHub offers merge queues only to repositories an organization owns, on a plan that includes them",
+                            write.name,
+                            first_line(&why)
+                        ));
+                        match fallback {
+                            Step::Unchanged(line) => prepared.lines.push(line.clone()),
+                            Step::Write(strict) => match self.send(strict) {
+                                Ok(line) => prepared.lines.push(line),
+                                Err(why) => prepared.fail(plan, &strict.name, &why, false),
+                            },
+                        }
+                    }
                 },
             }
         }
@@ -2749,6 +3127,16 @@ impl RemoteProvider for GithubProvider {
                     prepared
                         .lines
                         .push(format!("  request: {}", write.request.render()));
+                    match write.fallback.as_deref() {
+                        None => {}
+                        Some(Step::Unchanged(line)) => prepared.lines.push(format!(
+                            "  if the host refuses the merge queue rule, nothing else is sent: {line}"
+                        )),
+                        Some(Step::Write(strict)) => prepared.lines.push(format!(
+                            "  if the host refuses the merge queue rule, this is sent instead: {}",
+                            strict.request.render()
+                        )),
+                    }
                 }
             }
         }
@@ -3095,7 +3483,7 @@ printf '{}'
         assert!(registry.block_force_push && registry.block_deletion);
         assert!(!registry.require_pr && !registry.require_status_checks);
         let kinds: Vec<String> = registry
-            .rules()
+            .rules(true)
             .iter()
             .map(|rule| rule["type"].as_str().unwrap().to_string())
             .collect();
@@ -3127,11 +3515,11 @@ printf '{}'
         };
         assert!(
             !rule
-                .rules()
+                .rules(true)
                 .iter()
                 .any(|r| r["type"] == "required_status_checks"),
             "{:?}",
-            rule.rules()
+            rule.rules(true)
         );
     }
 
@@ -3629,6 +4017,11 @@ jobs:
         answer_conditions: Option<Value>,
         /// The branches the host has besides `main`; any other answers 404.
         branches: Vec<String>,
+        /// What `repo view` says of `isInOrganization`; absent when `None`.
+        in_organization: Option<bool>,
+        /// When set, a write that carries a `merge_queue` rule is refused,
+        /// as GitHub refuses one on a plan without merge queues.
+        refuse_queue: bool,
     }
 
     impl Fake {
@@ -3658,12 +4051,19 @@ jobs:
             )
         }
 
+        #[allow(clippy::too_many_lines)]
         fn handle(&self, args: &[&str], input: Option<&str>) -> Result<String, String> {
             match args {
-                ["repo", "view", ..] => Ok(
-                    r#"{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{"name":"main"}}"#
-                        .into(),
-                ),
+                ["repo", "view", ..] => {
+                    let mut view = json!({
+                        "nameWithOwner": "o/r", "isPrivate": false,
+                        "defaultBranchRef": { "name": "main" }
+                    });
+                    if let Some(org) = self.in_organization {
+                        view["isInOrganization"] = json!(org);
+                    }
+                    Ok(view.to_string())
+                }
                 ["api", url] if url.starts_with("repos/o/r/rulesets?") => {
                     let list: Vec<Value> = self
                         .rulesets
@@ -3715,6 +4115,15 @@ jobs:
                     .ok_or_else(|| format!("gh: Not Found (HTTP 404) {url}")),
                 ["api", "-X", method, path, "--input", "-"] => {
                     let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
+                    if self.refuse_queue
+                        && body["rules"]
+                            .as_array()
+                            .is_some_and(|rules| rules.iter().any(|r| r["type"] == "merge_queue"))
+                    {
+                        return Err(
+                            "gh: Validation Failed (HTTP 422): merge_queue is not available".into(),
+                        );
+                    }
                     self.writes
                         .borrow_mut()
                         .push((format!("{method} {path}"), body.clone()));
@@ -3785,6 +4194,7 @@ jobs:
             rules: Vec::new(),
             authority: Some(authority),
             scope: Scope::default(),
+            up_to_date: UpToDateChoice::default(),
         };
         host.provider().apply(&plan)
     }
@@ -4654,6 +5064,7 @@ jobs:
             rules: vec![BranchRule::registry_data_profile()],
             authority: None,
             scope: Scope::default(),
+            up_to_date: UpToDateChoice::default(),
         });
         let text = report.render();
         assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
@@ -4663,7 +5074,7 @@ jobs:
         );
         assert_eq!(
             *asked.borrow(),
-            vec!["repo view o/r --json nameWithOwner,isPrivate,defaultBranchRef"]
+            vec!["repo view o/r --json nameWithOwner,isPrivate,defaultBranchRef,isInOrganization"]
         );
     }
 
@@ -4688,6 +5099,7 @@ jobs:
             rules: vec![BranchRule::registry_data_profile()],
             authority: None,
             scope: Scope::default(),
+            up_to_date: UpToDateChoice::default(),
         });
         let text = report.render();
         assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
@@ -4870,6 +5282,363 @@ esac
             "{sent:#?}"
         );
         assert!(text.contains("5 request(s) planned"), "{text}");
+    }
+
+    // -----------------------------------------------------------------------
+    // TSK-1396: whether branches must be up to date, or a merge queue.
+    // -----------------------------------------------------------------------
+
+    fn choice(value: UpToDate) -> UpToDateChoice {
+        UpToDateChoice {
+            value,
+            reason: "read from refs/remotes/origin/main".into(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn queue_host(in_organization: Option<bool>, refuse_queue: bool) -> Rc<Fake> {
+        let base = Rc::try_unwrap(Fake::standard(&[])).ok().unwrap();
+        Rc::new(Fake {
+            in_organization,
+            refuse_queue,
+            ..base
+        })
+    }
+
+    fn up_to_date_plan(
+        authority: AuthorityPlan,
+        value: UpToDate,
+        branches: &str,
+    ) -> ProtectionPlan {
+        let dir = tempfile::tempdir().unwrap();
+        ProtectionPlan::from_policy_file(&write_policy(dir.path(), branches))
+            .unwrap()
+            .with_authority(authority)
+            .with_up_to_date(choice(value))
+    }
+
+    fn apply_up_to_date(
+        host: &Rc<Fake>,
+        authority: AuthorityPlan,
+        value: UpToDate,
+        branches: &str,
+    ) -> ProtectReport {
+        host.provider()
+            .apply(&up_to_date_plan(authority, value, branches))
+    }
+
+    fn strict_of(body: &Value) -> Value {
+        rule_of(body, "required_status_checks")["parameters"]
+            ["strict_required_status_checks_policy"]
+            .clone()
+    }
+
+    fn has_queue(body: &Value) -> bool {
+        body["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule["type"] == "merge_queue")
+    }
+
+    /// AC-1: each value's rulesets. `true` keeps every check strict,
+    /// `false` turns strictness off everywhere, and `merge_queue` puts the
+    /// queue on the default branch while the lines and patterns stay
+    /// strict.
+    #[test]
+    fn each_value_writes_its_rulesets() {
+        for (value, b_strict, b_queue, others) in [
+            (UpToDate::Strict, true, false, true),
+            (UpToDate::Off, false, false, false),
+            (UpToDate::MergeQueue, false, true, true),
+        ] {
+            let host = queue_host(Some(true), false);
+            let report = apply_up_to_date(&host, solo(), value, r#"["main", "release/*"]"#);
+            let text = report.render();
+            assert_eq!(report.status, ProtectStatus::Applied, "{value:?} {text:?}");
+            let b = host.body(RULESET_AUTHORITY_CHECKS);
+            assert_eq!(strict_of(&b), json!(b_strict), "{value:?} {b}");
+            assert_eq!(has_queue(&b), b_queue, "{value:?} {b}");
+            let c = host.body(RULESET_LINE_CHECKS);
+            assert_eq!(strict_of(&c), json!(others), "{value:?} {c}");
+            assert!(!has_queue(&c), "{value:?}");
+            let pattern = host.body("codeflow protect release/*");
+            assert_eq!(strict_of(&pattern), json!(others), "{value:?} {pattern}");
+            assert!(
+                text.as_str()
+                    .contains(&format!("git.require_up_to_date: {}", value.as_str())),
+                "{text:?}"
+            );
+        }
+    }
+
+    /// AC-3: the queue rule carries GitHub's required parameters.
+    #[test]
+    fn the_merge_queue_rule_is_complete() {
+        let host = queue_host(Some(true), false);
+        apply_up_to_date(&host, solo(), UpToDate::MergeQueue, r#"["main"]"#);
+        let rule = rule_of(&host.body(RULESET_AUTHORITY_CHECKS), "merge_queue").clone();
+        assert_eq!(rule, merge_queue_rule());
+        for key in [
+            "check_response_timeout_minutes",
+            "grouping_strategy",
+            "max_entries_to_build",
+            "max_entries_to_merge",
+            "merge_method",
+            "min_entries_to_merge",
+            "min_entries_to_merge_wait_minutes",
+        ] {
+            assert!(rule["parameters"].get(key).is_some(), "{key}");
+        }
+    }
+
+    /// AC-3: a repository that cannot have a queue gets the strict rule and
+    /// a degraded run that says why.
+    #[test]
+    fn a_queue_is_refused_with_the_reason() {
+        for (org, app, needle) in [
+            (Some(false), None, "owned by a user account"),
+            (None, None, "gh did not say whether an organization owns"),
+            (Some(true), Some(4242), "--check-app 4242"),
+        ] {
+            let host = queue_host(org, false);
+            let authority =
+                AuthorityPlan::new(Profile::SoloAdministrator, app, DEFAULT_LINES).unwrap();
+            let report = apply_up_to_date(&host, authority, UpToDate::MergeQueue, r#"["main"]"#);
+            let text = report.render();
+            assert_eq!(report.status, ProtectStatus::Degraded, "{needle}: {text:?}");
+            assert!(text.as_str().contains(needle), "{needle}: {text:?}");
+            assert!(
+                text.as_str().contains("no merge queue is added"),
+                "{needle}: {text:?}"
+            );
+            let b = host.body(RULESET_AUTHORITY_CHECKS);
+            assert_eq!(strict_of(&b), json!(true), "{needle}");
+            assert!(!has_queue(&b), "{needle}");
+            assert!(
+                host.writes().iter().all(|(_, body)| !has_queue(body)),
+                "{needle}"
+            );
+        }
+    }
+
+    /// AC-3: when the host refuses the queue rule, the strict rule is
+    /// written instead, never nothing.
+    #[test]
+    fn a_host_refusal_writes_the_strict_rule_instead() {
+        let host = queue_host(Some(true), true);
+        let report = apply_up_to_date(&host, solo(), UpToDate::MergeQueue, r#"["main"]"#);
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
+        assert!(
+            text.as_str()
+                .contains("the host refused the merge queue rule"),
+            "{text:?}"
+        );
+        let b = host.body(RULESET_AUTHORITY_CHECKS);
+        assert_eq!(strict_of(&b), json!(true), "{b}");
+        assert!(!has_queue(&b));
+        assert!(host
+            .rulesets
+            .borrow()
+            .values()
+            .any(|r| r["name"] == RULESET_AUTHORITY_CHECKS));
+    }
+
+    /// AC-3: the dry run names the strict request a refusal would send.
+    #[test]
+    fn the_dry_run_names_the_fallback_request() {
+        let host = queue_host(Some(true), false);
+        let plan = up_to_date_plan(solo(), UpToDate::MergeQueue, r#"["main"]"#);
+        let text = host.provider().preview(&plan).render();
+        assert!(
+            text.as_str()
+                .contains("if the host refuses the merge queue rule, this is sent instead"),
+            "{text:?}"
+        );
+        assert!(host.writes().is_empty());
+    }
+
+    /// AC-3: a provider without an adapter is told no queue is added, and
+    /// its checklist keeps the strict rule.
+    #[test]
+    fn a_provider_without_an_adapter_keeps_the_strict_rule() {
+        let plan = up_to_date_plan(solo(), UpToDate::MergeQueue, r#"["main"]"#);
+        let checklist = plan.manual_checklist("gitlab").join("\n");
+        assert!(
+            checklist.contains("provider 'gitlab' has no adapter"),
+            "{checklist}"
+        );
+        assert!(
+            checklist.contains("must still be up to date"),
+            "{checklist}"
+        );
+        let github = plan.manual_checklist("github").join("\n");
+        assert!(github.contains("merge queue"), "{github}");
+        assert!(!github.contains("has no adapter"), "{github}");
+    }
+
+    /// AC-1: an update never lowers a live strict rule; under `false` an
+    /// administrator turns it off on the host.
+    #[test]
+    fn false_never_lowers_a_live_strict_rule() {
+        let host = queue_host(Some(true), false);
+        apply_up_to_date(&host, solo(), UpToDate::Strict, r#"["main"]"#);
+        let report = apply_up_to_date(&host, solo(), UpToDate::Off, r#"["main"]"#);
+        let text = report.render();
+        let b = host.body(RULESET_AUTHORITY_CHECKS);
+        assert_eq!(strict_of(&b), json!(true), "{text:?}");
+    }
+
+    fn commit_files(repo: &git2::Repository, files: &[(&str, &str)]) {
+        let root = repo.workdir().unwrap().to_path_buf();
+        let mut index = repo.index().unwrap();
+        for (path, text) in files {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, text).unwrap();
+            index.add_path(Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "test: x",
+            &tree,
+            &parents,
+        )
+        .unwrap();
+    }
+
+    fn init_main(dir: &Path) -> git2::Repository {
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        git2::Repository::init_opts(dir, &options).unwrap()
+    }
+
+    const POLICY_FILE: &str = ".codeflow/policy.json";
+
+    /// A clone of an origin whose `main` holds `origin_policy`, with the
+    /// working copy's policy then set to `working`.
+    fn up_to_date_fixture(
+        origin_policy: Option<&str>,
+        working: Option<&str>,
+    ) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let origin = init_main(&base.join("origin"));
+        let mut files = vec![("README.md", "x\n")];
+        if let Some(policy) = origin_policy {
+            files.push((POLICY_FILE, policy));
+        }
+        commit_files(&origin, &files);
+        let work = base.join("work");
+        git2::Repository::clone(base.join("origin").to_str().unwrap(), &work).unwrap();
+        if let Some(policy) = working {
+            let path = work.join(POLICY_FILE);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, policy).unwrap();
+        }
+        (dir, work)
+    }
+
+    fn policy_with(value: &str) -> String {
+        format!(r#"{{"schema_version":1,"git":{{"require_up_to_date":{value}}}}}"#)
+    }
+
+    /// AC-1: a relaxing value counts only when the remote's default branch
+    /// holds it; the working copy can only keep the strict rule.
+    #[test]
+    fn only_the_committed_value_relaxes_the_rule() {
+        let off = policy_with("false");
+        let queue = policy_with(r#""merge_queue""#);
+        let on = policy_with("true");
+        for (origin, working, want, needle) in [
+            (None, None, UpToDate::Strict, "read from"),
+            (Some(off.as_str()), None, UpToDate::Off, "read from"),
+            (
+                Some(queue.as_str()),
+                None,
+                UpToDate::MergeQueue,
+                "read from",
+            ),
+            (
+                Some(off.as_str()),
+                Some(off.as_str()),
+                UpToDate::Off,
+                "read from",
+            ),
+            // The working copy relaxes; the authority does not.
+            (
+                None,
+                Some(off.as_str()),
+                UpToDate::Strict,
+                "which is ignored",
+            ),
+            (
+                Some(on.as_str()),
+                Some(off.as_str()),
+                UpToDate::Strict,
+                "which is ignored",
+            ),
+            (
+                None,
+                Some(queue.as_str()),
+                UpToDate::Strict,
+                "which is ignored",
+            ),
+            // The working copy keeps the strict rule.
+            (
+                Some(off.as_str()),
+                Some(on.as_str()),
+                UpToDate::Strict,
+                "keeps the strict rule",
+            ),
+            (
+                Some(off.as_str()),
+                Some("{"),
+                UpToDate::Strict,
+                "cannot be read",
+            ),
+            // A different relaxing value in the working copy is ignored.
+            (
+                Some(off.as_str()),
+                Some(queue.as_str()),
+                UpToDate::Off,
+                "which is ignored",
+            ),
+        ] {
+            let (_dir, work) = up_to_date_fixture(origin, working);
+            let choice = up_to_date_choice(&work);
+            let text = format!("{} {:?}", choice.line(), choice.notes);
+            assert_eq!(choice.value, want, "{origin:?} {working:?}: {text}");
+            assert!(text.contains(needle), "{origin:?} {working:?}: {text}");
+        }
+    }
+
+    /// AC-1: a local commit the remote does not hold, and a repository
+    /// without a remote, never relax the rule.
+    #[test]
+    fn a_local_commit_or_no_remote_never_relaxes() {
+        let off = policy_with("false");
+        let (_dir, work) = up_to_date_fixture(None, None);
+        commit_files(
+            &git2::Repository::open(&work).unwrap(),
+            &[(POLICY_FILE, off.as_str())],
+        );
+        assert_eq!(up_to_date_choice(&work).value, UpToDate::Strict);
+
+        let solo_dir = tempfile::tempdir().unwrap();
+        let root = solo_dir.path().canonicalize().unwrap();
+        commit_files(&init_main(&root), &[(POLICY_FILE, off.as_str())]);
+        let choice = up_to_date_choice(&root);
+        assert_eq!(choice.value, UpToDate::Strict, "{}", choice.line());
+        assert!(choice.line().contains("not honoured"), "{}", choice.line());
     }
 }
 

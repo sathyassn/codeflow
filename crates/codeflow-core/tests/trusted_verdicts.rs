@@ -43,7 +43,14 @@ fn workflows() -> Vec<(String, Value)> {
         "assets/base/ci",
         ".codeflow/.baseline/.github/workflows",
     ] {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(root.join(dir))
+        // `CODEFLOW_OWN_WORKFLOWS_ROOT` names another tree whose own
+        // workflow copies are read instead, so an operator patch to them is
+        // tested before it is committed (TSK-1396).
+        let base = match std::env::var_os("CODEFLOW_OWN_WORKFLOWS_ROOT") {
+            Some(own) if dir == ".github/workflows" => PathBuf::from(own),
+            _ => root.clone(),
+        };
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(base.join(dir))
             .unwrap_or_else(|error| panic!("{dir}: {error}"))
             .map(|entry| entry.unwrap().path())
             .filter(|path| {
@@ -60,7 +67,7 @@ fn workflows() -> Vec<(String, Value)> {
                 .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             if value.get("jobs").is_some() {
                 found.push((
-                    slashed(&path.strip_prefix(&root).unwrap().display().to_string()),
+                    slashed(&path.strip_prefix(&base).unwrap().display().to_string()),
                     value,
                 ));
             }
@@ -69,6 +76,12 @@ fn workflows() -> Vec<(String, Value)> {
     assert!(found.len() >= 6, "{}", found.len());
     found
 }
+
+/// The authority commit of a verdict job that also runs for a merge queue
+/// entry: the queue's base on `merge_group`, the run's commit on
+/// `pull_request_target`, and nothing (which the first step refuses) for a
+/// `merge_group` event without a base.
+const AUTHORITY_SHA: &str = "${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name != 'merge_group' && github.sha || '' }}";
 
 /// The `(job id, check name)` pairs of a workflow.
 fn jobs(workflow: &Value) -> Vec<(String, String, Value)> {
@@ -105,11 +118,14 @@ fn events(workflow: &Value) -> Vec<String> {
 }
 
 /// AC-2, AC-9 (review round 1, R1-1): a `trusted:` name comes only from a
-/// workflow that `pull_request_target` alone starts, and the job carries no
-/// `if`. A job-level `if` skips a job but keeps its check, and GitHub counts
-/// a skipped required check as passing, so a push, schedule or dispatch run
-/// of a workflow holding a trusted-named job would leave a passing check
-/// under that name at the pushed commit. `commit standards` has no producer.
+/// workflow that `pull_request_target` alone starts, or, since TSK-1396
+/// (ADR-0081 as amended), `pull_request_target` and a merge queue entry
+/// (`merge_group`), and the job carries no `if`. A job-level `if` skips a
+/// job but keeps its check, and GitHub counts a skipped required check as
+/// passing, so a push, schedule or dispatch run of a workflow holding a
+/// trusted-named job would leave a passing check under that name at the
+/// pushed commit. A queue entry is judged in full, never skipped.
+/// `commit standards` has no producer.
 #[test]
 fn only_pull_request_target_workflows_emit_a_trusted_name() {
     for (path, workflow) in workflows() {
@@ -119,10 +135,11 @@ fn only_pull_request_target_workflows_emit_a_trusted_name() {
                 "{path} job {id} still produces the old name"
             );
             if name.starts_with("trusted: ") {
-                assert_eq!(
-                    events(&workflow),
-                    ["pull_request_target"],
-                    "{path} job {id} ('{name}'): a workflow any other event starts creates this check, skipped or not"
+                let events = events(&workflow);
+                assert!(
+                    events == ["pull_request_target"]
+                        || events == ["pull_request_target", "merge_group"],
+                    "{path} job {id} ('{name}'): a workflow any other event starts creates this check, skipped or not: {events:?}"
                 );
                 assert!(
                     job.get("if").is_none(),
@@ -248,7 +265,20 @@ fn every_verdict_job_runs_only_the_default_branch_code() {
                 label(&steps[1]).starts_with("actions/checkout@"),
                 "{path} {id}"
             );
-            assert_eq!(steps[1]["with"]["ref"].as_str(), Some("${{ github.sha }}"));
+            // The default branch's commit: `github.sha` on
+            // pull_request_target, the queue's base on merge_group
+            // (TSK-1396), resolved once as the job's AUTHORITY_SHA.
+            let checkout = steps[1]["with"]["ref"].as_str();
+            if events(&workflow).contains(&"merge_group".to_owned()) {
+                assert_eq!(checkout, Some("${{ env.AUTHORITY_SHA }}"), "{path} {id}");
+                assert_eq!(
+                    job["env"]["AUTHORITY_SHA"].as_str(),
+                    Some(AUTHORITY_SHA),
+                    "{path} {id}"
+                );
+            } else {
+                assert_eq!(checkout, Some("${{ github.sha }}"), "{path} {id}");
+            }
             let assert_text = serde_yaml::to_string(&steps[2]).unwrap();
             for (index, step) in steps.iter().enumerate().skip(1) {
                 let is_assert = label(step) == "Assert the authority checkout";

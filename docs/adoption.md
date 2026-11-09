@@ -17,6 +17,23 @@ much working method comes with it.
   started: two pull requests each green on an older base can merge and leave
   the branch red. `codeflow doctor --check remote-perimeter` reads the live
   rules back and warns when they do not require that.
+- `git.require_up_to_date` chooses how that is held. Each setting has a
+  cost:
+
+  | Value | What `remote protect` writes | Cost |
+  |---|---|---|
+  | `true` (the default, also when absent) | strict checks on every branch it protects | each pull request is brought up to date and rerun after every other merge |
+  | `false` | checks that are not strict | two pull requests green on an older base can merge and leave the branch red; whoever merges confirms the checks ran on the current base |
+  | `"merge_queue"` | a merge queue on the default branch; the lines and other branches stay strict | GitHub offers merge queues only to repositories an organization owns, and the CI and policy workflows run again for each queue entry |
+
+  Only the value committed on the remote's default branch counts. A value
+  in the working copy, on a local branch or in the environment never
+  relaxes the rule. A run never lowers a live strict rule: after choosing
+  `false`, an administrator turns strictness off on the host. With
+  `"merge_queue"`, a repository owned by a user account, `--check-app`
+  and a provider other than GitHub keep the strict rule and say why, and
+  when the host refuses the queue rule the strict rule is written instead.
+  `doctor` accepts what the value chooses and names it in its message.
 - If your repository already has rulesets, `remote protect` leaves them as
   they are and adds its own beside them. It changes another ruleset only when
   you name it with `--adopt`, and only when that ruleset targets exactly the
