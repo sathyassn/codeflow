@@ -4339,7 +4339,7 @@ fn check_test_config(opts: &Options) -> CheckResult {
             c.status == crate::testing::doctor::CheckStatus::Warn
                 && c.name.ends_with(".coverage-producer")
         })
-        .map(|c| format!("; {}", c.message))
+        .flat_map(|c| ["; ", c.message.as_str()])
         .collect();
 
     if failures.is_empty() {

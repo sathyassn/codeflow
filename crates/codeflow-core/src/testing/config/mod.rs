@@ -740,27 +740,40 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
                 ),
             });
         }
-        if let Some(coverage) = &target.coverage {
-            let (rules, inherited) = coverage.effective_rules(&config.defaults.coverage);
-            if rules
-                .iter()
-                .any(|rule| rule.scope == CoverageScope::ChangedFiles)
-            {
-                let source = if inherited {
-                    " (inherited from defaults.coverage)"
-                } else {
-                    ""
-                };
-                return Err(TestingError::ConfigInvalid {
-                    path: path.to_path_buf(),
-                    message: format!(
-                        "target '{}': coverage scope 'changed_files'{source} requires a comparison base, \
-                         but standalone codeflow test has none",
-                        target.name
-                    ),
-                });
-            }
-        }
+        refuse_changed_files(path, config, target)?;
+    }
+    Ok(())
+}
+
+/// A `changed_files` rule needs a comparison base that standalone
+/// `codeflow test` lacks, whether the target wrote it or inherits it from
+/// `defaults.coverage` (TSK-1014).
+fn refuse_changed_files(
+    path: &Path,
+    config: &TestConfig,
+    target: &TargetConfig,
+) -> Result<(), TestingError> {
+    let Some(coverage) = &target.coverage else {
+        return Ok(());
+    };
+    let (rules, inherited) = coverage.effective_rules(&config.defaults.coverage);
+    if rules
+        .iter()
+        .any(|rule| rule.scope == CoverageScope::ChangedFiles)
+    {
+        let source = if inherited {
+            " (inherited from defaults.coverage)"
+        } else {
+            ""
+        };
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: format!(
+                "target '{}': coverage scope 'changed_files'{source} requires a comparison base, \
+                 but standalone codeflow test has none",
+                target.name
+            ),
+        });
     }
     Ok(())
 }
