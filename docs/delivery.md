@@ -97,6 +97,14 @@ each batch.
   evidence, never on a round count.
 - **The primary** assembles reviewed heads into a small batch candidate in
   dependency order and inspects each landing merge.
+  - It runs `codeflow ci --base <line tip> --head <candidate> --line-tip
+    integration/EPC-NNN-<slug>` on the candidate before the gate. The check
+    starts at the line's fetched tip and judges each member merge at its own
+    reviewed head against the tip it merged onto, as that member's own pull
+    request was judged. It proves that every merge equals the clean remerge
+    of its parents, that each member's completion binds at its head, and
+    that nothing beyond a member's own record changes its criteria. A
+    pushed `candidate/` branch gets the same check from the pre-push hook.
   - It runs the full gate once on that exact candidate.
   - A clean merge does not reopen unit review; a
     hand-resolved product hunk returns its task to a whole-unit review at its
@@ -190,7 +198,7 @@ or CI runs.**
 |---|---|---|
 | Start | The task record exists and is anchored: in the epic's planning change, or, for a standalone task, at head on its own branch. Code predecessors are complete, or reviewed and pinned with `--on TSK-NNN@<sha>` | `codeflow work claim`, `codeflow work start`; CI applies the same read-only check once per pull request |
 | Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`). A pull request that names neither is refused, whatever it touches | `codeflow ci` |
-| Criteria | The task may change its own criteria, and CI prints the change for the reviewer. Other records' criteria stay frozen except for completed standalone wording corrections (ADR-0080) and record-only redactions (ADR-0084). Both preserve every criterion and tag; see [acceptance waivers and redactions](#acceptance-waivers-and-redactions) | `codeflow ci` |
+| Criteria | The task may change its own criteria, and CI prints the change for the reviewer. The change rides in the task's own pull request, with a dated `- Amended YYYY-MM-DD:` note inside each changed criterion, and then lands on the line through the landing candidate, which accepts it at the member's reviewed head; it needs no separate amendment. Other records' criteria stay frozen except for completed standalone wording corrections (ADR-0080) and record-only redactions (ADR-0084). Both preserve every criterion and tag; see [acceptance waivers and redactions](#acceptance-waivers-and-redactions) | `codeflow ci` |
 | Evidence | The builder cites targeted tests and the quick gate (`codeflow test --mode quick`) with revision and command. The pull request stays a draft until its evidence exists | The reviewer |
 | Review | Every criterion not marked deferred has evidence on the reviewed revision, the needed checks are green, no material finding is open and every nit has a disposition | The other-lineage reviewer |
 | Landing | Each completion is bound to its reviewed commit. A merge from the first-parent line of the target tip the run is judged against (CI's base, never a local branch), whose recorded result equals the conflict-free automatic merge of its parents, keeps the binding, so the builder can take a moved target without a new review; any other later change unbinds it. Predecessors are complete at the merge base | `codeflow ci`, `codeflow task status complete` |

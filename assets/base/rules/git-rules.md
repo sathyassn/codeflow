@@ -134,7 +134,11 @@ a sync needs the carrying task the current checks require. See cf-method,
 Direct commits on an epic line are refused at push. `codeflow ci` refuses
 them on a landing candidate before its gate when run with `--line-tip
 integration/EPC-NNN-<slug>`, which judges the candidate from the line's
-fetched tip. Move an unpushed one
+fetched tip. That run, and the push of a `candidate/` branch, also judge
+each member merge at its own reviewed head against the tip it merged onto,
+so a member's own criteria change and completion pass as its pull request's
+did; a hand-resolved merge, another record's criteria change or an unbound
+completion is refused, naming the member. Move an unpushed one
 into a pull request: keep it on a task or planning branch, run
 `git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the
 default target on its first push), then open the pull request to the line.
