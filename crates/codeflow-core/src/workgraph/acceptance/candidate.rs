@@ -30,9 +30,9 @@
 //! target's) can use the same member judgment with its own anchor.
 
 use super::{
-    active_block, default_target_name, finding, history, imports::home_tip,
-    is_ancestor_or_same, pull_request_findings_into, read_merge, task_criteria, Criteria, Finding,
-    Graph, MergeReading, Oid, OwnLine, RecordKind, Repository, Scope, BINDING_RULE, FROZEN_RULE,
+    active_block, default_target_name, finding, history, imports::home_tip, is_ancestor_or_same,
+    pull_request_findings_into, read_merge, task_criteria, Criteria, Finding, Graph, MergeReading,
+    Oid, OwnLine, RecordKind, Repository, Scope, BINDING_RULE, FROZEN_RULE,
 };
 
 /// What a candidate is judged against: its trusted tip, resolved once by
@@ -88,10 +88,10 @@ pub fn candidate_findings(
     let tip = oid(candidate.tip)?;
     let head = oid(head)?;
     let mut found = Vec::new();
-    let mut default_tip = None;
+    let default_tip = published_default_tip(&repo)?;
     for (commit, parents) in first_parent_chain(&repo, tip, head)? {
         match parents.as_slice() {
-            [onto, member] if is_sync(&repo, &mut default_tip, *member)? => {
+            [onto, member] if is_sync(&repo, default_tip, *member)? => {
                 let named = format!(
                     "sync {member:.9} (already on the published default target), merged by {commit:.9} onto {onto:.9}"
                 );
@@ -130,25 +130,22 @@ pub fn candidate_findings(
     Ok(found)
 }
 
-/// Whether `member` is already on the published default target's tip, so
-/// its merge is a sync of that target, not a member. The tip is read once,
-/// from the default target's fetch remote; with none published, nothing is
-/// a sync and each merge is judged as a member.
-fn is_sync(
-    repo: &Repository,
-    default_tip: &mut Option<Option<Oid>>,
-    member: Oid,
-) -> Result<bool, String> {
-    if default_tip.is_none() {
-        let published = match default_target_name(repo) {
-            Ok(default) => home_tip(repo, &default.name)?,
-            Err(_) => None,
-        };
-        *default_tip = Some(published);
+/// The published default target's tip, read once from its fetch remote;
+/// `None` when no default target is published, so nothing is a sync.
+fn published_default_tip(repo: &Repository) -> Result<Option<Oid>, String> {
+    match default_target_name(repo) {
+        Ok(default) => home_tip(repo, &default.name),
+        Err(_) => Ok(None),
     }
+}
+
+/// Whether `member` is already on the published default target's tip, so
+/// its merge is a sync of that target, not a member; with no published
+/// default target, each merge is judged as a member.
+fn is_sync(repo: &Repository, default_tip: Option<Oid>, member: Oid) -> Result<bool, String> {
     match default_tip {
-        Some(Some(tip)) => is_ancestor_or_same(repo, member, *tip),
-        _ => Ok(false),
+        Some(tip) => is_ancestor_or_same(repo, member, tip),
+        None => Ok(false),
     }
 }
 

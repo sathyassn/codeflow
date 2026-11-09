@@ -184,7 +184,7 @@ fn a_members_own_criteria_change_lands_through_the_candidate() {
         passes(&result);
         lacks(&result, "work.criteria_frozen (block)");
         has(&result, "TSK-002 AC-4");
-        has(&result, &format!("member {:.9}", head));
+        has(&result, &format!("member {head:.9}"));
     }
 }
 
