@@ -3263,10 +3263,7 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
     let (code, printed) = guard_verdict(outside.path(), &fresh_clone);
     assert_eq!(code, Some(0), "{fresh_clone}: {printed}");
     assert!(!printed.contains("BLOCKED"), "{fresh_clone}: {printed}");
-    git(
-        scratch.path(),
-        &["clone", "-q", &url, clone.to_str().unwrap()],
-    );
+    codeflow_fixture::clone(scratch.path(), &url, &clone).run();
     git(&clone, &["config", "user.name", "t"]);
     git(&clone, &["config", "user.email", "t@example.test"]);
     let out = cli(&clone, &["work", "claim", "TSK-001"], None);
