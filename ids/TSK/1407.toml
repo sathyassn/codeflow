@@ -1,0 +1,11 @@
+id = "TSK-1407"
+uid = "a3ae4393-4eb1-4522-a13e-ce04c4845978"
+kind = "TSK"
+title = "The SQLite dependency carries no known advisory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T10:42:56Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
