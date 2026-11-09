@@ -99,7 +99,7 @@ pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     {
         return Err(SetupError::ConfigExists(config_path));
     }
-    let detected = detect::detect_stacks(project_dir)?;
+    let detected = detect::detect_stacks_with_coverage(project_dir)?;
 
     let config = TestConfig {
         description: None,
@@ -672,6 +672,80 @@ mod tests {
         let result = run_auto(dir.path()).unwrap();
         assert!(matches!(result, SetupResult::Written));
         assert!(config_path(dir.path()).unwrap().exists());
+    }
+
+    /// TSK-1014 AC-5: setup writes, for each detected stack, a coverage block
+    /// naming the artifact its producer writes, and the full command runs
+    /// that producer. The block sets no rules of its own.
+    #[test]
+    fn setup_writes_each_detected_stacks_coverage_producer() {
+        use crate::testing::config::CoverageFormat;
+        let stacks: [(&str, &str, &str, CoverageFormat, &str, &str); 5] = [
+            (
+                "Cargo.toml",
+                "[package]\nname = \"t\"\n",
+                "rust-core",
+                CoverageFormat::Lcov,
+                "target/llvm-cov/lcov.info",
+                "cargo llvm-cov",
+            ),
+            (
+                "package.json",
+                r#"{"devDependencies":{"vitest":"1"}}"#,
+                "web",
+                CoverageFormat::Lcov,
+                "coverage/lcov.info",
+                "--coverage.provider=v8",
+            ),
+            (
+                "package.json",
+                r#"{"devDependencies":{"jest":"29"}}"#,
+                "web",
+                CoverageFormat::Lcov,
+                "coverage/lcov.info",
+                "jest --ci --coverage",
+            ),
+            (
+                "go.mod",
+                "module t\n",
+                "go-service",
+                CoverageFormat::GoCover,
+                "coverage.out",
+                "-coverprofile=coverage.out",
+            ),
+            (
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\n",
+                "python",
+                CoverageFormat::Cobertura,
+                "coverage.xml",
+                "coverage run -m pytest",
+            ),
+        ];
+        for (sentinel, body, name, format, path, producer) in stacks {
+            let dir = crate::fixture_tests::project_dir();
+            std::fs::write(dir.path().join(sentinel), body).unwrap();
+            assert!(matches!(
+                run_auto(dir.path()).unwrap(),
+                SetupResult::Written
+            ));
+            let written = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
+            let target = &written.targets[0];
+            assert_eq!(target.name, name, "{sentinel}");
+            let coverage = target
+                .coverage
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name}: no block"));
+            assert_eq!(coverage.format, format, "{name}");
+            assert_eq!(coverage.path, path, "{name}");
+            assert!(coverage.rules.is_empty(), "{name}: setup writes no rules");
+            let full = &target.modes["full"].command;
+            assert!(full.contains(producer), "{name}: {full}");
+            assert!(
+                !target.modes["essential"].command.contains("coverage"),
+                "{name}: only the full mode measures coverage"
+            );
+        }
     }
 
     /// Zero-detection honesty: an empty repo still gets a config written (the

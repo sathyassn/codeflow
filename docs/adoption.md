@@ -303,7 +303,12 @@ Tell `codeflow test` which commands to run for each part of the project.
    `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml` or `setup.py`
    markers and writes the detected targets into an absent or empty
    `.codeflow/test-config.json`. It does not inspect workspaces recursively or
-   guess package boundaries.
+   guess package boundaries. Each detected target's full mode runs the
+   stack's coverage producer, such as cargo-llvm-cov or coverage.py, and a
+   coverage block with no rules names the artifact it writes; `codeflow
+   doctor` names a producer that still needs installing. Write the
+   project's floor once in `defaults.coverage` to judge every such target
+   ([test-gate reference](test-gate.md#coverage-rules-and-their-defaults)).
 2. Or start from a template, or add targets one at a time:
 
    ```sh

@@ -440,6 +440,33 @@ pub struct ReportConfig {
     pub derive_from: Option<String>,
 }
 
+impl TargetConfig {
+    /// A target that runs tests: its runner names a test runner, or it
+    /// declares a test report. Only such a target is named when coverage
+    /// defaults exist but it has no coverage block (TSK-1014).
+    #[must_use]
+    pub fn is_test_target(&self) -> bool {
+        self.runner != RunnerType::Custom || self.report.is_some()
+    }
+}
+
+impl CoverageConfig {
+    /// The rules that judge this block: its own when it sets any, else the
+    /// project's `defaults.coverage` ("applied when targets omit them").
+    /// The flag is true when the rules come from the defaults.
+    #[must_use]
+    pub fn effective_rules<'a>(
+        &'a self,
+        defaults: &'a [CoverageRule],
+    ) -> (&'a [CoverageRule], bool) {
+        if self.rules.is_empty() && !defaults.is_empty() {
+            (defaults, true)
+        } else {
+            (&self.rules, false)
+        }
+    }
+}
+
 /// Report format enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -713,20 +740,26 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
                 ),
             });
         }
-        if target.coverage.as_ref().is_some_and(|coverage| {
-            coverage
-                .rules
+        if let Some(coverage) = &target.coverage {
+            let (rules, inherited) = coverage.effective_rules(&config.defaults.coverage);
+            if rules
                 .iter()
                 .any(|rule| rule.scope == CoverageScope::ChangedFiles)
-        }) {
-            return Err(TestingError::ConfigInvalid {
-                path: path.to_path_buf(),
-                message: format!(
-                    "target '{}': coverage scope 'changed_files' requires a comparison base, \
-                     but standalone codeflow test has none",
-                    target.name
-                ),
-            });
+            {
+                let source = if inherited {
+                    " (inherited from defaults.coverage)"
+                } else {
+                    ""
+                };
+                return Err(TestingError::ConfigInvalid {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "target '{}': coverage scope 'changed_files'{source} requires a comparison base, \
+                         but standalone codeflow test has none",
+                        target.name
+                    ),
+                });
+            }
         }
     }
     Ok(())
@@ -1592,6 +1625,37 @@ mod r22_regressions {
         invalid_glob(
             "/defaults",
             serde_json::json!({"coverage":[{"scope":"global","minimum":80,"exclude":["["]}]}),
+        );
+    }
+    /// TSK-1014: a `changed_files` default needs the comparison base that
+    /// standalone `codeflow test` lacks, so a target that would inherit it is
+    /// refused at load, as its own such rule already is.
+    #[test]
+    fn an_inherited_changed_files_default_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let load = |coverage: serde_json::Value| {
+            let config = serde_json::json!({"schema_version":"1.0",
+                "defaults":{"coverage":[{"scope":"changed_files","minimum":80}]},
+                "targets":[{"name":"t","runner":"custom","coverage":coverage,
+                    "modes":{"full":{"command":"true"}}}]});
+            std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+            load_test_config(&path)
+        };
+        let error = load(serde_json::json!({"format":"lcov","path":"cov.info"}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("changed_files"), "{error}");
+        assert!(error.contains("defaults.coverage"), "{error}");
+        assert!(
+            load(serde_json::Value::Null).is_ok(),
+            "no block inherits nothing"
+        );
+        assert!(
+            load(serde_json::json!({"format":"lcov","path":"cov.info",
+                "rules":[{"scope":"global","minimum":80}]}))
+            .is_ok(),
+            "own rules replace the defaults"
         );
     }
     #[test]
