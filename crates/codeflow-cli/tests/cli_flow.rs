@@ -224,10 +224,14 @@ fn test_setup_writes_config_offline_and_is_idempotent() {
         "setup must not overwrite an already-populated config"
     );
 
-    // The conservative auto-detected config must run on a stock Rust
-    // toolchain. It must not assume cargo-nextest, a project-defined nextest
-    // profile, a report plugin, or a coverage artifact.
-    let gate = codeflow(dir.path(), &["test", "--mode", "full", "--strict"]);
+    // The conservative auto-detected config's essential mode must run on a
+    // stock Rust toolchain. It must not assume cargo-nextest, a
+    // project-defined nextest profile, a report plugin, or a coverage
+    // artifact. Full mode runs the coverage producer, cargo-llvm-cov, which a
+    // stock toolchain lacks and `codeflow doctor` names (TSK-1014 AC-5); under
+    // `cargo llvm-cov nextest` a nested one inherits the outer run's wrapper
+    // and recurses until the gate times out, so this test never runs it.
+    let gate = codeflow(dir.path(), &["test", "--mode", "essential", "--strict"]);
     assert_eq!(
         gate.status.code(),
         Some(0),
