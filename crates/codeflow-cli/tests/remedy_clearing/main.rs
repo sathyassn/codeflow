@@ -3767,7 +3767,9 @@ fn clears_doctor_hook_manager() {
         "another hook manager owns",
         || doctor(&root, "hooks"),
         |printed| {
-            assert!(printed.contains("/.husky executable"), "{printed}");
+            // The manager's folder is named under the project on every
+            // platform, also where the temporary folder is a symbolic link.
+            assert!(printed.contains("named in .husky executable"), "{printed}");
             // TSK-1395: the shim call does not depend on the hook's directory.
             assert!(
                 printed.contains("/.codeflow/git-hooks/pre-commit\" \"$@\""),

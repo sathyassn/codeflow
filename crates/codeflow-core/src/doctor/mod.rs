@@ -565,20 +565,19 @@ fn codeflow_form_wiring(form: &crate::scaffold::hooks_path::HooksPathForm) -> Op
     }
 }
 
-/// `path` for a message: relative to `root` (as given or canonical) when it
-/// lies under it, else in full.
+/// `path` for a message: relative to `root` when it lies under it, else in
+/// full. Either side may be spelled through a symbolic link (a macOS
+/// temporary folder is), so the canonical spellings are compared too.
 fn shown_under_root(root: &Path, path: &Path) -> String {
-    let canonical_root = root.canonicalize().ok();
-    crate::git::display_path(
-        path.strip_prefix(root)
-            .ok()
-            .or_else(|| {
-                canonical_root
-                    .as_deref()
-                    .and_then(|root| path.strip_prefix(root).ok())
-            })
-            .unwrap_or(path),
-    )
+    let roots = [Some(root.to_path_buf()), root.canonicalize().ok()];
+    let paths = [Some(path.to_path_buf()), path.canonicalize().ok()];
+    let relative = paths.iter().flatten().find_map(|path| {
+        roots
+            .iter()
+            .flatten()
+            .find_map(|root| path.strip_prefix(root).ok().map(Path::to_path_buf))
+    });
+    crate::git::display_path(relative.as_deref().unwrap_or(path))
 }
 
 /// Another manager's relative `core.hooksPath`: git reads it from the

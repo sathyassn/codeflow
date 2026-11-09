@@ -443,7 +443,9 @@ fn update_writes(
         report.notes.push(note);
     }
     // The brownfield hook choice stays visible until the adopter makes it.
-    if super::hooks_path::form(root)?.is_codeflow() {
+    // Read like the migration above: a repository git cannot read has no
+    // hooks report, and update goes on.
+    if super::hooks_path::form(root).is_ok_and(|form| form.is_codeflow()) {
         if let Some(found) = super::detect::git_dir_hooks(root) {
             report.notes.push(found.report_note());
         }
@@ -468,11 +470,18 @@ fn update_writes(
 /// relative form earlier releases wrote and a path a move or a removed
 /// worktree left behind are rewritten, and an unset one is wired where the
 /// project records its hooks as wired and no other hook manager owns them.
-/// Another manager's path is left as it is.
+/// Another manager's path is left as it is. When git cannot read the
+/// repository at all (a configuration value it rejects, for one), nothing
+/// is written and the report says so, so the rest of update still runs.
 fn migrate_hooks_path(
     root: &Path,
     state: &super::state::ProjectState,
 ) -> Result<Option<Shown>, ScaffoldError> {
+    if super::gitutil::is_repo(root).is_err() {
+        return Ok(Some(Shown::fixed(
+            "git hooks: core.hooksPath not checked, because git could not read the repository; `codeflow doctor --check hooks` reports the path once git can",
+        )));
+    }
     let wire_unset = state.git_hooks == super::state::GIT_HOOKS_WIRED
         && super::detect::detect_hook_manager(root)?.is_none();
     Ok(
