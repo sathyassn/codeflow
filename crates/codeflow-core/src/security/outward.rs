@@ -3936,7 +3936,7 @@ mod tests {
     }
 
     /// TSK-326 delta 5: exec-guard refuses `parallel`, `sem` and
-    /// `env_parallel` in every spelling, naming the human route.
+    /// `env_parallel` in every literal spelling, naming the human route.
     #[test]
     fn command_builders_refuse_in_every_spelling() {
         for command in crate::hooks::git_guard::data_operands::refused_command_builder_lines() {

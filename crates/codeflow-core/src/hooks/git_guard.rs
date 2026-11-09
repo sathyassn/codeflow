@@ -16022,7 +16022,8 @@ mod tests {
 
     /// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the
     /// commands they run at run time, so git-guard refuses each in every
-    /// spelling and behind every launcher, and names the human route.
+    /// literal spelling and behind the launchers it unwraps, and names the
+    /// human route.
     #[test]
     fn command_builders_refuse_in_every_spelling() {
         let policy = data_policy();

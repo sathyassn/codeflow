@@ -485,9 +485,13 @@ fn command_data_supplied(
         if expands(program) || program.contains(SUPPLIED) || program.contains(BRACES) {
             match fill(program, vars, supplier) {
                 Ok(value) => value,
-                // A program with no sign of git is left to exec-guard's own
-                // reader, which refuses a program it cannot read where it
-                // decides one; this refusal is for a program that may be git.
+                // This refusal is for a program that may be git. A program
+                // word the guard cannot fill whose words show no git returns
+                // here before the command-builder check, so neither guard
+                // judges it as git or as a command builder, and the
+                // deletion check, which keeps the spelled word, does not
+                // report it either: a known residual, tracked in TSK-1404.
+                // The pre-push hook stays the floor for a push.
                 Err(_) if !git_evidence(args) => return Ok(None),
                 Err(why) => {
                     return Err(unresolved(

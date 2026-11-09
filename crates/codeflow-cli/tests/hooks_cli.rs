@@ -2594,8 +2594,8 @@ fn each_guard_alone_refuses_fd_and_launcher_data() {
 }
 
 /// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the commands
-/// they run at run time, so each guard alone refuses them in any spelling
-/// and behind a launcher, and names the human route.
+/// they run at run time, so each guard alone refuses them in every literal
+/// spelling and behind a launcher, and names the human route.
 #[test]
 fn each_guard_alone_refuses_command_builders() {
     let dir = tempfile::tempdir().unwrap();

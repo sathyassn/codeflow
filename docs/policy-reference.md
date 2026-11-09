@@ -1762,16 +1762,18 @@ checked, so a symlink does not remove the target owner's protection.
   input, options, configuration files and environment, which neither hook
   reads, so those commands can carry a git command or a deletion the
   catastrophic floor cannot read. Both hooks refuse the three programs in
-  every spelling a program word is read in (a path, quotes, letter case, a
-  `.exe` suffix, a value the line assigns) and behind the launchers,
+  every literal spelling (a path, quotes, letter case, a `.exe` suffix, a
+  parameter the line assigns a literal) and behind the launchers,
   privilege runners and suppliers the hooks unwrap, and exec-guard's
   recursive-deletion check reports them unproven. No policy key relaxes
   this: a person runs them outside the session. In the session, run each
   command directly, or pass the input to a literal command with `xargs`,
   which the hooks read. The hooks read these program words as a Unix shell
-  passes them; a native Windows shell was not tested, and an interpreter
-  one-liner that starts a program is read only for the families the
-  interpreter check judges. An
+  passes them. Three residuals remain: a native Windows shell was not
+  tested; an interpreter one-liner that starts a program is read only for
+  the families the interpreter check judges; and a program word the hooks
+  cannot fill, such as a parameter the line does not assign a literal, is
+  not judged as one of these programs (TSK-1404). An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push
@@ -1793,8 +1795,12 @@ checked, so a symlink does not remove the target owner's protection.
   judged. A `$` in single quotes or escaped is text, in this check
   and in the check before a forced branch delete. A program position
   refuses under this rule only when the words after it show git (a git
-  subcommand or global option first, or a word naming `git`); exec-guard's
-  own reader judges any other program it cannot read. A command
+  subcommand or global option first, or a word naming `git`). In an agent
+  session, a program word the hooks cannot fill whose words show no git,
+  such as a parameter the line does not assign a literal, is not judged as
+  git or as one of the programs above by either hook or by the
+  recursive-deletion check; the pre-push hook stays the floor for a push
+  git runs with its hooks, and the fix is tracked in TSK-1404. A command
   substitution written on the git command itself stays with git-guard's
   substitution reader and its alias and message rules. Git-guard reads
   bracket arithmetic that holds only decimal integer arithmetic
