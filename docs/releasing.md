@@ -389,10 +389,10 @@ Any change to these settings is the operator's decision.
 
 A re-run carries only a run id, and the guard makes no network read to
 learn which workflow the run belongs to. So each job that publishes
-refuses its own re-run as its first step. CodeFlow's own workflows get
-that step, and the test below, in a commit the operator applies, because
-the guard refuses an agent's write to `.github/workflows`; until then a
-re-run of CodeFlow's release run has no floor. GitHub sets
+refuses its own re-run as its first step. CodeFlow's own publishing jobs
+carry that step, checked by the `release_rerun_contract` test; the
+operator applied them, because the guard refuses an agent's write to
+`.github/workflows`. GitHub sets
 `GITHUB_RUN_ATTEMPT`, which a requester cannot change; it is 1 on the first
 attempt and grows with each re-run
 ([contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)).
