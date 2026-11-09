@@ -346,8 +346,8 @@ pub(crate) fn reference_commit(
         .map_err(|error| WorkStartError::UnresolvableTip(unresolvable_tip(repo, name, &error)))
 }
 
-/// [`unresolvable_tip`] for the ref `reference` of the repository at
-/// `repo_root`, when it exists and names no readable commit; `None` when it
+/// The unresolvable-tip refusal for the ref `reference` of the repository
+/// at `repo_root`, when it exists and names no readable commit; `None` when it
 /// resolves, is absent, or the repository cannot be opened.
 #[must_use]
 pub fn unresolvable_reference(repo_root: &Path, reference: &str) -> Option<String> {
