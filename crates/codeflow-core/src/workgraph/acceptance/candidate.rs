@@ -307,6 +307,116 @@ pub fn filings(
     Ok(found)
 }
 
+/// Every member merge of a batch from its fetched tip `tip` to `head`, as
+/// merged (its two parents), oldest first. A commit that is not a
+/// two-parent merge is not listed; the acceptance check refuses it.
+///
+/// # Errors
+///
+/// Returns a message when the history or a commit cannot be read.
+pub fn members(root: &std::path::Path, tip: &str, head: &str) -> Result<Vec<Member>, String> {
+    let _judgment = history::judgment();
+    let repo = Repository::discover(root).map_err(|error| error.message().to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("{revision}: {}", error.message()))
+    };
+    Ok(first_parent_chain(&repo, oid(tip)?, oid(head)?)?
+        .into_iter()
+        .filter_map(|(merge, parents)| match parents.as_slice() {
+            [onto, member] => Some(Member {
+                merge,
+                onto: *onto,
+                head: *member,
+            }),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Check out under `dir`, an empty directory, the commit `member` lands as
+/// on its own (TSK-1154 AC-16): the clean merge of the batch's `anchor`
+/// and the member head, with those two as its parents, which is what the
+/// pull request run of that member alone into the default target checks
+/// out. `dir` becomes a scratch repository that borrows the batch
+/// repository's objects, so a check there reads the same history (the
+/// migration baseline, the merges of `HEAD`) as that run, and the
+/// workgraph it validates is the member's own, with the anchor's records
+/// and configuration: another member's records cannot complete it.
+///
+/// # Errors
+///
+/// Returns the reason when the member does not merge cleanly onto the
+/// anchor, or a commit cannot be read or the checkout cannot be written.
+pub fn check_out_landing(
+    root: &std::path::Path,
+    anchor: &str,
+    member: Member,
+    dir: &std::path::Path,
+) -> Result<(), String> {
+    let unreadable =
+        |what: &str, error: git2::Error| format!("cannot read {what}: {}", error.message());
+    let unwritable =
+        |error: &dyn std::fmt::Display| format!("cannot write the member's own landing: {error}");
+    let repo = Repository::discover(root).map_err(|error| error.message().to_string())?;
+    let (at_anchor, mut index) = {
+        let _judgment = history::judgment();
+        let at_anchor = repo
+            .revparse_single(anchor)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| unreadable(anchor, error))?;
+        let at_head = repo
+            .find_commit(member.head)
+            .map_err(|error| unreadable("the member head", error))?;
+        let index = history::merge_commits(&repo, &at_anchor, &at_head)
+            .map_err(|error| unreadable("the member's merge onto the anchor", error))?;
+        (at_anchor.id(), index)
+    };
+    if index.has_conflicts() {
+        return Err(format!(
+            "it does not merge cleanly onto the batch's anchor {at_anchor:.9}"
+        ));
+    }
+    let objects = repo.commondir().join("objects");
+    let objects = objects
+        .to_str()
+        .ok_or_else(|| unwritable(&"the repository's object path is not UTF-8"))?;
+    let landing = Repository::init(dir).map_err(|error| unwritable(&error))?;
+    let info = landing.path().join("objects").join("info");
+    std::fs::create_dir_all(&info).map_err(|error| unwritable(&error))?;
+    std::fs::write(info.join("alternates"), format!("{objects}\n"))
+        .map_err(|error| unwritable(&error))?;
+    // Reopened so the borrowed objects are read.
+    let landing = Repository::open(dir).map_err(|error| unwritable(&error))?;
+    let tree = index
+        .write_tree_to(&landing)
+        .and_then(|tree| landing.find_tree(tree))
+        .map_err(|error| unwritable(&error))?;
+    let parents = [at_anchor, member.head]
+        .iter()
+        .map(|id| landing.find_commit(*id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| unwritable(&error))?;
+    let signature = git2::Signature::new("codeflow", "codeflow@localhost", &git2::Time::new(0, 0))
+        .map_err(|error| unwritable(&error))?;
+    let landed = landing
+        .commit(
+            None,
+            &signature,
+            &signature,
+            &format!("Merge {} into {at_anchor}", member.head),
+            &tree,
+            &parents.iter().collect::<Vec<_>>(),
+        )
+        .map_err(|error| unwritable(&error))?;
+    landing
+        .set_head_detached(landed)
+        .and_then(|()| landing.checkout_head(Some(git2::build::CheckoutBuilder::new().force())))
+        .map_err(|error| unwritable(&error))
+}
+
 /// The member's own change, read from its two parents: `member` with
 /// `onto` replaced by the merge base of the tip it merged onto and its
 /// head. A later member merges onto a tip holding the members before it,
@@ -368,6 +478,20 @@ pub fn main_binding(
 ) -> Result<Option<String>, String> {
     let repo = Repository::discover(root).map_err(|error| error.message().to_string())?;
     let member = own_change(&repo, member)?;
+    // A member starts from the anchor's history, as its own pull request
+    // into the default target does: a base that only an earlier member or
+    // candidate merge holds would let that unlanded work stand in for it.
+    let at_anchor = repo
+        .revparse_single(anchor)
+        .and_then(|object| object.peel_to_commit())
+        .map(|commit| commit.id())
+        .map_err(|error| format!("{anchor}: {}", error.message()))?;
+    if !is_ancestor_or_same(&repo, member.onto, at_anchor)? {
+        return Err(format!(
+            "its history meets the batch at {:.9}, which is not on '{default}' at the batch's anchor {at_anchor:.9}, so it starts from unlanded work; a member branches from '{default}' and takes only '{default}' after its review",
+            member.onto
+        ));
+    }
     let (onto, head) = (member.onto.to_string(), member.head.to_string());
     let completed = completions(&repo, member)?;
     if completed.is_empty() {
@@ -712,6 +836,7 @@ fn member_findings(
             replaced: None,
             branch_prefixes: candidate.branch_prefixes,
             member: task.as_deref(),
+            stacking: Some(candidate.tip),
         },
     )?;
     found.extend(judged.into_iter().map(|mut each| {

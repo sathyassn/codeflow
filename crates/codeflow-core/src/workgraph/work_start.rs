@@ -1643,11 +1643,12 @@ pub fn task_line_binding(
 /// as a member of a batch into it (TSK-1154 AC-16(c)), judged at exact
 /// revisions only: its record at the member `head` declares `default` as
 /// its `integration_target`, and so does its record at the batch `anchor`
-/// where one exists there; a standalone task gives a non-empty
-/// `standalone_reason`; an epic task keeps the epic id its anchor record
-/// names, and that epic, read at the anchor (at the head only when the
-/// anchor has no record of it), exists and is neither cancelled nor
-/// archived. `Ok(Err(reason))` is a refusal. This binding is separate from
+/// where one exists there; the task keeps the owner its anchor record
+/// names (that epic id, or none), compared before anything else about
+/// ownership; a standalone task gives a non-empty `standalone_reason`; an
+/// epic task's epic, read at the anchor (at the head only for a task the
+/// anchor has no record of, when the anchor has no record of the epic
+/// either), exists and is neither cancelled nor archived. `Ok(Err(reason))` is a refusal. This binding is separate from
 /// [`task_line_binding`], which keeps refusing the default target.
 ///
 /// # Errors
@@ -1684,6 +1685,19 @@ pub fn task_main_binding(
             "{task}'s record at the batch's anchor does not declare '{default}' as its integration_target"
         )));
     }
+    // Ownership is the anchor's: a task the anchor records under an epic
+    // keeps that epic, and a standalone one stays standalone, before any
+    // standalone reason at the head is read, so leaving an epic (one
+    // cancelled or archived included) cannot skip its check.
+    if let Some(then) = &then {
+        if then.epic_id != record.epic_id {
+            return Ok(Err(format!(
+                "{task} names {} at the member head, but {} at the batch's anchor; a member keeps the owner its anchor record names",
+                record.epic_id.as_deref().unwrap_or("no epic"),
+                then.epic_id.as_deref().unwrap_or("no epic")
+            )));
+        }
+    }
     let Some(epic) = record.epic_id.as_deref() else {
         let reason = record
             .standalone_reason
@@ -1697,16 +1711,15 @@ pub fn task_main_binding(
             ))
         });
     };
-    if let Some(then) = &then {
-        if then.epic_id.as_deref() != Some(epic) {
-            return Ok(Err(format!(
-                "{task} names {epic} at the member head, but {} at the batch's anchor",
-                then.epic_id.as_deref().unwrap_or("no epic")
-            )));
-        }
-    }
+    // The member head's epic record counts only for a task the anchor does
+    // not record: a task the anchor holds takes its epic from the anchor.
     let (owner, place) = match epic_record_at_revision(repo_root, epic, anchor)? {
         Some(owner) => (owner, "the batch's anchor"),
+        None if then.is_some() => {
+            return Ok(Err(format!(
+                "{task} names {epic}, which has no epic record at the batch's anchor; a task the anchor holds takes its epic from the anchor, never from the member head"
+            )))
+        }
         None => match epic_record_at_revision(repo_root, epic, head)? {
             Some(owner) => (owner, "the member head"),
             None => {

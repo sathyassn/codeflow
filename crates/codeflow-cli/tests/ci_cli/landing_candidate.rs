@@ -821,3 +821,23 @@ fn a_candidate_of_pinned_member_heads_passes_and_a_doctored_one_is_refused() {
     has(&doctored, &format!("member {head:.9}"));
     has(&doctored, "src/tsk_004.rs");
 }
+
+/// A member that merges the candidate's earlier member merge after its
+/// review, then lands onto it, is refused: only the line's trusted tip may
+/// carry a post-review merge, never unlanded candidate work.
+#[test]
+fn a_member_merging_an_earlier_candidate_merge_after_its_review_is_refused() {
+    let (f, tip) = published(&["TSK-002", "TSK-003"]);
+    let first = member_head(&f, "TSK-002", &tip, Change::Code);
+    member_head(&f, "TSK-003", &tip, Change::Code);
+    let c1 = land(&f, "TSK-002", &first);
+    f.git(&["switch", "-q", "task/TSK-003-work"]);
+    f.git(&["merge", "--no-ff", "-qm", "chore: merge the candidate", &c1]);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", CANDIDATE]);
+    land(&f, "TSK-003", &head);
+    let result = candidate_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9} (TSK-003)"));
+    has(&result, "not on the first-parent line");
+}

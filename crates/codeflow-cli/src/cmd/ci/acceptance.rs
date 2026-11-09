@@ -100,6 +100,7 @@ pub(super) fn dispatch(
                     replaced: replaced.as_ref(),
                     branch_prefixes: Some(&git.branch_prefixes),
                     member: None,
+                    stacking: None,
                 },
             )
         }),

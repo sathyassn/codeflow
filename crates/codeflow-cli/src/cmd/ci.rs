@@ -912,6 +912,10 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+    // And each member's own graph, on the commit it lands as alone (AC-16).
+    if let (true, Some(landing)) = (scope_ready, names.main_batch()) {
+        main_batch::graphs(&root, landing, &head, level, &mut tagged, &mut ran);
+    }
     timings.lap("visible-graph");
 
     // --- PR-body check ----------------------------------------------------

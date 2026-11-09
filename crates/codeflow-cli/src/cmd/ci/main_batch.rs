@@ -7,9 +7,12 @@
 //! workflow change notice, path policy with the size and ignored-file
 //! rules, the record transitions and the id registry's merge rule. Each
 //! finding names the member. Classification admission
-//! (`amendment::range_problem`) is part of the admission itself, and the
-//! workgraph validation runs once on the batch head, which holds every
-//! filing's records.
+//! (`amendment::range_problem`) is part of the admission itself. The
+//! workgraph validation runs on the batch head and again for every member,
+//! filing or task, on the commit that member lands as on its own: the
+//! clean merge of the batch's anchor and the member head, as its one pull
+//! request's run checks it out. Another member's records cannot complete a
+//! member's graph, such as a dependency on a task only another member adds.
 
 use std::path::Path;
 
@@ -87,6 +90,67 @@ pub(super) fn filings(
             each.violation.message = format!("{named}: {}", each.violation.message);
             each
         }));
+    }
+}
+
+/// The workgraph of each member of the batch `landing` at `head`, filing or
+/// task, validated on the commit that member lands as on its own, at the
+/// run's `git.work_planning` level. Each finding names the member.
+pub(super) fn graphs(
+    root: &Path,
+    landing: &super::line_tip::Landing,
+    head: &str,
+    level: codeflow_core::hooks::PolicyLevel,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    use codeflow_core::workgraph::acceptance::candidate;
+    ran.push("main-batch-graphs");
+    let refuse = |message: String| super::TaggedViolation {
+        sha: None,
+        violation: Violation::new(
+            "work.valid_graph",
+            level,
+            message,
+            codeflow_core::remedy::WORKGRAPH_INVALID.remedy(),
+        ),
+    };
+    // A graph that cannot be validated refuses at any level: fail closed.
+    let cannot = |message: String| super::TaggedViolation {
+        sha: None,
+        violation: Violation::always_blocking(
+            "work.valid_graph",
+            message,
+            "fetch the full history of the batch and its default target, then rerun `codeflow ci`",
+        ),
+    };
+    let members = match candidate::members(root, &landing.tip, head) {
+        Ok(members) => members,
+        Err(error) => {
+            tagged.push(cannot(format!(
+                "cannot list the batch's members to validate each one's workgraph: {error}"
+            )));
+            return;
+        }
+    };
+    for member in members {
+        let named = format!("member {:.9}, merged by {:.9}", member.head, member.merge);
+        let checked = tempfile::tempdir()
+            .map_err(|error| format!("cannot make a scratch directory: {error}"))
+            .and_then(|dir| {
+                candidate::check_out_landing(root, &landing.tip, member, dir.path())
+                    .map(|()| codeflow_core::validate::validate_workgraph(dir.path()))
+            });
+        match checked {
+            Ok(report) if report.is_clean() => {}
+            Ok(report) => tagged.push(refuse(format!(
+                "{named}: its durable workgraph, on the commit it lands as on its own, is invalid: {}",
+                report.issues.join("; ")
+            ))),
+            Err(error) => tagged.push(cannot(format!(
+                "{named}: cannot validate its durable workgraph on the commit it lands as on its own: {error}"
+            ))),
+        }
     }
 }
 

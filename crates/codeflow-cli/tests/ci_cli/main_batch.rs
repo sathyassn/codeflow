@@ -1043,3 +1043,175 @@ fn an_unreadable_record_on_the_tip_refuses_the_member() {
     blocks(&result, "work.acceptance_binding");
     has(&result, &format!("member {head:.9}"));
 }
+
+/// Two members from the anchor: after the second's review it merges the
+/// candidate's first member merge, then lands onto it. That merge is
+/// unlanded work, not `main`, so it neither carries a post-review merge
+/// nor serves as the member's base, and the member is refused.
+#[test]
+fn a_member_merging_an_earlier_candidate_merge_after_its_review_is_refused() {
+    let (f, tip) = batch();
+    let first = member(&f, "TSK-011", &tip, untouched);
+    member(&f, "TSK-010", &tip, untouched);
+    let c1 = land(&f, "TSK-011", &first);
+    f.git(&["switch", "-q", "task/TSK-010-work"]);
+    f.git(&["merge", "--no-ff", "-qm", "chore: merge the candidate", &c1]);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", BATCH]);
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9}"));
+    has(&result, "so it starts from unlanded work");
+}
+
+/// A member that branches from an earlier candidate merge carries that
+/// member's unlanded work, which its own pull request into `main` would
+/// carry too, and is refused.
+#[test]
+fn a_member_branched_from_an_earlier_candidate_merge_is_refused() {
+    let (f, tip) = batch();
+    let first = member(&f, "TSK-011", &tip, untouched);
+    let c1 = land(&f, "TSK-011", &first);
+    let head = member(&f, "TSK-010", &c1, untouched);
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9}"));
+    has(&result, "so it starts from unlanded work");
+}
+
+/// A filing that adds TSK-012, which depends on TSK-013, and another
+/// filing that adds TSK-013. The batch head resolves the dependency, but
+/// the first filing's own pull request into `main` does not, and the batch
+/// refuses that member with the same finding its own run gives.
+#[test]
+fn a_filing_depending_on_a_task_another_filing_adds_is_refused_as_alone() {
+    let (f, tip) = batch();
+    let dependent = records_only(&f, "plan/TSK-012-file", &tip, |f| {
+        f.write(
+            &record_path("TSK-012"),
+            &main_task("TSK-012", None).replace("depends_on: []", "depends_on: [TSK-013]"),
+        );
+    });
+    let other = filing(&f, "TSK-013", &tip);
+    land(&f, "TSK-012", &dependent);
+    land(&f, "TSK-013", &other);
+    seed(&f);
+    let finding = "task TSK-012 depends on TSK-013, but no task with that id exists";
+    let batched = batch_ci(&f, &tip);
+    blocks(&batched, "work.valid_graph");
+    has(&batched, &format!("member {dependent:.9}, merged by"));
+    has(&batched, finding);
+    // Its own pull request names the task it files.
+    f.git(&["switch", "-q", "plan/TSK-012-file"]);
+    let body = format!("Task: TSK-012\n\n{BODY}");
+    let alone = ci(
+        &f,
+        &[
+            "--base",
+            &tip,
+            "--head",
+            "HEAD",
+            "--into",
+            "main",
+            "--branch",
+            "plan/TSK-012-file",
+            "--pr-body",
+            &body,
+        ],
+    );
+    blocks(&alone, "work.valid_graph");
+    has(&alone, finding);
+}
+
+/// An epic task that drops its epic and becomes standalone in its reviewed
+/// change is refused: a member keeps the owner its anchor record names,
+/// whatever that epic's state, and the anchor's cancelled or archived epic
+/// still refuses it.
+#[test]
+fn an_epic_task_turned_standalone_is_refused() {
+    let to_standalone = |f: &Line| {
+        criterion(
+            f,
+            "TSK-011",
+            "epic_id: EPC-001",
+            "epic_id: null\nstandalone_reason: One bounded fix",
+        );
+    };
+    for state in [None, Some("cancelled"), Some("archived")] {
+        let f = Line::new();
+        f.git(&["switch", "-q", "main"]);
+        if let Some(state) = state {
+            let epic = super::line_adoption::fixture::EPIC_PATH;
+            f.write(
+                epic,
+                &read(&f, epic).replace("status: planning", &format!("status: {state}")),
+            );
+        }
+        f.write(
+            &record_path("TSK-011"),
+            &main_task("TSK-011", Some("EPC-001")),
+        );
+        f.commit("docs: plan main work");
+        f.git(&["push", "-q", "origin", "main"]);
+        let tip = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["switch", "-qc", BATCH]);
+        let head = member(&f, "TSK-011", &tip, to_standalone);
+        land(&f, "TSK-011", &head);
+        let result = batch_ci(&f, &tip);
+        blocks(&result, "work.acceptance_binding");
+        has(&result, &format!("member {head:.9}"));
+        has(
+            &result,
+            "TSK-011 names no epic at the member head, but EPC-001 at the batch's anchor",
+        );
+    }
+}
+
+/// A task the anchor holds under an epic the anchor has no record of
+/// cannot take that epic's record from the member head: a member that
+/// adds the record itself is refused.
+#[test]
+fn an_epic_record_only_the_member_adds_does_not_bind_an_anchor_task() {
+    let (f, tip) = planned(&[("TSK-011", main_task("TSK-011", Some("EPC-002")))]);
+    let head = member(&f, "TSK-011", &tip, |f| {
+        let epic = super::line_adoption::fixture::EPIC_PATH;
+        f.write(
+            "project-management/epics/EPC-002.md",
+            &read(f, epic).replace("id: EPC-001", "id: EPC-002"),
+        );
+    });
+    land(&f, "TSK-011", &head);
+    seed(&f);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(&result, &format!("member {head:.9}"));
+    has(
+        &result,
+        "TSK-011 names EPC-002, which has no epic record at the batch's anchor",
+    );
+    lacks(&result, "work.id_registry (block)");
+}
+
+/// A standalone task that takes an epic in its reviewed change is refused
+/// the same way; the clean batch keeps its standalone member passing.
+#[test]
+fn a_standalone_task_given_an_epic_is_refused() {
+    let (f, tip) = batch();
+    let head = member(&f, "TSK-010", &tip, |f| {
+        criterion(
+            f,
+            "TSK-010",
+            "epic_id: null\nstandalone_reason: One bounded fix",
+            "epic_id: EPC-001",
+        );
+    });
+    land(&f, "TSK-010", &head);
+    let result = batch_ci(&f, &tip);
+    blocks(&result, "work.acceptance_binding");
+    has(
+        &result,
+        "TSK-010 names EPC-001 at the member head, but no epic at the batch's anchor",
+    );
+}
