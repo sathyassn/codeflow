@@ -1,0 +1,11 @@
+id = "TSK-1406"
+uid = "f32d221a-95d6-475f-9a18-a63c66fffae3"
+kind = "TSK"
+title = "Exec-guard decides a wide glob inside its deadline under load"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T10:40:51Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
