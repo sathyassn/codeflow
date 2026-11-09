@@ -1777,8 +1777,10 @@ checked, so a symlink does not remove the target owner's protection.
   parameter's value (TSK-1404). An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
-  or escaped brace is text. Such a word in the program position (`$V push
-  origin HEAD:main`, `env "$V" git push`), in a `GIT_*` or other git
+  or escaped brace is text. A word filled in from data the guard cannot
+  read, or one holding an unquoted brace list or sequence, in the program
+  position (`$V push origin HEAD:main`, `env "$V" git push`), in a `GIT_*`
+  or other git
   configuration, location or program variable assigned for git, in a git
   subcommand or `-c` value, or in an operand of a subcommand a decision
   reads refuses before the push, alias, transport and release decisions
