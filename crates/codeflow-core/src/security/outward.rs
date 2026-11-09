@@ -3977,7 +3977,10 @@ mod tests {
                 "{command}: refused as unresolved: {found:?}"
             );
         }
-        for command in ["parallel --plain -I % echo % ::: feat/x"] {
+        for command in [
+            "parallel --plain -I % echo % ::: feat/x",
+            "parallel --plain --arg-sep %% echo {} %% feat/x",
+        ] {
             let found = evaluate(command, &SecuritySection::default());
             assert!(found.is_empty(), "{command}: {found:?}");
         }

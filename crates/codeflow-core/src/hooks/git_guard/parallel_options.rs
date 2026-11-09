@@ -442,6 +442,7 @@ pub(crate) const INSIDE_THE_CLOSED_RULE: &[&str] = &[
     "parallel --pla touch {} ::: a",
     "cat list | parallel --plain wc -l",
     "parallel --plain -I % cp % backup/ ::: a.txt",
+    "parallel -0j2 --plai touch {} ::: a",
 ];
 
 #[cfg(test)]
