@@ -482,27 +482,31 @@ fn filing_problem(repo: &Repository, member: Member) -> Result<Option<String>, S
         .diff_tree_to_tree(Some(&before), Some(&after), None)
         .map_err(|error| format!("cannot diff the member: {}", error.message()))?;
     for delta in diff.deltas() {
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let name = crate::git::GitName::from_bytes(
+            delta
+                .new_file()
+                .path_bytes()
+                .or_else(|| delta.old_file().path_bytes())
+                .unwrap_or_default(),
+        );
         if delta.status() != git2::Delta::Added {
-            return Ok(Some(format!("it changes or removes {path}")));
+            return Ok(Some(format!("it changes or removes {}", name.display())));
         }
         let regular = matches!(
             delta.new_file().mode(),
             git2::FileMode::Blob | git2::FileMode::BlobExecutable
         );
-        let record = delta
-            .new_file()
-            .path()
-            .and_then(std::path::Path::to_str)
+        // A name that is not UTF-8 is no record path, so it refuses.
+        let record = name
+            .rule_text()
+            .ok()
             .and_then(crate::workgraph::work_start::record_kind_for_tree_path)
             .is_some();
         if !regular || !record {
-            return Ok(Some(format!("it adds {path}, which is not a record file")));
+            return Ok(Some(format!(
+                "it adds {}, which is not a record file",
+                name.display()
+            )));
         }
     }
     Ok(None)
