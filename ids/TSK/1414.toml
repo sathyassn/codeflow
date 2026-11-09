@@ -1,0 +1,11 @@
+id = "TSK-1414"
+uid = "8c3d8052-6830-448b-92f0-adc32fe9a6b0"
+kind = "TSK"
+title = "The secret scan exempts one reviewed fixture finding"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T15:56:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
