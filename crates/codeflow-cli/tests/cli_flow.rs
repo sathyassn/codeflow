@@ -281,8 +281,11 @@ fn without_outer_coverage(command: &mut Command) -> &mut Command {
 /// partitions and Windows, which install only cargo-nextest, the generated
 /// full command cannot run, `codeflow doctor` names the missing producer
 /// instead, and this test returns after saying on stderr that it proved
-/// nothing there. The scratch child runs without an outer collector's
-/// variables, so the check also holds inside `cargo llvm-cov nextest`.
+/// nothing there. A cargo-llvm-cov that is installed but fails its version
+/// probe fails this test, and so does one whose llvm-tools are missing: the
+/// probe passes and the full gate then fails. The scratch child runs without
+/// an outer collector's variables, so the check also holds inside
+/// `cargo llvm-cov nextest`.
 #[test]
 fn test_setup_full_command_runs_its_coverage_producer() {
     let dir = tempfile::tempdir().unwrap();
@@ -292,12 +295,32 @@ fn test_setup_full_command_runs_its_coverage_producer() {
             .current_dir(dir.path()),
     )
     .output();
-    if !probe.is_ok_and(|output| output.status.success()) {
-        eprintln!(
-            "skipped: cargo-llvm-cov is not installed on this host, so setup's \
-             generated full command cannot run; this test proved nothing here"
+    let probe = match probe {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!(
+                "skipped: cargo could not start ({error}), so setup's generated \
+                 full command cannot run; this test proved nothing here"
+            );
+            return;
+        }
+    };
+    if !probe.status.success() {
+        let message = stderr(&probe);
+        if message.contains("no such command") {
+            eprintln!(
+                "skipped: cargo-llvm-cov is not installed on this host ({}), so \
+                 setup's generated full command cannot run; this test proved \
+                 nothing here",
+                message.lines().next().unwrap_or_default().trim()
+            );
+            return;
+        }
+        panic!(
+            "cargo-llvm-cov is installed but `cargo llvm-cov --version` failed \
+             ({}):\n{message}",
+            probe.status
         );
-        return;
     }
     init_repo(dir.path());
     write(
