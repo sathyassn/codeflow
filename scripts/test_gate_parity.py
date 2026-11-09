@@ -477,7 +477,9 @@ class GatePartControls(unittest.TestCase):
         self.assert_problem(WORKFLOW.replace("only: present-supply-chain,cf-present-qualification",
                                              "only: present-supply-chain,cf-present-qualification,read-benchmark"),
                             "landing gate parts name release-tier targets")
-        self.assert_problem(WORKFLOW.replace(parity.RELEASE_IF, parity.RELEASE_IF.replace(
+        # TSK-1396: a copy wired for a merge queue carries the queue form.
+        release_if = parity.RELEASE_IF_QUEUE if parity.RELEASE_IF_QUEUE in WORKFLOW else parity.RELEASE_IF
+        self.assert_problem(WORKFLOW.replace(release_if, release_if.replace(
             "github.event_name == 'schedule'", "github.event_name == 'pull_request' || github.event_name == 'schedule'")),
                             "gates-release job's condition")
 
@@ -763,7 +765,11 @@ class HostedEventParityControls(unittest.TestCase):
         return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
 
     def test_ready_integration_conditions_keep_both_verdict_contracts(self):
-        self.assertEqual(gate_event_condition(WORKFLOW), self.READY)
+        # TSK-1396: a copy wired for a merge queue also runs the gates for
+        # a queue entry, and nothing else changes.
+        queued = "\n  merge_group:\n" in WORKFLOW
+        expected = self.READY + (" || github.event_name == 'merge_group'" if queued else "")
+        self.assertEqual(gate_event_condition(WORKFLOW), expected)
         workflow = self.ready_workflow()
         self.assertEqual(parity.gate_part_problems(CONFIG, workflow), [])
         self.assertEqual(parity.windows_verdict_problems(workflow), [])

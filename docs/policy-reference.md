@@ -1257,11 +1257,17 @@ run started, so two pull requests each green on an older base can merge
 and leave the branch red (ADR-0081). `git.require_up_to_date` chooses how
 that is prevented:
 
-| Value | B | C and `codeflow protect <pattern>` | Cost |
-|---|---|---|---|
-| `true` (the default, also when absent) | strict checks | strict checks | each pull request is updated and its checks rerun after every other merge |
-| `false` | checks that are not strict | checks that are not strict | nothing stops a merge on checks that ran against an older base; whoever merges confirms they ran on the current one |
-| `"merge_queue"` | checks that are not strict, and GitHub's `merge_queue` rule | strict checks | GitHub offers merge queues only to repositories an organization owns; the CI and policy workflows run again for each queue entry |
+- `true` (the default, also when absent): ruleset B, ruleset C and
+  `codeflow protect <pattern>` write strict checks. Cost: each pull request
+  is updated and its checks rerun after every other merge.
+- `false`: all of them write checks that are not strict. Cost: nothing
+  stops a merge on checks that ran against an older base; whoever merges
+  confirms they ran on the current one.
+- `"merge_queue"`: ruleset B writes checks that are not strict plus
+  GitHub's `merge_queue` rule; ruleset C and `codeflow protect <pattern>`
+  keep strict checks. Cost: GitHub offers merge queues only to repositories
+  an organization owns, and the CI and policy workflows run again for each
+  queue entry.
 
 - **Only the committed value relaxes the rule.** `remote protect` and
   `doctor` read the key from the remote's default branch as last fetched,

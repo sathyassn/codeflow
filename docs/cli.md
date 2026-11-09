@@ -532,9 +532,8 @@ in the [policy reference](policy-reference.md#own-task-criteria-on-an-integratio
 another provider prints the manual checklist. It writes only rulesets it owns
 or `--adopt` names, and never weakens a rule; the rulesets, profiles, dry run
 and recovery window are in the
-[policy reference](policy-reference.md#remote-protection), and whether
-branches must be up to date or use a merge queue is
-`git.require_up_to_date` there. A live read that
+[policy reference](policy-reference.md#remote-protection), with
+`git.require_up_to_date`. A live read that
 fails or does not parse writes nothing. `codeflow doctor` reads the live rules
 back.
 
