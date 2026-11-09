@@ -121,13 +121,9 @@ fn holds_hooks(dir: &Path) -> bool {
 /// UTF-8 text.
 pub fn target(root: &Path) -> Result<String, ScaffoldError> {
     let top = gitutil::top_level(root)?;
-    let Some(current) = gitutil::working_trees(root)?
-        .into_iter()
-        .find(|tree| same_dir(tree, &top))
-    else {
-        return Err(ScaffoldError::Git(Shown::fixed(
-            "core.hooksPath not written: this working tree is not one git lists for the repository (`git worktree list`), so the managed hooks folder cannot be tied to the repository; run the command from a listed working tree. Where git keeps the git directory apart from the working tree (a separate git directory or a submodule), check that the working tree is this repository's and set the path by hand: `git config core.hooksPath \"<working tree>/.codeflow/git-hooks\"`, with the working tree's absolute path",
-        )));
+    let trees = gitutil::working_trees(root)?;
+    let Some(current) = trees.iter().find(|tree| same_dir(tree, &top)).cloned() else {
+        return Err(unlisted(root, &trees)?);
     };
     if let Some(main) = gitutil::main_working_tree(root)? {
         if holds_hooks(&main.join(CODEFLOW_HOOKS_PATH)) {
@@ -135,6 +131,22 @@ pub fn target(root: &Path) -> Result<String, ScaffoldError> {
         }
     }
     spelled(&current)
+}
+
+/// The refusal for a working tree git does not list. Only when git lists
+/// the repository's own git directory as its working tree (a separate git
+/// directory or a submodule) does it name the hand step; any other unlisted
+/// folder is told to run from a listed working tree.
+fn unlisted(root: &Path, trees: &[std::path::PathBuf]) -> Result<ScaffoldError, ScaffoldError> {
+    let git_dir_listed = match gitutil::common_dir(root)? {
+        Some(common) => trees.iter().any(|tree| same_dir(tree, &common)),
+        None => false,
+    };
+    Ok(ScaffoldError::Git(Shown::fixed(if git_dir_listed {
+        "core.hooksPath not written: git lists this repository's git directory as its working tree (a separate git directory or a submodule), so the managed hooks folder cannot be tied to the repository; check that this working tree is the repository's and set the path by hand: `git config core.hooksPath \"<working tree>/.codeflow/git-hooks\"`, with the working tree's absolute path"
+    } else {
+        "core.hooksPath not written: this working tree is not one git lists for the repository (`git worktree list`), so the managed hooks folder cannot be tied to the repository; run the command from a listed working tree"
+    })))
 }
 
 /// Write the managed form for `root` and return it. The value git then
@@ -348,7 +360,14 @@ mod tests {
         std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\n").unwrap();
         let link = format!("gitdir: {}\n", repo.join(".git").display());
         std::fs::write(other.join(".git"), link).unwrap();
-        assert!(target(&other).is_err());
+        // The refusal names no hand step for a folder that only links to
+        // another repository's git directory.
+        let refusal = target(&other).unwrap_err().to_string();
+        assert!(
+            refusal.contains("run the command from a listed working tree"),
+            "{refusal}"
+        );
+        assert!(!refusal.contains("git config"), "{refusal}");
         assert!(migrate(&other, true).is_err());
         assert_eq!(
             super::super::detect::configured_hooks_path(&repo).unwrap(),
@@ -368,7 +387,8 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         git(&repo, &["config", "core.worktree", other.to_str().unwrap()]);
         // Git now treats `other` as the working tree, which it does not list.
-        assert!(target(&repo).is_err());
+        let refusal = target(&repo).unwrap_err().to_string();
+        assert!(!refusal.contains("git config"), "{refusal}");
         assert_eq!(migrate(&repo, true).ok().flatten(), None);
         assert_eq!(
             super::super::detect::configured_hooks_path(&repo.join(".git")).unwrap(),

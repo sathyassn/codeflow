@@ -61,7 +61,9 @@ ADR-0055 item 5's hooks sentences; the rest of that item stands.
 - A repository whose git directory is kept apart from its working tree (a
   separate git directory, a submodule) has no listed working tree to tie the
   path to, so init and update refuse and name the step; the path is then set
-  by hand.
+  by hand. Git lists the git directory as that repository's working tree, so
+  doctor keeps calling the hand-set path stale and names `codeflow update`,
+  which refuses again.
 - Per-worktree configuration (`extensions.worktreeConfig`) was not used: it
   turns on a repository extension, and a worktree made by plain `git
   worktree add` would fall back to the shared value anyway.
