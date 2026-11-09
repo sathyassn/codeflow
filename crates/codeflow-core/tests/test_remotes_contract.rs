@@ -121,7 +121,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
 /// Test sources the lint never opens, relative to `crates/`: their names say
 /// they hold secrets, so no agent or lint run reads them.
 const UNREAD: &[&str] = &[
-    "codeflow-cli/tests/ci_cli/secret_scan_exemption.rs",
+    "codeflow-cli/tests/ci_cli/scan_exemption_admission.rs",
     "codeflow-cli/tests/refusal_journey/secret_paths.rs",
     "codeflow-core/tests/managed_secret_scan.rs",
 ];
