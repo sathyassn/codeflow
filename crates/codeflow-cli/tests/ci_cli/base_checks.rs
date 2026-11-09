@@ -447,6 +447,84 @@ fn an_input_folder_name_that_is_not_utf8_fails_naming_it() {
     );
 }
 
+/// AC-2: a folder entry in a declared input folder whose name is not UTF-8
+/// fails the check before it runs, whatever the folder holds. The trusted
+/// commit gets that entry through git2, which writes the raw name and can
+/// hold an empty folder; `fill` adds the folder's own entries.
+fn assert_raw_folder_refused(fill: impl FnOnce(&git2::Repository, &mut git2::TreeBuilder<'_>)) {
+    let repo = Repo::with_boundary();
+    repo.write(
+        DECLARATION,
+        &declaration(SCRIPT, "bash", &[BOUNDARY, "docs/inputs"], Some(60)),
+    );
+    repo.write("docs/inputs/plain.txt", "plain\n");
+    repo.commit("chore: an input folder");
+    let clean = repo.checks("HEAD", "HEAD", "HEAD", &[]);
+    assert_eq!(clean.0, 0, "{}", clean.1);
+
+    let git = git2::Repository::open(&repo.root).unwrap();
+    let head = git.head().unwrap().peel_to_commit().unwrap();
+    let root = head.tree().unwrap();
+    let subtree = |path: &str| {
+        git.find_tree(root.get_path(std::path::Path::new(path)).unwrap().id())
+            .unwrap()
+    };
+    let mut raw = git.treebuilder(None).unwrap();
+    fill(&git, &mut raw);
+    let raw = raw.write().unwrap();
+    let mut inputs = git.treebuilder(Some(&subtree("docs/inputs"))).unwrap();
+    inputs.insert(&b"raw-\xff"[..], raw, 0o040_000).unwrap();
+    let inputs = inputs.write().unwrap();
+    let mut docs = git.treebuilder(Some(&subtree("docs"))).unwrap();
+    docs.insert("inputs", inputs, 0o040_000).unwrap();
+    let docs = docs.write().unwrap();
+    let mut top = git.treebuilder(Some(&root)).unwrap();
+    top.insert("docs", docs, 0o040_000).unwrap();
+    let tree = git.find_tree(top.write().unwrap()).unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.com").unwrap();
+    git.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "chore: a raw folder name",
+        &tree,
+        &[&head],
+    )
+    .unwrap();
+
+    let result = repo.checks("HEAD", "HEAD", "HEAD", &[]);
+    assert_refused(
+        &result,
+        &[
+            "docs/inputs/",
+            "has a name that is not UTF-8 on the trusted commit",
+            DECLARATION,
+        ],
+    );
+    assert!(!result.1.contains("boundary: holds"), "{}", result.1);
+}
+
+#[test]
+fn an_input_subfolder_name_that_is_not_utf8_fails_with_a_file_in_it() {
+    assert_raw_folder_refused(|git, raw| {
+        let blob = git.blob(b"child\n").unwrap();
+        raw.insert("child.txt", blob, 0o100_644).unwrap();
+    });
+}
+
+#[test]
+fn an_input_subfolder_name_that_is_not_utf8_fails_with_a_link_in_it() {
+    assert_raw_folder_refused(|git, raw| {
+        let blob = git.blob(b"../plain.txt").unwrap();
+        raw.insert("link", blob, 0o120_000).unwrap();
+    });
+}
+
+#[test]
+fn an_empty_input_subfolder_name_that_is_not_utf8_fails() {
+    assert_raw_folder_refused(|_, _| {});
+}
+
 /// AC-2: a check past its timeout is stopped, with everything it started,
 /// and fails naming the timeout.
 #[test]

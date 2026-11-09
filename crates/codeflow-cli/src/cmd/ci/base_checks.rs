@@ -399,47 +399,53 @@ fn export(
     };
     match mode {
         MODE_FILE | MODE_EXECUTABLE => write_blob(repo, id, path, &root.join(path)),
-        MODE_TREE if folder_allowed => {
-            let sub = repo.find_tree(id).map_err(|error| {
-                format!(
-                    "cannot run: its input {path} cannot be read: {}",
-                    error.message()
-                )
-            })?;
-            let mut failure = None;
-            sub.walk(git2::TreeWalkMode::PreOrder, |prefix, entry| {
-                let name = GitName::from_bytes(entry.name_bytes());
-                let result = match (entry.filemode(), name.rule_text()) {
-                    (MODE_TREE, _) => return git2::TreeWalkResult::Ok,
-                    (_, Err(_)) => Err(format!(
-                        "cannot run: its input {path}/{prefix}{} has a name that is not UTF-8 on the trusted commit",
-                        name.display()
-                    )),
-                    (MODE_FILE | MODE_EXECUTABLE, Ok(text)) => {
-                        let inner = format!("{path}/{prefix}{text}");
-                        write_blob(repo, entry.id(), &inner, &root.join(&inner))
-                    }
-                    (other, Ok(text)) => Err(format!(
-                        "cannot run: its input {path}/{prefix}{text} is {} on the trusted commit",
-                        describe_mode(other)
-                    )),
-                };
-                match result {
-                    Ok(()) => git2::TreeWalkResult::Ok,
-                    Err(why) => {
-                        failure = Some(why);
-                        git2::TreeWalkResult::Abort
-                    }
-                }
-            })
-            .ok();
-            failure.map_or(Ok(()), Err)
-        }
+        MODE_TREE if folder_allowed => export_folder(repo, id, path, root),
         other => Err(format!(
             "cannot run: its {what} {path} is {} on the trusted commit",
             describe_mode(other)
         )),
     }
+}
+
+/// Write every entry of the trusted folder `id`, shown as `shown`, under
+/// `root`. Each entry's name is judged before its kind, folders included,
+/// and every error is returned, so an entry this cannot judge or read fails
+/// the export instead of leaving the folder partly written.
+fn export_folder(
+    repo: &git2::Repository,
+    id: git2::Oid,
+    shown: &str,
+    root: &Path,
+) -> Result<(), String> {
+    let folder = repo.find_tree(id).map_err(|error| {
+        format!(
+            "cannot run: its input {shown} cannot be read: {}",
+            error.message()
+        )
+    })?;
+    for entry in &folder {
+        let name = GitName::from_bytes(entry.name_bytes());
+        let Ok(text) = name.rule_text() else {
+            return Err(format!(
+                "cannot run: its input {shown}/{} has a name that is not UTF-8 on the trusted commit",
+                name.display()
+            ));
+        };
+        let inner = format!("{shown}/{text}");
+        match entry.filemode() {
+            MODE_TREE => export_folder(repo, entry.id(), &inner, root)?,
+            MODE_FILE | MODE_EXECUTABLE => {
+                write_blob(repo, entry.id(), &inner, &root.join(&inner))?;
+            }
+            other => {
+                return Err(format!(
+                    "cannot run: its input {inner} is {} on the trusted commit",
+                    describe_mode(other)
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn write_blob(
