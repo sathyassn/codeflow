@@ -859,14 +859,21 @@ impl GitPolicy {
     }
 
     /// `true` when `branch` starts with one of the sanctioned prefixes
-    /// (charter §6.4). Protected branches are exempt — they are governed by
-    /// the protection rules, not naming.
+    /// (charter §6.4), or with `git.candidate_prefix` when that prefix keeps
+    /// landing candidates apart from every other branch
+    /// ([`Self::candidate_prefix_problem`]): a landing candidate is named by
+    /// it, and the name grants nothing else (TSK-1154 AC-10). Protected
+    /// branches are exempt — they are governed by the protection rules, not
+    /// naming.
     #[must_use]
     pub fn branch_name_ok(&self, branch: &str) -> bool {
         if self.branch_is_protected(branch) {
             return true;
         }
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))
+            || (branch.starts_with(&self.candidate_prefix)
+                && branch.len() > self.candidate_prefix.len()
+                && self.candidate_prefix_problem().is_none())
     }
 
     /// Why `git.candidate_prefix` does not keep landing candidates apart from
@@ -1705,6 +1712,16 @@ mod tests {
         assert!(g.branch_name_ok("feat/v2-hooks"));
         assert!(g.branch_name_ok("spike/idea"));
         assert!(!g.branch_name_ok("my-cool-branch"));
+        // TSK-1154 AC-10: a landing candidate's default prefix is a name.
+        assert!(g.branch_name_ok("candidate/epc-022-c1"));
+        assert!(!g.branch_name_ok("candidate/"));
+        // A prefix that overlaps a protected branch names nothing.
+        let overlapping = GitPolicy {
+            candidate_prefix: "mai".into(),
+            ..g.clone()
+        };
+        assert!(overlapping.candidate_prefix_problem().is_some());
+        assert!(!overlapping.branch_name_ok("mai-c1"));
         // Protected branches are exempt from naming.
         assert!(g.branch_name_ok("main"));
     }
