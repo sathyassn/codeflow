@@ -1639,6 +1639,95 @@ pub fn task_line_binding(
     })
 }
 
+/// Whether task `task`'s records bind it to the default target `default`
+/// as a member of a batch into it (TSK-1154 AC-16(c)), judged at exact
+/// revisions only: its record at the member `head` declares `default` as
+/// its `integration_target`, and so does its record at the batch `anchor`
+/// where one exists there; a standalone task gives a non-empty
+/// `standalone_reason`; an epic task keeps the epic id its anchor record
+/// names, and that epic, read at the anchor (at the head only when the
+/// anchor has no record of it), exists and is neither cancelled nor
+/// archived. `Ok(Err(reason))` is a refusal. This binding is separate from
+/// [`task_line_binding`], which keeps refusing the default target.
+///
+/// # Errors
+///
+/// Returns why a revision or a record could not be read.
+pub fn task_main_binding(
+    repo_root: &Path,
+    task: &str,
+    head: &str,
+    anchor: &str,
+    default: &str,
+) -> Result<Result<(), String>, WorkStartError> {
+    let Some(record) = task_record_at_revision(repo_root, task, head)? else {
+        return Ok(Err(format!("{task} has no record at the member head")));
+    };
+    if let Some(refusal) = task_parent_line_refusal(&record) {
+        return Ok(Err(refusal));
+    }
+    let declares = |record: &Record| {
+        record
+            .integration_target
+            .as_deref()
+            .map(logical_target)
+            .is_some_and(|target| target == default)
+    };
+    if !declares(&record) {
+        return Ok(Err(format!(
+            "{task}'s record at the member head does not declare '{default}' as its integration_target"
+        )));
+    }
+    let then = task_record_at_revision(repo_root, task, anchor)?;
+    if then.as_ref().is_some_and(|then| !declares(then)) {
+        return Ok(Err(format!(
+            "{task}'s record at the batch's anchor does not declare '{default}' as its integration_target"
+        )));
+    }
+    let Some(epic) = record.epic_id.as_deref() else {
+        let reason = record
+            .standalone_reason
+            .as_deref()
+            .is_some_and(|reason| reason.bytes().any(|byte| !byte.is_ascii_whitespace()));
+        return Ok(if reason {
+            Ok(())
+        } else {
+            Err(format!(
+                "{task} names no epic and gives no standalone_reason"
+            ))
+        });
+    };
+    if let Some(then) = &then {
+        if then.epic_id.as_deref() != Some(epic) {
+            return Ok(Err(format!(
+                "{task} names {epic} at the member head, but {} at the batch's anchor",
+                then.epic_id.as_deref().unwrap_or("no epic")
+            )));
+        }
+    }
+    let (owner, place) = match epic_record_at_revision(repo_root, epic, anchor)? {
+        Some(owner) => (owner, "the batch's anchor"),
+        None => match epic_record_at_revision(repo_root, epic, head)? {
+            Some(owner) => (owner, "the member head"),
+            None => {
+                return Ok(Err(format!(
+                    "{task} names {epic}, which has no epic record at the batch's anchor or the member head"
+                )))
+            }
+        },
+    };
+    Ok(
+        if matches!(owner.status.as_str(), "cancelled" | "archived") {
+            Err(format!(
+                "{task} names {epic}, which is {} at {place}",
+                owner.status
+            ))
+        } else {
+            Ok(())
+        },
+    )
+}
+
 /// The `integration_target` the task record at `path` declares.
 pub(crate) fn declared_work_target_at(path: &Path) -> Result<Option<String>, WorkStartError> {
     let content = std::fs::read_to_string(path).map_err(|error| {

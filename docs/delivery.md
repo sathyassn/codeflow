@@ -105,6 +105,17 @@ each batch.
     of its parents, that each member's completion binds at its head, and
     that nothing beyond a member's own record changes its criteria. A
     pushed `candidate/` branch gets the same check from the pre-push hook.
+  - A cut to `main` can be one batch pull request from a `candidate/`
+    branch cut from `main`'s fetched tip, holding only no-ff merges of
+    reviewed heads that target `main`. `codeflow ci --into main` with the
+    pull request's body, which carries no `Task:` line, judges each member
+    from that tip. A task member binds as its own pull request into `main`
+    would: its one changed task record declares `main`, and its acceptance
+    block names a reviewed commit the member head is, or holds with only
+    clean merges of `main` after it. A member with no task completion may
+    only add new record files. No existing criterion may change in the
+    batch, so a task's own criteria change goes to `main` in its own pull
+    request.
   - It runs the full gate once on that exact candidate.
   - A clean merge does not reopen unit review; a
     hand-resolved product hunk returns its task to a whole-unit review at its
@@ -197,7 +208,7 @@ or CI runs.**
 | Stage | What must hold | Checked by |
 |---|---|---|
 | Start | The task record exists and is anchored: in the epic's planning change, or, for a standalone task, at head on its own branch. Code predecessors are complete, or reviewed and pinned with `--on TSK-NNN@<sha>` | `codeflow work claim`, `codeflow work start`; CI applies the same read-only check once per pull request |
-| Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`). A pull request that names neither is refused, whatever it touches | `codeflow ci` |
+| Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`). A pull request that names neither is refused, whatever it touches. A batch pull request into `main` from a `candidate/` branch carries no `Task:` line: each member's task is read from the records at its head | `codeflow ci` |
 | Criteria | The task may change its own criteria, and CI prints the change for the reviewer. The change rides in the task's own pull request, with a dated `- Amended YYYY-MM-DD:` note inside each changed criterion, and then lands on the line through the landing candidate, which accepts it at the member's reviewed head; it needs no separate amendment. Other records' criteria stay frozen except for completed standalone wording corrections (ADR-0080) and record-only redactions (ADR-0084). Both preserve every criterion and tag; see [acceptance waivers and redactions](#acceptance-waivers-and-redactions) | `codeflow ci` |
 | Evidence | The builder cites targeted tests and the quick gate (`codeflow test --mode quick`) with revision and command. The pull request stays a draft until its evidence exists | The reviewer |
 | Review | Every criterion not marked deferred has evidence on the reviewed revision, the needed checks are green, no material finding is open and every nit has a disposition | The other-lineage reviewer |

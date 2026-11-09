@@ -59,6 +59,19 @@ pub(super) struct Run<'a> {
 pub(crate) struct Landing {
     pub line: String,
     pub tip: String,
+    /// What the head is: an epic line's next tip, or a batch into the
+    /// default target.
+    pub kind: Kind,
+}
+
+/// The two landings judged member by member (TSK-1154).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A landing candidate of an epic line.
+    Line,
+    /// A batch pull request into the default target (AC-16), whose `line`
+    /// is that target's branch name and whose `tip` is its fetched tip.
+    MainBatch,
 }
 
 /// Where the judged line came from, for the output and the remedy. A line
@@ -115,7 +128,11 @@ pub(super) fn check(
         codeflow_core::git::display_text(&line)
     );
     match judge(root, &line, &source, run.head, tagged) {
-        Ok(tip) => tip.map(|tip| Landing { line, tip }),
+        Ok(tip) => tip.map(|tip| Landing {
+            line,
+            tip,
+            kind: Kind::Line,
+        }),
         Err(error) => {
             refuse(tagged, &error, Some(&line), &source);
             None
@@ -348,4 +365,116 @@ fn refuse(
             &remedy,
         ),
     });
+}
+
+/// A batch into the default target (TSK-1154 AC-16): a head on the judging
+/// policy's `git.candidate_prefix` (`candidate`) whose run lands it on the
+/// default target, either a pull request into it (`into` names it) or a
+/// pushed candidate whose first-parent history reaches its fetched tip and
+/// no epic line's. The name only selects this judgment, which grants a
+/// member nothing its own pull request into the default target would not
+/// get. The anchor is always the default target's fetched tip, never a
+/// supplied base or anything the head names, and the head must descend
+/// from it. `None` when the run is not such a batch or durable work
+/// tracking is off; a batch whose anchor cannot be established refuses.
+pub(super) fn main_batch(
+    root: &Path,
+    run: &Run<'_>,
+    candidate: bool,
+    into: Option<&str>,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) -> Option<Landing> {
+    if !candidate || run.line_tip.is_some() {
+        return None;
+    }
+    let judged = (|| -> Result<Option<Landing>, String> {
+        let Some(target) = default_work_target_ref(root)
+            .map_err(|error| format!("the default target cannot be read: {error}"))?
+        else {
+            return Ok(None);
+        };
+        let Some(name) = target.strip_prefix("refs/remotes/origin/") else {
+            return Ok(None);
+        };
+        let into_default = into
+            .map(|into| {
+                into.strip_prefix("refs/heads/")
+                    .or_else(|| into.strip_prefix("origin/"))
+                    .unwrap_or(into)
+            })
+            .is_some_and(|into| into == name);
+        let tip = line_adoption::reference_tip(root, &target)?;
+        let pushed = run.pushed && run.candidate_push && !run.merge_landing;
+        let selected = if run.merge_landing {
+            into_default
+        } else if pushed {
+            match tip.as_deref() {
+                Some(tip) => line_adoption::first_parent_history(root, run.head, PUSHED_DEPTH)
+                    .map_err(|error| {
+                        format!("cannot read the pushed candidate's history: {error}")
+                    })?
+                    .iter()
+                    .any(|commit| commit == tip),
+                None => false,
+            }
+        } else {
+            false
+        };
+        if !selected {
+            return Ok(None);
+        }
+        ran.push("main-batch");
+        let tip = tip.ok_or_else(|| {
+            format!(
+                "'{}' has no fetched tip ('origin/{}'), so the batch's anchor cannot be established",
+                codeflow_core::git::display_text(name),
+                codeflow_core::git::display_text(name)
+            )
+        })?;
+        let mut tracked = false;
+        for revision in [run.head, tip.as_str()] {
+            tracked |= durable_work_tracking_enabled_at(root, revision).map_err(|error| {
+                format!(
+                    "durable work tracking cannot be read at {}: {error}",
+                    &revision[..revision.len().min(9)]
+                )
+            })?;
+        }
+        if !tracked {
+            println!("codeflow ci: main batch: durable work tracking is off, so no batch is judged member by member");
+            return Ok(None);
+        }
+        if !line_adoption::descends_from(root, &tip, run.head)? {
+            return Err(format!(
+                "the head is not cut from the fetched tip {} of '{}', so it is not a batch built on it",
+                &tip[..tip.len().min(9)],
+                codeflow_core::git::display_text(name)
+            ));
+        }
+        println!(
+            "codeflow ci: main batch: the head is judged as a batch into '{}' from its fetched tip {}",
+            codeflow_core::git::display_text(name),
+            &tip[..tip.len().min(9)]
+        );
+        Ok(Some(Landing {
+            line: name.to_string(),
+            tip,
+            kind: Kind::MainBatch,
+        }))
+    })();
+    match judged {
+        Ok(landing) => landing,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: Violation::always_blocking(
+                    "work.acceptance_binding",
+                    format!("cannot judge the head as a batch into the default target: {error}"),
+                    "fetch the default target (`git fetch origin`) and rebuild the batch from its fetched tip, with only no-ff merges of reviewed heads",
+                ),
+            });
+            None
+        }
+    }
 }

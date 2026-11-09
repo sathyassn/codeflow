@@ -138,7 +138,10 @@ fetched tip. That run, and the push of a `candidate/` branch, also judge
 each member merge at its own reviewed head against the tip it merged onto,
 so a member's own criteria change and completion pass as its pull request's
 did; a hand-resolved merge, another record's criteria change or an unbound
-completion is refused, naming the member. Move an unpushed one
+completion is refused, naming the member. A batch pull request into
+`main` from a `candidate/` branch gets the same member check from
+`main`'s fetched tip; there no existing criterion may change, and a member
+without a task completion may only add new record files. Move an unpushed one
 into a pull request: keep it on a task or planning branch, run
 `git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the
 default target on its first push), then open the pull request to the line.

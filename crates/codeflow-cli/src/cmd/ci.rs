@@ -782,22 +782,30 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         || is_pr_event(|key| environment.get(key).cloned());
     // A landing candidate's head judged as its line's next tip (TSK-1155):
     // the rule the pre-push hook applies to a push to the line.
-    names.landing = line_tip::check(
-        &root,
-        &line_tip::Run {
-            line_tip: args.line_tip.as_deref(),
-            base: base_sha.as_deref(),
-            head: &head,
-            merge_landing: pr_body.is_some() || pr_context,
-            pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
-            candidate_push: (args.pushed_ref.is_some() || args.advertisement_stdin)
-                && git.candidate_prefix_problem().is_none()
-                && branch.len() > git.candidate_prefix.len()
-                && branch.starts_with(&git.candidate_prefix),
-        },
-        &mut tagged,
-        &mut ran,
-    );
+    let candidate_branch = git.candidate_prefix_problem().is_none()
+        && branch.len() > git.candidate_prefix.len()
+        && branch.starts_with(&git.candidate_prefix);
+    let landing_run = line_tip::Run {
+        line_tip: args.line_tip.as_deref(),
+        base: base_sha.as_deref(),
+        head: &head,
+        merge_landing: pr_body.is_some() || pr_context,
+        pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
+        candidate_push: (args.pushed_ref.is_some() || args.advertisement_stdin) && candidate_branch,
+    };
+    names.landing = line_tip::check(&root, &landing_run, &mut tagged, &mut ran);
+    // A batch into the default target, judged member by member from that
+    // target's fetched tip (TSK-1154 AC-16).
+    if names.landing.is_none() {
+        names.landing = line_tip::main_batch(
+            &root,
+            &landing_run,
+            candidate_branch,
+            names.into,
+            &mut tagged,
+            &mut ran,
+        );
+    }
     timings.lap("line-tip");
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
@@ -876,12 +884,13 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     );
     timings.lap("own-branch-preflight");
     // The visible workgraph is checked once for tracked work, whether the
-    // task comes from the branch or from the `Task:` line (TSK-133).
+    // task comes from the branch or from the `Task:` line (TSK-133), or
+    // from the records at each member head of a batch into the default
+    // target (TSK-1154 AC-16).
     if own_task
-        || work_class
-            .as_ref()
-            .and_then(classification::Class::task_id)
-            .is_some()
+        || work_class.as_ref().is_some_and(|class| {
+            class.task_id().is_some() || *class == classification::Class::MainBatch
+        })
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
@@ -1187,7 +1196,7 @@ fn work_checks<'a>(
             body,
             branch,
             range_parts.as_ref(),
-            release.as_ref(),
+            (release.as_ref(), names.main_batch().is_some()),
             tagged,
             ran,
         )
@@ -2909,6 +2918,16 @@ pub(super) struct Names<'a> {
             acceptance::ScopeError,
         >,
     >,
+}
+
+impl Names<'_> {
+    /// The batch into the default target this run judges member by member
+    /// (TSK-1154 AC-16), when the run selected one.
+    pub(super) fn main_batch(&self) -> Option<&line_tip::Landing> {
+        self.landing
+            .as_ref()
+            .filter(|landing| landing.kind == line_tip::Kind::MainBatch)
+    }
 }
 
 /// Auto-detect the target branch NAME of a pull request. Verified variable

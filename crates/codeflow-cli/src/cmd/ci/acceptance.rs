@@ -58,7 +58,7 @@ pub(super) fn dispatch(
     ran.push("acceptance");
     println!("codeflow ci: acceptance: {SCOPE_NOTE}");
     let branch = names.branch;
-    let found = match judge(root, range, names) {
+    let found = match judged_apart(root, git, range, names) {
         Some(judged) => judged,
         None => criteria(root, git, range, branch, class).and_then(|criteria| {
             println!(
@@ -72,10 +72,11 @@ pub(super) fn dispatch(
                 codeflow_core::git::display_text(range.target)
             );
             // A landing candidate, whose line and fetched tip the line-tip
-            // check established, is judged member by member (TSK-1154):
-            // only where it would otherwise be judged as one frozen range.
-            if let (Criteria::Frozen, None, Some(landing)) =
-                (&criteria, class, names.landing.as_ref())
+            // check established, is judged member by member (TSK-1154)
+            // wherever it would not be judged as an amendment: a task its
+            // branch name carries is never the candidate's own, so each
+            // member's task comes only from the records at its head (AC-5).
+            if let (false, None, Some(landing)) = (criteria.amends(), class, names.landing.as_ref())
             {
                 return candidate(root, git, names, range.head, landing);
             }
@@ -141,6 +142,22 @@ pub(super) fn dispatch(
                 message: format!("cannot read the range to check acceptance: {error}"),
             },
         )),
+    }
+}
+
+/// A range judged apart from the criteria classes: a batch into the
+/// default target, member by member from that target's fetched tip
+/// (TSK-1154 AC-16), never as one range and never by a class its body
+/// names; or a release range ([`judge`]). `None` for any other range.
+fn judged_apart(
+    root: &Path,
+    git: &GitPolicy,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+) -> Option<Result<Vec<Finding>, String>> {
+    match names.main_batch() {
+        Some(landing) => Some(candidate(root, git, names, range.head, landing)),
+        None => judge(root, range, names),
     }
 }
 
@@ -302,14 +319,21 @@ fn own_line_tip(
 }
 
 /// A landing candidate judged member by member (TSK-1154): each merge on
-/// the head's first-parent chain from the line's fetched tip is judged at
-/// its member head against the tip it merged onto, as that member's own
-/// pull request into the line is judged. The whole tip-to-head chain is
-/// judged whatever base the run was given, so a base after the tip hides
-/// no member. A member's own criteria change is judged as its pull
+/// the head's first-parent chain from the fetched tip is judged at its
+/// member head against the tip it merged onto, as that member's own pull
+/// request into the receiving branch is judged. The whole tip-to-head
+/// chain is judged whatever base the run was given, so a base after the
+/// tip hides no member.
+///
+/// On an epic line, a member's own criteria change is judged as its pull
 /// request's only when its record declares the line at the line's tip and
 /// at the member head, and the trusted records at that tip (and at the
-/// candidate authority, when the run names one) bind the line for it.
+/// candidate authority, when the run names one) bind the line for it. In
+/// a batch into the default target (AC-16), each member binds from the
+/// records at its two parents and the target's fetched tip
+/// ([`main_binding`]), and no existing criterion may change.
+///
+/// [`main_binding`]: codeflow_core::workgraph::acceptance::candidate::main_binding
 fn candidate(
     root: &Path,
     git: &GitPolicy,
@@ -317,16 +341,40 @@ fn candidate(
     head: &str,
     landing: &super::line_tip::Landing,
 ) -> Result<Vec<Finding>, String> {
-    use codeflow_core::workgraph::acceptance::candidate::{candidate_findings, Candidate};
+    use codeflow_core::workgraph::acceptance::candidate::{
+        candidate_findings, completed_task, main_binding, Bound, Candidate, Member, Mode,
+    };
     use codeflow_core::workgraph::EpicLineBinding;
-    println!(
-        "codeflow ci: acceptance: landing candidate of '{}' from its fetched tip {:.9}: each member merge is judged at its own reviewed head against the tip it merged onto",
-        codeflow_core::git::display_text(&landing.line),
-        landing.tip
-    );
     let line = landing.line.as_str();
     let tip = landing.tip.as_str();
-    let mut bind = |task: &str, member: &str| -> Result<(), String> {
+    let mode = match landing.kind {
+        super::line_tip::Kind::Line => Mode::Line,
+        super::line_tip::Kind::MainBatch => Mode::MainBatch,
+    };
+    let candidate = Candidate {
+        tip,
+        target: line,
+        authority: names.candidate,
+        branch_prefixes: Some(&git.branch_prefixes),
+        mode,
+    };
+    if mode == Mode::MainBatch {
+        println!(
+            "codeflow ci: acceptance: batch into '{}' from its fetched tip {:.9}: each member merge is judged at its own reviewed head against the tip it merged onto, and no existing criterion may change",
+            codeflow_core::git::display_text(line),
+            tip
+        );
+        let mut bind = |member: Member| -> Result<Bound, String> {
+            main_binding(root, tip, member, line).map(|task| Bound::Frozen { task, note: None })
+        };
+        return candidate_findings(root, &candidate, head, &mut bind);
+    }
+    println!(
+        "codeflow ci: acceptance: landing candidate of '{}' from its fetched tip {:.9}: each member merge is judged at its own reviewed head against the tip it merged onto",
+        codeflow_core::git::display_text(line),
+        tip
+    );
+    let line_binding = |task: &str, member: &str| -> Result<(), String> {
         for (revision, place) in [(tip, "the line's tip"), (member, "the member head")] {
             let declared = codeflow_core::workgraph::task_target_at_revision(root, task, revision)
                 .map_err(|error| error.to_string())?;
@@ -349,17 +397,22 @@ fn candidate(
             }
         }
     };
-    candidate_findings(
-        root,
-        &Candidate {
-            tip,
-            target: line,
-            authority: names.candidate,
-            branch_prefixes: Some(&git.branch_prefixes),
-        },
-        head,
-        &mut bind,
-    )
+    let mut bind = |member: Member| -> Result<Bound, String> {
+        let Some(task) = completed_task(root, member)? else {
+            return Ok(Bound::Frozen {
+                task: None,
+                note: None,
+            });
+        };
+        Ok(match line_binding(&task, &member.head.to_string()) {
+            Ok(()) => Bound::Own(task),
+            Err(note) => Bound::Frozen {
+                task: Some(task),
+                note: Some(note),
+            },
+        })
+    };
+    candidate_findings(root, &candidate, head, &mut bind)
 }
 
 /// The remote-tracking ref of the judged branch that this run replaces

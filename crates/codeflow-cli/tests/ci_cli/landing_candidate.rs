@@ -10,7 +10,7 @@ use super::line_adoption::fixture::{blocks, output, passes, Line, LINE, ZERO};
 
 const CANDIDATE: &str = "candidate/epc-001-c1";
 
-fn record_path(task: &str) -> String {
+pub(super) fn record_path(task: &str) -> String {
     format!("project-management/tasks/{task}.md")
 }
 
@@ -57,7 +57,7 @@ fn published_with(tasks: &[&str], gated: bool) -> (Line, String) {
     (f, tip)
 }
 
-fn read(f: &Line, path: &str) -> String {
+pub(super) fn read(f: &Line, path: &str) -> String {
     std::fs::read_to_string(f.root().join(path)).unwrap()
 }
 
@@ -132,7 +132,7 @@ fn member_head(f: &Line, task: &str, from: &str, change: Change) -> String {
 }
 
 /// Merge `head` onto the candidate by a no-ff merge, as the primary does.
-fn land(f: &Line, task: &str, head: &str) -> String {
+pub(super) fn land(f: &Line, task: &str, head: &str) -> String {
     f.git(&[
         "merge",
         "--no-ff",
@@ -143,7 +143,7 @@ fn land(f: &Line, task: &str, head: &str) -> String {
     f.git(&["rev-parse", "HEAD"])
 }
 
-fn ci(f: &Line, args: &[&str]) -> Output {
+pub(super) fn ci(f: &Line, args: &[&str]) -> Output {
     f.command(env!("CARGO_BIN_EXE_codeflow"))
         .arg("ci")
         .args(args)
@@ -155,7 +155,7 @@ fn candidate_ci(f: &Line, tip: &str) -> Output {
     ci(f, &["--base", tip, "--head", "HEAD", "--line-tip", LINE])
 }
 
-fn lacks(o: &Output, text: &str) {
+pub(super) fn lacks(o: &Output, text: &str) {
     assert!(
         !output(o).contains(text),
         "unexpected {text}: {}",
@@ -163,7 +163,7 @@ fn lacks(o: &Output, text: &str) {
     );
 }
 
-fn has(o: &Output, text: &str) {
+pub(super) fn has(o: &Output, text: &str) {
     assert!(output(o).contains(text), "missing {text}: {}", output(o));
 }
 
@@ -558,4 +558,166 @@ fn a_sync_of_the_default_target_is_not_judged_as_a_member() {
     has(&result, &format!("sync {synced:.9}"));
     lacks(&result, &format!("member {synced:.9}"));
     has(&result, &format!("member {head:.9}"));
+}
+
+/// A head from `from` on `branch` with `edit` and no completion; the
+/// candidate branch stays checked out.
+fn uncompleted(f: &Line, branch: &str, from: &str, edit: impl Fn(&Line)) -> String {
+    let back = f.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
+    f.git(&["switch", "-qc", branch, from]);
+    edit(f);
+    let head = f.commit("docs: change records");
+    f.git(&["switch", "-q", &back]);
+    head
+}
+
+/// AC-5: a requester-supplied anchor grants nothing. TSK-005 targets
+/// `main` at the line's fetched tip; a commit beside that tip retargets it
+/// to the line, and the member, cut from that commit, changes its own
+/// criteria. Given as the base or as the candidate authority, that commit
+/// never becomes the anchor: the record does not declare the line at the
+/// fetched tip, so the criteria change stays frozen.
+#[test]
+fn a_requester_supplied_anchor_grants_nothing() {
+    let (f, _) = published(&[]);
+    f.git(&["switch", "-q", LINE]);
+    f.git(&["switch", "-qc", "plan/TSK-005"]);
+    f.write(
+        &record_path("TSK-005"),
+        &planned("TSK-005").replace(
+            &format!("integration_target: {LINE}"),
+            "integration_target: main",
+        ),
+    );
+    f.commit("docs: plan TSK-005 for main");
+    f.git(&["switch", "-q", LINE]);
+    f.merge("plan/TSK-005");
+    f.git(&["push", "-q", "origin", LINE]);
+    let tip = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", CANDIDATE]);
+    f.git(&["reset", "-q", "--hard", &tip]);
+    let forged = uncompleted(&f, "plan/forged-anchor", &tip, |f| {
+        f.write(&record_path("TSK-005"), &planned("TSK-005"));
+    });
+    let head = member_head(&f, "TSK-005", &forged, Change::OwnCriterion);
+    land(&f, "TSK-005", &head);
+    for result in [
+        ci(
+            &f,
+            &["--base", &forged, "--head", "HEAD", "--line-tip", LINE],
+        ),
+        ci(
+            &f,
+            &[
+                "--base",
+                &tip,
+                "--head",
+                "HEAD",
+                "--line-tip",
+                LINE,
+                "--policy-from",
+                &forged,
+            ],
+        ),
+    ] {
+        blocks(&result, "work.criteria_frozen");
+        has(&result, &format!("member {head:.9} (TSK-005)"));
+        has(&result, "does not declare this line");
+    }
+}
+
+/// AC-5: trusted records that exist only in the head grant nothing. The
+/// member's own head adds an epic that declares the line as its
+/// `parent_line`; its task declares the line at the tip, but only the
+/// tip's records can bind a declared epic, so the own criteria change
+/// stays frozen.
+#[test]
+fn records_only_in_the_head_grant_nothing() {
+    let (f, tip) = published(&[]);
+    let back = f.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
+    f.git(&["switch", "-q", LINE]);
+    f.git(&["switch", "-qc", "plan/TSK-006"]);
+    f.write(
+        &record_path("TSK-006"),
+        &planned("TSK-006").replace("epic_id: EPC-001", "epic_id: EPC-002"),
+    );
+    f.commit("docs: plan TSK-006 under EPC-002");
+    f.git(&["switch", "-q", LINE]);
+    f.merge("plan/TSK-006");
+    f.git(&["push", "-q", "origin", LINE]);
+    let tip2 = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", &back]);
+    f.git(&["reset", "-q", "--hard", &tip2]);
+    let declaring = uncompleted(&f, "plan/EPC-002-only-here", &tip2, |f| {
+        f.write(
+            "project-management/epics/EPC-002.md",
+            &format!("---\nid: EPC-002\ntitle: Declared\nstatus: planning\nwork_type: feat\nspecs: []\nparent_line: {LINE}\ncreated: 2026-10-06\n---\n\n# Declared\n\n## Summary\n\nDeclare the line.\n\n## Acceptance Criteria\n\n- AC-1 Work runs.\n"),
+        );
+    });
+    let head = member_head(&f, "TSK-006", &declaring, Change::OwnCriterion);
+    land(&f, "TSK-006", &head);
+    let result = candidate_ci(&f, &tip2);
+    blocks(&result, "work.criteria_frozen");
+    has(&result, &format!("member {head:.9} (TSK-006)"));
+    assert_ne!(tip, tip2);
+}
+
+/// AC-5: a task identity taken only from a flag grants nothing. The member
+/// changes code and TSK-002's criteria without completing it, so its
+/// records name no task; `--branch task/TSK-002-work` on the run supplies
+/// none. Before this, the flag made the whole candidate TSK-002's own range.
+#[test]
+fn a_task_identity_from_a_flag_grants_nothing() {
+    let (f, tip) = published(&["TSK-002"]);
+    let head = uncompleted(&f, "task/TSK-002-work", &tip, |f| {
+        f.write("src/tsk_002.rs", "pub fn member() {}\n");
+        let path = record_path("TSK-002");
+        f.write(
+            &path,
+            &read(f, &path).replace("- AC-4 The text is A.\n", AMENDED),
+        );
+    });
+    land(&f, "TSK-002", &head);
+    let result = ci(
+        &f,
+        &[
+            "--base",
+            &tip,
+            "--head",
+            "HEAD",
+            "--line-tip",
+            LINE,
+            "--branch",
+            "task/TSK-002-work",
+        ],
+    );
+    blocks(&result, "work.criteria_frozen");
+    has(&result, &format!("member {head:.9} (no task completion)"));
+}
+
+/// A planning member that changes a task's criteria is judged as its own
+/// pull request into the line is: a planning amendment, reported with its
+/// criteria delta, beside a task member judged at its own head. Before
+/// this, a candidate holding a task member froze the planning member's
+/// change, while a candidate of the planning member alone was judged as
+/// an amendment.
+#[test]
+fn a_planning_member_is_judged_as_a_planning_amendment() {
+    let (f, tip) = published(&["TSK-002", "TSK-003"]);
+    let task = member_head(&f, "TSK-003", &tip, Change::Code);
+    let plan = uncompleted(&f, "plan/EPC-001-reword", &tip, |f| {
+        let path = record_path("TSK-002");
+        f.write(
+            &path,
+            &read(f, &path).replace("AC-3 The output is plain.", "AC-3 The output is bold."),
+        );
+    });
+    land(&f, "TSK-003", &task);
+    land(&f, "plan", &plan);
+    let result = candidate_ci(&f, &tip);
+    passes(&result);
+    has(&result, &format!("member {plan:.9} (no task completion)"));
+    has(&result, "judged as a planning amendment");
+    has(&result, "TSK-002 criteria delta: AC-3 changed");
+    has(&result, &format!("member {task:.9} (TSK-003)"));
 }
