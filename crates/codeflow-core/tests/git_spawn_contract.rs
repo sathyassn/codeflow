@@ -132,6 +132,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "tests re-running their own binary for empty answers, SSH config and URL rewrites",
     ),
     (
+        "codeflow-core/src/git/remote_identity.rs",
+        "program",
+        1,
+        "TSK-1184 ssh_endpoint runs the ssh found on PATH, an SSH client and never git",
+    ),
+    (
         "codeflow-present/src/responses.rs",
         "std::env::current_exe().unwrap()",
         1,

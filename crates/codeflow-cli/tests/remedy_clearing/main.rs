@@ -187,6 +187,9 @@ const ROWS: &[(&str, Proof)] = &[
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
     ("SECRET_ENGINE_UNAVAILABLE", Excluded(Network)),
+    ("BINARY_TOO_OLD", Excluded(Network)),
+    ("BINARY_MAY_BE_OLDER", Confirms),
+    ("PUSH_SET_TOO_OLD", Excluded(Network)),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
@@ -233,6 +236,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
+    ("DOCTOR_REGISTRY_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
@@ -357,7 +361,10 @@ fn command(program: &str, dir: &Path) -> Command {
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("CODEX_HOME")
-        .env_remove("GROK_HOME");
+        .env_remove("GROK_HOME")
+        // A push gate keeps its evidence under the fixture's own `target`,
+        // never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
     cmd
 }
 
@@ -2236,6 +2243,47 @@ fn clears_push_set_ci() {
             git(&root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
         },
     );
+}
+
+/// The note stays, since a repository with no comparable version cannot say
+/// what it needs; the printed step names the binary running, which is the
+/// half of the comparison a person cannot read from the repository.
+#[test]
+fn confirms_binary_may_be_older() {
+    let row = "BINARY_MAY_BE_OLDER";
+    let finding = "this binary (CodeFlow";
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let state = read(&root, ".codeflow/project.toml");
+    let state: Vec<String> = state
+        .lines()
+        .map(|line| {
+            if line.starts_with("scaffold_version") {
+                "scaffold_version = \"newest\"".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    write(&root, ".codeflow/project.toml", &state.join("\n"));
+    write(
+        &root,
+        ".codeflow/test-config.json",
+        r#"{"schema_version":"99.0","targets":[]}"#,
+    );
+    let refused = || codeflow(&root, &["test", "--mode", "quick"]);
+    let before = refused();
+    let printed = block(&before, finding).to_string();
+    assert_prints_row(&printed, row);
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        printed.contains(&format!("CodeFlow {version}")),
+        "{printed}"
+    );
+    let step = printed_command(&printed, row, None);
+    let said = run_printed(&root, &step, &[], &[]);
+    assert!(said.starts_with(&format!("codeflow {version}")), "{said}");
+    assert!(refused().contains(finding));
 }
 
 #[test]

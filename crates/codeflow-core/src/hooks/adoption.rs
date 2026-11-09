@@ -204,6 +204,7 @@ pub fn apply_profile_exemptions(git: &GitPolicy) -> GitPolicy {
     exempt.commit_format = PolicyLevel::Off;
     exempt.commit_body = PolicyLevel::Off;
     exempt.commit_ticket_required = PolicyLevel::Off;
+    exempt.commit_ticket_merges = PolicyLevel::Off;
     exempt.commit_ticket_keys = Vec::new();
     exempt.commit_required_footers = Vec::new();
     exempt.pr_summary = PolicyLevel::Off;

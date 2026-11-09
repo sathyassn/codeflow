@@ -30,6 +30,7 @@ mod id_registry;
 mod judging;
 mod line_tip;
 pub(crate) mod pr_body;
+mod timing;
 mod work_records;
 mod workflow_change;
 
@@ -39,13 +40,13 @@ use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
     adoption, any_blocking, git_hook, policy_schema, standards, GitPolicy, PolicyLevel, Violation,
 };
+use codeflow_core::scaffold::too_old::{self, BinaryAge};
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
-    branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
-    task_id_from_branch_at,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, judged_branch_claims_task_id,
+    resolve_work_target_checked,
 };
 use judging::{judging_policy, Authority};
 use pr_body::find_section;
@@ -54,6 +55,7 @@ use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct CiArgs {
     /// Optional subcommand. When omitted, `codeflow ci` judges the range.
     #[command(subcommand)]
@@ -197,6 +199,18 @@ pub struct CiArgs {
     /// a landing candidate, and the hook itself judges a push to a line.
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
+
+    /// Print how long each check took, on stderr after the verdict, one
+    /// line per check and then the total. The times only report; they
+    /// change no verdict.
+    #[arg(long)]
+    pub timings: bool,
+
+    /// Write each check's time to this file, one `<check>\t<microseconds>`
+    /// line each: the pre-push hook names the slowest checks when a push
+    /// goes over its budget (TSK-1306).
+    #[arg(long, value_name = "FILE", hide = true)]
+    pub timings_out: Option<PathBuf>,
 }
 
 /// The subcommands of `codeflow ci`.
@@ -253,7 +267,8 @@ struct CommitRecord {
     sha: String,
     message: String,
     files: Vec<String>,
-    /// A merge commit gets only the policy-character rule (ADR-0067); the
+    /// A merge commit gets only the policy-character rule (ADR-0067) and,
+    /// when the project opts in, the merge ticket rule (TSK-1350); the
     /// conventional-format rules have always skipped merges in CI.
     is_merge: bool,
 }
@@ -315,9 +330,11 @@ struct AddedLine {
 
 /// Validate the policy before verifying anything: `false` (after naming each
 /// offending key) when it is invalid; deprecated keys are warned about.
-fn policy_verifiable(root: &Path) -> bool {
+fn policy_verifiable(root: &Path, rules_out: Option<&Path>) -> bool {
     if let Err(errors) = policy_schema::validate_policy(root) {
-        report_invalid_policy(&errors);
+        // No authority is known yet, so the working tree's pin answers. It
+        // only words the refusal: this run stops here either way.
+        report_invalid_policy(&errors, &crate::cmd::binary_age(root), rules_out);
         return false;
     }
     for warning in policy_schema::deprecation_warnings(root)
@@ -367,11 +384,23 @@ fn ci_environment(
     Ok(values)
 }
 
-#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
     if let Some(CiCommand::BaseChecks(checks)) = &args.command {
         return base_checks::run(checks);
     }
+    let mut timings = timing::Timings::start();
+    let code = run_timed(args, &mut timings);
+    if args.timings {
+        timings.print();
+    }
+    if let Some(out) = &args.timings_out {
+        timings.write(out);
+    }
+    code
+}
+
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
@@ -397,7 +426,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // naming each offending key, rather than silently verify against the
     // built-in defaults, which could pass a range the real (mistyped) policy
     // meant to block. Exit 2, the existing could-not-verify-in-full code.
-    if !policy_verifiable(&root) {
+    if !policy_verifiable(&root, args.blocking_rules_out.as_deref()) {
         return 2;
     }
     // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is
@@ -408,17 +437,33 @@ pub fn run(args: &CiArgs) -> i32 {
     let (working, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!(
-                "codeflow: cannot read policy: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            let age = crate::cmd::binary_age(&root);
+            let too_old = crate::cmd::unread_refusal("codeflow ci", &age, "its policy", || {
+                eprintln!(
+                    "codeflow: cannot read policy: {}",
+                    codeflow_core::git::display_message(&error)
+                );
+            });
+            if too_old {
+                write_too_old_rule(args.blocking_rules_out.as_deref());
+            }
             return 2;
         }
     };
 
     // Resolve names and pin revisions once before any range rule runs.
-    let context = match context::resolve(&root, args, &environment, &working.git.protected_branches)
-    {
+    // The working copy's policy finds the range, its work prefixes as its
+    // protected branches (see `judging_policy`): the judging policy is read at
+    // the base, which the declared target picks. The pre-push hook picks the
+    // base and target under the judging policy's prefixes and passes them as
+    // `--base` and `--into` (TSK-1257).
+    let context = match context::resolve(
+        &root,
+        args,
+        &environment,
+        &working.git.protected_branches,
+        &working.git.branch_prefixes,
+    ) {
         Ok(context) => context,
         Err(error) => {
             eprintln!(
@@ -479,7 +524,12 @@ pub fn run(args: &CiArgs) -> i32 {
     ) else {
         return 2;
     };
-    let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
+    let Some(judging) = judging_policy(
+        &root,
+        authority.as_ref(),
+        working,
+        args.blocking_rules_out.as_deref(),
+    ) else {
         return 2;
     };
     note_lowered_security_levels(&root, &judging.raw, &head);
@@ -553,6 +603,7 @@ pub fn run(args: &CiArgs) -> i32 {
         || (base_candidates.clone(), range_source.clone()),
         |from| (vec![from], "--commits-from".to_string()),
     );
+    timings.lap("setup");
     let range = evaluate_commit_range(&root, &commit_bases, &head, &commit_source, git);
     tagged.extend(range.violations);
     if range.ran {
@@ -565,6 +616,7 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+    timings.lap("commit");
     conflict_markers::dispatch(
         &root,
         git,
@@ -576,7 +628,9 @@ pub fn run(args: &CiArgs) -> i32 {
     // What this change does to the workflows is base..head; the wider
     // commit range `--commits-from` selects (pre-push) also holds commits
     // the target already carries, whose workflow edits are not this one's.
+    timings.lap("conflict-markers");
     workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
+    timings.lap("workflow-change");
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
         let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
@@ -615,6 +669,7 @@ pub fn run(args: &CiArgs) -> i32 {
             ),
         }),
     }
+    timings.lap("path-policy");
 
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
@@ -680,6 +735,7 @@ pub fn run(args: &CiArgs) -> i32 {
             false
         }
     };
+    timings.lap("release-scope");
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     let target_tip = target_tip(
@@ -690,6 +746,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &environment,
     );
     target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
+    timings.lap("target-tip");
     if scope_ready {
         record_checks(
             &root,
@@ -711,6 +768,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &target_tip,
             &mut tagged,
             &mut ran,
+            timings,
         );
     }
 
@@ -732,6 +790,7 @@ pub fn run(args: &CiArgs) -> i32 {
         }
         ran.push("branch-naming");
     }
+    timings.lap("branch-naming");
 
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
@@ -754,6 +813,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("line-tip");
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
@@ -795,6 +855,7 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
+    timings.lap("change-class");
     let work_class = if scope_ready {
         work_checks(
             &root,
@@ -808,6 +869,7 @@ pub fn run(args: &CiArgs) -> i32 {
             &stacked,
             &mut tagged,
             &mut ran,
+            timings,
         )
     } else {
         None
@@ -816,8 +878,9 @@ pub fn run(args: &CiArgs) -> i32 {
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(
         &root,
+        git,
+        (base_sha.as_deref(), &head),
         &branch,
-        &head,
         &stacked,
         level,
         work_class
@@ -826,6 +889,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    timings.lap("own-branch-preflight");
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
     if own_task
@@ -836,6 +900,7 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+    timings.lap("visible-graph");
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -894,15 +959,71 @@ pub fn run(args: &CiArgs) -> i32 {
         );
         ran.push("PR-body");
     }
+    timings.lap("PR-body");
 
     settle_watched_paths(&mut tagged, pr_body.as_deref());
     if let Some(running) = args.run_level {
         run_under(running, &judging.raw, &mut tagged);
     }
+    settle_unread_records(&root, authority.as_ref(), &mut tagged);
     if let Some(out) = &args.blocking_rules_out {
         write_blocking_rules(out, &tagged);
     }
     report(&tagged, &ran, &skipped)
+}
+
+/// Records carry no version of their own and a newer one fails by meaning,
+/// so a binary cannot tell a record it cannot read from a wrong record. When
+/// the authority commit declares a newer `CodeFlow`, every `work.*` finding
+/// gives way to one blocking too-old finding (TSK-1285). The pin is read at
+/// the authority, never at the head: the range cannot write it, so a raised
+/// pin cannot hide a finding. Other findings stay, since they judge the
+/// commits and the body rather than the records.
+fn settle_unread_records(
+    root: &Path,
+    authority: Option<&judging::Authority>,
+    tagged: &mut Vec<TaggedViolation>,
+) {
+    let is_work = |t: &TaggedViolation| t.violation.rule.starts_with("work.");
+    if !tagged
+        .iter()
+        .any(|t| is_work(t) && t.violation.level == PolicyLevel::Block)
+    {
+        return;
+    }
+    let binary = env!("CARGO_PKG_VERSION");
+    let age = authority.map_or_else(
+        || BinaryAge::from_state(None, binary),
+        |authority| BinaryAge::at_commit(root, authority.sha(), binary),
+    );
+    if let Some(refusal) = age.too_old("its task and epic records") {
+        tagged.retain(|t| !is_work(t));
+        tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                too_old::RULE,
+                PolicyLevel::Block,
+                refusal.message,
+                refusal.remedy,
+            ),
+        });
+    } else if let Some(line) = age.may_be_older() {
+        eprintln!("codeflow ci: {line}");
+    }
+}
+
+/// Name the too-old refusal for the pre-push hook on a path that stops
+/// before any finding exists. Best effort, like [`write_blocking_rules`].
+fn write_too_old_rule(out: Option<&Path>) {
+    if let Some(out) = out {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(out)
+            .and_then(|mut file| {
+                std::io::Write::write_all(&mut file, format!("{}\n", too_old::RULE).as_bytes())
+            });
+    }
 }
 
 /// The blocking findings' rule ids, one per line, for the pre-push hook's
@@ -1025,6 +1146,7 @@ fn work_checks<'a>(
     stacked: &[ReviewedPin],
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
+    timings: &mut timing::Timings,
 ) -> Option<classification::Class> {
     let base = match resolve_base(root, base_candidates) {
         Ok(value) => value,
@@ -1105,6 +1227,7 @@ fn work_checks<'a>(
         );
         None
     };
+    timings.lap("classification");
     acceptance::dispatch(
         root,
         git,
@@ -1118,6 +1241,7 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    timings.lap("acceptance");
     tagged.extend(tracked_review(
         root,
         git,
@@ -1126,6 +1250,7 @@ fn work_checks<'a>(
         range_parts.as_ref(),
         head,
     ));
+    timings.lap("review-row");
     class
 }
 
@@ -1255,6 +1380,7 @@ fn record_checks(
     target_tip: &Result<String, NoTarget>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
+    timings: &mut timing::Timings,
 ) {
     // On a release range, the records it brings are judged where each was
     // introduced on its line (SPC-013 R-120).
@@ -1303,6 +1429,7 @@ fn record_checks(
     } else {
         None
     };
+    timings.lap("record-range");
     work_records::dispatch(
         root,
         base_candidates,
@@ -1314,7 +1441,9 @@ fn record_checks(
         tagged,
         ran,
     );
+    timings.lap("work-records");
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    timings.lap("id-registry");
 }
 
 /// The tip of `target`, the branch the range lands on, which the Outcome
@@ -1549,15 +1678,24 @@ fn verified_epic_line(
 
 /// Name every invalid policy key and, when a key is unknown to this binary,
 /// the two-step upgrade order (SPC-013 R-113).
-fn report_invalid_policy(errors: &[policy_schema::PolicyError]) {
-    for e in errors {
-        eprintln!("codeflow ci: policy error: {e}", e = crate::cmd::shown(&e));
-    }
-    eprintln!(
-        "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
-    );
-    if let Some(hint) = policy_schema::upgrade_order_hint(errors, env!("CARGO_PKG_VERSION")) {
-        eprintln!("codeflow ci: {hint}");
+fn report_invalid_policy(
+    errors: &[policy_schema::PolicyError],
+    age: &BinaryAge,
+    rules_out: Option<&Path>,
+) {
+    let too_old = crate::cmd::unread_refusal("codeflow ci", age, "its policy", || {
+        for e in errors {
+            eprintln!("codeflow ci: policy error: {e}", e = crate::cmd::shown(&e));
+        }
+        eprintln!(
+            "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
+        );
+        if let Some(hint) = policy_schema::upgrade_order_hint(errors, env!("CARGO_PKG_VERSION")) {
+            eprintln!("codeflow ci: {hint}");
+        }
+    });
+    if too_old {
+        write_too_old_rule(rules_out);
     }
 }
 
@@ -1786,28 +1924,22 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
 #[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn own_branch_preflight(
     root: &Path,
+    git: &GitPolicy,
+    (base, head): (Option<&str>, &str),
     branch: &str,
-    head: &str,
     stacked: &[ReviewedPin],
     level: PolicyLevel,
     exemption: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> bool {
-    let claims = match branch_claims_task_id(root, branch) {
-        Ok(claims) => claims,
-        Err(error) => {
-            tagged.push(TaggedViolation {
-                sha: None,
-                violation: tracking_state_violation(error),
-            });
-            return false;
-        }
-    };
+    // The work prefixes of the policy the run judges with, never the
+    // checkout's (TSK-1257).
+    let claims = judged_branch_claims_task_id(&git.branch_prefixes, branch);
     if branch.starts_with("task/") || claims {
-        match durable_work_tracking_enabled(root) {
+        match tracking_judged(root, base, head) {
             Ok(true) => {
-                evaluate_work_start(root, branch, head, stacked, level, exemption, tagged);
+                evaluate_work_start(root, git, branch, head, stacked, level, exemption, tagged);
                 ran.push("work-start");
                 return true;
             }
@@ -1822,6 +1954,17 @@ fn own_branch_preflight(
         }
     }
     false
+}
+
+/// Whether durable work tracking is on in the checkout, at the judged
+/// `head` or at `base` (TSK-1257): a checkout without tracking state never
+/// switches a check off for a range whose commits carry it.
+pub(super) fn tracking_judged(root: &Path, base: Option<&str>, head: &str) -> Result<bool, String> {
+    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
+    for revision in base.into_iter().chain([head]) {
+        enabled |= durable_work_tracking_enabled_at(root, revision)?;
+    }
+    Ok(enabled)
 }
 
 /// The visible workgraph, checked once per run for tracked work at the
@@ -1909,33 +2052,36 @@ fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<R
     }
 }
 
-/// The task checks for the task the branch carries, at the
-/// `git.work_planning` level (TSK-133).
+/// The task the branch carries, read from the task records at the judged
+/// `head` under the work prefixes of the policy the run judges with
+/// (TSK-1257, TSK-350 AC-1). The checkout's records and policy take no
+/// part: a record only the checkout holds names no task, and one the
+/// checkout lacks hides none.
 pub(super) fn branch_task_at(
     root: &Path,
+    git: &GitPolicy,
     branch: &str,
     head: &str,
 ) -> Result<Option<String>, String> {
-    match task_id_from_branch_at(root, branch, head).map_err(|error| error.to_string())? {
-        Some(task) => Ok(Some(task)),
-        None => task_id_from_branch(root, branch).map_err(|error| error.to_string()),
-    }
+    codeflow_core::workgraph::judged_task_id(root, &git.branch_prefixes, branch, head)
+        .map_err(|error| error.to_string())
 }
 
+/// The integration target `task` declares in its record at the judged
+/// `head` (TSK-1257), never in the checkout's copy of the record.
 pub(super) fn work_target_at(
     root: &Path,
-    branch: &str,
     head: &str,
     task: &str,
 ) -> Result<Option<String>, String> {
-    match declared_work_target_at_revision(root, branch, head).map_err(|error| error.to_string())? {
-        Some(target) => Ok(Some(target)),
-        None => declared_work_target(root, task).map_err(|error| error.to_string()),
-    }
+    codeflow_core::workgraph::task_target_at_revision(root, task, head)
+        .map_err(|error| format!("{task}'s record at {head} cannot be read: {error}"))
 }
 
+#[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn evaluate_work_start(
     root: &Path,
+    git: &GitPolicy,
     branch: &str,
     head: &str,
     stacked: &[ReviewedPin],
@@ -1945,7 +2091,7 @@ fn evaluate_work_start(
 ) {
     // The head's records first: from a base checkout (the hosted policy
     // workflow) the branch's own standalone record is not on disk.
-    let task_at_head = match branch_task_at(root, branch, head) {
+    let task_at_head = match branch_task_at(root, git, branch, head) {
         Ok(task) => task,
         Err(error) => {
             tagged.push(TaggedViolation {
@@ -1956,7 +2102,7 @@ fn evaluate_work_start(
         }
     };
     if let Some(task_id) = task_at_head {
-        let declared = match work_target_at(root, branch, head, &task_id) {
+        let declared = match work_target_at(root, head, &task_id) {
             Ok(target) => target,
             Err(error) => {
                 tagged.push(TaggedViolation {
@@ -2015,7 +2161,9 @@ fn evaluate_work_start(
             violation: Violation::new(
                 "work.task_record",
                 level,
-                format!("task branch '{branch}' does not identify a visible task record"),
+                format!(
+                    "task branch '{branch}' names no task record in the judged head {head}: no record under project-management/ at that commit carries the branch's task id, and a record only the checkout holds is not read"
+                ),
                 codeflow_core::remedy::TASK_RECORD_MISSING.remedy(),
             ),
         });
@@ -2361,12 +2509,16 @@ fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViol
     let mut out = Vec::new();
     for c in commits {
         let violations = if c.is_merge {
+            // A merge made outside the local hooks (a hosting service's merge
+            // button) is judged here for its ticket footer when the project
+            // opts in (TSK-1350).
             git_hook::policy_characters_in_message(
                 git,
                 &c.message,
                 &git_hook::MessageSource::Committed,
             )
             .into_iter()
+            .chain(git_hook::merge_ticket_violation(git, &c.message))
             .collect()
         } else {
             git_hook::commit_msg_with_files(
@@ -3738,6 +3890,7 @@ mod tests {
             let mut tagged = Vec::new();
             evaluate_work_start(
                 dir.path(),
+                &GitPolicy::default(),
                 "task/TSK-001-fix",
                 &head,
                 &[],
@@ -4195,6 +4348,76 @@ mod tests {
         assert!(!present
             .iter()
             .any(|t| t.violation.rule == "git.commit_ticket"));
+    }
+
+    #[test]
+    fn merge_ticket_rule_judges_two_parent_commits_in_ci() {
+        // TSK-1350 AC-3: with the key on, a merge commit in the range (one a
+        // hosting service made, outside the local hooks) is judged for its
+        // ticket footer; with it off, merges stay exempt.
+        let mut g = GitPolicy {
+            commit_ticket_keys: vec!["Refs".into()],
+            commit_ticket_required: PolicyLevel::Block,
+            commit_ticket_merges: PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        let merge = |sha: &str, message: &str| CommitRecord {
+            is_merge: true,
+            ..commit(sha, message)
+        };
+        let missing = evaluate_commits(
+            &g,
+            &[merge(
+                "abab1111",
+                "Merge pull request #7 from o/task/x\n\nfeat: x",
+            )],
+        );
+        let hit = missing
+            .iter()
+            .find(|t| t.violation.rule == "git.commit_ticket_merges")
+            .expect("a merge ticket finding");
+        assert_eq!(hit.sha.as_deref(), Some("abab1111"));
+        assert!(hit.violation.message.contains("Merge pull request #7"));
+        let present = evaluate_commits(
+            &g,
+            &[merge(
+                "cdcd2222",
+                "Merge pull request #7 from o/task/x\n\nRefs: TSK-1",
+            )],
+        );
+        assert!(present.is_empty(), "{}", present.len());
+        // Review F1: the one-parent exempt prefixes and a blank message do
+        // not exempt a merge.
+        for subject in [
+            "fixup! land x",
+            "squash! land x",
+            "Revert \"feat: x\"",
+            "Reapply \"feat: x\"",
+            "",
+            "  ",
+        ] {
+            let missing = evaluate_commits(&g, &[merge("abab4444", subject)]);
+            assert!(
+                missing
+                    .iter()
+                    .any(|t| t.violation.rule == "git.commit_ticket_merges"),
+                "{subject:?}"
+            );
+            let present = evaluate_commits(
+                &g,
+                &[merge("abab5555", &format!("{subject}\n\nRefs: TSK-1"))],
+            );
+            assert!(present.is_empty(), "{subject:?}: {}", present.len());
+        }
+        g.commit_ticket_merges = PolicyLevel::Off;
+        let off = evaluate_commits(
+            &g,
+            &[merge(
+                "efef3333",
+                "Merge pull request #7 from o/task/x\n\nfeat: x",
+            )],
+        );
+        assert!(off.is_empty(), "{}", off.len());
     }
 
     #[test]

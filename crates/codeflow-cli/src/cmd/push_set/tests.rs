@@ -153,6 +153,18 @@ impl History {
     }
 
     fn try_range(&self, branch: &str, head: &str, old: &str) -> Result<SelectedRange, String> {
+        self.range_under(branch, head, old, &GitPolicy::default().branch_prefixes)
+    }
+
+    /// The range under `prefixes`, the judging policy's work prefixes, while
+    /// the hook's own policy keeps the shipped defaults.
+    fn range_under(
+        &self,
+        branch: &str,
+        head: &str,
+        old: &str,
+        prefixes: &[String],
+    ) -> Result<SelectedRange, String> {
         let listing = OnceCell::new();
         let advertised = OnceCell::new();
         let answer = OnceCell::new();
@@ -178,9 +190,14 @@ impl History {
             remote_sha: old.to_string(),
         };
         let mut notices = Vec::new();
-        let RangeBase { base, note } =
-            range_base(self.local.path(), &pushed, &destination, &mut notices)?
-                .ok_or("no range")?;
+        let RangeBase { base, note } = range_base(
+            self.local.path(),
+            &pushed,
+            &destination,
+            prefixes,
+            &mut notices,
+        )?
+        .ok_or("no range")?;
         Ok(SelectedRange {
             base,
             note,
@@ -307,6 +324,41 @@ fn push_set_new_task_with_multiple_boundaries_uses_declared_target() {
         .notices
         .iter()
         .any(|text| text.contains("integration/EPC-001-line")));
+}
+
+/// TSK-1257: the declared target is found under the judging policy's work
+/// prefixes. The hook's policy (the shipped defaults here) lacks `work/`,
+/// the destination's has it: the declared line bounds the range only under
+/// the destination's prefixes, so the checkout's policy no longer decides.
+#[test]
+fn push_set_finds_the_declared_target_under_the_judging_prefixes() {
+    let h = History::new();
+    let target = h.git(&["rev-parse", "HEAD"]);
+    h.advertise(&target, "integration/EPC-001-line");
+    h.git(&["checkout", "-q", "-b", "sibling"]);
+    h.commit("sibling", "sibling", "feat: sibling");
+    h.advertise("HEAD", "task/sibling");
+    h.git(&["checkout", "-q", "-b", "work/TSK-001-change", &target]);
+    h.task("integration/EPC-001-line");
+    h.git(&["merge", "--no-ff", "-m", "feat: use sibling", "sibling"]);
+    let head = h.git(&["rev-parse", "HEAD"]);
+    let checkout = GitPolicy::default().branch_prefixes;
+    assert!(!checkout.iter().any(|prefix| prefix == "work/"));
+    let mut judging = checkout.clone();
+    judging.push("work/".into());
+
+    let range = h
+        .range_under("work/TSK-001-change", &head, NEW, &judging)
+        .unwrap();
+    assert_eq!(range.base, target);
+    assert!(range
+        .notices
+        .iter()
+        .any(|text| text.contains("integration/EPC-001-line")));
+    let unjudged = h
+        .range_under("work/TSK-001-change", &head, NEW, &checkout)
+        .unwrap();
+    assert_ne!(unjudged.base, target, "{:?}", unjudged.notices);
 }
 
 #[test]
@@ -561,11 +613,15 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         remote_sha: NEW.into(),
     };
     let mut notices = Vec::new();
-    assert!(
-        range_base(h.local.path(), &pushed, &destination, &mut notices)
-            .unwrap()
-            .is_none()
-    );
+    assert!(range_base(
+        h.local.path(),
+        &pushed,
+        &destination,
+        &destination.policy.branch_prefixes,
+        &mut notices,
+    )
+    .unwrap()
+    .is_none());
     assert!(notices
         .iter()
         .any(|text| text.contains(&tip) && text.contains("not fetched here")));
@@ -784,7 +840,7 @@ fn round_two_hook_and_local_plans_use_the_same_epic_target() {
             &pushed,
             branch,
             &judged,
-            &destination,
+            (&destination, &destination.policy.branch_prefixes),
             &mut report,
         )
         .unwrap();

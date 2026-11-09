@@ -15,7 +15,7 @@ use std::path::Path;
 use crate::scaffold::release_pin::{
     is_table_header, pinned_digests, unread_line, PinnedDigests, TABLE,
 };
-use crate::scaffold::version::{is_older, is_parseable, Unparseable};
+use crate::scaffold::version::{is_older, is_parseable, pinned, Unparseable};
 
 use super::Status;
 use crate::remedy;
@@ -521,17 +521,6 @@ pub(super) fn setup_note(root: &Path, dest: &str, content: &str) -> String {
             "project setup hook {SETUP_HOOK} is present ({what}), but {dest} does not source it before `codeflow test`"
         )
     }
-}
-
-/// The `scaffold_version` a project state pins, if any.
-fn pinned(state: &str) -> Result<Option<String>, String> {
-    let value: toml::Value =
-        toml::from_str(state).map_err(|error| format!("cannot parse state: {error}"))?;
-    Ok(value
-        .get("scaffold_version")
-        .and_then(toml::Value::as_str)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string))
 }
 
 /// The first target ref that exists, and a reader of files at its commit.

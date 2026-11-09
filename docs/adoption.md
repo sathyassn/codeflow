@@ -17,6 +17,17 @@ much working method comes with it.
   started: two pull requests each green on an older base can merge and leave
   the branch red. `codeflow doctor --check remote-perimeter` reads the live
   rules back and warns when they do not require that.
+- If your repository already has rulesets, `remote protect` leaves them as
+  they are and adds its own beside them. It changes another ruleset only when
+  you name it with `--adopt`, and only when that ruleset targets exactly the
+  branches of the ruleset it stands for. `--dry-run` reads the host and prints
+  the exact requests a run would send, and `--branch <name>` limits a run to
+  one branch. A protected branch in the policy that the host does not have
+  is reported and gets no ruleset. `codeflow doctor` accepts any active
+  ruleset or branch protection on `codeflow/registry` that blocks force
+  pushes and deletion for everyone, whoever created it: a ruleset counts
+  only with an empty bypass list, and branch protection only when it binds
+  administrators. Rules it cannot read are a warning, never a pass.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 
@@ -501,9 +512,9 @@ With no remote, `codeflow integrate` replaces the pull request.
    protected branch or with a breaking commit.
 5. **One review, then land.** A seat of the other model lineage reviews the
    whole change once, and a material finding is fixed in the same PR. The
-   reviewed head lands with the next batch on the integration line. When
-   the PR targets `main`, a human merges it once the required checks are
-   evidenced green. An infrastructure-killed duplicate CI job is not a failed
+   head goes to `main`, where a human merges it once the required checks are
+   evidenced green, or, when no human merges as work becomes ready, to its
+   epic line. An infrastructure-killed duplicate CI job is not a failed
    check. An agent's `gh pr merge` into a protected base is blocked.
 6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
    A human can override the git layer for a local merge or a protected
@@ -517,7 +528,7 @@ With no remote, `codeflow integrate` replaces the pull request.
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
 [How work moves to main](delivery.md) covers how a batch of reviewed tasks
-lands with one full gate, how an epic closes into `main`, and what happens
+lands with one full gate, how a line's checkpoints reach `main`, and what happens
 when something changes midway.
 
 ### Related guides
