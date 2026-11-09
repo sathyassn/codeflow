@@ -4,6 +4,61 @@
 //! request that landed it was judged.
 use super::*;
 
+/// TSK-1083: drive completion with the built binary when planning added the
+/// task record after its reviewed branch was cut from the line.
+fn complete_line_planned_record(changed_merge: bool) -> (i32, String) {
+    let dir = line_repo(&["TSK-002"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    git(root, &["switch", "-c", "plan/add-task", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", "Pending.\n"),
+    );
+    commit(root, "docs(records): plan the task on the line");
+    land(root, "plan/add-task");
+    land(root, "task/TSK-001-work");
+    if changed_merge {
+        write(root, "src/merge-only.rs", "// added by the merge\n");
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "--amend", "--no-edit"]);
+    }
+    for (branch, path) in [
+        ("task/later-one", "src/one.rs"),
+        ("task/later-two", "src/two.rs"),
+    ] {
+        build(root, branch, path);
+        land(root, branch);
+    }
+    git(root, &["switch", "-c", "plan/complete-tsk001", LINE]);
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    let result = status_complete(root, "TSK-001");
+    println!("completion at reviewed head {reviewed}: {}", result.1);
+    let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    let expected_status = if changed_merge {
+        "status: in_progress"
+    } else {
+        "status: complete"
+    };
+    assert!(record.contains(expected_status), "{record}");
+    assert!(record.contains(&reviewed), "{record}");
+    result
+}
+
+#[test]
+fn status_completes_a_line_planned_record_at_its_reviewed_head() {
+    let result = complete_line_planned_record(false);
+    assert_eq!(result.0, 0, "{}", result.1);
+}
+
+#[test]
+fn status_refuses_a_line_planned_record_with_a_changed_landing_merge() {
+    let result = complete_line_planned_record(true);
+    assert_ne!(result.0, 0, "{}", result.1);
+    assert!(result.1.contains("not the clean re-merge"), "{}", result.1);
+}
+
 /// TSK-001 as a task of EPC-001 with `criteria`, targeting [`LINE`].
 fn own_task(status: &str, criteria: &str, closeout: &str) -> String {
     task("TSK-001", status, criteria, closeout).replace(
