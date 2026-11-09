@@ -228,9 +228,8 @@ fn test_setup_writes_config_offline_and_is_idempotent() {
     // stock Rust toolchain. It must not assume cargo-nextest, a
     // project-defined nextest profile, a report plugin, or a coverage
     // artifact. Full mode runs the coverage producer, cargo-llvm-cov, which a
-    // stock toolchain lacks and `codeflow doctor` names (TSK-1014 AC-5); under
-    // `cargo llvm-cov nextest` a nested one inherits the outer run's wrapper
-    // and recurses until the gate times out, so this test never runs it.
+    // stock toolchain lacks and `codeflow doctor` names (TSK-1014 AC-5);
+    // `test_setup_full_command_runs_its_coverage_producer` runs it.
     let gate = codeflow(dir.path(), &["test", "--mode", "essential", "--strict"]);
     assert_eq!(
         gate.status.code(),
@@ -238,6 +237,107 @@ fn test_setup_writes_config_offline_and_is_idempotent() {
         "auto-detected Rust config must be runnable:\nstdout: {}\nstderr: {}",
         stdout(&gate),
         stderr(&gate)
+    );
+}
+
+/// The variables an outer coverage collector, `cargo llvm-cov nextest`, sets
+/// for each test process (read from cargo-llvm-cov 0.8.4): its rustc wrapper
+/// and the wrapper's own variables, the profile file, and the compiler flags
+/// a collector may set. A nested `cargo llvm-cov` that inherits the wrapper
+/// wraps rustc in itself again and recurses until the gate times out.
+/// Clears an outer coverage collector's variables from one child process,
+/// so a scratch project's own `cargo llvm-cov` runs as it would on an
+/// adopter's machine. Only this test's child is changed; the gate still
+/// passes its caller's environment to every target.
+///
+/// The names are the ones `cargo llvm-cov nextest` (0.8.4, the version CI
+/// installs) sets for its tests, plus the rustc wrapper and flag variables
+/// cargo reads. Each name is a literal so the git environment contract scan
+/// can see that no inherited git configuration is removed.
+fn without_outer_coverage(command: &mut Command) -> &mut Command {
+    command
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("LLVM_PROFILE_FILE")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTDOCFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTDOCFLAGS")
+        .env_remove("CARGO_LLVM_COV")
+        .env_remove("CARGO_LLVM_COV_TARGET_DIR")
+        .env_remove("CARGO_LLVM_COV_BUILD_DIR")
+        .env_remove("__CARGO_LLVM_COV_RUSTC_WRAPPER")
+        .env_remove("__CARGO_LLVM_COV_RUSTC_WRAPPER_RUSTFLAGS")
+        .env_remove("__CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES")
+}
+
+/// Setup's generated full command runs for real: its `cargo llvm-cov` writes
+/// the lcov artifact the coverage block names, and the strict full gate
+/// passes and reports the target's coverage (TSK-1014 AC-5).
+///
+/// What it proves depends on the host. Where cargo-llvm-cov is installed,
+/// such as this repository's coverage job and a developer's machine, it runs
+/// the command end to end. Where it is not, such as the plain test
+/// partitions and Windows, which install only cargo-nextest, the generated
+/// full command cannot run, `codeflow doctor` names the missing producer
+/// instead, and this test returns after saying on stderr that it proved
+/// nothing there. The scratch child runs without an outer collector's
+/// variables, so the check also holds inside `cargo llvm-cov nextest`.
+#[test]
+fn test_setup_full_command_runs_its_coverage_producer() {
+    let dir = tempfile::tempdir().unwrap();
+    let probe = without_outer_coverage(
+        Command::new("cargo")
+            .args(["llvm-cov", "--version"])
+            .current_dir(dir.path()),
+    )
+    .output();
+    if !probe.is_ok_and(|output| output.status.success()) {
+        eprintln!(
+            "skipped: cargo-llvm-cov is not installed on this host, so setup's \
+             generated full command cannot run; this test proved nothing here"
+        );
+        return;
+    }
+    init_repo(dir.path());
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn one() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one_is_one() {\n        assert_eq!(super::one(), 1);\n    }\n}\n",
+    );
+    let setup = codeflow(dir.path(), &["test", "setup"]);
+    assert_eq!(setup.status.code(), Some(0), "{}", stderr(&setup));
+
+    let home = tempfile::tempdir().unwrap();
+    let gate = without_outer_coverage(
+        Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args(["test", "--mode", "full", "--strict"])
+            .current_dir(dir.path())
+            .env("CODEFLOW_HOME", home.path())
+            .env_remove("CARGO_TARGET_DIR"),
+    )
+    .output()
+    .expect("codeflow binary runs");
+    assert_eq!(
+        gate.status.code(),
+        Some(0),
+        "the generated full command must run:\nstdout: {}\nstderr: {}",
+        stdout(&gate),
+        stderr(&gate)
+    );
+    assert!(
+        dir.path().join("target/lcov.info").is_file(),
+        "cargo llvm-cov must write the artifact the coverage block names"
+    );
+    assert!(
+        stdout(&gate).contains("rust-core: 100.0% overall"),
+        "the gate reports the producer's coverage:\n{}",
+        stdout(&gate)
     );
 }
 
