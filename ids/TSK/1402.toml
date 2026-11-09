@@ -1,0 +1,11 @@
+id = "TSK-1402"
+uid = "3554f96d-2ea1-413c-9860-1e1e34f2cf4d"
+kind = "TSK"
+title = "Every protected path set in the edit guard keeps its resolved spelling or refuses"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T08:05:25Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
