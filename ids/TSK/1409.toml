@@ -1,0 +1,11 @@
+id = "TSK-1409"
+uid = "64cc3403-a246-41b2-ad47-a64264bf0791"
+kind = "TSK"
+title = "Git-guard judges the path a clone checks out into"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T11:07:12Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
