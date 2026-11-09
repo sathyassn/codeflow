@@ -122,6 +122,24 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-416 AC-9: names a ref in a refusal that is already certain (a
+    // fetch failed, or a ref names no readable commit). The text only reaches
+    // a person; a ref name git2 cannot give as text is skipped, and the fetch
+    // or read still refuses on its own.
+    (
+        "codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_remote_ref",
+        "name",
+        1,
+        "display",
+    ),
+    (
+        "codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_tip",
+        "symbolic_target",
+        1,
+        "display",
+    ),
     // TSK-416 (issue 547): a failed review provider's stderr, shown to a
     // person after redaction, never compared or used as a name
     (
@@ -1520,6 +1538,74 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-416 AC-9: `None` only drops the named-remedy refusal; `codeflow ci`
+    // then resolves the same ref with git, which still refuses a ref that
+    // names no readable commit. A readable commit is the success case.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_reference",
+        "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_reference",
+        "obtain-absent:find_reference",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_reference",
+        "obtain-absent:peel_to_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-416 AC-9: picks which ref a fetch that already failed names; a
+    // readable commit is skipped, and the fetch refuses either way.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_remote_ref",
+        "obtain-absent:peel_to_commit",
+        1,
+        "display",
+    ),
+    // TSK-416 AC-9: builds the text of a refusal already decided by the
+    // caller: what the ref points at and whether its object is here, which
+    // only chooses the remedy shown to a person.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_tip",
+        "obtain-absent:find_object",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_tip",
+        "obtain-absent:find_reference",
+        1,
+        "display",
+    ),
+    // TSK-416 AC-22: the commit is read only from the exact fetched ref;
+    // these reads only look for a local ref spelled the same, to refuse it,
+    // and show its commit in that refusal. A shadow ref git cannot read
+    // still never anchors the binding.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "pinned_commit",
+        "obtain-absent:find_reference",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "pinned_commit",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
     // TSK-416 (issue 547): the review provider has already failed and the
     // claim refuses either way; its stderr is read, bounded, only to name the
     // cause and show its first line, redacted, to a person.
