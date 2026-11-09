@@ -1771,9 +1771,10 @@ checked, so a symlink does not remove the target owner's protection.
   which the hooks read. The hooks read these program words as a Unix shell
   passes them. Three residuals remain: a native Windows shell was not
   tested; an interpreter one-liner that starts a program is read only for
-  the families the interpreter check judges; and a program word the hooks
-  cannot fill, such as a parameter the line does not assign a literal, is
-  not judged as one of these programs (TSK-1404). An
+  the families the interpreter check judges; and a program word that is a
+  parameter the line does not assign a literal is not judged as one of
+  these programs, except where the recursive-deletion check models the
+  parameter's value (TSK-1404). An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push
@@ -1802,9 +1803,9 @@ checked, so a symlink does not remove the target owner's protection.
   recursive-deletion check models the parameter's value; the pre-push hook
   stays the floor for a push git runs with its hooks, and the fix is
   tracked in TSK-1404. Git-guard refuses a command substitution, in `$(...)`
-  or backtick form, in a command's program word, read after the prefix
-  launchers and `env` it unwraps, since its output decides which program
-  runs. A command
+  or backtick form, in a command's program word whose basename is neither
+  `git` nor `gh`, read after the prefix launchers and `env` it unwraps,
+  since its output decides which program runs. A command
   substitution written on the git command itself stays with git-guard's
   substitution reader and its alias and message rules. Git-guard reads
   bracket arithmetic that holds only decimal integer arithmetic

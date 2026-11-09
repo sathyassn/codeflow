@@ -488,13 +488,15 @@ fn command_data_supplied(
                 // This refusal is for a program that may be git. A program
                 // word the guard cannot fill whose words show no git returns
                 // here, before the command-builder check. Git-guard still
-                // refuses a substitution in the program word, and the
-                // deletion check reports a builder in a value it models.
-                // The residual is a parameter the line does not assign a
-                // literal: neither guard judges it as git or as a command
-                // builder, and the deletion check keeps it spelled where it
-                // does not model its value. Tracked in TSK-1404; the
-                // pre-push hook stays the floor for a push.
+                // refuses a substitution in a program word whose basename is
+                // neither git nor gh, read after the prefix launchers and
+                // env it unwraps, and the deletion check reports a builder
+                // in a value it models. The residual is a program word that
+                // is a parameter the line does not assign a literal:
+                // neither guard judges it as git or as a command builder,
+                // and the deletion check keeps it spelled where it does not
+                // model its value. Tracked in TSK-1404; the pre-push hook
+                // stays the floor for a push.
                 Err(_) if !git_evidence(args) => return Ok(None),
                 Err(why) => {
                     return Err(unresolved(
