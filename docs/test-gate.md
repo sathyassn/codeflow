@@ -231,13 +231,16 @@ the stack's producer, and the block sets no rules:
 
 | Stack | Producer | Artifact |
 |---|---|---|
-| Rust (`cargo`) | cargo-llvm-cov | `target/llvm-cov/lcov.info` (lcov) |
+| Rust (`cargo`) | cargo-llvm-cov | `target/lcov.info` (lcov) |
 | Python (`pytest`) | coverage.py | `coverage.xml` (cobertura) |
 | Node (`vitest`) | `@vitest/coverage-v8` | `coverage/lcov.info` (lcov) |
 | Node (`jest`) | Jest's own coverage | `coverage/lcov.info` (lcov) |
 | Go | `go test -coverprofile` | `coverage.out` (go-cover) |
 
-`codeflow update` never rewrites the test config, and the gate's own
+cargo-llvm-cov does not create its output's folder; cargo creates
+`target/` for its build while `CARGO_TARGET_DIR` is unset, so with that
+variable pointing elsewhere, move the Rust path and `--output-path` under
+it. `codeflow update` never rewrites the test config, and the gate's own
 detection for a project with no config keeps the plain test commands. A
 full gate cannot pass until the producer its full command runs is
 installed, so `codeflow doctor` prints one line naming a missing producer

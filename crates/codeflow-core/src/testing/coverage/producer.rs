@@ -37,7 +37,10 @@ pub struct Producer {
     /// Format of the artifact the full command writes.
     pub format: CoverageFormat,
     /// Artifact path, relative to the target's working directory. Each sits
-    /// where the stack's usual ignore file already excludes it.
+    /// where the stack's usual ignore file already excludes it, in a folder
+    /// that exists when the producer writes: cargo-llvm-cov does not create
+    /// its output's folder, but cargo creates `target/` for its build while
+    /// `CARGO_TARGET_DIR` is unset.
     pub path: &'static str,
     /// How doctor checks that the tool is installed.
     pub probe: Probe,
@@ -50,10 +53,10 @@ pub const PRODUCERS: &[Producer] = &[
     Producer {
         runner: RunnerType::Cargo,
         tool: "cargo-llvm-cov",
-        full_command: "cargo llvm-cov --workspace --lcov --output-path target/llvm-cov/lcov.info",
+        full_command: "cargo llvm-cov --workspace --lcov --output-path target/lcov.info",
         markers: &["cargo llvm-cov"],
         format: CoverageFormat::Lcov,
-        path: "target/llvm-cov/lcov.info",
+        path: "target/lcov.info",
         probe: Probe::Command(&["cargo", "llvm-cov", "--version"]),
         install: "cargo install cargo-llvm-cov",
     },

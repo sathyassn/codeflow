@@ -686,7 +686,7 @@ mod tests {
                 "[package]\nname = \"t\"\n",
                 "rust-core",
                 CoverageFormat::Lcov,
-                "target/llvm-cov/lcov.info",
+                "target/lcov.info",
                 "cargo llvm-cov",
             ),
             (
