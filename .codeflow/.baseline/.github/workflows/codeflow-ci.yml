@@ -15,7 +15,8 @@
 # then run `codeflow update`.
 #
 # A project that needs its own toolchain for the gate commits
-# .codeflow/ci-setup.sh; the gates job sources it just before `codeflow test`.
+# .codeflow/ci-setup.sh; the gates job sources it in its own step before
+# `codeflow test`.
 # The secret scan reads only the commits a pull request or push brings; the
 # weekly and manual runs read the full history.
 #
@@ -54,9 +55,37 @@ jobs:
         with:
           fetch-depth: 0
 
+      # On a pull request the target is its base branch's current tip,
+      # resolved once here and used by every later step of this job, never
+      # the event's base commit, which is the base when the event fired
+      # (issue 602). `range` is merge-base(head, tip). A base that moves
+      # after this step is not seen by this run; only strict up-to-date
+      # checks or a merge queue close that gap. Other events judge the
+      # pushed commit and leave both empty.
+      - name: Resolve the base
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            { echo "tip="; echo "range="; } >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/codeflow/base-tip"; then
+            echo "::error::cannot fetch the pull request's base branch ${BASE_REF}; nothing is judged"; exit 1
+          fi
+          tip=$(git rev-parse --verify 'refs/codeflow/base-tip^{commit}')
+          if ! range=$(git merge-base "$HEAD_SHA" "$tip"); then
+            echo "::error::the head ${HEAD_SHA} shares no history with ${BASE_REF} at ${tip}; nothing is judged"; exit 1
+          fi
+          { echo "tip=${tip}"; echo "range=${range}"; } >> "$GITHUB_OUTPUT"
+          echo "base ${BASE_REF} resolved once at ${tip}; the change is ${range}..${HEAD_SHA}"
+
       - name: Install codeflow (target-pinned, checksum-verified)
         env:
-          PIN_REF: ${{ github.event.pull_request.base.sha || github.sha }}
+          PIN_REF: ${{ steps.base.outputs.tip || github.sha }}
         run: |
           # SPC-013 R-113: install the codeflow version the target pins in
           # .codeflow/project.toml (scaffold_version). When the same file pins
@@ -163,41 +192,115 @@ jobs:
           if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
           echo "codeflow ${version} installed and verified against ${verified}"
 
+      # The gate's binary is the one the install above put on PATH, found here
+      # before the project setup hook runs, so a folder the hook adds to PATH
+      # does not change which codeflow the gate runs by accident.
+      - name: Find the codeflow binary the gate runs
+        id: gate
+        run: |
+          set -eu
+          bin=$(command -v codeflow)
+          echo "bin=${bin}" >> "$GITHUB_OUTPUT"
+          echo "the gate runs ${bin}"
+
       # Project setup (optional): a change that holds .codeflow/ci-setup.sh
-      # has it sourced here, after the install and before the test gate,
-      # under set -eu, so the toolchain it installs and the variables it
-      # exports reach the gate and a failing command fails the job. The
-      # project owns the file; `codeflow update` never writes it.
+      # has it sourced here, in its own step after the install and before the
+      # test gate, under set -eu, so a failing command fails the job. What it
+      # exports, and the folders it puts in front of PATH, are carried to the
+      # gate step through GITHUB_ENV and GITHUB_PATH. An `exit` in it, even
+      # `exit 0`, fails this step and the job, while the hook leaves the
+      # step's trap in place; a hook that clears the trap and exits ends
+      # only this step, and the gate step runs after it. Like the test
+      # commands, the hook is the change's own code with the job's
+      # authority, so it is reviewed as this file is. The project owns the
+      # file; `codeflow update` never writes it.
+      - name: Project setup hook
+        run: |
+          set -eu
+          if [ ! -f .codeflow/ci-setup.sh ]; then
+            echo "no project setup hook (.codeflow/ci-setup.sh)"; exit 0
+          fi
+          codeflow_env=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-env.XXXXXX")
+          python3 -I -c 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], "w"))' "$codeflow_env"
+          codeflow_returned=
+          trap '[ -n "$codeflow_returned" ] || { echo "::error::the project setup hook ended the step instead of returning; a project setup hook must not exit"; exit 1; }' EXIT
+          echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
+          . ./.codeflow/ci-setup.sh
+          set -eu
+          codeflow_returned=1
+          python3 -I - "$codeflow_env" <<'CARRY'
+          import json, os, re, secrets, sys
+          before = json.load(open(sys.argv[1]))
+          own = {"PATH", "PWD", "OLDPWD", "SHLVL", "_", "BASH_ENV", "ENV", "NODE_OPTIONS", "EVENT", "BASE_TIP", "CODEFLOW_BIN"}
+          with open(before["GITHUB_ENV"], "a") as env:
+              for name, value in sorted(os.environ.items()):
+                  if before.get(name) == value or name in own or name.startswith(("GITHUB_", "RUNNER_")):
+                      continue
+                  if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                      continue
+                  mark = "codeflow_" + secrets.token_hex(16)
+                  env.write(f"{name}<<{mark}\n{value}\n{mark}\n")
+          was = before.get("PATH", "").split(os.pathsep)
+          added = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in was]
+          with open(before["GITHUB_PATH"], "a") as path:
+              for folder in reversed(added):
+                  path.write(folder + "\n")
+          CARRY
+
+      # The gate. This job runs the change's own code, its workflow file,
+      # setup hook and tests, with the runner's full privileges, so it is not
+      # a trusted verdict: a hook, a test command or an edit of this file
+      # written to pass can decide it. With this file as shipped, a pull
+      # request's targets come from the base tip's .codeflow/test-config.json,
+      # read here after the setup hook, so an ordinary edit of that file does
+      # not drop a target or lower a floor in its own run; the edit takes
+      # effect once it lands. A config the base does not hold is removed, so
+      # the gate runs as the base would; one the base holds as anything but a
+      # regular file, or that cannot be read, fails the job. The change's own
+      # .codeflow/policy.json stays in place for `codeflow validate --docs`;
+      # every enforcement level comes from the default branch (ADR-0091).
       - name: codeflow test
         env:
           EVENT: ${{ github.event_name }}
+          BASE_TIP: ${{ steps.base.outputs.tip }}
+          CODEFLOW_BIN: ${{ steps.gate.outputs.bin }}
         run: |
-          set -eu
-          codeflow_mode=full
-          if [ "${EVENT:-}" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' 2>/dev/null; then
-            codeflow_mode=essential
+          set -euo pipefail
+          case ${CODEFLOW_BIN:-} in
+            /*) ;;
+            *) echo "::error::the gate's codeflow binary was not found; nothing is judged"; exit 1 ;;
+          esac
+          config=.codeflow/test-config.json
+          if [ "$EVENT" = pull_request ]; then
+            case ${BASE_TIP:-} in
+              '' | *[!0-9a-f]*) echo "::error::no base commit to read the gate's test config from; nothing is judged"; exit 1 ;;
+            esac
+            if [ -L .codeflow ] || { [ -e .codeflow ] && [ ! -d .codeflow ]; }; then
+              echo "::error::.codeflow in this change is not a folder; the base's test config cannot be put in place; nothing is judged"; exit 1
+            fi
+            mkdir -p .codeflow
+            if ! entry=$(git ls-tree "$BASE_TIP" -- "$config"); then
+              echo "::error::cannot read the tree of the base ${BASE_TIP}; nothing is judged"; exit 1
+            fi
+            rm -f -- "$config"
+            case ${entry%% *} in
+              '') echo "the base ${BASE_TIP} holds no ${config}; the gate runs without it, as the base would" ;;
+              100644|100755)
+                if ! git cat-file blob "${BASE_TIP}:${config}" > "$config"; then
+                  echo "::error::cannot read ${config} at the base ${BASE_TIP}; nothing is judged"; exit 1
+                fi
+                echo "the gate reads ${config} from the base ${BASE_TIP}" ;;
+              *) echo "::error::${config} at the base ${BASE_TIP} is not a regular file; nothing is judged"; exit 1 ;;
+            esac
+          else
+            echo "a ${EVENT} run judges the pushed commit with its own test config"
           fi
-          # The hook runs with the gate's authority, like this file, so it is
-          # reviewed as this file is. These lines keep it from skipping the gate
-          # by accident: the shell variables naming the binary and folder are
-          # read-only (the binary itself is not), set -eu holds again once it
-          # returns, and a run it ends (an `exit`) fails.
-          codeflow_bin=$(command -v codeflow)
-          codeflow_root=$(pwd)
-          readonly codeflow_bin codeflow_root codeflow_mode
-          codeflow_gated=
-          trap '[ -n "$codeflow_gated" ] || { echo "::error::the run ended before codeflow test ran; a project setup hook must not exit"; exit 1; }' EXIT
-          if [ -f .codeflow/ci-setup.sh ]; then
-            echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
-            . ./.codeflow/ci-setup.sh
-            set -eu
-            cd "$codeflow_root"
+          mode=full
+          if [ "$EVENT" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(sys.argv[1])); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' "$config" 2>/dev/null; then
+            mode=essential
           fi
-          codeflow_gated=1
-          "$codeflow_bin" test --strict --mode "$codeflow_mode"
-
-      - name: codeflow validate --docs
-        run: codeflow validate --docs
+          "$CODEFLOW_BIN" validate --docs
+          "$CODEFLOW_BIN" test --strict --mode "$mode"
 
   # R-113 upgrade step one: a pull request that raises the pinned version is
   # judged by the target's binary above; this job tests the candidate binary
@@ -212,10 +315,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve the base
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            { echo "tip="; echo "range="; } >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/codeflow/base-tip"; then
+            echo "::error::cannot fetch the pull request's base branch ${BASE_REF}; nothing is judged"; exit 1
+          fi
+          tip=$(git rev-parse --verify 'refs/codeflow/base-tip^{commit}')
+          if ! range=$(git merge-base "$HEAD_SHA" "$tip"); then
+            echo "::error::the head ${HEAD_SHA} shares no history with ${BASE_REF} at ${tip}; nothing is judged"; exit 1
+          fi
+          { echo "tip=${tip}"; echo "range=${range}"; } >> "$GITHUB_OUTPUT"
+          echo "base ${BASE_REF} resolved once at ${tip}; the change is ${range}..${HEAD_SHA}"
+
       - name: Compare the target and head pins
         id: pins
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base.outputs.tip }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           pin() { git show "$1:.codeflow/project.toml" 2>/dev/null | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1; }
@@ -461,9 +585,22 @@ jobs:
       # reads no commit.
       - name: gitleaks
         env:
-          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TRUSTED_SHA: ${{ github.event_name != 'pull_request' && github.sha || '' }}
+          SCAN_FROM: ${{ github.event_name != 'pull_request' && github.event.before || '' }}
         run: |
+          # On a pull request the trusted commit is the base branch's current
+          # tip, resolved here, inside the scan step, so that no step runs
+          # before the scan (issue 602; the other jobs use "Resolve the base").
+          if [ "${EVENT:-}" = pull_request ]; then
+            if ! git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/codeflow/base-tip"; then
+              echo "::error::cannot fetch the pull request's base branch ${BASE_REF}; refusing to scan"; exit 1
+            fi
+            TRUSTED_SHA=$(git rev-parse --verify 'refs/codeflow/base-tip^{commit}')
+            SCAN_FROM=$TRUSTED_SHA
+            echo "base ${BASE_REF} resolved once at ${TRUSTED_SHA}"
+          fi
           case ${TRUSTED_SHA:-} in
             '' | *[!0-9a-f]*)
               echo "::error::no trusted commit to read exemptions from; refusing to scan"; exit 1 ;;
@@ -952,6 +1089,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve the base
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            { echo "tip="; echo "range="; } >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/codeflow/base-tip"; then
+            echo "::error::cannot fetch the pull request's base branch ${BASE_REF}; nothing is judged"; exit 1
+          fi
+          tip=$(git rev-parse --verify 'refs/codeflow/base-tip^{commit}')
+          if ! range=$(git merge-base "$HEAD_SHA" "$tip"); then
+            echo "::error::the head ${HEAD_SHA} shares no history with ${BASE_REF} at ${tip}; nothing is judged"; exit 1
+          fi
+          { echo "tip=${tip}"; echo "range=${range}"; } >> "$GITHUB_OUTPUT"
+          echo "base ${BASE_REF} resolved once at ${tip}; the change is ${range}..${HEAD_SHA}"
+
       # Dependency / supply-chain audit — the deterministic floor the
       # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
       # A03:2025). Pinned
@@ -995,7 +1153,7 @@ jobs:
       # commit's, so a pull request cannot accept its own findings.
       - name: dependency audit (osv-scanner)
         env:
-          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          TRUSTED_SHA: ${{ steps.base.outputs.tip || github.sha }}
         run: |
           set -u
           case ${TRUSTED_SHA:-} in
