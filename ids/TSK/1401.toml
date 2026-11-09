@@ -1,0 +1,11 @@
+id = "TSK-1401"
+uid = "11c71c0f-7de7-45c1-995c-7e119c048078"
+kind = "TSK"
+title = "The clone creation check judges only the paths clone writes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T07:39:38Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
