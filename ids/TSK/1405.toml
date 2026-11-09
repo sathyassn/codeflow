@@ -1,0 +1,11 @@
+id = "TSK-1405"
+uid = "9f973c11-7c17-4438-8585-0990f3986e87"
+kind = "TSK"
+title = "Test files have names the agent sandbox can read"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T10:22:21Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
