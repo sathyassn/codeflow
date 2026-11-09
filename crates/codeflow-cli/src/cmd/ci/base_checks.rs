@@ -25,6 +25,7 @@ use codeflow_core::base_checks::{
     self, describe_mode, entry_in, tree_at, Check, DECLARATION, MODE_EXECUTABLE, MODE_FILE,
     MODE_TREE,
 };
+use codeflow_core::git::name::GitName;
 use codeflow_core::remedy::{Finding, CI_BASE_CHECK_FAILED};
 
 /// Arguments of `codeflow ci base-checks`.
@@ -290,12 +291,14 @@ fn run_check(
     for input in &check.inputs {
         export(repo, tree, input, &root, true)?;
     }
-    let interpreter = on_path(&check.interpreter).ok_or_else(|| {
+    let not_on_path = || {
         format!(
             "cannot run: its interpreter {} is not on PATH",
             check.interpreter
         )
-    })?;
+    };
+    let search = std::env::var_os("PATH").ok_or_else(not_on_path)?;
+    let interpreter = on_path(&check.interpreter, &search).ok_or_else(not_on_path)?;
     let empty_config = folder.join("gitconfig");
     std::fs::write(&empty_config, "")
         .map_err(|error| format!("cannot write {}: {error}", empty_config.display()))?;
@@ -305,7 +308,7 @@ fn run_check(
         .args([run.base, run.head, run.merge, run.head_repo])
         .current_dir(&root)
         .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("PATH", &search)
         .env("HOME", &home)
         .env("TMPDIR", &temp)
         .env("LANG", "C.UTF-8")
@@ -405,15 +408,19 @@ fn export(
             })?;
             let mut failure = None;
             sub.walk(git2::TreeWalkMode::PreOrder, |prefix, entry| {
-                let name = String::from_utf8_lossy(entry.name_bytes());
-                let inner = format!("{path}/{prefix}{name}");
-                let result = match entry.filemode() {
-                    MODE_TREE => return git2::TreeWalkResult::Ok,
-                    MODE_FILE | MODE_EXECUTABLE if entry.name().is_ok() => {
+                let name = GitName::from_bytes(entry.name_bytes());
+                let result = match (entry.filemode(), name.rule_text()) {
+                    (MODE_TREE, _) => return git2::TreeWalkResult::Ok,
+                    (_, Err(_)) => Err(format!(
+                        "cannot run: its input {path}/{prefix}{} has a name that is not UTF-8 on the trusted commit",
+                        name.display()
+                    )),
+                    (MODE_FILE | MODE_EXECUTABLE, Ok(text)) => {
+                        let inner = format!("{path}/{prefix}{text}");
                         write_blob(repo, entry.id(), &inner, &root.join(&inner))
                     }
-                    other => Err(format!(
-                        "cannot run: its input {inner} is {} on the trusted commit",
+                    (other, Ok(text)) => Err(format!(
+                        "cannot run: its input {path}/{prefix}{text} is {} on the trusted commit",
                         describe_mode(other)
                     )),
                 };
@@ -455,10 +462,10 @@ fn write_blob(
         .map_err(|error| format!("cannot run: cannot write {shown}: {error}"))
 }
 
-/// The first executable file named `name` on PATH.
-fn on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
+/// The first executable file named `name` in the folders of `search`, a
+/// PATH value.
+fn on_path(name: &str, search: &std::ffi::OsStr) -> Option<PathBuf> {
+    std::env::split_paths(search).find_map(|dir| {
         let candidates = if cfg!(windows) {
             vec![dir.join(format!("{name}.exe")), dir.join(name)]
         } else {

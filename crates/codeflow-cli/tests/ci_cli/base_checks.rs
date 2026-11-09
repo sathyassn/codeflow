@@ -408,6 +408,45 @@ fn the_step_refuses_gitlinks_unreadable_objects_and_unknown_commits() {
     }
 }
 
+/// AC-2: a file in a declared input folder whose name is not UTF-8 fails
+/// the check naming that, never as a file it could not write.
+#[cfg(unix)]
+#[test]
+fn an_input_folder_name_that_is_not_utf8_fails_naming_it() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let repo = Repo::with_boundary();
+    repo.write(
+        DECLARATION,
+        &declaration(SCRIPT, "bash", &["docs/inputs"], Some(60)),
+    );
+    repo.write("docs/inputs/plain.txt", "plain\n");
+    repo.commit("chore: an input folder");
+    let blob = repo.git(&["rev-parse", "HEAD:docs/inputs/plain.txt"]);
+    let mut entry = b"100644,".to_vec();
+    entry.extend_from_slice(blob.as_bytes());
+    entry.extend_from_slice(b",docs/inputs/bad-\xff.txt");
+    let out = git_command(&repo.root)
+        .args(["update-index", "--add", "--cacheinfo"])
+        .arg(std::ffi::OsStr::from_bytes(&entry))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    repo.git(&["commit", "-q", "--no-verify", "-m", "chore: a raw name"]);
+    assert_refused(
+        &repo.checks("HEAD", "HEAD", "HEAD", &[]),
+        &[
+            "docs/inputs/",
+            "has a name that is not UTF-8 on the trusted commit",
+            DECLARATION,
+        ],
+    );
+}
+
 /// AC-2: a check past its timeout is stopped, with everything it started,
 /// and fails naming the timeout.
 #[test]
