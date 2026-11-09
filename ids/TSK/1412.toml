@@ -1,0 +1,11 @@
+id = "TSK-1412"
+uid = "9d1e89d2-82d0-4951-a5e8-d84ac020f2f8"
+kind = "TSK"
+title = "Main carries the SQLite advisory fix"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-09T13:43:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
