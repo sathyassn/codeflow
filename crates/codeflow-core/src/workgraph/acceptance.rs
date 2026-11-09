@@ -2663,7 +2663,9 @@ pub(super) fn judged_target_tips(
 /// that names it: the configured upstream of its local branch when it is the
 /// same branch on a configured remote (an upstream naming another branch is
 /// never this target, TSK-416), its `origin` tracking ref, and the local
-/// branch, in that order. Empty when none resolves.
+/// branch, in that order. Empty when none resolves. A ref that exists and
+/// names no readable commit refuses, naming the ref, what it points at and
+/// a remedy that runs under the guard (TSK-416 AC-9).
 pub(super) fn target_tips(repo: &Repository, name: &str) -> Result<Vec<(String, Oid)>, String> {
     let mut names = Vec::new();
     if let Some(upstream) =
@@ -2676,13 +2678,11 @@ pub(super) fn target_tips(repo: &Repository, name: &str) -> Result<Vec<(String, 
     names.extend(super::work_start::target_reference_names(name).unwrap_or_default());
     let mut tips = Vec::new();
     for reference in names {
-        let found = match repo.find_reference(&reference) {
-            Ok(found) => found,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
-            Err(error) => return Err(error.to_string()),
-        };
-        let commit = found.peel_to_commit().map_err(|error| error.to_string())?;
-        tips.push((reference, commit.id()));
+        if let Some(tip) = super::work_start::reference_commit(repo, &reference)
+            .map_err(|error| error.to_string())?
+        {
+            tips.push((reference, tip));
+        }
     }
     Ok(tips)
 }
@@ -6629,5 +6629,50 @@ mod judged_tip_tests {
             "{error}"
         );
         assert!(error.contains(&broken), "{error}");
+        // TSK-416 AC-9: the remedy works from the fetched line and runs
+        // under the guard.
+        assert!(
+            error.contains("git worktree add --detach <path> refs/remotes/origin/main"),
+            "{error}"
+        );
+        assert!(!error.contains("update-ref"), "{error}");
+    }
+
+    /// TSK-416 AC-9: a fetched tip that names no readable commit refuses
+    /// naming the cause, the ref and the object it points at; the remedy is
+    /// a fresh clone for a missing object, which stops every fetch, and a
+    /// plain fetch of its remote for an object that is not a commit.
+    #[test]
+    fn a_fetched_tip_that_names_no_commit_refuses_naming_the_ref_and_a_guarded_remedy() {
+        let (dir, _) = fixture();
+        let root = dir.path();
+        let blob = git(root, &["hash-object", "-w", "--stdin"]);
+        std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
+        let fresh_clone = [
+            "a fresh clone of the remote, made from outside this clone (`git clone ",
+            "`git branch -d -r origin/main`, then `git fetch origin`",
+            "which the guard leaves to the operator",
+        ];
+        let fetch = ["plain `git fetch origin`, which rewrites refs/remotes/origin/main"];
+        for (points_at, remedy) in [("1".repeat(40), &fresh_clone[..]), (blob, &fetch[..])] {
+            std::fs::write(
+                root.join(".git/refs/remotes/origin/main"),
+                format!("{points_at}\n"),
+            )
+            .unwrap();
+            let error = tips(root).unwrap_err();
+            for part in [
+                "refs/remotes/origin/main points at",
+                points_at.as_str(),
+                "not a commit this clone can read",
+                "the fetched tip cannot be resolved",
+            ]
+            .iter()
+            .chain(remedy)
+            {
+                assert!(error.contains(part), "{part}: {error}");
+            }
+            assert!(!error.contains("update-ref"), "{error}");
+        }
     }
 }

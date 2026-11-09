@@ -279,13 +279,10 @@ fn claim_reference(
         None => return Ok(reference),
     };
     let fetched = format!("refs/remotes/{remote}/{branch}");
-    let fetched_tip = match repo.find_reference(&fetched) {
-        Ok(found) => found
-            .peel_to_commit()
-            .map_err(|error| format!("cannot read {fetched}: {error}"))?
-            .id(),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(reference),
-        Err(error) => return Err(format!("cannot read {fetched}: {error}")),
+    let Some(fetched_tip) =
+        super::work_start::reference_commit(repo, &fetched).map_err(|error| error.to_string())?
+    else {
+        return Ok(reference);
     };
     if fetched_tip == tip {
         return Ok(fetched);
@@ -1990,7 +1987,14 @@ fn fetch_for_admission(root: &Path, remote: &str) -> Result<(), String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let last = fetched_at(&repo).unwrap_or_else(|| "unknown".into());
     git(root, &["fetch", "--prune", "--quiet", "--", remote]).map_err(|error| {
-        format!("fetch {remote} failed (last fetch before this attempt: {last}): {error}")
+        let failed =
+            format!("fetch {remote} failed (last fetch before this attempt: {last}): {error}");
+        // A fetched ref naming a missing object stops every fetch; name it
+        // and the remedy (TSK-416 AC-9).
+        match super::work_start::unresolvable_remote_ref(&repo, remote) {
+            Some(broken) => format!("{failed}; {broken}"),
+            None => failed,
+        }
     })?;
     Ok(())
 }

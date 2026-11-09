@@ -540,12 +540,76 @@ fn target_commit(
 ) -> Result<Option<git2::Oid>, String> {
     target
         .map(|target| {
-            repo.revparse_single(target)
-                .and_then(|object| object.peel_to_commit())
-                .map(|commit| commit.id())
+            pinned_commit(repo, target)?
                 .map_err(|error| format!("cannot read acceptance target '{target}': {error}"))
         })
         .transpose()
+}
+
+/// The commit a pinned anchor names: `--base`, or the acceptance target
+/// (TSK-416; TSK-398 binds anchors to remote-tracking refs). A value
+/// spelled `<remote>/<branch>` for a configured remote reads exactly
+/// `refs/remotes/<remote>/<branch>`. Git's own name lookup tries
+/// `refs/<value>`, `refs/tags/<value>` and `refs/heads/<value>` first, so a
+/// local ref spelled like the fetched one would decide in its place; when
+/// one exists, the read refuses (the outer error), naming both refs and
+/// their commits. Any other value, a full ref or a commit, reads as git
+/// reads it. The inner error is a value that names no commit here.
+fn pinned_commit(
+    repo: &git2::Repository,
+    value: &str,
+) -> Result<Result<git2::Oid, git2::Error>, String> {
+    let peel = |object: Result<git2::Object<'_>, git2::Error>| {
+        object
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+    };
+    let remotes = repo
+        .remotes()
+        .map_err(|error| format!("cannot read the remotes: {error}"))?;
+    let remote = remotes
+        .iter()
+        .flatten()
+        .flatten()
+        .filter(|remote| {
+            value
+                .strip_prefix(remote)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|branch| !branch.is_empty())
+        })
+        .max_by_key(|remote| remote.len());
+    if remote.is_none() || value.starts_with("refs/") {
+        return Ok(peel(repo.revparse_single(value)));
+    }
+    let fetched = format!("refs/remotes/{value}");
+    let read = |reference: &str| {
+        repo.find_reference(reference)
+            .and_then(|found| found.peel_to_commit())
+            .map(|commit| commit.id())
+    };
+    let shown = |reference: &str| {
+        repo.find_reference(reference).ok().map(|_| {
+            read(reference).map_or_else(
+                |_| "a target that is not a readable commit".to_string(),
+                |oid| oid.to_string(),
+            )
+        })
+    };
+    for shadow in [
+        format!("refs/{value}"),
+        format!("refs/tags/{value}"),
+        format!("refs/heads/{value}"),
+    ] {
+        let Some(shadow_tip) = shown(&shadow) else {
+            continue;
+        };
+        let fetched_tip =
+            shown(&fetched).map_or_else(|| "absent here".to_string(), |tip| format!("at {tip}"));
+        return Err(format!(
+            "`{value}` is ambiguous here: the local ref {shadow} at {shadow_tip} is spelled like the fetched {fetched} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full (`{fetched}`, as in `--base {fetched}`), or rename the local ref (`git branch -m {value} <new-name>` for a branch)"
+        ));
+    }
+    Ok(read(&fetched))
 }
 
 /// The receiving lines `task status` binds against, settled once from
@@ -686,13 +750,9 @@ fn default_target(
             .into
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
-        let tip = repo
-            .revparse_single(base)
-            .and_then(|object| object.peel_to_commit())
-            .map_err(|error| {
-                format!("`--base {base}` does not name a commit here ({error}); fetch it (`git fetch origin {name}`)")
-            })?
-            .id();
+        let tip = pinned_commit(repo, base)?.map_err(|error| {
+            format!("`--base {base}` does not name a commit here ({error}); fetch it (`git fetch origin {name}`)")
+        })?;
         return Ok(Some((name, tip)));
     }
     let remotes = repo
@@ -1119,6 +1179,78 @@ mod tests {
         repo.reference("refs/tags/not-commit", blob, true, "test")
             .unwrap();
         assert!(target_commit(&repo, Some("refs/tags/not-commit")).is_err());
+    }
+
+    /// TSK-416 (security review nit N2): `--base origin/main` and an
+    /// acceptance target spelled `origin/main` read the fetched
+    /// `refs/remotes/origin/main`, never a local branch named `origin/main`,
+    /// which git's own name lookup would read first; with such a branch
+    /// present they refuse, naming both refs and commits.
+    #[test]
+    fn a_local_branch_spelled_like_the_fetched_line_never_anchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let local = repo
+            .commit(None, &signature, &signature, "local", &tree, &[])
+            .unwrap();
+        let fetched = repo
+            .commit(None, &signature, &signature, "fetched", &tree, &[])
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", fetched, true, "test")
+            .unwrap();
+        let change = StatusChange {
+            base: Some("origin/main".into()),
+            into: Some("main".into()),
+            ..StatusChange::default()
+        };
+        assert_eq!(
+            default_target(&repo, &change).unwrap(),
+            Some(("main".to_string(), fetched))
+        );
+        assert_eq!(
+            target_commit(&repo, Some("origin/main")).unwrap(),
+            Some(fetched)
+        );
+        for shadow in ["refs/heads/origin/main", "refs/tags/origin/main"] {
+            repo.reference(shadow, local, true, "test").unwrap();
+            for error in [
+                default_target(&repo, &change).unwrap_err(),
+                target_commit(&repo, Some("origin/main")).unwrap_err(),
+            ] {
+                for part in [
+                    "`origin/main` is ambiguous",
+                    &format!("{shadow} at {local}"),
+                    &format!("refs/remotes/origin/main (at {fetched})"),
+                    "`--base refs/remotes/origin/main`",
+                ] {
+                    assert!(error.contains(part), "{part}: {error}");
+                }
+            }
+            // The full ref names only the fetched line.
+            let full = StatusChange {
+                base: Some("refs/remotes/origin/main".into()),
+                ..change.clone()
+            };
+            assert_eq!(default_target(&repo, &full).unwrap().unwrap().1, fetched);
+            repo.find_reference(shadow).unwrap().delete().unwrap();
+        }
+        // A commit and a value naming no configured remote read as before.
+        let by_commit = StatusChange {
+            base: Some(local.to_string()),
+            ..change.clone()
+        };
+        assert_eq!(default_target(&repo, &by_commit).unwrap().unwrap().1, local);
+        repo.reference("refs/heads/fork/main", local, true, "test")
+            .unwrap();
+        assert_eq!(
+            target_commit(&repo, Some("fork/main")).unwrap(),
+            Some(local)
+        );
     }
 
     #[test]

@@ -348,6 +348,20 @@ git sets when a line is cut from `origin/main`, is never read for the line.
   or `has diverged from the pin` means a copy of the predecessor's branch
   moved past the reviewed head. Rebase on its new reviewed head and pin that,
   or delete or reset the stray copy. A copy behind the pin is accepted.
+- `refs/remotes/<remote>/<line> points at <sha>, which is not a commit this
+  clone can read` means the fetched ref names an object that is missing or
+  is not a commit, so the line cannot be judged. When the object is here
+  and is not a commit, a plain `git fetch <remote>` rewrites the ref. When
+  the object is missing, every fetch stops on it, so work from a fresh clone
+  made from outside this clone (`git clone <url> <path>`). Repairing this
+  clone deletes the ref so a fetch can recreate it (`git branch -d -r
+  <remote>/<line>`, then `git fetch <remote>`), which the guard leaves to
+  the operator.
+- `` `origin/<line>` is ambiguous here ``, from `task status complete
+  --base`, means a local ref spelled like the fetched one exists, such as a
+  local branch named `origin/<line>`, and git would read it first. Name the
+  fetched line in full (`--base refs/remotes/origin/<line>`), or rename the
+  local branch.
 
 ## A blocked task refuses its own pull request
 

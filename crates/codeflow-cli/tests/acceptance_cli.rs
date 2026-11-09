@@ -1839,6 +1839,67 @@ fn task_status_refuses_without_the_remote_tracking_target() {
     assert!(verb.1.contains("git fetch origin main"), "{}", verb.1);
 }
 
+/// TSK-416 (security review nit N2): `--base origin/main` reads the fetched
+/// `refs/remotes/origin/main`. A local branch literally named `origin/main`
+/// at another commit, which git's name lookup reads first, never anchors
+/// the completion: the verb refuses, naming both refs and commits, and the
+/// record is not written.
+#[test]
+fn task_status_never_anchors_on_a_local_branch_spelled_like_the_fetched_line() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let origin = root.parent().unwrap().join(format!(
+        "origin-{}.git",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["fetch", "-q", "origin"]);
+    let fetched = git_out(root, &["rev-parse", "refs/remotes/origin/main"]);
+    // The local branch spelled like the fetched line sits on the task's own
+    // reviewed commit, so reading it would bind the task against itself.
+    git(root, &["update-ref", "refs/heads/origin/main", &reviewed]);
+    let block = fix_block(&reviewed);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &block),
+    );
+    let verb = status_complete_args(
+        root,
+        "TSK-001",
+        &["--base", "origin/main", "--into", "main"],
+    );
+    assert_ne!(verb.0, 0, "{}", verb.1);
+    for part in [
+        "`origin/main` is ambiguous".to_string(),
+        format!("refs/heads/origin/main at {reviewed}"),
+        format!("refs/remotes/origin/main (at {fetched})"),
+        "`--base refs/remotes/origin/main`".to_string(),
+    ] {
+        assert!(verb.1.contains(&part), "{part}: {}", verb.1);
+    }
+    // The full ref names only the fetched line and is judged as usual.
+    let full = status_complete_args(
+        root,
+        "TSK-001",
+        &["--base", "refs/remotes/origin/main", "--into", "main"],
+    );
+    assert!(!full.1.contains("is ambiguous"), "{}", full.1);
+}
+
 /// A side branch from `main` with unreviewed product that merges a reviewed
 /// task head as its second parent; returns the reviewed commit and the
 /// merge.

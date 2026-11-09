@@ -3175,6 +3175,135 @@ fn tsk416_a_claim_cuts_from_the_fetched_tip_or_refuses_a_differing_local_line() 
     assert!(claimed(root, "TSK-005").is_empty(), "{said}");
 }
 
+/// `codeflow hook git-guard` on a Claude Code `PreToolUse` Bash payload for
+/// `shell`, run from `root`: the exit code and what it printed.
+fn guard_verdict(root: &Path, shell: &str) -> (Option<i32>, String) {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": shell},
+        "cwd": root,
+    })
+    .to_string();
+    let mut guard = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["hook", "git-guard"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(guard.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+    let out = guard.wait_with_output().unwrap();
+    (out.status.code(), text(&out))
+}
+
+/// TSK-416 AC-9: a fetched tip that names no readable commit refuses,
+/// naming the cause, the ref, the object it points at and a remedy, and
+/// the guard passes the remedy, which is run here.
+/// - A missing object stops the claim's own fetch: the refusal names the
+///   ref and a fresh clone, from which the same claim cuts from the
+///   fetched tip.
+/// - An object that is here and is not a commit: `work next` names a plain
+///   fetch, which rewrites the ref, and `work next` then reads the line.
+///
+/// The remedy for the other refusals, a fresh worktree of the fetched
+/// line, passes the guard too, once the fetched ref resolves.
+#[test]
+fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard() {
+    let dir = fixture();
+    let root = dir.path();
+    // A remote named by URL, as an adopter's is: the guard reads a bare
+    // local path given to `git clone` as repository metadata it would
+    // touch, and refuses it.
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let url = format!("file://{}", remote.path().display());
+    git(root, &["remote", "add", "origin", &url]);
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["remote", "set-head", "origin", "main"]);
+    let fetched = git(root, &["rev-parse", "refs/remotes/origin/main"]);
+    let missing = "1".repeat(40);
+    write(
+        root,
+        ".git/refs/remotes/origin/main",
+        &format!("{missing}\n"),
+    );
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    assert!(!out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    for part in [
+        format!("refs/remotes/origin/main points at {missing}"),
+        "not a commit this clone can read".to_string(),
+        format!(
+            "a fresh clone of the remote, made from outside this clone (`git clone {url} <path>`)"
+        ),
+        "`git branch -d -r origin/main`, then `git fetch origin`".to_string(),
+        "which the guard leaves to the operator".to_string(),
+    ] {
+        assert!(said.contains(&part), "{part}: {said}");
+    }
+    assert!(!said.contains("update-ref"), "{said}");
+    assert!(claimed(root, "TSK-001").is_empty(), "{said}");
+
+    let scratch = tempfile::tempdir().unwrap();
+    let clone = scratch.path().join("fresh");
+    let fresh_clone = format!("git clone {url} {}", clone.display());
+    let fresh_worktree = format!(
+        "git worktree add --detach {} refs/remotes/origin/main",
+        scratch.path().join("line").display()
+    );
+    // The guard reads this clone's policy from the broken ref, so it fails
+    // closed here; the clone is made from outside it, as the remedy says,
+    // here from a session in another, healthy repository.
+    let (code, _) = guard_verdict(root, &fresh_clone);
+    assert_eq!(code, Some(2));
+    let outside = fixture();
+    let (code, printed) = guard_verdict(outside.path(), &fresh_clone);
+    assert_eq!(code, Some(0), "{fresh_clone}: {printed}");
+    assert!(!printed.contains("BLOCKED"), "{fresh_clone}: {printed}");
+    git(
+        scratch.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    git(&clone, &["config", "user.name", "t"]);
+    git(&clone, &["config", "user.email", "t@example.test"]);
+    let out = cli(&clone, &["work", "claim", "TSK-001"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains(&format!("from origin/main@{}", &fetched[..9])),
+        "{}",
+        text(&out)
+    );
+
+    let blob = git(root, &["hash-object", "-w", "--stdin"]);
+    write(root, ".git/refs/remotes/origin/main", &format!("{blob}\n"));
+    let out = cli(root, &["work", "next"], None);
+    let said = text(&out);
+    for part in [
+        format!("refs/remotes/origin/main points at {blob}"),
+        "plain `git fetch origin`, which rewrites refs/remotes/origin/main".to_string(),
+    ] {
+        assert!(said.contains(&part), "{part}: {said}");
+    }
+    let (code, printed) = guard_verdict(root, "git fetch origin");
+    assert_eq!(code, Some(0), "{printed}");
+    assert!(!printed.contains("BLOCKED"), "{printed}");
+    let repaired = fetch_origin(root);
+    assert!(repaired.status.success(), "{}", text(&repaired));
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/main"]),
+        fetched
+    );
+    let (code, printed) = guard_verdict(root, &fresh_worktree);
+    assert_eq!(code, Some(0), "{fresh_worktree}: {printed}");
+    assert!(!printed.contains("BLOCKED"), "{fresh_worktree}: {printed}");
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    assert!(!text(&next).contains("points at"), "{}", text(&next));
+}
+
 /// TSK-416 AC-11: the pre-push occurrence. Local `main` is behind
 /// `origin/main`. The claim and the task's own push run the real pre-push
 /// hook and pass, the hook reads `refs/remotes/origin/main` as the default
@@ -3253,19 +3382,64 @@ fn tsk416_a_local_branch_decides_only_where_nothing_is_fetched_and_is_named() {
     );
 }
 
-/// TSK-416 AC-12, AC-13 and AC-15 (issue 603's wording half): a local copy
-/// of the predecessor branch behind the reviewed pin, or a remote-tracking
-/// copy behind it, no longer reads as "has advanced": the claim cuts from
-/// the pin and its push check honours it. A copy ahead of the pin, or
-/// diverged from it, still refuses, naming the shape.
+/// TSK-416 AC-12, AC-13, AC-15 and AC-17 (issue 603's wording half): a
+/// local copy of the predecessor branch behind the reviewed pin, or a
+/// remote-tracking copy behind it, no longer reads as "has advanced": the
+/// claim cuts from the pin, and the successor's push to `origin` passes the
+/// installed pre-push hook, whose check honours the pin. A copy ahead of
+/// the pin, or diverged from it, still refuses, naming the shape.
 #[test]
 #[cfg(unix)]
 fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = fixture();
     let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "chore: add the policy"]);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
+    let hooks = tempfile::tempdir().unwrap();
+    write(
+        hooks.path(),
+        "pre-push",
+        &format!(
+            "#!/bin/sh\nexec '{}' git-hook pre-push \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    );
+    std::fs::set_permissions(
+        hooks.path().join("pre-push"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(
+        root,
+        &["config", "core.hooksPath", hooks.path().to_str().unwrap()],
+    );
     let bin = tempfile::tempdir().unwrap();
     let branch = "task/TSK-001-work";
     let (_, pin) = reviewed_predecessor(root, branch);
+    // Reviewed destination history under a non-task branch, as in
+    // `a_claim_on_a_reviewed_head_passes_its_own_push_check`.
+    git(
+        origin.path(),
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{pin}:refs/heads/chore/reviewed-predecessor"),
+        ],
+    );
     review_tool(bin.path(), branch, &pin, true);
     let before = git(root, &["rev-parse", &format!("{pin}^")]);
     let copy = format!("refs/remotes/review/{branch}");
@@ -3290,15 +3464,39 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
             &["commit", "-q", "--allow-empty", "-m", "feat: successor"],
         );
         let head = git(root, &["rev-parse", "HEAD"]);
+        // The push runs the installed pre-push hook, which judges it.
+        let pushed = Command::new("git")
+            .args(["push", "-q", "origin", child])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env(
+                "PATH",
+                std::env::join_paths(std::iter::once(bin.path().to_path_buf()).chain(
+                    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+                ))
+                .unwrap(),
+            )
+            .output()
+            .unwrap();
+        assert!(pushed.status.success(), "{}", text(&pushed));
+        assert!(!text(&pushed).contains("several tips"), "{}", text(&pushed));
+        assert_eq!(
+            git(
+                origin.path(),
+                &["rev-parse", &format!("refs/heads/{child}")]
+            ),
+            head
+        );
         git(root, &["switch", "-q", "main"]);
         let push = push_check(root, child, &head, bin.path());
-        assert!(!text(&push).contains("several tips"), "{}", text(&push));
         assert!(
             text(&push).contains("stacks on TSK-001's reviewed head"),
             "{}",
             text(&push)
         );
         git(root, &["branch", "-q", "-D", child]);
+        git(origin.path(), &["branch", "-q", "-D", child]);
     }
     git(root, &["update-ref", &format!("refs/heads/{branch}"), &pin]);
     git(root, &["switch", "-q", "--detach", &pin]);

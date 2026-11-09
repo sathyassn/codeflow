@@ -63,6 +63,10 @@ pub enum WorkStartError {
     Base(String),
     #[error("git repository unavailable: {0}")]
     Repository(String),
+    /// A ref that exists and names no commit this clone can read, with its
+    /// cause, what it points at and a remedy (TSK-416 AC-9).
+    #[error("{0}")]
+    UnresolvableTip(String),
     #[error("target ref '{0}' does not resolve to a commit")]
     Target(String),
     #[error("current branch '{branch}' does not carry {task_id} on a work prefix (<prefix>/{task_id}-<slug>)")]
@@ -320,16 +324,111 @@ fn default_target(repo_root: &Path) -> Result<Option<(&'static str, String)>, Wo
     Ok(None)
 }
 
-fn reference_commit(repo: &Repository, name: &str) -> Result<Option<git2::Oid>, WorkStartError> {
+/// The commit the ref `name` names, `None` when no such ref exists. A ref
+/// that exists and names no readable commit refuses with
+/// [`unresolvable_tip`].
+pub(crate) fn reference_commit(
+    repo: &Repository,
+    name: &str,
+) -> Result<Option<git2::Oid>, WorkStartError> {
     let reference = match repo.find_reference(name) {
         Ok(reference) => reference,
         Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+        Err(error) => {
+            return Err(WorkStartError::UnresolvableTip(unresolvable_tip(
+                repo, name, &error,
+            )))
+        }
     };
     reference
         .peel_to_commit()
         .map(|commit| Some(commit.id()))
-        .map_err(|error| WorkStartError::Repository(error.to_string()))
+        .map_err(|error| WorkStartError::UnresolvableTip(unresolvable_tip(repo, name, &error)))
+}
+
+/// [`unresolvable_tip`] for the ref `reference` of the repository at
+/// `repo_root`, when it exists and names no readable commit; `None` when it
+/// resolves, is absent, or the repository cannot be opened.
+#[must_use]
+pub fn unresolvable_reference(repo_root: &Path, reference: &str) -> Option<String> {
+    let repo = Repository::discover(repo_root).ok()?;
+    let found = repo.find_reference(reference).ok()?;
+    let error = found.peel_to_commit().err()?;
+    Some(unresolvable_tip(&repo, reference, &error))
+}
+
+/// Why the ref `reference` names no commit this clone can read (TSK-416
+/// AC-9): the cause, the ref and what it points at, and a remedy that runs
+/// under the guard, never `update-ref` or a fetch with a destination.
+/// - A fetched ref whose object is here but is not a commit is rewritten
+///   by a plain fetch of its remote.
+/// - A fetched ref whose object is missing stops every fetch (git refuses
+///   the bad object while it negotiates), so the remedy is a fresh clone;
+///   repairing this clone deletes a remote-tracking ref, which the guard
+///   leaves to the operator.
+/// - Any other ref is damage in this clone, which `git fsck` shows and a
+///   fresh clone avoids.
+pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2::Error) -> String {
+    let found = repo.find_reference(reference).ok();
+    let target = found.as_ref().and_then(git2::Reference::target);
+    let symbolic = found
+        .as_ref()
+        .and_then(|found| found.symbolic_target().ok().flatten());
+    let points_at = match (target, symbolic) {
+        (Some(oid), _) => oid.to_string(),
+        (None, Some(symbolic)) => format!("the symbolic ref {symbolic}"),
+        (None, None) => "a target git cannot read".to_string(),
+    };
+    let present = target.is_some_and(|oid| repo.find_object(oid, None).is_ok());
+    // The url, its userinfo redacted, so the remedy runs as printed.
+    let fresh_clone = |remote: &str| {
+        let url = repo
+            .find_remote(remote)
+            .ok()
+            .and_then(|found| found.url().ok().map(str::to_string))
+            .map_or_else(
+                || format!("<url of {remote}>"),
+                |url| crate::git::display_text(&crate::git::remote_query::display_url(&url)),
+            );
+        format!("work from a fresh clone of the remote, made from outside this clone (`git clone {url} <path>`)")
+    };
+    let remedy = match reference
+        .strip_prefix("refs/remotes/")
+        .and_then(|rest| rest.split_once('/').map(|(remote, _)| (remote, rest)))
+    {
+        Some((remote, _)) if present => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain `git fetch {remote}`, which rewrites {reference} from the remote and moves no local branch"
+        ),
+        Some((remote, short)) => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it (`git branch -d -r {short}`, then `git fetch {remote}`), which the guard leaves to the operator",
+            fresh_clone(remote)
+        ),
+        None => format!(
+            "{reference} cannot be resolved, so the line it names cannot be judged; check this clone with `git fsck`, or {}",
+            fresh_clone("origin")
+        ),
+    };
+    format!(
+        "{reference} points at {points_at}, which is not a commit this clone can read ({}); {remedy}",
+        error.message()
+    )
+}
+
+/// [`unresolvable_tip`] for the first ref under `refs/remotes/<remote>/`
+/// that names no readable commit, so a failed fetch of `remote` can say
+/// which ref stopped it. Symbolic refs (`<remote>/HEAD`) are skipped: they
+/// fail through the ref they name.
+pub(crate) fn unresolvable_remote_ref(repo: &Repository, remote: &str) -> Option<String> {
+    let glob = format!("refs/remotes/{remote}/*");
+    repo.references_glob(&glob)
+        .ok()?
+        .flatten()
+        .find_map(|found| {
+            found.target()?;
+            let name = found.name().ok()?.to_string();
+            let error = found.peel_to_commit().err()?;
+            Some(unresolvable_tip(repo, &name, &error))
+        })
 }
 
 /// Resolve a declared target to an available local or remote-tracking ref.
@@ -3620,7 +3719,19 @@ pub(crate) fn tracking_reference(
     let read = |reference: &str| {
         crate::hooks::repo::listed_ref_commit(repo, reference)
             .map(|tip| tip.map(|tip| (reference_display_name(reference), tip)))
-            .map_err(|error| WorkStartError::Repository(error.to_string()))
+            .map_err(|error| {
+                // The listing reads every ref; only this ref's own failure
+                // is reported as its unresolvable tip.
+                let own = repo
+                    .find_reference(reference)
+                    .map(|found| found.peel_to_commit().err());
+                match own {
+                    Ok(Some(own)) => {
+                        WorkStartError::UnresolvableTip(unresolvable_tip(repo, reference, &own))
+                    }
+                    _ => WorkStartError::Repository(error.to_string()),
+                }
+            })
     };
     let remotes = repo
         .remotes()
@@ -5939,6 +6050,65 @@ mod tests {
                 .as_deref(),
             Some("refs/heads/main")
         );
+    }
+
+    /// TSK-416 AC-9: a fetched tip that names no readable commit, a missing
+    /// object or a blob, refuses in every reader of the target, naming the
+    /// cause, the ref, the object it points at and a remedy that runs under
+    /// the guard, never `update-ref` or a fetch with a destination.
+    #[test]
+    fn an_unresolvable_fetched_tip_refuses_naming_the_ref_and_a_guarded_remedy() {
+        let dir = tracking_fixture(false, false);
+        let repo = Repository::open(dir.path()).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap().to_string();
+        let missing = "1".repeat(40);
+        // A missing object stops every fetch, so the remedy is a fresh
+        // clone; an object that is here and is not a commit is rewritten by
+        // a plain fetch.
+        let fresh_clone = [
+            "a fetch cannot rewrite the ref while its object is missing",
+            "a fresh clone of the remote, made from outside this clone (`git clone ",
+            "`git branch -d -r origin/main`, then `git fetch origin`",
+            "which the guard leaves to the operator",
+        ];
+        let fetch = ["plain `git fetch origin`, which rewrites refs/remotes/origin/main"];
+        for (points_at, remedy) in [(missing, &fresh_clone[..]), (blob, &fetch[..])] {
+            fs::write(
+                dir.path().join(".git/refs/remotes/origin/main"),
+                format!("{points_at}\n"),
+            )
+            .unwrap();
+            let repo = Repository::open(dir.path()).unwrap();
+            for (reader, error) in [
+                (
+                    "resolve_work_target_checked",
+                    resolve_work_target_checked(dir.path(), Some("main")).unwrap_err(),
+                ),
+                (
+                    "target_reference_read",
+                    target_reference_read(&repo, "main").unwrap_err(),
+                ),
+                (
+                    "tracking_reference",
+                    tracking_reference(&repo, "main").unwrap_err(),
+                ),
+            ] {
+                let message = error.to_string();
+                for part in [
+                    "refs/remotes/origin/main points at",
+                    points_at.as_str(),
+                    "not a commit this clone can read",
+                    "the fetched tip cannot be resolved",
+                ]
+                .iter()
+                .chain(remedy)
+                {
+                    assert!(message.contains(part), "{reader}: {part}: {message}");
+                }
+                assert!(!message.contains("update-ref"), "{reader}: {message}");
+                assert!(!message.contains("unavailable"), "{reader}: {message}");
+            }
+        }
     }
 
     #[test]
