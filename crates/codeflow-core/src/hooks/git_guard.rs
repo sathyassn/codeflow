@@ -1156,7 +1156,7 @@ fn evaluate_report_with_runners(
                     ctx.policy,
                     form.sub.as_deref(),
                     &form.what,
-                    &crate::remedy::GUARD_UNCLASSIFIABLE,
+                    form.clearing(),
                 ));
                 continue;
             }
@@ -15931,7 +15931,10 @@ mod tests {
     /// `xargs` does, and a launcher's git child (`watch`, `flock`, `script
     /// -c`) is judged as AC-1 and AC-2 judge git; literal forms still pass.
     #[test]
-    fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
+    /// TSK-326 AC-2 siblings: `fd -x` supplies input as `xargs` does, and a
+    /// launcher's git child (`watch`, `flock`, `script -c`) is judged as AC-1
+    /// and AC-2 judge git; literal forms still pass.
+    fn fd_and_launcher_children_supplied_as_data_refuse() {
         for command in [
             "fd -x git push origin {}",
             "fd --exec git push origin {.}",
@@ -15954,7 +15957,6 @@ mod tests {
         }
         let policy = data_policy();
         for command in [
-            "parallel --plain echo {} ::: feat/x",
             "fd -x git log {}",
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
@@ -15965,9 +15967,9 @@ mod tests {
         }
     }
 
-    /// TSK-326 review F1: a shell or `eval` that `find`, `fd`, `xargs` or
-    /// `parallel` runs reads the input through a replacement string or a
-    /// positional parameter, so a git command in the script that takes one
+    /// TSK-326 review F1: a shell or `eval` that `find`, `fd` or `xargs`
+    /// runs reads the input through a replacement string or a positional
+    /// parameter, so a git command in the script that takes one
     /// refuses as unresolved; input spliced into the script and a script the
     /// guard cannot read refuse too. A literal script passes.
     #[test]
@@ -15981,8 +15983,6 @@ mod tests {
             "xargs -I % dash -c 'git push origin HEAD:%' < refs",
             "xargs sh -c 'git push origin \"$1\"' _ < refs",
             "xargs -n1 sh -c 'git push origin ${0}' < refs",
-            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
-            "parallel --plain zsh -c 'git push origin \"$1\"' _ :::: refs",
             "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
             "xargs -I{} sh -c 'echo {}' < refs",
             "find . -exec sh {} \\;",
@@ -16020,150 +16020,39 @@ mod tests {
         }
     }
 
-    /// TSK-326 delta review F1: a shell or `eval` that `parallel` runs from
-    /// its template with `:::` inputs on the line takes the input as
-    /// supplied, so a replacement string inside the script refuses in any
-    /// quoting, with `-q` or without; a template with no shell is judged as
-    /// written.
+    /// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the
+    /// commands they run at run time, so git-guard refuses each in every
+    /// spelling and behind every launcher, and names the human route.
     #[test]
-    fn parallel_shell_templates_with_literal_inputs_refuse() {
-        let refused = [
-            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
-            "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
-            "parallel --plain -q bash -c 'git push origin \"$1\"' _ {} ::: main",
-            "parallel --plain 'eval git push origin {}' ::: main",
-            "parallel --plain --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
-        ];
-        for command in refused {
-            assert!(
-                data_refusal(command).is_some(),
-                "{command}: refused as unresolved"
-            );
-        }
-        // At the default policy, hook integrity at block and `main`
-        // protected, from a non-protected branch.
-        let p = default_policy();
-        for command in refused {
-            let found = evaluate(command, &ctx(&p, "feat/x"));
-            assert!(
-                found.iter().any(|v| v.rule == "git.push_to_protected"
-                    || v.message.contains("is filled in at run time")),
-                "{command}: {found:?}"
-            );
-        }
-        let found = evaluate(
-            "parallel --plain git push origin {} ::: main",
-            &ctx(&p, "feat/x"),
-        );
-        assert!(
-            found.iter().any(|v| v.rule == "git.push_to_protected"
-                || v.message.contains("is filled in at run time")),
-            "{found:?}"
-        );
-        let policy = data_policy();
-        for command in [
-            "parallel --plain echo {} ::: feat/x",
-            "parallel --plain 'echo {}' ::: a",
-        ] {
-            let found = evaluate(command, &ctx(&policy, "feat/x"));
-            assert!(found.is_empty(), "{command}: {found:?}");
-        }
-    }
-
-    /// TSK-326 delta review 2 F1: `parallel`'s options are read as GNU
-    /// `parallel` reads them, so a replacement string or an input separator
-    /// set by an option is the one judged, in every spelling.
-    #[test]
-    fn parallel_custom_replacements_and_separators_refuse() {
-        let refused = [
-            "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
-            "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --plain --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
-            "parallel --plain -I% 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain -qI % sh -c 'git push origin %' ::: main",
-            "parallel --plain --replace % 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain --replace=% 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain -i% 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain --er % 'sh -c \"git push origin %\"' ::: main.x",
-            "parallel --plain --rpl '%% s/x//' 'sh -c \"git push origin %%\"' ::: mainx",
-            "parallel --plain --argsep %% 'sh -c \"git push origin {}\"' %% main",
-            "parallel --plain --arg-s %% 'sh -c \"git push origin {}\"' %% main",
-            "parallel --plain 'sh -c \"git push origin {-1}\"' ::: main",
-            "parallel --plain git push --no-verify origin {.} ::: main.x",
-            "parallel --plain -q --bnr % git push origin HEAD:% ::: x/main",
-        ];
-        let policy = data_policy();
-        for command in refused {
-            let found = evaluate(command, &ctx(&policy, "feat/x"));
-            assert!(
-                found
-                    .iter()
-                    .any(|v| v.message.contains("filled in at run time")),
-                "{command}: refused as unresolved: {found:?}"
-            );
-        }
-        let p = default_policy();
-        for command in refused.iter().chain(&[
-            "parallel --plain --arg-sep %% git push --no-verify origin {} %% main",
-            "parallel --plain --delim , git push --no-verify origin {} ::: main",
-            "parallel --plain -I % git push --no-verify origin % ::: main",
-        ]) {
-            let found = evaluate(command, &ctx(&p, "feat/x"));
-            assert!(
-                found.iter().any(|v| v.rule == "git.push_to_protected"
-                    || v.message.contains("filled in at run time")),
-                "{command}: {found:?}"
-            );
-        }
-        for command in [
-            "parallel --plain -I % echo % ::: feat/x",
-            "parallel --plain --arg-sep %% echo {} %% feat/x",
-        ] {
-            let found = evaluate(command, &ctx(&policy, "feat/x"));
-            assert!(found.is_empty(), "{command}: {found:?}");
-        }
-    }
-
-    /// TSK-326 delta 4: GNU `parallel` is allowed only inside the closed
-    /// rule (`--plain`, options the guard reads, a template on the line and a
-    /// fixed program that is not git, a shell, `eval` or a program that runs
-    /// another command); each shape outside it refuses as unresolved, and
-    /// each shape inside it runs a fixed program that is not git.
-    #[test]
-    fn parallel_outside_the_closed_rule_refuses() {
-        use super::parallel_options::{
-            ParallelCall, INSIDE_THE_CLOSED_RULE, OUTSIDE_THE_CLOSED_RULE,
-        };
+    fn command_builders_refuse_in_every_spelling() {
         let policy = data_policy();
         let p = default_policy();
-        for command in OUTSIDE_THE_CLOSED_RULE {
+        for command in super::data_operands::refused_command_builder_lines() {
             for found in [
-                evaluate(command, &ctx(&policy, "feat/x")),
-                evaluate(command, &ctx(&p, "feat/x")),
+                evaluate(&command, &ctx(&policy, "feat/x")),
+                evaluate(&command, &ctx(&p, "feat/x")),
             ] {
                 assert!(
                     found
                         .iter()
-                        .any(|v| v.message.contains("in a shape the guard does not judge")),
-                    "{command}: refused as unresolved: {found:?}"
+                        .any(|v| v.message.contains("refused in agent sessions")
+                            && v.remedy.to_string().contains("a human runs")),
+                    "{command}: refused as a command builder: {found:?}"
                 );
             }
         }
-        for command in INSIDE_THE_CLOSED_RULE {
+        // A word that only names a builder, as data, is not the program.
+        for command in [
+            "echo parallel sem env_parallel",
+            "grep -n parallel notes.md",
+            "git log --grep parallel",
+        ] {
             let found = evaluate(command, &ctx(&policy, "feat/x"));
-            assert!(found.is_empty(), "{command}: {found:?}");
-            let words: Vec<String> = shell_tokens(command)
-                .into_iter()
-                .skip_while(|word| word != "parallel")
-                .skip(1)
-                .collect();
-            let call = ParallelCall::read(&words);
-            let program = words[call.template].as_str();
             assert!(
-                ["echo", "gzip", "touch", "wc", "cp"].contains(&program),
-                "{command}: {program}"
+                !found
+                    .iter()
+                    .any(|v| v.message.contains("refused in agent sessions")),
+                "{command}: {found:?}"
             );
         }
     }
@@ -17657,7 +17546,6 @@ mod tests {
             "script -q /dev/null git status",
             "script -q /dev/null git -c color.ui=never log",
             "watch git status",
-            "parallel --plain echo ::: a b",
             "setsid git config --global user.name Test",
             "find . -name '*.rs' -exec ls {} \\;",
         ] {

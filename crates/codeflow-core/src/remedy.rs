@@ -841,8 +841,11 @@ catalog! {
     /// A git command whose target repository the guard cannot resolve.
     GUARD_UNRESOLVED = Step::Git("git -C"),
         "name the repository with a literal path (`git -C /path/to/repo …`) or change to it first (`cd /path/to/repo && git …`), so the guard can read its branch and policy";
+    /// A program that builds the commands it runs at run time (TSK-326).
+    GUARD_COMMAND_BUILDER = Step::Git("git commit"),
+        "a human runs `parallel`, `sem` or `env_parallel` outside the session, since the guards cannot read the commands they build; in the session, run each command it would run as its own command (`git commit …`, a removal of a named path), or pass the inputs to a literal command with `xargs`, which the guards read";
     /// A git alias the guard cannot resolve.
-    GUARD_ALIAS = Step::Git("git config"),
+    GUARD_ALIAS =Step::Git("git config"),
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
     /// Effective configuration cannot be reproduced for an outward action.
     GUARD_GIT_CONFIGURATION = Step::Git("git config"),

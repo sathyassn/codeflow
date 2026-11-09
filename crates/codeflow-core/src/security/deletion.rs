@@ -4374,7 +4374,15 @@ impl Reader<'_> {
             }
             "find" => self.judge_find(&argv[1..], &st, ambiguous),
             "xargs" => self.judge_xargs(&argv[1..], &st, input, ambiguous),
-            "parallel" => self.judge_parallel(&argv[1..], &st, input, ambiguous),
+            name if crate::hooks::git_guard::data_operands::command_builder(name).is_some() => {
+                self.report(
+                    Judged::Unproven(Unproven {
+                        reason: format!("`{name}`, which builds the commands it runs at run time"),
+                        cwd: false,
+                    }),
+                    ambiguous,
+                );
+            }
             "rsync" => self.judge_rsync(&argv[1..], &st, ambiguous),
             _ => {}
         }
@@ -4483,79 +4491,6 @@ impl Reader<'_> {
             true
         } else {
             false
-        }
-    }
-
-    /// GNU `parallel CMD ::: ARGS`, or `parallel CMD` fed like `xargs`.
-    fn judge_parallel(
-        &mut self,
-        args: &[String],
-        st: &State,
-        input: Option<&Fed>,
-        ambiguous: bool,
-    ) {
-        // The guards' closed rule for `parallel` (TSK-326): outside it, what
-        // runs is not proven, so neither is what it deletes.
-        let assigned = st.wild.is_some()
-            || crate::hooks::git_guard::data_operands::PARALLEL_VARIABLES
-                .iter()
-                .any(|name| st.vars.contains_key(*name));
-        if let Some(reason) =
-            crate::hooks::git_guard::data_operands::parallel_refusal(args, assigned)
-        {
-            self.report(
-                Judged::Unproven(Unproven {
-                    reason: format!("`parallel` outside the shape the guard reads: {reason}"),
-                    cwd: false,
-                }),
-                ambiguous,
-            );
-            return;
-        }
-        let mut options = input_options(args, true);
-        let rest = options.command;
-        let split = rest
-            .iter()
-            .position(|a| a.starts_with(":::"))
-            .unwrap_or(rest.len());
-        let (command, sources) = rest.split_at(split);
-        options.command = command;
-        if self.input_options_unproven(&options, ambiguous) || command.is_empty() {
-            return;
-        }
-        let mut entries: Vec<Input> = sources
-            .iter()
-            .filter(|a| !a.starts_with(":::"))
-            .map(|value| Input {
-                value: value.clone(),
-                tree: false,
-            })
-            .collect();
-        if sources.is_empty() {
-            entries.extend(items(input, options.delimiter));
-        }
-        self.exec(command, st, None, false, ambiguous);
-        for item in entries {
-            let token = options.replace.as_deref().unwrap_or("{}");
-            let line: Vec<String> = if command.iter().any(|word| word == token) {
-                command
-                    .iter()
-                    .map(|word| {
-                        if word == token {
-                            item.value.clone()
-                        } else {
-                            word.clone()
-                        }
-                    })
-                    .collect()
-            } else {
-                command
-                    .iter()
-                    .cloned()
-                    .chain([item.value.clone()])
-                    .collect()
-            };
-            self.exec(&line, st, None, item.tree, ambiguous);
         }
     }
 
@@ -6763,20 +6698,16 @@ struct InputOptions<'a> {
 }
 
 fn after_xargs_options(args: &[String]) -> InputOptions<'_> {
-    input_options(args, false)
+    input_options(args)
 }
 
 /// Short value options consume the remainder of their cluster, or the next word.
 #[allow(clippy::too_many_lines)]
-fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
+fn input_options(args: &[String]) -> InputOptions<'_> {
     let mut options = InputOptions {
         command: &[],
-        replace: parallel.then(|| "{}".into()),
-        delimiter: if parallel {
-            Delimiter::Char('\n')
-        } else {
-            Delimiter::Blanks
-        },
+        replace: None,
+        delimiter: Delimiter::Blanks,
         unmodelled: Vec::new(),
     };
     let mut explicit_delimiter = false;
@@ -6800,12 +6731,6 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
                     explicit_delimiter = true;
                 }
                 "verbose" | "no-run-if-empty" if attached.is_none() => {}
-                // `--plain` as `parallel` reads it: any unique prefix, any case.
-                plain
-                    if parallel
-                        && attached.is_none()
-                        && plain.len() >= 3
-                        && "plain".starts_with(&plain.to_ascii_lowercase()) => {}
                 "replace" => options.replace = Some(attached.unwrap_or("{}").into()),
                 "delimiter" | "max-procs" | "jobs" | "max-lines" | "max-args" | "max-chars"
                 | "eof" | "arg-file" | "sshlogin" | "joblog" | "colsep" | "results" | "tmpdir"
@@ -6824,7 +6749,6 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
                             None => options.unmodelled.push(arg.clone()),
                         },
                         ("max-procs", Some(_)) => {}
-                        ("jobs", Some(_)) if parallel => {}
                         _ => options.unmodelled.push(arg.clone()),
                     }
                 }
@@ -6834,12 +6758,12 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
         }
         let cluster = &arg[1..];
         for (offset, flag) in cluster.char_indices() {
-            if flag == 'i' && !parallel {
+            if flag == 'i' {
                 let rest = &cluster[offset + 1..];
                 options.replace = Some(if rest.is_empty() { "{}" } else { rest }.into());
                 break;
             }
-            if "dIJLnPsEaRS".contains(flag) || (parallel && flag == 'j') {
+            if "dIJLnPsEaRS".contains(flag) {
                 let rest = &cluster[offset + flag.len_utf8()..];
                 let value = if rest.is_empty() {
                     let next = args.get(at);
@@ -6864,7 +6788,6 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
                         options.unmodelled.push("-J replacement semantics".into());
                     }
                     ('P', Some(_)) => {}
-                    ('j', Some(_)) if parallel => {}
                     _ => options.unmodelled.push(format!("-{flag}")),
                 }
                 break;
@@ -6879,7 +6802,7 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
             }
         }
     }
-    if options.replace.is_some() && !explicit_delimiter && !parallel {
+    if options.replace.is_some() && !explicit_delimiter {
         options.delimiter = Delimiter::ReplacementLines;
     }
     options.command = args.get(at..).unwrap_or_default();
@@ -8028,19 +7951,14 @@ mod tests {
             "-Z",
             "--unknown",
         ] {
-            for parallel in [false, true] {
-                let args = vec![option.into(), "rm".into(), "-rf".into()];
-                assert!(
-                    !super::input_options(&args, parallel).unmodelled.is_empty(),
-                    "{option}"
-                );
-            }
+            let args = vec![option.into(), "rm".into(), "-rf".into()];
+            assert!(
+                !super::input_options(&args).unmodelled.is_empty(),
+                "{option}"
+            );
         }
         let args = vec!["-rt0".into(), "rm".into()];
-        assert_eq!(
-            super::input_options(&args, true).delimiter,
-            super::Delimiter::Nul
-        );
+        assert_eq!(super::input_options(&args).delimiter, super::Delimiter::Nul);
     }
 
     #[test]
@@ -8226,33 +8144,32 @@ mod tests {
         );
         assert_eq!(found.target, "system directory", "{command}: {found:?}");
     }
-    /// TSK-326 delta 4: the deletion check gives the guards' answer for
-    /// GNU `parallel`: outside the closed rule what runs is unproven, inside
-    /// it a fixed program is judged as written.
+    /// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the
+    /// commands they run at run time, so the deletion check reports each
+    /// unproven in every spelling the guards refuse, a remover fed by a
+    /// file separator and a shell builtin that runs a file included.
     #[test]
-    fn parallel_outside_the_closed_rule_is_unproven() {
-        use crate::hooks::git_guard::parallel_options::{
-            INSIDE_THE_CLOSED_RULE, OUTSIDE_THE_CLOSED_RULE,
-        };
-        for command in OUTSIDE_THE_CLOSED_RULE {
-            let found = super::composed_deletion_in(command, None);
+    fn command_builders_are_unproven() {
+        for command in crate::hooks::git_guard::data_operands::refused_command_builder_lines() {
+            let found = super::composed_deletion_in(&command, None);
             assert!(
-                found.as_ref().is_some_and(|f| f
-                    .unproven
+                found
                     .as_ref()
-                    .is_some_and(|u| u.reason.contains("outside the shape the guard reads"))),
+                    .is_some_and(|f| f.unproven.as_ref().is_some_and(|u| u
+                        .reason
+                        .contains("which builds the commands it runs at run time"))),
                 "{command}: {found:?}"
             );
         }
-        for command in INSIDE_THE_CLOSED_RULE {
-            let found = super::composed_deletion_in(command, None);
-            assert!(found.is_none(), "{command}: {found:?}");
+        for command in [
+            "echo parallel sem env_parallel",
+            "grep -n parallel notes.md",
+        ] {
+            assert!(
+                super::composed_deletion_in(command, None).is_none(),
+                "{command}"
+            );
         }
-        let found = super::composed_deletion_in("parallel --plain rm -rf {} ::: /", None);
-        assert!(
-            found.as_ref().is_some_and(|f| f.unproven.is_none()),
-            "a fixed remover inside the rule is judged as written: {found:?}"
-        );
     }
 
     #[cfg(unix)]
@@ -8264,11 +8181,6 @@ mod tests {
     #[test]
     fn r18_xargs_quotes_preserve_spaced_path() {
         r18_spaced_input(1);
-    }
-    #[cfg(unix)]
-    #[test]
-    fn r18_parallel_newline_preserves_spaced_path() {
-        r18_spaced_input(2);
     }
 
     #[test]

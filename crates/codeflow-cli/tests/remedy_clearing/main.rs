@@ -250,6 +250,8 @@ const ROWS: &[(&str, Proof)] = &[
     // Settings the guard cannot read are the operator's to confirm.
     ("DOCTOR_TEXT_RULE_UNSEEN", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
+    // A human runs a command builder outside the session.
+    ("GUARD_COMMAND_BUILDER", Excluded(HumanAuthority)),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
     ("GUARD_GIT_CONFIGURATION", Excluded(HumanAuthority)),

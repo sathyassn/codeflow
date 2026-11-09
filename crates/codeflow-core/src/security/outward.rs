@@ -106,7 +106,8 @@ pub(crate) fn evaluate_at(
             })
         })
         .collect::<Vec<_>>());
-    violations.extend(unresolved.and_then(|what| unresolved_violation(&what, levels)));
+    violations
+        .extend(unresolved.and_then(|(what, remedy)| unresolved_violation(&what, remedy, levels)));
     violations
 }
 
@@ -116,7 +117,11 @@ pub(crate) fn evaluate_at(
 /// `read`, an inherited variable, `xargs` or `find` input) is returned, in
 /// words, to refuse as unresolved before the push, alias, transport and
 /// release decisions.
-fn read_data_operands(command: &str, cwd: Option<&Path>, parsed: &mut Parsed) -> Option<String> {
+fn read_data_operands(
+    command: &str,
+    cwd: Option<&Path>,
+    parsed: &mut Parsed,
+) -> Option<(String, &'static crate::remedy::Clearing)> {
     let data = crate::hooks::git_guard::data_operands::line_data(
         command,
         crate::hooks::git_guard::data_operands::Reader::ExecGuard,
@@ -124,12 +129,19 @@ fn read_data_operands(command: &str, cwd: Option<&Path>, parsed: &mut Parsed) ->
     for words in &data.filled {
         argv(words, None, cwd, 0, parsed);
     }
-    data.unresolved.map(|form| form.what)
+    data.unresolved.map(|form| {
+        let clearing = form.clearing();
+        (form.what, clearing)
+    })
 }
 
 /// The outward-action finding for an unresolved git word, when that rule
 /// is active.
-fn unresolved_violation(what: &str, levels: &SecuritySection) -> Option<Violation> {
+fn unresolved_violation(
+    what: &str,
+    remedy: &'static crate::remedy::Clearing,
+    levels: &SecuritySection,
+) -> Option<Violation> {
     levels.outward_actions.is_active().then(|| {
         Violation::new(
             "security.outward_actions",
@@ -137,7 +149,7 @@ fn unresolved_violation(what: &str, levels: &SecuritySection) -> Option<Violatio
             format!(
                 "command unresolved: {what}, so the guard cannot judge the push, alias, transport or release decision it reaches"
             ),
-            crate::remedy::GUARD_UNCLASSIFIABLE.remedy(),
+            remedy.remedy(),
         )
     })
 }
@@ -3855,13 +3867,11 @@ mod tests {
     /// `xargs` does, and a launcher's git child (`watch`, `flock`, `script
     /// -c`) is judged as AC-1 and AC-2 judge git; literal forms still pass.
     #[test]
-    fn parallel_fd_and_launcher_children_supplied_as_data_refuse() {
+    /// TSK-326 AC-2 siblings: `fd -x` supplies input as `xargs` does, and a
+    /// launcher's git child (`watch`, `flock`, `script -c`) is judged as AC-1
+    /// and AC-2 judge git; literal forms still pass.
+    fn fd_and_launcher_children_supplied_as_data_refuse() {
         for command in [
-            "parallel --plain git push origin :::: refs",
-            "parallel --plain git push origin < refs",
-            "cat refs | parallel --plain git push origin {}",
-            "parallel --plain -q git push origin HEAD:{} :::: refs",
-            "parallel --plain --arg-file refs git push origin",
             "fd -x git push origin {}",
             "fd --exec git push origin {.}",
             "fd . refs -X git push origin",
@@ -3878,7 +3888,6 @@ mod tests {
             assert!(found.remedy.to_string().contains("pass it as a literal"));
         }
         for command in [
-            "parallel --plain echo {} ::: feat/x",
             "fd -x git log {}",
             "watch git push origin feat/x",
             "flock /tmp/l git push origin feat/x",
@@ -3889,9 +3898,9 @@ mod tests {
         }
     }
 
-    /// TSK-326 review F1: a shell or `eval` that `find`, `fd`, `xargs` or
-    /// `parallel` runs reads the input through a replacement string or a
-    /// positional parameter, so a git command in the script that takes one
+    /// TSK-326 review F1: a shell or `eval` that `find`, `fd` or `xargs`
+    /// runs reads the input through a replacement string or a positional
+    /// parameter, so a git command in the script that takes one
     /// refuses as unresolved; input spliced into the script and a script the
     /// guard cannot read refuse too. A literal script passes.
     #[test]
@@ -3905,8 +3914,6 @@ mod tests {
             "xargs -I % dash -c 'git push origin HEAD:%' < refs",
             "xargs sh -c 'git push origin \"$1\"' _ < refs",
             "xargs -n1 sh -c 'git push origin ${0}' < refs",
-            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
-            "parallel --plain zsh -c 'git push origin \"$1\"' _ :::: refs",
             "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
             "xargs -I{} sh -c 'echo {}' < refs",
             "find . -exec sh {} \\;",
@@ -3928,80 +3935,23 @@ mod tests {
         }
     }
 
-    /// TSK-326 delta review F1: a shell or `eval` that `parallel` runs from
-    /// its template with `:::` inputs on the line takes the input as
-    /// supplied, so a replacement string inside the script refuses in any
-    /// quoting, with `-q` or without; a template with no shell is judged as
-    /// written.
+    /// TSK-326 delta 5: exec-guard refuses `parallel`, `sem` and
+    /// `env_parallel` in every spelling, naming the human route.
     #[test]
-    fn parallel_shell_templates_with_literal_inputs_refuse() {
-        for command in [
-            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
-            "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
-            "parallel --plain -q bash -c 'git push origin \"$1\"' _ {} ::: main",
-            "parallel --plain 'eval git push origin {}' ::: main",
-            "parallel --plain --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
-        ] {
-            let found =
-                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
-            assert_eq!(found.rule, "security.outward_actions", "{command}");
-        }
-        for command in [
-            "parallel --plain echo {} ::: feat/x",
-            "parallel --plain 'echo {}' ::: a",
-        ] {
-            let found = evaluate(command, &SecuritySection::default());
-            assert!(found.is_empty(), "{command}: {found:?}");
-        }
-    }
-
-    /// TSK-326 delta review 2 F1: a replacement string or an input
-    /// separator `parallel` takes from an option is read in every spelling,
-    /// so a shell template that uses it refuses.
-    #[test]
-    fn parallel_custom_replacements_and_separators_refuse() {
-        for command in [
-            "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
-            "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --plain --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
-            "parallel --plain --replace=% 'sh -c \"git push origin %\"' ::: main",
-            "parallel --plain -qI % sh -c 'git push origin %' ::: main",
-            "parallel --plain --bnr % 'sh -c \"git push origin %\"' ::: x/main",
-        ] {
-            let found = evaluate(command, &SecuritySection::default());
+    fn command_builders_refuse_in_every_spelling() {
+        for command in crate::hooks::git_guard::data_operands::refused_command_builder_lines() {
+            let found = evaluate(&command, &SecuritySection::default());
             assert!(
                 found.iter().any(|v| v.rule == "security.outward_actions"
-                    && v.message.contains("filled in at run time")),
-                "{command}: refused as unresolved: {found:?}"
+                    && v.message.contains("refused in agent sessions")
+                    && v.remedy.to_string().contains("a human runs")),
+                "{command}: refused as a command builder: {found:?}"
             );
         }
         for command in [
-            "parallel --plain -I % echo % ::: feat/x",
-            "parallel --plain --arg-sep %% echo {} %% feat/x",
+            "echo parallel sem env_parallel",
+            "grep -n parallel notes.md",
         ] {
-            let found = evaluate(command, &SecuritySection::default());
-            assert!(found.is_empty(), "{command}: {found:?}");
-        }
-    }
-
-    /// TSK-326 delta 4: GNU `parallel` outside the closed rule refuses as
-    /// unresolved; inside it, it passes.
-    #[test]
-    fn parallel_outside_the_closed_rule_refuses() {
-        use crate::hooks::git_guard::parallel_options::{
-            INSIDE_THE_CLOSED_RULE, OUTSIDE_THE_CLOSED_RULE,
-        };
-        for command in OUTSIDE_THE_CLOSED_RULE {
-            let found = evaluate(command, &SecuritySection::default());
-            assert!(
-                found.iter().any(|v| v.rule == "security.outward_actions"
-                    && v.message.contains("in a shape the guard does not judge")),
-                "{command}: refused as unresolved: {found:?}"
-            );
-        }
-        for command in INSIDE_THE_CLOSED_RULE {
             let found = evaluate(command, &SecuritySection::default());
             assert!(found.is_empty(), "{command}: {found:?}");
         }

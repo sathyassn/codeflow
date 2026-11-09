@@ -1485,8 +1485,8 @@ written: quoted, or free of unquoted glob, brace and `$` or backtick
 expansion. An unquoted `~/.*rc` in the pattern position expands into the
 pattern and more searched paths, so it is judged as before. GNU
 `parallel` without `-q` runs its command through a shell, so no word of
-it is a pattern word, and git-guard's `parallel` rule reads the commands
-it builds whole. `ag` has no `-e`, and a direct `git grep` is a read both
+it is a pattern word; both hooks refuse `parallel` in agent sessions
+(TSK-326). `ag` has no `-e`, and a direct `git grep` is a read both
 guards pass. Every other word is judged as before: a path operand after
 the pattern, a `-f` pattern file, a redirect and every word of a call
 with an option the reader does not know, so `rg x > ~/.zshrc` refuses.
@@ -1757,17 +1757,21 @@ checked, so a symlink does not remove the target owner's protection.
   supplied input; input spliced into the script text, and a script the
   guard cannot read (a file, standard input, a variable), refuse as well,
   so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
-  GNU `parallel` is allowed only in one closed shape: `--plain`; options
-  from a small set the guards read (job count and order, how input is read
-  and split, how output is shown), in any spelling `parallel` accepts; a
-  template written on the line; no option variable assigned on the line;
-  and, in every command of the template, read as the shell line
-  `parallel` builds, a fixed program word, after the prefix launchers, that
-  is not git, a shell, `eval` or a program that runs another command. Any
-  other `parallel` call refuses as unresolved in both hooks, and
-  exec-guard's recursive-deletion check treats it as unproven. In agent
-  sessions `parallel` therefore cannot run git, a shell, `eval` or a
-  command carrier; run those directly. An
+  GNU `parallel` and its front ends `sem` and `env_parallel` are refused
+  in every agent session. They build the commands they run from their
+  input, options, configuration files and environment, which neither hook
+  reads, so those commands can carry a git command or a deletion the
+  catastrophic floor cannot read. Both hooks refuse the three programs in
+  every spelling a program word is read in (a path, quotes, letter case, a
+  `.exe` suffix, a value the line assigns) and behind the launchers,
+  privilege runners and suppliers the hooks unwrap, and exec-guard's
+  recursive-deletion check reports them unproven. No policy key relaxes
+  this: a person runs them outside the session. In the session, run each
+  command directly, or pass the input to a literal command with `xargs`,
+  which the hooks read. The hooks read these program words as a Unix shell
+  passes them; a native Windows shell was not tested, and an interpreter
+  one-liner that starts a program is read only for the families the
+  interpreter check judges. An
   unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
   git word refuses too, since the shell makes it several words; a quoted
   or escaped brace is text. Such a word in the program position (`$V push

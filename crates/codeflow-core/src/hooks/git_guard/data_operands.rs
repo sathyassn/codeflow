@@ -14,15 +14,13 @@
 
 use std::collections::HashMap;
 
-use super::parallel_options::ParallelCall;
-
 use super::super::git_target::{expand_word, has_substitution, Cwd, ShellState, Val};
 use super::{
     basename, cd_target, command_argv, command_argv_braces, command_argv_live, configuration_input,
     configuration_launch, expand_shell_commands, expands, flat_top_level, git_program_environment,
-    is_identifier, is_prefix_launcher, is_shell, launcher_name, map_top_level, message_values,
-    plain_pushd, quote_words, shell_tokens, shown_word, strip_reserved_words, xargs_command,
-    COMMAND_CARRIERS, GIT_BUILTINS, GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
+    is_identifier, is_shell, launcher_name, map_top_level, message_values, plain_pushd,
+    shell_tokens, shown_word, strip_reserved_words, xargs_command, GIT_BUILTINS,
+    GLOBAL_VALUE_OPTIONS, JUDGED_SUBCOMMANDS, NESTING_UNREAD,
 };
 
 /// Stands in a word for text that `xargs` or `find` supplies from its
@@ -122,6 +120,26 @@ pub(crate) struct Form {
     /// position. git-guard's own reader judges those already (TSK-112), so
     /// it leaves them to that reader; exec-guard refuses them here.
     pub(crate) substitution: bool,
+    /// The remedy the refusal names, when it is not the general one for an
+    /// unresolved word.
+    pub(crate) remedy: Option<Remedy>,
+}
+
+/// The remedies a [`Form`] names beside the general one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Remedy {
+    /// A command builder, which a human runs outside the session.
+    CommandBuilder,
+}
+
+impl Form {
+    /// The remedy the refusal names.
+    pub(crate) fn clearing(&self) -> &'static crate::remedy::Clearing {
+        match self.remedy {
+            Some(Remedy::CommandBuilder) => &crate::remedy::GUARD_COMMAND_BUILDER,
+            None => &crate::remedy::GUARD_UNCLASSIFIABLE,
+        }
+    }
 }
 
 /// The value the shell gives `word`, from the literals the line assigned
@@ -173,6 +191,7 @@ fn unresolved(word: &str, place: &str, why: &str, sub: Option<&str>, operand: bo
         sub: sub.map(unmark),
         operand,
         substitution: why == SUBSTITUTION && !place.starts_with("sets `"),
+        remedy: None,
     }
 }
 
@@ -286,6 +305,7 @@ fn git_args_supplied(
                 sub: None,
                 operand: false,
                 substitution: false,
+                remedy: None,
             });
         }
         return Ok((filled.words, filled.changed));
@@ -483,6 +503,9 @@ fn command_data_supplied(
             program.to_string()
         };
     let program_filled = filled_program != program;
+    if let Some(name) = command_builder(&filled_program).or_else(|| command_builder_in(words)) {
+        return Err(command_builder_refusal(name));
+    }
     match launcher_name(&filled_program) {
         "xargs" => {
             if let Some(child) = xargs_command(args) {
@@ -506,12 +529,8 @@ fn command_data_supplied(
             }
             return Ok(None);
         }
-        // `parallel` and `fd -x` put their input in place of a replacement
-        // string, or append it, as `xargs` does.
-        "parallel" => {
-            parallel_data(&words[..program_at], args, vars)?;
-            return Ok(None);
-        }
+        // `fd -x` puts its input in place of a replacement string, or
+        // appends it, as `xargs` does.
         "fd" | "fdfind" => {
             if let Some(child) = fd_command(args) {
                 let child = supply(child);
@@ -553,151 +572,216 @@ fn command_data_supplied(
     }))
 }
 
-/// GNU `parallel` under the guards' closed rule (TSK-326): only the shape
-/// [`parallel_refusal`] admits is allowed, and any other call refuses as
-/// unresolved. `prefix` holds the words before `parallel`, its assignments
-/// included; `vars` the names the line assigns before it.
-fn parallel_data(
-    prefix: &[String],
-    args: &[String],
-    vars: &HashMap<String, Val>,
-) -> Result<(), Form> {
-    let assigned = prefix.iter().any(|word| {
-        unmark(word)
-            .split_once('=')
-            .is_some_and(|(name, _)| PARALLEL_VARIABLES.contains(&name))
-    }) || PARALLEL_VARIABLES
+/// The programs that build the commands they run at run time from their
+/// input, options, configuration and environment: GNU `parallel` and its
+/// `sem` and `env_parallel` front ends. The guards cannot read those
+/// commands, which may carry a git command or a deletion, so both guards
+/// refuse these programs in agent sessions and the deletion check reports
+/// them unproven (TSK-326); a person runs them outside the session.
+const COMMAND_BUILDERS: [&str; 3] = ["parallel", "sem", "env_parallel"];
+
+/// The command builder ([`COMMAND_BUILDERS`]) the program word `word` runs,
+/// read as every program word is: its base name after a `/` or `\`
+/// path, in any letter case, without a trailing `.exe`.
+pub(crate) fn command_builder(word: &str) -> Option<&'static str> {
+    let name = unmark(word);
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(&name);
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    COMMAND_BUILDERS
         .iter()
-        .any(|name| vars.contains_key(*name));
-    match parallel_refusal(args, assigned) {
-        Some(reason) => Err(Form {
-            what: format!(
-                "the command `parallel` runs is filled in at run time in a shape the guard does not judge ({reason}); `parallel` is allowed only with `--plain`, options the guard reads, a template on the line and a fixed program that is not git, a shell, `eval` or a program that runs another command"
-            ),
-            sub: None,
-            operand: false,
-            substitution: false,
-        }),
-        None => Ok(()),
+        .copied()
+        .find(|builder| *builder == name)
+}
+
+/// The command builder the simple command `words` runs behind its
+/// launchers: the prefix launchers and `env` git-guard unwraps, and the
+/// privilege, shell and `eval` layers the catastrophic floor unwraps
+/// ([`crate::security::dangerous::effective_invocation`]).
+fn command_builder_in(words: &[String]) -> Option<&'static str> {
+    let mut current = words.to_vec();
+    for _ in 0..8 {
+        let (program, args) = configuration_launch(&current)?;
+        if let Some(name) = command_builder(program) {
+            return Some(name);
+        }
+        let launched: Vec<String> = std::iter::once(program.to_string())
+            .chain(args.iter().cloned())
+            .collect();
+        let next = crate::security::dangerous::effective_invocation(&launched);
+        if next.is_empty() || next == launched {
+            return None;
+        }
+        current = next;
+    }
+    None
+}
+
+/// The refusal for a command builder: the commands it runs are not on the
+/// line, so neither guard can judge them.
+fn command_builder_refusal(name: &str) -> Form {
+    Form {
+        what: format!(
+            "`{name}` builds the commands it runs at run time from its input, options, configuration and environment, where the guard cannot read the git commands or deletions they carry; `parallel`, `sem` and `env_parallel` are refused in agent sessions"
+        ),
+        sub: None,
+        operand: false,
+        substitution: false,
+        remedy: Some(Remedy::CommandBuilder),
     }
 }
 
-/// The variables GNU `parallel` reads options or its configuration
-/// directory from.
-pub(crate) const PARALLEL_VARIABLES: [&str; 3] = ["PARALLEL", "PARALLEL_CSH", "PARALLEL_HOME"];
-
-/// Programs that run a command given as their arguments, beyond the
-/// launchers [`configuration_launch`] unwraps and the carriers it reads.
-const COMMAND_RUNNERS: &[&str] = &[
-    "env",
-    "sudo",
-    "doas",
-    "su",
-    "runuser",
-    "pkexec",
-    "chroot",
-    "nsenter",
-    "unshare",
-    "setpriv",
-    "ssh",
-    "systemd-run",
-    "xvfb-run",
-    "dbus-run-session",
-    "firejail",
-    "bwrap",
-    "sandbox-exec",
-    "strace",
-    "ltrace",
-    "valgrind",
-    "taskset",
-    "chrt",
-    "numactl",
-    "prlimit",
-    "sg",
-    "newgrp",
-    "entr",
-    "watchexec",
-    "hyperfine",
-    "busybox",
-    "toybox",
-    "sem",
-    "env_parallel",
+/// Command-builder lines git-guard and exec-guard refuse and the deletion
+/// check reports unproven (TSK-326): every shape the earlier closed rule
+/// for `parallel` allowed or refused, the shell builtins that run a file,
+/// a remover fed by a file separator, and `sem` and `env_parallel`.
+#[cfg(test)]
+const REFUSED_COMMAND_BUILDER_LINES: &[&str] = &[
+    "parallel --plain flock lockfile git push origin {} :::: refs",
+    "parallel --plain -a refs script -qc 'git push origin {}' /dev/null",
+    "cat refs | parallel --plain watch git push origin {}",
+    "parallel --plain setsid git push origin {} :::: refs",
+    "parallel --plain unbuffer rm -rf {} :::: dirs",
+    "parallel --plain xargs echo ::: a",
+    "parallel --plain :::: cmds",
+    "parallel --plain -a cmds",
+    "cat cmds | parallel --plain",
+    "parallel --plain --arg-file-sep @@ @@ cmds",
+    "parallel --plain ::: 'git push origin main'",
+    "parallel --plain --pipe sh",
+    "parallel --plain --shebang-wrap cmds",
+    "parallel --plain --nonall rm -rf ./build",
+    "parallel --plain --semaphore rm -rf ./build",
+    "parallel --plain --sqlworker sql:x rm",
+    "PARALLEL='-I %' parallel --plain rm -rf ./% ::: build",
+    "env PARALLEL_HOME=/tmp/p parallel --plain echo {} ::: a",
+    "export PARALLEL_CSH=x; parallel --plain echo {} ::: a",
+    "parallel echo {} ::: a",
+    "parallel --pl echo {} ::: a",
+    "parallel --plain -J prof echo {} ::: a",
+    "parallel --plain --tagstring {=1=} echo {} ::: a",
+    "parallel --plain --ssh rm -S host echo {} ::: a",
+    "parallel --plain --rpl '{x} s/a/b/' echo {x} ::: a",
+    "parallel --plain echo {= system('rm -rf ./build') =} ::: a",
+    "parallel --plain git push origin {} ::: main",
+    "parallel --plain /usr/bin/git push origin {} ::: main",
+    "parallel --plain ./git push origin {} ::: main",
+    "parallel --plain 'git' push origin {} ::: main",
+    "parallel --plain \"g\"it push origin {} ::: main",
+    "parallel --plain Git push origin {} ::: main",
+    "parallel --plain git.exe push origin {} ::: main",
+    "parallel --plain -q sh -c 'git push origin $1' _ ::: main",
+    "parallel --plain 'bash -c \"rm -rf {}\"' ::: ./build",
+    "parallel --plain eval rm -rf {} ::: ./build",
+    "parallel --plain env git push origin {} ::: main",
+    "parallel --plain env -S 'git push origin' {} ::: main",
+    "parallel --plain nice git push origin {} ::: main",
+    "parallel --plain timeout 5 git push origin {} ::: main",
+    "parallel --plain command git push origin {} ::: main",
+    "parallel --plain exec git push origin {} ::: main",
+    "parallel --plain sudo git push origin {} ::: main",
+    "parallel --plain nohup git push origin {} ::: main",
+    "parallel --plain {} push origin main ::: git",
+    "parallel --plain -I prog prog push origin main ::: git",
+    "parallel --plain $P push origin {} ::: main",
+    "parallel --plain 'echo {}; git push origin main' ::: a",
+    "parallel --plain 'echo {} && git push origin main' ::: a",
+    "parallel --plain echo '$(git push origin main)' ::: a",
+    "parallel --plain echo {} ::: a b",
+    "parallel --PLAIN -j4 gzip {} :::: list",
+    "parallel --pla touch {} ::: a",
+    "cat list | parallel --plain wc -l",
+    "parallel --plain -I % cp % backup/ ::: a.txt",
+    "parallel -0j2 --plai touch {} ::: a",
+    "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
+    "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
+    "parallel --plain -q bash -c 'git push origin \"$1\"' _ {} ::: main",
+    "parallel --plain 'eval git push origin {}' ::: main",
+    "parallel --plain --quote -- sh -c 'git push origin HEAD:{1}' ::: main",
+    "parallel --plain echo {} ::: feat/x",
+    "parallel --plain 'echo {}' ::: a",
+    "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
+    "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
+    "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
+    "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
+    "parallel --plain --arg-sep=%% sh -c 'git push --no-verify origin {}' %% main",
+    "parallel --plain -I% 'sh -c \"git push origin %\"' ::: main",
+    "parallel --plain -qI % sh -c 'git push origin %' ::: main",
+    "parallel --plain --replace % 'sh -c \"git push origin %\"' ::: main",
+    "parallel --plain --replace=% 'sh -c \"git push origin %\"' ::: main",
+    "parallel --plain -i% 'sh -c \"git push origin %\"' ::: main",
+    "parallel --plain --er % 'sh -c \"git push origin %\"' ::: main.x",
+    "parallel --plain --rpl '%% s/x//' 'sh -c \"git push origin %%\"' ::: mainx",
+    "parallel --plain --argsep %% 'sh -c \"git push origin {}\"' %% main",
+    "parallel --plain --arg-s %% 'sh -c \"git push origin {}\"' %% main",
+    "parallel --plain 'sh -c \"git push origin {-1}\"' ::: main",
+    "parallel --plain git push --no-verify origin {.} ::: main.x",
+    "parallel --plain -q --bnr % git push origin HEAD:% ::: x/main",
+    "parallel --plain --arg-sep %% git push --no-verify origin {} %% main",
+    "parallel --plain --delim , git push --no-verify origin {} ::: main",
+    "parallel --plain -I % git push --no-verify origin % ::: main",
+    "parallel --plain -I % echo % ::: feat/x",
+    "parallel --plain --arg-sep %% echo {} %% feat/x",
+    "parallel --plain --bnr % 'sh -c \"git push origin %\"' ::: x/main",
+    "parallel --plain git push origin :::: refs",
+    "parallel --plain git push origin < refs",
+    "cat refs | parallel --plain git push origin {}",
+    "parallel --plain -q git push origin HEAD:{} :::: refs",
+    "parallel --plain --arg-file refs git push origin",
+    "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+    "parallel --plain zsh -c 'git push origin \"$1\"' _ :::: refs",
+    "parallel --plain source {} ::: x.sh",
+    "parallel --plain . {} ::: x.sh",
+    "parallel --plain source x.sh ::: a",
+    "parallel --plain rm -rf {} :::: list",
+    "sem rm -rf ./build",
+    "sem git push origin main",
+    "env_parallel git push origin {} ::: main",
+    "env_parallel rm -rf {} ::: ./build",
 ];
 
-/// Why GNU `parallel` with the words `args` falls outside the closed rule,
-/// or `None` when it is inside it. Inside means: no option variable
-/// assigned (`assigned`); `--plain` and only the options [`ParallelCall`]
-/// admits; no word supplied as data and no `{= =}` expression (Perl that
-/// `parallel` runs); a template on the line; and in every command of the
-/// template, read as the shell line `parallel` builds, a program that is a
-/// fixed word after the prefix launchers, holds no replacement string, and
-/// is not git, a shell, `eval`, a carrier or another program that runs a
-/// command. Shared by both guards and the deletion check (TSK-326).
-pub(crate) fn parallel_refusal(args: &[String], assigned: bool) -> Option<&'static str> {
-    const PROGRAM: &str = "a template whose program is not a fixed word other than git, a shell, `eval` or a program that runs another command";
-    if assigned {
-        return Some("an option variable assigned on the line");
-    }
-    if args.iter().any(|word| word.contains(SUPPLIED)) {
-        return Some("a word supplied as data");
-    }
-    let args: Vec<String> = args.iter().map(|word| unmark(word)).collect();
-    let call = ParallelCall::read(&args);
-    if !call.mode.plain {
-        return Some(
-            "no `--plain`, so options may come from its environment, a profile or its configuration files",
-        );
-    }
-    if call.mode.unlisted {
-        return Some("an option outside the set the guard reads");
-    }
-    if args.iter().any(|word| word.contains("{=")) {
-        return Some("a `{= =}` expression, which `parallel` runs as Perl");
-    }
-    let (start, end) = call.command(&args);
-    if end == start {
-        return Some("no template, so its input lines are the commands");
-    }
-    let line = if call.quoted {
-        quote_words(&args[start..end])
-    } else {
-        args[start..end].join(" ")
-    };
-    let tokens: Vec<&str> = call
-        .whole
+/// [`REFUSED_COMMAND_BUILDER_LINES`] and each command builder behind every
+/// spelling a program word is read in: a path, quotes, letter case, a
+/// `.exe` suffix, a value the line assigns, and the launchers, privilege
+/// runners and suppliers before it.
+#[cfg(test)]
+pub(crate) fn refused_command_builder_lines() -> Vec<String> {
+    let mut lines: Vec<String> = REFUSED_COMMAND_BUILDER_LINES
         .iter()
-        .chain(&call.derived)
-        .map(String::as_str)
+        .map(ToString::to_string)
         .collect();
-    let segments = expand_shell_commands(&line).segments;
-    if segments.is_empty() {
-        return Some(PROGRAM);
-    }
-    for segment in &segments {
-        let mut words = command_argv(segment);
-        strip_reserved_words(&mut words);
-        let Some((program, _)) = configuration_launch(&words) else {
-            return Some(PROGRAM);
-        };
-        let fixed = !program.is_empty()
-            && program
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '+' | '-'))
-            && !tokens.iter().any(|token| program.contains(token));
-        let name = launcher_name(program).to_ascii_lowercase();
-        let name = name.strip_suffix(".exe").unwrap_or(&name);
-        if !fixed
-            || name == "git"
-            || name == "eval"
-            || is_shell(name)
-            || COMMAND_CARRIERS.contains(&name)
-            || COMMAND_RUNNERS.contains(&name)
-            || is_prefix_launcher(program)
-        {
-            return Some(PROGRAM);
+    for (program, rest) in [
+        ("parallel", "--plain echo {} ::: a"),
+        ("sem", "echo hi"),
+        ("env_parallel", "echo ::: a"),
+    ] {
+        let split = format!("\"{}\"{}", &program[..2], &program[2..]);
+        for spelled in [
+            program.to_string(),
+            format!("/usr/bin/{program}"),
+            format!("./{program}"),
+            format!("'{program}'"),
+            split,
+            program.to_ascii_uppercase(),
+            format!("{program}.exe"),
+            format!("env {program}"),
+            format!("env FOO=1 {program}"),
+            format!("nice {program}"),
+            format!("nice -n 5 {program}"),
+            format!("timeout 5 {program}"),
+            format!("command {program}"),
+            format!("exec {program}"),
+            format!("sudo {program}"),
+            format!("sudo -u root {program}"),
+            format!("nohup {program}"),
+            format!("p={program}; $p"),
+        ] {
+            lines.push(format!("{spelled} {rest}"));
         }
+        lines.push(format!("printf '%s\\n' a | xargs {program} {rest}"));
+        lines.push(format!("find . -name x -exec {program} {rest} \\;"));
     }
-    None
+    lines
 }
 
 /// Whether the arguments of a program the guard cannot read show that it
@@ -746,6 +830,7 @@ fn shell_script_data(
         sub: None,
         operand: false,
         substitution: false,
+        remedy: None,
     })?;
     let text = fill(&script, vars, Some(supplier))
         .map_err(|why| unresolved(&script, &place, &why, None, false))?;
@@ -1067,6 +1152,7 @@ pub(crate) fn line_data(command: &str, reader: Reader) -> LineData {
                                 sub: None,
                                 operand: false,
                                 substitution: false,
+                                remedy: None,
                             });
                             return out;
                         }

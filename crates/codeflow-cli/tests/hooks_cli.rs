@@ -2552,18 +2552,17 @@ fn each_guard_alone_refuses_git_operands_supplied_as_data() {
     }
 }
 
-/// TSK-326 siblings: `parallel`, `fd -x` and a launcher's git child are
-/// refused by each guard alone when their input or a variable supplies a git
-/// operand; their literal forms pass.
+/// TSK-326 siblings: `fd -x` and a launcher's git child are refused by each
+/// guard alone when their input or a variable supplies a git operand; their
+/// literal forms pass.
 #[test]
-fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
+fn each_guard_alone_refuses_fd_and_launcher_data() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/data");
     write_agent_policy(dir.path(), TARGETING_POLICY);
     std::fs::write(dir.path().join("refs"), "main\n").unwrap();
     for hook in ["git-guard", "exec-guard"] {
         for command in [
-            "parallel --plain git push origin :::: refs",
             "fd -x git push origin {}",
             "V=$(cat refs); watch git push origin \"$V\"",
             "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
@@ -2581,8 +2580,8 @@ fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
             );
         }
         for command in [
-            "parallel --plain echo ::: feat/x",
             "watch git push origin feat/x",
+            "flock /tmp/l git push origin feat/x",
         ] {
             let out = run_with_stdin(
                 codeflow().args(["hook", hook]).current_dir(dir.path()),
@@ -2590,6 +2589,41 @@ fn each_guard_alone_refuses_parallel_fd_and_launcher_data() {
             );
             let stderr = String::from_utf8_lossy(&out.stderr);
             assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
+/// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the commands
+/// they run at run time, so each guard alone refuses them in any spelling
+/// and behind a launcher, and names the human route.
+#[test]
+fn each_guard_alone_refuses_command_builders() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "parallel --plain echo ::: feat/x",
+            "parallel --plain git push origin :::: refs",
+            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel --plain rm -rf {} :::: refs",
+            "/usr/bin/PARALLEL.exe echo ::: a",
+            "nice -n 5 'parallel' echo ::: a",
+            "sem echo hi",
+            "timeout 5 env_parallel echo ::: a",
+            "printf '%s\\n' a | xargs sem echo",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("refused in agent sessions") && stderr.contains("a human runs"),
+                "{hook}: {command}: {stderr}"
+            );
         }
     }
 }
@@ -2608,18 +2642,6 @@ fn each_guard_alone_refuses_supplied_scripts_and_brace_lists() {
             "find main -exec sh -c 'git push --no-verify origin {}' \\;",
             "fd -x sh -c 'git push --no-verify origin {}'",
             "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
-            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
-            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' ::: main",
-            "parallel --plain -q sh -c 'git push --no-verify origin {}' ::: main",
-            "parallel --plain -I % 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "parallel --plain -q -I % sh -c 'git push --no-verify origin %' ::: main",
-            "parallel --plain --arg-sep %% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --plain --arg-sep=%% 'sh -c \"git push --no-verify origin {}\"' %% main",
-            "parallel --plain 'sh -c \"git push --no-verify origin {}\"' :::: refs",
-            "parallel --plain -a refs 'sh -c \"git push --no-verify origin {}\"'",
-            "cat refs | parallel --plain 'sh -c \"git push --no-verify origin {}\"'",
-            "parallel 'sh -c \"git push --no-verify origin %\"' ::: main",
-            "PARALLEL='-I %' parallel --plain 'sh -c \"git push origin %\"' ::: main",
             "git push --no-verify origin {feat/x,main}",
             "V=main; git push origin {feat/x,$V}",
         ] {
