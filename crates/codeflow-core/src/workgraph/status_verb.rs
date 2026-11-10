@@ -606,11 +606,13 @@ fn pinned_commit(
         let fetched_tip =
             shown(&fetched).map_or_else(|| "absent here".to_string(), |tip| format!("at {tip}"));
         // Each argument a reader may paste is quoted: a ref name can hold
-        // `$(…)`, `;` or a backtick (TSK-416 review).
+        // `$(…)`, `;` or a backtick, and the branch to rename follows `--`
+        // when it starts with `-` (TSK-416 review). `--base` takes the full
+        // `refs/remotes/…` name, which never starts with `-`.
         return Err(format!(
             "`{value}` is ambiguous here: the local ref {shadow} at {shadow_tip} is spelled like the fetched {fetched} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full (`{fetched}`, as in `--base {}`), or rename the local ref (`git branch -m {} <new-name>` for a branch)",
             crate::git::shell_arg(&fetched),
-            crate::git::shell_arg(value)
+            crate::git::git_operands(&[value])
         ));
     }
     Ok(read(&fetched))
@@ -687,7 +689,8 @@ fn qualify(
             own_target = true;
             let Some(tip) = receiving_tip(repo, name)? else {
                 return Err(format!(
-                    "the target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
+                    "the target `{name}` does not resolve here; fetch it (`git fetch {}`)",
+                    crate::git::git_operands(&["origin", name])
                 ));
             };
             target = Some(tip);
@@ -755,7 +758,10 @@ fn default_target(
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
         let tip = pinned_commit(repo, base)?.map_err(|error| {
-            format!("`--base {base}` does not name a commit here ({error}); fetch it (`git fetch origin {name}`)")
+            format!(
+                "`--base {base}` does not name a commit here ({error}); fetch it (`git fetch {}`)",
+                crate::git::git_operands(&["origin", &name])
+            )
         })?;
         return Ok(Some((name, tip)));
     }
@@ -840,7 +846,8 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
             .any(|remote| matches!(remote, Ok(Some("origin"))));
         if !origin {
             return Err(format!(
-                "this clone has remotes but no `origin`, so the target `{name}` has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch origin {name}`)"
+                "this clone has remotes but no `origin`, so the target `{name}` has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch {}`)",
+                crate::git::git_operands(&["origin", name])
             ));
         }
         format!("refs/remotes/origin/{name}")
@@ -855,7 +862,8 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
                 Ok(None)
             } else {
                 Err(format!(
-                    "the target `{name}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch origin {name}`) and run this again"
+                    "the target `{name}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch {}`) and run this again",
+                    crate::git::git_operands(&["origin", name])
                 ))
             }
         }
@@ -1257,58 +1265,127 @@ mod tests {
         );
     }
 
+    /// The arguments `command` passes to `git`, read by a shell whose `git`
+    /// prints them one per line.
+    #[cfg(unix)]
+    fn printed_git_arguments(command: &str) -> String {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     /// TSK-416 review: the ambiguity refusal's commands reach a shell as
-    /// the arguments they name when the branch name holds `$(…)` and `;`;
-    /// each runs here under a shell whose `git` prints its arguments. (A
-    /// backtick would split the message's own code spans; `shell_arg`'s test
-    /// covers it.)
+    /// the arguments they name when the branch name holds `$(…)` and `;`,
+    /// and git reads a name that starts with `-` as the branch, never as
+    /// an option. Each runs here under a shell whose `git` prints its
+    /// arguments, and the rename then runs with git itself. (A backtick
+    /// would split the message's own code spans; `shell_arg`'s test covers
+    /// it.)
     #[test]
     #[cfg(unix)]
     fn the_ambiguity_remedy_quotes_a_name_holding_shell_syntax() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(dir.path()).unwrap();
-        repo.remote("origin", "/nowhere").unwrap();
-        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
-        let tree = repo
-            .find_tree(repo.index().unwrap().write_tree().unwrap())
-            .unwrap();
-        let tip = repo
-            .commit(None, &signature, &signature, "tip", &tree, &[])
-            .unwrap();
-        let value = "origin/m$(id);x";
-        repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
-            .unwrap();
-        repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
-            .unwrap();
-        let error = target_commit(&repo, Some(value)).unwrap_err();
-        let base = error
-            .split('`')
-            .find(|span| span.starts_with("--base "))
-            .unwrap_or_else(|| panic!("{error}"));
-        let rename = error
-            .split('`')
-            .find(|span| span.starts_with("git branch -m "))
-            .unwrap_or_else(|| panic!("{error}"));
-        for (command, expected) in [
+        for (remote, value, dashed) in [
+            ("origin", "origin/m$(id);x", false),
+            ("-x", "-x/--upload-pack=touch_pwned", true),
             (
-                format!("git {base}"),
-                format!("--base\nrefs/remotes/{value}\n"),
-            ),
-            (
-                rename.replace(" <new-name>", " new"),
-                format!("branch\n-m\n{value}\nnew\n"),
+                "--upload-pack=touch_pwned",
+                "--upload-pack=touch_pwned/main",
+                true,
             ),
         ] {
-            let out = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str(&format!("remote.{remote}.url"), "/nowhere")
+                .unwrap();
+            let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+            let tree = repo
+                .find_tree(repo.index().unwrap().write_tree().unwrap())
+                .unwrap();
+            let tip = repo
+                .commit(None, &signature, &signature, "tip", &tree, &[])
+                .unwrap();
+            repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+                .unwrap();
+            repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+                .unwrap();
+            let error = target_commit(&repo, Some(value)).unwrap_err();
+            let base = error
+                .split('`')
+                .find(|span| span.starts_with("--base "))
+                .unwrap_or_else(|| panic!("{error}"));
+            let rename = error
+                .split('`')
+                .find(|span| span.starts_with("git branch -m "))
+                .unwrap_or_else(|| panic!("{error}"))
+                .replace(" <new-name>", " new");
+            let end = if dashed { "--\n" } else { "" };
+            assert_eq!(
+                printed_git_arguments(&format!("git {base}")),
+                format!("--base\nrefs/remotes/{value}\n"),
+                "{error}"
+            );
+            let printed = printed_git_arguments(&rename);
+            assert_eq!(
+                printed,
+                format!("branch\n-m\n{end}{value}\nnew\n"),
+                "{error}"
+            );
+            let arguments: Vec<&str> = printed.lines().collect();
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(&arguments)
                 .output()
                 .unwrap();
-            assert_eq!(
-                String::from_utf8_lossy(&out.stdout),
-                expected,
-                "{command}: {error}"
+            assert!(
+                out.status.success(),
+                "{rename}: {}",
+                String::from_utf8_lossy(&out.stderr)
             );
+            assert!(repo.find_reference("refs/heads/new").is_ok(), "{rename}");
+            assert!(
+                repo.find_reference(&format!("refs/heads/{value}")).is_err(),
+                "{rename}"
+            );
+        }
+    }
+
+    /// TSK-416 review: a target branch named like an option reaches git as
+    /// the branch to fetch, after `--`, in each fetch the receiving-source
+    /// refusals print; an ordinary name prints as it did.
+    #[test]
+    #[cfg(unix)]
+    fn a_fetch_remedy_ends_the_options_before_a_dashed_target() {
+        for (remotes, name, expected) in [
+            (
+                &["origin"][..],
+                "--upload-pack=touch_pwned",
+                "fetch\n--\norigin\n--upload-pack=touch_pwned\n",
+            ),
+            (
+                &["up"][..],
+                "--upload-pack=touch_pwned",
+                "fetch\n--\norigin\n--upload-pack=touch_pwned\n",
+            ),
+            (&["origin"][..], "main", "fetch\norigin\nmain\n"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            for remote in remotes {
+                repo.remote(remote, "/nowhere").unwrap();
+            }
+            let error = receiving_tip(&repo, name).unwrap_err();
+            let fetch = error
+                .split('`')
+                .find(|span| span.starts_with("git fetch "))
+                .unwrap_or_else(|| panic!("{error}"));
+            assert_eq!(printed_git_arguments(fetch), expected, "{error}");
         }
     }
 

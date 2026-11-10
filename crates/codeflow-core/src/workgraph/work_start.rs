@@ -381,7 +381,7 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
         (None, None) => "a target git cannot read".to_string(),
     };
     let present = target.is_some_and(|oid| repo.find_object(oid, None).is_ok());
-    let quoted = crate::git::shell_arg;
+    let quoted = |operand: &str| crate::git::git_operands(&[operand]);
     let remedy = match reference
         .strip_prefix("refs/remotes/")
         .and_then(|rest| rest.split_once('/').map(|(remote, _)| (remote, rest)))
@@ -422,11 +422,12 @@ pub(crate) fn remote_of(reference: &str) -> &str {
 /// and a message reaches logs and transcripts (TSK-416 review). A clone has
 /// its own refs, so what made this clone's judgment refuse is not there; a
 /// worktree of this clone would share them. The remote is quoted as one
-/// shell argument.
+/// shell argument, after `--` in the command when it starts with `-`.
 pub(crate) fn fresh_clone(remote: &str) -> String {
+    let operand = crate::git::git_operands(&[remote]);
     let remote = crate::git::shell_arg(remote);
     format!(
-        "work from a fresh clone of the remote {remote}, made from outside this clone (`git clone <url> <path>`, where `git remote get-url {remote}` prints the url)"
+        "work from a fresh clone of the remote {remote}, made from outside this clone (`git clone <url> <path>`, where `git remote get-url {operand}` prints the url)"
     )
 }
 
@@ -6165,6 +6166,10 @@ mod tests {
             // A backtick would split the message's own code spans, which
             // this test reads; `shell_arg`'s test covers it.
             ("o$(id);x", "/nowhere"),
+            // Git reads an operand that starts with `-` as an option
+            // wherever it stands, unless `--` ends the options first.
+            ("-x", "/nowhere"),
+            ("--upload-pack=touch_pwned", "/nowhere"),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path();
@@ -6195,12 +6200,101 @@ mod tests {
                     "{command} gave {printed}"
                 );
                 assert!(!printed.contains("uid="), "{command} ran id: {printed}");
+                // Before `--`, the only dashed arguments are the command's
+                // own options.
+                for argument in printed.lines().take_while(|argument| *argument != "--") {
+                    assert!(
+                        !argument.starts_with('-') || ["-d", "-r"].contains(&argument),
+                        "{command} passes {argument} where git reads options: {printed}"
+                    );
+                }
             }
             for hidden in ["FAKE_TOKEN", "with space", "/nowhere", "h.invalid"] {
                 assert!(!message.contains(hidden), "{hidden}: {message}");
             }
             // The fetch, the ref deletion and the URL lookup.
             assert_eq!(commands.len(), 3, "{message}");
+        }
+    }
+
+    /// TSK-416 review: for a remote named like an option, git runs each
+    /// command the remedy prints as written, and following them in order
+    /// repairs the fetched ref: the URL lookup prints the remote's URL, the
+    /// deletion removes the ref whose object is missing and the fetch
+    /// recreates it from the remote.
+    #[test]
+    #[cfg(unix)]
+    fn a_dashed_remote_remedy_runs_with_git_as_printed() {
+        for remote in ["-x", "--upload-pack=touch_pwned"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let source = root.to_str().unwrap();
+            git(root, &["init", "-q", "-b", "main"]);
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "tip",
+                ],
+            );
+            git(root, &["config", &format!("remote.{remote}.url"), source]);
+            git(
+                root,
+                &[
+                    "config",
+                    &format!("remote.{remote}.fetch"),
+                    &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+                ],
+            );
+            let refs = root.join(".git/refs/remotes").join(remote);
+            fs::create_dir_all(&refs).unwrap();
+            fs::write(refs.join("main"), format!("{}\n", "1".repeat(40))).unwrap();
+            let fetched = format!("refs/remotes/{remote}/main");
+            let message = unresolvable_reference(root, &fetched).unwrap();
+            let commands: Vec<&str> = message
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("git ") && !span.contains('<'))
+                .collect();
+            assert_eq!(commands.len(), 3, "{message}");
+            for command in commands {
+                let out = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+                    .output()
+                    .unwrap();
+                let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+                let arguments: Vec<&str> = printed.lines().collect();
+                let ran = crate::git::command()
+                    .arg("-C")
+                    .arg(root)
+                    .args(&arguments)
+                    .output()
+                    .unwrap();
+                assert!(
+                    ran.status.success(),
+                    "{command}: {}",
+                    String::from_utf8_lossy(&ran.stderr)
+                );
+                if arguments.contains(&"get-url") {
+                    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), source);
+                }
+            }
+            let repo = Repository::open(root).unwrap();
+            let head = repo.head().unwrap().target().unwrap();
+            assert_eq!(
+                repo.find_reference(&fetched).unwrap().target(),
+                Some(head),
+                "{message}"
+            );
         }
     }
 

@@ -439,6 +439,27 @@ pub fn shell_arg(text: &str) -> String {
     }
 }
 
+/// `operands` as the operands of a git command a reader may paste: each
+/// one a [`shell_arg`], with `--` before them when one starts with `-`, so
+/// git reads none of them as an option. A remote or branch may be named
+/// `-x` or `--upload-pack=<command>`, and git reads such an operand as an
+/// option wherever it stands (TSK-416 review). Only verbs that end their
+/// options at `--` take these operands: `git fetch`, `git branch` and
+/// `git remote get-url` do.
+#[must_use]
+pub fn git_operands(operands: &[&str]) -> String {
+    let quoted: Vec<String> = operands.iter().map(|operand| shell_arg(operand)).collect();
+    let dashed = operands
+        .iter()
+        .any(|operand| display_text(operand).starts_with('-'));
+    let joined = quoted.join(" ");
+    if dashed {
+        format!("-- {joined}")
+    } else {
+        joined
+    }
+}
+
 /// Output text as a terminal may show it: each control, format and
 /// separator character other than a line break or tab escaped, as
 /// [`display_text`] escapes them; backslashes are kept. For text that
@@ -734,6 +755,21 @@ mod tests {
             assert_eq!(String::from_utf8_lossy(&out.stdout), value);
             assert!(!std::path::Path::new(marker).exists(), "{value} ran");
         }
+    }
+
+    /// TSK-416 review: an operand that starts with `-` follows `--`, and
+    /// ordinary operands print as they did.
+    #[test]
+    fn git_operands_end_the_options_before_a_leading_dash() {
+        assert_eq!(git_operands(&["origin"]), "origin");
+        assert_eq!(git_operands(&["origin/main"]), "origin/main");
+        assert_eq!(git_operands(&["-x"]), "-- -x");
+        assert_eq!(
+            git_operands(&["--upload-pack=touch_pwned/main"]),
+            "-- --upload-pack=touch_pwned/main"
+        );
+        assert_eq!(git_operands(&["origin", "-x/main"]), "-- origin -x/main");
+        assert_eq!(git_operands(&["-o$(id)"]), "-- '-o$(id)'");
     }
 
     #[test]

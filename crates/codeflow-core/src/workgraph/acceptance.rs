@@ -2344,8 +2344,9 @@ fn judge_reopened(
         }
         if found.is_empty() {
             return TaskJudgement::unreadable(format!(
-                "the target `{0}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {0}`)",
-                crate::git::display_text(name)
+                "the target `{}`, which this task's record names, does not resolve here; fetch it (`git fetch {}`)",
+                crate::git::display_text(name),
+                crate::git::git_operands(&["origin", name])
             ));
         }
         // The epic line's pull request into its target judges the line's
@@ -2364,10 +2365,15 @@ fn judge_reopened(
             };
             if found.is_empty() {
                 return TaskJudgement::unreadable(format!(
-                    "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
-                    // `origin/HEAD` names it, as the remote said (TSK-388).
+                    "the default target `{}`{} does not resolve here; fetch it (`git fetch {}`)",
                     crate::git::display_text(&name.name),
-                    if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
+                    // `origin/HEAD` names it, as the remote said (TSK-388).
+                    if name.from_origin_head {
+                        ", which `origin/HEAD` names,"
+                    } else {
+                        ""
+                    },
+                    crate::git::git_operands(&["origin", &name.name])
                 ));
             }
             tips.extend(found);

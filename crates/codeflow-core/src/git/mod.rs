@@ -16,8 +16,9 @@ pub mod unreadable;
 
 pub use name::{
     diff_paths, display_json, display_key, display_line, display_message, display_output,
-    display_path, display_print, display_relay, display_text, gitfile_dir, key_is_text, shell_arg,
-    tracking_branch, walk_tree, DisplayName, GitName, NotRepresentable, NotUtf8, TextBlock, Walk,
+    display_path, display_print, display_relay, display_text, git_operands, gitfile_dir,
+    key_is_text, shell_arg, tracking_branch, walk_tree, DisplayName, GitName, NotRepresentable,
+    NotUtf8, TextBlock, Walk,
 };
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
