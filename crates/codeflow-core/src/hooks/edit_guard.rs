@@ -229,11 +229,28 @@ fn absolute_target(path: &Path, cwd: &Path, home: &Path) -> PathBuf {
     if let Ok(relative) = path.strip_prefix("~") {
         return home.join(relative);
     }
-    if path.is_absolute() {
+    if path.is_absolute() || nt_namespace(path) {
         path.to_path_buf()
     } else {
         cwd.join(path)
     }
+}
+
+/// Whether `path` is a Windows NT object namespace path (`\??\C:\x`). The
+/// standard library reads it as rooted but not absolute, so a join would
+/// put the cwd's drive in front, while Win32 opens it as `\\?\C:\x`. It is
+/// kept as written for [`crate::portable_path::guard_path`] to map
+/// (TSK-1400). Other platforms have no such path.
+fn nt_namespace(path: &Path) -> bool {
+    cfg!(windows) && path.to_str().is_some_and(nt_namespace_text)
+}
+
+/// [`nt_namespace`] without the platform check, so every host can test it.
+fn nt_namespace_text(text: &str) -> bool {
+    matches!(
+        text.as_bytes(),
+        [b'/' | b'\\', b'?', b'?', b'/' | b'\\', ..]
+    )
 }
 
 /// Return a policy finding per refused target, with the existing rule and remedy.
@@ -269,6 +286,17 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
     for path in &request.paths {
         let absolute = absolute_target(path, cwd, ctx.home);
+        // A Windows drive-relative path (`C:name`) keeps its drive and
+        // drops the cwd when joined. Windows opens it from the writer's
+        // current directory on that drive, which the guard cannot read, so
+        // it cannot be judged and refuses (TSK-1400). Elsewhere every
+        // joined path is absolute.
+        if !absolute.is_absolute() && !nt_namespace(&absolute) {
+            return Err(EditError(format!(
+                "cannot check the drive-relative edit path {}: Windows opens it from that drive's current directory, which the guard cannot read",
+                absolute.display()
+            )));
+        }
         // First, so a path past the bound reads nothing on disk (TSK-1258).
         let lexical = normalized(&absolute, false)?;
         // Shell startup files refuse whatever the integrity level (TSK-242).
