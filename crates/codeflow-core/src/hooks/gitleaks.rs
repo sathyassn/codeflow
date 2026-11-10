@@ -867,18 +867,20 @@ fn git_refusal(version: &str, promisor: bool) -> Option<String> {
 /// the repository: the repository, worktree and index variables are kept,
 /// and a caller's `GIT_CONFIG` (which only `git config` reads) and its
 /// command-line and numbered settings are removed, as the scan removes them
-/// for `git diff`.
+/// for `git diff`. It runs within the guard's lookup wait (TSK-327): a query
+/// that stalls, overflows or cannot run is an error, which refuses; git's
+/// own exit status is returned for the caller to read.
 fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     let mut command = crate::git::command();
     command.env_remove("GIT_CONFIG");
     remove_caller_settings(&mut command);
     crate::git::local_objects_only(&mut command);
-    command
-        .args(args)
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| format!("git did not run: {error}"))
+    command.args(args).current_dir(root);
+    crate::git::remote_query::bounded_output(
+        command,
+        crate::git::remote_query::QueryLimits::guard().timeout(),
+    )
+    .map_err(|why| why.reason)
 }
 
 /// The git version text, and whether the repository has a promisor remote

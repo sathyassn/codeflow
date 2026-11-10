@@ -641,10 +641,26 @@ fn bounded(command: std::process::Command, deadline: Duration) -> Result<String,
 }
 
 /// [`bounded`], returning the answer's bytes undecoded.
-fn bounded_bytes(
-    mut command: std::process::Command,
-    deadline: Duration,
-) -> Result<Vec<u8>, Failure> {
+fn bounded_bytes(command: std::process::Command, deadline: Duration) -> Result<Vec<u8>, Failure> {
+    let (status, bytes, diagnostics) = bounded_run(command, deadline)?;
+    if !status.success() {
+        if diagnostics.as_deref().is_some_and(authentication_failed) {
+            return Err(Failure::Authentication);
+        }
+        return Err(Failure::Exit(status.code()));
+    }
+    Ok(bytes)
+}
+
+/// A bounded run's exit status, answer and diagnostics, when read.
+type Ran = (std::process::ExitStatus, Vec<u8>, Option<Vec<u8>>);
+
+/// Run `command` with no input, within `deadline` (then its whole process
+/// group is killed) and [`MAX_ANSWER_BYTES`]: git's exit status, its
+/// answer, and up to 64 KiB of its diagnostics when they could be read
+/// before the stderr grace ended. Only a timeout, an oversized answer or a
+/// failure to run or read is an error.
+fn bounded_run(mut command: std::process::Command, deadline: Duration) -> Result<Ran, Failure> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -661,8 +677,10 @@ fn bounded_bytes(
         kill_group(&mut child);
         return Err(Failure::Other("could not read its answer".to_string()));
     };
-    // Read diagnostics only to classify authentication failures. Never return
-    // remote stderr: a helper or URL could include credential material.
+    // The destination query reads diagnostics only to classify
+    // authentication failures and never shows them: a helper or URL could
+    // include credential material. Only `bounded_output` returns them, to a
+    // caller that redacts URLs before showing any (the id sync).
     let stderr = child.stderr.take();
     let diagnostics = std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -732,14 +750,14 @@ fn bounded_bytes(
     while !diagnostics.is_finished() && Instant::now() < grace {
         std::thread::sleep(Duration::from_millis(10));
     }
-    let authentication = if diagnostics.is_finished() {
+    let diagnostics = if diagnostics.is_finished() {
         match diagnostics.join() {
-            Ok(Ok(bytes)) => authentication_failed(&bytes),
-            Ok(Err(_)) | Err(_) => false,
+            Ok(Ok(bytes)) => Some(bytes),
+            Ok(Err(_)) | Err(_) => None,
         }
     } else {
         signal_group(&child);
-        false
+        None
     };
     let status = match child.wait() {
         Ok(status) => status,
@@ -749,13 +767,45 @@ fn bounded_bytes(
             )))
         }
     };
-    if !status.success() {
-        if authentication {
-            return Err(Failure::Authentication);
-        }
-        return Err(Failure::Exit(status.code()));
+    Ok((status, bytes, diagnostics))
+}
+
+/// A bounded run that ended without git's full output: why, and whether
+/// the deadline ran out, which a caller of a network command may treat as
+/// an unreachable remote.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Unanswered {
+    /// The deadline ran out and git's process group was ended.
+    pub timed_out: bool,
+    /// Why there is no output, fit to show.
+    pub reason: String,
+}
+
+/// Run a git command within `deadline` and [`MAX_ANSWER_BYTES`], as the
+/// destination query's own reads run, and return its output whatever the
+/// exit status (TSK-327 pre-push id sync). Its stderr is at most 64 KiB, and
+/// empty when a helper held it past the grace. The caller classifies a
+/// failed exit; a timeout, an oversized answer or a failure to run is
+/// [`Unanswered`], never an output.
+///
+/// # Errors
+///
+/// Why git gave no output within `deadline`.
+pub fn bounded_output(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<std::process::Output, Unanswered> {
+    match bounded_run(command, deadline) {
+        Ok((status, stdout, stderr)) => Ok(std::process::Output {
+            status,
+            stdout,
+            stderr: stderr.unwrap_or_default(),
+        }),
+        Err(why) => Err(Unanswered {
+            timed_out: matches!(why, Failure::Timeout(_)),
+            reason: local_read_failure(why),
+        }),
     }
-    Ok(bytes)
 }
 
 fn local_read_failure(why: Failure) -> String {

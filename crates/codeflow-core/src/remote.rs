@@ -1692,17 +1692,32 @@ fn origin_on(
     };
     // Git's own answer, after `pushurl` and `pushInsteadOf`.
     // Read within the guard's wait and answer cap (TSK-327): a read that
-    // stalls, overflows or fails refuses.
+    // stalls, overflows or fails refuses. Git's stderr is not shown; a failed
+    // exit names the command the operator can run to see why.
     let mut command = crate::git::process("git");
     command
         .arg("-C")
         .arg(root)
         .args(["remote", "get-url", "--push", "--all", "origin"]);
-    let stdout = crate::git::remote_query::bounded_raw(
+    let failed = |why: &str| {
+        format!(
+            "cannot read the `origin` push URL: {why}; run `git remote get-url --push --all origin` in the repository to see why"
+        )
+    };
+    let stdout = match crate::git::remote_query::bounded_local(
         command,
         crate::git::remote_query::QueryLimits::guard().timeout(),
     )
-    .map_err(|why| format!("cannot read the `origin` push URL: {why}"))?;
+    .map_err(|why| failed(&why))?
+    {
+        crate::git::remote_query::LocalAnswer::Answer(stdout) => stdout,
+        crate::git::remote_query::LocalAnswer::Exit(code) => {
+            return Err(failed(&format!(
+                "git exited with {}",
+                code.map_or_else(|| "no exit code".to_string(), |code| code.to_string())
+            )))
+        }
+    };
     let pushes =
         String::from_utf8(stdout).map_err(|_| "the `origin` push URL is not UTF-8".to_string())?;
     for push in pushes.split('\n').filter(|line| !line.is_empty()) {

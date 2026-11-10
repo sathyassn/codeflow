@@ -12,6 +12,9 @@ use super::IdsError;
 #[derive(Debug, Clone)]
 pub struct Git {
     root: PathBuf,
+    /// When set, every command that captures output runs within these
+    /// limits (TSK-327, the pre-push id sync).
+    limits: Option<crate::git::remote_query::QueryLimits>,
 }
 
 impl Git {
@@ -20,7 +23,44 @@ impl Git {
     pub fn new(root: &Path) -> Git {
         Git {
             root: root.to_path_buf(),
+            limits: None,
         }
+    }
+
+    /// Git in the repository at `root` whose captured commands each run
+    /// within `limits`: `fetch`, `push` and `ls-remote` within the fetch
+    /// wait, any other within the query wait. A network command that runs
+    /// out of time is [`IdsError::Offline`], as an unreachable authority
+    /// is; any other read that cannot answer is an error.
+    #[must_use]
+    pub fn bounded(root: &Path, limits: crate::git::remote_query::QueryLimits) -> Git {
+        Git {
+            root: root.to_path_buf(),
+            limits: Some(limits),
+        }
+    }
+
+    /// Capture `command`'s output, within the limits when they are set.
+    fn capture(&self, mut command: Command, args: &[&str]) -> Result<Output, IdsError> {
+        let shown = || crate::git::remote_query::display_urls(&args.join(" "));
+        let Some(limits) = self.limits else {
+            return command
+                .output()
+                .map_err(|error| IdsError::Git(format!("git {}: {error}", shown())));
+        };
+        let network = matches!(args.first(), Some(&"fetch" | &"push" | &"ls-remote"));
+        let deadline = if network {
+            limits.fetch_timeout()
+        } else {
+            limits.timeout()
+        };
+        crate::git::remote_query::bounded_output(command, deadline).map_err(|why| {
+            if network && why.timed_out {
+                IdsError::Offline(format!("git {}: {}", shown(), why.reason))
+            } else {
+                IdsError::Git(format!("git {}: {}", shown(), why.reason))
+            }
+        })
     }
 
     /// The repository root.
@@ -59,12 +99,7 @@ impl Git {
     /// Returns an error when git cannot be started.
     pub fn output(&self, args: &[&str]) -> Result<Output, IdsError> {
         self.check_history(args)?;
-        self.command(args).output().map_err(|error| {
-            IdsError::Git(format!(
-                "git {}: {error}",
-                crate::git::remote_query::display_urls(&args.join(" "))
-            ))
-        })
+        self.capture(self.command(args), args)
     }
 
     /// Run git with extra environment and return its raw output.
@@ -78,12 +113,7 @@ impl Git {
         for (key, value) in env {
             command.env(key, value);
         }
-        command.output().map_err(|error| {
-            IdsError::Git(format!(
-                "git {}: {error}",
-                crate::git::remote_query::display_urls(&args.join(" "))
-            ))
-        })
+        self.capture(command, args)
     }
 
     /// Run git and return stdout, failing on a nonzero exit.

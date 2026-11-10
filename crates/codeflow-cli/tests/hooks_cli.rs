@@ -12598,6 +12598,44 @@ fn promisor_hook(
     command.output().unwrap()
 }
 
+/// TSK-327: the commit hooks' promisor setting read is bounded by the
+/// guard's lookup wait. A `git` first on `PATH` stalls only that read
+/// (`config --get-regexp`) for 25 s and passes every other call to the real
+/// git. Before the change the read had no deadline: the merge route's
+/// staged listing waited out the stall. Now it refuses within the wait
+/// (10 s), naming it, before any object is read.
+#[cfg(unix)]
+#[test]
+fn a_stalled_promisor_setting_read_refuses_within_the_guard_wait() {
+    use std::os::unix::fs::PermissionsExt;
+    let (keep, work, fetched) = promisor_repository_missing_blobs();
+    let bin = keep.path().join("stall-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  config\\ --get-regexp*) sleep 25;;\nesac\nexec '{}' \"$@\"\n",
+            real_git_path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let out = promisor_hook(&work, &bin, true, false, &[]);
+    let took = started.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{took:?}: {stderr}");
+    assert!(
+        stderr.contains("no answer within 10s"),
+        "{took:?}: {stderr}"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(20),
+        "{took:?}: {stderr}"
+    );
+    assert!(!fetched.exists(), "a fetch or transport process started");
+}
+
 /// R15-1 across the supported Git range, through the hook entry points on
 /// the pre-commit route (attribute lookup) and the merge route (staged
 /// listing): a repository with a promisor remote on a Git before 2.46, a

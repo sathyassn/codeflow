@@ -652,9 +652,13 @@ pub struct SyncReport {
 ///
 /// Returns a clash naming `ids retarget` (or the authority migration for a
 /// landed record), or the classified push failure. Offline is
-/// [`IdsError::Offline`].
+/// [`IdsError::Offline`]. The pre-push hook runs it, so every git command it
+/// captures runs within the lookup limits ([`Git::bounded`], TSK-327).
 pub fn sync(root: &Path) -> Result<SyncReport, IdsError> {
-    let git = Git::new(root);
+    let git = Git::bounded(
+        root,
+        crate::git::remote_query::QueryLimits::from_authority_or_default(root),
+    );
     let _lock = state::lock(&git)?;
     if !git.has_remote(AUTHORITY)? {
         return Ok(SyncReport {
@@ -672,9 +676,14 @@ pub fn sync(root: &Path) -> Result<SyncReport, IdsError> {
 /// Whether the local registry holds reservations the authority lacks.
 ///
 /// # Errors
-/// Returns an error when Git cannot inspect the local or authority history.
+/// Returns an error when Git cannot inspect the local or authority history,
+/// including within the lookup limits, as the pre-push hook asks it
+/// ([`Git::bounded`], TSK-327).
 pub fn has_pending(root: &Path) -> Result<bool, IdsError> {
-    let git = Git::new(root);
+    let git = Git::bounded(
+        root,
+        crate::git::remote_query::QueryLimits::from_authority_or_default(root),
+    );
     let Some(local) = git.rev(REGISTRY_REF)? else {
         return Ok(false);
     };

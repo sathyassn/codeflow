@@ -1062,7 +1062,8 @@ fn held_tracking_ref(
     }
     let mut args = vec!["for-each-ref", "--count=1", "--format=%(refname)"];
     args.extend(patterns.iter().map(String::as_str));
-    Ok(git(root, &args)?.and_then(|out| {
+    // Its empty answer is initialization, so it is bounded too (TSK-327).
+    Ok(git_bounded(root, &args, limits)?.and_then(|out| {
         out.split('\n')
             .find(|name| !name.is_empty())
             .map(str::to_string)
