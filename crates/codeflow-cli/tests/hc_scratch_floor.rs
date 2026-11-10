@@ -29,8 +29,12 @@
 //! or the Claude sandbox):
 //! `CODEFLOW_SCRATCH_HC=1 cargo test -p codeflow-cli --test hc_scratch_floor -- --ignored --nocapture`
 
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
+
+use drain_pipe::drain_pipe;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -370,36 +374,18 @@ fn scratch_command(program: &Path, env: &Env) -> Command {
 
 /// Run `cmd`, killing it after `limit`. Output is stdout then stderr.
 fn run_bounded(cmd: &mut Command, limit: Duration) -> Ran {
-    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return Ran {
-                code: None,
-                output: format!("did not start: {err}"),
-                timed_out: false,
-            }
-        }
-    };
-    let readers: Vec<_> = [
-        child
-            .stdout
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-        child
-            .stderr
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|mut stream| {
-        thread::spawn(move || {
-            let mut text = String::new();
-            let _ = stream.read_to_string(&mut text);
-            text
-        })
+    run_piped(cmd, limit).unwrap_or_else(|err| Ran {
+        code: None,
+        output: format!("did not start: {err}"),
+        timed_out: false,
     })
-    .collect();
+}
+
+/// [`run_bounded`] once the command has started; the error is a failed spawn.
+fn run_piped(cmd: &mut Command, limit: Duration) -> std::io::Result<Ran> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stdout = drain_pipe(child.stdout.take());
+    let stderr = drain_pipe(child.stderr.take());
     let started = Instant::now();
     let mut timed_out = false;
     let status = loop {
@@ -414,15 +400,15 @@ fn run_bounded(cmd: &mut Command, limit: Duration) -> Ran {
             Err(_) => break None,
         }
     };
-    let output = readers
+    let output = [stdout, stderr]
         .into_iter()
-        .map(|reader| reader.join().unwrap_or_default())
+        .map(|reader| String::from_utf8_lossy(&reader.join().unwrap_or_default()).into_owned())
         .collect::<String>();
-    Ran {
+    Ok(Ran {
         code: status.and_then(|status| status.code()),
         output,
         timed_out,
-    }
+    })
 }
 
 /// `program` on the colon-separated `path`, the first executable found.
