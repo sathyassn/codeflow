@@ -7177,3 +7177,9 @@ mod line_sync_push;
 
 #[path = "acceptance_cli/own_line_criteria.rs"]
 mod own_line_criteria;
+
+#[path = "acceptance_cli/head_tree_records.rs"]
+mod head_tree_records;
+
+#[path = "acceptance_cli/merged_target_changes.rs"]
+mod merged_target_changes;

@@ -142,8 +142,35 @@ pub fn digest(bytes: &[u8]) -> String {
     hex
 }
 
+/// The build-output folder the gate uses: `CARGO_TARGET_DIR` as the process
+/// holds it, else `target`. A relative value joins `root`; an absolute one
+/// replaces it.
 pub fn target_dir(root: &Path) -> PathBuf {
-    root.join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
+    target_dir_for(root, &build_output_setting())
+}
+
+/// [`target_dir`] for a given `CARGO_TARGET_DIR` value (`target` when the
+/// variable is unset).
+pub fn target_dir_for(root: &Path, configured: &std::ffi::OsStr) -> PathBuf {
+    root.join(configured)
+}
+
+/// `CARGO_TARGET_DIR` as the process holds it, else `target`.
+#[cfg(not(test))]
+fn build_output_setting() -> std::ffi::OsString {
+    std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into())
+}
+
+/// This library's unit tests read the setting as unset, so the build output
+/// is `target` (TSK-1369). In a test process the variable names the folder
+/// cargo builds `CodeFlow` into, never the build output of the temporary
+/// project a test makes, so honouring it would send a test gate's evidence
+/// outside that project. Set values are covered by the tests of
+/// [`target_dir_for`] and [`target_anchor_for`] and, through the real binary,
+/// by the CLI journeys that set the variable (`test_gate_cli/containment.rs`).
+#[cfg(test)]
+fn build_output_setting() -> std::ffi::OsString {
+    "target".into()
 }
 
 /// The trusted folder the gate's evidence writes walk from, and the
@@ -159,7 +186,19 @@ pub fn target_dir(root: &Path) -> PathBuf {
 /// When the build-output path has no parent or a component that is not a
 /// UTF-8 name.
 pub fn target_anchor(root: &Path) -> Result<(PathBuf, String), TestingError> {
-    let configured = std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into());
+    target_anchor_for(root, &build_output_setting())
+}
+
+/// [`target_anchor`] for a given `CARGO_TARGET_DIR` value (`target` when the
+/// variable is unset).
+///
+/// # Errors
+///
+/// As [`target_anchor`].
+pub fn target_anchor_for(
+    root: &Path,
+    configured: &std::ffi::OsStr,
+) -> Result<(PathBuf, String), TestingError> {
     let path = Path::new(&configured);
     if path.is_relative() {
         if let Ok(relative) = crate::contained::relative_to(Path::new(""), path) {
@@ -971,5 +1010,56 @@ mod r22_regressions {
         std::os::unix::fs::symlink("sub", &sub).unwrap();
         let linked = tracked(dir.path()).unwrap();
         assert_ne!(linked, deleted);
+    }
+}
+
+/// TSK-1369: the build-output folder follows the `CARGO_TARGET_DIR` value it
+/// is given, so the adopter rule (TSK-1044) is tested without reading or
+/// changing the test process's environment.
+#[cfg(test)]
+mod build_output_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn the_default_is_the_project_target_folder() {
+        let root = Path::new("project");
+        let value = OsStr::new("target");
+        assert_eq!(target_dir_for(root, value), root.join("target"));
+        let (anchor, output) = target_anchor_for(root, value).unwrap();
+        assert_eq!((anchor.as_path(), output.as_str()), (root, "target"));
+    }
+
+    #[test]
+    fn a_relative_value_stays_under_the_project() {
+        let root = Path::new("project");
+        let value = OsStr::new("build/out");
+        assert_eq!(target_dir_for(root, value), root.join("build/out"));
+        let (anchor, output) = target_anchor_for(root, value).unwrap();
+        assert_eq!((anchor.as_path(), output.as_str()), (root, "build/out"));
+    }
+
+    #[test]
+    fn an_absolute_value_is_anchored_at_its_parent() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let folder = elsewhere.path().join("cargo-out");
+        let root = Path::new("project");
+        assert_eq!(target_dir_for(root, folder.as_os_str()), folder);
+        let (anchor, output) = target_anchor_for(root, folder.as_os_str()).unwrap();
+        assert_eq!(
+            (anchor.as_path(), output.as_str()),
+            (elsewhere.path(), "cargo-out")
+        );
+    }
+
+    #[test]
+    fn unit_tests_read_the_setting_as_unset() {
+        assert_eq!(build_output_setting(), OsStr::new("target"));
+        let root = Path::new("project");
+        assert_eq!(target_dir(root), root.join("target"));
+        assert_eq!(
+            target_anchor(root).unwrap(),
+            (root.to_path_buf(), "target".into())
+        );
     }
 }

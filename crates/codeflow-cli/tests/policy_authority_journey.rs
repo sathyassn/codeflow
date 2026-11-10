@@ -359,6 +359,30 @@ fn challenging_server() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) 
     (port, seen)
 }
 
+/// `doctor` once the remote has answered its question. The question runs
+/// inside the guard's fixed lookup wait (`GUARD_REMOTE_QUERY_SECS`, a
+/// product limit no policy changes), and on a loaded runner starting `git`
+/// and its HTTP helper can take longer than that wait, although the
+/// loopback server answers at once (TSK-1253, hosted Windows). Such a run
+/// says nothing about which headers were sent, so it is asked again; the
+/// requests of every attempt stay in the server's log and are all checked.
+/// Each attempt is one child run to its exit; the attempt count only stops
+/// a remote that never answers.
+fn doctor_until_answered(a: &Adopter) -> String {
+    use codeflow_core::hooks::guard_deadline::GUARD_REMOTE_QUERY_SECS;
+    const ATTEMPTS: usize = 6;
+    let expired = format!("no answer within {GUARD_REMOTE_QUERY_SECS}s per attempt");
+    let mut text = String::new();
+    for attempt in 1..=ATTEMPTS {
+        text = a.doctor();
+        if !text.contains(&expired) {
+            return text;
+        }
+        println!("doctor attempt {attempt}: the guard's lookup wait expired:\n{text}");
+    }
+    panic!("the remote answered none of {ATTEMPTS} questions: {text}");
+}
+
 /// Review round 03 F5: git's HTTP transport reads a `.netrc` in the
 /// inherited home whatever its configuration says, so a remote URL that
 /// names a host the attacker controls would receive those credentials
@@ -389,7 +413,7 @@ fn asking_the_remote_sends_no_stored_http_credentials() {
         }
         std::fs::write(a.temp.path().join(".netrc"), entry).unwrap();
         std::fs::write(a.temp.path().join("_netrc"), entry).unwrap();
-        let text = a.doctor();
+        let text = doctor_until_answered(&a);
         println!("doctor with a .netrc {entry:?}:\n{text}");
         let requests = seen.lock().unwrap().clone();
         assert!(!requests.is_empty(), "the remote was not asked: {text}");
@@ -406,7 +430,9 @@ fn asking_the_remote_sends_no_stored_http_credentials() {
 
 /// TSK-1301: a folder holding a `git` that answers `ls-remote` only after
 /// `delay` (or never, for `None`) and passes every other command to the
-/// real git, and the `PATH` that puts it first.
+/// real git, and the `PATH` that puts it first. Each `ls-remote` it is
+/// asked adds a line to [`ls_remote_calls`] first, so a test can tell "asked
+/// nothing" from "answered fast" without a clock (TSK-1253).
 #[cfg(unix)]
 fn slow_ls_remote(a: &Adopter, delay: Option<&str>) -> std::ffi::OsString {
     use std::os::unix::fs::PermissionsExt as _;
@@ -421,7 +447,8 @@ fn slow_ls_remote(a: &Adopter, delay: Option<&str>) -> std::ffi::OsString {
         |delay| format!("sleep {delay}"),
     );
     let script = format!(
-        "#!/bin/sh\nfor word in \"$@\"; do\n  if [ \"$word\" = ls-remote ]; then\n    {wait}\n    break\n  fi\ndone\nexec '{}' \"$@\"\n",
+        "#!/bin/sh\nfor word in \"$@\"; do\n  if [ \"$word\" = ls-remote ]; then\n    echo ls-remote >> '{}'\n    {wait}\n    break\n  fi\ndone\nexec '{}' \"$@\"\n",
+        calls_log(a).display(),
         real.display()
     );
     let git = bin.join("git");
@@ -431,6 +458,17 @@ fn slow_ls_remote(a: &Adopter, delay: Option<&str>) -> std::ffi::OsString {
         std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap()
+}
+
+#[cfg(unix)]
+fn calls_log(a: &Adopter) -> std::path::PathBuf {
+    a.temp.path().join("ls-remote-calls")
+}
+
+/// How many `ls-remote` questions the [`slow_ls_remote`] git has been asked.
+#[cfg(unix)]
+fn ls_remote_calls(a: &Adopter) -> usize {
+    std::fs::read_to_string(calls_log(a)).map_or(0, |log| log.lines().count())
 }
 
 #[cfg(unix)]
@@ -647,22 +685,23 @@ fn no_configured_wait_reaches_a_guard() {
             )),
             "{text}"
         );
+        assert_eq!(ls_remote_calls(&a), 1, "one attempt: {text}");
 
         let (a, _) = Adopter::with_line();
         let payload = json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git push --force-with-lease origin task/TSK-007-cert"}})
             .to_string();
         let silent = slow_ls_remote(&a, None);
         a.land_main_policy(&policy);
+        let asked = ls_remote_calls(&a);
         let started = Instant::now();
         let guard = a.codeflow_on(&silent, &["hook", "git-guard"], &payload);
         let took = started.elapsed();
         let text = said(&guard);
         println!("authority, keys {seconds} s and {attempts} ({took:?}):\n{text}");
         assert_eq!(guard.status.code(), Some(0), "{text}");
-        assert!(
-            took < Duration::from_secs(GUARD_REMOTE_QUERY_SECS / 2),
-            "{took:?}"
-        );
+        // It asked the remote nothing, read from the fake git's log rather
+        // than from a clock a loaded runner can stretch (TSK-1253).
+        assert_eq!(ls_remote_calls(&a), asked, "{took:?}: {text}");
     }
 }
 
@@ -808,6 +847,7 @@ fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
         "{text}"
     );
     assert!(text.contains("run git fetch origin"), "{text}");
+    assert_eq!(ls_remote_calls(&a), 1, "one attempt: {text}");
 
     // The route the refusal names has to be open to the session it refused.
     let fetch_payload =
@@ -828,14 +868,74 @@ fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
     {
         a.git(&["remote", "set-head", "origin", "main"]);
     }
+    let asked = ls_remote_calls(&a);
     let started = Instant::now();
     let guard = a.codeflow_on(&silent, &["hook", "git-guard"], &payload);
     let took = started.elapsed();
     let text = said(&guard);
     println!("guard after the fetch ({took:?}):\n{text}");
     assert_eq!(guard.status.code(), Some(0), "{text}");
-    assert!(
-        took < Duration::from_secs(GUARD_REMOTE_QUERY_SECS / 2),
-        "{took:?}"
+    // It read local refs and asked the remote nothing (TSK-1253: an event,
+    // where a 5 s bound stood before).
+    assert_eq!(ls_remote_calls(&a), asked, "{took:?}: {text}");
+}
+
+/// TSK-1184 AC-1, AC-3 and AC-5: a fresh adopter whose remote is empty and
+/// configured as git uses it is labelled initialization, and its first push
+/// passes the guard and the pre-push hook. When an `insteadOf` rewrite makes
+/// git use a populated repository instead, doctor, the git-guard and
+/// pre-commit refuse with both identities named and never read `HEAD`.
+#[test]
+fn a_rewritten_empty_remote_refuses_and_a_matching_fresh_remote_pushes() {
+    let a = Adopter::new();
+    let empty = a.temp.path().join("empty.git");
+    let populated = a.temp.path().join("populated.git");
+    let empty = empty.to_str().unwrap();
+    let populated = populated.to_str().unwrap();
+    for bare in [empty, populated] {
+        a.git(&["init", "-q", "--bare", "-b", "main", bare]);
+    }
+    a.git(&["remote", "add", "origin", empty]);
+    a.commit(
+        &[(".codeflow/policy.json", MAIN_POLICY)],
+        "chore: adopt codeflow",
     );
+    a.git(&["push", "-q", populated, "main"]);
+    a.git(&["checkout", "-q", "-b", "feat/first"]);
+    let head = a.commit(&[("README.md", "first\n")], "docs: first change");
+
+    let text = a.doctor();
+    println!("fresh remote:\n{text}");
+    assert!(
+        text.contains("initialization: origin advertises no refs"),
+        "{text}"
+    );
+    let guard = a.guard("git push origin feat/first");
+    assert_eq!(guard.status.code(), Some(0), "{}", said(&guard));
+    let push = a.codeflow(
+        &["git-hook", "pre-push", "origin", empty],
+        &format!("refs/heads/feat/first {head} refs/heads/feat/first {ZERO}\n"),
+    );
+    let text = said(&push);
+    println!("first push:\n{text}");
+    assert_eq!(push.status.code(), Some(0), "{text}");
+
+    a.git(&["config", &format!("url.{populated}.insteadOf"), empty]);
+    let text = a.doctor();
+    println!("rewritten remote:\n{text}");
+    assert!(text.contains(empty) && text.contains(populated), "{text}");
+    assert!(text.contains("never read from HEAD"), "{text}");
+    assert!(!text.contains("initialization"), "{text}");
+    let guard = a.guard("git commit -m 'docs: x'");
+    let text = said(&guard);
+    println!("git-guard, rewritten remote:\n{text}");
+    assert_eq!(guard.status.code(), Some(2), "{text}");
+    assert!(text.contains(populated), "{text}");
+    a.write("README.md", "second\n");
+    a.git(&["add", "README.md"]);
+    let commit = a.codeflow(&["git-hook", "pre-commit"], "");
+    let text = said(&commit);
+    println!("pre-commit, rewritten remote:\n{text}");
+    assert_ne!(commit.status.code(), Some(0), "{text}");
+    assert!(text.contains(populated), "{text}");
 }
