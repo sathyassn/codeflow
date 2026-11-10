@@ -219,7 +219,7 @@ pub fn ask(
 ///
 /// Returns why the destination could not be asked.
 pub fn advertisement(repo_root: &Path, url: &str, limits: QueryLimits) -> Result<String, String> {
-    crate::git::remote_query::require_unredirected(repo_root, url)
+    crate::git::remote_query::require_unredirected(repo_root, url, limits)
         .and_then(|()| {
             crate::git::remote_query::ls_remote(
                 repo_root,

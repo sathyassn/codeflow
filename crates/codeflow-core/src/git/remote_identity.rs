@@ -322,7 +322,12 @@ const PATH_CONDITIONAL_REFUSED: &[&str] = &[
 /// Whether git applies such a file depends on the path a command reaches
 /// the repository by (a symbolic link, `GIT_DIR` as written), which this
 /// read cannot know, so its answer would not bind a later fetch or push.
-fn refuse_path_conditional_remote_settings(entries: &[Entry], root: &Path) -> Result<(), String> {
+/// Each included file is read within the caller's `limits`.
+fn refuse_path_conditional_remote_settings(
+    entries: &[Entry],
+    root: &Path,
+    limits: QueryLimits,
+) -> Result<(), String> {
     for entry in entries {
         let Some(condition) = entry
             .key
@@ -366,7 +371,7 @@ fn refuse_path_conditional_remote_settings(entries: &[Entry], root: &Path) -> Re
             .args(["config", "--null", "--no-includes", "--list", "--file"])
             .arg(&file)
             .env("LC_ALL", "C");
-        let listed = super::remote_query::bounded_raw(command, QueryLimits::guard().timeout())
+        let listed = super::remote_query::bounded_raw(command, limits.timeout())
             .and_then(|bytes| parse_listing(&bytes, false))
             .map_err(|why| {
                 format!(
@@ -1274,7 +1279,7 @@ pub fn verify(root: &Path, name: &str, raw: &str, limits: QueryLimits) -> Result
         )
     })?;
     refuse_transport_settings(&entries, name).map_err(|why| format!("{why}; {remedy}"))?;
-    refuse_path_conditional_remote_settings(&entries, root)
+    refuse_path_conditional_remote_settings(&entries, root, limits)
         .map_err(|why| format!("{why}; {remedy}"))?;
     for (push, verb) in [(false, "fetches from"), (true, "pushes to")] {
         let urls = effective_urls(root, name, push, limits).map_err(|why| {
@@ -1413,11 +1418,21 @@ mod tests {
         assert!(!listed[0].exact);
         assert!(listed[1].exact);
         assert!(refuse_transport_settings(&listed, "origin").is_ok());
-        assert!(refuse_path_conditional_remote_settings(&listed, Path::new("/r")).is_ok());
+        assert!(refuse_path_conditional_remote_settings(
+            &listed,
+            Path::new("/r"),
+            QueryLimits::guard()
+        )
+        .is_ok());
         let include =
             parse_entries(b"file:/r/.git/config\0includeif.gitdir:/x/.git.path\n/w\xff.config\0")
                 .unwrap();
-        let error = refuse_path_conditional_remote_settings(&include, Path::new("/r")).unwrap_err();
+        let error = refuse_path_conditional_remote_settings(
+            &include,
+            Path::new("/r"),
+            QueryLimits::guard(),
+        )
+        .unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");
     }
 
@@ -2009,7 +2024,9 @@ mod tests {
                 value: dir.path().join("ssh.config").to_str().unwrap().into(),
                 exact: true,
             }];
-            let error = refuse_path_conditional_remote_settings(&include, dir.path()).unwrap_err();
+            let error =
+                refuse_path_conditional_remote_settings(&include, dir.path(), QueryLimits::guard())
+                    .unwrap_err();
             assert!(error.contains(key), "{error}");
         }
     }

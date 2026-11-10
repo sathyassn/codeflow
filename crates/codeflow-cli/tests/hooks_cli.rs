@@ -5835,6 +5835,81 @@ fn ac6_a_hidden_rewrite_never_selects_initialization() {
     }
 }
 
+/// TSK-327 AC-6, the guard wait: the landed-policy emptiness query's
+/// destination check reads `git config -z --list` within the guard's
+/// lookup wait. A `git` first on `PATH` passes every other call to the
+/// real git, so the identity check finishes, and stalls only that listing
+/// for 40 s. Before the change the read had no deadline: the load waited
+/// out the stall and then chose initialization. Now it refuses within the
+/// wait (10 s) and never chooses initialization.
+#[cfg(unix)]
+#[test]
+fn ac6_a_stalled_destination_check_refuses_within_the_guard_wait() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git is on PATH");
+    let top = tempfile::tempdir().unwrap();
+    let empty = top.path().join("empty.git");
+    git(
+        top.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            empty.to_str().unwrap(),
+        ],
+    );
+    let adopter = top.path().join("adopter");
+    std::fs::create_dir(&adopter).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &adopter,
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", &adopter, &["switch", "-c", "feat/stall"]);
+    git(
+        &adopter,
+        &["remote", "add", "origin", empty.to_str().unwrap()],
+    );
+    let stub = top.path().join("stub");
+    std::fs::create_dir(&stub).unwrap();
+    let script = stub.join("git");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in\n  *\" config -z --list \") sleep 40 ;;\nesac\nexec '{}' \"$@\"\n",
+            real_git.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(stub.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let started = std::time::Instant::now();
+    let out = codeflow()
+        .args(["doctor", "--check", "policy-source"])
+        .current_dir(&adopter)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    let took = started.elapsed();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!text.contains("initialization"), "{took:?}: {text}");
+    assert!(text.contains("no answer within 10s"), "{took:?}: {text}");
+    assert!(text.contains("never read from HEAD"), "{took:?}: {text}");
+    assert!(
+        took < std::time::Duration::from_secs(30),
+        "{took:?}: {text}"
+    );
+}
+
 #[test]
 fn push_set_refuses_initialization_under_a_command_line_transport_setting() {
     // TSK-327: an empty destination is initialization only when the query

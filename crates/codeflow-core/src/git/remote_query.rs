@@ -272,14 +272,15 @@ pub fn ls_remote(root: &Path, args: &[&str], limits: QueryLimits) -> Result<Stri
 /// - a `remotes/<url>` or `branches/<url>` file, when `url` has no directory
 ///   separator and git could read it as a legacy remote name.
 ///
-/// A configuration that cannot be read refuses too. Nothing is rewritten
-/// here: the query either asks `url` exactly or does not ask.
+/// A configuration that cannot be read within the caller's `limits` refuses
+/// too, so a stalled read never holds a guard past its lookup wait. Nothing
+/// is rewritten here: the query either asks `url` exactly or does not ask.
 ///
 /// # Errors
 ///
 /// Returns what would redirect the query, or why the configuration could not
 /// be read.
-pub fn require_unredirected(root: &Path, url: &str) -> Result<(), String> {
+pub fn require_unredirected(root: &Path, url: &str, limits: QueryLimits) -> Result<(), String> {
     let shown = display_url(url);
     let refuse = |why: String| {
         format!(
@@ -290,7 +291,7 @@ pub fn require_unredirected(root: &Path, url: &str) -> Result<(), String> {
     if url.is_empty() || url.starts_with('-') {
         return Err(refuse("the URL is empty or starts with '-'".to_string()));
     }
-    if let Some(overlay) = destination_overlay(root, url).map_err(refuse)? {
+    if let Some(overlay) = destination_overlay(root, url, limits).map_err(refuse)? {
         return Err(refuse(format!(
             "{overlay} would send the destination query somewhere other than this URL; remove it, or push to the URL it names"
         )));
@@ -299,23 +300,22 @@ pub fn require_unredirected(root: &Path, url: &str) -> Result<(), String> {
 }
 
 /// What in the configuration at `root` would redirect a query of `url`, if
-/// anything (see [`require_unredirected`]).
-fn destination_overlay(root: &Path, url: &str) -> Result<Option<String>, String> {
-    let out = crate::git::judging_command()
+/// anything (see [`require_unredirected`]). The listing is read within
+/// `limits` and [`MAX_ANSWER_BYTES`].
+fn destination_overlay(
+    root: &Path,
+    url: &str,
+    limits: QueryLimits,
+) -> Result<Option<String>, String> {
+    let mut command = crate::git::judging_command();
+    command
         .arg("-C")
         .arg(root)
         .args(["config", "-z", "--list"])
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot read the git configuration: {error}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "cannot read the git configuration: git config failed ({})",
-            out.status
-        ));
-    }
-    if let Some(overlay) = overlay_in(&out.stdout, url) {
+        .env("LC_ALL", "C");
+    let listed = bounded_raw(command, limits.timeout())
+        .map_err(|why| format!("cannot read the git configuration: {why}"))?;
+    if let Some(overlay) = overlay_in(&listed, url) {
         return Ok(Some(overlay));
     }
     legacy_remote_file(root, url)
@@ -458,7 +458,7 @@ pub fn fetch_objects(
     refs: &[&str],
     limits: QueryLimits,
 ) -> Result<(), String> {
-    require_unredirected(root, url)?;
+    require_unredirected(root, url, limits)?;
     let mut all = vec![
         "fetch",
         "--quiet",
@@ -630,7 +630,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
         .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", batch_ssh_command(root)?);
+        .env("GIT_SSH_COMMAND", batch_ssh_command(root, deadline)?);
     bounded(command, deadline)
 }
 
@@ -827,7 +827,8 @@ fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
 /// OS text rule (issue 79): the command is executed, so it must be exactly what
 /// git would run. A value that is not valid UTF-8 cannot be passed on as text,
 /// and a lossy spelling would run a different program, so the query refuses.
-fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
+/// The configuration read runs within `deadline`, as the query does.
+fn batch_ssh_command(root: &Path, deadline: Duration) -> Result<String, Failure> {
     let not_utf8 = |name: &str| {
         Failure::Other(format!(
             "{name} is not valid UTF-8, so the remote is not asked"
@@ -846,27 +847,31 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     // another program.
     let mut configured = from_env("GIT_SSH_COMMAND")?;
     if configured.is_none() {
-        let out = push_view()
+        let mut command = push_view();
+        command
             .arg("-C")
             .arg(root)
-            .args(["config", "--null", "--get", "core.sshCommand"])
-            .output()
-            .map_err(|error| Failure::Other(format!("cannot read core.sshCommand: {error}")))?;
-        if out.status.success() {
-            // `--null` frames the value with a NUL, so a value that ends in a
-            // carriage return keeps it.
-            let framed = out.stdout.strip_suffix(&[0]).ok_or_else(|| {
-                Failure::Other("cannot read core.sshCommand: missing NUL framing".into())
-            })?;
-            let value = std::str::from_utf8(framed)
-                .map_err(|_| not_utf8("core.sshCommand"))?
-                .to_string();
-            configured = Some(value);
-        } else if out.status.code() != Some(1) {
-            return Err(Failure::Other(format!(
-                "cannot read core.sshCommand: git config failed ({})",
-                out.status
-            )));
+            .args(["config", "--null", "--get", "core.sshCommand"]);
+        match bounded_bytes(command, deadline) {
+            Ok(answer) => {
+                // `--null` frames the value with a NUL, so a value that ends
+                // in a carriage return keeps it.
+                let framed = answer.strip_suffix(&[0]).ok_or_else(|| {
+                    Failure::Other("cannot read core.sshCommand: missing NUL framing".into())
+                })?;
+                let value = std::str::from_utf8(framed)
+                    .map_err(|_| not_utf8("core.sshCommand"))?
+                    .to_string();
+                configured = Some(value);
+            }
+            // Git exits 1 when the key is not set.
+            Err(Failure::Exit(Some(1))) => {}
+            Err(why) => {
+                return Err(Failure::Other(format!(
+                    "cannot read core.sshCommand: {}",
+                    local_read_failure(why)
+                )))
+            }
         }
     }
     if configured.is_none() {
@@ -914,23 +919,18 @@ fn push_view() -> std::process::Command {
 ///
 /// # Errors
 ///
-/// Returns why the command-line configuration could not be read.
-pub fn command_line_transport(root: &Path) -> Result<Option<String>, String> {
-    let out = push_view()
+/// Returns why the command-line configuration could not be read within
+/// `limits`.
+pub fn command_line_transport(root: &Path, limits: QueryLimits) -> Result<Option<String>, String> {
+    let mut command = push_view();
+    command
         .arg("-C")
         .arg(root)
         .args(["config", "-z", "--list", "--show-scope"])
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot read the command-line git configuration: {error}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "cannot read the command-line git configuration: git config failed ({})",
-            out.status
-        ));
-    }
-    Ok(transport_in(&out.stdout))
+        .env("LC_ALL", "C");
+    let listed = bounded_raw(command, limits.timeout())
+        .map_err(|why| format!("cannot read the command-line git configuration: {why}"))?;
+    Ok(transport_in(&listed))
 }
 
 /// [`command_line_transport`] over `git config -z --list --show-scope`
@@ -1351,7 +1351,7 @@ mod tests {
         let dest = dir.path().join("dest.git");
         let url = dest.to_str().unwrap();
         // The developer's own files could name this path only by accident.
-        if require_unredirected(dir.path(), url).is_err() {
+        if require_unredirected(dir.path(), url, QueryLimits::guard()).is_err() {
             return;
         }
         repo.config()
@@ -1361,22 +1361,23 @@ mod tests {
                 url,
             )
             .unwrap();
-        let refused = require_unredirected(dir.path(), url).unwrap_err();
+        let refused = require_unredirected(dir.path(), url, QueryLimits::guard()).unwrap_err();
         assert!(refused.contains("insteadOf"), "{refused}");
         assert!(refused.contains("cannot be verified"), "{refused}");
         let clean = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(clean.path()).unwrap();
-        assert!(require_unredirected(clean.path(), "dest").is_ok());
+        assert!(require_unredirected(clean.path(), "dest", QueryLimits::guard()).is_ok());
         std::fs::create_dir_all(repo.path().join("remotes")).unwrap();
         std::fs::write(
             repo.path().join("remotes").join("dest"),
             "URL: /elsewhere\n",
         )
         .unwrap();
-        let refused = require_unredirected(clean.path(), "dest").unwrap_err();
+        let refused = require_unredirected(clean.path(), "dest", QueryLimits::guard()).unwrap_err();
         assert!(refused.contains("remotes/dest"), "{refused}");
-        assert!(require_unredirected(clean.path(), "./dest").is_ok());
-        let refused = require_unredirected(clean.path(), "--upload-pack=x").unwrap_err();
+        assert!(require_unredirected(clean.path(), "./dest", QueryLimits::guard()).is_ok());
+        let refused = require_unredirected(clean.path(), "--upload-pack=x", QueryLimits::guard())
+            .unwrap_err();
         assert!(refused.contains("starts with '-'"), "{refused}");
     }
 
@@ -1646,11 +1647,11 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
-        assert!(batch_ssh_command(dir.path()).is_ok());
+        assert!(batch_ssh_command(dir.path(), QueryLimits::guard().timeout()).is_ok());
         let path = repo.path().join("config");
         std::fs::write(path, "[broken\n").unwrap();
         assert!(
-            batch_ssh_command(dir.path()).is_err(),
+            batch_ssh_command(dir.path(), QueryLimits::guard().timeout()).is_err(),
             "failed config must not choose ssh"
         );
     }
@@ -1721,7 +1722,9 @@ mod tests {
         let mut text = std::fs::read(&config).unwrap();
         text.extend_from_slice(b"[core]\n\tsshCommand = ssh \xff\n");
         std::fs::write(&config, text).unwrap();
-        let error = batch_ssh_command(dir.path()).err().unwrap();
+        let error = batch_ssh_command(dir.path(), QueryLimits::guard().timeout())
+            .err()
+            .unwrap();
         assert!(
             matches!(error, Failure::Other(ref why) if why.contains("not valid UTF-8")),
             "refused"
@@ -1741,7 +1744,9 @@ mod tests {
         let mut text = std::fs::read(&config).unwrap();
         text.extend_from_slice(b"[core]\n\tsshCommand = \"ssh-wrapper\r\"\n");
         std::fs::write(&config, text).unwrap();
-        let command = batch_ssh_command(dir.path()).ok().unwrap();
+        let command = batch_ssh_command(dir.path(), QueryLimits::guard().timeout())
+            .ok()
+            .unwrap();
         assert_eq!(command, "ssh-wrapper\r -o BatchMode=yes");
     }
 
@@ -1758,7 +1763,9 @@ mod tests {
         let mut text = std::fs::read(&config).unwrap();
         text.extend_from_slice(b"[core]\n\tsshCommand =\n");
         std::fs::write(&config, text).unwrap();
-        let error = batch_ssh_command(dir.path()).err().unwrap();
+        let error = batch_ssh_command(dir.path(), QueryLimits::guard().timeout())
+            .err()
+            .unwrap();
         assert!(
             matches!(error, Failure::Other(ref why) if why.contains("empty")),
             "refused"

@@ -205,8 +205,10 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
             crate::git::remote_identity::verify(root, remote, url, limits)
                 .map_err(Unasked::Identity)?;
             // TSK-327 AC-6: the destination the pre-push query validates
-            // (AC-1) is validated here too, in the same isolated view.
-            crate::git::remote_query::require_unredirected(root, url).map_err(Unasked::Identity)?;
+            // (AC-1) is validated here too, in the same isolated view and
+            // within the same guard wait.
+            crate::git::remote_query::require_unredirected(root, url, limits)
+                .map_err(Unasked::Identity)?;
             crate::git::remote_query::advertises_any_ref(root, url, limits).map_err(Unasked::Query)
         }
         [] => Err(Unasked::Query(format!("{key} is not set"))),

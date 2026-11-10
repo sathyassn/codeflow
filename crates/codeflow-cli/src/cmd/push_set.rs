@@ -1179,7 +1179,7 @@ fn judged_by(
         destination.listing(root).map_err(str::to_string)?;
         // An empty answer is trusted only when the query connected as the
         // push did (TSK-327).
-        if let Some(setting) = remote_query::command_line_transport(root)? {
+        if let Some(setting) = remote_query::command_line_transport(root, destination.limits)? {
             return Err(format!(
                 "the destination advertises no branches, but the push connected with {setting}, which the destination query does not apply, so the empty answer may not be the destination's; push without it, or set it in the repository configuration"
             ));
