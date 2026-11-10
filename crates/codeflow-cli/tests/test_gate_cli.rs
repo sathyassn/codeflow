@@ -114,6 +114,67 @@ fn every_selection_control_names_why_every_target_runs() {
     }
 }
 
+/// TSK-353 (AC-9, AC-10): with this repository's own mapping, `codeflow
+/// test guards` names the two tests PR 525's quick run missed for its
+/// managed skill assets and its record, prints an unmapped path as
+/// unguarded, and marks its declared selection as not applied.
+#[test]
+fn guards_name_the_tests_pr_525_missed_and_report_unguarded_paths() {
+    let own = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.codeflow/test-config.json"),
+    )
+    .unwrap();
+    let dir = repo(&own);
+    let home = tempfile::tempdir().unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: own config"]);
+    for (path, text) in [
+        (
+            "assets/base/agents/skills/cf-present/resources/tokens.md",
+            "tokens\n",
+        ),
+        (
+            "project-management/tasks/TSK-1162.md",
+            "[swatches](../../docs/verification/evidence/tsk-1162/ink-swatches.html)\n",
+        ),
+        ("notes.txt", "unmapped\n"),
+    ] {
+        let file = dir.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "guards", "--since", "HEAD"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for needle in [
+        "test guards: 3 changed path(s) against ",
+        "(--since HEAD)",
+        "guarded: assets/base/agents/skills/cf-present/resources/tokens.md\n",
+        "  cargo test -p codeflow-cli --test init_e2e\n",
+        "guarded: project-management/tasks/TSK-1162.md\n",
+        "  cargo test -p codeflow-cli --test release_contract\n",
+        "unguarded: notes.txt (no guards rule names a test for it)\n",
+        "run these guarding tests:\n",
+        "declared selection for quick (not applied: every run still executes every eligible target, ADR-0089):\n",
+        "  every target: ",
+    ] {
+        assert!(stdout.contains(needle), "{needle:?} in {stdout}");
+    }
+    let no_base = run(dir.path(), home.path(), &["test", "guards"]);
+    assert_eq!(no_base.status.code(), Some(1), "{}", stderr(&no_base));
+    assert!(
+        stderr(&no_base).contains("no comparison base: "),
+        "{}",
+        stderr(&no_base)
+    );
+    let mixed = run(dir.path(), home.path(), &["test", "--all", "guards"]);
+    assert_eq!(mixed.status.code(), Some(2), "{}", stderr(&mixed));
+}
+
 /// What a spawned gate has written to stdout, read to the end on its own
 /// thread (`join` returns the bytes once the gate has exited).
 type Stdout = std::thread::JoinHandle<Vec<u8>>;

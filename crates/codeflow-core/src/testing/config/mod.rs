@@ -43,6 +43,23 @@ pub struct TestConfig {
     /// Test targets.
     #[serde(default)]
     pub targets: Vec<TargetConfig>,
+
+    /// The tests that guard each class of path, which `codeflow test
+    /// guards` names for a change. A touched path no rule matches is
+    /// reported as unguarded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<GuardRule>,
+}
+
+/// Paths and the tests that guard them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuardRule {
+    /// Repository path globs, matched like `narrow`.
+    pub paths: Vec<String>,
+    /// The commands that run the guarding tests, such as
+    /// `cargo test -p codeflow-cli --test init_e2e`.
+    pub tests: Vec<String>,
 }
 
 /// Default class for undeclared targets in a configured quick mode.
@@ -585,6 +602,7 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "execution",
         "defaults",
         "targets",
+        "guards",
     ];
     if let Some(object) = raw.as_object() {
         for key in object.keys() {
@@ -642,6 +660,15 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
         Ok(())
     };
     validate_globs(&config.execution.run_everything)?;
+    for rule in &config.guards {
+        if rule.paths.is_empty() || rule.tests.iter().all(|test| test.trim().is_empty()) {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: "a guards rule needs at least one path and one test".into(),
+            });
+        }
+        validate_globs(&rule.paths)?;
+    }
     for rule in config.defaults.coverage.iter().chain(
         config
             .targets
@@ -1261,6 +1288,7 @@ mod tests {
             schema_version: "1.0".to_string(),
             execution: ExecutionConfig::default(),
             defaults: DefaultsConfig::default(),
+            guards: Vec::new(),
             targets: vec![TargetConfig {
                 name: "test".to_string(),
                 enabled: true,

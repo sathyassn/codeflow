@@ -76,6 +76,7 @@ pub fn run_wizard(
         schema_version: "1.0".to_string(),
         execution: ExecutionConfig::default(),
         defaults: crate::testing::config::DefaultsConfig::default(),
+        guards: Vec::new(),
         targets,
     };
 

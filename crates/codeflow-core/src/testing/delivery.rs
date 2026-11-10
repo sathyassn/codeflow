@@ -477,7 +477,7 @@ pub fn select(targets: &[TargetConfig], mode: &str, options: &GateOptions) -> Se
 }
 
 /// Add every target the selection requires, transitively.
-fn with_prerequisites(
+pub(super) fn with_prerequisites(
     targets: &[TargetConfig],
     mut selected: BTreeSet<String>,
 ) -> BTreeSet<String> {
@@ -725,6 +725,44 @@ mod tests {
         );
         assert_eq!(only.selected, every, "--only keeps the prerequisite");
         assert!(only.skipped.is_empty());
+    }
+
+    /// TSK-353 under credit row B: this repository's declared inputs narrow
+    /// no run. Every eligible target of each mode runs with the ADR-0089
+    /// reason, including the `content` targets whose declarations would
+    /// leave out a records-only change and the targets that read docs.
+    #[test]
+    fn this_repositorys_declarations_narrow_no_run() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.codeflow/test-config.json");
+        let config = super::super::config::load_test_config(&path).unwrap();
+        let content: Vec<_> = config
+            .targets
+            .iter()
+            .filter(|t| t.input_class == Some(super::super::config::InputClass::Content))
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(content.contains(&"rust-clippy"), "{content:?}");
+        for mode in ["quick", "essential", "full"] {
+            let every: BTreeSet<String> = config
+                .targets
+                .iter()
+                .filter(|t| t.enabled && t.modes.contains_key(mode))
+                .map(|t| t.name.clone())
+                .collect();
+            for since in [None, Some("HEAD".to_string())] {
+                let selection = select(
+                    &config.targets,
+                    mode,
+                    &GateOptions {
+                        since: since.clone(),
+                        ..GateOptions::default()
+                    },
+                );
+                assert_eq!(selection.selected, every, "{mode} {since:?}");
+                assert!(selection.skipped.is_empty(), "{mode} {since:?}");
+                assert!(selection.reason.contains("ADR-0089"), "{mode}");
+            }
+        }
     }
 
     /// A repository whose index and first commit hold `caf\xe9.txt`, a name

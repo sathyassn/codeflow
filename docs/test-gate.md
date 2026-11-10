@@ -95,6 +95,17 @@ continue executing their targets until their dependencies are declared.
 | `cleanup_grace_seconds` | Time allowed after a target stops for termination, reaping and pipe draining, default 5 seconds, from 1 through 3600. On Unix a supervised process group still running at half this time is killed; on Windows the target's job is terminated when it stops. Cleanup that does not finish is a non-pass |
 | `stall_timeout_seconds` | Heavy-target inactivity window, default 300 seconds. Early stalls require valid scoped CPU accounting; otherwise the run explicitly uses its ceiling |
 
+A top-level `guards` list maps path globs to the commands that run the tests
+guarding those paths, each rule as `{"paths": [...], "tests": [...]}`.
+`codeflow test guards` reads the change from its comparison base to the
+working tree (the merge base of `HEAD` with the task's line, or
+`--since <rev>`), prints each touched path's guarding tests and each path no
+rule covers as unguarded, and lists the targets the `narrow` and
+`input_class` declarations would select in a mode. No run applies that
+selection while ADR-0089 stands: a deletion, rename, `run_everything` path
+or undeclared path would select every target, and a target that is not
+`content` class, or declares no inputs, would always run.
+
 `timeout_seconds` and `stall_timeout_seconds` accept integers from 1 through 4611686018427386 seconds.
 The loader and schema reject zero, fractional values and values beyond that
 bound. A stall window greater than the ceiling is valid; the ceiling wins.

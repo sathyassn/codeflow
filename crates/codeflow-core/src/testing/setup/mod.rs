@@ -107,6 +107,7 @@ pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
         schema_version: "1.0".to_string(),
         execution: config::ExecutionConfig::default(),
         defaults: config::DefaultsConfig::default(),
+        guards: Vec::new(),
         targets: detected.into_iter().map(|d| d.config).collect(),
     };
 
@@ -300,6 +301,7 @@ pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
         schema_version: "1.0".to_string(),
         execution: config::ExecutionConfig::default(),
         defaults: config::DefaultsConfig::default(),
+        guards: Vec::new(),
         targets: Vec::new(),
     };
 
@@ -807,6 +809,7 @@ mod tests {
             schema_version: "1.0".to_string(),
             execution: config::ExecutionConfig::default(),
             defaults: config::DefaultsConfig::default(),
+            guards: Vec::new(),
             targets: vec![TargetConfig {
                 name: "rust-core".to_string(),
                 enabled: true,
@@ -886,6 +889,7 @@ mod tests {
             schema_version: "1.0".to_string(),
             execution: config::ExecutionConfig::default(),
             defaults: config::DefaultsConfig::default(),
+            guards: Vec::new(),
             targets: vec![TargetConfig {
                 name: "shell-scripts".to_string(),
                 enabled: true,
