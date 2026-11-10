@@ -1310,6 +1310,167 @@ fn native_routing_policy_trigger_is_shared_with_catalog_validation() {
     assert_eq!(result.participants[1].participant, "extra");
 }
 
+// TSK-1292: every effort floor and launch rule is catalog data.
+
+/// The fixture with the engineering seat (`quartz-seat`) at medium and its
+/// seat routes moved down to medium: catalog data only.
+fn medium_engineering_seat() -> Value {
+    let mut value = fixture();
+    value["seats"][1]["effort"] = json!("medium");
+    for duty in value["duties"].as_object_mut().unwrap().values_mut() {
+        for participant in duty["required"].as_array_mut().unwrap() {
+            for alternative in participant["alternatives"].as_array_mut().unwrap() {
+                if alternative["target"]["id"] == "quartz-seat" {
+                    alternative["effort"] = json!("medium");
+                }
+            }
+        }
+    }
+    value
+}
+
+#[test]
+fn a_seat_effort_field_sets_its_default_and_floor() {
+    let c = parse(&medium_engineering_seat()).unwrap();
+    let observed = BTreeMap::new();
+    let review = c.resolve(&request("unit-review", &observed)).unwrap();
+    assert_eq!(review.participants[0].seat.as_deref(), Some("quartz-seat"));
+    assert_eq!(review.participants[0].effort, Effort::Medium);
+    // Another seat keeps its own floor: the design seat still refuses medium.
+    let mut value = medium_engineering_seat();
+    value["duties"]["design"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("below its effort floor"));
+    // The seat's own floor is data: below it is refused at resolve time.
+    let mut c = parse(&medium_engineering_seat()).unwrap();
+    c.seats[1].effort = Effort::High;
+    assert!(c
+        .resolve(&request("unit-review", &observed))
+        .unwrap_err()
+        .contains("below its effort floor"));
+}
+
+#[test]
+fn a_seat_rises_to_high_only_on_its_high_when_policies() {
+    let mut value = medium_engineering_seat();
+    value["seats"][1]["high_when"] = json!(["extra-review"]);
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let plain = c.resolve(&request("unit-review", &observed)).unwrap();
+    assert_eq!(plain.participants[0].effort, Effort::Medium);
+    let facts = vec!["material".to_owned()];
+    let mut req = request("unit-review", &observed);
+    req.trigger_facts = &facts;
+    let raised = c.resolve(&req).unwrap();
+    assert_eq!(raised.participants[0].seat.as_deref(), Some("quartz-seat"));
+    assert_eq!(raised.participants[0].effort, Effort::High);
+    // An unknown policy name is refused.
+    value["seats"][1]["high_when"] = json!(["unregistered"]);
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("high_when names unknown policy"));
+}
+
+#[test]
+fn a_subagent_only_line_never_fills_a_seat_and_the_refusal_names_the_field() {
+    let mut value = fixture();
+    value["lines"][1]["launch"] = json!("subagent-only");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    // As a worker it still resolves.
+    let consult = c.resolve(&request("consultation", &observed)).unwrap();
+    assert_eq!(consult.participants[0].line, "orchid-support");
+    assert!(consult.participants[0].seat.is_none());
+    // As a seat it is refused, naming the field.
+    let error = c
+        .eligible(&EligibilityRequest {
+            duty: "orchestrate",
+            line: "orchid-support",
+            version: "orchid-two",
+            seat: Some("orchid-seat"),
+            harness: "claude-code",
+            effort: Effort::High,
+            exclusions: &[],
+            observed_ids: &observed,
+        })
+        .unwrap_err();
+    assert!(error.contains("launch: subagent-only"), "{error}");
+    // With the first line excluded, the seat stays open rather than use it.
+    let excluded = [exclude("orchid-one")];
+    let mut req = request("orchestrate", &observed);
+    req.exclusions = &excluded;
+    let open = c.resolve(&req).unwrap();
+    assert!(open.is_open(), "{open:?}");
+    // A seat whose first line is subagent-only cannot fill it.
+    value["lines"][0]["launch"] = json!("subagent-only");
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("is launch: subagent-only"));
+}
+
+#[test]
+fn a_seat_only_line_never_runs_as_a_worker() {
+    assert_invalid(
+        |v| v["lines"][3]["launch"] = json!("seat"),
+        "its launch is seat",
+    );
+}
+
+#[test]
+fn worker_floors_are_the_catalog_effort_floors() {
+    assert_invalid(
+        |v| {
+            v["effort_floors"]
+                .as_object_mut()
+                .unwrap()
+                .remove("default");
+        },
+        "effort_floors needs a default floor",
+    );
+    assert_invalid(
+        |v| v["effort_floors"]["absent-duty"] = json!("medium"),
+        "effort_floors names unknown duty",
+    );
+    // Moving a duty's floor is catalog data: consultation may now run medium.
+    let mut value = fixture();
+    value["effort_floors"]["consultation"] = json!("medium");
+    value["duties"]["consultation"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let result = c.resolve(&request("consultation", &observed)).unwrap();
+    assert_eq!(result.participants[0].effort, Effort::Medium);
+    // Without that floor entry, the same route is below the default floor.
+    value["effort_floors"]
+        .as_object_mut()
+        .unwrap()
+        .remove("consultation");
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("below its effort floor"));
+}
+
+#[test]
+fn a_fallback_only_version_backs_its_own_seat_line() {
+    // The first seat line holds an active version and an older fallback-only
+    // one: the fallback fills the seat when the active version is excluded.
+    let mut value = fixture();
+    let mut older = version("orchid-zero", &["claude-code"], Some("orchid-seat"));
+    older["lifecycle"] = json!("fallback-only");
+    value["lines"][0]["versions"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, older);
+    value["lines"][1]["launch"] = json!("subagent-only");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let excluded = [exclude("orchid-one")];
+    let mut req = request("orchestrate", &observed);
+    req.exclusions = &excluded;
+    let result = c.resolve(&req).unwrap();
+    assert_eq!(result.participants[0].version, "orchid-zero");
+}
+
 // Project design authority and standing reviews (issue 43).
 #[path = "authority_tests.rs"]
 mod authority_tests;

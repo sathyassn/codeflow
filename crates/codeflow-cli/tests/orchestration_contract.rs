@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use codeflow_core::model_catalog::{
-    Adoption, Alternative, Catalog, Effort, EligibilityRequest, Lifecycle, ParticipantLabel,
-    Resolution, ResolveRequest, Target,
+    Adoption, Alternative, Catalog, Effort, EligibilityRequest, Launch, Lifecycle,
+    ParticipantLabel, Resolution, ResolveRequest, Target,
 };
 use codeflow_core::validate::parse_frontmatter;
 use codeflow_core::workgraph::record_text::has_section;
@@ -217,6 +217,7 @@ fn fictional_catalog() -> Catalog {
     // TSK-079's fixture keeps a design-implementation duty that is open until
     // scoped evidence exists; the managed catalog defines no such duty.
     catalog.duties.remove("design-implementation");
+    catalog.effort_floors.remove("design-implementation");
     // Date its designations on a decision the roster ADR records, never on
     // the fixture's own literal, and cite that date in each record as the
     // managed catalog's records do.
@@ -277,7 +278,8 @@ fn resolve(catalog: &Catalog, duty: &str, host: &str, author: Option<&str>) -> R
         .unwrap_or_else(|error| panic!("{duty} on {host}: {error}"))
 }
 
-/// Every line a seat lists has a version that can hold that seat at high.
+/// Every line a seat lists that may fill it (its `launch` is not
+/// `subagent-only`) has a version that can hold that seat at its own effort.
 fn every_seat_line_can_be_eligible(catalog: &Catalog) -> Result<(), String> {
     let observed = BTreeMap::new();
     for seat in &catalog.seats {
@@ -287,6 +289,9 @@ fn every_seat_line_can_be_eligible(catalog: &Catalog) -> Result<(), String> {
                 .iter()
                 .find(|l| &l.id == id)
                 .ok_or(id.clone())?;
+            if line.launch == Launch::SubagentOnly {
+                continue;
+            }
             let eligible = line.versions.iter().any(|version| {
                 version.selectors.keys().any(|harness| {
                     catalog
@@ -296,7 +301,7 @@ fn every_seat_line_can_be_eligible(catalog: &Catalog) -> Result<(), String> {
                             version: &version.id,
                             seat: Some(&seat.id),
                             harness,
-                            effort: Effort::High,
+                            effort: seat.effort,
                             exclusions: &[],
                             observed_ids: &observed,
                         })
@@ -751,9 +756,11 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "Never combine apparently separate limits",
         "is a reassignment: it is recorded and reviewed by one other-lineage seat",
         "permitted worker change",
-        "Default effort is high for primary seats, not a ceiling",
+        // TSK-1292: the default effort is the seat's catalog `effort` field.
+        "Each seat's default effort is its catalog `effort` field",
+        "A seat's default is not a ceiling",
         "strongest capable permitted same-family reasoning route",
-        "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
+        "An `xhigh_triggers` fact requires the owning primary to obtain that reasoning",
         "Delegate substantial, well-specified routine implementation",
         "The primary critically integrates worker findings and retains approvals",
         "a lineage different from the actual author's reviews it independently",
@@ -3282,4 +3289,147 @@ fn status_rows_name_live_checked_facts_and_preflight_expires() {
             assert!(!text.contains(retired), "{path} keeps the retired {retired:?}");
         }
     }
+}
+
+/// TSK-1292 AC-3: the orchestrator skill, its references and resources, and
+/// the managed block templates name no fixed model id and state no fixed
+/// effort level except beside a pointer to `codeflow models resolve`. The
+/// values are catalog fields a project can change.
+fn fixed_model_rule_gaps(texts: &BTreeMap<String, String>, catalog: &Catalog) -> Vec<String> {
+    let ids: BTreeSet<&str> = catalog
+        .lines
+        .iter()
+        .flat_map(|line| &line.versions)
+        .flat_map(|v| {
+            [v.id.as_str(), v.alias.as_str(), v.pinned_id.as_str()]
+                .into_iter()
+                .chain(v.selectors.values().map(String::as_str))
+        })
+        // A bare line alias such as `opus` is also a family word in prose;
+        // a model id carries its version number.
+        .filter(|id| id.chars().any(|c| c.is_ascii_digit()))
+        .collect();
+    // A model display name carries a one- or two-part version (`Grok 4.7`);
+    // a three-part harness release (`Grok 1.0.46`) is not a model.
+    let display = regex::Regex::new(
+        r"(?i)\b(opus|sonnet|fable|haiku|astra|luna|terra|sol|gpt|grok)[ -]\d+(\.\d+)?(\.\d)?",
+    )
+    .expect("display-name pattern");
+    let effort = regex::Regex::new(
+        r"(?i)\b(at|is|to) (low|medium|high|xhigh)\b|\b(low|medium|high|xhigh)[ -]effort\b|\beffort (of|at|is) (low|medium|high|xhigh)\b|\b(low|medium|high|xhigh) (primary|primaries|seat|seats|worker|workers)\b",
+    )
+    .expect("effort pattern");
+    let mut gaps = Vec::new();
+    for (path, text) in texts {
+        for paragraph in text.split("\n\n") {
+            let flat = normalize_whitespace(paragraph);
+            for id in &ids {
+                if flat
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+                    .any(|word| word.trim_end_matches('.') == *id)
+                {
+                    gaps.push(format!("{path}: names model id {id}: {flat}"));
+                }
+            }
+            if let Some(found) = display
+                .captures_iter(&flat)
+                .find(|captures| captures.get(3).is_none())
+            {
+                gaps.push(format!("{path}: names model {}: {flat}", &found[0]));
+            }
+            if !flat.contains("codeflow models resolve") {
+                if let Some(found) = effort.find(&flat) {
+                    gaps.push(format!(
+                        "{path}: states effort {:?} without `codeflow models resolve`: {flat}",
+                        found.as_str()
+                    ));
+                }
+            }
+        }
+    }
+    gaps
+}
+
+fn orchestrator_rule_texts() -> BTreeMap<String, String> {
+    let mut files = Vec::new();
+    collect_markdown(
+        &repo_root().join("assets/base/agents/skills/cf-model-orchestrator"),
+        &mut files,
+    );
+    let mut texts: BTreeMap<String, String> = files
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .map(|path| {
+            let rel = path
+                .strip_prefix(repo_root())
+                .expect("under the repository")
+                .display()
+                .to_string();
+            (rel.clone(), read(&rel))
+        })
+        .collect();
+    for template in [
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "assets/base/CLAUDE.md.tmpl",
+        "assets/base/CLAUDE.minimal.md.tmpl",
+    ] {
+        texts.insert(template.into(), read(template));
+    }
+    texts
+}
+
+fn with_skill_paragraph(
+    texts: &BTreeMap<String, String>,
+    paragraph: &str,
+) -> BTreeMap<String, String> {
+    let mut changed = texts.clone();
+    let skill = changed
+        .keys()
+        .find(|path| path.ends_with("cf-model-orchestrator/SKILL.md"))
+        .cloned()
+        .expect("skill");
+    let text = changed.get_mut(&skill).expect("skill text");
+    text.push_str("\n\n");
+    text.push_str(paragraph);
+    text.push('\n');
+    changed
+}
+
+#[test]
+fn the_skill_states_no_fixed_model_or_effort_outside_a_resolve_pointer() {
+    let catalog = managed_catalog();
+    let texts = orchestrator_rule_texts();
+    assert!(texts.keys().any(|path| path.ends_with("SKILL.md")));
+    let gaps = fixed_model_rule_gaps(&texts, &catalog);
+    assert!(gaps.is_empty(), "{}", gaps.join("\n"));
+    // The check fails on the prose this task replaced, on a pinned id and on
+    // a display name.
+    for (planted, expected) in [
+        (
+            "Default effort is high for primary seats, not a ceiling.",
+            "states effort",
+        ),
+        (
+            "Launch claude-opus-5-5 for the design seat.",
+            "names model id",
+        ),
+        ("Grok 4.7 reviews security work.", "names model"),
+    ] {
+        let gaps = fixed_model_rule_gaps(&with_skill_paragraph(&texts, planted), &catalog);
+        assert!(
+            gaps.iter().any(|gap| gap.contains(expected)),
+            "{planted}: {gaps:?}"
+        );
+    }
+    // A paragraph that points at the resolver may name the level it returns.
+    let pointed = with_skill_paragraph(
+        &texts,
+        "The Codex seat runs at medium unless `codeflow models resolve` says otherwise.",
+    );
+    assert!(fixed_model_rule_gaps(&pointed, &catalog).is_empty());
+    // A harness release number is not a model name.
+    let release = with_skill_paragraph(&texts, "Grok 1.0.46 sends hook events.");
+    assert!(fixed_model_rule_gaps(&release, &catalog).is_empty());
 }

@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     authority::{designation_text, AuthorityRole, DESIGN_APPROVAL, STANDING_REVIEW_DUTIES},
-    validate::{floor, nonempty},
-    Adoption, Alternative, Catalog, Effort, Family, Lifecycle, LineageRelation, Participant,
-    ParticipantLabel, ProductLine, Seat, Target, Version,
+    validate::nonempty,
+    Adoption, Alternative, Catalog, Effort, Family, Launch, Lifecycle, LineageRelation,
+    Participant, ParticipantLabel, ProductLine, Seat, Target, Version,
 };
 use crate::model_qualification::QualifiedBinding;
 
@@ -183,6 +183,21 @@ fn candidate_duty(duty: &str) -> bool {
     )
 }
 
+/// A line's `launch` field decides whether it may fill a seat, run as a
+/// subagent, or both; the refusal names the field.
+fn check_launch(line: &ProductLine, for_seat: bool) -> Result<(), String> {
+    let refusal = match (line.launch, for_seat) {
+        (Launch::SubagentOnly, true) => "it runs only as a subagent and never fills a seat",
+        (Launch::Seat, false) => "it fills a seat and never runs as a subagent",
+        _ => return Ok(()),
+    };
+    Err(format!(
+        "line {} is launch: {}; {refusal}",
+        line.id,
+        line.launch.as_str()
+    ))
+}
+
 impl Catalog {
     pub(super) fn full_binding(
         &self,
@@ -221,6 +236,7 @@ impl Catalog {
             .seat
             .map(|id| self.seat(id).ok_or("unknown seat"))
             .transpose()?;
+        check_launch(line, seat.is_some())?;
         if let Some(seat) = seat {
             if version.personal_candidate {
                 return Err("personal overlay candidates never fill seats".into());
@@ -241,13 +257,19 @@ impl Catalog {
         ) {
             return Err("workers never hold direction or fidelity approval".into());
         }
-        Self::check_native(version, family, request)?;
+        self.check_native(version, family, seat, request)?;
+        // A fallback-only version backs a seat from a later seat line, or
+        // inside a line that still has an active version (its own fallback).
         if version.lifecycle == Lifecycle::FallbackOnly
             && !seat.is_some_and(|s| {
                 s.lines
                     .iter()
                     .position(|id| id == &line.id)
                     .is_some_and(|i| i > 0)
+                    || line
+                        .versions
+                        .iter()
+                        .any(|v| v.lifecycle == Lifecycle::Active)
             })
         {
             return Err("fallback-only version requires a listed seat fallback".into());
@@ -301,8 +323,10 @@ impl Catalog {
     }
 
     fn check_native(
+        &self,
         version: &Version,
         family: &Family,
+        seat: Option<&Seat>,
         request: &EligibilityRequest<'_>,
     ) -> Result<(), String> {
         if version.lifecycle == Lifecycle::Retired {
@@ -314,8 +338,15 @@ impl Catalog {
         if !version.efforts.contains(&request.effort) {
             return Err("unsupported effort; never clamped".into());
         }
-        if request.effort < floor(request.duty, request.seat.is_some()) {
-            return Err("effort below duty floor".into());
+        if request.effort < self.floor(request.duty, seat) {
+            return Err(match seat {
+                Some(seat) => format!(
+                    "effort below seat {} effort {}",
+                    seat.id,
+                    seat.effort.as_str()
+                ),
+                None => "effort below duty floor".into(),
+            });
         }
         for exclusion in request.exclusions.iter().filter(|e| e.fresh_native) {
             let applies = match &exclusion.scope {
@@ -504,7 +535,7 @@ impl Catalog {
                     version: &version.id,
                     seat: Some(&seat.id),
                     harness,
-                    effort: Effort::High,
+                    effort: seat.effort,
                     exclusions: request.exclusions,
                     observed_ids: request.observed_ids,
                 };
@@ -603,6 +634,8 @@ impl Catalog {
                             && self.authority_role(id) == Some(AuthorityRole::CoOwner))
                 })
                 .filter_map(|(_, id)| self.line(id).map(|line| (Some(seat), line)))
+                // A subagent-only line never fills a seat (its `launch` field).
+                .filter(|(_, line)| line.launch != Launch::SubagentOnly)
                 .collect()
         })
         .unwrap_or_default()
@@ -686,13 +719,19 @@ impl Catalog {
                     &family.harnesses[0]
                 }
             });
-            let effort = if seat.is_none()
-                && alternative.effort < Effort::High
-                && self
+            let raised = match seat {
+                // A seat rises to high on its own `high_when` policies.
+                Some(seat) => seat
+                    .high_when
+                    .iter()
+                    .any(|trigger| self.triggered(trigger, request.trigger_facts)),
+                // A worker rises to high on the catalog's `high_triggers`.
+                None => self
                     .high_triggers
                     .iter()
-                    .any(|t| request.trigger_facts.contains(t))
-            {
+                    .any(|t| request.trigger_facts.contains(t)),
+            };
+            let effort = if raised && alternative.effort < Effort::High {
                 Effort::High
             } else {
                 alternative.effort
@@ -782,7 +821,7 @@ impl Catalog {
                 .iter()
                 .flat_map(|l| &l.versions)
                 .any(|v| v.pinned_id == *observed && v.lifecycle != Lifecycle::Active)
-            && Self::check_native(version, family, request).is_ok()
+            && self.check_native(version, family, None, request).is_ok()
     }
 
     fn serves_host_seat(&self, version: &Version, request: &ResolveRequest<'_>) -> bool {
@@ -794,7 +833,7 @@ impl Catalog {
             alternatives: vec![Alternative {
                 target: Target::Seat(seat.id.clone()),
                 harness: None,
-                effort: Effort::High,
+                effort: seat.effort,
             }],
             relation: LineageRelation::Any,
             label: ParticipantLabel::Required,
@@ -901,9 +940,6 @@ impl Catalog {
         if route.effort != record.route.effort {
             return Err("OPERATOR_OVERRIDE effort mismatch".into());
         }
-        if route.effort < floor("design", true) {
-            return Err("OPERATOR_OVERRIDE effort below design duty floor".into());
-        }
         let harness = route
             .harness
             .as_deref()
@@ -929,6 +965,9 @@ impl Catalog {
             }
             Target::HostSeat => return Err("OPERATOR_OVERRIDE needs an exact seat or line".into()),
         };
+        if route.effort < self.floor("design", Some(seat)) {
+            return Err("OPERATOR_OVERRIDE effort below design duty floor".into());
+        }
         let mut reasons = Vec::new();
         for line in lines {
             for version in line.versions.iter().rev() {
@@ -983,7 +1022,7 @@ impl Catalog {
             version: &version.id,
             seat: None,
             harness: &primary.harness,
-            effort: Effort::Xhigh,
+            effort: self.floor("xhigh-reasoning", None),
             exclusions: request.exclusions,
             observed_ids: request.observed_ids,
         };
@@ -1010,7 +1049,7 @@ impl Catalog {
                     .map(|line| Alternative {
                         target: Target::Line(line.id.clone()),
                         harness: None,
-                        effort: Effort::Xhigh,
+                        effort: self.floor("xhigh-reasoning", None),
                     })
                     .collect(),
                 relation: LineageRelation::Any,

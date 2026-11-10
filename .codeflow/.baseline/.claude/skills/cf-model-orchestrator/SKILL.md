@@ -67,7 +67,8 @@ asks for just that.
 - **Both think independently.** Claude and Codex research, analyze, and
   identify risks in parallel and return their findings before seeing the
   other's conclusions.
-- **Claude leads design.** The qualified Claude judgment primary **produces**
+- **Claude leads design.** The qualified Claude judgment primary (the
+  catalog's `design_owner` seat) **produces**
   the primary solution design and drafts the one plan in its own native
   interactive session and, unless the brief already fixes a clear direction,
   compares 2 to 3 viable options. For material product, UX, UI, interaction,
@@ -115,15 +116,21 @@ asks for just that.
   the foreign primary's entry command; it sends complexity and the required
   outcome, and that primary chooses and reviews its own workers. Later
   primary-approval prose cannot repair an incorrect initial dispatch. Use the
-  concrete selectors, default effort and typed routes from the ensemble
-  (model names are current catalog bindings); invoke each primary directly
-  and retain its planning, integration, and approval duties. A natively
+  concrete selectors, default effort and typed routes that
+  `codeflow models resolve` returns from catalog fields (each
+  line's `launch`, each seat's `effort` and `high_when`, `effort_floors`,
+  `design_owner`), never from memory; invoke each primary directly and
+  retain its planning, integration, and approval duties. A natively
   proven candidate may execute bounded non-design work without qualification.
   An unverified worker route is unavailable, not an invitation to guess or
   invoke it headlessly. Never infer availability, applied route, economy, or
   usage; workers replace no primary or named reviewer. Use the strongest
-  capable permitted reasoning route, direct xhigh on trigger, and select
-  effort per unit.
+  capable permitted reasoning route, escalate on the catalog's
+  `high_triggers` and `xhigh_triggers`, and select effort per unit.
+- **The harness choice applies.** The model and effort the user chose in
+  their own harness apply over CodeFlow's suggestion. Record the effective
+  model and effort with `codeflow models resolve --effective
+  <model>@<effort>`; never re-launch a session to change them.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -195,6 +202,9 @@ model identity.
 | Grok Build (interactive `grok` CLI) | Claude and Codex | Claude primary, natively; catalog Grok may execute or take named extra-family review | Same | Same |
 | Other harness, including Hermes | Hand the repository task to one sanctioned native host; coordinate directly only if both seats and the full contract are proven | As that host | Same | Same; no nested orchestration |
 
+The table names seats, never models. Each seat's model, effort and
+fallbacks are the values `codeflow models resolve` returns for the duty, and
+`codeflow doctor --check model-bindings` shows them for every host.
 Every peer seat, its fallbacks and its launch posture follow
 [cross-family transport](resources/routing/transport.md), never a simulated
 seat; `cf-herdr` hosts the tab with the project being worked as the cwd, and
@@ -315,7 +325,8 @@ still make the live observations the steps below require.
    Authenticated tools use their broker/OAuth/keychain/credential-mask path;
    raw tokens never enter prompts, logs, repository files, or arbitrary
    commands.
-6. Record the models, effort and effective sandbox once per session. Record
+6. Record the models, effort and effective sandbox once per session, the
+   model and effort through `codeflow models resolve --effective`. Record
    usage evidence only when an explicit hard limit depends on it, with its
    source, time and scope; unknown usage stays unknown and advisory. Never
    infer quota, availability, applied selection, or savings.

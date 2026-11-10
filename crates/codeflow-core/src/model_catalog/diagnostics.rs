@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{AuthorityRole, CatalogInputs, Effort, Lifecycle, ResolveRequest};
+use super::{AuthorityRole, CatalogInputs, Lifecycle, ResolveRequest};
 
 impl CatalogInputs {
     /// Illustrative host/duty matrix and advisory catalog/canary warnings.
@@ -60,7 +60,7 @@ impl CatalogInputs {
                     for (harness, selector) in &version.selectors {
                         if self
                             .catalog
-                            .full_binding(seat, version, harness, selector, Effort::High)
+                            .full_binding(seat, version, harness, selector, seat.effort)
                             .is_none()
                         {
                             warnings.push(format!(

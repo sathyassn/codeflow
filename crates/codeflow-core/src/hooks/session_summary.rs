@@ -237,6 +237,96 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
     Ok(ledger_dir.join(file))
 }
 
+/// The sessions-ledger event for the model and effort a session runs at.
+pub const EFFECTIVE_MODEL: &str = "effective_model";
+
+/// The model and effort the user's harness started a session with. They are
+/// recorded as given: the harness choice applies over the catalog's
+/// suggestion, and nothing re-launches the session to change them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveSession {
+    pub model: String,
+    pub effort: String,
+    /// The host harness id the session runs in.
+    pub host: String,
+    pub session_id: Option<String>,
+    pub timestamp: String,
+}
+
+impl EffectiveSession {
+    /// Parse `<model>@<effort>` as the harness reports them.
+    ///
+    /// # Errors
+    /// Either part is empty or holds whitespace, or the `@` is missing or doubled.
+    pub fn parse(value: &str, host: &str) -> Result<Self, String> {
+        let (model, effort) = value
+            .split_once('@')
+            .ok_or("effective must be <model>@<effort>")?;
+        for (part, label) in [(model, "model"), (effort, "effort")] {
+            if part.is_empty() || part.contains('@') || part.chars().any(char::is_whitespace) {
+                return Err(format!(
+                    "effective {label} must be one nonempty word: <model>@<effort>"
+                ));
+            }
+        }
+        Ok(Self {
+            model: model.into(),
+            effort: effort.into(),
+            host: host.into(),
+            session_id: None,
+            timestamp: rfc3339_utc_now(),
+        })
+    }
+}
+
+/// Append the session's effective model and effort to the sessions ledger
+/// of the repository containing `root`. Outside a repository nothing is
+/// recorded: `Ok(None)`.
+///
+/// # Errors
+/// Returns [`LedgerUnwritten`] when the ledger cannot be written.
+pub fn record_effective(
+    root: &Path,
+    session: &EffectiveSession,
+) -> Result<Option<PathBuf>, LedgerUnwritten> {
+    let Some(info) = RepoInfo::discover(root).map_err(|cause| LedgerUnwritten {
+        path: root.to_path_buf(),
+        cause,
+        repair: Repair::RestoreInputs,
+    })?
+    else {
+        return Ok(None);
+    };
+    let ledger_dir = info.ledger_dir();
+    let session_id = session.session_id.as_deref().map(normalize_session_id);
+    let mut data = HashMap::new();
+    data.insert("model".to_string(), serde_json::json!(session.model));
+    data.insert("effort".to_string(), serde_json::json!(session.effort));
+    data.insert("host".to_string(), serde_json::json!(session.host));
+    data.insert("source".to_string(), serde_json::json!("harness choice"));
+    let event = Event {
+        event_type: EFFECTIVE_MODEL.to_string(),
+        timestamp: session.timestamp.clone(),
+        session_id: session_id.clone(),
+        worktree: Some(
+            crate::git::GitName::from_os_str(info.root.as_os_str())
+                .display()
+                .to_string(),
+        ),
+        data,
+    };
+    let writer = JsonlWriter::new_with_session(&ledger_dir, session_id.clone())
+        .map_err(|error| unwritten(&ledger_dir, error))?;
+    writer
+        .append_event(event)
+        .map_err(|error| unwritten(&ledger_dir, error))?;
+    let file = match &session_id {
+        Some(sid) => format!("{t}/{t}-{sid}.jsonl", t = files::SESSIONS),
+        None => format!("{t}/{t}.jsonl", t = files::SESSIONS),
+    };
+    Ok(Some(ledger_dir.join(file)))
+}
+
 /// What keeps the ledger from being written, from the path the writer
 /// failed on: a file in the way of a directory it creates, a directory in
 /// the way of a file it opens, or else the nearest existing part of that

@@ -713,7 +713,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "17014bf48842f21e0846ca47e6f7dfd11334408ada8ae6973af1e5fb6aaae575",
+      "sha256": "a82566b16ac19a8ee2b984ed2560e83a648f07146707834204297e53c01435c8",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -755,7 +755,7 @@
     ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "d7356436f95192d9c7334df3f16796b3052e4459711111215affb90f26cd618b",
+      "sha256": "217106f28082fa5cd72bc84ba80919c0c6392f5db7abe1d6178ec280d680747a",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -845,7 +845,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality/plan.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
       "ownership": "managed",
-      "sha256": "56c84531611296e474176f57660fe3e7fb0059ad4f4a70e45f28aec2ca7784b2",
+      "sha256": "a6172b24aa574be22dfa5f9cbbbbcf9ab5d1da6466711bea7bce7203bb963ebe",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality/research-planning.md": {
@@ -2075,7 +2075,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "17014bf48842f21e0846ca47e6f7dfd11334408ada8ae6973af1e5fb6aaae575",
+      "sha256": "a82566b16ac19a8ee2b984ed2560e83a648f07146707834204297e53c01435c8",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -2117,7 +2117,7 @@
     ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "d7356436f95192d9c7334df3f16796b3052e4459711111215affb90f26cd618b",
+      "sha256": "217106f28082fa5cd72bc84ba80919c0c6392f5db7abe1d6178ec280d680747a",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -2207,7 +2207,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality/plan.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
       "ownership": "managed",
-      "sha256": "56c84531611296e474176f57660fe3e7fb0059ad4f4a70e45f28aec2ca7784b2",
+      "sha256": "a6172b24aa574be22dfa5f9cbbbbcf9ab5d1da6466711bea7bce7203bb963ebe",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality/research-planning.md": {

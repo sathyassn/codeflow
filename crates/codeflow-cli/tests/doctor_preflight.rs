@@ -81,7 +81,8 @@ fn configured_values_are_marked_configured_and_never_observed() {
     );
     for line in [
         "seat claude-primary: configured claude-opus-5-5 through claude-code, efforts medium|high|xhigh",
-        "seat codex-primary: configured gpt-6-astra through codex-cli",
+        // TSK-1292: GPT-6.1 Sol is the Codex seat's first line; Astra is subagent-only.
+        "seat codex-primary: configured gpt-6.1-sol through codex-cli",
         "sandbox claude: configured enabled true, failIfUnavailable true (.claude/settings.json)",
         "sandbox codex: configured default profile cf-guard, profiles cf-builder|cf-guard (.codex/config.toml)",
         "executable claude: unavailable: not found on PATH",

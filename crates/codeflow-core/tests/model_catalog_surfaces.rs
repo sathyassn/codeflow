@@ -441,8 +441,9 @@ const MANAGED_BASELINE: &str =
 
 /// With no project file, or a schema 1 file, every managed duty resolves
 /// exactly as the 3.0.0 engine did. The baseline was recorded from main at
-/// 447455ca5, before the project design-authority block existed, so it
-/// carries the current managed catalog.
+/// 447455ca5, before the project design-authority block existed, and
+/// re-recorded by TSK-1292 for the 2026-11-03 default models, seat efforts
+/// and `launch` fields, so it carries the current managed catalog.
 #[test]
 fn managed_resolutions_without_a_schema_two_block_match_the_prior_engine() {
     let baseline_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(MANAGED_BASELINE);

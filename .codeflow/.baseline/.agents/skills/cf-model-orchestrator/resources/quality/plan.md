@@ -83,32 +83,39 @@ state live" say.
 A change to the responsible primary or cross-lineage reviewer seat or lineage
 is a reassignment: it is recorded and reviewed by one other-lineage seat (in
 the batched epic amendment for epic tasks) before the affected work continues.
-A same-seat trigger-based effort escalation, including direct high to xhigh, is
-ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
-high primary stays the orchestrator and spawns same-family workers at that
+A same-seat trigger-based effort escalation, including the direct escalation
+an `xhigh_triggers` fact allows, is ledger evidence, not reassignment. Novelty
+is not a trigger. Mid-session, the primary stays the orchestrator at its
+resolved effort; when a unit escalates, it spawns same-family workers at that
 effort, each as a native subagent of its own session (the seat section of
-`SKILL.md`). Where the harness has no native route for that model, the
-recorded fallback is `primary-retained`: keep the high primary, record the
-missing route as a limitation, and do not infer a pass. A permitted worker
-change within the approved responsible-primary seat remains internal routing
-unless it changes the named primary or reviewer.
+`SKILL.md`).
+Where the harness has no native route for that model, the recorded fallback
+is `primary-retained`: keep the primary, record the missing route as a
+limitation, and do not infer a pass. A permitted worker change within the
+approved responsible-primary seat remains internal routing unless it changes
+the named primary or reviewer.
 
-Default effort is high for primary seats, not a ceiling or a mandate to make
-every worker high; a primary already qualified at high performs suitable
-reasoning directly. Delegate substantial, well-specified routine implementation,
+Each seat's default effort is its catalog `effort` field, raised by its
+`high_when` policies, and each worker duty's floor is `effort_floors`; use
+the values `codeflow models resolve` returns. A seat's default is not a
+ceiling or a mandate to raise every worker; a primary already qualified at
+its effort performs suitable reasoning directly. Delegate substantial,
+well-specified routine implementation,
 evidence, or review-support work to a capable permitted route when one is
 available and the unit is separable enough to inspect; direct primary
 execution remains valid for a tiny warm-context change, inseparable
 unresolved reasoning, material risk, an unavailable route, or bounded
 recovery. Record the concrete reason whenever substantial routine work is
 retained. Complex architecture and technical planning use the strongest
-capable permitted same-family reasoning route at high or xhigh from the active
-binding's permitted routes. An xhigh trigger requires the owning primary to
-obtain xhigh reasoning through a supported same-family worker route; do not
-spend a high attempt merely to fail first. The primary critically integrates worker
+capable permitted same-family reasoning route from the active binding's
+permitted routes, escalated on the catalog's `high_triggers` and
+`xhigh_triggers`. An `xhigh_triggers` fact requires the owning primary to
+obtain that reasoning through a supported same-family worker route, the
+obligation `codeflow models resolve` returns; do not spend a lower-effort
+attempt merely to fail first. The primary critically integrates worker
 findings and retains approvals. If no required capable route is available,
 record the unresolved quality gap and the bounded recovery or degradation
-rather than claiming medium work satisfied it.
+rather than claiming lower-effort work satisfied it.
 
 ### Route readiness
 

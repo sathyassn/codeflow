@@ -17,7 +17,15 @@ pub fn parse_override_route(
         .ok_or("override route must be seat-or-line@harness")?;
     let target = if catalog.seat(id).is_some() {
         Target::Seat(id.into())
-    } else if catalog.line(id).is_some() {
+    } else if let Some(line) = catalog.line(id) {
+        // An override route fills a seat: a subagent-only line never does.
+        if line.launch == super::Launch::SubagentOnly {
+            return Err(format!(
+                "override route names line {id}, which is launch: {}; it runs only as a \
+                 subagent and never fills a seat",
+                line.launch.as_str()
+            ));
+        }
         Target::Line(id.into())
     } else {
         return Err("override route names unknown seat or line".into());

@@ -53,6 +53,10 @@ pub struct Catalog {
     pub standing_seats: Vec<String>,
     pub design_owner: String,
     pub duties: BTreeMap<String, Duty>,
+    /// The lowest effort a worker route may request, per duty. `default`
+    /// covers every duty the map does not name; a seat route's floor is its
+    /// seat's `effort` instead.
+    pub effort_floors: BTreeMap<String, Effort>,
     pub high_triggers: Vec<String>,
     pub xhigh_triggers: Vec<String>,
     /// Named policy to its trigger facts; no expressions or executable content.
@@ -80,9 +84,33 @@ pub struct Family {
 pub struct ProductLine {
     pub id: String,
     pub family: String,
+    /// Whether the line fills a seat, runs only as a subagent, or both.
+    pub launch: Launch,
     pub adoption: Adoption,
     pub adopted_version: String,
     pub versions: Vec<Version>,
+}
+
+/// How a line may be launched. A `subagent-only` line resolves only for a
+/// worker route and never fills a seat; a `seat` line never runs as a worker.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Launch {
+    Seat,
+    SubagentOnly,
+    Either,
+}
+
+impl Launch {
+    /// The catalog spelling, for refusals that name the field.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Seat => "seat",
+            Self::SubagentOnly => "subagent-only",
+            Self::Either => "either",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -144,6 +172,11 @@ pub struct Seat {
     pub family: String,
     pub role: String,
     pub lines: Vec<String>,
+    /// The seat's default effort, and the floor for every route to it.
+    pub effort: Effort,
+    /// Named policies or trigger facts that raise this seat's route to
+    /// `high` when it would otherwise run below it.
+    pub high_when: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

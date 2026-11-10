@@ -356,7 +356,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--until <UNTIL>` | State to observe. Required. One of `ready`, `accepted`, `terminal`. |
 | | `--turn-id <ID>` | Turn identifier; required for accepted and terminal waits. |
 | | `--timeout-seconds <N>` | Bounded wait duration in seconds. Required. |
-| `codeflow models resolve` | | Resolve every participant and obligation without launching or writing |
+| `codeflow models resolve` | | Resolve every participant and obligation without launching; only `--effective` writes a record |
 | | `--duty <DUTY>` | Catalog duty whose participants and obligations must be resolved, or `design-approval`. Required. |
 | | `--host <HOST>` | Supported host harness id, such as claude-code or codex-app. Required. |
 | | `--author <AUTHOR>` | One of `claude`, `codex`, `grok`, `none`. Default `none`. |
@@ -368,6 +368,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--override <OVERRIDE_ID>` | Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task. |
 | | `--route <ROUTE>` | Exact override invocation route: `<seat-or-line>@<harness>`. |
 | | `--effort <EFFORT>` | Exact override invocation effort. |
+| | `--effective <EFFECTIVE>` | The model and effort this session's harness runs at, `<model>@<effort>`: recorded to the sessions ledger as given; the resolution is unchanged and nothing is re-launched. |
 | | `--json` | Print the resolution as JSON; input errors go to stderr with exit 2. |
 
 ### Present

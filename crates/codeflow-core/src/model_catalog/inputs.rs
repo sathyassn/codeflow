@@ -63,7 +63,9 @@ pub(super) fn optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
 fn validate_selection(selection: &ProjectSelection, catalog: &Catalog) -> Result<(), String> {
     // Validate even an empty selection, and every selected tuple before
     // resolving any duty.
-    selection.resolve(catalog, &catalog.bindings, "", "", Effort::High)?;
+    // The empty role matches no entry, so the effort argument is never compared.
+    let any_effort = catalog.floor("", None);
+    selection.resolve(catalog, &catalog.bindings, "", "", any_effort)?;
     for entry in &selection.bindings {
         let record = catalog
             .bindings

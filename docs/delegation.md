@@ -27,6 +27,16 @@ in its own interactive session under your own login.
 - They never log in for you.
 - They never count a same-vendor model as an independent reviewer.
 
+CodeFlow suggests each seat's model and effort from the managed catalog;
+`codeflow models resolve` prints the suggestion. The model and effort you
+choose in your own harness apply over that suggestion.
+
+- CodeFlow records the effective model and effort with
+  `codeflow models resolve --effective <model>@<effort>`, which appends an
+  `effective_model` event to the sessions ledger and leaves the resolution
+  unchanged.
+- CodeFlow never re-launches a session to change its model or effort.
+
 ## Architecture
 
 Every peer runs as its own interactive CLI in a Herdr tab, whichever host

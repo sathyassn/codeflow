@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 
 use super::validate::nonempty;
-use super::{Catalog, Effort, Lifecycle, Target};
+use super::{Catalog, Launch, Lifecycle, Target};
 
 /// The engine-owned duty for a same-family design approval.
 pub const DESIGN_APPROVAL: &str = "design-approval";
@@ -159,13 +159,20 @@ impl DesignAuthority {
                     seat.id
                 ));
             }
+            if line.launch == Launch::SubagentOnly {
+                return Err(format!(
+                    "design authority line {id} is launch: {}; it never fills seat {}",
+                    line.launch.as_str(),
+                    seat.id
+                ));
+            }
             if !line.versions.iter().any(|v| {
                 !v.personal_candidate
                     && v.lifecycle == Lifecycle::Active
-                    && v.efforts.contains(&Effort::High)
+                    && v.efforts.contains(&seat.effort)
                     && (v.designations.iter().any(|d| d.seat == seat.id)
                         || v.selectors.iter().any(|(h, s)| {
-                            catalog.full_binding(seat, v, h, s, Effort::High).is_some()
+                            catalog.full_binding(seat, v, h, s, seat.effort).is_some()
                         }))
             }) {
                 return Err(format!(
