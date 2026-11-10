@@ -50,6 +50,9 @@ fn with_env(command: &mut Command) -> &mut Command {
         .env_remove("CODEX_THREAD_ID")
         .env_remove("CODEX_CI")
         .env_remove("GROK_SESSION_ID")
+        // The gate `integrate` runs keeps its evidence under the fixture's
+        // own `target`, never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR")
 }
 
 fn codeflow(root: &Path, args: &[&str]) -> Output {

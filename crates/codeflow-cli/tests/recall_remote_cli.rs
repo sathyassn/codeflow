@@ -36,6 +36,30 @@ fn init_repo(root: &Path, name: &str) {
     fs::create_dir_all(root.join(".git")).unwrap();
 }
 
+/// Make `root` a git repository whose `origin` names `nwo` on github.com,
+/// the repository `remote protect` writes; git there refuses https, so
+/// nothing contacts the host, and `gh` is a stub.
+#[cfg(unix)]
+fn github_origin(root: &Path, nwo: &str) {
+    let url = format!("https://github.com/{nwo}.git");
+    for args in [
+        &["init", "-q"][..],
+        &["config", "protocol.https.allow", "never"],
+        &["remote", "add", "origin", &url],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+}
+
 fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
@@ -212,6 +236,7 @@ fn remote_protect_refuses_an_invalid_policy_and_writes_nothing() {
         format!(
             "#!/bin/sh\n\
              case \"$*\" in\n\
+               \"auth status --hostname github.com\") exit 0 ;;\n\
                \"repo view\"*) printf '%s' '{{\"nameWithOwner\":\"o/r\",\"isPrivate\":false,\"defaultBranchRef\":{{\"name\":\"main\"}}}}' ;;\n\
                \"api -X \"*) echo \"$*\" >> '{}'; cat >/dev/null; printf '{{}}' ;;\n\
                \"api repos/o/r/rulesets?\"*) printf '[]' ;;\n\
@@ -397,6 +422,7 @@ fn remote_protect_degrades_legibly_on_free_plan_403() {
     let home = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
     init_repo(repo.path(), "private-free");
+    github_origin(repo.path(), "sathyassn/private-free");
 
     // gh shim on PATH: private repo, every api call hits the Free-plan wall.
     let shims = tempfile::tempdir().unwrap();
@@ -404,6 +430,9 @@ fn remote_protect_degrades_legibly_on_free_plan_403() {
     fs::write(
         &gh,
         "#!/bin/sh\n\
+         if [ \"$1\" = \"auth\" ]; then\n\
+           exit 0\n\
+         fi\n\
          if [ \"$1\" = \"repo\" ]; then\n\
            printf '%s' '{\"nameWithOwner\":\"sathyassn/private-free\",\"isPrivate\":true}'\n\
            exit 0\n\
@@ -473,11 +502,15 @@ fn r21_remote_protect_refuses_undecodable_identity_before_api() {
     let home = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
     init_repo(repo.path(), "invalid-identity");
+    github_origin(repo.path(), "owner/repo");
     let shims = tempfile::tempdir().unwrap();
     let gh = shims.path().join("gh");
     fs::write(
         &gh,
         r#"#!/bin/sh
+if [ "$1" = "auth" ]; then
+  exit 0
+fi
 if [ "$1" = "repo" ]; then
   printf '{"nameWithOwner":"owner/caf'
   printf '\377'

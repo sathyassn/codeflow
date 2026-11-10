@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 pub mod ci;
 pub mod conflict;
 pub mod name;
+pub mod remote_identity;
 pub mod remote_query;
 pub(crate) mod stdin;
 pub mod unreadable;

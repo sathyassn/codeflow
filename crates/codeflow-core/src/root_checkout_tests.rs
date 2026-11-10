@@ -231,16 +231,23 @@ fn each_harness_marker_alone_marks_an_agent() {
 fn the_test_environment_blanks_every_harness_marker() {
     // `.cargo/config.toml` blanks each marker, so a test that commits
     // through real hooks does not inherit the agent session running it.
+    // The fixture helpers also clear every marker themselves (TSK-1397), so
+    // a test binary started directly, which inherits the caller's markers,
+    // gives the same results; the blank environment is asserted only when
+    // cargo started the run and applied that file.
     let config = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/config.toml"),
     )
     .unwrap();
+    let started_by_cargo = std::env::var_os("CARGO_MANIFEST_DIR").is_some();
     for marker in AGENT_MARKERS {
         assert!(
             config.contains(&format!("{marker} = {{ value = \"\", force = true }}")),
             "{marker} is not blanked in .cargo/config.toml"
         );
-        assert_eq!(std::env::var(marker).unwrap_or_default(), "", "{marker}");
+        if started_by_cargo {
+            assert_eq!(std::env::var(marker).unwrap_or_default(), "", "{marker}");
+        }
     }
 }
 
