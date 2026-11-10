@@ -1,0 +1,11 @@
+id = "TSK-1417"
+uid = "17486779-7ede-4041-9731-56484444bb4f"
+kind = "TSK"
+title = "The 4.0.0 release candidate passes the CLI qualification on sample projects"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T21:33:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
