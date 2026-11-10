@@ -306,7 +306,14 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
     let path = effective["recorded_to"].as_str().unwrap();
     assert!(path.ends_with("sessions.jsonl"), "{path}");
     // A malformed value is an input error, and nothing resolves.
-    for bad in ["no-at-sign", "@high", "model@", "a b@high"] {
+    for bad in [
+        "no-at-sign",
+        "@high",
+        "model@",
+        "a b@high",
+        "model@hi\u{2003}gh",
+        "mod\u{1b}el@high",
+    ] {
         let mut args = args.to_vec();
         args.extend(["--effective", bad]);
         let output = project.run(&args);

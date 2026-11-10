@@ -257,15 +257,19 @@ impl EffectiveSession {
     /// Parse `<model>@<effort>` as the harness reports them.
     ///
     /// # Errors
-    /// Either part is empty or holds whitespace, or the `@` is missing or doubled.
+    /// Either part is empty or holds a character outside printable ASCII
+    /// (a space, a control or a non-ASCII character), or the `@` is missing
+    /// or doubled.
     pub fn parse(value: &str, host: &str) -> Result<Self, String> {
         let (model, effort) = value
             .split_once('@')
             .ok_or("effective must be <model>@<effort>")?;
         for (part, label) in [(model, "model"), (effort, "effort")] {
-            if part.is_empty() || part.contains('@') || part.chars().any(char::is_whitespace) {
+            if part.is_empty() || part.contains('@') || !part.chars().all(|c| c.is_ascii_graphic())
+            {
                 return Err(format!(
-                    "effective {label} must be one nonempty word: <model>@<effort>"
+                    "effective {label} must be one nonempty word of printable ASCII: \
+                     <model>@<effort>"
                 ));
             }
         }
