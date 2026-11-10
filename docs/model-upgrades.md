@@ -79,8 +79,8 @@ nor the current ensemble promotes anything on its own.
 
 ## Technical
 
-Below are the qualification run, the kit's contracts, and the files and commands
-each step touches. Run `/cf-evaluate-model` from the orchestrated maintenance
+Below are the qualification run, the kit's contracts, the files and commands
+each step touches, and how a project overrides managed instructions. Run `/cf-evaluate-model` from the orchestrated maintenance
 flow (ADR-0027); each step produces the evidence the next one depends on.
 
 ### The qualification run
@@ -278,3 +278,50 @@ The paired governance cases separate persistence from assumption:
 - Missing product intent or a public contract still blocks for a well-framed
   operator decision.
 - Retry counts alone prove neither case.
+
+### Override managed instructions
+
+A project can replace a managed always rule, a row of the "When you are
+about to" table, or a declared skill section, and keep the replacement
+through every `codeflow update`. Declare it in `.codeflow/overrides.toml`,
+which update never writes:
+
+```toml
+schema_version = 1
+
+[[override]]
+target = "rule:outcome"            # an always rule: `text` and/or `title`
+text = "Name the result and who uses it; our release notes are the evidence."
+
+[[override]]
+target = "moment:release"          # a table row: `action`
+action = "follow RELEASING.md; agents never publish or move tags"
+
+[[override]]
+target = "cf-present#completion"   # a declared skill section: `body`
+body = """
+Post the handoff line in the team channel and link the page.
+"""
+```
+
+Names come only from the shipped text of the binary you run: the rule and
+moment ids in the rule-map kernel, and the `<!-- codeflow:section id=...
+class=... -->` markers in the managed skills. Each unit declares a class:
+
+| Class | What an override of it does |
+|---|---|
+| `overridable` | Applied. A row override replaces fields, so the row's pointers stay shipped; a section override replaces the body, and the marker and heading stay shipped |
+| `fixed` | Refused with the unit's reason. The review rows, the delegation row and the planning row that requires an other-lineage review are fixed, so no override can drop review independence, other-lineage review or the rule against headless peers: review policy is configured in `.codeflow/model-selection.json`, never by rewriting review text |
+| `floor` | Refused with the floor's name. The git floor and the non-relaxable command class are never overridden |
+
+Update applies the file as follows:
+
+| Case | What update does |
+|---|---|
+| Any problem in the file | Refuses the whole update with nothing applied, naming the entry: a floor or fixed unit, a name this version does not declare (removed, renamed or never shipped), the same unit twice, a row value of more than one line or holding marker text, a section body that would end the section early, hold a codeflow marker or leave a code fence open, an unknown field, an unreadable file, or a result that would change anything outside the targeted units. Retarget or remove the entry and rerun |
+| Hand edits | Merged against the shipped text with your overrides applied, so an override is never read as a hand edit and a hand edit is never folded into the overrides. What each override replaced is recorded at `.codeflow/.baseline/<file>.overrides.json` |
+| An interrupted update | Each overridden write is journaled in `.codeflow/.pending-update/` first. The next update finishes a write that landed, drops one that did not, and refuses any other state without writing |
+| An entry removed | The shipped text returns on the next update |
+| `codeflow doctor --check overrides` | Lists each override with the shipped text it replaces, warns while one is not yet applied, and fails with update's refusal |
+| `[scaffold] ignore` in `.codeflow/project.toml` | Not an override: it stops update from managing a whole file, names no unit, keeps no floor and takes no shipped change; update lists the file as ignored |
+| A new section in a shipped skill | Add the marker, with a class, on the line directly above its heading in `assets/base/agents/skills/`; the `instruction_overrides_contract` test refuses a marker without a class, a nested section, and an `overridable` section holding floor text |
