@@ -839,7 +839,7 @@ fn round_two_hook_and_local_plans_use_the_same_epic_target() {
             h.local.path(),
             &pushed,
             branch,
-            &judged,
+            (&judged, &Landing::Ordinary),
             (&destination, &destination.policy.branch_prefixes),
             &mut report,
         )

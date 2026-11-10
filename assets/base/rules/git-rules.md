@@ -148,6 +148,17 @@ before it, provided the adopted commit leaves their acceptance blocks
 unchanged. An unlanded entry or unreadable adoption history does not
 authorize the binding.
 
+A landing candidate is a branch named with `git.candidate_prefix`
+(`candidate/` by default), cut from the line's fetched tip with each
+reviewed member head merged onto it by `git merge --no-ff` and no other
+commit. Push it to have it judged as the line's next tip: the hook and
+`codeflow ci` bind it to the line only when its first-parent chain reaches
+the fetched tip of exactly one epic line, the remote advertises that tip,
+the records bind the line, and every commit after the tip is a clean merge.
+Anything else, an evil merge included, is refused as
+`work.landing_candidate` with its cause. Once its gate is green, land the
+batch with one push of the line to the candidate commit, a fast-forward.
+
 ## PR bodies
 
 **PR bodies:** follow the template and the sections `codeflow ci` requires

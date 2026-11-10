@@ -18,6 +18,7 @@ mod format_id;
 pub mod history;
 mod history_graph;
 mod landing;
+pub mod landing_candidate;
 pub(crate) mod layout;
 pub mod lifecycle;
 pub mod light_paths;

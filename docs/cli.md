@@ -507,6 +507,7 @@ How `codeflow ci` treats a head that could become an epic line's next tip:
 | No role, and the base is the fetched tip of both the default target and an epic line, as a new line's is | Yes: nothing the requester cannot forge says where the head lands | A direct commit refuses, and the remedy also names `--into main` for a change into the default target |
 | No role, and the head is the base | No: it adds no commit | Not judged |
 | A pull request head: a body, a pull request event, or `--into` | No: it lands by merge | Not judged |
+| A push hand-off of a branch named with `git.candidate_prefix` (`--pushed-ref refs/heads/candidate/...`) | Yes, when `codeflow ci` binds it again itself: its first-parent chain reaches the fetched tip of exactly one epic line within `git.candidate_search_depth` commits, the destination advertises that tip, the records at the default branch's tip and at the line tip bind the line, every commit after the tip is a clean two-parent merge, and `--base` is that tip | Judged as a push of the line: the line's records into the line's own target, and the line's direct-commit rule; a binding that does not hold or cannot be read refuses with `work.landing_candidate` and its cause |
 | A push hand-off from the pre-push hook | No | The hook judges the push |
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
@@ -569,6 +570,14 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 
 - The range is bound to what is pushed.
 - An existing protected or `integration/` branch starts at its advertised tip.
+- A landing candidate, a branch named with `git.candidate_prefix`, starts at
+  its line's fetched tip and is judged into that line, once the binding in
+  the table above holds; otherwise the push is refused with
+  `work.landing_candidate` and its cause, and no `codeflow ci` runs for it.
+- A push of an epic line whose new tip is a landing candidate's tip (the
+  pushed ref's source, a local branch at that commit, or an advertised
+  candidate branch) is admitted only when that candidate binds to the line
+  and the push is a fast-forward of the line to it.
 - A branch with a declared target starts at the merge base with that target's
   advertised tip, read from the task record.
 - The hook names what it left to CI, such as an unresolved range.
