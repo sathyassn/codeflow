@@ -484,7 +484,7 @@ class=... -->` markers in the managed skills. Each unit declares a class:
 | Class | What an override of it does |
 |---|---|
 | `overridable` | Applied. A row override replaces fields, so the row's pointers stay shipped; a section override replaces the body, and the marker and heading stay shipped |
-| `fixed` | Refused with the unit's reason. The review rows are fixed: review policy is configured in `.codeflow/model-selection.json`, never by rewriting review text |
+| `fixed` | Refused with the unit's reason. The review rows, the delegation row and the planning row that requires an other-lineage review are fixed, so no override can drop review independence, other-lineage review or the rule against headless peers: review policy is configured in `.codeflow/model-selection.json`, never by rewriting review text |
 | `floor` | Refused with the floor's name. The git floor and the non-relaxable command class are never overridden |
 
 Update checks the whole file before it writes anything, and any problem

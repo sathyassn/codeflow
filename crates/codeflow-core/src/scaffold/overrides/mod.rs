@@ -59,7 +59,9 @@ pub const FLOORS_ASSET: &str = "base/instruction-floors.toml";
 /// The rule-map kernel, in the binary's assets.
 pub const KERNEL_ASSET: &str = "base/rule-map.toml";
 
-/// Phrases that mark floor text. The contract test fails the build when an
+/// Phrases that mark floor text, including the review floors: review
+/// independence, other-lineage review and the rule against headless peers
+/// (TSK-1302 AC-3). The contract test fails the build when an
 /// `overridable` unit's shipped text holds one. It is a regression check
 /// that supplements each unit's declared class and its review: it catches
 /// these phrases, not every paraphrase of a floor.
@@ -71,6 +73,12 @@ pub const FLOOR_PHRASES: &[&str] = &[
     "--no-verify",
     "override env",
     "headless",
+    "self-review",
+    "fresh-context",
+    "other-lineage",
+    "other lineage",
+    "another lineage",
+    "cross-lineage",
 ];
 
 const OVERRIDES_SCHEMA: u32 = 1;

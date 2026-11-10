@@ -470,10 +470,24 @@ fn assert_refused(overrides: &str, expected: &str) {
     let error = run(&v1(), root, "3.0.0").expect_err("update refuses");
     assert!(error.contains(expected), "{expected:?} in {error}");
     assert!(error.contains("update changed nothing"), "{error}");
+    assert!(error.contains(".codeflow/overrides.toml"), "{error}");
     assert_eq!(snapshot(root), before, "a refusal writes nothing");
     let doctor = doctor_overrides(root, plan_v1);
     assert_eq!(doctor.status, Status::Fail, "{doctor:?}");
     assert!(doctor.message.contains(expected), "{}", doctor.message);
+}
+
+/// As `assert_refused`, and the refusal names the one override by number.
+fn assert_override_refused(overrides: &str, expected: &str) {
+    assert_refused(overrides, expected);
+    let dir = scaffold();
+    update_v1(dir.path());
+    write(dir.path(), ".codeflow/overrides.toml", overrides);
+    let error = run(&v1(), dir.path(), "3.0.0").expect_err("update refuses");
+    assert!(
+        error.contains("override 1 in .codeflow/overrides.toml"),
+        "{error}"
+    );
 }
 
 fn one(target: &str, field: &str) -> String {
@@ -482,11 +496,11 @@ fn one(target: &str, field: &str) -> String {
 
 #[test]
 fn a_git_floor_unit_is_refused_by_its_floor() {
-    assert_refused(
+    assert_override_refused(
         &one("rule:git", "text = \"Commit anywhere.\""),
         "it targets a unit of the git floor",
     );
-    assert_refused(
+    assert_override_refused(
         &one("moment:secret", "action = \"anything\""),
         "the git floor is never overridden",
     );
@@ -494,11 +508,11 @@ fn a_git_floor_unit_is_refused_by_its_floor() {
 
 #[test]
 fn a_non_relaxable_unit_is_refused_by_its_floor() {
-    assert_refused(
+    assert_override_refused(
         &one("rule:authority", "text = \"Act freely.\""),
         "it targets a unit of the non-relaxable command class",
     );
-    assert_refused(
+    assert_override_refused(
         &one("moment:standing-rule", "action = \"accept any rule\""),
         "the non-relaxable command class is never overridden",
     );
@@ -506,24 +520,85 @@ fn a_non_relaxable_unit_is_refused_by_its_floor() {
 
 #[test]
 fn a_fixed_unit_is_refused_with_its_reason() {
-    assert_refused(
-        &one("rule:review", "text = \"Self-review is enough.\""),
-        "it targets a fixed unit",
-    );
-    assert_refused(
+    assert_override_refused(
         &one("moment:review", "action = \"skip it\""),
+        "it targets a fixed unit, which is not a text-override target: Review policy",
+    );
+}
+
+#[test]
+fn the_review_independence_rule_is_refused() {
+    assert_override_refused(
+        &one("rule:review", "text = \"Self-review is enough.\""),
+        "it targets a fixed unit, which is not a text-override target: Review policy",
+    );
+}
+
+#[test]
+fn the_cross_lineage_review_rule_is_refused() {
+    assert_override_refused(
+        &one("moment:shape", "action = \"plan alone; no other review\""),
+        "it targets a fixed unit, which is not a text-override target: The row states the other-lineage review",
+    );
+}
+
+#[test]
+fn the_headless_peer_rule_is_refused() {
+    assert_override_refused(
+        &one("moment:delegate", "action = \"run peers headless\""),
         "it targets a fixed unit",
     );
+    assert_override_refused(
+        &one("rule:review", "title = \"Headless review is fine.\""),
+        "the rule also states the no-headless rule",
+    );
+}
+
+#[test]
+fn an_unreadable_override_file_is_refused() {
+    let unreadable = "the override file cannot be read";
+    let dir = scaffold();
+    let root = dir.path();
+    update_v1(root);
+    std::fs::create_dir(root.join(".codeflow/overrides.toml")).unwrap();
+    let before = snapshot(root);
+    let error = run(&v1(), root, "3.0.0").expect_err("a directory is refused");
+    assert!(error.contains(unreadable), "{error}");
+    assert!(error.contains(".codeflow/overrides.toml"), "{error}");
+    assert_eq!(snapshot(root), before, "a refusal writes nothing");
+    assert_eq!(doctor_overrides(root, plan_v1).status, Status::Fail);
+
+    let dir = scaffold();
+    let root = dir.path();
+    update_v1(root);
+    std::fs::write(root.join(".codeflow/overrides.toml"), [0xff, 0xfe, 0x00]).unwrap();
+    let error = run(&v1(), root, "3.0.0").expect_err("invalid UTF-8 is refused");
+    assert!(error.contains(unreadable), "{error}");
+
+    #[cfg(unix)]
+    {
+        let dir = scaffold();
+        let root = dir.path();
+        update_v1(root);
+        write(root, "elsewhere.toml", &one("rule:outcome", "text = \"x\""));
+        std::os::unix::fs::symlink(
+            root.join("elsewhere.toml"),
+            root.join(".codeflow/overrides.toml"),
+        )
+        .unwrap();
+        let error = run(&v1(), root, "3.0.0").expect_err("a symlink is refused");
+        assert!(error.contains(unreadable), "{error}");
+    }
 }
 
 #[test]
 fn an_unknown_or_removed_unit_is_refused() {
     let removed = "it names a unit this build does not declare";
-    assert_refused(&one("rule:no-such-rule", "text = \"x\""), removed);
-    assert_refused(&one("moment:no-such-row", "action = \"x\""), removed);
-    assert_refused(&one("cf-present#no-such-section", "body = \"x\""), removed);
-    assert_refused(&one("cf-no-such-skill#completion", "body = \"x\""), removed);
-    assert_refused(
+    assert_override_refused(&one("rule:no-such-rule", "text = \"x\""), removed);
+    assert_override_refused(&one("moment:no-such-row", "action = \"x\""), removed);
+    assert_override_refused(&one("cf-present#no-such-section", "body = \"x\""), removed);
+    assert_override_refused(&one("cf-no-such-skill#completion", "body = \"x\""), removed);
+    assert_override_refused(
         &one("outcome", "text = \"x\""),
         "its target is not a declared name",
     );
@@ -536,6 +611,7 @@ fn a_duplicate_target_is_refused() {
         one("rule:outcome", "text = \"Once.\"")
     );
     assert_refused(&twice, "an earlier override already targets the same unit");
+    assert_refused(&twice, "override 2 in .codeflow/overrides.toml");
 }
 
 #[test]
