@@ -933,7 +933,8 @@
       "tests": [
         "codeflow validate --docs",
         "codeflow test --only docs-portal",
-        "cargo test -p codeflow-cli --test doc_fact_pins"
+        "cargo test -p codeflow-cli --test doc_fact_pins",
+        "cargo test -p codeflow-core --test guide_altitude_budget"
       ]
     },
     {
@@ -943,7 +944,9 @@
         ".codeflow/docs-portal.json"
       ],
       "tests": [
-        "codeflow test --only docs-portal"
+        "codeflow test --only docs-portal",
+        "cargo test -p codeflow-core --test guide_altitude_budget",
+        "cargo test -p codeflow-core --test manifest_consistency"
       ]
     },
     {

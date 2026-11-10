@@ -366,6 +366,29 @@ fn pr_525s_range_names_init_e2e_and_release_contract() {
     );
 }
 
+/// A docs page names the tests that read docs through the portal config,
+/// with no `docs/` literal a source sweep would find.
+#[test]
+fn a_docs_page_names_the_portal_config_readers() {
+    let report = guards(
+        &config(),
+        &[
+            changed("docs/cli.md"),
+            changed("docs-portal/portal.config.json"),
+        ],
+    );
+    assert!(report.guarded["docs/cli.md"]
+        .iter()
+        .any(|t| t.ends_with("--test guide_altitude_budget")));
+    let portal = &report.guarded["docs-portal/portal.config.json"];
+    for test in ["guide_altitude_budget", "manifest_consistency"] {
+        assert!(
+            portal.iter().any(|t| t.ends_with(&format!("--test {test}"))),
+            "{test}"
+        );
+    }
+}
+
 /// AC-10: a mapped path names its tests; an unmapped one is reported.
 #[test]
 fn an_unmapped_path_is_reported_as_unguarded() {

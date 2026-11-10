@@ -551,14 +551,7 @@ and CI runs it again.
 | Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
-
-`codeflow test guards` runs nothing. For the change from the merge base of
-`HEAD` with the task's line (or `--since <rev>`) to the working tree, it
-names the tests the config's `guards` rules give each touched path, prints
-each path no rule covers as unguarded, and lists the targets the declared
-inputs would select. Run the named tests as the build loop's targeted tests.
-No run applies the declared selection while no local record earns selection
-credit (ADR-0089).
+| `test guards` | Runs nothing. For the change from the merge base of `HEAD` with the task's line (or `--since <rev>`) to the working tree, names the tests the config's `guards` rules give each touched path, prints each path no rule covers as unguarded, and lists the targets the declared inputs would select. Run the named tests as the build loop's targeted tests. No run applies that selection while no local record earns selection credit (ADR-0089) |
 
 Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
