@@ -4162,6 +4162,113 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // TSK-1302: doctor's overrides check quotes the shipped text an override
+    // replaces; the clipped, trimmed and counted text is message wording only
+    // and decides no status.
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "clip",
+        "trim",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "clip",
+        "trim_end",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "describe",
+        "lines",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "describe",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1302: a missing override record means the file has no override
+    // state, and the merge base stays the pristine baseline the installed hash
+    // proves. A missing pristine baseline beside a record reads as empty,
+    // whose hash never equals both the record's pristine hash and the
+    // installed hash, so update refuses; absence grants nothing.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "Plan::load_old",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    // TSK-1302: strips only LF and CR line endings to compare a whole shipped
+    // line with the exact replaced text; no other character is removed.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "apply_units",
+        "trim_end_matches",
+        2,
+        "grammar:lf-crlf-line-endings",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "only_units_changed",
+        "trim_end_matches",
+        2,
+        "grammar:lf-crlf-line-endings",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "heading_level",
+        "trim_end_matches",
+        1,
+        "grammar:lf-crlf-line-endings",
+    ),
+    // TSK-1302: an override value or section body that is empty after a
+    // Unicode trim is refused; Unicode trimming only widens the refusal.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "row_value_ok",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "check_body",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1302: marker detection with a Unicode trim treats more lines as
+    // marker lines, which an override body refuses and the shipped text's
+    // contract test pins; a marker that does not parse refuses the file.
+    // Names come from the binary's shipped markers only.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "is_marker_line",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "parse_marker",
+        "split_whitespace",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "parse_marker",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
     // LF/CRLF framing only rejects unresolved conflict markers; accepted file bytes are never normalized or used as names.
     (
         "crates/codeflow-core/src/scaffold/update/pending.rs",
