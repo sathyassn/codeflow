@@ -257,6 +257,9 @@ git worktree add -q --detach "${judge}/target" "$target"
 trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true' EXIT
 branch=$(git symbolic-ref --short -q HEAD || true)
 (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
+# Project checks (TSK-1103): the target's .codeflow/base-checks.json checks run
+# from the target's own copies, before any of the change's code runs.
+(cd "${judge}/target" && codeflow ci base-checks --trusted "$target" --base "$(git merge-base "$head" "$target")" --head "$head")
 # Refuse a lowered pin before the project's own code runs, so nothing the
 # head brings can clear the refusal.
 [ -z "$lowered" ] ||

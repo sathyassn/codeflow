@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod acceptance;
 mod adopter;
+mod base_checks;
 mod change_class;
 mod classification;
 mod conflict_markers;
@@ -34,7 +35,7 @@ mod work_records;
 mod workflow_change;
 
 use change_class::ChangeClass;
-use clap::Args;
+use clap::{Args, Subcommand};
 use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
     adoption, any_blocking, git_hook, policy_schema, standards, GitPolicy, PolicyLevel, Violation,
@@ -53,8 +54,13 @@ use pr_body::find_section;
 use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 #[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct CiArgs {
+    /// Optional subcommand. When omitted, `codeflow ci` judges the range.
+    #[command(subcommand)]
+    pub command: Option<CiCommand>,
+
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
     /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
     /// protected branches. Each is read by exact ref: a `refs/` name as written, `origin/<name>`
@@ -205,6 +211,16 @@ pub struct CiArgs {
     /// goes over its budget (TSK-1306).
     #[arg(long, value_name = "FILE", hide = true)]
     pub timings_out: Option<PathBuf>,
+}
+
+/// The subcommands of `codeflow ci`.
+#[derive(Debug, Subcommand)]
+pub enum CiCommand {
+    /// Run the project checks the trusted commit declares in
+    /// `.codeflow/base-checks.json`, from that commit's own copies of each
+    /// script and its inputs (TSK-1103). The managed verdict job runs it
+    /// before it judges a pull request; any failure fails the job.
+    BaseChecks(base_checks::BaseChecksArgs),
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -369,6 +385,9 @@ fn ci_environment(
 }
 
 pub fn run(args: &CiArgs) -> i32 {
+    if let Some(CiCommand::BaseChecks(checks)) = &args.command {
+        return base_checks::run(checks);
+    }
     let mut timings = timing::Timings::start();
     let code = run_timed(args, &mut timings);
     if args.timings {
@@ -516,6 +535,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     note_lowered_security_levels(&root, &judging.raw, &head);
     if let Some(authority) = authority.as_ref() {
         note_changed_setup_hook(&root, authority.sha(), &head);
+        note_changed_project_inputs(&root, authority.sha(), &head);
     }
     let configured = &judging.policy.git;
     let mut tagged: Vec<TaggedViolation> = Vec::new();
@@ -2282,6 +2302,100 @@ fn setup_hook_note(root: &Path, base: &str, head: &str) -> Option<String> {
         codeflow_core::remedy::CI_SETUP_HOOK_CHANGED.remedy(),
     );
     Some(finding.line("codeflow ci", "note"))
+}
+
+/// TSK-1103: name a change to a file the managed CI runs from the trusted
+/// commit: the trusted-base check declaration, a script or input it
+/// declares, the dependency-audit exception hook, or a file that hook reads.
+/// The verdict is unchanged; the trusted commit's copies decide until the
+/// change lands, so its reviewer is the boundary.
+fn note_changed_project_inputs(root: &Path, base: &str, head: &str) {
+    for line in project_input_notes(root, base, head) {
+        println!("{line}");
+    }
+}
+
+/// The notes [`note_changed_project_inputs`] prints, one per changed path.
+/// Each side's declaration supplies the paths, so a change that adds,
+/// removes or renames a declared file is named; a path both a check and the
+/// exception hook read is named once, as a check's.
+fn project_input_notes(root: &Path, base: &str, head: &str) -> Vec<String> {
+    use codeflow_core::base_checks::{read_in, tree_at, AUDIT_EXCEPTIONS_HOOK, DECLARATION};
+    use codeflow_core::remedy::{Finding, CI_AUDIT_EXCEPTIONS_CHANGED, CI_BASE_CHECK_CHANGED};
+    let note = |text: String, remedy: codeflow_core::remedy::Remedy| {
+        Finding::new(text, remedy).line("codeflow ci", "note")
+    };
+    let unknown = |error: &str| {
+        vec![note(
+            format!("whether this change edits {DECLARATION}, a file its trusted-base checks run from, or the dependency-audit exception hook {AUDIT_EXCEPTIONS_HOOK} cannot be told: {error}"),
+            CI_BASE_CHECK_CHANGED.with(&[("path", DECLARATION)]),
+        )]
+    };
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) => return unknown(error.message()),
+    };
+    let (was, now) = match (tree_at(&repo, base), tree_at(&repo, head)) {
+        (Ok(was), Ok(now)) => (was, now),
+        (Err(error), _) | (_, Err(error)) => return unknown(&error),
+    };
+    // A declaration that cannot be read lists nothing; its own change is
+    // still named below.
+    let declared: Vec<_> = [&was, &now]
+        .into_iter()
+        .filter_map(|tree| read_in(&repo, tree).ok().flatten())
+        .collect();
+    let mut checks = BTreeSet::from([DECLARATION.to_string()]);
+    let mut audit = BTreeSet::from([AUDIT_EXCEPTIONS_HOOK.to_string()]);
+    for declaration in &declared {
+        checks.extend(declaration.check_paths());
+        audit.extend(declaration.audit_exception_inputs.iter().cloned());
+    }
+    let audit: Vec<String> = audit
+        .into_iter()
+        .filter(|path| !checks.contains(path))
+        .collect();
+    let mut notes = Vec::new();
+    let mut compare = |path: &str, role: &str, remedy: &'static codeflow_core::remedy::Clearing| {
+        let entries = (
+            codeflow_core::base_checks::entry_in(&was, path),
+            codeflow_core::base_checks::entry_in(&now, path),
+        );
+        let verb = match entries {
+            (Ok(None), Ok(Some(_))) => "adds",
+            (Ok(Some(_)), Ok(None)) => "removes",
+            (Ok(Some(a)), Ok(Some(b))) if a != b => "edits",
+            (Ok(_), Ok(_)) => return,
+            (Err(error), _) | (_, Err(error)) => {
+                notes.push(note(
+                    format!("whether this change edits {path}, {role}, cannot be told: {error}"),
+                    remedy.with(&[("path", path)]),
+                ));
+                return;
+            }
+        };
+        notes.push(note(
+            format!("this change {verb} {path}, {role}; the trusted commit's copy decides until this change lands"),
+            remedy.with(&[("path", path)]),
+        ));
+    };
+    for path in &checks {
+        let role = if path == DECLARATION {
+            "the declaration of the trusted-base checks the managed CI runs before it judges a pull request"
+        } else {
+            "a file a trusted-base check declared in .codeflow/base-checks.json runs from"
+        };
+        compare(path, role, &CI_BASE_CHECK_CHANGED);
+    }
+    for path in &audit {
+        let role = if path == AUDIT_EXCEPTIONS_HOOK {
+            "the dependency-audit exception hook the security review runs from the trusted commit"
+        } else {
+            "a file the dependency-audit exception hook reads (audit_exception_inputs in .codeflow/base-checks.json)"
+        };
+        compare(path, role, &CI_AUDIT_EXCEPTIONS_CHANGED);
+    }
+    notes
 }
 
 /// Report the policy source. Loading refuses malformed or unreadable policy;

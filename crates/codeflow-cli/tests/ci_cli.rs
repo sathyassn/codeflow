@@ -11,6 +11,9 @@
 
 #[path = "ci_cli/acceptance_fix.rs"]
 mod acceptance_fix;
+#[cfg(unix)]
+#[path = "ci_cli/base_checks.rs"]
+mod base_checks;
 #[path = "ci_cli/base_policy.rs"]
 mod base_policy;
 #[path = "ci_cli/cancelled_standalone.rs"]

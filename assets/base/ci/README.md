@@ -24,7 +24,7 @@ it reads from that platform's CI variables (`codeflow ci` auto-detects them):
 
 | File | Platform | Range source (verified variables) |
 |---|---|---|
-| `codeflow-ci.yml` | GitHub Actions | `github.event.pull_request.base.sha` / `.head.sha` / `.head.ref`, body via `CODEFLOW_PR_BODY` |
+| `codeflow-ci.yml` | GitHub Actions | the base branch's tip, resolved once per job from `github.event.pull_request.base.ref`, then `.head.sha` / `.head.ref`; the body is read by `codeflow-policy.yml` (see [Base branch tip](#base-branch-tip)) |
 | `.gitlab-ci.yml` | GitLab CI | target: `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, else `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` fetched from the merge request's project; `CI_COMMIT_SHA`, `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`, body via `CI_MERGE_REQUEST_DESCRIPTION` |
 | `bitbucket-pipelines.yml` | Bitbucket Pipelines | target: `BITBUCKET_PR_DESTINATION_COMMIT`, else `BITBUCKET_PR_DESTINATION_BRANCH` fetched from `origin`; `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (supply the body via `CODEFLOW_PR_BODY` or `--pr-body-file`) |
 | `ci-generic.sh` | anything with a working tree and full history (Makefile, other CI) | the target commit as `$1` (required) and the head as `$2` (default `HEAD`), or `BASE`/`HEAD` env; body via `CODEFLOW_PR_BODY` |
@@ -160,9 +160,11 @@ standards`, runs on `pull_request_target`, which takes the workflow from the
 default branch for every pull request whatever it targets. It checks that
 the run is for the default branch, checks out exactly that commit
 (`github.sha`), so the default branch's pin and policy apply to a pull
-request into a line too (ADR-0091), fetches the pull request's base and head
-only as git data, and asserts after every step that the checkout has not
-moved, and it refuses when that commit has no `.codeflow/policy.json`.
+request into a line too (ADR-0091), fetches the pull request's head and its
+base branch's tip only as git data, runs the project checks that commit
+declares (see [Trusted-base project checks](#trusted-base-project-checks)),
+and asserts after every step that the checkout has not moved, and it
+refuses when that commit has no `.codeflow/policy.json`.
 Push, schedule and dispatch runs only check the id registry, in their own
 workflow, `codeflow-registry.yml`, under the name `registry check`: a
 workflow those events start creates no check under a `trusted:` name, not
@@ -291,28 +293,43 @@ its own. A project that needs a toolchain of its own (a Node version with
 corepack and a frozen install, a pinned Python, a service) commits
 `.codeflow/ci-setup.sh`. The GitHub gates job and the shared pinned run of
 the GitLab, Bitbucket and generic wrappers source it after installing
-codeflow and just before `codeflow test --strict`, so the managed file stays
+codeflow and before `codeflow test --strict`, so the managed file stays
 managed and the gate runs once, on the project's toolchain:
 
-- It is sourced (`. ./.codeflow/ci-setup.sh`) under `set -eu` by the shell
-  that runs the gate, so write POSIX sh. Variables it exports and `PATH`
-  changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
-  or `GITHUB_ENV`. A `cd` in it does not move the gate.
+- It is sourced (`. ./.codeflow/ci-setup.sh`) under `set -eu`, so write
+  POSIX sh. In the GitLab, Bitbucket and generic scripts it shares the
+  shell that runs the gate, so variables it exports and `PATH` changes
+  reach `codeflow test`. On GitHub it runs in a step of its own, the
+  "Project setup hook" step, just before the gate step: the variables it
+  exports are carried to the gate step through `GITHUB_ENV`, and folders it
+  adds to `PATH` through `GITHUB_PATH`, in front of the runner's own. A
+  variable it removes, `NODE_OPTIONS`, `BASH_ENV`, `ENV`, the runner's
+  `GITHUB_` and `RUNNER_` names and the gate step's own `EVENT`,
+  `BASE_TIP` and `CODEFLOW_BIN` are not carried; it may also write
+  `GITHUB_ENV` or `GITHUB_PATH` itself. A `cd` in it does not move the gate.
 - A failing command fails the job before the gate runs. An `exit` in it,
-  even `exit 0`, fails the job too, since the gate never ran, but only
-  while the hook leaves the script's `EXIT` trap in place; a hook that
-  replaces that trap and then exits can end the job green, because it
-  shares the gate's shell (below).
-- It cannot skip the gate by accident: the gate runs the `codeflow` binary
-  found before the hook, from the folder the hook started in, and `set -eu`
-  holds again once the hook returns, so a `codeflow` function, a `PATH`
-  entry or `set +e` in it leaves the gate running. In the GitLab,
-  Bitbucket and generic scripts the exit trap is set again once the hook
-  returns too, so an `EXIT` trap the hook sets does not run; remove the
-  hook's own temporary files before it returns.
-- It is not a security boundary. It shares the gate's shell and runs with
-  the gate's authority, as the CI file does, which a change can also edit,
-  so a hook written to defeat the gate can. Review it as you would the CI
+  even `exit 0`, fails the job too while the hook leaves its `EXIT` trap in
+  place: on GitHub it fails the hook's step, so the job is red and the gate
+  step does not run. A hook that replaces that trap and then exits ends
+  only its own step, and on GitHub the gate step runs after it; in the
+  shared run it can end the job green, because it shares the gate's shell
+  (below).
+- It does not move the gate by accident. On GitHub the gate's binary is
+  found in a step before the hook runs, and the gate step reads the test
+  config from the base after the hook's step has ended (see "Base branch
+  tip"), so a `codeflow` function, a `PATH` entry, `set +e`, a shell
+  variable or a rewrite of `.codeflow/test-config.json` in an ordinary hook
+  leaves the gate running on the base's targets. In the shared run the gate runs the
+  `codeflow` binary found before the hook, from the folder the hook started
+  in, and `set -eu` holds again once the hook returns, so a `codeflow`
+  function, a `PATH` entry or `set +e` in it leaves the gate running. In
+  the GitLab, Bitbucket and generic scripts the exit trap is set again once
+  the hook returns too, so an `EXIT` trap the hook sets does not run;
+  remove the hook's own temporary files before it returns.
+- It is not a security boundary. The gates job runs the change's own
+  code, its CI file, this hook and its tests, with the runner's full
+  privileges, so a hook, a test command or a CI file edit written to pass
+  can decide that job. Review it as you would the CI
   file: `codeflow ci` in the enforcing policy job names a change that adds,
   edits or removes it, and you can protect `.codeflow/` and the CI file with
   required review. It runs in the gates job, never in the secret-scan job,
@@ -325,10 +342,110 @@ managed and the gate runs once, on the project's toolchain:
   whether the CI file sources it, and its first command; doctor does not
   audit what it does.
 
+## Trusted-base project checks
+
+A project can declare checks that the managed CI runs from the trusted
+commit before it judges a pull request, so the pull request cannot skip,
+replace or weaken them. Typical checks read the head as git data: a module
+boundary, a debt register that may only shrink, generated files that must
+match their source, an owners file that must cover each new path. The
+declaration is `.codeflow/base-checks.json`, project-owned and never written
+by `codeflow update`; its schema is `.codeflow/schemas/base-checks.schema.json`.
+
+```json
+{
+  "version": 1,
+  "checks": [
+    {
+      "name": "boundary",
+      "script": ".codeflow/checks/boundary.sh",
+      "interpreter": "bash",
+      "inputs": ["docs/boundary.txt"],
+      "timeout_seconds": 120
+    }
+  ],
+  "audit_exception_inputs": ["docs/dependency-register.csv"]
+}
+```
+
+- **Where it runs.** On GitHub, in the `trusted: commit standards` job of
+  `codeflow-policy.yml`, which GitHub runs from the default branch on
+  `pull_request_target`. The declaration, each script and each input come
+  from the default branch's commit that run is for, also for a pull request
+  into an integration line. It is never a step of `codeflow-ci.yml`, since a
+  pull request can rewrite that file and drop the step. The GitLab, Bitbucket
+  and generic scripts run it from the target commit after the target's
+  `codeflow ci` and before the setup hook and the test gate; those platforms
+  read the pipeline file from the change itself, so there it holds against a
+  change to the check, its inputs or the declaration, but not against a
+  change to the pipeline file. On GitLab, a pipeline execution policy is the
+  route to a boundary there.
+- **How it runs.** `codeflow ci base-checks --trusted <commit> --base <commit>
+  --head <commit> [--merge <commit>] [--head-repo <name>]` exports the
+  script and its inputs from the trusted commit to a folder outside the
+  checkout and runs `<interpreter> <script> <base> <head> <merge>
+  <head-repo>` there. The base is merge-base(head, base tip). The merge
+  argument is GitHub's test merge only when its parents are the base tip and
+  the head; it is empty for a conflicting pull request. The environment is
+  cleared to `PATH`, a fresh `HOME` and `TMPDIR`, `LANG`, `GIT_DIR` and
+  `CODEFLOW_CHECK_NAME`, `CODEFLOW_TRUSTED_SHA`, `CODEFLOW_TRUSTED_ROOT`,
+  `CODEFLOW_BASE_SHA`, `CODEFLOW_HEAD_SHA`, `CODEFLOW_MERGE_SHA` and
+  `CODEFLOW_HEAD_REPO`. `GIT_DIR` is a fresh git directory that reads the
+  repository's objects and holds only `refs/codeflow/trusted`, `base`,
+  `head` and `merge`, so `git show "$2:path"` reads the head while the
+  job's token and the checkout's configuration stay out of reach.
+- **Fails closed.** A check that exits non-zero fails the required check. So
+  does a declaration that cannot be parsed or is not a regular file, a
+  script or input that is missing, a symbolic link, a gitlink or unreadable,
+  an interpreter not on the runner's `PATH`, and a check past its timeout
+  (300 seconds by default, at most 900), which is stopped with everything it
+  started. Each failure names the check, the declaration and the path.
+- **The limit.** A check gets no candidate code and no toolchain beyond the
+  runner's (`bash`, `sh`, `python3`, `node`, `perl` on `ubuntu-24.04`). A
+  check that needs the change built, or a toolchain the setup hook installs,
+  belongs in the gates job, where the change's own code runs and is not a
+  boundary. A re-run keeps its event's default-branch commit, so it judges
+  with the declaration that commit holds.
+- **Review.** `codeflow ci` prints a note, with its own remedy, when a
+  change adds, edits or removes the declaration, a declared script or
+  input, the dependency-audit exception hook or a file the declaration lists
+  under `audit_exception_inputs`; the verdict is unchanged, since the
+  trusted commit's copies decide until the change lands. `codeflow doctor
+  --check ci-perimeter` lists the declared checks and warns when no managed
+  CI file runs them.
+
+## Base branch tip
+
+Every job that judges a pull request against its base resolves the base
+branch's tip once, at its start, and uses that commit for every later step:
+the pinned install, the pin comparison, the secret scan's trusted commit and
+range, the security review's trusted commit, and in the verdict job the range
+`codeflow ci` and `codeflow ids check` judge, merge-base(head, tip)..head.
+The secret scan resolves the tip inside its gitleaks step, so that nothing
+but the checkout runs before the scan. The event's base commit is never read, because it is the base when the event
+fired, and a later run would judge an old base's policy. On a pull request,
+with the workflow as shipped, the gates job's gate step reads
+`.codeflow/test-config.json` from that tip, after the project setup hook's
+step has ended and just before `codeflow test` reads it, so an ordinary edit
+of that file does not drop a target or lower a floor in its own run; the
+edit takes effect once it lands. A config the tip does not hold is removed,
+so the gate runs as the base would; one the tip holds as a link, or that
+cannot be read, fails the job. The change's own `.codeflow/policy.json`
+stays in place, so `codeflow validate --docs` checks it; the jobs that
+enforce its levels read them from the trusted commit. The gates job is not
+a trusted verdict: it runs the change's own workflow file, setup hook and
+tests with the runner's full privileges, so a hostile hook, test command or
+workflow edit can still decide it, and their reviewer remains the boundary
+(see "Project setup hook").
+
+The race that remains: a base that moves after a run is not seen by that
+run, and a push to the base fires no pull request event. Requiring branches
+to be up to date before merging, or a merge queue, closes it.
+
 ## Security review levels
 
 The GitHub `security review` job reads `git.security_review` and
-`git.dep_audit` from the trusted commit: the pull request's base, or the
+`git.dep_audit` from the trusted commit: the pull request's base branch tip, or the
 pushed commit on a push. A pull request cannot lower the level that judges
 it, and `codeflow ci` names a change that lowers or removes either key so
 its reviewer sees it. The job fails when the policy file is missing at that
@@ -363,7 +480,7 @@ the audit finds advisories, and may accept findings that a trusted file
 records.
 
 - **Trusted commit only.** The step reads the hook from the trusted commit
-  (the pull request's base, or the pushed commit) and exports that commit's
+  (the pull request's base branch tip, or the pushed commit) and exports that commit's
   files to a folder outside the checkout. The hook runs there with `bash`,
   so a path it reads, such as `docs/dependency-register.csv`, is the trusted
   commit's copy. A pull request that adds or changes the hook or the
@@ -492,7 +609,7 @@ as extra steps when your stack warrants:
   full history reachable from its resolved head.
   A wrapper can run `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<base-sha>..<head-sha> --"` with resolved commit ids.
   The GitHub workflow reads every exemption from the trusted commit: the
-  pull request's base, or the pushed commit on a push. A pull request
+  pull request's base branch tip, or the pushed commit on a push. A pull request
   cannot exempt the leak it adds, so a new exemption takes effect once its
   own pull request merges. The step deletes the checkout's
   `.gitleaksignore`, `.gitleaks.toml` and `.gitleaks.json` and gives

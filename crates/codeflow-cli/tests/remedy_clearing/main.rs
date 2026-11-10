@@ -177,6 +177,9 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_BODY_UNSUPPLIED", Runs),
     ("CI_SECURITY_LEVEL_LOWERED", Runs),
     ("CI_SETUP_HOOK_CHANGED", Runs),
+    ("CI_BASE_CHECK_CHANGED", Runs),
+    ("CI_AUDIT_EXCEPTIONS_CHANGED", Runs),
+    ("CI_BASE_CHECK_FAILED", Runs),
     ("CI_WORKFLOW_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("PATH_POLICY", Runs),
@@ -222,6 +225,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_POLICY_DECISION", Runs),
     ("DOCTOR_RELEASE_BACKEND", Runs),
     ("DOCTOR_CI_PLACEHOLDER", Runs),
+    ("DOCTOR_BASE_CHECKS_UNRUN", Runs),
+    ("DOCTOR_BASE_CHECKS_UNREADABLE", Runs),
     ("DOCTOR_CI_PIN_MISSING", Runs),
     ("DOCTOR_CI_PIN_TARGET", Runs),
     ("DOCTOR_CI_PIN_LOWERED", Runs),
@@ -1181,6 +1186,139 @@ fn clears_ci_setup_hook_changed() {
         let after = ci(root, &[]);
         assert!(!after.contains("codeflow ci: note: this change"), "{after}");
     }
+}
+
+const BASE_CHECKS: &str = ".codeflow/base-checks.json";
+const BASE_CHECK_SCRIPT: &str = ".codeflow/checks/boundary.sh";
+const AUDIT_REGISTER: &str = "docs/dependency-register.csv";
+
+/// A `ci_repo` whose main declares one trusted-base check and the audit
+/// exception hook's register, then a `feat/x` level with it.
+fn base_checks_repo() -> tempfile::TempDir {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(
+        root,
+        BASE_CHECKS,
+        &format!("{{\"version\": 1, \"checks\": [{{\"name\": \"boundary\", \"script\": \"{BASE_CHECK_SCRIPT}\", \"interpreter\": \"sh\", \"inputs\": [\"docs/boundary.txt\"]}}], \"audit_exception_inputs\": [\"{AUDIT_REGISTER}\"]}}\n"),
+    );
+    write(
+        root,
+        BASE_CHECK_SCRIPT,
+        "git diff --name-only \"$1\" \"$2\" | grep -q '^vendor/' && exit 1\nexit 0\n",
+    );
+    write(root, "docs/boundary.txt", "vendor/\n");
+    write(
+        root,
+        ".codeflow/audit-exceptions.sh",
+        "cat \"$CODEFLOW_AUDIT_FINDINGS\" | grep -F -f docs/dependency-register.csv || true\n",
+    );
+    write(root, AUDIT_REGISTER, "GHSA-xxxx\n");
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-q", "-m", "ci: declare a trusted-base check"],
+    );
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["merge", "--ff-only", "main"]);
+    dir
+}
+
+/// TSK-1103 AC-5: a range that edits a declared script, a declared input or
+/// the declaration prints the note with its own remedy, and the verdict is
+/// unchanged; restoring the target state clears it.
+#[test]
+fn clears_ci_base_check_changed() {
+    for path in [BASE_CHECK_SCRIPT, "docs/boundary.txt", BASE_CHECKS] {
+        let dir = base_checks_repo();
+        let root = dir.path();
+        let original = read(root, path);
+        let (status, _) = ci_status(root, &[]);
+        write(root, path, &format!("{original}\n"));
+        git(root, &["add", path]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: change a base check file"],
+        );
+        let (changed, before) = ci_status(root, &[]);
+        assert_eq!(changed, status, "the note changed the verdict:\n{before}");
+        let finding = format!("this change edits {path}");
+        assert_prints_row(block(&before, &finding), "CI_BASE_CHECK_CHANGED");
+        assert!(
+            before.contains(&format!("restore {path} to its target state")),
+            "{before}"
+        );
+        write(root, path, &original);
+        git(root, &["add", path]);
+        git(
+            root,
+            &["commit", "-q", "-m", "ci: restore the base check file"],
+        );
+        let after = ci(root, &[]);
+        assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
+
+/// TSK-1103 AC-10, AC-11: a range that edits the dependency-audit exception
+/// hook or the register the declaration names prints its own note, and the
+/// verdict is unchanged; restoring the target state clears it.
+#[test]
+fn clears_ci_audit_exceptions_changed() {
+    for path in [".codeflow/audit-exceptions.sh", AUDIT_REGISTER] {
+        let dir = base_checks_repo();
+        let root = dir.path();
+        let original = read(root, path);
+        let (status, _) = ci_status(root, &[]);
+        write(root, path, &format!("{original}GHSA-yyyy\n"));
+        git(root, &["add", path]);
+        git(root, &["commit", "-q", "-m", "ci: accept another advisory"]);
+        let (changed, before) = ci_status(root, &[]);
+        assert_eq!(changed, status, "the note changed the verdict:\n{before}");
+        let finding = format!("this change edits {path}");
+        assert_prints_row(block(&before, &finding), "CI_AUDIT_EXCEPTIONS_CHANGED");
+        write(root, path, &original);
+        git(root, &["add", path]);
+        git(root, &["commit", "-q", "-m", "ci: restore the exception"]);
+        let after = ci(root, &[]);
+        assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
+
+/// TSK-1103: a check that refuses the change prints its remedy; fixing the
+/// change and rerunning the printed command passes.
+#[test]
+fn clears_ci_base_check_failed() {
+    let dir = base_checks_repo();
+    let root = dir.path();
+    write(root, "vendor/lib.rs", "// copied in\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "feat: vendor a library"]);
+    let run = || {
+        codeflow(
+            root,
+            &[
+                "ci",
+                "base-checks",
+                "--trusted",
+                "main",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+            ],
+        )
+    };
+    let before = run();
+    assert_prints_row(block(&before, "check boundary"), "CI_BASE_CHECK_FAILED");
+    git(root, &["rm", "-q", "-r", "vendor"]);
+    git(
+        root,
+        &["commit", "-q", "-m", "fix: drop the vendored library"],
+    );
+    let after = run();
+    assert!(after.contains("boundary passed"), "{after}");
+    assert!(!after.contains("check boundary"), "{after}");
 }
 
 #[test]
@@ -2914,6 +3052,64 @@ fn clears_doctor_ci_placeholder() {
             assert!(printed.contains(&format!("in {path}")), "{printed}");
             // The release installer, as `codeflow init` writes it now.
             write(&root, path, &wired);
+        },
+    );
+}
+
+/// TSK-1103 AC-4: declared checks that the managed verdict workflow does not
+/// run are reported; putting the shipped step back clears it.
+#[test]
+fn clears_doctor_base_checks_unrun() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let path = ".github/workflows/codeflow-policy.yml";
+    let wired = read(&root, path);
+    assert!(wired.contains("codeflow ci base-checks"), "{wired}");
+    write(
+        &root,
+        ".codeflow/base-checks.json",
+        "{\"version\": 1, \"checks\": [{\"name\": \"boundary\", \"script\": \"a.sh\", \"interpreter\": \"sh\"}]}\n",
+    );
+    let declared = doctor(&root, "ci-perimeter");
+    assert!(
+        declared.contains(&format!(
+            ".codeflow/base-checks.json declares boundary, run from the trusted commit by {path}"
+        )),
+        "{declared}"
+    );
+    write(
+        &root,
+        path,
+        &wired.replace("codeflow ci base-checks", "true"),
+    );
+    prove(
+        "DOCTOR_BASE_CHECKS_UNRUN",
+        &format!("but {path} does not run them"),
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            assert!(printed.contains(&format!("back to {path}")), "{printed}");
+            write(&root, path, &wired);
+        },
+    );
+}
+
+/// TSK-1103: a declaration doctor cannot read is reported; fixing it to the
+/// schema clears it.
+#[test]
+fn clears_doctor_base_checks_unreadable() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    write(&root, ".codeflow/base-checks.json", "{\"version\": 2}\n");
+    prove(
+        "DOCTOR_BASE_CHECKS_UNREADABLE",
+        ".codeflow/base-checks.json cannot be read",
+        || doctor(&root, "ci-perimeter"),
+        |_| {
+            write(
+                &root,
+                ".codeflow/base-checks.json",
+                "{\"version\": 1, \"checks\": [{\"name\": \"boundary\", \"script\": \"a.sh\", \"interpreter\": \"sh\"}]}\n",
+            );
         },
     );
 }

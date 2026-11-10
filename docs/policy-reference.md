@@ -270,6 +270,33 @@ weights, datasets and fixtures, media, vendored binaries and installers
 belong in Git LFS, or in a release asset or package registry that the
 repository references by digest.
 
+## Project-owned CI inputs `codeflow ci` notes
+
+The managed CI reads some files a project owns and `codeflow update` never
+writes. A change to one of them prints a `codeflow ci` note with its own
+remedy code and leaves the verdict unchanged, since the trusted commit's
+copy decides until the change lands; its reviewer is the boundary. Each
+changed path prints one note naming it and what reads it. A rename names the
+old path removed and the new one added, a file replaced by a symbolic link
+is an edit, and a tree that cannot be read is named unknown, never a removal.
+
+Each input, what reads it and its remedy code:
+
+- `git.security_review`, `git.dep_audit` in `.codeflow/policy.json`: read by the security review; remedy `CI_SECURITY_LEVEL_LOWERED`.
+- `.codeflow/ci-setup.sh`: read by the gates job, in its own step before the gate step, and the shared pinned run, sourced before `codeflow test`; remedy `CI_SETUP_HOOK_CHANGED`.
+- `.codeflow/base-checks.json`: read by the trusted-base project checks (TSK-1103); remedy `CI_BASE_CHECK_CHANGED`.
+- each `script` and `inputs` path it declares, on either side of the range: read by the same checks; remedy `CI_BASE_CHECK_CHANGED`.
+- `.codeflow/audit-exceptions.sh`: read by the security review's project exception hook (TSK-294); remedy `CI_AUDIT_EXCEPTIONS_CHANGED`.
+- each `audit_exception_inputs` path in `.codeflow/base-checks.json`: read by the exception hook, such as its register; remedy `CI_AUDIT_EXCEPTIONS_CHANGED`.
+
+`.codeflow/test-config.json` is read by the gates job's gate step from the
+base branch's tip, after the project setup hook's step has ended, so an
+ordinary edit of a pull request's own copy does not decide its gate's
+targets. The gates job runs the change's own code, so a hostile setup hook,
+test command or workflow edit can still decide that job. The setup hook is
+named by `CI_SETUP_HOOK_CHANGED`, and the managed workflow files are judged
+by `CI_WORKFLOW_CHANGED`.
+
 ## Unsupported policy keys
 
 `security.script_bypass`, `security.sandbox_retry` and

@@ -3359,6 +3359,106 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
 /// file at all passes cleanly: the repo opted out or predates the workflow.
 /// WARN only, never a block.
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
+    let mut result = ci_perimeter_pin(opts);
+    let root = PathBuf::from(&opts.project_dir);
+    if let Some((status, line)) = base_checks_report(&root) {
+        result.message = format!("{}; {line}", result.message);
+        result.status = match (result.status, status) {
+            (Status::Fail, _) | (_, Status::Fail) => Status::Fail,
+            (Status::Warn(remedy), _) | (_, Status::Warn(remedy)) => Status::Warn(remedy),
+            (Status::Note(remedy), _) | (_, Status::Note(remedy)) => Status::Note(remedy),
+            (Status::Pass, Status::Pass) => Status::Pass,
+        };
+    }
+    result
+}
+
+/// The managed CI files that can run the trusted-base checks (TSK-1103):
+/// the GitHub verdict workflow at its installed path, then the copy-in
+/// GitLab and Bitbucket files at the paths their platforms read.
+fn base_check_runners(root: &Path) -> Vec<String> {
+    let policy = read_installed_manifest(root)
+        .ok()
+        .and_then(|installed| {
+            installed
+                .files
+                .iter()
+                .find(|(_, file)| file.src == "ci/codeflow-policy.yml")
+                .map(|(dest, _)| dest.clone())
+        })
+        .unwrap_or_else(|| ".github/workflows/codeflow-policy.yml".to_string());
+    vec![
+        policy,
+        ".gitlab-ci.yml".into(),
+        "bitbucket-pipelines.yml".into(),
+    ]
+}
+
+/// The doctor line for the trusted-base checks (TSK-1103): `None` when the
+/// project declares none, so a project without the feature sees no change;
+/// else the declared checks and whether a managed CI file runs them.
+fn base_checks_report(root: &Path) -> Option<(Status, String)> {
+    use crate::base_checks::{read_worktree, DECLARATION};
+    let declaration = match read_worktree(root) {
+        Ok(Some(declaration)) if !declaration.checks.is_empty() => declaration,
+        Ok(_) => return None,
+        Err(error) => {
+            return Some((
+                Status::Warn(remedy::DOCTOR_BASE_CHECKS_UNREADABLE.remedy()),
+                format!("base checks: {error}"),
+            ))
+        }
+    };
+    let names: Vec<&str> = declaration.checks.iter().map(|c| c.name.as_str()).collect();
+    let names = names.join(", ");
+    let runners = base_check_runners(root);
+    let mut running = Vec::new();
+    let mut silent = Vec::new();
+    for dest in &runners {
+        let path = root.join(dest);
+        match crate::absence::proven_absent(&path) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                return Some((
+                    Status::Fail,
+                    format!("base checks: cannot inspect {dest}: {error}"),
+                ))
+            }
+        }
+        match crate::bounded_file::read_regular_to_string(&path) {
+            Ok(content) if content.contains("codeflow ci base-checks") => {
+                running.push(dest.clone());
+            }
+            Ok(_) => silent.push(dest.clone()),
+            Err(error) => {
+                return Some((
+                    Status::Fail,
+                    format!("base checks: cannot read {dest}: {error}"),
+                ))
+            }
+        }
+    }
+    if let Some(dest) = silent.first().or(if running.is_empty() {
+        runners.first()
+    } else {
+        None
+    }) {
+        return Some((
+            Status::Warn(remedy::DOCTOR_BASE_CHECKS_UNRUN.with(&[("path", dest)])),
+            format!("base checks: {DECLARATION} declares {names}, but {dest} does not run them (no `codeflow ci base-checks` step)"),
+        ));
+    }
+    Some((
+        Status::Pass,
+        format!(
+            "base checks: {DECLARATION} declares {names}, run from the trusted commit by {}",
+            running.join(", ")
+        ),
+    ))
+}
+
+fn ci_perimeter_pin(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
     let github = match ci_workflow_dest(&root) {
@@ -7818,8 +7918,15 @@ mod tests {
         assert_unverified(&r);
         let head = edit_line(
             SHIPPED_GITHUB_CI,
-            "PIN_REF: ${{ github.event.pull_request.base.sha || github.sha }}",
+            "PIN_REF: ${{ steps.base.outputs.tip || github.sha }}",
             "PIN_REF: ${{ github.event.pull_request.head.sha || github.sha }}",
+        );
+        assert_unverified(&perimeter(CI_DEFAULT_DEST, &head));
+        // The step that resolves the base tip decides the pin too.
+        let head = edit_line(
+            SHIPPED_GITHUB_CI,
+            "tip=$(git rev-parse --verify 'refs/codeflow/base-tip^{commit}')",
+            "tip=\"$HEAD_SHA\"",
         );
         assert_unverified(&perimeter(CI_DEFAULT_DEST, &head));
         let head = edit_line(
