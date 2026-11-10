@@ -1,0 +1,11 @@
+id = "TSK-1420"
+uid = "0379189d-7aca-4d11-bc05-cebd954efa22"
+kind = "TSK"
+title = "A squash-merging repository's pull request title meets the commit subject rules"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T21:34:21Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
