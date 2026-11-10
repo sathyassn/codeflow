@@ -265,6 +265,11 @@ COVERAGE_JOB = """\
         shard: [@SHARDS@]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Watch the free disk
+        shell: bash
+        run: |
+          df -h / "$GITHUB_WORKSPACE"
+          nohup python3 -B scripts/disk-margin.py watch --out "$RUNNER_TEMP/disk-low.json" --path "$GITHUB_WORKSPACE" > /dev/null 2>&1 &
       - name: Install the differential shells
         run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
@@ -318,6 +323,12 @@ COVERAGE_JOB = """\
             target/nextest/codeflow/tests.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Lowest free disk of this shard
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          df -h / "$GITHUB_WORKSPACE"
+          python3 -B scripts/disk-margin.py report --low "$RUNNER_TEMP/disk-low.json" --min-free-gib 10 --path "$GITHUB_WORKSPACE" --size target/llvm-cov-target
 """
 COVERAGE_REPORT_JOB = """\
     if: always() && needs.gates-coverage.result != 'skipped' && (@CONDITION@)
