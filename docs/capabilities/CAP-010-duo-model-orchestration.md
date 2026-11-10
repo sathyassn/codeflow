@@ -467,8 +467,12 @@ range before the reviewed commit; the verb also refuses uncommitted changes
 outside the record. A clean task landing can carry that reviewed source onto
 its line, including when only status and Closeout changed between the review
 and the landed task head; unrelated line work before the landing does not
-invalidate that source. Direct work and transported work use the same
-binding predicate. At a batch landing each completion binds at the commit
+invalidate that source. A record planned on the line after the task branch
+was cut can supply the scope the reviewed head lacks, when the record at the
+landing merge equals the record at its first parent, the completion changes
+only its status and Closeout, and only the record differs between the reviewed
+head and the merge's second parent (TSK-1083). Direct work and transported
+work use the same binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one candidate.
 When such a merge brings a landed planning move of the task's epic, the
 record may also differ by that edit alone: the `epic_id` line and plain

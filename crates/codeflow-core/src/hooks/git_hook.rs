@@ -168,11 +168,9 @@ fn pre_commit_engine(
             report.violations.extend(paths.violations);
             report.status.extend(paths.notes);
         }
-        Err(error) => report.violations.push(Violation::always_blocking(
-            "git.path_policy",
-            format!("cannot verify staged paths: {error}"),
-            "repair the named policy source or Git object, then retry",
-        )),
+        Err(error) => report
+            .violations
+            .push(unverified_staged_paths(root, &error)),
     }
 
     if policy.secret_scan.is_active() {
@@ -187,6 +185,30 @@ fn pre_commit_engine(
     }
 
     Ok(report)
+}
+
+/// The refusal when the staged paths cannot be judged. A landed policy this
+/// binary cannot read, in a repository that declares a newer `CodeFlow`, is
+/// the too-old refusal (TSK-1285); it blocks the same way.
+fn unverified_staged_paths(root: &Path, error: &str) -> Violation {
+    let unread_policy = super::landed_policy::is_invalid_policy(error);
+    let age = crate::scaffold::too_old::BinaryAge::at_root(root, env!("CARGO_PKG_VERSION"));
+    if let Some(refusal) = age.too_old("its policy").filter(|_| unread_policy) {
+        return Violation::always_blocking(
+            crate::scaffold::too_old::RULE,
+            refusal.message,
+            &refusal.remedy,
+        );
+    }
+    let doubt = age
+        .may_be_older()
+        .filter(|_| unread_policy)
+        .map_or_else(String::new, |line| format!("; {line}"));
+    Violation::always_blocking(
+        "git.path_policy",
+        format!("cannot verify staged paths: {error}{doubt}"),
+        "repair the named policy source or Git object, then retry",
+    )
 }
 
 /// The staged secret scan: the built-in patterns, then, when the policy
@@ -569,13 +591,25 @@ pub fn commit_msg_from(
         .extend(policy_characters_in_message(policy, message, source));
     let cleaned = strip_commit_comments(message);
     let Some(subject) = cleaned.lines().find(|l| !l.trim().is_empty()) else {
-        return report; // git rejects empty messages itself
+        // Git rejects an empty message itself, unless told to allow one; a
+        // blank merge message still has no ticket (TSK-1350 review F1).
+        if is_merge {
+            report
+                .violations
+                .extend(merge_ticket_violation(policy, &cleaned));
+        }
+        return report;
     };
 
     // A genuine merge commit carries a git-authored subject/body — exempt it
     // ONCE, structurally (is_merge is decided from MERGE_HEAD, not the subject
     // text), so a one-parent commit named `Merge ...` is still fully checked.
+    // A project that opts in with `commit_ticket_merges` still judges the
+    // merge for its ticket footer (TSK-1350).
     if is_merge && subject.starts_with("Merge ") {
+        report
+            .violations
+            .extend(merge_ticket_violation(policy, &cleaned));
         return report;
     }
 
@@ -618,7 +652,11 @@ pub fn commit_msg_from(
     // configured ticket keys; the returned level distinguishes a required-but-
     // missing ticket (`commit_ticket_required`) from a malformed present one
     // (block).
-    if !policy.commit_ticket_keys.is_empty() {
+    if is_merge && policy.commit_ticket_merges.is_active() {
+        report
+            .violations
+            .extend(merge_ticket_violation(policy, &cleaned));
+    } else if !policy.commit_ticket_keys.is_empty() {
         if let Some((level, reason)) = standards::check_commit_ticket(
             subject,
             &cleaned,
@@ -659,6 +697,40 @@ pub fn commit_msg_from(
     }
 
     report
+}
+
+/// The merge ticket rule (`git.commit_ticket_merges`, TSK-1350) over one
+/// merge commit's message: `None` when the rule is off, the project has no
+/// ticket keys, or the merge carries a matching ticket trailer. The finding
+/// names the merge commit, the rule and the keys that satisfy it, at the
+/// rule's level; a malformed present ticket blocks, as on any commit. Both
+/// the commit-msg hook and `codeflow ci` call this, so the two planes judge a
+/// landing merge alike. The one-parent subject exemptions (`fixup!`,
+/// `squash!`, `Revert `, `Reapply `) do not apply, and a blank message is a
+/// missing ticket, so the rule fails closed (review F1).
+#[must_use]
+pub fn merge_ticket_violation(policy: &GitPolicy, message: &str) -> Option<Violation> {
+    if !policy.commit_ticket_merges.is_active() || policy.commit_ticket_keys.is_empty() {
+        return None;
+    }
+    let cleaned = strip_commit_comments(message);
+    let (level, reason) = standards::check_ticket_trailers(
+        &cleaned,
+        &policy.commit_ticket_keys,
+        policy.commit_ticket_merges,
+        &policy.commit_ticket_pattern,
+    )?;
+    let named = match cleaned.lines().find(|l| !l.trim().is_empty()) {
+        Some(subject) => format!("merge commit '{subject}'"),
+        None => "merge commit with an empty message".to_string(),
+    };
+    let keys = policy.commit_ticket_keys.join(", ");
+    Some(Violation::new(
+        "git.commit_ticket_merges",
+        level,
+        format!("{named}: {reason}"),
+        crate::remedy::COMMIT_TICKET.with(&[("keys", &keys)]),
+    ))
 }
 
 /// The policy-character rule (ADR-0067) over one commit message, `None` when
@@ -1636,9 +1708,12 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
         .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
 
-/// Time budget for the whole pre-push set. A push set that takes longer still
+/// The shipped time budget for the whole pre-push set,
+/// [`super::limits::PUSH_BUDGET`]; a project sets its own with
+/// `git.push_budget_seconds` (TSK-1306). A push set that takes longer still
 /// runs to its verdict, but the hook names the slowest step (TSK-132).
-pub const PUSH_SET_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+pub const PUSH_SET_BUDGET: std::time::Duration =
+    std::time::Duration::from_secs(super::limits::PUSH_BUDGET.default);
 
 /// One timed step of the push set.
 #[derive(Debug, Clone)]
@@ -1647,10 +1722,15 @@ pub struct PushStep {
     /// (TSK-449).
     pub name: String,
     pub duration: std::time::Duration,
+    /// The step's slowest parts, slowest first, where it reports them: a
+    /// `codeflow ci` step's slowest checks (TSK-1306). Empty otherwise.
+    pub parts: Vec<(String, std::time::Duration)>,
 }
 
 /// When the whole push set took longer than `budget`, the note naming its
-/// slowest built-in step and the push-set rule that drops it.
+/// slowest built-in step, the slowest checks inside it where the step
+/// reports them, and the push-set rule that drops it. The note reports the
+/// overrun; it never refuses the push.
 #[must_use]
 pub fn over_budget_note(
     steps: &[PushStep],
@@ -1666,14 +1746,26 @@ pub fn over_budget_note(
         budget.as_secs()
     );
     Some(match steps.iter().max_by_key(|s| s.duration) {
-        Some(slow) => crate::remedy::Finding::new(
-            format!(
-                "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key",
-                slow.name,
-                slow.duration.as_secs_f64()
-            ),
-            crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy(),
-        ),
+        Some(slow) => {
+            let inside = if slow.parts.is_empty() {
+                String::new()
+            } else {
+                let parts: Vec<String> = slow
+                    .parts
+                    .iter()
+                    .map(|(check, spent)| format!("{check} {:.1}s", spent.as_secs_f64()))
+                    .collect();
+                format!("; slowest checks in it: {}", parts.join(", "))
+            };
+            crate::remedy::Finding::new(
+                format!(
+                    "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key{inside}",
+                    slow.name,
+                    slow.duration.as_secs_f64()
+                ),
+                crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy(),
+            )
+        }
         None => crate::remedy::Finding::new(head, crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy()),
     })
 }
@@ -2594,6 +2686,127 @@ mod tests {
             .violations
             .iter()
             .any(|v| v.rule == "git.commit_ticket"));
+    }
+
+    fn merge_ticket_policy(merges: PolicyLevel) -> GitPolicy {
+        GitPolicy {
+            commit_ticket_keys: vec!["Refs".into(), "Closes".into()],
+            commit_ticket_required: PolicyLevel::Block,
+            commit_ticket_merges: merges,
+            ..GitPolicy::default()
+        }
+    }
+
+    fn merge_ticket_finding(report: &StageReport) -> Option<&Violation> {
+        report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.commit_ticket_merges")
+    }
+
+    #[test]
+    fn merge_ticket_rule_is_off_by_default_and_merges_stay_exempt() {
+        // TSK-1350 AC-1: the key defaults off, and with it off a real merge
+        // with git's subject is exempt as before, footer or not.
+        assert_eq!(GitPolicy::default().commit_ticket_merges, PolicyLevel::Off);
+        let policy = merge_ticket_policy(PolicyLevel::Off);
+        let report = commit_msg(&policy, "Merge branch 'task/x' into line\n", true);
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        assert!(merge_ticket_violation(&policy, "Merge branch 'task/x'\n").is_none());
+    }
+
+    #[test]
+    fn merge_ticket_rule_judges_git_default_merge_subject() {
+        // TSK-1350 AC-2: with the key on, git's `Merge ...` subject is judged
+        // for its ticket footer; the other message rules still skip it.
+        let policy = merge_ticket_policy(PolicyLevel::Block);
+        let missing = commit_msg(&policy, "Merge branch 'task/x' into line\n", true);
+        let v = merge_ticket_finding(&missing).expect("a merge ticket finding");
+        assert_eq!(v.level, PolicyLevel::Block);
+        assert_eq!(missing.violations.len(), 1, "{:?}", missing.violations);
+        let present = commit_msg(
+            &policy,
+            "Merge branch 'task/x' into line\n\nRefs: TSK-1\n",
+            true,
+        );
+        assert!(present.violations.is_empty(), "{:?}", present.violations);
+    }
+
+    #[test]
+    fn merge_ticket_rule_judges_author_merge_subject() {
+        // TSK-1350 AC-2: an author's own merge subject is judged by the merge
+        // rule at its level, once, even when commits need no ticket.
+        let policy = GitPolicy {
+            commit_ticket_required: PolicyLevel::Off,
+            ..merge_ticket_policy(PolicyLevel::Warn)
+        };
+        let missing = commit_msg(&policy, "feat: land the parser\n\n- merge it\n", true);
+        let v = merge_ticket_finding(&missing).expect("a merge ticket finding");
+        assert_eq!(v.level, PolicyLevel::Warn);
+        assert!(!missing
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_ticket"));
+        let present = commit_msg(&policy, "feat: land the parser\n\nCloses: TSK-2\n", true);
+        assert!(present.violations.is_empty(), "{:?}", present.violations);
+        // A one-parent commit keeps the ordinary ticket rule.
+        let plain = commit_msg(&policy, "feat: land the parser\n\n- merge it\n", false);
+        assert!(merge_ticket_finding(&plain).is_none());
+    }
+
+    #[test]
+    fn merge_ticket_rule_has_no_subject_prefix_exemption() {
+        // TSK-1350 review F1: a merge whose subject starts with one of the
+        // one-parent exempt prefixes is still judged; a blank merge message
+        // is a missing ticket. A one-parent commit keeps the exemption.
+        let policy = merge_ticket_policy(PolicyLevel::Block);
+        for subject in [
+            "fixup! land the thing",
+            "squash! land the thing",
+            "Revert \"feat: x\"",
+            "Reapply \"feat: x\"",
+        ] {
+            let missing = commit_msg(&policy, &format!("{subject}\n"), true);
+            assert!(
+                merge_ticket_finding(&missing).is_some(),
+                "{subject}: {:?}",
+                missing.violations
+            );
+            let present = commit_msg(&policy, &format!("{subject}\n\nRefs: TSK-1\n"), true);
+            assert!(
+                merge_ticket_finding(&present).is_none(),
+                "{subject}: {:?}",
+                present.violations
+            );
+            let plain = commit_msg(&policy, &format!("{subject}\n"), false);
+            assert!(merge_ticket_finding(&plain).is_none(), "{subject}");
+            assert!(!plain
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.commit_ticket"));
+        }
+        for blank in ["", "   \n\t\n", "# only a comment\n"] {
+            let report = commit_msg(&policy, blank, true);
+            let v = merge_ticket_finding(&report).expect("a blank merge is refused");
+            assert!(v.message.contains("empty message"), "{}", v.message);
+            assert!(commit_msg(&policy, blank, false).violations.is_empty());
+        }
+    }
+
+    #[test]
+    fn merge_ticket_refusal_names_commit_rule_and_keys() {
+        // TSK-1350 AC-4.
+        let policy = merge_ticket_policy(PolicyLevel::Block);
+        let v = merge_ticket_violation(&policy, "Merge branch 'task/x' into line\n")
+            .expect("a finding");
+        assert_eq!(v.rule, "git.commit_ticket_merges");
+        assert!(
+            v.message
+                .contains("merge commit 'Merge branch 'task/x' into line'"),
+            "{}",
+            v.message
+        );
+        assert!(v.message.contains("Refs, Closes"), "{}", v.message);
     }
 
     #[test]
@@ -3778,7 +3991,41 @@ mod tests {
         PushStep {
             name: name.into(),
             duration: std::time::Duration::from_secs(secs),
+            parts: Vec::new(),
         }
+    }
+
+    /// TSK-1306 AC-1: over the budget, the note names the slowest checks
+    /// inside a `codeflow ci` step, in the order the step gave them; under
+    /// it, nothing is printed. A project budget is the threshold.
+    #[test]
+    fn over_budget_names_the_slowest_checks_inside_ci() {
+        let mut ci = step("codeflow ci --head abc --branch feat/x", 70);
+        ci.parts = vec![
+            (
+                "acceptance".into(),
+                std::time::Duration::from_millis(41_200),
+            ),
+            (
+                "work-records".into(),
+                std::time::Duration::from_millis(20_050),
+            ),
+        ];
+        let steps = [ci, step("release preflight (feat/x)", 2)];
+        let total = std::time::Duration::from_secs(72);
+        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
+        assert!(
+            note.contains("slowest checks in it: acceptance 41.2s, work-records 20.1s"),
+            "{note}"
+        );
+        let budget = std::time::Duration::from_secs(90);
+        assert!(over_budget_note(&steps, total, budget).is_none());
+        let note = over_budget_note(&steps, total, std::time::Duration::from_secs(30))
+            .unwrap()
+            .to_string();
+        assert!(note.contains("over its 30s budget"), "{note}");
     }
 
     #[test]

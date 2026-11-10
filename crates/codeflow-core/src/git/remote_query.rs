@@ -497,7 +497,15 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
 
 /// Run `command` with no input, within `deadline` (then its whole process
 /// group is killed) and [`MAX_ANSWER_BYTES`], and return its answer.
-fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+fn bounded(command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+    text_answer(&bounded_bytes(command, deadline)?)
+}
+
+/// [`bounded`], returning the answer's bytes undecoded.
+fn bounded_bytes(
+    mut command: std::process::Command,
+    deadline: Duration,
+) -> Result<Vec<u8>, Failure> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -594,7 +602,33 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
         }
         return Err(Failure::Exit(status.code()));
     }
-    text_answer(&bytes)
+    Ok(bytes)
+}
+
+fn local_read_failure(why: Failure) -> String {
+    match why {
+        Failure::Exit(_) | Failure::Authentication => "git failed".to_string(),
+        Failure::Timeout(deadline) => format!("git gave no answer within {}", seconds(deadline)),
+        Failure::Other(why) => why,
+    }
+}
+
+/// [`bounded`] for a local git read in another module: the answer, or why
+/// there is none, as text (TSK-1184 `remote_identity`).
+pub(crate) fn bounded_text(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<String, String> {
+    bounded(command, deadline).map_err(local_read_failure)
+}
+
+/// [`bounded_text`] with the answer's bytes undecoded, for a listing whose
+/// unrelated entries need not be text (TSK-1184 `remote_identity`).
+pub(crate) fn bounded_raw(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<Vec<u8>, String> {
+    bounded_bytes(command, deadline).map_err(local_read_failure)
 }
 
 /// Whether git's diagnostics carry an authentication marker. The bytes are

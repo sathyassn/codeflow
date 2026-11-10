@@ -509,6 +509,30 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // RemoteProvider::name returns the provider's fixed label for the dry-run report; no git name is decoded.
+    (
+        "codeflow-core/src/remote.rs",
+        "RemoteProvider::preview",
+        "name",
+        1,
+        "format-contract",
+    ),
+    // RemoteProvider::name returns the provider's fixed label for the fallback report; no git name is decoded.
+    (
+        "codeflow-core/src/remote.rs",
+        "GithubProvider::preview",
+        "name",
+        1,
+        "format-contract",
+    ),
+    // Only the stderr of a failed `git remote get-url --push` is shown in the refusal; the exit status decides, and the push URLs on stdout are decoded strictly.
+    (
+        "codeflow-core/src/remote.rs",
+        "origin_on",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
         "codeflow-core/src/root_checkout.rs",
@@ -600,7 +624,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // commit subjects (message text) searched for a task id
     (
         "codeflow-core/src/validate/mod.rs",
-        "landed_pull_requests",
+        "merge_sources",
         "from_utf8_lossy",
         1,
         "grammar:merge-subject",
@@ -1828,6 +1852,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // A ruleset answer that does not parse reads as Null, which has no bypass list, so ruleset_bound returns Bypass::Unknown and the registry rules read as unread, never as bound.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "ruleset_bound",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // Trims the stderr of a failed `git remote get-url --push` only to show it in the refusal; the exit status decides.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "origin_on",
+        "trim",
+        1,
+        "display",
+    ),
     // A gh answer that does not parse reads as Null, so the check returns a note that names no default branch or no readable rules, never a pass.
     (
         "crates/codeflow-core/src/doctor/remote_perimeter.rs",
@@ -2347,6 +2387,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "RulesOut::read",
+        "split_terminator",
+        1,
+        "display",
+    ),
+    // The child's per-check timings only name slow checks in the over-budget note (TSK-1306); a missing or unreadable file drops the breakdown and never changes the push's verdict.
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "RulesOut::timings",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // The child's per-check timings only name slow checks in the over-budget note (TSK-1306); each LF row's tab-separated name is checked as a plain check name before it is shown.
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "RulesOut::timings",
         "split_terminator",
         1,
         "display",
@@ -2881,6 +2937,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:git-commit-message-lines",
     ),
+    // TSK-1350: the merge ticket rule finds a merge commit's subject as commit_msg_from does; no ref/path identity is derived from this text.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
+        "lines",
+        1,
+        "framing:git-commit-message-lines",
+    ),
     // TSK-412: `gitleaks version` output trimmed, then compared whole with the pinned ASCII version; any other output refuses.
     (
         "crates/codeflow-core/src/hooks/gitleaks.rs",
@@ -2908,6 +2972,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_from",
+        "trim",
+        1,
+        "grammar:git-commit-message",
+    ),
+    // TSK-1350: the merge commit's subject is found as in commit_msg_from; no ref/path identity is derived from this text.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
         "trim",
         1,
         "grammar:git-commit-message",
@@ -3314,7 +3386,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "lines",
         1,
         "framing:conventional-commits-lines",
@@ -3322,7 +3394,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
         "trim_end",
         1,
         "grammar:conventional-commits",
@@ -3861,10 +3933,26 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A write answer that does not parse reads as Null, whose bypass list differs from the one sent, so the ruleset is reported unconfirmed, never applied.
     (
         "crates/codeflow-core/src/remote.rs",
-        "GithubProvider::apply_owned",
+        "GithubProvider::send",
         "obtain-absent:from_str",
         1,
         "unproven",
+    ),
+    // An --adopt ruleset or owned name that is blank after trimming is refused; the untrimmed text is what is matched, exactly.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "Adopt::parse",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
+    // A blank --branch is refused; the untrimmed name is what limits the run and is looked up on the host.
+    (
+        "crates/codeflow-cli/src/cmd/remote.rs",
+        "run",
+        "trim",
+        1,
+        "schema-reject-only",
     ),
     // A bypass actor's missing type or mode is shown as a placeholder in a report or failure line; the non-empty list alone decides.
     (
@@ -4322,18 +4410,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; a build-output folder whose last name is not UTF-8 is refused, and the other components stay native path bytes, never decoded lossily (TSK-1044).
+    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; present bytes become the native path without decoding or normalization; target_anchor_for refuses a build-output folder whose last name is not UTF-8 and keeps the other components as native path bytes, never decoded lossily (TSK-1044). The one read serves target_dir and target_anchor (TSK-1369).
     (
         "crates/codeflow-core/src/testing/delivery.rs",
-        "target_anchor",
-        "obtain-absent:var_os",
-        1,
-        "format-contract",
-    ),
-    // var_os returns OS bytes or genuine unset; present CARGO_TARGET_DIR bytes become the native PathBuf without decoding or normalization.
-    (
-        "crates/codeflow-core/src/testing/delivery.rs",
-        "target_dir",
+        "build_output_setting",
         "obtain-absent:var_os",
         1,
         "format-contract",
@@ -4545,7 +4625,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Git log emits one merge subject per LF record; subjects are metadata with newline already collapsed by Git, and branch extraction uses literal markers.
     (
         "crates/codeflow-core/src/validate/mod.rs",
-        "landed_pull_requests",
+        "merge_sources",
         "lines",
         1,
         "framing:validate-mod-landed-pull-requests-records",
@@ -4917,10 +4997,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding (through later_change and later_change_finding).
+    // An unreadable reviewed or landed-span tree produces a refusal finding.
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
-        "later_change_judged",
+        "later_path_change",
         "obtain-absent:find_commit",
         1,
         "unproven",
@@ -6498,7 +6578,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "conventional-commits-lines",
         "crates/codeflow-core/src/hooks/standards.rs",
-        "check_commit_ticket",
+        "check_ticket_trailers",
     ),
     (
         "conventional-commits-lines",
@@ -6539,6 +6619,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "git-commit-message-lines",
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_with_files",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "merge_ticket_violation",
     ),
     (
         "git-commit-message-lines",
@@ -6758,7 +6843,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "validate-mod-landed-pull-requests-records",
         "crates/codeflow-core/src/validate/mod.rs",
-        "landed_pull_requests",
+        "merge_sources",
     ),
     (
         "validate-portal-lookups-hook-stage-names-records",
@@ -7039,6 +7124,10 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/git/remote_identity.rs", "accepts_ssh_configuration", "ErrorKind::NotFound", 1, "A missing allow file means the allow is off, so the SSH text check still runs: absence only ever makes the check stricter. Every other open error refuses (TSK-1184)."),
+    ("crates/codeflow-core/src/git/remote_identity.rs", "accepts_ssh_configuration", "is_file", 1, "Type check on the opened descriptor's metadata; anything but a regular file refuses, so nothing is read as absent (TSK-1184)."),
+    ("crates/codeflow-core/src/git/remote_identity.rs", "refuse_ssh_commands", "is_file", 1, "Type check on metadata_optional, which already proved the file exists; a non-file SSH configuration refuses, so nothing is read as absent (TSK-1184)."),
+    ("crates/codeflow-core/src/git/remote_identity.rs", "ssh_on_path", "is_file", 2, "Type check on metadata_optional, which already succeeded, one per platform branch; a PATH entry that is not a runnable file is skipped as the shell skips it, and no ssh found refuses (TSK-1184)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "read_regular_file", "is_file", 1, "Type check on symlink_metadata, which already succeeded; a non-file is not opened so a FIFO cannot block the scan, and it is reported as readable because only a refused stat or open counts (TSK-1315)."),
     ("crates/codeflow-core/src/git/unreadable.rs", "walk", "is_dir", 1, "Type check on a read_dir entry only chooses to descend; a non-directory entry is still read, so no file is skipped as absent (TSK-1315)."),
     ("crates/codeflow-core/src/hooks/gitleaks.rs", "private::open_folder", "is_dir", 1, "Type check on the descriptor opened without following a link; anything but a directory this user owns with mode 0700 refuses, which fails the scan as incomplete (TSK-412)."),
@@ -7046,7 +7135,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is reported by doctor's state-root check, which then fails."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
-    ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
+    ("crates/codeflow-cli/src/cmd/ci.rs", "run_timed", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
