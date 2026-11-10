@@ -33,7 +33,10 @@ much working method comes with it.
   policy allows it, and then no pull request can merge. An administrator
   creates one policy that allows the event for `codeflow-policy.yml` alone;
   the command is in `assets/base/ci/README.md` "Public GitHub
-  repositories". The same doctor check reports a missing or too-wide policy.
+  repositories". `codeflow remote protect` creates that policy when it is
+  missing, except in a `--branch` run, which leaves this repository-wide
+  setting alone and says so. The same doctor check reports a missing or
+  too-wide policy.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 

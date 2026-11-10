@@ -2419,7 +2419,12 @@ impl GithubProvider {
                 },
             }
         }
-        self.prepare_event_policy(&repo, declared.as_ref(), &mut out);
+        self.prepare_event_policy(
+            &repo,
+            declared.as_ref(),
+            plan.scope.branch.as_deref(),
+            &mut out,
+        );
         Ok(out)
     }
 
@@ -2517,11 +2522,13 @@ impl GithubProvider {
 
     /// The Actions event policy part of `prepare`: on a public repository,
     /// its report line, the planned write, or the limitation and checklist
-    /// item.
+    /// item. A `--branch` run plans none, since the policy applies to the
+    /// whole repository.
     fn prepare_event_policy(
         &self,
         repo: &RepoInfo,
         declared: Option<&Result<Declared, String>>,
+        branch: Option<&str>,
         out: &mut Prepared,
     ) {
         if repo.private {
@@ -2530,11 +2537,17 @@ impl GithubProvider {
             ));
             return;
         }
+        // Without the authority rulesets nothing reads the workflows.
+        let Some(declared) = declared else { return };
+        if let Some(branch) = branch {
+            out.lines.push(format!(
+                "--branch {branch}: the repository's Actions event policy is not planned because the run is limited to a branch; a run without --branch creates it when it is missing"
+            ));
+            return;
+        }
         let planned = match declared {
-            // Without the authority rulesets nothing reads the workflows.
-            None => return,
-            Some(Err(why)) => Err(why.clone()),
-            Some(Ok(declared)) => self.plan_event_policy(&repo.nwo, declared),
+            Err(why) => Err(why.clone()),
+            Ok(declared) => self.plan_event_policy(&repo.nwo, declared),
         };
         match planned {
             Ok(EventPolicyStep::Unchanged(line)) => out.lines.push(line),
@@ -5053,7 +5066,9 @@ jobs:
         }
     }
 
-    /// AC-2: `--branch` plans only the owned rulesets that target it.
+    /// AC-2: `--branch` plans only the owned rulesets that target it, and
+    /// never the repository-wide Actions event policy, which a run without
+    /// `--branch` creates (TSK-1347 AC-8).
     #[test]
     fn branch_limits_the_run_to_the_owned_rulesets_that_target_it() {
         for (branch, expected) in [
@@ -5079,6 +5094,11 @@ jobs:
                 .apply(&plan_with(r#"["main", "release/*"]"#, true, scope));
             let text = report.render().as_str().to_string();
             assert_eq!(written_names(&host), expected, "{branch}: {text}");
+            assert!(host.policy_writes.borrow().is_empty(), "{branch}: {text}");
+            assert!(
+                text.contains(&format!("--branch {branch}: the repository's Actions event policy is not planned because the run is limited to a branch; a run without --branch creates it when it is missing")),
+                "{text}"
+            );
             if expected.is_empty() {
                 assert!(
                     text.contains("--branch feature/x: no ruleset remote protect owns targets it, so nothing is planned"),
@@ -5086,6 +5106,15 @@ jobs:
                 );
             }
         }
+
+        // The same plan without `--branch` creates the policy.
+        let host = Fake::standard(&[]);
+        host.provider().apply(&plan_with(
+            r#"["main", "release/*"]"#,
+            true,
+            Scope::default(),
+        ));
+        assert_eq!(host.policy_writes.borrow().len(), 1);
     }
 
     /// AC-2: a literal policy branch the host does not have is reported
