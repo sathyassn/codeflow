@@ -1667,7 +1667,15 @@ fn the_ci_workflow_schedules_the_full_scan_and_the_full_gate() {
         assert!(on.contains(event), "{event}: {on}");
     }
     assert!(!job(CI, "gates").contains("    if:"));
-    assert!(!job(CI, "secret-scan").contains("    if:"));
+    // TSK-1176: the default branch's `secret scan` judges pull requests, so
+    // this history scan skips them and nothing else, and a schedule or
+    // manual run always reaches it.
+    let scan = job(CI, "secret-scan");
+    assert_eq!(scan.matches("\n    if:").count(), 1, "{scan}");
+    assert!(
+        scan.contains("\n    if: github.event_name != 'pull_request'\n"),
+        "{scan}"
+    );
 }
 
 /// The job-level text of `id` in a workflow, up to the next job.

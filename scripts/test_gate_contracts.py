@@ -122,8 +122,26 @@ def github_expression(text, context):
 class GateContracts(unittest.TestCase):
     def test_publication_requires_the_five_existing_floors(self):
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        self.assertEqual(set(checks), {'codeflow gates', 'windows', 'secret scan', 'security review', 'release state'})
+        self.assertEqual(set(checks), {'codeflow gates', 'windows', 'history scan', 'security review', 'release state'})
         self.assertEqual(len(checks), 5)
+
+    def test_every_publication_check_has_a_main_push_producer(self):
+        # TSK-1176: scripts/release.py reads these names only from the main
+        # push runs of the publication workflows, and `secret scan` now runs
+        # on pull_request_target alone, so a push cannot produce it. A name
+        # with no push producer here would fail every publication closed.
+        config = json.loads(read('.release/config.json'))
+        produced = set()
+        for path in config['publication_workflows']:
+            workflow = read(path)
+            head, jobs = workflow.split('\njobs:\n', 1)
+            self.assertRegex(head, r'(?m)^  push:', path)
+            parts = re.split(r'^  ([A-Za-z0-9_-]+):.*\n', jobs, flags=re.M)
+            for key, text in zip(parts[1::2], parts[2::2]):
+                name = re.search(r'^    name: *["\']?(.+?)["\']? *$', text, re.M)
+                produced.add(name.group(1) if name else key)
+        self.assertEqual(set(config['required_publication_checks']) - produced, set())
+        self.assertNotIn('secret scan', config['required_publication_checks'])
 
     def test_windows_jobs_are_a_gate_behind_one_verdict(self):
         # Native Windows is a release target (TSK-197). TSK-203 splits the

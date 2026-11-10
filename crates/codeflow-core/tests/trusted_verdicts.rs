@@ -1,11 +1,10 @@
-//! TSK-336 (ADR-0091): the policy and release verdicts are produced only by
-//! the verdict jobs of the policy workflow, which GitHub runs from the
-//! default branch on `pull_request_target`. A verdict is trusted by the
-//! explicit list `codeflow_core::remote::TRUSTED_VERDICTS`, never by its
-//! spelling: the commit verdict is named `commit standards`, the name the
-//! rulesets require (TSK-1368). No workflow that runs on `pull_request` or
-//! `push` emits a trusted verdict's name or a `trusted:` name. These read
-//! every workflow the repository ships or runs.
+//! TSK-336 (ADR-0091): the trusted verdicts are produced only by the jobs of
+//! the policy workflow, which GitHub runs from the default branch on
+//! `pull_request_target`. A verdict is a name in the one table,
+//! [`TRUSTED_VERDICTS`], never judged by its spelling: a required check keeps
+//! its plain name (TSK-1368, TSK-1176). No workflow that runs on
+//! `pull_request` or `push` emits a trusted verdict's name or a `trusted:`
+//! name. These read every workflow the repository ships or runs.
 use codeflow_core::remote::{is_trusted_verdict, TRUSTED_VERDICTS};
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
@@ -50,7 +49,8 @@ fn workflows() -> Vec<(String, Value)> {
             .unwrap_or_else(|error| panic!("{dir}: {error}"))
             .map(|entry| entry.unwrap().path())
             .filter(|path| {
-                path.extension().is_some_and(|ext| ext == "yml")
+                path.extension()
+                    .is_some_and(|ext| ext == "yml" || ext == "yaml")
                     && !path
                         .file_name()
                         .is_some_and(|name| name.to_string_lossy().starts_with('.'))
@@ -113,13 +113,15 @@ fn looks_trusted(name: &str) -> bool {
     is_trusted_verdict(name) || name.starts_with("trusted: ")
 }
 
-/// TSK-1368: the list is reviewed here, so a change to it is a change to
-/// this test.
+/// TSK-1368, TSK-1176 (operator decision, 2026-11-06): the table is reviewed
+/// here, so a change to it is a change to this test. A required check keeps
+/// its plain name, and only `trusted: release impact` keeps its prefix, until
+/// TSK-1178 renames it.
 #[test]
 fn the_trusted_verdicts_are_the_listed_names() {
     assert_eq!(
         TRUSTED_VERDICTS,
-        ["commit standards", "trusted: release impact"]
+        ["commit standards", "secret scan", "trusted: release impact"]
     );
     for (path, workflow) in workflows() {
         for (id, name, _) in jobs(&workflow) {
@@ -133,14 +135,14 @@ fn the_trusted_verdicts_are_the_listed_names() {
     }
 }
 
-/// AC-2, AC-9 (review round 1, R1-1), TSK-1368: a trusted verdict's name
-/// comes only from a policy workflow that `pull_request_target` alone
-/// starts, and the job carries no `if`. A job-level `if` skips a job but
-/// keeps its check, and GitHub counts a skipped required check as passing,
-/// so a push, schedule or dispatch run of a workflow holding a trusted-named
-/// job would leave a passing check under that name at the pushed commit.
-/// `commit standards` is checked by name, so it keeps every property
-/// without a `trusted:` prefix.
+/// AC-2, AC-9 (review round 1, R1-1), TSK-1368, TSK-1176 AC-4: a trusted
+/// verdict's name comes only from a policy workflow that `pull_request_target`
+/// alone starts, and the job carries no `if`. A job-level `if` skips a job but
+/// keeps its check, and GitHub counts a skipped required check as passing, so a
+/// push, schedule or dispatch run of a workflow holding a trusted-named job
+/// would leave a passing check under that name at the pushed commit. Each name
+/// is checked as listed, so a head-run `secret scan` job fails here in any
+/// workflow copy.
 #[test]
 fn only_pull_request_target_workflows_emit_a_trusted_name() {
     let mut producers = Vec::new();
@@ -255,15 +257,15 @@ fn the_policy_workflows_declare_their_trusted_names() {
     };
     assert_eq!(
         declared("assets/base/ci/codeflow-policy.yml"),
-        ["commit standards"]
+        ["commit standards", "secret scan"]
     );
     assert_eq!(
         declared(".codeflow/.baseline/.github/workflows/codeflow-policy.yml"),
-        ["commit standards"]
+        ["commit standards", "secret scan"]
     );
     assert_eq!(
         declared(".github/workflows/codeflow-policy.yml"),
-        ["commit standards", "trusted: release impact"]
+        ["commit standards", "trusted: release impact", "secret scan"]
     );
 }
 
@@ -323,6 +325,124 @@ fn every_verdict_job_runs_only_the_default_branch_code() {
                 // A queued run cannot pass on a body that changed under it.
                 assert!(text.contains("the pull request is unchanged since it was judged"));
                 assert!(text.contains("JUDGED_DIGEST: ${{ steps.body.outputs.digest }}"));
+            }
+        }
+    }
+}
+
+/// TSK-1176 review nit N2: `scripts/check-scaffold-gitleaks.sh` exercises
+/// the template `codeflow-policy.yml` gitleaks step. The `history scan` in
+/// `codeflow-ci.yml` runs on push and schedule, so every copy of the step,
+/// in both workflows and all three folders, must be that step exactly, or
+/// the fixture's evidence stops applying to the copy that runs.
+#[test]
+fn every_secret_scan_step_is_the_tested_step() {
+    let step = |workflow: &Value| -> Option<Value> {
+        workflow["jobs"]
+            .get("secret-scan")?
+            .get("steps")?
+            .as_sequence()?
+            .iter()
+            .find(|step| step["name"].as_str() == Some("gitleaks"))
+            .cloned()
+    };
+    let all = workflows();
+    let tested = all
+        .iter()
+        .find(|(path, _)| path == "assets/base/ci/codeflow-policy.yml")
+        .and_then(|(_, workflow)| step(workflow))
+        .expect("the template policy workflow has the tested gitleaks step");
+    let mut copies = Vec::new();
+    for (path, workflow) in &all {
+        if let Some(found) = step(workflow) {
+            assert_eq!(found, tested, "{path}: the gitleaks step drifted");
+            copies.push(path.clone());
+        }
+    }
+    copies.sort();
+    assert_eq!(
+        copies,
+        [
+            ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+            ".codeflow/.baseline/.github/workflows/codeflow-policy.yml",
+            ".github/workflows/codeflow-ci.yml",
+            ".github/workflows/codeflow-policy.yml",
+            "assets/base/ci/codeflow-ci.yml",
+            "assets/base/ci/codeflow-policy.yml",
+        ]
+    );
+}
+
+/// TSK-1176 AC-1/2/4/5: every event class gets the correct producer and
+/// authority inputs. The shell fixture exercises the extracted scan body
+/// with real Git and gitleaks; these assertions cover GitHub's wiring.
+#[test]
+fn scan_events_bind_authority_and_keep_the_pr_head_as_data() {
+    for (path, workflow) in workflows() {
+        let Some(job) = workflow["jobs"].get("secret-scan") else {
+            continue;
+        };
+        let steps = job["steps"].as_sequence().unwrap();
+        let scan = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("gitleaks"))
+            .unwrap();
+        assert_eq!(
+            scan["env"]["TRUSTED_SHA"].as_str(),
+            Some("${{ github.sha }}"),
+            "{path}"
+        );
+        assert_eq!(
+            scan["env"]["SCAN_HEAD"].as_str(),
+            Some("${{ github.event.pull_request.head.sha || github.sha }}"),
+            "{path}"
+        );
+        assert_eq!(
+            scan["env"]["PR_BASE"].as_str(),
+            Some("${{ github.event.pull_request.base.sha || '' }}"),
+            "{path}"
+        );
+        assert_eq!(
+            scan["env"]["SCAN_FROM"].as_str(),
+            Some("${{ github.event.pull_request.base.sha || github.event.before || '' }}"),
+            "{path}"
+        );
+        let run = scan["run"].as_str().unwrap();
+        assert!(
+            run.find("export GIT_NO_REPLACE_OBJECTS=1").unwrap()
+                < run.find("git cat-file").unwrap(),
+            "{path}"
+        );
+        assert!(run.contains("--min-parents=3"), "{path}");
+        assert!(
+            run.contains("log -1 -p --diff-merges=first-parent"),
+            "{path}"
+        );
+        assert!(!run.contains("rm -f .gitleaks"), "{path}");
+        assert!(
+            !run.contains("${{"),
+            "{path}: expressions must enter through env"
+        );
+        if events(&workflow) == ["pull_request_target"] {
+            assert_eq!(job["name"].as_str(), Some("secret scan"), "{path}");
+            assert!(job.get("if").is_none(), "{path}");
+            assert_eq!(
+                job["env"]["GIT_NO_REPLACE_OBJECTS"].as_str(),
+                Some("1"),
+                "{path}"
+            );
+        } else {
+            assert_eq!(job["name"].as_str(), Some("history scan"), "{path}");
+            assert_eq!(
+                job["if"].as_str(),
+                Some("github.event_name != 'pull_request'"),
+                "{path}"
+            );
+            for event in ["push", "schedule", "workflow_dispatch"] {
+                assert!(
+                    events(&workflow).contains(&event.to_owned()),
+                    "{path}: {event}"
+                );
             }
         }
     }

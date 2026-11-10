@@ -12265,3 +12265,86 @@ fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
     );
     assert_eq!(transports, Vec::<String>::new());
 }
+
+// TSK-1176 AC-8 (moved from TSK-430 AC-3): `git.scan_on_push: on` runs
+// `codeflow scan` over each pushed range in the push set.
+
+const SCAN_ON_PUSH: &str = r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block", "scan_on_push": "on", "secret_scan": "block", "security_review": "off", "dep_audit": "off"}}"#;
+
+/// The pre-push hook for `branch` at `sha` into the `dest` remote, with
+/// `PATH` set to `path`.
+fn push_hook_with_path(dir: &Path, branch: &str, sha: &str, path: &str) -> (Option<i32>, String) {
+    let url = push_url(dir, "dest");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "dest", &url])
+            .current_dir(dir)
+            .env("PATH", path),
+        &format!("refs/heads/{branch} {sha} refs/heads/{branch} {ZERO_SHA}\n"),
+    );
+    (out.status.code(), both_streams(&out))
+}
+
+/// With the key on and gitleaks missing, the scan fails closed at
+/// `secret_scan: block` and the push stops under `git.scan_on_push`; with
+/// the key off (the default) no scan runs.
+#[cfg(unix)]
+#[test]
+fn scan_on_push_refuses_when_the_pinned_scanner_is_missing_and_is_off_by_default() {
+    let empty = tempfile::tempdir().unwrap();
+    let path = format!("{}:/usr/bin:/bin", empty.path().display());
+    let (_bare, local) = gate_destination(SCAN_ON_PUSH, false);
+    let head = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
+    let (code, err) = push_hook_with_path(local.path(), "feat/x", &head, &path);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("git.scan_on_push"), "{err}");
+    assert!(err.contains("gitleaks is not on PATH"), "{err}");
+
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        false,
+    );
+    let head = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
+    let (code, err) = push_hook_with_path(local.path(), "feat/x", &head, &path);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("codeflow scan"), "{err}");
+}
+
+/// The official pinned gitleaks (`CODEFLOW_TEST_GITLEAKS_DIR`): a pushed
+/// range whose secret a later commit deletes is refused, as the hosted job
+/// would fail it; a clean range passes, within the stated 60 second bound.
+#[cfg(unix)]
+#[test]
+fn scan_on_push_refuses_a_range_the_hosted_scan_would_fail() {
+    let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+        return;
+    };
+    let path = format!("{}:/usr/bin:/bin", Path::new(&bin).display());
+    let (_bare, local) = gate_destination(SCAN_ON_PUSH, false);
+    let clean = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
+    let started = std::time::Instant::now();
+    let (code, err) = push_hook_with_path(local.path(), "feat/x", &clean, &path);
+    let elapsed = started.elapsed();
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(60),
+        "{elapsed:?}: {err}"
+    );
+    let key = format!(
+        "{}{}",
+        "9f2c4e1ab7d03586c2e9f41a7b8d5e3c", "06a1f9b2d7c4e8a35f1b6d0c9e2a7f48"
+    );
+    commit_file(
+        local.path(),
+        "leak.json",
+        &format!("{{\"src/auth/token.rs\": \"{key}\"}}\n"),
+        "feat: add settings",
+    );
+    git(local.path(), &["rm", "-q", "leak.json"]);
+    git(local.path(), &["commit", "-q", "-m", "fix: drop settings"]);
+    let head = rev(local.path(), "HEAD");
+    let (code, err) = push_hook_with_path(local.path(), "feat/x", &head, &path);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("git.scan_on_push"), "{err}");
+    assert!(err.contains("generic-api-key"), "{err}");
+}

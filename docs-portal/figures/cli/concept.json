@@ -8,7 +8,7 @@
     "idea": "Twenty-nine subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
     "title": "The command surface, by job",
     "kicker": "Command reference",
-    "caption": "You type twenty-six of the commands; hook, git-hook and ci are called by the wiring that init installs.",
+    "caption": "You type twenty-seven of the commands; hook, git-hook and ci are called by the wiring that init installs.",
     "states": [
       {
         "name": "typed",
@@ -313,6 +313,23 @@
           "style": "mono",
           "for": [
             "g1c4"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 595,
+          "cy": 93,
+          "r": 7,
+          "id": "g1c5"
+        },
+        {
+          "text": "scan",
+          "x": 611,
+          "y": 98,
+          "style": "mono",
+          "for": [
+            "g1c5"
           ]
         },
         {
@@ -895,6 +912,23 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 292,
+          "cy": 169,
+          "r": 7,
+          "id": "g1c5"
+        },
+        {
+          "text": "scan",
+          "x": 306,
+          "y": 174,
+          "style": "mono",
+          "for": [
+            "g1c5"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1221,7 +1255,7 @@
         ],
         [
           "Enforce",
-          "`policy`, `remote`",
+          "`policy`, `remote`, `scan`",
           "`hook`, `git-hook`, `ci`"
         ],
         [

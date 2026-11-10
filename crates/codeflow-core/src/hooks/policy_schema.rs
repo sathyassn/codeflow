@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 82] = [
+pub const SCHEMA: [KeySpec; 83] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -853,8 +853,8 @@ pub const SCHEMA: [KeySpec; 82] = [
         kind: KeyKind::Enum(&["trusted", "never"]),
         valid: "trusted | never",
         purpose: "Inline gitleaks:allow handling in the managed CI secret scan.",
-        notes: "Read from the trusted commit (the pull request base, or the pushed \
-                commit). Missing means trusted: only allows on commits it already \
+        notes: "Read from the trusted commit (the default-branch authority for a pull request, \
+                or the pushed commit). Missing means trusted: only allows on commits it already \
                 holds count. With never, every inline allow is ignored; other \
                 trusted exemptions still apply. A pull request's head-only policy \
                 change cannot change its own scan. This key does not affect the pre-commit scan. \
@@ -887,6 +887,20 @@ pub const SCHEMA: [KeySpec; 82] = [
                 is made ready. Tag and other non-branch pushes are outside the \
                 push set. Local-config tampering is outside the hook threat \
                 model; hosted CI checks the pushed commit.",
+    },
+    KeySpec {
+        path: "git.scan_on_push",
+        kind: KeyKind::Enum(&["off", "on"]),
+        valid: "off | on",
+        purpose: "Run `codeflow scan`, the hosted secret scan and dependency audit, over each pushed range (pre-push hook).",
+        notes: "Read from the push's candidate authority, the destination's default branch, as \
+                git.test_gate_on_push is, so a pushed head cannot turn it off. Each scan keeps \
+                its own level from the range's base: git.secret_scan for gitleaks, and \
+                git.security_review with git.dep_audit for osv-scanner. A finding or a missing \
+                pinned binary at block refuses the push. The audit asks OSV.dev, so it needs the \
+                network. The hook never downloads either binary; `codeflow doctor --check \
+                scan-tools` reports where it looked. The shipped policy file does not list it, \
+                so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.security_review",

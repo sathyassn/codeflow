@@ -180,7 +180,7 @@ fn a_head_that_changes_a_workflow_is_warned_by_name() {
     let widened = base_policy
         .replace("on:\n  pull_request_target:\n", "on:\n  pull_request_target:\n  push:\n")
         .replace("    permissions:\n      contents: read\n", "    permissions:\n      contents: write\n")
-        + "  forged:\n    name: 'trusted: secret scan'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n";
+        + "  forged:\n    name: 'secret scan'\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n";
     write(root, POLICY_WF, &widened);
     std::fs::remove_file(root.join(RELEASE_WF)).unwrap();
     commit(root, "ci: widen the policy workflow");
@@ -192,10 +192,7 @@ fn a_head_that_changes_a_workflow_is_warned_by_name() {
         "{text}"
     );
     assert!(text.contains("adds triggers push"), "{text}");
-    assert!(
-        text.contains("adds jobs forged ('trusted: secret scan')"),
-        "{text}"
-    );
+    assert!(text.contains("adds jobs forged ('secret scan')"), "{text}");
     assert!(
         text.contains("changes the permissions of jobs commit-lint ('commit standards')"),
         "{text}"

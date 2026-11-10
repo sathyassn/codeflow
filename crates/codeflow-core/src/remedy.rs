@@ -619,6 +619,10 @@ catalog! {
     /// binary (TSK-412).
     SECRET_ENGINE_UNAVAILABLE = Step::Codeflow("codeflow doctor"),
         "download the pinned gitleaks release build ({archive}) over the network from https://github.com/gitleaks/gitleaks/releases, check it against that release's checksums file and put its gitleaks binary on PATH; `codeflow doctor --check secret-engine` then reports it pinned";
+    /// A pinned binary `codeflow scan` runs is missing or mismatched
+    /// (TSK-1176).
+    SCAN_TOOLS_UNAVAILABLE = Step::Codeflow("codeflow doctor"),
+        "download the pinned release builds named above from https://github.com/gitleaks/gitleaks/releases and https://github.com/google/osv-scanner/releases, check each against its release's checksums file and put them on PATH; `codeflow doctor --check scan-tools` then reports them pinned";
 
     // The push set.
 

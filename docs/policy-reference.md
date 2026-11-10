@@ -77,9 +77,10 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.max_file_bytes` | object | `absent` | {limit: bytes, at least 1 (default 10485760), except_under: [root-relative directory]} | Refuse a new or changed file larger than the limit; one over 1 MiB warns. | Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default; except_under exempts files beneath a directory, never one named file. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. A merge Git concludes itself runs no pre-commit, so commit-msg scans it when Git passes MERGE_MSG; a commit-msg message file other than MERGE_MSG or COMMIT_EDITMSG is refused at this level. |
 | `git.secret_scan_engine` | enum | `builtin` | builtin \| gitleaks | The engine the commit-time secret scan runs beside the built-in patterns. | builtin runs the built-in patterns only. gitleaks also runs the gitleaks release the managed CI scan pins over the staged diff, after the built-in patterns, reading the working tree's .gitleaksignore and .gitleaks.toml. A gitleaks binary that is missing, not the pinned version or not the pinned checksum is a finding at the git.secret_scan level, so at block it refuses the commit; `codeflow doctor --check secret-engine` reports where it looked. The hook never downloads it. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the default-branch authority for a pull request, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
 | `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for a heavy run; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
+| `git.scan_on_push` | enum | `off` | off \| on | Run `codeflow scan`, the hosted secret scan and dependency audit, over each pushed range (pre-push hook). | Read from the push's candidate authority, the destination's default branch, as git.test_gate_on_push is, so a pushed head cannot turn it off. Each scan keeps its own level from the range's base: git.secret_scan for gitleaks, and git.security_review with git.dep_audit for osv-scanner. A finding or a missing pinned binary at block refuses the push. The audit asks OSV.dev, so it needs the network. The hook never downloads either binary; `codeflow doctor --check scan-tools` reports where it looked. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.discard_uncommitted` | Level | `block` | off \| warn \| allow \| block | Commands in an agent session that discard locally unique uncommitted work (ADR-0075). | Default block. The in-session guard judges it; a human terminal and the git hooks are unaffected. |
@@ -954,10 +955,10 @@ userinfo of a URL such as `https://user:token@host/path` is shown as
 
 ## Secret-scan exemption pull requests
 
-The managed secret scan reads `.gitleaksignore` from the pull request's
-trusted base. When an integration line contains a reviewed false positive,
-land its fingerprint on the base in a separate pull request first, then
-rerun the line's scan.
+The managed pull request scan reads `.gitleaksignore` from the pinned
+default-branch authority commit. When an integration line contains a
+reviewed false positive, land its fingerprint on the default branch in a
+separate pull request first, then rerun the line's scan.
 
 `codeflow ci` gives a range that adds or modifies only the root `.gitleaksignore`
 the **secret-scan exemption** class. Its body names one existing epic or
@@ -972,8 +973,8 @@ The class permits a task whose predecessor is incomplete at the planning
 anchor, including one complete only on an integration line. Task identity,
 record validation, PR-body requirements and commit standards still apply.
 The secret scan and security review jobs still run at their configured
-levels. The new fingerprint takes effect only after it lands on the trusted
-base; it cannot exempt a finding introduced by its own pull request.
+levels. The new fingerprint takes effect only after it lands on the default
+branch; it cannot exempt a finding introduced by its own pull request.
 Repository approval rules, including code-owner review where configured,
 are unchanged. The class neither configures protection nor grants approval.
 
@@ -1171,13 +1172,13 @@ The flags:
   requires the last push to be approved by someone else, and lets only the
   maintain role (`RepositoryRole` 2) and the roles above it update it.
 - **`--check-app <id>`**: Mode A, where B requires the `authority:` names
-  pinned to that GitHub App. Without it, Mode B: B requires the `trusted:`
+  pinned to that GitHub App. Without it, Mode B: B requires the trusted verdict
   names pinned to GitHub Actions (15368). GitHub Actions' own id is
   refused. Mode B is a lower tier: it does not close forgery by a later
   producer. Its refusal step reads the producers once, when each verdict
   job ends, and GitHub takes the newest check run of a name, so a
   workflow that runs later, for example on an event the policy workflow
-  does not run on, can still satisfy a `trusted:` name. Only Mode A, the
+  does not run on, can still satisfy a trusted verdict name. Only Mode A, the
   App authority, closes it.
 - **`--lines <pattern>`**: the pattern C targets, below `refs/heads/`;
   default `integration/**`.
@@ -1189,17 +1190,17 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
 --admin`.
 
 - **What B and C require.** B: the trusted verdict names (Mode B) or the
-  matching `authority:` names (Mode A), plus `codeflow gates`, `secret scan`,
-  `security review` and `windows` where a workflow on the default branch
-  declares them. C: the trusted verdict names plus `codeflow gates` and
-  `windows` where declared, each pinned to GitHub Actions. The trusted
-  verdicts are an explicit list, `commit standards` and
+  matching `authority:` names (Mode A), plus `codeflow gates`, `security
+  review` and `windows` where a workflow on the default branch declares them.
+  C: the trusted verdict names plus `codeflow gates` and `windows` where
+  declared, each pinned to GitHub Actions. The trusted verdicts are an
+  explicit list, `commit standards`, `secret scan` and
   `trusted: release impact`, counted only where the policy workflow declares
-  them; a name is never trusted for its `trusted:` spelling. `secret scan` is
-  still a head-built job, so it is a test verdict, not a trusted one.
+  them; a name is never trusted for its `trusted:` spelling, and a required
+  check keeps its plain name.
   `remote protect` refuses B and C while the default branch's
   `.github/workflows/codeflow-policy.yml` does not declare
-  `commit standards` as a job name (and,
+  `commit standards` and `secret scan` as job names (and,
   in Mode A, does not name each `authority:` check it creates), or no workflow there
   declares `codeflow gates`: a rule that requires a name nothing produces
   blocks every pull request. A is written either way.

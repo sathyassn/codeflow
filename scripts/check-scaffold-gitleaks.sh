@@ -29,7 +29,7 @@
 #      named, as is a git older than 2.41; spaced and non-ASCII names pass;
 #      branches and tags HEAD does not reach neither refuse nor fail it;
 #   4. this repository's own gitleaks step is the template's, and in both
-#      workflows the secret-scan job runs only the checkout before it.
+#      workflows the scan resolves and checks out the authority, then fetches data.
 # The step's download is served from a local archive of the gitleaks under
 # test, so no network is needed; its pinned checksum is the Linux release's
 # and is not checked here.
@@ -50,8 +50,8 @@ GITLEAKS=$(absolute "$GITLEAKS")
 [ -z "$CODEFLOW" ] || CODEFLOW=$(absolute "$CODEFLOW")
 [ -z "$PREVIOUS_CODEFLOW" ] || PREVIOUS_CODEFLOW=$(absolute "$PREVIOUS_CODEFLOW")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-TEMPLATE=${CODEFLOW_CI_TEMPLATE:-$ROOT/assets/base/ci/codeflow-ci.yml}
-OWN=${CODEFLOW_CI_OWN:-$ROOT/.github/workflows/codeflow-ci.yml}
+TEMPLATE=${CODEFLOW_CI_TEMPLATE:-$ROOT/assets/base/ci/codeflow-policy.yml}
+OWN=${CODEFLOW_CI_OWN:-$ROOT/.github/workflows/codeflow-policy.yml}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-gitleaks.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 FAILURES="$TMP/failures"
@@ -88,9 +88,8 @@ fi
 
 # The template's gitleaks step, whole. It must read the trusted commit
 # through env, never interpolate it into the script, and match this
-# repository's own step. In both workflows the secret-scan job runs nothing
-# before it but the checkout: an earlier step that ran checkout code could
-# write GITHUB_ENV or GITHUB_PATH, and the scan would honour them.
+# repository's own step. Both workflows resolve and check out the authority
+# and fetch the pull request as data; no step runs head code before the scan.
 cat >"$TMP/extract-step.py" <<'PY'
 import re
 import sys
@@ -109,10 +108,15 @@ def before_scan(path):
     before = job[:job.index("      - name: gitleaks")]
     steps = [line for line in before if line.startswith("      - ")]
     problems = []
-    if steps != ["      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0"]:
-        problems.append(f"{path}: the secret-scan job runs {steps} before gitleaks, not the checkout alone")
-    if any(line.strip().startswith(("run:", "shell:", "env:")) for line in before):
-        problems.append(f"{path}: the secret-scan job sets a run, shell or env before gitleaks")
+    expected = [
+        "      - name: Resolve the authority",
+        "      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0",
+        "      - name: Assert the authority checkout",
+        "      - name: Fetch the pull request's base and head as data",
+        "      - name: Assert the authority checkout",
+    ]
+    if steps != expected:
+        problems.append(f"{path}: the scan does not use the authority-only setup: {steps}")
     return problems
 
 
@@ -135,11 +139,13 @@ if '"$report"' not in script:
     raise SystemExit("the template's gitleaks step reads no report, so the "
                      "3.0.0 pipeline line fails every adopter's secret scan")
 open(out, "w", encoding="utf-8").write(script)
-trusted = "          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}"
+trusted = "          TRUSTED_SHA: ${{ github.sha }}"
+head = "          SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}"
 # The scan's start (sathyassn/codeflow#48): the pull request's base, else
 # the push's previous tip, else nothing for a scheduled or manual run.
 start = "          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}"
-if env != ["        env:", trusted, start]:
+pr_base = "          PR_BASE: ${{ github.event.pull_request.base.sha || '' }}"
+if env != ["        env:", trusted, head, pr_base, start]:
     print(f"step: the trusted commit and the scan start are not passed as env "
           f"{trusted.strip()!r} and {start.strip()!r}: {env}")
 if "${{" in script:
@@ -310,7 +316,7 @@ PY
   if grep -q "^$name: " "$FAILURES"; then
     sed 's/^/    /' "$TMP/$name.out" >&2
   fi
-  # The step deletes the exemption files from the checkout; put them back.
+  # Restore fixture edits, if a case made any after the scan.
   git -C "$REPO" checkout -q -- .
 }
 PIPELINES=".claude/workflows/pipeline.workflow.js:3 .codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3"
@@ -642,7 +648,7 @@ for route in fresh updated; do
         (cd "$REPO" && "$PREVIOUS_CODEFLOW" init --minimal --yes && "$CODEFLOW" update) \
           >"$TMP/installed-$route-$policy.out" 2>&1
       fi
-      workflow="$REPO/.github/workflows/codeflow-ci.yml"
+      workflow="$REPO/.github/workflows/codeflow-policy.yml"
       STEP_SCRIPT="$TMP/installed-$route-$policy.sh"
       python3 "$TMP/extract-step.py" "$workflow" "$workflow" "$STEP_SCRIPT" >>"$FAILURES"
       cmp "$STEP_SCRIPT" "$TMP/step.sh" || failed installed-workflow "installed step differs from template"
@@ -724,13 +730,7 @@ commit "plant links"
 after_step() {
   (cd "$TMP/link-targets" && cksum ignore config.toml archive binary) |
     cmp -s - "$TMP/link-targets.before" || { echo "a link target was written"; return 1; }
-  for link in .gitleaksignore .gitleaks.toml; do
-    if [ -e "$REPO/$link" ] || [ -L "$REPO/$link" ]; then
-      echo "$link is still in the checkout"
-      return 1
-    fi
-  done
-  added=$(git -C "$REPO" status --porcelain --ignored --untracked-files=all | grep -v '^ D ' || true)
+  added=$(git -C "$REPO" status --porcelain --ignored --untracked-files=all)
   [ -z "$added" ] || { echo "the step wrote into the checkout: $added"; return 1; }
 }
 on_base "$BASE" pr-links 1 fixtures/leak.txt:1
@@ -875,6 +875,13 @@ on_base "$BASE" pr-octopus 1
 NO_SCAN=
 MESSAGE=
 on_base "$(tip)" trusted-octopus 0
+# AC-3: push and scheduled runs read the additions of a trusted octopus,
+# including the finding removed by the next commit.
+SCAN_FROM=$BASE
+expect octopus-push 1 octopus.txt:1
+SCAN_FROM=
+expect octopus-scheduled 1 octopus.txt:1
+unset SCAN_FROM
 # A local stash also has three parents; it is not refused.
 new_repo stash
 printf 'changed\n' >>"$REPO/README.md"
@@ -1049,6 +1056,90 @@ expect one-parent-fingerprint 1 f.txt:1
 STEP_ENV=
 after_step() { :; }
 MESSAGE=
+
+# SEC-05: a clean two-parent merge amended with new content has no
+# conflict header. Advice must not invent a legacy exemption for it.
+new_repo clean-merge-fingerprint
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+git -C "$REPO" checkout -q -b side
+printf 'side\n' >"$REPO/side.txt"
+commit side
+git -C "$REPO" checkout -q "$MAIN"
+printf 'main\n' >"$REPO/main.txt"
+commit main
+merge side --no-commit
+printf '%s\n' "$PLANTED" >"$REPO/f.txt"
+commit "clean merge with an addition"
+MERGED=$(tip)
+ENTRY="$MERGED:b/f.txt:generic-api-key:1"
+printf '%s\n' "$ENTRY" >"$REPO/.gitleaksignore"
+commit "misnamed merge fingerprint"
+MESSAGE="no remerge CONFLICT header for $ENTRY; no replacement inferred"
+expect clean-merge-fingerprint 1 f.txt:1
+MESSAGE=
+
+# AC-2: an object replacement hides the finding from ordinary git reads.
+# The production step must ignore that ref before its first Git read.
+new_repo replaced-object
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "introduced finding"
+LEAK=$(tip)
+printf 'clean\n' >"$REPO/leak.txt"
+as_canary add -A
+as_canary commit -q --amend -m replacement
+REPLACEMENT=$(tip)
+git -C "$REPO" checkout -q --detach "$LEAK"
+git -C "$REPO" replace "$LEAK" "$REPLACEMENT"
+on_base "$BASE" replaced-object 1 leak.txt:1
+
+# AC-1, AC-5: authority checkout, distinct PR head used only as data.
+# Rewriting the head's workflow and configuration cannot change its judge.
+# Replay both installation routes when a codeflow binary is supplied.
+for route in fresh updated; do
+  workflow=$TEMPLATE
+  if [ -n "$CODEFLOW" ]; then
+    install="$TMP/authority-install-$route"
+    mkdir "$install"
+    git -C "$install" init -q
+    if [ "$route" = fresh ]; then
+      (cd "$install" && "$CODEFLOW" init --minimal --yes) >"$TMP/authority-$route-init.out" 2>&1
+    else
+      (cd "$install" && "$PREVIOUS_CODEFLOW" init --minimal --yes && "$CODEFLOW" update) \
+        >"$TMP/authority-$route-init.out" 2>&1
+    fi
+    workflow="$install/.github/workflows/codeflow-policy.yml"
+    STEP_SCRIPT="$TMP/authority-$route.sh"
+    python3 "$TMP/extract-step.py" "$workflow" "$workflow" "$STEP_SCRIPT" >>"$FAILURES"
+  fi
+  # The adversarial history is a separate fixture; installation hooks stay
+  # intact in the install repository above.
+  new_repo "authority-$route"
+  mkdir -p "$REPO/.github/workflows"
+  cp "$workflow" "$REPO/.github/workflows/codeflow-policy.yml"
+  commit "authority workflow"
+  BASE=$(tip)
+  printf 'clean change\n' >"$REPO/change.txt"
+  commit "clean head"
+  CLEAN=$(tip)
+  mkdir -p "$REPO/.github/workflows"
+  printf 'jobs: {secret-scan: {steps: [{run: "true"}]}}\n' >"$REPO/.github/workflows/codeflow-policy.yml"
+  printf '%s\n' "$ALLOW_FIXTURES" >"$REPO/.gitleaks.toml"
+  mkdir -p "$REPO/fixtures"
+  printf '%s\n' "$PLANTED" >"$REPO/fixtures/leak.txt"
+  commit "head rewrites its judge and exempts its finding"
+  git -C "$REPO" rm -q fixtures/leak.txt
+  commit "remove the finding from the final tree"
+  ATTACK=$(tip)
+  git -C "$REPO" checkout -q --detach "$BASE"
+  STEP_ENV="SCAN_HEAD=$CLEAN"
+  on_base "$BASE" "authority-$route-clean" 0
+  STEP_ENV="SCAN_HEAD=$ATTACK"
+  on_base "$BASE" "authority-$route-tamper" 1 fixtures/leak.txt:1
+  [ "$(tip)" = "$BASE" ] || failed authority-checkout "HEAD moved away from authority"
+  git -C "$REPO" diff --quiet HEAD -- || failed authority-checkout "authority files changed"
+  STEP_ENV=
+  unset STEP_SCRIPT
+done
 
 # git configuration the runner sets does not change the patch gitleaks reads.
 # With diff.noprefix, gitleaks would drop dir/ and the trusted exemption for

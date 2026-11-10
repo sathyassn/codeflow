@@ -748,7 +748,14 @@ class HostedEventParityControls(unittest.TestCase):
         self.assertIn("  workflow_dispatch:", trigger)
         for name in ("secret-scan", "gitleaks-canary", "security-review"):
             job = parity.workflow_jobs(WORKFLOW)[name]
-            self.assertIsNone(re.search(r"^ {4}if:", job, re.M), name)
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M)
+            if name == "secret-scan":
+                # TSK-1176: pull requests are scanned by the default branch's
+                # `secret scan`; this history scan skips only them.
+                self.assertEqual(condition and condition.group(1),
+                                 "github.event_name != 'pull_request'", name)
+            else:
+                self.assertIsNone(condition, name)
             self.assertNotIn("    needs:", job, name)
 
     def test_schedule_and_dispatch_select_every_expensive_job(self):

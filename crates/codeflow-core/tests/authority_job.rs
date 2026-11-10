@@ -656,6 +656,52 @@ exit 22
         assert!(host.temp_is_empty());
     }
 
+    /// TSK-1176 AC-4: the name list the template ships covers the plain
+    /// `secret scan`, so a pull request that adds a job of that name to a
+    /// workflow it can edit, a green head-run job beside a red trusted scan,
+    /// fails the verdict job. The genuine trusted scan passes the same list.
+    #[test]
+    fn a_head_run_secret_scan_is_refused() {
+        const SCAN: &str = "check-runs?check_name=secret%20scan&filter=all";
+        let (_, workflow) = read("assets/base/ci/codeflow-policy.yml");
+        let shipped = str_of(
+            &step(&workflow["jobs"]["commit-lint"], GUARD)["env"],
+            "TRUSTED_NAMES",
+        )
+        .to_owned();
+        let empty = runs(&[]);
+        let answer = |scan: &str, event: &str, path: &str| {
+            let host = Host::new(&[
+                ("GET", STANDARDS, empty.as_str()),
+                ("GET", SCAN, scan),
+                ("GET", "check_suite_id=10", &suite(event, path)),
+                ("GET", "/statuses?", "[]"),
+            ]);
+            host.run(
+                &guard_script(),
+                &[
+                    ("GH_TOKEN", "ghs_workflow"),
+                    ("HEAD_SHA", HEAD),
+                    ("TRUSTED_NAMES", shipped.as_str()),
+                ],
+            )
+        };
+        let one = runs(&[(1, 15368, 10)]);
+        let forged = answer(&one, "pull_request", ".github/workflows/codeflow-ci.yml");
+        assert!(!forged.status.success(), "{}", text(&forged));
+        assert!(
+            text(&forged).contains(
+                "check run 1 named 'secret scan' is on \
+                 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a pull_request run of \
+                 .github/workflows/codeflow-ci.yml created it"
+            ),
+            "{}",
+            text(&forged)
+        );
+        let genuine = answer(&one, "pull_request_target", WORKFLOW);
+        assert!(genuine.status.success(), "{}", text(&genuine));
+    }
+
     /// Each named case fails closed and names the producer.
     #[test]
     fn every_other_producer_fails_closed() {

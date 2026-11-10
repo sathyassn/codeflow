@@ -1900,6 +1900,8 @@ on: pull_request_target
 jobs:
   commit-standards:
     name: 'commit standards'
+  secret-scan:
+    name: 'secret scan'
   authority:
     environment: codeflow-authority
     steps:
@@ -1947,7 +1949,11 @@ jobs:
     /// A, B and C as `remote protect` writes them for the solo profile in
     /// Mode B, and the workflows that declare their names.
     fn protected_world() -> World {
-        let trusted = checks(&[("commit standards", 15368), ("codeflow gates", 15368)]);
+        let trusted = checks(&[
+            ("commit standards", 15368),
+            ("secret scan", 15368),
+            ("codeflow gates", 15368),
+        ]);
         World {
             rulesets: vec![
                 serde_json::json!({
@@ -2308,7 +2314,7 @@ jobs:
         }));
         let text = warn_text(&judge(world, None));
         assert!(
-            text.contains("ruleset 'main required checks' (24379074) requires release impact, secret scan, which no workflow on main produces"),
+            text.contains("ruleset 'main required checks' (24379074) requires release impact, which no workflow on main produces"),
             "{text}"
         );
         assert!(

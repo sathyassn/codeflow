@@ -232,7 +232,7 @@ it through the "ended before codeflow test ran" check.
 ## Timeouts and superseded runs
 
 A job with no `timeout-minutes` runs for up to GitHub's default six hours
-when a step stalls, and holds a runner while it does. The `secret scan` and
+when a step stalls, and holds a runner while it does. The `history scan`, `secret scan` and
 `security review` jobs stop after 30 minutes and the enforcing `commit
 standards` job after 20; a timed-out job fails, never passes. The `gates`
 job has no cap, because it runs your own suite, whose length only you know;
@@ -448,9 +448,9 @@ the base and waits for the fresh run first.
 It never writes a ruleset with another name, and an update never lowers an
 approval count, removes a rule or widens a bypass list; reducing a rule is
 an administrator's edit on the host. It refuses the checks rulesets until
-the default branch's `codeflow-policy.yml` declares the `trusted:` names,
+the default branch's `codeflow-policy.yml` declares the trusted verdicts,
 then the operator retires any older ruleset that requires the old names
-(`commit standards`, `secret scan`, `release impact`), which `doctor`
+(`commit standards`, `release impact`), which `doctor`
 names. The Mode A App and environment setup, the enablement order and the
 recovery window are in the policy reference's "Remote protection" section.
 
@@ -459,7 +459,7 @@ recovery window are in the policy reference's "Remote protection" section.
 ### Landing a reviewed false-positive exemption
 
 When an integration line's scan needs a new fingerprint in `.gitleaksignore`,
-land that fingerprint on the trusted base first in a separate pull request.
+land that fingerprint on the default branch first in a separate pull request.
 `codeflow ci` classifies a range that adds or modifies only the root `.gitleaksignore`
 as a **secret-scan exemption** when its body names one existing epic or task:
 `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its own task.
@@ -474,7 +474,7 @@ work with its dependency check, and one naming an epic is refused.
 Commit standards, record and body checks, the secret scan and security review
 still apply. The repository's existing approval requirements, including
 code-owner review where configured, also apply; classification changes no
-protection setting and grants no approval. The scanner reads the base's
+protection setting and grants no approval. The scanner reads the default branch's
 exemptions, so the new fingerprint cannot suppress a finding in its own pull
 request. Once the exemption lands, rerun the integration line's scan.
 
@@ -494,12 +494,22 @@ as extra steps when your stack warrants:
   change the scan. A change scans its own commits; a schedule scans the
   full history reachable from its resolved head.
   A wrapper can run `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<base-sha>..<head-sha> --"` with resolved commit ids.
-  The GitHub workflow reads every exemption from the trusted commit: the
-  pull request's base, or the pushed commit on a push. A pull request
-  cannot exempt the leak it adds, so a new exemption takes effect once its
-  own pull request merges. The step deletes the checkout's
-  `.gitleaksignore`, `.gitleaks.toml` and `.gitleaks.json` and gives
-  gitleaks the trusted commit's copies, choosing your configuration as
+  The `secret scan` job runs in `codeflow-policy.yml` on
+  `pull_request_target`, from the default branch's authority commit. It
+  keeps that commit checked out and fetches the pull request as Git data.
+  The head cannot replace its judge or supply its configuration. Push,
+  scheduled and manual scans run separately as `history scan`, and no
+  workflow a pull request can edit may carry the name `secret scan`: the
+  verdict jobs fail on a head-run job of that name. A rule that requires
+  `secret scan` keeps working. GitHub runs this job from the default branch,
+  so the pull request that first adds it has no `secret scan` check of its
+  own; where the check is required, an administrator merges that one pull
+  request with a bypass, or lifts the requirement for that merge, and the
+  default branch then goes into each integration line at once.
+  Every exemption comes from the authority commit, or the pushed commit
+  for a push scan. A new exemption takes effect once it lands there.
+  The step leaves the checkout intact and gives gitleaks explicit copies
+  of the trusted inputs, choosing the configuration as
   gitleaks does (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`, a
   `.gitleaks.json` beside `.gitleaks.toml`, `.gitleaks.toml`, else its
   default rules). A file your configuration extends by `[extend] path`, and
@@ -529,7 +539,7 @@ as extra steps when your stack warrants:
   with `TRUSTED_SHA` in its env; if you renamed it, update cannot check the
   order and says on every run that the job's step order needs your review.
   gitleaks reads only the commits the event brings: on a pull request,
-  those the pull request merged into its base holds and the base does not;
+  those the pull request's head holds and the base does not;
   on a push, those the pushed commit holds and the previous tip did not. A
   finding already in the base's history, or on another branch, is not the
   change's to fix, so it no longer fails every pull request. The workflow
@@ -544,11 +554,15 @@ as extra steps when your stack warrants:
   No run reads a branch or tag that HEAD does not reach, so an unrelated
   ref can neither fail this scan nor hide a leak from it; a
   repository-wide audit of every ref needs a scan of its own. The refusals below check
-  only the commits a pull request brings, those HEAD holds and the trusted
-  commit does not; on a push that range is empty, since the pushed commit
+  only the commits a pull request brings, those its head holds and its base
+  does not; on a push that range is empty, since the pushed commit
   is the trusted commit, so a push scan reads its history without them.
   In those commits, git cannot show what an octopus merge adds, so the
-  step refuses one; merge the branches one at a time. It also refuses a path with a
+  step refuses one; merge the branches one at a time. Push and full-history
+  scans read octopus commits against their first parent as well, so their
+  additions are scanned even when a later commit deletes them. Every Git
+  read ignores replace refs with `GIT_NO_REPLACE_OBJECTS=1`.
+  The preflight also refuses a path with a
   backslash, a double quote or a control character that one of those
   commits changes, or that either side of a merge among them changes,
   since gitleaks cannot read such names reliably. Each refusal names the
@@ -561,7 +575,8 @@ as extra steps when your stack warrants:
   `<commit>:b/<path>:<rule>:<line>` for a conflicted merge's unprefixed file.
   The step diagnoses that legacy fingerprint only when the commit is
   readable with exactly two parents, the prefixed path is absent and the
-  unprefixed path exists.
+  unprefixed path exists and a remerge CONFLICT header names it. A clean
+  two-parent merge amended with content receives no replacement advice.
   It prints the exact replacement for review, leaving the ignore file and
   its exemptions unchanged. An existing `b/` path and an unreadable commit
   receive distinct messages; neither is called legacy. A one-parent commit

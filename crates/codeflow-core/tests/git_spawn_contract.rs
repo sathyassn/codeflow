@@ -210,6 +210,24 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "the verified gitleaks binary over the staged diff; the git diff it starts runs no hook (TSK-412)",
     ),
     (
+        "codeflow-core/src/hooks/gitleaks/range.rs",
+        "&verified.path",
+        1,
+        "the verified gitleaks binary over base..head; the git it starts runs no hook (TSK-1176)",
+    ),
+    (
+        "codeflow-core/src/hooks/osv.rs",
+        "&path",
+        1,
+        "the osv-scanner binary, run for its version only after its checksum matched the pin (TSK-1176)",
+    ),
+    (
+        "codeflow-core/src/hooks/osv.rs",
+        "&verified.path",
+        1,
+        "the verified osv-scanner binary over an exported tree; it starts no git (TSK-1176)",
+    ),
+    (
         "codeflow-present/src/platform.rs",
         "executable",
         2,
