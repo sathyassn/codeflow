@@ -383,7 +383,9 @@ fn a_docs_page_names_the_portal_config_readers() {
     let portal = &report.guarded["docs-portal/portal.config.json"];
     for test in ["guide_altitude_budget", "manifest_consistency"] {
         assert!(
-            portal.iter().any(|t| t.ends_with(&format!("--test {test}"))),
+            portal
+                .iter()
+                .any(|t| t.ends_with(&format!("--test {test}"))),
             "{test}"
         );
     }

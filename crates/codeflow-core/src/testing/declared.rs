@@ -158,7 +158,7 @@ pub fn guards(config: &TestConfig, changes: &[Change]) -> GuardReport {
     for path in paths {
         let mut tests: Vec<String> = Vec::new();
         for rule in config.guards.iter().filter(|r| matches(&r.paths, path)) {
-            for test in rule.tests.iter().filter(|t| !t.trim().is_empty()) {
+            for test in rule.tests.iter().filter(|t| !t.trim_ascii().is_empty()) {
                 if !tests.contains(test) {
                     tests.push(test.clone());
                 }
@@ -236,7 +236,8 @@ pub fn changes_since(root: &Path, base: &str) -> Result<Vec<Change>, String> {
 ///
 /// Names why no base could be found.
 pub fn comparison_base(root: &Path, since: Option<&str>) -> Result<(String, String), String> {
-    let trimmed = |text: String| text.trim_end_matches('\n').to_string();
+    // Git ends each answer with one newline; nothing else is stripped.
+    let trimmed = |text: String| text.strip_suffix('\n').unwrap_or(&text).to_string();
     if let Some(base) = since {
         let sha = git_output(
             root,

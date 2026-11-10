@@ -662,7 +662,7 @@ fn validate_glob_list(path: &Path, patterns: &[String]) -> Result<(), TestingErr
 /// Each `guards` rule names at least one path glob and one test command.
 fn validate_guards(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
     for rule in &config.guards {
-        if rule.paths.is_empty() || rule.tests.iter().all(|test| test.trim().is_empty()) {
+        if rule.paths.is_empty() || rule.tests.iter().all(|test| test.trim_ascii().is_empty()) {
             return Err(TestingError::ConfigInvalid {
                 path: path.to_path_buf(),
                 message: "a guards rule needs at least one path and one test".into(),

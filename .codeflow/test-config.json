@@ -895,6 +895,7 @@
         ".claude/skills/**",
         ".claude/agents/**",
         ".codeflow/.baseline/**",
+        ".codeflow/manifest.json",
         "AGENTS.md",
         "CLAUDE.md"
       ],
