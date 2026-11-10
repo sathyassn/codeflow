@@ -1,0 +1,11 @@
+id = "TSK-1418"
+uid = "0eb60ed3-9431-4c94-9ff2-2ecfa359df31"
+kind = "TSK"
+title = "A pipeline run given a task claims and starts it, and records a blocker it cannot clear"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T21:33:37Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
