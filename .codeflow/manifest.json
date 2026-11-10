@@ -2765,7 +2765,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "707d6d8cc8761af7625779d41d51a25d41878139224f4038fbc1e33f8c4c251d",
+      "sha256": "5d079b9d023317915da59134f15b0ce120049920ed8e3703c5858e490adbafc3",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

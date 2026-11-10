@@ -935,6 +935,11 @@ fn evaluate_report_with_runners(
             crate::remedy::HOOK_INTEGRITY.remedy(),
         )),
     }
+    // A command run through the Herdr app (`hc run`, `hc exec`) or the
+    // older `herdr` CLI is judged as the same command typed bare, in the
+    // directory it runs in, so `--cwd` names the repository it targets; a
+    // form the guard cannot read refuses (TSK-1344).
+    carried_commands_judged(command, ctx, cwd, read_runners, &mut report);
     let violations = &mut report.violations;
     violations.extend(line_home::unread_violation(
         &home,
@@ -1211,6 +1216,45 @@ fn evaluate_report_with_runners(
 
     report.notes = notes;
     report
+}
+
+/// [`evaluate_report_with_runners`] for each command the line runs through
+/// `hc` or `herdr` ([`crate::security::terminal_carriers`]); a carrier
+/// form the guard cannot read refuses under `git.hook_integrity`, always
+/// blocking, as an unreadable Git runner does.
+fn carried_commands_judged(
+    command: &str,
+    ctx: &GuardContext<'_>,
+    cwd: &Path,
+    read_runners: bool,
+    report: &mut Evaluation,
+) {
+    use crate::security::terminal_carriers::{carried, Carried, Nested};
+    let found = carried(command, cwd);
+    if found == Carried::default() {
+        return;
+    }
+    let unread = |why: &str| {
+        Violation::always_blocking(
+            "git.hook_integrity",
+            why.to_string(),
+            "run the command bare, or in a form the guard reads (`hc run [options] -- <program> <args>`), so it is judged",
+        )
+    };
+    let Some(_nested) = Nested::enter() else {
+        report
+            .violations
+            .push(unread("terminal carriers nest deeper than the guard reads"));
+        return;
+    };
+    report
+        .violations
+        .extend(found.unread.iter().map(|why| unread(why)));
+    for run in &found.runs {
+        let nested = evaluate_report_with_runners(&run.bare_line(cwd), ctx, cwd, read_runners);
+        report.violations.extend(nested.violations);
+        report.notes.extend(nested.notes);
+    }
 }
 
 /// The argument vector of every simple command in `command`, read the way

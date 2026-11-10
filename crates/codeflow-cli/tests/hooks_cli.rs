@@ -19,6 +19,9 @@ use host_isolation::{git_command, isolate_clone, isolate_git};
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
+#[path = "hooks_cli/terminal_carriers.rs"]
+mod terminal_carriers;
+
 #[path = "hooks_cli/text_rule.rs"]
 mod text_rule;
 

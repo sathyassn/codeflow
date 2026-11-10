@@ -801,6 +801,68 @@ A program outside this list that moves the command it runs to another
 directory, or hands it paths it finds, is outside the text guard's
 promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
+### Terminal carriers the guards model
+
+The Herdr app's CLI and the older `herdr` CLI start a command in another
+process. Both guards read these forms wherever a line runs them (after a
+launcher, inside `sh -c`, in a substitution), and judge the command each
+carries as a command of its own, by the same rules as that command typed
+bare (TSK-1344). The code holds the program names in
+`security/terminal_carriers.rs`, and a test keeps them equal to this list.
+
+- Programs: `hc`, `herdr-core`, `herdr`.
+- Carried commands: `hc run [options] [--] <program> <args>...`, a single
+  shell line, or a template's `command` when the first word names a file in
+  `herdr-core/templates`; `hc exec [options] <program> <args>...` with each
+  `--env K=V` as an assignment; `hc machine add --via <command>`; `herdr
+  pane run <pane> <command>`; `herdr agent start <name> --kind <kind>
+  [options] -- <args>...`, judged as `<kind> <args>...`.
+- Directory: `--cwd` from where the line runs, else that directory, so a
+  Git command is judged against the repository it targets. Where the
+  directory is unknown, the form refuses whatever it carries, because a
+  relative path in it names files the guard cannot see: on another machine
+  (`--on`, with or without `--cwd`), in a `herdr` pane (`pane run`,
+  `agent start`), and after a `cd` the guard cannot follow. `herdr pane
+  split` with `--cwd` or `--env` refuses too, since later commands in that
+  pane run under the directory and environment it sets.
+- Files: `hc file write` and `hc file edit` meet the Edit tool's path
+  rules; on another machine (`--on`) they refuse. The files `hc file
+  read`, `hc put` and `hc update --from` read are judged by the
+  secret-read rules, as `cat` of the same path; `hc file read --on`
+  refuses.
+- Read once: the other readers leave the outer words of a form this reader
+  reads in full to it, so a carried program's options are not read again as
+  the carrier's own. A form it cannot read keeps every other reader.
+- Refused and named: an unknown `hc` subcommand or option, an option
+  without its value, a template the guard cannot read or whose `command` is
+  not a one-line scalar, a word holding a substitution, words supplied by
+  `xargs` or `find -exec`, and carriers nested more than six deep.
+- Read and passed: `hc ls`, `get`, `read`, `wait`, `kill`, `rm`, `attach`,
+  `interrupt`, `label`, `keep`, `templates`, `events`, `schema`, `server`,
+  `connect`, the other `machine` commands, `--skill`, `--help` and
+  `--version`, when their options parse.
+
+Text typed into a terminal is not judged: `hc send`, `hc keys`, `herdr
+pane send-text`, `herdr pane send-keys`, `herdr agent send-keys`, `herdr
+agent prompt`, and the body and task of an `hc run` template, which the
+Herdr app sends as the first message once the agent is ready (the
+template's `command` is judged). The guard
+cannot know whether the program in that terminal reads the text as a
+prompt or runs it as a command, and `hc keys` can spell any line one key at
+a time, so a filter would stop only some spellings and is not offered as
+protection. Their options are still read. The floor for typed text is the
+program that receives it: an agent session runs its own guards before it
+runs a command, and a plain shell has none. Then the Git hooks in each
+repository, CI, and the remote branch protection hold, as they do for a
+command a person types. `hc send --if idle` types only into a program that
+reports idle status; a plain shell reports none.
+
+An `hc` terminal runs outside the harness's Bash sandbox. A command it
+starts can write wherever the user can, read files the sandbox denies and
+reach any host, and the harness's per-command permission prompts do not
+apply to it. The guards' text rules are the only in-session check on such
+a command, which is why every form above is judged as if typed bare.
+
 ### Program variables the guards judge
 
 A variable whose value is a program is judged as a command before every

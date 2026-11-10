@@ -231,6 +231,12 @@ pub fn evaluate_ruled(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
+    // A command run through the Herdr app (`hc run`, `hc exec`) or the
+    // older `herdr` CLI is judged as the same command typed bare, where it
+    // runs; a form the guard cannot read refuses (TSK-1344).
+    violations.extend(carrier_violations(
+        command, posix, levels, integrity, cwd, root, outcome,
+    ));
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
@@ -360,6 +366,105 @@ fn runner_violations(
             format!("cannot verify the program Git runs: {why}"),
             crate::remedy::SECRET_SELECTION.remedy(),
         )],
+    }
+}
+
+/// Every command the line runs through `hc` or `herdr`, judged as a
+/// command of its own in the directory it runs in (a form whose directory
+/// is unknown is also refused as unread); every file `hc file write` or `hc file edit`
+/// changes, held to the edit guard's path rules; and every carrier form the
+/// guard cannot read, refused on the catastrophic floor, which no policy
+/// relaxes (TSK-1344).
+fn carrier_violations(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
+    use crate::security::terminal_carriers::{carried, Nested};
+    let found = carried(command, cwd);
+    if found == crate::security::terminal_carriers::Carried::default() {
+        return Vec::new();
+    }
+    let Some(_nested) = Nested::enter() else {
+        return vec![carrier_unread(
+            "terminal carriers nest deeper than the guard reads",
+        )];
+    };
+    let mut violations: Vec<Violation> =
+        found.unread.iter().map(|why| carrier_unread(why)).collect();
+    for run in &found.runs {
+        for finding in evaluate_ruled(
+            &run.bare_line(cwd),
+            posix,
+            levels,
+            integrity,
+            cwd,
+            root,
+            outcome,
+        ) {
+            merge_strongest(&mut violations, finding);
+        }
+    }
+    for write in &found.writes {
+        for finding in carried_write(write, root, integrity) {
+            merge_strongest(&mut violations, finding);
+        }
+    }
+    violations
+}
+
+/// The refusal of a carrier form the guard cannot read.
+fn carrier_unread(why: &str) -> Violation {
+    Violation::always_blocking(
+        "security.dangerous_commands",
+        why.to_string(),
+        "run the command bare, or in a form the guard reads (`hc run [options] -- <program> <args>`), so it is judged",
+    )
+}
+
+/// A file `hc file` changes, held to the same path rules as the Edit tool.
+fn carried_write(
+    write: &crate::security::terminal_carriers::Write,
+    root: &std::path::Path,
+    integrity: PolicyLevel,
+) -> Vec<Violation> {
+    let unread = |why: String| {
+        vec![carrier_unread(&format!(
+            "`{}` to `{}`: {why}; the guard cannot check the path",
+            write.form, write.path
+        ))]
+    };
+    let Some(home) = crate::portable_path::user_home() else {
+        return unread("the home cannot be resolved".to_string());
+    };
+    let repo = match super::RepoInfo::discover(root) {
+        Ok(repo) => repo,
+        Err(why) => return unread(why),
+    };
+    let context = super::edit_guard::EditContext {
+        cwd: &write.directory,
+        root,
+        home: &home,
+        git_common_dir: repo.as_ref().map(|repo| repo.common_dir.as_path()),
+        level: integrity,
+    };
+    let request = super::edit_guard::EditRequest {
+        cwd: None,
+        paths: vec![std::path::PathBuf::from(&write.path)],
+    };
+    match super::edit_guard::evaluate(&request, &context) {
+        Ok(findings) => findings
+            .into_iter()
+            .map(|mut finding| {
+                finding.message = format!("`{}`: {}", write.form, finding.message);
+                finding
+            })
+            .collect(),
+        Err(why) => unread(why.to_string()),
     }
 }
 

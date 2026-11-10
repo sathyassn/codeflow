@@ -50,6 +50,7 @@ pub(crate) mod search_pattern;
 pub(crate) mod sed_script;
 pub(crate) mod shell_lex;
 pub mod startup;
+pub(crate) mod terminal_carriers;
 pub(crate) mod unresolved;
 
 pub use policy::SecurityPolicy;

@@ -2126,6 +2126,14 @@ fn conservative_read_roots(
     ) {
         return None;
     }
+    // A terminal carrier the carrier reader reads in full has its carried
+    // command, and every file it reads, judged as commands of their own in
+    // their own directories; walking the outer words again would read the
+    // carried command's options as archive syntax (TSK-1344). A form it
+    // cannot read keeps this walk and is refused by that reader too.
+    if super::terminal_carriers::fully_read(args) {
+        return None;
+    }
     let rest = args.get(1..).unwrap_or_default();
     let program_args = outward::recursive_arguments(name, rest);
     let effects = super::unresolved::writer_effects(name, rest, &[]);

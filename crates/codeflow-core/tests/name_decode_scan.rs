@@ -3826,6 +3826,28 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "grammar:yaml-frontmatter",
     ),
+    // Reads the `command` of a Herdr template's YAML front matter a line at a time: the fence lines and the key's one-line scalar; any other form, or a second `command`, refuses, and the value is judged as a command, never used as a name.
+    (
+        "crates/codeflow-core/src/security/terminal_carriers.rs",
+        "frontmatter_command",
+        "lines",
+        1,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/security/terminal_carriers.rs",
+        "frontmatter_command",
+        "trim",
+        1,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/security/terminal_carriers.rs",
+        "frontmatter_command",
+        "trim_end",
+        2,
+        "grammar:yaml-frontmatter",
+    ),
     // Reads the scaffold version out of the ASCII managed-block marker `codeflow:managed:begin scaffold=`, which ends at whitespace or the `-` that opens the comment closer; the version is displayed, never used as a path.
     (
         "crates/codeflow-core/src/doctor/mod.rs",
@@ -7146,6 +7168,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; a dangling link exists, so it and every other error propagate."),
     ("crates/codeflow-core/src/doctor/startup_files.rs", "sourced_files", "is_file", 1, "Type check on metadata from metadata_optional, whose errors are reported as unresolved; a startup path that is not a regular file is not one the shell sources as a file."),
+    ("crates/codeflow-core/src/security/terminal_carriers.rs", "template_command", "ErrorKind::NotFound", 1, "Only native NotFound means a template folder holds no file of that name, which is when the Herdr app finds no template there either and runs the word as a command, which the guard judges; any other read error refuses the form."),
     ("crates/codeflow-core/src/security/startup.rs", "resolve", "ErrorKind::NotFound", 1, "The walk stats each component in order from the root, so a component that is not found lies beneath one that resolved as a directory or was itself not found; the missing suffix is kept as written, which is where a write lands, and any other error returns None."),
     ("crates/codeflow-cli/src/cmd/ids.rs", "run_admit", "exists", 1, "False only sends a rev:path spec to git show, which refuses on error; a literal path whose metadata fails also fails the read that follows, so no unread input becomes a default."),
     ("crates/codeflow-cli/src/cmd/new.rs", "run_adr", "ErrorKind::NotFound", 1, "NotFound only picks the shipped template text for a new ADR, which check_adr then validates; any other read error refuses, and a dangling ancestor fails create_dir_all."),
