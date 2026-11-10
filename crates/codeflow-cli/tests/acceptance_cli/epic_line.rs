@@ -806,3 +806,128 @@ fn tsk416_a_ref_named_like_the_line_at_another_commit_still_refuses() {
         ],
     );
 }
+
+/// Checkpoint 607's base, `main` when hosted job 127659313186 ran.
+const CHECKPOINT_BASE: &str = "879a7a7fc83ae37ded08dcc730a283acebd1d6c2";
+/// Checkpoint 607's head, the 3.2.0 line's tip it judged.
+const CHECKPOINT_HEAD: &str = "2630d4854c47941af283df41591eab03f4e8407e";
+/// The 3.2.0 line checkpoint 607 took into `main`.
+const CHECKPOINT_LINE: &str = "integration/EPC-022-the-3-2-0-milestone-fixes";
+/// Lines other than the 3.2.0 line that records changed in checkpoint 607
+/// name as their home.
+const CHECKPOINT_HOMES: [&str; 2] = [
+    "integration/EPC-024-quality-defaults-local-scan-parity-and-seat-capa",
+    "integration/EPC-026-the-capabilities-catalog",
+];
+
+/// TSK-416 AC-20 on the real commits: checkpoint 607 (`879a7a7f..2630d4854`,
+/// 997 commits and 383 merges) runs as hosted job 127659313186 ran it, with
+/// its pull request's `Task: EPC-022`. Before the fix it refused TSK-1062 as
+/// a completion outside the range, reached through `c677596d6`, an in-range
+/// merge rewriting the record; with the fix the line's completions are its
+/// own. The judgement must run: the test also requires TSK-1062's binding
+/// note and no import refusal, which would skip every task.
+#[test]
+#[ignore = "needs this repository's full history; CI's test checkout is shallow"]
+fn tsk416_checkpoint_607_reports_no_completion_outside_its_range() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for commit in [CHECKPOINT_BASE, CHECKPOINT_HEAD] {
+        git(
+            &source,
+            &["cat-file", "-e", &format!("{commit}^{{commit}}")],
+        );
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let remote = scratch.path().join("origin.git");
+    git(
+        scratch.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            remote.to_str().unwrap(),
+        ],
+    );
+    let url = format!("file://{}", source.canonicalize().unwrap().display());
+    // The refs `origin` holds, and why:
+    // - `main` at the base: the default target the range lands on.
+    // - The line at the head: the ref through which the walk for a holder
+    //   outside the range, over every branch and remote-tracking ref
+    //   (landing.rs:1022-1043), reached `c677596d6` before the fix.
+    // - Each other home at the base: the import check reads a home's
+    //   remote-tracking tip, refuses a missing one and skips every task's
+    //   judgement (imports.rs:121-124), and passes a tip the anchor holds
+    //   with no import (imports.rs:126).
+    let mut refspecs = vec![
+        format!("{CHECKPOINT_BASE}:refs/heads/main"),
+        format!("{CHECKPOINT_HEAD}:refs/heads/{CHECKPOINT_LINE}"),
+    ];
+    refspecs.extend(
+        CHECKPOINT_HOMES
+            .iter()
+            .map(|home| format!("{CHECKPOINT_BASE}:refs/heads/{home}")),
+    );
+    let mut fetch = vec![
+        "-c",
+        "uploadpack.allowAnySHA1InWant=true",
+        "fetch",
+        "-q",
+        url.as_str(),
+    ];
+    fetch.extend(refspecs.iter().map(String::as_str));
+    git(&remote, &fetch);
+    let clone = scratch.path().join("clone");
+    codeflow_fixture::clone(
+        scratch.path(),
+        format!("file://{}", remote.display()),
+        &clone,
+    )
+    .no_checkout()
+    .run();
+    git(&clone, &["switch", "-q", "--detach", CHECKPOINT_HEAD]);
+    let body = scratch.path().join("pr-body.md");
+    std::fs::write(
+        &body,
+        "## Summary\nThe 3.2.0 line into main.\n\nTask: EPC-022\n\n## Changes\n- the line\n\n## Testing\n- test\n",
+    )
+    .unwrap();
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            CHECKPOINT_BASE,
+            "--head",
+            CHECKPOINT_HEAD,
+            "--branch",
+            CHECKPOINT_LINE,
+            "--policy-from",
+            CHECKPOINT_BASE,
+            "--baseline-from",
+            CHECKPOINT_BASE,
+            "--pr-body-file",
+            body.to_str().unwrap(),
+        ])
+        .current_dir(&clone)
+        .output()
+        .unwrap();
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!printed.contains("work.import_authority"), "{printed}");
+    assert!(
+        printed.contains("TSK-1062 completion bound at"),
+        "{printed}"
+    );
+    let refused = printed
+        .lines()
+        .any(|line| line.contains("TSK-1062") && line.contains(OUTSIDE_RANGE));
+    assert!(!refused, "TSK-1062 refused as outside the range: {printed}");
+    assert!(
+        !printed.contains("work.acceptance_binding (block)"),
+        "{printed}"
+    );
+}
