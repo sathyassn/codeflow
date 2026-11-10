@@ -38,6 +38,7 @@
 //! GitHub blocks `pull_request_target` there unless one allows it
 //! (TSK-1347, `event_policy`).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -883,7 +884,7 @@ fn branch_rules(
     branch: &str,
 ) -> Result<Value, String> {
     let mut rules = Vec::new();
-    for page in 1.. {
+    for page in 1..=remote::MAX_LIST_PAGES {
         let url =
             format!("repos/{nwo}/rules/branches/{branch}?per_page={RULES_PAGE_SIZE}&page={page}");
         let text = gh(&["api", &url])?;
@@ -893,10 +894,13 @@ fn branch_rules(
         };
         rules.extend_from_slice(&rows);
         if rows.len() < RULES_PAGE_SIZE {
-            break;
+            return Ok(Value::Array(rules));
         }
     }
-    Ok(Value::Array(rules))
+    Err(format!(
+        "the rules did not end within {} pages",
+        remote::MAX_LIST_PAGES
+    ))
 }
 
 /// The classic protection of `branch`, or why it could not be read. Only
@@ -1151,6 +1155,238 @@ fn names(list: &Value) -> Vec<String> {
         .collect()
 }
 
+/// What the host's live rules give one branch, against what a branch rule
+/// requires (TSK-383).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum LiveRules {
+    /// Every required rule is there, with the sources that give them.
+    Holds(Vec<String>),
+    /// What is missing, one item each, with the sources that give the rest.
+    Lacks(Vec<String>),
+    /// The rules could not be read or judged, and why.
+    Unread(String),
+}
+
+/// Read the live rules for `branch` (the active rulesets that apply to it,
+/// whoever created them, and its classic protection) and compare them with
+/// what `rule` requires: no force push, no deletion, a pull request and the
+/// named checks, each where the rule asks for it. Only GET calls are made.
+pub(super) fn live_branch_rules(
+    opts: &Options,
+    branch: &str,
+    rule: &remote::BranchRule,
+) -> LiveRules {
+    let root = Path::new(&opts.project_dir);
+    let nwo = match github_origin(root) {
+        Ok(Some(nwo)) => nwo,
+        Ok(None) => return LiveRules::Unread("no GitHub `origin` remote".into()),
+        Err(why) => return LiveRules::Unread(why),
+    };
+    if opts.do_look_path("gh").is_err() {
+        return LiveRules::Unread(format!(
+            "`gh` not found, so the rules of {nwo} were not read"
+        ));
+    }
+    let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, GH_TIMEOUT);
+    let rules = match branch_rules(&gh, &nwo, branch) {
+        Ok(rules) => rules,
+        Err(error) => {
+            return LiveRules::Unread(format!(
+                "the rules of {nwo} {branch} are not readable ({})",
+                super::first_line(&error)
+            ))
+        }
+    };
+    let (classic, classic_unread) = classic_protection(&gh, &nwo, branch);
+    let needs = branch_needs(&rules, classic.as_ref(), rule);
+    // A rule counts only where it binds everyone: a ruleset whose bypass
+    // list is read and empty, or classic protection with `enforce_admins`
+    // on. Each ruleset is read once.
+    let mut bound: BTreeMap<String, Bypass> = BTreeMap::new();
+    let mut state = |giver: &Giver| -> Bypass {
+        let key = giver.label();
+        let found = bound.entry(key).or_insert_with(|| match giver {
+            Giver::Ruleset(Some(id)) => ruleset_bound(opts, &nwo, *id),
+            Giver::Ruleset(None) => Bypass::Unknown("a rule row names no ruleset".into()),
+            Giver::Classic(Some(true)) => Bypass::Bound,
+            Giver::Classic(Some(false)) => Bypass::Bypassable(
+                "classic branch protection does not bind administrators (enforce_admins is off)"
+                    .into(),
+            ),
+            Giver::Classic(None) => {
+                Bypass::Unknown("classic branch protection enforce_admins not readable".into())
+            }
+        });
+        match found {
+            Bypass::Bound => Bypass::Bound,
+            Bypass::Bypassable(why) => Bypass::Bypassable(why.clone()),
+            Bypass::Unknown(why) => Bypass::Unknown(why.clone()),
+        }
+    };
+    let mut givers = Vec::new();
+    let mut lacking = Vec::new();
+    let mut unread = Vec::new();
+    for (need, by) in &needs {
+        let mut how = Vec::new();
+        let mut unknown = Vec::new();
+        let mut holds = false;
+        for giver in by {
+            match state(giver) {
+                Bypass::Bound => {
+                    holds = true;
+                    givers.push(giver.label());
+                }
+                Bypass::Bypassable(why) => how.push(why),
+                Bypass::Unknown(why) => unknown.push(why),
+            }
+        }
+        if holds {
+            continue;
+        }
+        if unknown.is_empty() {
+            lacking.push(if how.is_empty() {
+                need.clone()
+            } else {
+                format!("{need} for everyone ({})", how.join("; "))
+            });
+        } else {
+            unread.push(format!("{need}: {}", unknown.join("; ")));
+        }
+    }
+    givers.sort();
+    givers.dedup();
+    if lacking.is_empty() && unread.is_empty() {
+        return LiveRules::Holds(givers);
+    }
+    // Classic protection, or a bypass list not read, could give what the
+    // rest lacks.
+    if let Some(why) = classic_unread {
+        unread.push(why);
+    }
+    if unread.is_empty() {
+        LiveRules::Lacks(lacking)
+    } else {
+        let lacks = if lacking.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "the live rules on {branch} do not {}, and ",
+                lacking.join(", ")
+            )
+        };
+        LiveRules::Unread(format!("{lacks}{}", unread.join("; ")))
+    }
+}
+
+/// Who could give one rule on a branch: a ruleset, by id, or classic
+/// protection, with whether it binds administrators.
+enum Giver {
+    Ruleset(Option<u64>),
+    Classic(Option<bool>),
+}
+
+impl Giver {
+    fn label(&self) -> String {
+        match self {
+            Self::Ruleset(Some(id)) => format!("ruleset {id}"),
+            Self::Ruleset(None) => "a ruleset".into(),
+            Self::Classic(_) => "classic branch protection".into(),
+        }
+    }
+}
+
+/// Each rule `rule` requires on a branch, with who gives it in the live
+/// rules: the ruleset each rule row names and classic protection.
+fn branch_needs(
+    rules: &Value,
+    classic: Option<&Value>,
+    rule: &remote::BranchRule,
+) -> Vec<(String, Vec<Giver>)> {
+    let rows: Vec<&Value> = rules.as_array().into_iter().flatten().collect();
+    let from_rulesets = |kind: &str| -> Vec<Giver> {
+        rows.iter()
+            .filter(|row| row["type"] == kind)
+            .map(|row| Giver::Ruleset(row["ruleset_id"].as_u64()))
+            .collect()
+    };
+    let admins = classic
+        .and_then(|c| c.pointer("/enforce_admins/enabled"))
+        .and_then(Value::as_bool);
+    let classic_off = |key: &str| {
+        classic
+            .and_then(|c| c.pointer(&format!("/{key}/enabled")))
+            .and_then(Value::as_bool)
+            == Some(false)
+    };
+    let mut needs: Vec<(String, Vec<Giver>)> = Vec::new();
+    if rule.block_force_push {
+        let mut by = from_rulesets("non_fast_forward");
+        if classic_off("allow_force_pushes") {
+            by.push(Giver::Classic(admins));
+        }
+        needs.push(("block force pushes".into(), by));
+    }
+    if rule.block_deletion {
+        let mut by = from_rulesets("deletion");
+        if classic_off("allow_deletions") {
+            by.push(Giver::Classic(admins));
+        }
+        needs.push(("block deletion".into(), by));
+    }
+    if rule.require_pr {
+        let mut by = from_rulesets("pull_request");
+        if classic.is_some_and(|c| c["required_pull_request_reviews"].is_object()) {
+            by.push(Giver::Classic(admins));
+        }
+        needs.push(("require a pull request".into(), by));
+    }
+    if rule.requires_checks() {
+        let sources = sources(rules, classic);
+        for name in &rule.required_checks {
+            let by = sources
+                .iter()
+                .filter(|s| s.contexts.contains(name))
+                .map(|s| {
+                    if s.classic {
+                        Giver::Classic(s.enforce_admins)
+                    } else {
+                        Giver::Ruleset(s.ruleset_id)
+                    }
+                })
+                .collect();
+            needs.push((format!("require the check {name}"), by));
+        }
+    }
+    needs
+}
+
+/// Whether ruleset `id` binds everyone: its bypass list, read with one GET,
+/// is empty. A non-empty list names each actor; a list that cannot be read
+/// is unknown, never bound.
+fn ruleset_bound(opts: &Options, nwo: &str, id: u64) -> Bypass {
+    match opts.do_exec_bounded(
+        "gh",
+        &["api", &format!("repos/{nwo}/rulesets/{id}")],
+        GH_TIMEOUT,
+    ) {
+        Ok(text) => {
+            let ruleset = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+            match ruleset.get("bypass_actors").and_then(Value::as_array) {
+                Some(actors) if actors.is_empty() => Bypass::Bound,
+                Some(actors) => Bypass::Bypassable(format!(
+                    "ruleset {id} lets {} bypass it",
+                    remote::actors_text(actors)
+                )),
+                None => Bypass::Unknown(format!("ruleset {id} bypass list not readable")),
+            }
+        }
+        Err(error) => Bypass::Unknown(format!(
+            "ruleset {id} not readable ({})",
+            super::first_line(&error)
+        )),
+    }
+}
+
 /// `owner/name` of the GitHub `origin`, or the note that says why doctor
 /// reads no host rules.
 fn origin_or_why(root: &Path) -> Result<String, String> {
@@ -1172,41 +1408,7 @@ fn origin_or_why(root: &Path) -> Result<String, String> {
 /// none. An unreadable repository or an `origin` URL that is not UTF-8 is
 /// named, never read as no remote.
 fn github_origin(root: &Path) -> Result<Option<String>, String> {
-    let Some(repo) = crate::hooks::repo::open(root)? else {
-        return Ok(None);
-    };
-    let remote = match repo.find_remote("origin") {
-        Ok(remote) => remote,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "cannot read the `origin` remote: {}",
-                error.message()
-            ))
-        }
-    };
-    let url = remote
-        .url()
-        .map_err(|error| format!("cannot read the `origin` URL: {}", error.message()))?;
-    Ok(parse_github_url(url))
-}
-
-/// `owner/name` from an HTTPS, SSH or scp-style github.com URL.
-fn parse_github_url(url: &str) -> Option<String> {
-    let rest = [
-        "https://github.com/",
-        "http://github.com/",
-        "ssh://git@github.com/",
-        "git@github.com:",
-    ]
-    .iter()
-    .find_map(|prefix| url.strip_prefix(prefix))?;
-    let rest = rest.trim_end_matches('/');
-    let rest = rest.strip_suffix(".git").unwrap_or(rest);
-    let mut parts = rest.split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    (parts.next().is_none() && !owner.is_empty() && !name.is_empty())
-        .then(|| format!("{owner}/{name}"))
+    remote::origin_repository(root)
 }
 
 #[cfg(test)]
@@ -1971,15 +2173,28 @@ mod tests {
             "https://github.com/o/r",
             "git@github.com:o/r.git",
             "ssh://git@github.com/o/r.git",
+            // The forms `remote protect` names github.com for are a GitHub
+            // origin to doctor too (review of PR 700, delta nit 1).
+            "https://user@github.com/o/r.git",
+            "https://github.com:443/o/r.git",
+            "https://GitHub.com/o/r",
+            "ssh://github.com/o/r.git",
+            "ssh://git@github.com:22/o/r.git",
+            "other@github.com:o/r.git",
         ] {
-            assert_eq!(parse_github_url(url).as_deref(), Some("o/r"), "{url}");
+            assert_eq!(
+                remote::parse_github_url(url).as_deref(),
+                Some("o/r"),
+                "{url}"
+            );
         }
         for url in [
             "https://gitlab.com/o/r.git",
+            "https://github.com.gitlab.com/o/r.git",
             "git@github.com:o",
             "/srv/r.git",
         ] {
-            assert_eq!(parse_github_url(url), None, "{url}");
+            assert_eq!(remote::parse_github_url(url), None, "{url}");
         }
     }
 
@@ -2694,5 +2909,199 @@ jobs:
         // Without a profile, a missing ruleset is not judged.
         let result = judge(world, None);
         assert_eq!(result.status, Status::Pass, "{}", result.message);
+    }
+
+    // TSK-383: live rules on one branch, whoever created them.
+
+    const REGISTRY_RULES: &str = "repos/o/r/rules/branches/codeflow/registry";
+    const REGISTRY_CLASSIC: &str = "repos/o/r/branches/codeflow/registry/protection";
+
+    fn registry(exec: fn(&str, &[&str]) -> Result<String, String>) -> LiveRules {
+        let dir = project();
+        live_branch_rules(
+            &opts(dir.path(), exec),
+            "codeflow/registry",
+            &remote::BranchRule::registry_data_profile(),
+        )
+    }
+
+    const RULESET_9: &str = "repos/o/r/rulesets/9";
+    const BOTH_RULES_FROM_9: &str =
+        r#"[{"type":"non_fast_forward","ruleset_id":9},{"type":"deletion","ruleset_id":9}]"#;
+
+    #[test]
+    fn a_manual_ruleset_that_blocks_force_push_and_deletion_holds() {
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok(BOTH_RULES_FROM_9.into()),
+                ["api", RULESET_9] => Ok(r#"{"id":9,"bypass_actors":[]}"#.into()),
+                ["api", REGISTRY_CLASSIC] => Err("gh: Branch not protected (HTTP 404)".into()),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        assert_eq!(registry(exec), LiveRules::Holds(vec!["ruleset 9".into()]));
+    }
+
+    /// Review of PR 700, finding 1: a rule an actor can bypass does not
+    /// protect the branch from that actor, and the actor is named.
+    #[test]
+    fn a_ruleset_an_actor_can_bypass_does_not_hold() {
+        fn bypassable(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok(BOTH_RULES_FROM_9.into()),
+                ["api", RULESET_9] => Ok(
+                    r#"{"id":9,"bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}"#
+                        .into(),
+                ),
+                ["api", REGISTRY_CLASSIC] => Err("gh: Branch not protected (HTTP 404)".into()),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        fn bypass_unread(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok(BOTH_RULES_FROM_9.into()),
+                ["api", RULESET_9] => Err("gh: Resource not accessible (HTTP 403)".into()),
+                ["api", REGISTRY_CLASSIC] => Err("gh: Branch not protected (HTTP 404)".into()),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        let LiveRules::Lacks(missing) = registry(bypassable) else {
+            panic!("a bypassable ruleset is not a pass")
+        };
+        assert_eq!(
+            missing,
+            vec![
+                "block force pushes for everyone (ruleset 9 lets RepositoryRole 5 (always) bypass it)",
+                "block deletion for everyone (ruleset 9 lets RepositoryRole 5 (always) bypass it)",
+            ]
+        );
+        let LiveRules::Unread(why) = registry(bypass_unread) else {
+            panic!("an unread bypass list is not a verdict")
+        };
+        assert!(
+            why.contains("ruleset 9 not readable (gh: Resource not accessible (HTTP 403))"),
+            "{why}"
+        );
+    }
+
+    /// Review of PR 700, finding 1: classic protection counts only when it
+    /// binds administrators.
+    #[test]
+    fn classic_protection_counts_only_when_it_binds_administrators() {
+        fn admins_off(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok("[]".into()),
+                ["api", REGISTRY_CLASSIC] => Ok(
+                    r#"{"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"enforce_admins":{"enabled":false}}"#
+                        .into(),
+                ),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        fn admins_unread(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok("[]".into()),
+                ["api", REGISTRY_CLASSIC] => Ok(
+                    r#"{"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}"#
+                        .into(),
+                ),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        let LiveRules::Lacks(missing) = registry(admins_off) else {
+            panic!("classic protection that spares administrators is not a pass")
+        };
+        assert!(
+            missing[0].contains("does not bind administrators (enforce_admins is off)"),
+            "{missing:?}"
+        );
+        let LiveRules::Unread(why) = registry(admins_unread) else {
+            panic!("an unread enforce_admins is not a verdict")
+        };
+        assert!(why.contains("enforce_admins not readable"), "{why}");
+    }
+
+    #[test]
+    fn a_missing_rule_is_named_and_classic_protection_can_give_it() {
+        fn deletion_only(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => {
+                    Ok(r#"[{"type":"deletion","ruleset_id":9}]"#.into())
+                }
+                ["api", RULESET_9] => Ok(r#"{"id":9,"bypass_actors":[]}"#.into()),
+                ["api", REGISTRY_CLASSIC] => Err("gh: Branch not protected (HTTP 404)".into()),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        fn classic_gives(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => {
+                    Ok(r#"[{"type":"deletion","ruleset_id":9}]"#.into())
+                }
+                ["api", RULESET_9] => Ok(r#"{"id":9,"bypass_actors":[]}"#.into()),
+                ["api", REGISTRY_CLASSIC] => Ok(
+                    r#"{"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":true},"enforce_admins":{"enabled":true}}"#
+                        .into(),
+                ),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        fn classic_unread(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok("[]".into()),
+                ["api", REGISTRY_CLASSIC] => Err("gh: Resource not accessible (HTTP 403)".into()),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        assert_eq!(
+            registry(deletion_only),
+            LiveRules::Lacks(vec!["block force pushes".into()])
+        );
+        assert_eq!(
+            registry(classic_gives),
+            LiveRules::Holds(vec!["classic branch protection".into(), "ruleset 9".into()])
+        );
+        let LiveRules::Unread(why) = registry(classic_unread) else {
+            panic!("an unread classic protection that could give the rules is not a verdict")
+        };
+        assert!(
+            why.contains("do not block force pushes, block deletion"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn rules_that_cannot_be_read_are_not_a_verdict() {
+        fn fails(_: &str, _: &[&str]) -> Result<String, String> {
+            Err("gh: HTTP 502".into())
+        }
+        // A host that answers full pages without end (review of PR 700).
+        fn endless(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with(REGISTRY_RULES) => Ok(format!(
+                    "[{}]",
+                    vec![r#"{"type":"deletion","ruleset_id":9}"#; RULES_PAGE_SIZE].join(",")
+                )),
+                other => Err(format!("unexpected gh call {other:?}")),
+            }
+        }
+        let LiveRules::Unread(why) = registry(fails) else {
+            panic!("a failed read is not a verdict")
+        };
+        assert!(why.contains("not readable (gh: HTTP 502)"), "{why}");
+        let LiveRules::Unread(why) = registry(endless) else {
+            panic!("an endless list is not a verdict")
+        };
+        assert!(why.contains("did not end within 50 pages"), "{why}");
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let LiveRules::Unread(why) = live_branch_rules(
+            &opts(dir.path(), fails),
+            "codeflow/registry",
+            &remote::BranchRule::registry_data_profile(),
+        ) else {
+            panic!("no GitHub origin is not a verdict")
+        };
+        assert_eq!(why, "no GitHub `origin` remote");
     }
 }

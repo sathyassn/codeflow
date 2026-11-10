@@ -117,6 +117,7 @@ impl WorkgraphValidationReport {
 pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
     let pm_root = repo_root.join("project-management");
     let opts = ValidateOptions::default();
+    let _merges = MergeSourcesScope::open();
     let mut report = WorkgraphValidationReport::default();
     let mut identities = HashMap::<String, String>::new();
 
@@ -850,20 +851,91 @@ fn awaiting_selection_errors(
 /// `codeflow integrate` fast-forwards and writes no merge, so its landings
 /// are not counted. Zero when git is unavailable.
 fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
-    let Ok(out) = crate::git::command()
+    let needle = format!("/{task_id}-");
+    let count = |sources: &[String]| {
+        sources
+            .iter()
+            .filter(|source| source.contains(&needle))
+            .count()
+    };
+    // Inside one `validate_workgraph` run the history is read once and
+    // every complete standalone task counts from that one read; HEAD does
+    // not move during a validation (TSK-1306).
+    let memo = MERGE_SOURCES.with(|memo| {
+        memo.borrow_mut().as_mut().map(|memo| {
+            memo.entry(repo_root.to_path_buf())
+                .or_insert_with(|| merge_sources(repo_root).map(std::rc::Rc::new))
+                .clone()
+        })
+    });
+    match memo {
+        Some(sources) => sources.map_or(0, |sources| count(&sources)),
+        None => merge_sources(repo_root).map_or(0, |sources| count(&sources)),
+    }
+}
+
+/// The merged-in side of every merge subject in the history of `HEAD`,
+/// `None` when git is unavailable.
+fn merge_sources(repo_root: &Path) -> Option<Vec<String>> {
+    #[cfg(test)]
+    MERGE_READS.with(|reads| reads.set(reads.get() + 1));
+    let out = crate::git::command()
         .arg("-C")
         .arg(repo_root)
         .args(["log", "--merges", "--format=%s", "HEAD"])
         .output()
-    else {
-        return 0;
-    };
-    let needle = format!("/{task_id}-");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(merged_in)
-        .filter(|source| source.contains(&needle))
-        .count()
+        .ok()?;
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(merged_in)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`merge_sources`] has read the history on this thread.
+    static MERGE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+type MergeSourcesMemo = HashMap<std::path::PathBuf, Option<std::rc::Rc<Vec<String>>>>;
+
+thread_local! {
+    /// The merge sources each repository's `HEAD` gives, kept only while a
+    /// [`validate_workgraph`] run is open on this thread.
+    static MERGE_SOURCES: std::cell::RefCell<Option<MergeSourcesMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens the merge-source memo for one validation run and clears it when
+/// dropped; a nested run shares its caller's memo.
+struct MergeSourcesScope {
+    owner: bool,
+}
+
+impl MergeSourcesScope {
+    fn open() -> Self {
+        let owner = MERGE_SOURCES.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if memo.is_some() {
+                false
+            } else {
+                *memo = Some(HashMap::new());
+                true
+            }
+        });
+        Self { owner }
+    }
+}
+
+impl Drop for MergeSourcesScope {
+    fn drop(&mut self) {
+        if self.owner {
+            MERGE_SOURCES.with(|memo| *memo.borrow_mut() = None);
+        }
+    }
 }
 
 /// The merged-in side of a merge subject: the text after `Merge ` and before
@@ -1074,6 +1146,54 @@ mod tests {
     use crate::models::{EpicStatus, TaskStatus};
 
     use super::*;
+
+    /// One validation reads the merge history once, and every task counts
+    /// the same landings from it as from its own read (TSK-1306).
+    #[test]
+    fn one_validation_reads_the_merge_history_once_for_every_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let base = repo.commit(None, &sig, &sig, "base", &tree, &[]).unwrap();
+        let mut head = repo.find_commit(base).unwrap();
+        for (n, subject) in [
+            "Merge pull request #1 from o/task/TSK-001-a",
+            "Merge pull request #2 from o/task/TSK-001-b",
+            "Merge pull request #3 from o/task/TSK-002-a",
+            "Merge remote-tracking branch 'origin/main' into task/TSK-002-a",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let side = repo
+                .commit(None, &sig, &sig, &format!("side {n}"), &tree, &[&head])
+                .unwrap();
+            let side = repo.find_commit(side).unwrap();
+            let merge = repo
+                .commit(None, &sig, &sig, subject, &tree, &[&head, &side])
+                .unwrap();
+            head = repo.find_commit(merge).unwrap();
+        }
+        repo.reference("refs/heads/main", head.id(), true, "test")
+            .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let counts =
+            || ["TSK-001", "TSK-002", "TSK-003"].map(|id| landed_pull_requests(dir.path(), id));
+        MERGE_READS.with(|reads| reads.set(0));
+        let alone = counts();
+        assert_eq!(alone, [2, 1, 0]);
+        assert_eq!(MERGE_READS.with(std::cell::Cell::get), 3);
+        MERGE_READS.with(|reads| reads.set(0));
+        {
+            let _scope = MergeSourcesScope::open();
+            assert_eq!(counts(), alone);
+            assert_eq!(MERGE_READS.with(std::cell::Cell::get), 1);
+        }
+        assert!(MERGE_SOURCES.with(|memo| memo.borrow().is_none()));
+    }
 
     #[test]
     fn merged_in_reads_the_source_side_of_merge_subjects() {

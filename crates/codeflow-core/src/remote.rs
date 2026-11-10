@@ -24,7 +24,11 @@
 //! `codeflow protect <pattern>`, as does the registry's data profile.
 //!
 //! Ownership is by exact name. A ruleset with any other name is never
-//! written. Every write sends the whole body (`name`, `target`,
+//! written, unless the operator names it with `--adopt` and it targets
+//! exactly what one owned ruleset targets: then it is renamed to that
+//! owned name and updated as one (TSK-383). A literal policy branch the
+//! host does not have gets no ruleset, `--branch` limits a run to one
+//! branch, and the dry run prints the exact requests a run sends. Every write sends the whole body (`name`, `target`,
 //! `enforcement`, `conditions`, `bypass_actors`, `rules`), because GitHub
 //! does not document what an update does with omitted fields. An update
 //! only adds: an approval count is never lowered, a rule is never removed,
@@ -167,6 +171,10 @@ const REQUIRED_TEST_VERDICT: &str = "codeflow gates";
 
 /// Rulesets read per page.
 const RULESET_PAGE_SIZE: usize = 100;
+/// The most pages of a host list read before the list is called
+/// unreadable: a host that answers full pages without end cannot hold a run
+/// (review of PR 700). GitHub allows far fewer rulesets than this reads.
+pub(crate) const MAX_LIST_PAGES: usize = 50;
 
 /// The repository role ids GitHub uses for `RepositoryRole` bypass actors.
 /// GitHub's REST reference does not list them; these are the values its
@@ -549,6 +557,80 @@ pub struct ProtectionPlan {
     pub rules: Vec<BranchRule>,
     /// Rulesets A, B and C; `None` writes only the policy patterns.
     pub authority: Option<AuthorityPlan>,
+    /// Which branch the run is limited to and which foreign rulesets the
+    /// operator hands over.
+    pub scope: Scope,
+}
+
+/// What `--branch` and `--adopt` ask of a run.
+#[derive(Debug, Clone, Default)]
+pub struct Scope {
+    /// Only the owned rulesets that target this branch are planned.
+    pub branch: Option<String>,
+    /// Rulesets the operator names for remote protect to bring under an
+    /// owned name.
+    pub adopt: Vec<Adopt>,
+}
+
+/// One `--adopt` value: a live ruleset, by id or exact name, and
+/// optionally the owned ruleset it stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adopt {
+    /// The live ruleset's id or exact name.
+    pub ruleset: String,
+    /// The owned name it is adopted as, when the target alone does not
+    /// say which.
+    pub as_name: Option<String>,
+}
+
+impl Adopt {
+    /// Read `<ruleset>` or `<ruleset>=<owned name>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty ruleset or owned name.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let (ruleset, as_name) = match text.split_once('=') {
+            Some((ruleset, name)) => (ruleset, Some(name.to_string())),
+            None => (text, None),
+        };
+        if ruleset.trim().is_empty() || as_name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+            return Err(format!(
+                "--adopt '{text}' must name a ruleset by id or name, optionally followed by =<owned ruleset name>"
+            ));
+        }
+        Ok(Self {
+            ruleset: ruleset.to_string(),
+            as_name,
+        })
+    }
+
+    fn label(&self) -> String {
+        match &self.as_name {
+            Some(name) => format!("{}={name}", self.ruleset),
+            None => self.ruleset.clone(),
+        }
+    }
+}
+
+/// One write remote protect sends to the host: the dry run prints these,
+/// and a run sends exactly these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRequest {
+    /// `POST` or `PUT`.
+    pub method: &'static str,
+    /// The REST path below the API root.
+    pub path: String,
+    /// The JSON body.
+    pub body: Value,
+}
+
+impl HostRequest {
+    /// The request on one line: method, path and compact JSON body.
+    #[must_use]
+    pub fn render(&self) -> String {
+        format!("{} {} {}", self.method, self.path, self.body)
+    }
 }
 
 impl ProtectionPlan {
@@ -667,6 +749,7 @@ impl ProtectionPlan {
         Ok(Self {
             rules,
             authority: None,
+            scope: Scope::default(),
         })
     }
 
@@ -675,6 +758,13 @@ impl ProtectionPlan {
     #[must_use]
     pub fn with_registry_profile(mut self) -> Self {
         self.rules.push(BranchRule::registry_data_profile());
+        self
+    }
+
+    /// Limit the run to `scope`.
+    #[must_use]
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.scope = scope;
         self
     }
 
@@ -733,7 +823,7 @@ impl ProtectionPlan {
             }
         }
         lines.push(
-            "only rulesets with these names are written; every other ruleset is left as it is, and an update never lowers an approval count, removes a rule or widens a bypass list"
+            "only rulesets with these names, and a ruleset --adopt names that targets exactly what one of them targets, are written; every other ruleset is left as it is, and an update never lowers an approval count, removes a rule or widens a bypass list"
                 .to_string(),
         );
         ProtectReport {
@@ -1173,9 +1263,72 @@ struct Owned {
     bypass: BypassIntent,
     /// B and C never carry `update`.
     no_update_rule: bool,
+    /// The one branch a policy pattern names, when it names one that must
+    /// exist on the host before a ruleset is planned for it.
+    literal_branch: Option<String>,
+}
+
+/// An owned ruleset that cannot be written, with what it targets and why.
+#[derive(Debug, Clone)]
+struct Refused {
+    name: String,
+    include: Vec<String>,
+    why: String,
+}
+
+/// Whether ref `include` entries cover `branch`; an entry that cannot be
+/// read keeps the ruleset in the run, so a scope never drops it unseen.
+fn covers(include: &[String], branch: &str, default_branch: Option<&str>) -> bool {
+    let ruleset = json!({ "conditions": { "ref_name": { "include": include, "exclude": [] } } });
+    !matches!(
+        ruleset_targets(&ruleset, branch, default_branch),
+        Targeting::Misses
+    )
 }
 
 impl Owned {
+    /// What a live exclude list takes out of this ruleset's own target: an
+    /// exclude equal to one of its include entries, or one that matches the
+    /// default branch or a single branch it names. A glob include is
+    /// compared as written, since its branches cannot all be listed.
+    fn excluded_target(
+        &self,
+        exclude: &[Value],
+        default_branch: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        if exclude.is_empty() {
+            return Ok(None);
+        }
+        if let Some(same) = exclude
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|entry| *entry == "~ALL" || self.include.iter().any(|own| own == entry))
+        {
+            return Ok(Some(same.to_string()));
+        }
+        let only_excludes =
+            json!({ "conditions": { "ref_name": { "include": ["~ALL"], "exclude": exclude } } });
+        for own in &self.include {
+            let branch = match own.as_str() {
+                "~DEFAULT_BRANCH" => default_branch,
+                own => own
+                    .strip_prefix("refs/heads/")
+                    .filter(|name| !name.contains(['*', '?', '['])),
+            };
+            let Some(branch) = branch else { continue };
+            match ruleset_targets(&only_excludes, branch, default_branch) {
+                Targeting::Targets => {}
+                Targeting::Misses => return Ok(Some(format!("refs/heads/{branch}"))),
+                Targeting::Unexplained(why) => {
+                    return Err(format!(
+                        "its exclude list cannot be read ({why}), so it cannot be written without changing it"
+                    ))
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn create_body(&self) -> Value {
         let bypass = match &self.bypass {
             BypassIntent::Exactly(list) | BypassIntent::OnCreate(list) => list.clone(),
@@ -1191,14 +1344,15 @@ impl Owned {
     }
 
     /// The full body that brings `existing` up to this ruleset, adding
-    /// only: includes are joined and excludes dropped (both widen what it
-    /// covers), it is made active, a missing rule is added, an approval
+    /// only: includes are joined, the live excludes are kept as they are
+    /// (dropping one would bind refs the operator left out, review of PR
+    /// 700), it is made active, a missing rule is added, an approval
     /// count is raised and never lowered, a review flag is turned on and
     /// never off, checks become strict and gain the missing names, and a
     /// bypass list is replaced only where `bypass` says exactly. A change
-    /// that would weaken a rule or change a check's producer is refused
-    /// with why.
-    fn update_body(&self, existing: &Value) -> Result<Value, String> {
+    /// that would weaken a rule or change a check's producer, or an exclude
+    /// that takes out a branch this ruleset must cover, is refused with why.
+    fn update_body(&self, existing: &Value, default_branch: Option<&str>) -> Result<Value, String> {
         let mut include: Vec<String> = existing
             .pointer("/conditions/ref_name/include")
             .and_then(Value::as_array)
@@ -1211,6 +1365,20 @@ impl Owned {
             if !include.contains(entry) {
                 include.push(entry.clone());
             }
+        }
+        let exclude: Vec<Value> =
+            match existing.pointer("/conditions/ref_name/exclude") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(list)) if list.iter().all(Value::is_string) => list.clone(),
+                Some(_) => return Err(
+                    "its exclude list is not readable, so it cannot be written without changing it"
+                        .into(),
+                ),
+            };
+        if let Some(taken) = self.excluded_target(&exclude, default_branch)? {
+            return Err(format!(
+                "its exclude list leaves out {taken}, which it must cover; remove that exclude on the host, since remote protect never drops an exclude"
+            ));
         }
         let bypass = match &self.bypass {
             BypassIntent::Exactly(list) => list.clone(),
@@ -1251,7 +1419,7 @@ impl Owned {
             "name": self.name,
             "target": "branch",
             "enforcement": "active",
-            "conditions": { "ref_name": { "include": include, "exclude": [] } },
+            "conditions": { "ref_name": { "include": include, "exclude": exclude } },
             "bypass_actors": bypass,
             "rules": rules,
         }))
@@ -1272,6 +1440,21 @@ fn written_fields(ruleset: &Value) -> Value {
         "bypass_actors": ruleset.get("bypass_actors").cloned().unwrap_or(Value::Null),
         "rules": ruleset.get("rules").cloned().unwrap_or(json!([])),
     })
+}
+
+/// Whether `got` carries every value of `sent` as sent: each key of an
+/// object, each element of a list in order and of the same length, and
+/// every other value equal. Keys only `got` has are the host's defaults.
+fn answers(sent: &Value, got: &Value) -> bool {
+    match (sent, got) {
+        (Value::Object(sent), Value::Object(got)) => sent
+            .iter()
+            .all(|(key, value)| got.get(key).is_some_and(|other| answers(value, other))),
+        (Value::Array(sent), Value::Array(got)) => {
+            sent.len() == got.len() && sent.iter().zip(got).all(|(a, b)| answers(a, b))
+        }
+        (sent, got) => sent == got,
+    }
 }
 
 /// A ruleset body as the host answers it. The host leaves
@@ -1395,7 +1578,7 @@ fn owned_rulesets(
     plan: &ProtectionPlan,
     default_branch: Option<&str>,
     declared: Option<&Result<Declared, String>>,
-) -> Vec<Result<Owned, (String, String)>> {
+) -> Vec<Result<Owned, Refused>> {
     let mut owned = Vec::new();
     if let Some(authority) = &plan.authority {
         let default = vec!["~DEFAULT_BRANCH".to_string()];
@@ -1409,6 +1592,7 @@ fn owned_rulesets(
             })],
             bypass: BypassIntent::OnCreate(vec![authority.profile.bypass_actor()]),
             no_update_rule: false,
+            literal_branch: None,
         }));
         let (checks_b, checks_c) = match declared {
             Some(Ok(declared)) => planned_checks(authority, declared),
@@ -1424,7 +1608,7 @@ fn owned_rulesets(
                 .map(|checks| Owned {
                     name: RULESET_AUTHORITY_CHECKS.into(),
                     target: "~DEFAULT_BRANCH".into(),
-                    include: default,
+                    include: default.clone(),
                     rules: vec![
                         pull_request_rule(authority.profile.approvals(), independent),
                         status_checks_rule(checks, true),
@@ -1433,8 +1617,13 @@ fn owned_rulesets(
                     ],
                     bypass: BypassIntent::Exactly(Vec::new()),
                     no_update_rule: true,
+                    literal_branch: None,
                 })
-                .map_err(|why| (RULESET_AUTHORITY_CHECKS.to_string(), why)),
+                .map_err(|why| Refused {
+                    name: RULESET_AUTHORITY_CHECKS.to_string(),
+                    include: default,
+                    why,
+                }),
         );
         let line = format!("refs/heads/{}", authority.lines);
         owned.push(
@@ -1453,8 +1642,13 @@ fn owned_rulesets(
                     ],
                     bypass: BypassIntent::Exactly(Vec::new()),
                     no_update_rule: true,
+                    literal_branch: None,
                 })
-                .map_err(|why| (RULESET_LINE_CHECKS.to_string(), why)),
+                .map_err(|why| Refused {
+                    name: RULESET_LINE_CHECKS.to_string(),
+                    include: vec![line.clone()],
+                    why,
+                }),
         );
     }
     for rule in plan.pattern_rules(default_branch) {
@@ -1465,6 +1659,12 @@ fn owned_rulesets(
             rules: rule.rules(),
             bypass: BypassIntent::OnCreate(Vec::new()),
             no_update_rule: false,
+            // The registry's data profile holds before its branch exists
+            // (SPC-013 R-6), and the default branch always exists.
+            literal_branch: (!rule.is_glob()
+                && !rule.data_profile
+                && Some(rule.pattern.as_str()) != default_branch)
+                .then(|| rule.pattern.clone()),
         }));
     }
     owned
@@ -1522,7 +1722,143 @@ fn describe(body: &Value) -> String {
             Some(actors) => format!("bypass: {}", actors_text(actors)),
         },
     );
+    let excluded: Vec<&str> = body
+        .pointer("/conditions/ref_name/exclude")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !excluded.is_empty() {
+        parts.push(format!("keeps exclude {}", excluded.join(", ")));
+    }
     parts.join(", ")
+}
+
+/// `owner/name` from a URL [`parse_repo_url`] reads as one on github.com,
+/// so `doctor` and `remote protect` agree on which URLs name a github.com
+/// repository (review of PR 700, delta nit 1).
+pub(crate) fn parse_github_url(url: &str) -> Option<String> {
+    parse_repo_url(url)
+        .filter(|(host, _)| host == "github.com")
+        .map(|(_, nwo)| nwo)
+}
+
+/// The one github.com repository `origin` names, which `doctor` reads and
+/// `remote protect` writes (TSK-383, review of PR 700): `owner/name` of its
+/// fetch URL, when every URL git pushes `origin` to is that same
+/// repository. A push URL that names another repository is refused, since
+/// the rules read for one would not protect the other.
+///
+/// OS text rule (issue 79): only a proven missing repository or `origin` is
+/// none. An unreadable repository, an `origin` URL that is not UTF-8 or a
+/// push URL that cannot be read is named, never read as no remote.
+///
+/// # Errors
+///
+/// Returns why the repository cannot be named as one.
+pub(crate) fn origin_repository(root: &Path) -> Result<Option<String>, String> {
+    let github = |url: &str| parse_github_url(url).map(|nwo| ("github.com".to_string(), nwo));
+    Ok(origin_on(root, github)?.map(|(_, nwo)| nwo))
+}
+
+/// `(host, owner/name)` from an HTTPS, HTTP or SSH URL or an scp-style
+/// `user@host:owner/name`, on any host. The host is lower-cased and loses
+/// any user or port; one that is not a plain DNS name is not parsed.
+pub(crate) fn parse_repo_url(url: &str) -> Option<(String, String)> {
+    let (authority, path) = if let Some((scheme, rest)) = url.split_once("://") {
+        if !matches!(scheme, "https" | "http" | "ssh") {
+            return None;
+        }
+        rest.split_once('/')?
+    } else {
+        let (authority, path) = url.split_once(':')?;
+        if authority.contains('/') {
+            return None;
+        }
+        (authority, path)
+    };
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host.split_once(':').map_or(host, |(host, _)| host);
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+    if host.is_empty() || !host.chars().all(plain) || host.starts_with(['-', '.']) {
+        return None;
+    }
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && !owner.is_empty() && !name.is_empty())
+        .then(|| (host.to_ascii_lowercase(), format!("{owner}/{name}")))
+}
+
+/// The one repository `origin` names on whatever host it is on, as
+/// `(host, owner/name)`, for `remote protect`: the host is pinned for every
+/// `gh` call, so no inherited setting can send a read or a write to another
+/// host. The same push URL rule as [`origin_repository`] holds.
+///
+/// # Errors
+///
+/// Returns why the repository cannot be named as one.
+pub(crate) fn origin_host_repository(root: &Path) -> Result<Option<(String, String)>, String> {
+    origin_on(root, parse_repo_url)
+}
+
+/// `origin`'s fetch URL parsed by `parse`, when every URL git pushes
+/// `origin` to parses to the same host and repository.
+fn origin_on(
+    root: &Path,
+    parse: impl Fn(&str) -> Option<(String, String)>,
+) -> Result<Option<(String, String)>, String> {
+    let Some(repo) = crate::hooks::repo::open(root)? else {
+        return Ok(None);
+    };
+    let remote = match repo.find_remote("origin") {
+        Ok(remote) => remote,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "cannot read the `origin` remote: {}",
+                error.message()
+            ))
+        }
+    };
+    let url = remote
+        .url()
+        .map_err(|error| format!("cannot read the `origin` URL: {}", error.message()))?;
+    let Some((host, nwo)) = parse(url) else {
+        return Ok(None);
+    };
+    // Git's own answer, after `pushurl` and `pushInsteadOf`.
+    let output = crate::git::process("git")
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", "--push", "--all", "origin"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot read the `origin` push URL: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot read the `origin` push URL: {}",
+            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
+        ));
+    }
+    let pushes = String::from_utf8(output.stdout)
+        .map_err(|_| "the `origin` push URL is not UTF-8".to_string())?;
+    for push in pushes.split('\n').filter(|line| !line.is_empty()) {
+        let same = parse(push).is_some_and(|(named_host, named)| {
+            named_host == host && named.eq_ignore_ascii_case(&nwo)
+        });
+        if !same {
+            return Err(format!(
+                "`origin` pushes to {}, not to {nwo} on {host}, the repository it fetches from, so the host rules of one do not protect the other; point the push URL at {nwo} or remove it",
+                crate::git::remote_query::display_urls(push)
+            ));
+        }
+    }
+    Ok(Some((host, nwo)))
 }
 
 /// A bypass list for a reader: `RepositoryRole 5 (always), Team 9
@@ -1555,6 +1891,12 @@ pub trait RemoteProvider {
 
     /// Apply the plan, reporting exactly what was and was not applied.
     fn apply(&self, plan: &ProtectionPlan) -> ProtectReport;
+
+    /// The dry run: what a run would do, with nothing written. A provider
+    /// that reads the host prints the exact requests a run would send.
+    fn preview(&self, plan: &ProtectionPlan) -> ProtectReport {
+        plan.dry_run_report(self.name())
+    }
 }
 
 /// Resolve a provider by name.
@@ -1588,6 +1930,10 @@ impl RemoteProvider for ManualChecklistProvider {
         "manual"
     }
 
+    fn preview(&self, plan: &ProtectionPlan) -> ProtectReport {
+        plan.dry_run_report(&self.provider)
+    }
+
     fn apply(&self, plan: &ProtectionPlan) -> ProtectReport {
         ProtectReport {
             status: ProtectStatus::Degraded,
@@ -1615,6 +1961,11 @@ pub type GhTransport = Box<dyn Fn(&[&str], Option<&str>) -> Result<String, Strin
 /// GitHub adapter, shelling out to the `gh` CLI for auth and transport.
 pub struct GithubProvider {
     transport: GhTransport,
+    /// `(host, owner/name)` of the checkout's `origin`, read once when `gh`
+    /// is bound to a checkout; every `gh` call is pinned to that host.
+    origin: Option<Result<Option<(String, String)>, String>>,
+    /// The repository a recorded host stands for (test seam).
+    repository: Option<String>,
 }
 
 impl GithubProvider {
@@ -1632,17 +1983,38 @@ impl GithubProvider {
     /// Construct with an explicit `gh` binary (test seam for PATH shims).
     pub fn with_gh(gh: impl Into<PathBuf>, repo_dir: impl AsRef<Path>) -> Self {
         let gh = gh.into();
-        let repo_dir = repo_dir.as_ref().to_path_buf();
-        Self::with_transport(Box::new(move |args, input| {
-            run_gh(&gh, &repo_dir, args, input)
-        }))
+        let dir = repo_dir.as_ref().to_path_buf();
+        let origin = origin_host_repository(&dir);
+        let host = origin
+            .as_ref()
+            .ok()
+            .cloned()
+            .flatten()
+            .map(|(host, _)| host);
+        let mut provider = Self::with_transport(Box::new(move |args, input| {
+            run_gh(&gh, &dir, host.as_deref(), args, input)
+        }));
+        provider.origin = Some(origin);
+        provider
     }
 
     /// Construct with a transport that answers `gh` calls (test seam for a
     /// recorded host).
     #[must_use]
     pub fn with_transport(transport: GhTransport) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            origin: None,
+            repository: None,
+        }
+    }
+
+    /// Name the repository a recorded host stands for, as `origin` would
+    /// (test seam).
+    #[must_use]
+    pub fn with_repository(mut self, nwo: &str) -> Self {
+        self.repository = Some(nwo.to_string());
+        self
     }
 
     fn run_gh(&self, args: &[&str], input: Option<&str>) -> Result<String, String> {
@@ -1650,17 +2022,39 @@ impl GithubProvider {
     }
 
     /// Identify the repo (`owner/name`, visibility, default branch) via
-    /// `gh repo view`.
+    /// `gh repo view` of the repository `origin` names, on the host its URL
+    /// names, so neither `gh`'s own choice nor an inherited setting decides
+    /// it (review of PR 700). A host `gh` has no working login for, or an
+    /// answer for another repository, is refused before anything is read.
     fn repo_info(&self) -> Result<RepoInfo, String> {
-        let out = self.run_gh(
-            &[
-                "repo",
-                "view",
-                "--json",
-                "nameWithOwner,isPrivate,defaultBranchRef",
-            ],
-            None,
-        )?;
+        let (expected, target) = match &self.origin {
+            Some(origin) => {
+                let (host, nwo) = origin.clone()?.ok_or(
+                    "`origin` has no URL that names a repository as host/owner/name, so remote protect cannot tell which repository to write; point `origin` at the repository",
+                )?;
+                if self
+                    .run_gh(&["auth", "status", "--hostname", &host], None)
+                    .is_err()
+                {
+                    return Err(format!(
+                        "gh has no working login for {host}, the host `origin` names (`gh auth status --hostname {host}` fails), so nothing is read or written; run `gh auth login --hostname {host}`, then run remote protect again"
+                    ));
+                }
+                let target = if host == "github.com" {
+                    nwo.clone()
+                } else {
+                    format!("{host}/{nwo}")
+                };
+                (Some(nwo), Some(target))
+            }
+            None => (self.repository.clone(), self.repository.clone()),
+        };
+        let mut args = vec!["repo", "view"];
+        if let Some(target) = &target {
+            args.push(target);
+        }
+        args.extend(["--json", "nameWithOwner,isPrivate,defaultBranchRef"]);
+        let out = self.run_gh(&args, None)?;
         let v: Value =
             serde_json::from_str(&out).map_err(|e| format!("gh repo view parse: {e}"))?;
         let nwo = v
@@ -1668,6 +2062,11 @@ impl GithubProvider {
             .and_then(Value::as_str)
             .ok_or_else(|| "gh repo view: nameWithOwner missing".to_string())?
             .to_string();
+        if let Some(expected) = expected.filter(|e| !e.eq_ignore_ascii_case(&nwo)) {
+            return Err(format!(
+                "gh answers for {nwo}, not {expected}, the repository `origin` names, so nothing is read or written"
+            ));
+        }
         let private = v.get("isPrivate").and_then(Value::as_bool).unwrap_or(false);
         let default_branch = v
             .pointer("/defaultBranchRef/name")
@@ -1685,7 +2084,7 @@ impl GithubProvider {
     /// second ruleset beside one already there.
     fn ruleset_summaries(&self, nwo: &str) -> Result<Vec<Value>, String> {
         let mut found = Vec::new();
-        for page in 1.. {
+        for page in 1..=MAX_LIST_PAGES {
             let list = self.run_gh(
                 &[
                     "api",
@@ -1699,115 +2098,393 @@ impl GithubProvider {
             let short = summaries.len() < RULESET_PAGE_SIZE;
             found.extend(summaries);
             if short {
-                break;
+                return Ok(found);
             }
         }
-        Ok(found)
+        Err(format!(
+            "the rulesets did not end within {MAX_LIST_PAGES} pages"
+        ))
     }
 
-    /// Write one owned ruleset: create it, or bring the one with its name
-    /// up to it, or leave it when it already is. Returns the report line.
-    fn apply_owned(&self, nwo: &str, summaries: &[Value], owned: &Owned) -> Result<String, String> {
+    /// Whether `branch` exists on the host: only a 404 means it does not.
+    fn branch_exists(&self, nwo: &str, branch: &str) -> Result<bool, String> {
+        match self.run_gh(
+            &[
+                "api",
+                &format!("repos/{nwo}/branches/{}", query_value(branch)),
+            ],
+            None,
+        ) {
+            Ok(_) => Ok(true),
+            Err(error) if error.contains("404") || error.contains("Not Found") => Ok(false),
+            Err(error) => Err(first_line(&error).to_string()),
+        }
+    }
+
+    /// Read one ruleset in full.
+    fn full_ruleset(&self, nwo: &str, id: u64) -> Result<Value, String> {
+        let live = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
+        serde_json::from_str(&live).map_err(|e| format!("ruleset {id} is not JSON ({e})"))
+    }
+
+    /// The foreign rulesets `--adopt` names, each matched to the owned
+    /// ruleset that targets exactly the same branches, keyed by the owned
+    /// name. A request that cannot be matched exactly is refused and
+    /// reported; nothing is adopted for it.
+    /// The rulesets `--adopt` names, matched against the live list; when
+    /// the list could not be read, each request is reported as not adopted.
+    fn adoptions(
+        &self,
+        nwo: &str,
+        summaries: &Result<Vec<Value>, String>,
+        plan: &ProtectionPlan,
+        owned: &[Result<Owned, Refused>],
+        out: &mut Prepared,
+    ) -> std::collections::BTreeMap<String, Value> {
+        match summaries {
+            Ok(summaries) => self.resolve_adoptions(nwo, summaries, &plan.scope.adopt, owned, out),
+            Err(why) => {
+                for request in &plan.scope.adopt {
+                    out.limitations.push(format!(
+                        "--adopt {}: the rulesets could not be read ({why}); nothing was adopted for it",
+                        request.label()
+                    ));
+                }
+                std::collections::BTreeMap::new()
+            }
+        }
+    }
+
+    fn resolve_adoptions(
+        &self,
+        nwo: &str,
+        summaries: &[Value],
+        adopt: &[Adopt],
+        owned: &[Result<Owned, Refused>],
+        out: &mut Prepared,
+    ) -> std::collections::BTreeMap<String, Value> {
+        let mut chosen = std::collections::BTreeMap::new();
+        for request in adopt {
+            let matched = self
+                .adopted_live(nwo, summaries, request, owned)
+                .and_then(|live| {
+                    let name = owned_for(request, &live, owned, summaries)?;
+                    if chosen.contains_key(&name) {
+                        return Err(format!("another --adopt already stands for '{name}'"));
+                    }
+                    Ok((name, live))
+                });
+            match matched {
+                Ok((name, live)) => {
+                    chosen.insert(name, live);
+                }
+                Err(why) => out.limitations.push(format!(
+                    "--adopt {}: {why}; nothing was adopted for it",
+                    request.label()
+                )),
+            }
+        }
+        chosen
+    }
+
+    /// The live ruleset one `--adopt` names: exactly one branch ruleset of
+    /// this repository, by id or name, that carries no owned name, read in
+    /// full.
+    fn adopted_live(
+        &self,
+        nwo: &str,
+        summaries: &[Value],
+        request: &Adopt,
+        owned: &[Result<Owned, Refused>],
+    ) -> Result<Value, String> {
+        let found: Vec<&Value> = summaries
+            .iter()
+            .filter(|s| {
+                s.get("id").and_then(Value::as_u64).map(|id| id.to_string())
+                    == Some(request.ruleset.clone())
+                    || s.get("name").and_then(Value::as_str) == Some(request.ruleset.as_str())
+            })
+            .collect();
+        let summary = match found.as_slice() {
+            [one] => *one,
+            [] => return Err("no ruleset of this repository has that id or name".into()),
+            many => return Err(format!("{} rulesets match it; name it by id", many.len())),
+        };
+        let label = ruleset_label(summary);
+        let Some(id) = summary
+            .get("id")
+            .and_then(Value::as_u64)
+            .filter(|_| repository_branch_ruleset(summary))
+        else {
+            return Err(format!(
+                "ruleset {label} is not a branch ruleset of this repository"
+            ));
+        };
+        if owned_names(owned).any(|name| summary.get("name").and_then(Value::as_str) == Some(name))
+        {
+            return Err(format!("ruleset {label} already carries an owned name"));
+        }
+        self.full_ruleset(nwo, id)
+            .map_err(|why| format!("ruleset {label} could not be read ({why})"))
+    }
+
+    /// What a run does with one owned ruleset: create it, bring the one with
+    /// its name (or the adopted one) up to it, or leave it when it already
+    /// is. Nothing is sent here.
+    fn plan_owned(
+        nwo: &str,
+        summaries: &[Value],
+        owned: &Owned,
+        adopted: Option<&Value>,
+        read: &dyn Fn(u64) -> Result<Value, String>,
+        default_branch: Option<&str>,
+    ) -> Result<Step, String> {
+        if let Some(live) = adopted {
+            let id = live
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or("the adopted ruleset has no id")?;
+            let body = owned
+                .update_body(live, default_branch)
+                .map_err(|why| format!("ruleset {} was not adopted: {why}", ruleset_label(live)))?;
+            return Ok(Step::Write(Write {
+                name: owned.name.clone(),
+                target: owned.target.clone(),
+                id: Some(id),
+                adopted: Some(ruleset_label(live)),
+                request: HostRequest {
+                    method: "PUT",
+                    path: format!("repos/{nwo}/rulesets/{id}"),
+                    body,
+                },
+            }));
+        }
         let named: Vec<&Value> = summaries
             .iter()
             .filter(|s| s.get("name").and_then(Value::as_str) == Some(owned.name.as_str()))
             .collect();
-        let (method, path, body) = match named.as_slice() {
-            [] => (
-                "POST",
-                format!("repos/{nwo}/rulesets"),
-                owned.create_body(),
-            ),
+        match named.as_slice() {
+            [] => Ok(Step::Write(Write {
+                name: owned.name.clone(),
+                target: owned.target.clone(),
+                id: None,
+                adopted: None,
+                request: HostRequest {
+                    method: "POST",
+                    path: format!("repos/{nwo}/rulesets"),
+                    body: owned.create_body(),
+                },
+            })),
             [summary] => {
-                let ours = summary.get("target").and_then(Value::as_str) == Some("branch")
-                    && summary
-                        .get("source_type")
-                        .and_then(Value::as_str)
-                        .is_none_or(|source| source == "Repository");
                 let id = summary.get("id").and_then(Value::as_u64);
-                let (true, Some(id)) = (ours, id) else {
+                let (true, Some(id)) = (repository_branch_ruleset(summary), id) else {
                     return Err(format!(
                         "a ruleset named '{}' exists that is not a branch ruleset of this repository; rename or remove it on the host",
                         owned.name
                     ));
                 };
-                let live = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
-                let live: Value = serde_json::from_str(&live)
-                    .map_err(|e| format!("ruleset {id} is not JSON ({e})"))?;
+                let live = read(id)?;
                 let body = owned
-                    .update_body(&live)
+                    .update_body(&live, default_branch)
                     .map_err(|why| format!("ruleset '{}' ({id}) was not written: {why}", owned.name))?;
                 if host_form(&written_fields(&live)) == host_form(&body) {
-                    return Ok(format!(
+                    return Ok(Step::Unchanged(format!(
                         "ruleset '{}' ({id}) on {} already as intended, nothing written: {}",
                         owned.name,
                         owned.target,
                         describe(&body)
-                    ));
+                    )));
                 }
-                ("PUT", format!("repos/{nwo}/rulesets/{id}"), body)
+                Ok(Step::Write(Write {
+                    name: owned.name.clone(),
+                    target: owned.target.clone(),
+                    id: Some(id),
+                    adopted: None,
+                    request: HostRequest {
+                        method: "PUT",
+                        path: format!("repos/{nwo}/rulesets/{id}"),
+                        body,
+                    },
+                }))
             }
-            _ => {
-                return Err(format!(
-                    "{} rulesets are named '{}', so remote protect cannot tell which it owns; keep one on the host",
-                    named.len(),
-                    owned.name
-                ))
-            }
-        };
+            _ => Err(format!(
+                "{} rulesets are named '{}', so remote protect cannot tell which it owns; keep one on the host",
+                named.len(),
+                owned.name
+            )),
+        }
+    }
+
+    /// Send one planned write, exactly as planned. Returns the report line.
+    fn send(&self, write: &Write) -> Result<String, String> {
+        let request = &write.request;
         let answer = self.run_gh(
-            &["api", "-X", method, &path, "--input", "-"],
-            Some(&body.to_string()),
+            &["api", "-X", request.method, &request.path, "--input", "-"],
+            Some(&request.body.to_string()),
         )?;
         // The host's answer is the ruleset as written: its bypass list is
         // checked as a field, since an update's handling of it is not
         // documented.
         let written: Value = serde_json::from_str(&answer).unwrap_or(Value::Null);
-        let id = written.get("id").and_then(Value::as_u64);
-        if written.get("bypass_actors") != body.get("bypass_actors") {
+        if written.get("bypass_actors") != request.body.get("bypass_actors") {
             return Err(format!(
                 "ruleset '{}' was written, but the host answered with the bypass list {} where {} was sent; read it on the host",
-                owned.name,
+                write.name,
                 written
                     .get("bypass_actors")
                     .map_or_else(|| "(none)".to_string(), Value::to_string),
-                body["bypass_actors"]
+                request.body["bypass_actors"]
             ));
         }
-        Ok(format!(
-            "{} ruleset '{}'{} on {}: {}",
-            if method == "POST" {
-                "created"
+        // The other written fields are compared in host form (review of PR
+        // 700): each value sent must come back as sent. The host may add
+        // its own defaults, but an answer that changes or drops a sent
+        // condition or rule is not a success, and no record is kept for it.
+        if !answers(
+            &host_form(&request.body),
+            &host_form(&written_fields(&written)),
+        ) {
+            return Err(format!(
+                "ruleset '{}' was written, but the host answered with other conditions, enforcement or rules than were sent; read it on the host",
+                write.name
+            ));
+        }
+        Ok(write.line(true, written.get("id").and_then(Value::as_u64)))
+    }
+
+    /// Read the host and plan every write, without sending one. `Err` is
+    /// why the repository could not be identified.
+    fn prepare(&self, plan: &ProtectionPlan) -> Result<Prepared, String> {
+        let repo = self.repo_info()?;
+        let nwo = repo.nwo.as_str();
+        let default = repo.default_branch.as_deref();
+        let mut out = Prepared {
+            lines: vec![format!(
+                "repo: {nwo} ({})",
+                if repo.private { "private" } else { "public" }
+            )],
+            limitations: Vec::new(),
+            checklist: Vec::new(),
+            steps: Vec::new(),
+            event_policy: None,
+            private: repo.private,
+        };
+        if let Some(authority) = &plan.authority {
+            out.lines.push(format!(
+                "profile {}; {}",
+                authority.profile.as_str(),
+                authority.mode()
+            ));
+        }
+        let declared = match (&plan.authority, default) {
+            (Some(_), Some(branch)) => {
+                let gh = |args: &[&str]| self.run_gh(args, None);
+                Some(read_declared(&gh, nwo, branch))
+            }
+            _ => None,
+        };
+        let mut owned = owned_rulesets(plan, default, declared.as_ref());
+        if let Some(branch) = &plan.scope.branch {
+            owned.retain(|entry| match entry {
+                Ok(o) => covers(&o.include, branch, default),
+                Err(r) => covers(&r.include, branch, default),
+            });
+            out.lines.push(if owned.is_empty() {
+                format!("--branch {branch}: no ruleset remote protect owns targets it, so nothing is planned")
             } else {
-                "updated"
-            },
-            owned.name,
-            id.map_or_else(String::new, |id| format!(" ({id})")),
-            owned.target,
-            describe(&body)
-        ))
+                format!("--branch {branch}: only the owned rulesets that target it are planned")
+            });
+        }
+        let kept = self.keep_present_branches(nwo, plan, owned, &mut out);
+        let summaries = self.ruleset_summaries(nwo);
+        let adopted = self.adoptions(nwo, &summaries, plan, &kept, &mut out);
+        let read = |id: u64| self.full_ruleset(nwo, id);
+        let plan_one = |owned: &Owned, summaries: &[Value]| {
+            Self::plan_owned(
+                nwo,
+                summaries,
+                owned,
+                adopted.get(&owned.name),
+                &read,
+                default,
+            )
+        };
+        for entry in kept {
+            match (entry, &summaries) {
+                (Err(refused), _) => out.fail(plan, &refused.name, &refused.why, true),
+                (Ok(owned), Err(why)) => out.fail(plan, &owned.name, why, false),
+                (Ok(owned), Ok(summaries)) => match plan_one(&owned, summaries) {
+                    Ok(step) => out.steps.push(step),
+                    Err(why) => out.fail(plan, &owned.name, &why, false),
+                },
+            }
+        }
+        self.prepare_event_policy(&repo, declared.as_ref(), &mut out);
+        Ok(out)
+    }
+
+    /// The owned rulesets left once each one that names a single policy
+    /// branch the host does not have is reported and dropped; a branch
+    /// whose existence cannot be read fails its ruleset.
+    fn keep_present_branches(
+        &self,
+        nwo: &str,
+        plan: &ProtectionPlan,
+        owned: Vec<Result<Owned, Refused>>,
+        out: &mut Prepared,
+    ) -> Vec<Result<Owned, Refused>> {
+        let mut kept = Vec::new();
+        for entry in owned {
+            if let Ok(Owned {
+                name,
+                literal_branch: Some(branch),
+                ..
+            }) = &entry
+            {
+                match self.branch_exists(nwo, branch) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        out.lines.push(format!(
+                            "policy branch '{branch}' does not exist on {nwo}, so no ruleset is planned for it; run remote protect again once it does"
+                        ));
+                        continue;
+                    }
+                    Err(why) => {
+                        out.fail(
+                            plan,
+                            name,
+                            &format!("whether branch '{branch}' exists could not be read ({why})"),
+                            false,
+                        );
+                        continue;
+                    }
+                }
+            }
+            kept.push(entry);
+        }
+        kept
     }
 
     /// On a public repository whose policy workflow runs on
-    /// `pull_request_target`, create the Actions event policy that allows
-    /// the workflow's events for that workflow alone (TSK-1347 AC-8), or
-    /// leave the one with its name as it is. A policy is never updated, so
-    /// its events, actors and targets are never widened. Returns the report
-    /// line; reading and writing need an administrator's token.
-    fn apply_event_policy(&self, nwo: &str, declared: &Declared) -> Result<String, String> {
+    /// `pull_request_target`, plan the Actions event policy that allows the
+    /// workflow's events for that workflow alone (TSK-1347 AC-8), or leave
+    /// the one with its name as it is. A policy is never updated, so its
+    /// events, actors and targets are never widened. Returns the report line
+    /// when nothing is to be written; reading needs an administrator's token.
+    fn plan_event_policy(&self, nwo: &str, declared: &Declared) -> Result<EventPolicyStep, String> {
         let Some((_, events)) = declared
             .events
             .iter()
             .find(|(path, _)| path == POLICY_WORKFLOW)
         else {
-            return Ok(format!(
+            return Ok(EventPolicyStep::Unchanged(format!(
                 "no Actions event policy written: the default branch has no {POLICY_WORKFLOW}"
-            ));
+            )));
         };
         if !events.iter().any(|event| event == GATED_EVENT) {
-            return Ok(format!(
+            return Ok(EventPolicyStep::Unchanged(format!(
                 "no Actions event policy written: {POLICY_WORKFLOW} does not run on {GATED_EVENT}"
-            ));
+            )));
         }
         let gh = |args: &[&str]| self.run_gh(args, None);
         let policies = paged_list(&gh, &format!("repos/{nwo}/actions/policies"), "policies")
@@ -1819,72 +2496,65 @@ impl GithubProvider {
             .filter(|policy| policy["name"] == EVENT_POLICY_NAME)
             .collect();
         match named.as_slice() {
-            [] => {}
-            [policy] => {
-                return Ok(format!(
-                    "Actions event policy '{EVENT_POLICY_NAME}' ({}) exists and was left as it is; `codeflow doctor --check remote-perimeter` judges what it allows",
-                    policy["id"]
-                ))
-            }
-            _ => {
-                return Err(format!(
-                    "{} Actions event policies are named '{EVENT_POLICY_NAME}', so remote protect cannot tell which it owns; keep one on the host",
-                    named.len()
-                ))
-            }
+            [] => Ok(EventPolicyStep::Create(EventPolicyWrite {
+                events: events.clone(),
+                request: HostRequest {
+                    method: "POST",
+                    path: format!("repos/{nwo}/actions/policies"),
+                    body: event_policy_body(POLICY_WORKFLOW, events),
+                },
+            })),
+            [policy] => Ok(EventPolicyStep::Unchanged(format!(
+                "Actions event policy '{EVENT_POLICY_NAME}' ({}) exists and was left as it is; `codeflow doctor --check remote-perimeter` judges what it allows",
+                policy["id"]
+            ))),
+            _ => Err(format!(
+                "{} Actions event policies are named '{EVENT_POLICY_NAME}', so remote protect cannot tell which it owns; keep one on the host",
+                named.len()
+            )),
         }
-        let body = event_policy_body(POLICY_WORKFLOW, events);
-        let answer = self.run_gh(
-            &[
-                "api",
-                "-X",
-                "POST",
-                &format!("repos/{nwo}/actions/policies"),
-                "--input",
-                "-",
-            ],
-            Some(&body.to_string()),
-        )?;
-        let written: Value = serde_json::from_str(&answer).map_err(|_| {
-            "the Actions event policy was sent, but the host's answer is not JSON; read it on the host".to_string()
-        })?;
-        Ok(format!(
-            "created Actions event policy '{EVENT_POLICY_NAME}' ({}) for {POLICY_WORKFLOW} alone, allowing {}",
-            written["id"],
-            events.join(", ")
-        ))
     }
 
-    /// The Actions event policy part of `apply`: on a public repository,
-    /// its report line, or the limitation and checklist item.
-    fn event_policy_outcome(
+    /// The Actions event policy part of `prepare`: on a public repository,
+    /// its report line, the planned write, or the limitation and checklist
+    /// item.
+    fn prepare_event_policy(
         &self,
         repo: &RepoInfo,
         declared: Option<&Result<Declared, String>>,
-        report: (&mut Vec<String>, &mut Vec<String>, &mut Vec<String>),
+        out: &mut Prepared,
     ) {
-        let (lines, limitations, checklist) = report;
         if repo.private {
-            lines.push(format!(
+            out.lines.push(format!(
                 "no Actions event policy written: GitHub blocks {GATED_EVENT} by default only in public repositories"
             ));
             return;
         }
-        let outcome = match declared {
+        let planned = match declared {
             // Without the authority rulesets nothing reads the workflows.
             None => return,
             Some(Err(why)) => Err(why.clone()),
-            Some(Ok(declared)) => self.apply_event_policy(&repo.nwo, declared),
+            Some(Ok(declared)) => self.plan_event_policy(&repo.nwo, declared),
         };
-        match outcome {
-            Ok(line) => lines.push(line),
-            Err(why) => {
-                limitations.push(format!("Actions event policy was not written: {why}"));
-                checklist.push(
-                    "[ ] Actions event policy: `codeflow doctor --check remote-perimeter` prints the policy to create; create it as a repository administrator".to_string(),
-                );
-            }
+        match planned {
+            Ok(EventPolicyStep::Unchanged(line)) => out.lines.push(line),
+            Ok(EventPolicyStep::Create(write)) => out.event_policy = Some(write),
+            Err(why) => out.fail_event_policy(&why),
         }
+    }
+
+    /// Send the planned Actions event policy, exactly as planned. Returns
+    /// the report line; writing needs an administrator's token.
+    fn send_event_policy(&self, write: &EventPolicyWrite) -> Result<String, String> {
+        let request = &write.request;
+        let answer = self.run_gh(
+            &["api", "-X", request.method, &request.path, "--input", "-"],
+            Some(&request.body.to_string()),
+        )?;
+        let written: Value = serde_json::from_str(&answer).map_err(|_| {
+            "the Actions event policy was sent, but the host's answer is not JSON; read it on the host".to_string()
+        })?;
+        Ok(write.line(Some(&written["id"])))
     }
 
     /// Classify a failed gh call into a precise limitation message.
@@ -1915,12 +2585,21 @@ impl GithubProvider {
 fn run_gh(
     gh: &Path,
     repo_dir: &Path,
+    host: Option<&str>,
     args: &[&str],
     input: Option<&str>,
 ) -> Result<String, String> {
     let mut cmd = Command::new(gh);
-    cmd.args(args)
-        .current_dir(repo_dir)
+    // The host and repository come from `origin` alone: GH_HOST is set to
+    // the host its URL names, never inherited, and GH_REPO is removed, so
+    // no read or write can go to another host or repository (review of
+    // PR 700).
+    cmd.args(args).env_remove("GH_REPO");
+    match host {
+        Some(host) => cmd.env("GH_HOST", host),
+        None => cmd.env_remove("GH_HOST"),
+    };
+    cmd.current_dir(repo_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2030,14 +2709,275 @@ pub(crate) fn ruleset_targets(
     }
 }
 
+/// The names of every owned ruleset in a run, written or refused.
+fn owned_names(owned: &[Result<Owned, Refused>]) -> impl Iterator<Item = &str> + Clone {
+    owned.iter().map(|entry| match entry {
+        Ok(o) => o.name.as_str(),
+        Err(r) => r.name.as_str(),
+    })
+}
+
+/// The owned name an adopted ruleset stands for: the one owned ruleset in
+/// the run whose include list is exactly the adopted ruleset's, with no
+/// exclude, narrowed to `request.as_name` when given, and whose name no
+/// live ruleset holds yet.
+fn owned_for(
+    request: &Adopt,
+    live: &Value,
+    owned: &[Result<Owned, Refused>],
+    summaries: &[Value],
+) -> Result<String, String> {
+    let label = ruleset_label(live);
+    let entries = |list: &str| -> BTreeSet<String> {
+        live.pointer(&format!("/conditions/ref_name/{list}"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    };
+    let (include, exclude) = (entries("include"), entries("exclude"));
+    let wanted: Vec<&Owned> = owned
+        .iter()
+        .filter_map(|entry| entry.as_ref().ok())
+        .filter(|o| request.as_name.as_ref().is_none_or(|name| *name == o.name))
+        .collect();
+    if let (Some(name), true) = (&request.as_name, wanted.is_empty()) {
+        let why = owned.iter().find_map(|entry| match entry {
+            Err(r) if r.name == *name => Some(r.why.clone()),
+            _ => None,
+        });
+        return Err(match why {
+            Some(why) => format!("'{name}' cannot be written in this run: {why}"),
+            None => format!(
+                "'{name}' is not a ruleset this run plans ({})",
+                owned_names(owned)
+                    .map(|n| format!("'{n}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+    }
+    let exact: Vec<&&Owned> = wanted
+        .iter()
+        .filter(|o| {
+            exclude.is_empty() && o.include.iter().cloned().collect::<BTreeSet<_>>() == include
+        })
+        .collect();
+    let shown = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
+    let theirs = format!(
+        "ruleset {label} targets {}{}",
+        shown(&include),
+        if exclude.is_empty() {
+            String::new()
+        } else {
+            format!(" excluding {}", shown(&exclude))
+        }
+    );
+    let one = match exact.as_slice() {
+        [one] => **one,
+        [] => {
+            return Err(format!(
+                "{theirs}, which is not exactly what {} target{}",
+                wanted
+                    .iter()
+                    .map(|o| format!("'{}' ({})", o.name, o.include.join(", ")))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if wanted.len() == 1 { "s" } else { "" }
+            ))
+        }
+        many => {
+            return Err(format!(
+                "{theirs}, as {} all do; name one with --adopt {}=<name>",
+                many.iter()
+                    .map(|o| format!("'{}'", o.name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                request.ruleset
+            ))
+        }
+    };
+    if let Some(existing) = summaries
+        .iter()
+        .find(|s| s.get("name").and_then(Value::as_str) == Some(one.name.as_str()))
+    {
+        return Err(format!(
+            "ruleset {} already holds the name, so remote protect keeps it and adopts nothing for it",
+            ruleset_label(existing)
+        ));
+    }
+    Ok(one.name.clone())
+}
+
+/// Whether a ruleset summary is a branch ruleset of this repository, not
+/// a tag ruleset or one an organization pushes down.
+fn repository_branch_ruleset(summary: &Value) -> bool {
+    summary.get("target").and_then(Value::as_str) == Some("branch")
+        && summary
+            .get("source_type")
+            .and_then(Value::as_str)
+            .is_none_or(|source| source == "Repository")
+}
+
+/// What a run does with one owned ruleset.
+enum Step {
+    /// It is already as intended: the report line.
+    Unchanged(String),
+    /// One write.
+    Write(Write),
+}
+
+/// One planned write and what the report says about it.
+struct Write {
+    name: String,
+    target: String,
+    /// The ruleset written, for an update or an adoption.
+    id: Option<u64>,
+    /// The foreign ruleset an adoption brings under `name`, as
+    /// `'name' (id)`.
+    adopted: Option<String>,
+    request: HostRequest,
+}
+
+impl Write {
+    /// The report line: what was done (`done`), or what would be.
+    fn line(&self, done: bool, answered_id: Option<u64>) -> String {
+        let id = answered_id.or(self.id);
+        let id_text = id.map_or_else(String::new, |id| format!(" ({id})"));
+        let what = describe(&self.request.body);
+        match (&self.adopted, self.request.method, done) {
+            (Some(foreign), _, true) => format!(
+                "adopted ruleset {foreign} as '{}' on {}: {what}",
+                self.name, self.target
+            ),
+            (Some(foreign), _, false) => format!(
+                "would adopt ruleset {foreign} as '{}' on {}: {what}",
+                self.name, self.target
+            ),
+            (None, "POST", true) => format!(
+                "created ruleset '{}'{id_text} on {}: {what}",
+                self.name, self.target
+            ),
+            (None, "POST", false) => format!(
+                "would create ruleset '{}' on {}: {what}",
+                self.name, self.target
+            ),
+            (None, _, true) => format!(
+                "updated ruleset '{}'{id_text} on {}: {what}",
+                self.name, self.target
+            ),
+            (None, _, false) => format!(
+                "would update ruleset '{}'{id_text} on {}: {what}",
+                self.name, self.target
+            ),
+        }
+    }
+}
+
+/// What a run does about the Actions event policy (TSK-1347).
+enum EventPolicyStep {
+    /// Nothing to write: the report line.
+    Unchanged(String),
+    /// The policy to create.
+    Create(EventPolicyWrite),
+}
+
+/// The Actions event policy a run creates: the events it allows and the
+/// one request that creates it.
+struct EventPolicyWrite {
+    events: Vec<String>,
+    request: HostRequest,
+}
+
+impl EventPolicyWrite {
+    /// The report line: the policy created, with the id the host answered,
+    /// or, with no answer, the one a run would create.
+    fn line(&self, answered_id: Option<&Value>) -> String {
+        let events = self.events.join(", ");
+        match answered_id {
+            Some(id) => format!(
+                "created Actions event policy '{EVENT_POLICY_NAME}' ({id}) for {POLICY_WORKFLOW} alone, allowing {events}"
+            ),
+            None => format!(
+                "would create Actions event policy '{EVENT_POLICY_NAME}' for {POLICY_WORKFLOW} alone, allowing {events}"
+            ),
+        }
+    }
+}
+
+/// A run read and planned, before anything is sent.
+struct Prepared {
+    lines: Vec<String>,
+    limitations: Vec<String>,
+    checklist: Vec<String>,
+    steps: Vec<Step>,
+    /// The Actions event policy to create, when one is needed.
+    event_policy: Option<EventPolicyWrite>,
+    private: bool,
+}
+
+impl Prepared {
+    /// Record that the Actions event policy is not written, and why.
+    fn fail_event_policy(&mut self, why: &str) {
+        self.limitations
+            .push(format!("Actions event policy was not written: {why}"));
+        self.checklist.push(
+            "[ ] Actions event policy: `codeflow doctor --check remote-perimeter` prints the policy to create; create it as a repository administrator".to_string(),
+        );
+    }
+
+    /// Record that the owned ruleset `name` is not written, and why: a
+    /// refusal of the plan itself, or a host answer.
+    fn fail(&mut self, plan: &ProtectionPlan, name: &str, why: &str, refused: bool) {
+        if refused {
+            self.limitations
+                .push(format!("ruleset '{name}' was not written: {why}"));
+            self.checklist.push(format!(
+                "[ ] {name}: once the cause above is fixed, run `codeflow remote protect` again"
+            ));
+        } else {
+            self.limitations
+                .push(GithubProvider::limitation_for(name, why, self.private));
+            self.checklist.extend(
+                plan.manual_checklist()
+                    .into_iter()
+                    .filter(|item| item.starts_with(&format!("[ ] {name}"))),
+            );
+        }
+    }
+
+    fn report(mut self, status: ProtectStatus, adopt: bool) -> ProtectReport {
+        self.lines.push(
+            if adopt {
+                "rulesets with other names, apart from those --adopt names, were not read for writing and were left as they are"
+            } else {
+                "rulesets with other names were not read for writing and were left as they are"
+            }
+            .to_string(),
+        );
+        let status = match status {
+            ProtectStatus::Applied if !self.limitations.is_empty() => ProtectStatus::Degraded,
+            other => other,
+        };
+        ProtectReport {
+            status,
+            lines: self.lines,
+            limitations: self.limitations,
+            checklist: self.checklist,
+        }
+    }
+}
+
 impl RemoteProvider for GithubProvider {
     fn name(&self) -> &'static str {
         "github"
     }
 
     fn apply(&self, plan: &ProtectionPlan) -> ProtectReport {
-        let repo = match self.repo_info() {
-            Ok(info) => info,
+        let mut prepared = match self.prepare(plan) {
+            Ok(prepared) => prepared,
             Err(e) => {
                 return ProtectReport {
                     status: ProtectStatus::Degraded,
@@ -2049,78 +2989,61 @@ impl RemoteProvider for GithubProvider {
                 };
             }
         };
-
-        let mut lines = vec![format!(
-            "repo: {} ({})",
-            repo.nwo,
-            if repo.private { "private" } else { "public" }
-        )];
-        if let Some(authority) = &plan.authority {
-            lines.push(format!(
-                "profile {}; {}",
-                authority.profile.as_str(),
-                authority.mode()
-            ));
-        }
-        let mut limitations = Vec::new();
-        let mut checklist = Vec::new();
-        let declared = match (&plan.authority, repo.default_branch.as_deref()) {
-            (Some(_), Some(branch)) => {
-                let gh = |args: &[&str]| self.run_gh(args, None);
-                Some(read_declared(&gh, &repo.nwo, branch))
+        for step in std::mem::take(&mut prepared.steps) {
+            match step {
+                Step::Unchanged(line) => prepared.lines.push(line),
+                Step::Write(write) => match self.send(&write) {
+                    Ok(line) => prepared.lines.push(line),
+                    Err(why) => prepared.fail(plan, &write.name, &why, false),
+                },
             }
-            _ => None,
+        }
+        if let Some(write) = prepared.event_policy.take() {
+            match self.send_event_policy(&write) {
+                Ok(line) => prepared.lines.push(line),
+                Err(why) => prepared.fail_event_policy(&why),
+            }
+        }
+        prepared.report(ProtectStatus::Applied, !plan.scope.adopt.is_empty())
+    }
+
+    fn preview(&self, plan: &ProtectionPlan) -> ProtectReport {
+        let mut prepared = match self.prepare(plan) {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                let mut report = plan.dry_run_report(self.name());
+                report.limitations.push(format!(
+                    "the host was not read ({e}), so these are the intended rules, not the exact requests; --branch, --adopt and absent branches are judged only against the host"
+                ));
+                return report;
+            }
         };
-        let owned = owned_rulesets(plan, repo.default_branch.as_deref(), declared.as_ref());
-        let summaries = self.ruleset_summaries(&repo.nwo);
-        for entry in owned {
-            let (name, outcome, refused) = match (entry, &summaries) {
-                (Err((name, why)), _) => (name, Err(why), true),
-                (Ok(owned), Err(why)) => (owned.name.clone(), Err(why.clone()), false),
-                (Ok(owned), Ok(summaries)) => {
-                    let name = owned.name.clone();
-                    let outcome = self.apply_owned(&repo.nwo, summaries, &owned);
-                    (name, outcome, false)
-                }
-            };
-            match outcome {
-                Ok(line) => lines.push(line),
-                Err(e) if refused => {
-                    limitations.push(format!("ruleset '{name}' was not written: {e}"));
-                    checklist.push(format!(
-                        "[ ] {name}: once the cause above is fixed, run `codeflow remote protect` again"
-                    ));
-                }
-                Err(e) => {
-                    limitations.push(Self::limitation_for(&name, &e, repo.private));
-                    checklist.extend(
-                        plan.manual_checklist()
-                            .into_iter()
-                            .filter(|item| item.starts_with(&format!("[ ] {name}"))),
-                    );
+        prepared.lines.insert(
+            0,
+            "dry-run: the exact requests a run would send, nothing written".to_string(),
+        );
+        let mut writes = 0;
+        for step in std::mem::take(&mut prepared.steps) {
+            match step {
+                Step::Unchanged(line) => prepared.lines.push(line),
+                Step::Write(write) => {
+                    writes += 1;
+                    prepared.lines.push(write.line(false, None));
+                    prepared
+                        .lines
+                        .push(format!("  request: {}", write.request.render()));
                 }
             }
         }
-        lines.push(
-            "rulesets with other names were not read for writing and were left as they are"
-                .to_string(),
-        );
-        self.event_policy_outcome(
-            &repo,
-            declared.as_ref(),
-            (&mut lines, &mut limitations, &mut checklist),
-        );
-
-        ProtectReport {
-            status: if limitations.is_empty() {
-                ProtectStatus::Applied
-            } else {
-                ProtectStatus::Degraded
-            },
-            lines,
-            limitations,
-            checklist,
+        if let Some(write) = prepared.event_policy.take() {
+            writes += 1;
+            prepared.lines.push(write.line(None));
+            prepared
+                .lines
+                .push(format!("  request: {}", write.request.render()));
         }
+        prepared.lines.push(format!("{writes} request(s) planned"));
+        prepared.report(ProtectStatus::DryRun, !plan.scope.adopt.is_empty())
     }
 }
 
@@ -2140,6 +3063,9 @@ mod tests {
         std::fs::write(
             &shim,
             r#"#!/bin/sh
+if [ "$1" = "auth" ]; then
+  exit 0
+fi
 if [ "$1" = "repo" ]; then
   printf '{"nameWithOwner":"owner/caf'
   printf '\377'
@@ -2153,6 +3079,7 @@ printf '{}'
         .unwrap();
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
         wait_until_executable(&shim);
+        github_checkout(dir.path(), "owner/repo");
         let policy = write_policy(dir.path(), r#"["main"]"#);
         let plan = ProtectionPlan::from_policy_file(&policy).unwrap();
         let report = GithubProvider::with_gh(&shim, dir.path()).apply(&plan);
@@ -2198,12 +3125,25 @@ printf '{}'
         path
     }
 
+    /// A checkout whose `origin` names `nwo` on github.com, as a project
+    /// has; no test contacts it, since `gh` is a stub. Only the Unix shim
+    /// tests use it.
+    #[cfg(unix)]
+    fn github_checkout(dir: &Path, nwo: &str) {
+        let repo = git2::Repository::init(dir).unwrap();
+        repo.remote("origin", &format!("https://github.com/{nwo}.git"))
+            .unwrap();
+    }
+
     #[cfg(unix)]
     fn write_shim(dir: &Path, api_behavior: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join("gh");
         let script = format!(
             "#!/bin/sh\n\
+             if [ \"$1\" = \"auth\" ]; then\n\
+               exit 0\n\
+             fi\n\
              if [ \"$1\" = \"repo\" ]; then\n\
                printf '%s' '{{\"nameWithOwner\":\"sathyassn/private-repo\",\"isPrivate\":true}}'\n\
                exit 0\n\
@@ -2346,6 +3286,7 @@ printf '{}'
     #[test]
     fn test_github_degraded_on_free_plan_403() {
         let dir = tempfile::tempdir().unwrap();
+        github_checkout(dir.path(), "sathyassn/private-repo");
         let gh = write_shim(
             dir.path(),
             "echo 'HTTP 403: Upgrade to GitHub Pro or make this repository public to enable this feature. (https://docs.github.com/rest/repos/rules)' >&2\nexit 1",
@@ -2381,6 +3322,7 @@ printf '{}'
     #[test]
     fn test_github_applies_when_gh_succeeds() {
         let dir = tempfile::tempdir().unwrap();
+        github_checkout(dir.path(), "sathyassn/private-repo");
         // The rulesets list is a JSON array on GitHub; a write answers the
         // ruleset as written.
         let gh = write_shim(
@@ -2638,6 +3580,7 @@ jobs:
         fn new(rulesets: &str, by_id: &[(u64, &str)]) -> Self {
             use std::os::unix::fs::PermissionsExt;
             let dir = tempfile::tempdir().unwrap();
+            github_checkout(dir.path(), "o/r");
             let d = dir.path().display().to_string();
             std::fs::write(dir.path().join("rulesets.json"), rulesets).unwrap();
             for (id, body) in by_id {
@@ -2647,6 +3590,7 @@ jobs:
                 r#"#!/bin/sh
 d='{d}'
 case "$*" in
+  "auth status --hostname github.com") exit 0 ;;
   "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
   "repo") exit 0 ;;
   "api -X "*) printf '%s %s\n' "$3" "$4" >> "$d/writes"; body="$(cat)"; printf '%s\n' "$body" >> "$d/bodies"; printf '%s' "$body" ;;
@@ -2905,7 +3849,7 @@ esac
         let expected = input.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(run_gh(Path::new("cat"), &repo, &[], Some(&input)));
+            let _ = sender.send(run_gh(Path::new("cat"), &repo, None, &[], Some(&input)));
         });
         let out = receiver
             .recv_timeout(std::time::Duration::from_secs(60))
@@ -2971,6 +3915,10 @@ jobs:
         /// When set, a write answers this bypass list instead of the one
         /// it was sent.
         answer_bypass: Option<Value>,
+        /// When set, a write answers these conditions instead.
+        answer_conditions: Option<Value>,
+        /// The branches the host has besides `main`; any other answers 404.
+        branches: Vec<String>,
         /// The repository's Actions event policies (TSK-1347).
         policies: RefCell<Vec<Value>>,
         /// Whether the token is refused the policy list.
@@ -3038,6 +3986,14 @@ jobs:
                         .map(Value::to_string)
                         .ok_or_else(|| "gh: Not Found (HTTP 404)".to_string())
                 }
+                ["api", url] if url.starts_with("repos/o/r/branches/") => {
+                    let branch = &url["repos/o/r/branches/".len()..];
+                    if branch == "main" || self.branches.iter().any(|b| b == branch) {
+                        Ok(json!({ "name": branch }).to_string())
+                    } else {
+                        Err("gh: Branch not found (HTTP 404)".into())
+                    }
+                }
                 ["api", "repos/o/r/contents/.github/workflows?ref=main"] => {
                     if self.workflows.is_empty() {
                         return Err("gh: Not Found (HTTP 404)".into());
@@ -3101,6 +4057,9 @@ jobs:
                     if let Some(bypass) = &self.answer_bypass {
                         body["bypass_actors"] = bypass.clone();
                     }
+                    if let Some(conditions) = &self.answer_conditions {
+                        body["conditions"] = conditions.clone();
+                    }
                     Ok(body.to_string())
                 }
                 other => Err(format!("unexpected gh call {other:?}")),
@@ -3129,6 +4088,7 @@ jobs:
         fn provider(self: &Rc<Self>) -> GithubProvider {
             let host = Rc::clone(self);
             GithubProvider::with_transport(Box::new(move |args, input| host.handle(args, input)))
+                .with_repository("o/r")
         }
 
         fn writes(&self) -> Vec<(String, Value)> {
@@ -3150,6 +4110,7 @@ jobs:
         let plan = ProtectionPlan {
             rules: Vec::new(),
             authority: Some(authority),
+            scope: Scope::default(),
         };
         host.provider().apply(&plan)
     }
@@ -3604,7 +4565,7 @@ jobs:
         json!({
             "id": 77, "name": RULESET_AUTHORITY_CHECKS, "target": "branch",
             "source_type": "Repository", "enforcement": "evaluate",
-            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH", "refs/heads/release"], "exclude": ["refs/heads/main"] } },
+            "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH", "refs/heads/release"], "exclude": ["refs/heads/old"] } },
             "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
             "rules": [
                 { "type": "pull_request", "parameters": {
@@ -3642,9 +4603,15 @@ jobs:
             .unwrap();
         assert_eq!(call, "PUT repos/o/r/rulesets/77");
         assert_eq!(b["enforcement"], "active");
+        // An exclude the operator set is kept and named (review of PR 700).
         assert_eq!(
             b["conditions"]["ref_name"],
-            json!({ "include": ["~DEFAULT_BRANCH", "refs/heads/release"], "exclude": [] })
+            json!({ "include": ["~DEFAULT_BRANCH", "refs/heads/release"], "exclude": ["refs/heads/old"] })
+        );
+        assert!(
+            report.render().contains("keeps exclude refs/heads/old"),
+            "{:?}",
+            report.render()
         );
         assert_eq!(b["bypass_actors"], json!([]), "the window is closed");
         let pr = &rule_of(&b, "pull_request")["parameters"];
@@ -3730,7 +4697,21 @@ jobs:
         tag["target"] = json!("tag");
         let mut twin = stronger_b();
         twin["id"] = json!(78);
+        // An exclude that takes out the branch it must cover is never
+        // dropped quietly (review of PR 700).
+        let mut main_out = stronger_b();
+        main_out["conditions"]["ref_name"]["exclude"] = json!(["refs/heads/old", "refs/heads/ma*"]);
+        let mut all_out = stronger_b();
+        all_out["conditions"]["ref_name"]["exclude"] = json!(["~ALL"]);
         for (rulesets, why) in [
+            (
+                vec![main_out],
+                "its exclude list leaves out refs/heads/main, which it must cover",
+            ),
+            (
+                vec![all_out],
+                "its exclude list leaves out ~ALL, which it must cover",
+            ),
             (vec![with_update], "carries an `update` rule"),
             (vec![repinned], "pins `codeflow gates` to app 99"),
             (vec![tag], "not a branch ruleset"),
@@ -3770,6 +4751,35 @@ jobs:
         );
     }
 
+    /// Review of PR 700, nit 2: an answer whose conditions differ from
+    /// those sent is reported, never taken as written.
+    #[test]
+    fn conditions_the_host_answers_differently_are_reported() {
+        let host = Rc::new(Fake {
+            answer_conditions: Some(
+                json!({ "ref_name": { "include": ["refs/heads/other"], "exclude": [] } }),
+            ),
+            ..Rc::try_unwrap(Fake::standard(&[])).ok().unwrap()
+        });
+        let report = apply_authority(&host, solo());
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
+        assert!(
+            text.contains(
+                "the host answered with other conditions, enforcement or rules than were sent"
+            ),
+            "{text:?}"
+        );
+        // Defaults the host adds are not a difference.
+        let report = apply_authority(&Fake::standard(&[]), solo());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{:?}",
+            report.render()
+        );
+    }
+
     /// A line pattern from `--lines` is C's target.
     #[test]
     fn c_targets_the_line_pattern() {
@@ -3798,6 +4808,575 @@ jobs:
         };
         assert_eq!(on_create(RULESET_LINE_CHECKS), true);
         assert_eq!(on_create(RULESET_AUTHORITY_CHECKS), false);
+    }
+
+    // -----------------------------------------------------------------------
+    // TSK-383: split rulesets, --adopt, --branch, absent branches and the
+    // exact preview, against the recorded host in memory.
+    // -----------------------------------------------------------------------
+
+    fn ruleset_on(id: u64, name: &str, include: &[&str], rules: &Value, bypass: &Value) -> Value {
+        json!({
+            "id": id, "name": name, "target": "branch", "source_type": "Repository",
+            "enforcement": "active",
+            "conditions": { "ref_name": { "include": include, "exclude": [] } },
+            "rules": rules, "bypass_actors": bypass,
+        })
+    }
+
+    fn admin_bypass() -> Value {
+        json!([{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }])
+    }
+
+    /// Issue 200's `main`: its checks in one ruleset an administrator can
+    /// bypass, no force push and no deletion in another nobody can.
+    fn split_main() -> Vec<Value> {
+        vec![
+            ruleset_on(
+                301,
+                "main checks",
+                &["~DEFAULT_BRANCH"],
+                &json!([{ "type": "required_status_checks", "parameters": {
+                    "strict_required_status_checks_policy": true,
+                    "required_status_checks": [{ "context": "codeflow gates", "integration_id": 15368 }]
+                } }]),
+                &admin_bypass(),
+            ),
+            ruleset_on(
+                302,
+                "main history",
+                &["~DEFAULT_BRANCH"],
+                &json!([{ "type": "non_fast_forward" }, { "type": "deletion" }]),
+                &json!([]),
+            ),
+        ]
+    }
+
+    /// A registry ruleset an administrator made by hand.
+    fn registry_guard() -> Value {
+        ruleset_on(
+            303,
+            "registry guard",
+            &["refs/heads/codeflow/registry"],
+            &json!([{ "type": "non_fast_forward" }, { "type": "deletion" }]),
+            &admin_bypass(),
+        )
+    }
+
+    fn plan_with(branches: &str, authority: bool, scope: Scope) -> ProtectionPlan {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_policy(dir.path(), branches);
+        let plan = ProtectionPlan::from_policy_file(&path)
+            .unwrap()
+            .with_registry_profile()
+            .with_scope(scope);
+        if authority {
+            plan.with_authority(solo())
+        } else {
+            plan
+        }
+    }
+
+    fn adopting(values: &[&str]) -> Scope {
+        Scope {
+            branch: None,
+            adopt: values.iter().map(|v| Adopt::parse(v).unwrap()).collect(),
+        }
+    }
+
+    fn written_names(host: &Fake) -> Vec<String> {
+        host.writes()
+            .iter()
+            .map(|(_, body)| body["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// AC-1: split `main` rulesets with different bypass lists are left
+    /// byte for byte; the owned rulesets are added beside them.
+    #[test]
+    fn split_main_rulesets_are_left_as_they_are_and_owned_ones_are_added_beside() {
+        let host = Fake::standard(&split_main());
+        let before = host.rulesets.borrow().clone();
+        let report = host
+            .provider()
+            .apply(&plan_with(r#"["main"]"#, true, Scope::default()));
+        let text = report.render().as_str().to_string();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        let calls: Vec<String> = host.writes().into_iter().map(|(call, _)| call).collect();
+        assert_eq!(calls, vec!["POST repos/o/r/rulesets"; 4], "{text}");
+        for id in [301, 302] {
+            assert_eq!(host.rulesets.borrow()[&id], before[&id], "{text}");
+        }
+    }
+
+    /// AC-1: `--adopt` brings a foreign ruleset that targets exactly what
+    /// an owned one targets under the owned name; the preview and the
+    /// report name it, its id and its new name, and it only gains rules.
+    #[test]
+    fn an_adopted_ruleset_with_the_exact_target_is_renamed_and_only_gains() {
+        let plan = || plan_with(r#"["main"]"#, false, adopting(&["registry guard"]));
+        let adopted = "ruleset 'registry guard' (303) as 'codeflow protect codeflow/registry' on refs/heads/codeflow/registry";
+
+        let previewed = Fake::standard(&[registry_guard()]);
+        let preview = previewed.provider().preview(&plan());
+        let text = preview.render().as_str().to_string();
+        assert_eq!(preview.status, ProtectStatus::DryRun, "{text}");
+        assert!(text.contains(&format!("would adopt {adopted}")), "{text}");
+        assert!(
+            text.contains("  request: PUT repos/o/r/rulesets/303 "),
+            "{text}"
+        );
+        assert!(previewed.writes().is_empty(), "{text}");
+
+        let host = Fake::standard(&[registry_guard()]);
+        let report = host.provider().apply(&plan());
+        let text = report.render().as_str().to_string();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert!(text.contains(&format!("adopted {adopted}")), "{text}");
+        let writes = host.writes();
+        let (call, body) = writes
+            .iter()
+            .find(|(_, body)| body["name"] == "codeflow protect codeflow/registry")
+            .unwrap();
+        assert_eq!(call, "PUT repos/o/r/rulesets/303");
+        assert_eq!(
+            body["bypass_actors"],
+            admin_bypass(),
+            "the bypass list is kept"
+        );
+        assert_eq!(body["rules"], registry_guard()["rules"]);
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|(call, _)| call.starts_with("POST"))
+                .count(),
+            1,
+            "only codeflow protect main is created: {writes:?}"
+        );
+    }
+
+    /// AC-1: an `--adopt` whose target is not exactly an owned ruleset's is
+    /// refused, the foreign ruleset is not written, and the owned ruleset
+    /// is created beside it.
+    #[test]
+    fn an_adopt_whose_target_is_not_exact_is_refused() {
+        let mut wider = registry_guard();
+        wider["conditions"]["ref_name"]["include"] = json!(["refs/heads/codeflow/**"]);
+        let mut excluding = registry_guard();
+        excluding["conditions"]["ref_name"]["exclude"] = json!(["refs/heads/codeflow/old"]);
+        for (live, why) in [
+            (&wider, "--adopt 303: ruleset 'registry guard' (303) targets refs/heads/codeflow/**, which is not exactly what 'codeflow protect main' (refs/heads/main), 'codeflow protect codeflow/registry' (refs/heads/codeflow/registry) target; nothing was adopted for it"),
+            (&excluding, "targets refs/heads/codeflow/registry excluding refs/heads/codeflow/old, which is not exactly"),
+        ] {
+            let host = Fake::standard(std::slice::from_ref(live));
+            let report = host
+                .provider()
+                .apply(&plan_with(r#"["main"]"#, false, adopting(&["303"])));
+            let text = report.render().as_str().to_string();
+            assert_eq!(report.status, ProtectStatus::Degraded, "{text}");
+            assert!(text.contains(why), "{text}");
+            assert!(
+                host.writes().iter().all(|(call, _)| !call.ends_with("/303")),
+                "{text}"
+            );
+            assert_eq!(&host.rulesets.borrow()[&303], live);
+            assert!(written_names(&host).contains(&"codeflow protect codeflow/registry".to_string()));
+        }
+    }
+
+    /// AC-1: A and B both target the default branch, so adopting a `main`
+    /// ruleset needs the owned name; a named owned ruleset with another
+    /// target is refused; an unknown ruleset is refused.
+    #[test]
+    fn an_adopt_two_owned_rulesets_could_stand_for_needs_the_owned_name() {
+        let host = Fake::standard(&split_main());
+        let report = host.provider().apply(&plan_with(
+            r#"["main"]"#,
+            true,
+            adopting(&["main history", "302=codeflow line checks", "999"]),
+        ));
+        let text = report.render().as_str().to_string();
+        for why in [
+            "--adopt main history: ruleset 'main history' (302) targets ~DEFAULT_BRANCH, as 'codeflow authority updates', 'codeflow authority checks' all do; name one with --adopt main history=<name>",
+            "--adopt 302=codeflow line checks: ruleset 'main history' (302) targets ~DEFAULT_BRANCH, which is not exactly what 'codeflow line checks' (refs/heads/integration/**) targets",
+            "--adopt 999: no ruleset of this repository has that id or name",
+        ] {
+            assert!(text.contains(why), "{why}: {text}");
+        }
+        assert!(host
+            .writes()
+            .iter()
+            .all(|(call, _)| !call.ends_with("/302")));
+
+        let host = Fake::standard(&split_main());
+        let report = host.provider().apply(&plan_with(
+            r#"["main"]"#,
+            true,
+            adopting(&["302=codeflow authority checks"]),
+        ));
+        let text = report.render().as_str().to_string();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert!(
+            text.contains("adopted ruleset 'main history' (302) as 'codeflow authority checks' on ~DEFAULT_BRANCH"),
+            "{text}"
+        );
+        let body = host.body(RULESET_AUTHORITY_CHECKS);
+        for kind in [
+            "pull_request",
+            "required_status_checks",
+            "non_fast_forward",
+            "deletion",
+        ] {
+            assert_eq!(rule_of(&body, kind)["type"], kind);
+        }
+        let main_checks: Value = split_main()[0].clone();
+        assert_eq!(host.rulesets.borrow()[&301], main_checks);
+    }
+
+    #[test]
+    fn an_adopt_value_names_a_ruleset() {
+        assert_eq!(
+            Adopt::parse("12=codeflow protect main").unwrap(),
+            Adopt {
+                ruleset: "12".into(),
+                as_name: Some("codeflow protect main".into())
+            }
+        );
+        for bad in ["", "=codeflow protect main", "12=", " "] {
+            assert!(Adopt::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// AC-2: `--branch` plans only the owned rulesets that target it.
+    #[test]
+    fn branch_limits_the_run_to_the_owned_rulesets_that_target_it() {
+        for (branch, expected) in [
+            (
+                "codeflow/registry",
+                vec!["codeflow protect codeflow/registry"],
+            ),
+            (
+                "main",
+                vec![RULESET_AUTHORITY_UPDATES, RULESET_AUTHORITY_CHECKS],
+            ),
+            ("integration/EPC-1-x", vec![RULESET_LINE_CHECKS]),
+            ("release/1", vec!["codeflow protect release/*"]),
+            ("feature/x", vec![]),
+        ] {
+            let host = Fake::standard(&[]);
+            let scope = Scope {
+                branch: Some(branch.into()),
+                adopt: Vec::new(),
+            };
+            let report = host
+                .provider()
+                .apply(&plan_with(r#"["main", "release/*"]"#, true, scope));
+            let text = report.render().as_str().to_string();
+            assert_eq!(written_names(&host), expected, "{branch}: {text}");
+            if expected.is_empty() {
+                assert!(
+                    text.contains("--branch feature/x: no ruleset remote protect owns targets it, so nothing is planned"),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    /// AC-2: a literal policy branch the host does not have is reported
+    /// and not planned; a glob, the default branch and the registry are
+    /// planned without a branch read.
+    #[test]
+    fn a_policy_branch_the_host_does_not_have_is_reported_and_not_planned() {
+        let plan = || {
+            plan_with(
+                r#"["main", "master", "develop", "release/*"]"#,
+                false,
+                Scope::default(),
+            )
+        };
+        let host = || {
+            Rc::new(Fake {
+                branches: vec!["develop".into()],
+                ..Fake::default()
+            })
+        };
+        let absent =
+            "policy branch 'master' does not exist on o/r, so no ruleset is planned for it";
+
+        let previewed = host();
+        let preview = previewed.provider().preview(&plan());
+        let text = preview.render().as_str().to_string();
+        assert!(text.contains(absent), "{text}");
+        assert!(!text.contains("codeflow protect master"), "{text}");
+
+        let applied = host();
+        let report = applied.provider().apply(&plan());
+        let text = report.render().as_str().to_string();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert!(text.contains(absent), "{text}");
+        assert_eq!(
+            written_names(&applied),
+            [
+                "codeflow protect main",
+                "codeflow protect develop",
+                "codeflow protect release/*",
+                "codeflow protect codeflow/registry"
+            ]
+        );
+    }
+
+    /// Review of PR 700, finding 4: `gh` is asked about the repository
+    /// `origin` names, and an answer for another one reads and writes
+    /// nothing.
+    #[test]
+    fn a_gh_answer_for_another_repository_is_refused() {
+        let asked = Rc::new(RefCell::new(Vec::<String>::new()));
+        let seen = Rc::clone(&asked);
+        let provider = GithubProvider::with_transport(Box::new(move |args, _| {
+            seen.borrow_mut().push(args.join(" "));
+            match args {
+                ["repo", "view", ..] => Ok(
+                    r#"{"nameWithOwner":"x/y","isPrivate":false,"defaultBranchRef":{"name":"main"}}"#
+                        .into(),
+                ),
+                _ => Err("nothing else is read".into()),
+            }
+        }))
+        .with_repository("o/r");
+        let report = provider.apply(&ProtectionPlan {
+            rules: vec![BranchRule::registry_data_profile()],
+            authority: None,
+            scope: Scope::default(),
+        });
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
+        assert!(
+            text.contains("gh answers for x/y, not o/r, the repository `origin` names"),
+            "{text:?}"
+        );
+        assert_eq!(
+            *asked.borrow(),
+            vec!["repo view o/r --json nameWithOwner,isPrivate,defaultBranchRef"]
+        );
+    }
+
+    /// Review of PR 700, nit 1: a host that answers full pages of rulesets
+    /// without end is a list not read, so nothing is planned or written.
+    #[test]
+    fn an_endless_ruleset_list_is_not_read() {
+        let provider = GithubProvider::with_transport(Box::new(|args, _| match args {
+            ["repo", "view", ..] => Ok(
+                r#"{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{"name":"main"}}"#
+                    .into(),
+            ),
+            ["api", url] if url.starts_with("repos/o/r/rulesets?") => Ok(format!(
+                "[{}]",
+                vec![r#"{"id":1,"name":"other","target":"branch"}"#; RULESET_PAGE_SIZE].join(",")
+            )),
+            ["api", "repos/o/r/branches/main"] => Ok("{}".into()),
+            _ => Err("no other call is expected".into()),
+        }))
+        .with_repository("o/r");
+        let report = provider.apply(&ProtectionPlan {
+            rules: vec![BranchRule::registry_data_profile()],
+            authority: None,
+            scope: Scope::default(),
+        });
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
+        assert!(text.contains("did not end within 50 pages"), "{text:?}");
+    }
+
+    /// Review of PR 700, finding 4: a push URL for another repository
+    /// leaves `origin` naming no one repository.
+    #[test]
+    fn a_push_url_for_another_repository_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/o/r.git").unwrap();
+        assert_eq!(
+            origin_repository(dir.path()).unwrap().as_deref(),
+            Some("o/r")
+        );
+        repo.remote_set_pushurl("origin", Some("git@github.com:O/R.git"))
+            .unwrap();
+        assert_eq!(
+            origin_repository(dir.path()).unwrap().as_deref(),
+            Some("o/r"),
+            "the same repository, spelled another way"
+        );
+        repo.remote_set_pushurl("origin", Some("https://github.com/x/y.git"))
+            .unwrap();
+        let why = origin_repository(dir.path()).unwrap_err();
+        assert!(
+            why.contains("`origin` pushes to https://github.com/x/y.git, not to o/r"),
+            "{why}"
+        );
+    }
+
+    /// `remote protect` names the host from `origin`'s URL on any host, so
+    /// an Enterprise host keeps working once it is pinned.
+    #[test]
+    fn origin_urls_name_their_host_and_repository() {
+        for (url, host) in [
+            ("https://github.com/o/r.git", "github.com"),
+            ("git@github.com:o/r.git", "github.com"),
+            ("https://GHE.example.invalid/o/r", "ghe.example.invalid"),
+            (
+                "https://user@ghe.example.invalid:8443/o/r.git",
+                "ghe.example.invalid",
+            ),
+            (
+                "ssh://git@ghe.example.invalid:2222/o/r.git/",
+                "ghe.example.invalid",
+            ),
+            ("git@ghe.example.invalid:o/r.git", "ghe.example.invalid"),
+        ] {
+            assert_eq!(
+                parse_repo_url(url),
+                Some((host.to_string(), "o/r".to_string())),
+                "{url}"
+            );
+        }
+        for url in [
+            "file:///srv/o/r.git",
+            "/srv/o/r.git",
+            "git://ghe.example.invalid/o/r.git",
+            "https://ghe.example.invalid/o",
+            "https://ghe.example.invalid/o/r/extra",
+            "https://gh$e.example.invalid/o/r",
+            "https://-ghe.example.invalid/o/r",
+        ] {
+            assert_eq!(parse_repo_url(url), None, "{url}");
+        }
+    }
+
+    /// Review of PR 700, finding 4, as settled: every `gh` call `remote
+    /// protect` makes carries `GH_HOST` set to the host `origin` names, and
+    /// a host `gh` has no working login for is refused before any read.
+    #[cfg(unix)]
+    #[test]
+    fn every_gh_call_is_pinned_to_the_host_origin_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path())
+            .unwrap()
+            .remote("origin", "https://ghe.example.invalid/o/r.git")
+            .unwrap();
+        let d = dir.path().display().to_string();
+        let shim = dir.path().join("gh");
+        std::fs::write(
+            &shim,
+            format!(
+                r#"#!/bin/sh
+printf '%s %s\n' "${{GH_HOST-unset}}" "$*" >> '{d}/calls'
+case "$*" in
+  "auth status --hostname ghe.example.invalid") [ -f '{d}/logged-out' ] && exit 1; exit 0 ;;
+  "repo view ghe.example.invalid/o/r --json"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
+  "api repos/o/r/rulesets?"*) printf '[]' ;;
+  "api repos/o/r/branches/"*) printf '{{"name":"main"}}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        wait_until_executable(&shim);
+        let policy = write_policy(dir.path(), r#"["main"]"#);
+        let plan = ProtectionPlan::from_policy_file(&policy).unwrap();
+        // The readiness probe runs the stub once; only the provider's calls
+        // count.
+        let calls = dir.path().join("calls");
+        let _ = std::fs::remove_file(&calls);
+
+        let report = GithubProvider::with_gh(&shim, dir.path())
+            .preview(&plan)
+            .render();
+        let seen = std::fs::read_to_string(&calls).unwrap();
+        assert!(seen.lines().count() > 2, "{seen}\n{report:?}");
+        assert!(
+            seen.lines()
+                .all(|line| line.starts_with("ghe.example.invalid ")),
+            "{seen}"
+        );
+        assert!(
+            seen.contains("repo view ghe.example.invalid/o/r --json"),
+            "{seen}"
+        );
+        assert!(!report.contains("the host was not read"), "{report:?}");
+
+        std::fs::write(dir.path().join("logged-out"), "").unwrap();
+        std::fs::remove_file(&calls).unwrap();
+        let report = GithubProvider::with_gh(&shim, dir.path())
+            .apply(&plan)
+            .render();
+        assert!(
+            report.contains("gh has no working login for ghe.example.invalid"),
+            "{report:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap(),
+            "ghe.example.invalid auth status --hostname ghe.example.invalid\n"
+        );
+    }
+
+    /// AC-3: the dry run prints exactly the requests a run then sends, in
+    /// order, and sends none itself.
+    #[test]
+    fn the_dry_run_prints_exactly_the_requests_a_run_sends() {
+        let mut rulesets = split_main();
+        rulesets.push(ruleset_on(
+            400,
+            "codeflow protect codeflow/registry",
+            &["refs/heads/codeflow/registry"],
+            &json!([{ "type": "deletion" }]),
+            &json!([]),
+        ));
+        let plan = || plan_with(r#"["main", "release/*"]"#, true, Scope::default());
+
+        let previewed = Fake::standard(&rulesets);
+        let preview = previewed.provider().preview(&plan());
+        let text = preview.render().as_str().to_string();
+        assert_eq!(preview.status, ProtectStatus::DryRun, "{text}");
+        assert!(previewed.writes().is_empty(), "{text}");
+        assert!(previewed.policy_writes.borrow().is_empty(), "{text}");
+        let printed: Vec<String> = preview
+            .lines
+            .iter()
+            .filter_map(|line| line.strip_prefix("  request: "))
+            .map(str::to_string)
+            .collect();
+
+        let applied = Fake::standard(&rulesets);
+        let report = applied.provider().apply(&plan());
+        assert_eq!(report.status, ProtectStatus::Applied);
+        // The ruleset writes, then the Actions event policy (TSK-1347).
+        let sent: Vec<String> = applied
+            .writes()
+            .iter()
+            .map(|(call, body)| format!("{call} {body}"))
+            .chain(
+                applied
+                    .policy_writes
+                    .borrow()
+                    .iter()
+                    .map(|body| format!("POST repos/o/r/actions/policies {body}")),
+            )
+            .collect();
+        assert_eq!(printed, sent, "{text}");
+        assert_eq!(sent.len(), 6, "{sent:#?}");
+        assert!(
+            sent.iter()
+                .any(|request| request.starts_with("PUT repos/o/r/rulesets/400 ")),
+            "{sent:#?}"
+        );
+        assert!(
+            sent.last()
+                .is_some_and(|request| request.starts_with("POST repos/o/r/actions/policies ")),
+            "{sent:#?}"
+        );
+        assert!(text.contains("6 request(s) planned"), "{text}");
     }
 }
 

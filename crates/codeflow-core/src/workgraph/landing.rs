@@ -234,20 +234,71 @@ enum Read {
     Broken,
 }
 
+/// What one task's scans have learned of a path or blob index.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    /// Not looked at yet.
+    Unknown,
+    /// The path is the task's own file, or the blob reads and may spell
+    /// the task ([`may_spell`]).
+    Yes,
+    /// The path is not the task's own file, or the blob reads and cannot
+    /// spell the task. An unreadable blob is never marked, so its doubt is
+    /// raised in every tree that holds it.
+    No,
+}
+
+impl Mark {
+    fn of(yes: bool) -> Self {
+        if yes {
+            Self::Yes
+        } else {
+            Self::No
+        }
+    }
+}
+
+/// One task identity's marks over the store's path and blob indices, kept
+/// for the whole run so each path and blob is judged once per task.
+#[derive(Default)]
+struct Scan {
+    own: Vec<Mark>,
+    spells: Vec<Mark>,
+}
+
+/// The next index of a store table.
+fn index_of(len: usize) -> Result<u32, String> {
+    u32::try_from(len).map_err(|_| "too many task files to index in one run".to_string())
+}
+
 /// One run's reading of record history: trees, task entries and parsed
 /// records are read once per object and shared by every task judged.
 pub(super) struct RecordStore<'r> {
     repo: &'r Repository,
-    /// Task entries (path, blob) per `project-management` tree.
-    entries: HashMap<Oid, Vec<(String, Oid)>>,
+    /// The `project-management` tree of each commit read, `None` when the
+    /// commit's tree has none.
+    records_trees: HashMap<Oid, Option<Oid>>,
+    /// Task entries per `project-management` tree, as indices into
+    /// `paths` and `blobs`, so one tree's entries are read once and every
+    /// task scans them without a copy (TSK-1306 AC-10).
+    entries: HashMap<Oid, Rc<[(u32, u32)]>>,
+    /// Each task file path met, by index, and the index of each.
+    paths: Vec<Rc<str>>,
+    path_index: HashMap<Rc<str>, u32>,
+    /// Each task file blob met, by index, and the index of each.
+    blobs: Vec<Oid>,
+    blob_index: HashMap<Oid, u32>,
     /// Each task file's text, by blob (`None` when it cannot be read).
     texts: HashMap<Oid, Option<Rc<str>>>,
     /// Each task file parsed, by path and blob.
     read: HashMap<(String, Oid), Read>,
     /// What each `project-management` tree holds of each task identity.
     held: HashMap<(Oid, String, Option<String>), Held>,
-    /// Per task identity, whether each blob may spell it ([`may_spell`]).
-    spells: HashMap<(String, Option<String>), HashMap<Oid, bool>>,
+    /// Per task identity, what is known of each path and blob index.
+    scans: HashMap<(String, Option<String>), Scan>,
+    /// Whether each task file's version shows a completion, by blob: the
+    /// status and body it is read from are the blob's own text (TSK-1306).
+    completions: HashMap<Oid, bool>,
     /// Why no history read here is complete, when it is not.
     overlay: Option<String>,
     /// The commits a shallow clone's history is cut at.
@@ -258,6 +309,25 @@ pub(super) struct RecordStore<'r> {
     /// store judges every task of a run, so the key carries the task's
     /// whole identity: another task's proof never answers (SEC-306-03).
     introduced: HashMap<Traced, Result<Vec<Oid>, String>>,
+    /// Each judged walk's topological order ([`RecordStore::order`]).
+    orders: HashMap<(Vec<Oid>, Vec<Oid>, u32), Rc<Order>>,
+}
+
+/// One guarded walk's commits in order, and why it stopped early when it
+/// did.
+#[derive(Default)]
+struct Order {
+    commits: Vec<Oid>,
+    end: Option<(git2::ErrorCode, git2::ErrorClass, String)>,
+}
+
+impl Order {
+    /// The error the walk stopped at, when it stopped early.
+    fn end(&self) -> Option<git2::Error> {
+        self.end
+            .as_ref()
+            .map(|(code, class, message)| git2::Error::new(*code, *class, message))
+    }
 }
 
 impl<'r> RecordStore<'r> {
@@ -278,14 +348,21 @@ impl<'r> RecordStore<'r> {
             .or(boundary_problem);
         Self {
             repo,
+            records_trees: HashMap::new(),
             entries: HashMap::new(),
+            paths: Vec::new(),
+            path_index: HashMap::new(),
+            blobs: Vec::new(),
+            blob_index: HashMap::new(),
             texts: HashMap::new(),
             read: HashMap::new(),
             held: HashMap::new(),
-            spells: HashMap::new(),
+            scans: HashMap::new(),
+            completions: HashMap::new(),
             overlay,
             boundary,
             introduced: HashMap::new(),
+            orders: HashMap::new(),
         }
     }
 
@@ -295,39 +372,40 @@ impl<'r> RecordStore<'r> {
     ///
     /// Returns a message when the commit or its tree cannot be read.
     fn held_at(&mut self, commit: Oid, task: &Identity) -> Result<Held, String> {
-        let tree = self
-            .repo
-            .find_commit(commit)
-            .and_then(|commit| commit.tree())
-            .map_err(|error| format!("cannot read the tree of {commit}: {}", error.message()))?;
-        let Some(records) = tree
-            .get_name("project-management")
-            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
-            .map(|entry| entry.id())
-        else {
+        let Some(records) = self.records_tree(commit)? else {
             return Ok(Held::default());
         };
         let key = (records, task.id.clone(), task.uid.clone());
         if let Some(held) = self.held.get(&key) {
             return Ok(held.clone());
         }
-        if !self.entries.contains_key(&records) {
-            let tree = self.repo.find_tree(records).map_err(|error| {
-                format!("cannot read the records at {commit}: {}", error.message())
-            })?;
-            let found = super::acceptance::task_entries_in(self.repo, &tree)
-                .map_err(|reason| format!("cannot read the records at {commit}: {reason}"))?;
-            self.entries.insert(records, found);
-        }
-        let entries = self.entries.get(&records).cloned().unwrap_or_default();
+        let entries = self.entries_of(commit, records)?;
         let identity = (task.id.clone(), task.uid.clone());
-        let mut spells = self.spells.remove(&identity).unwrap_or_default();
+        let mut scan = self.scans.remove(&identity).unwrap_or_default();
+        scan.own.resize(self.paths.len(), Mark::Unknown);
+        scan.spells.resize(self.blobs.len(), Mark::Unknown);
         let mut held = Held::default();
-        for (path, blob) in entries {
-            let own = path
-                .rsplit('/')
-                .next()
-                .is_some_and(|name| name.eq_ignore_ascii_case(&task.own_file));
+        for &(path_at, blob_at) in entries.iter() {
+            let own = match scan.own[path_at as usize] {
+                Mark::Yes => true,
+                Mark::No => false,
+                Mark::Unknown => {
+                    let own = self.paths[path_at as usize]
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&task.own_file));
+                    scan.own[path_at as usize] = Mark::of(own);
+                    own
+                }
+            };
+            // A blob already read, and known not to spell the task, leaves
+            // a file that is not the task's own with nothing to read: the
+            // same answer the text and spelling below would give.
+            if !own && scan.spells[blob_at as usize] == Mark::No {
+                continue;
+            }
+            let path = Rc::clone(&self.paths[path_at as usize]);
+            let blob = self.blobs[blob_at as usize];
             let Some(text) = self.text(blob) else {
                 // Any task file may be this task under another name.
                 held.doubt.get_or_insert(format!(
@@ -338,7 +416,15 @@ impl<'r> RecordStore<'r> {
             // Only a file that may spell the task's id or uid can parse as
             // the task, so no other file is parsed for it. Each blob is
             // searched once per task, however many trees hold it.
-            let spelled = *spells.entry(blob).or_insert_with(|| may_spell(&text, task));
+            let spelled = match scan.spells[blob_at as usize] {
+                Mark::Yes => true,
+                Mark::No => false,
+                Mark::Unknown => {
+                    let spelled = may_spell(&text, task);
+                    scan.spells[blob_at as usize] = Mark::of(spelled);
+                    spelled
+                }
+            };
             if !(own || spelled) {
                 continue;
             }
@@ -371,7 +457,7 @@ impl<'r> RecordStore<'r> {
                 }
             }
         }
-        self.spells.insert(identity, spells);
+        self.scans.insert(identity, scan);
         if held.records.len() > 1 {
             held.doubt.get_or_insert(format!(
                 "{commit} holds {} records of {}, so which one is the task cannot be told",
@@ -381,6 +467,71 @@ impl<'r> RecordStore<'r> {
         }
         self.held.insert(key, held.clone());
         Ok(held)
+    }
+
+    /// The `project-management` tree of `commit`, read once per run;
+    /// `None` when the commit's tree has none.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the commit or its tree cannot be read.
+    fn records_tree(&mut self, commit: Oid) -> Result<Option<Oid>, String> {
+        if let Some(records) = self.records_trees.get(&commit) {
+            return Ok(*records);
+        }
+        let tree = self
+            .repo
+            .find_commit(commit)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| format!("cannot read the tree of {commit}: {}", error.message()))?;
+        let records = tree
+            .get_name("project-management")
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .map(|entry| entry.id());
+        self.records_trees.insert(commit, records);
+        Ok(records)
+    }
+
+    /// The task entries of the `records` tree at `commit`, read once per
+    /// tree, as path and blob indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the records cannot be read.
+    fn entries_of(&mut self, commit: Oid, records: Oid) -> Result<Rc<[(u32, u32)]>, String> {
+        if let Some(entries) = self.entries.get(&records) {
+            return Ok(Rc::clone(entries));
+        }
+        let tree = self
+            .repo
+            .find_tree(records)
+            .map_err(|error| format!("cannot read the records at {commit}: {}", error.message()))?;
+        let found = super::acceptance::task_entries_in(self.repo, &tree)
+            .map_err(|reason| format!("cannot read the records at {commit}: {reason}"))?;
+        let mut entries = Vec::with_capacity(found.len());
+        for (path, blob) in found {
+            let path_at = if let Some(&at) = self.path_index.get(path.as_str()) {
+                at
+            } else {
+                let at = index_of(self.paths.len())?;
+                let path: Rc<str> = Rc::from(path);
+                self.paths.push(Rc::clone(&path));
+                self.path_index.insert(path, at);
+                at
+            };
+            let blob_at = if let Some(&at) = self.blob_index.get(&blob) {
+                at
+            } else {
+                let at = index_of(self.blobs.len())?;
+                self.blobs.push(blob);
+                self.blob_index.insert(blob, at);
+                at
+            };
+            entries.push((path_at, blob_at));
+        }
+        let entries: Rc<[(u32, u32)]> = Rc::from(entries);
+        self.entries.insert(records, Rc::clone(&entries));
+        Ok(entries)
     }
 
     /// The text of `blob`, read once per run; `None` when the object
@@ -447,34 +598,15 @@ impl<'r> RecordStore<'r> {
         found.doubt.clone_from(&self.overlay);
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let walk = match history::revwalk(self.repo)
-            .map_err(unreadable)
-            .and_then(|mut walk| {
-                walk.set_sorting(git2::Sort::TOPOLOGICAL)
-                    .map_err(unreadable)?;
-                for point in push {
-                    walk.push(*point).map_err(unreadable)?;
-                }
-                for point in hide {
-                    walk.hide(*point).map_err(unreadable)?;
-                }
-                Ok(walk)
-            }) {
-            Ok(walk) => walk,
-            Err(reason) => {
-                found.doubt.get_or_insert(reason);
+        let order = match self.order(push, hide, git2::Sort::TOPOLOGICAL) {
+            Ok(order) => order,
+            Err(error) => {
+                found.doubt.get_or_insert(unreadable(error));
                 return found;
             }
         };
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
-        for commit in walk {
-            let commit = match commit {
-                Ok(commit) => commit,
-                Err(error) => {
-                    found.doubt.get_or_insert(unreadable(error));
-                    return found;
-                }
-            };
+        for &commit in &order.commits {
             if self.boundary.contains(&commit) {
                 found.doubt.get_or_insert(format!(
                     "this clone is shallow at {commit}, so the history before it cannot be read; fetch it in full (`git fetch --unshallow`)"
@@ -494,16 +626,65 @@ impl<'r> RecordStore<'r> {
             if let Some(doubt) = two_uids(task, &uids) {
                 found.doubt.get_or_insert(doubt);
             }
-            if held
-                .records
-                .iter()
-                .any(|(_, record)| super::acceptance::shows_completion(record))
-            {
+            let completions = &mut self.completions;
+            if held.records.iter().any(|(blob, record)| {
+                *completions
+                    .entry(*blob)
+                    .or_insert_with(|| super::acceptance::shows_completion(record))
+            }) {
                 found.witness = Some(commit);
                 return found;
             }
         }
+        if let Some(error) = order.end() {
+            found.doubt.get_or_insert(unreadable(error));
+        }
         found
+    }
+
+    /// The order, by `sorting`, of the history `push` reaches and `hide`
+    /// does not, walked once per run and shared by every task judged
+    /// (TSK-1306 AC-10). The first walk verifies the history at every step
+    /// as any guarded walk does; each later use verifies the history again
+    /// before it reads the stored order, so a change made since the walk
+    /// refuses as it would have.
+    ///
+    /// # Errors
+    ///
+    /// Returns the walk's error when it cannot start, or the check's when
+    /// the history changed since it ran.
+    fn order(
+        &mut self,
+        push: &[Oid],
+        hide: &[Oid],
+        sorting: git2::Sort,
+    ) -> Result<Rc<Order>, git2::Error> {
+        let key = (push.to_vec(), hide.to_vec(), sorting.bits());
+        if let Some(order) = self.orders.get(&key) {
+            history::check(self.repo)?;
+            return Ok(Rc::clone(order));
+        }
+        let mut walk = history::revwalk(self.repo)?;
+        walk.set_sorting(sorting)?;
+        for point in push {
+            walk.push(*point)?;
+        }
+        for point in hide {
+            walk.hide(*point)?;
+        }
+        let mut order = Order::default();
+        for commit in walk {
+            match commit {
+                Ok(commit) => order.commits.push(commit),
+                Err(error) => {
+                    order.end = Some((error.code(), error.class(), error.message().to_string()));
+                    break;
+                }
+            }
+        }
+        let order = Rc::new(order);
+        self.orders.insert(key, Rc::clone(&order));
+        Ok(order)
     }
 
     /// Judge the task against `judged` (the range anchor and the run's
@@ -903,24 +1084,20 @@ impl<'r> RecordStore<'r> {
     ) -> Result<Option<(Oid, Oid, RecordView)>, String> {
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
-        walk.set_sorting(git2::Sort::TOPOLOGICAL)
+        let order = self
+            .order(judged, hide, git2::Sort::TOPOLOGICAL)
             .map_err(unreadable)?;
-        for point in judged {
-            walk.push(*point).map_err(unreadable)?;
-        }
-        for point in hide {
-            walk.hide(*point).map_err(unreadable)?;
-        }
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
-        for commit in walk {
-            let commit = commit.map_err(unreadable)?;
+        for &commit in &order.commits {
             let held = self.history_at(task, commit, &mut uids)?;
             if let Some((blob, record)) = held.records.into_iter().next() {
                 return Ok(Some((commit, blob, record)));
             }
         }
-        Ok(None)
+        match order.end() {
+            Some(error) => Err(unreadable(error)),
+            None => Ok(None),
+        }
     }
 
     /// The refs outside the judged points that make the answer unknown: a
@@ -1045,15 +1222,20 @@ impl<'r> RecordStore<'r> {
             refs.push((name, short, commit.id()));
         }
         refs.sort();
-        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
-        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+        // Every task judged in a run reads the same refs outside one head,
+        // so their history is walked once ([`Self::order`]).
+        let tips: Vec<Oid> = refs.iter().map(|(_, _, tip)| *tip).collect();
+        let order = self
+            .order(
+                &tips,
+                &[head],
+                git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE,
+            )
             .map_err(unreadable)?;
-        for (_, _, tip) in &refs {
-            walk.push(*tip).map_err(unreadable)?;
+        if let Some(error) = order.end() {
+            return Err(unreadable(error));
         }
-        walk.hide(head).map_err(unreadable)?;
-        let commits = walk.collect::<Result<Vec<_>, _>>().map_err(unreadable)?;
-        for commit in commits {
+        for &commit in &order.commits {
             let found = self.held_at(commit, task)?;
             if found.records.is_empty() {
                 continue;
@@ -2417,5 +2599,263 @@ mod tests {
                 _ => panic!("overlaid history proved a landing answer"),
             }
         }
+    }
+
+    /// What a tree holds of a task, compared by value: each record's blob,
+    /// id and text, the uids, and the doubt.
+    type Shown = (Vec<(Oid, String, String)>, BTreeSet<String>, Option<String>);
+
+    /// What a tree holds of a task as the store read it before TSK-1306
+    /// AC-10: the tree read from its commit, every entry copied, each blob
+    /// read and searched afresh. The store's indexed scan must give the
+    /// same answer for every commit and task.
+    fn held_as_read_before(
+        repo: &Repository,
+        commit: Oid,
+        task: &Identity,
+    ) -> Result<Shown, String> {
+        let tree = repo
+            .find_commit(commit)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| format!("cannot read the tree of {commit}: {}", error.message()))?;
+        let Some(records) = tree
+            .get_name("project-management")
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .map(|entry| entry.id())
+        else {
+            return Ok((Vec::new(), BTreeSet::new(), None));
+        };
+        let records = repo.find_tree(records).map_err(|error| error.to_string())?;
+        let entries = super::super::acceptance::task_entries_in(repo, &records)?;
+        let mut found = Vec::new();
+        let mut uids = BTreeSet::new();
+        let mut doubt: Option<String> = None;
+        for (path, blob) in entries {
+            let own = path
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case(&task.own_file));
+            let text = repo.find_blob(blob).ok().and_then(|object| {
+                std::str::from_utf8(object.content())
+                    .ok()
+                    .map(str::to_string)
+            });
+            let Some(text) = text else {
+                doubt.get_or_insert(format!(
+                    "{path} at {commit} cannot be read, so whether it is this task cannot be told"
+                ));
+                continue;
+            };
+            if !(own || may_spell(&text, task)) {
+                continue;
+            }
+            match RecordView::parse(RecordKind::Task, &path, &text) {
+                Ok(record) => {
+                    let uid = super::super::acceptance::record_uid(&record.content);
+                    if record.id == task.id
+                        || (task.uid.is_some() && uid.as_deref() == task.uid.as_deref())
+                    {
+                        if record.id == task.id {
+                            if uid.is_some()
+                                && task.uid.is_some()
+                                && uid.as_deref() != task.uid.as_deref()
+                            {
+                                doubt.get_or_insert(format!(
+                                    "{path} at {commit} carries the id {} with another uid, so which task it is cannot be told",
+                                    task.id
+                                ));
+                            }
+                            uids.extend(uid);
+                        }
+                        found.push((blob, record.id, record.content));
+                    }
+                }
+                Err(_) => {
+                    doubt.get_or_insert(format!(
+                        "{path} at {commit} does not parse, so whether it is this task cannot be told"
+                    ));
+                }
+            }
+        }
+        if found.len() > 1 {
+            doubt.get_or_insert(format!(
+                "{commit} holds {} records of {}, so which one is the task cannot be told",
+                found.len(),
+                task.id
+            ));
+        }
+        Ok((found, uids, doubt))
+    }
+
+    /// TSK-1306 AC-10: one store shared by several tasks over a history
+    /// with merges, renames, a copy, a file that does not parse and one
+    /// that is not UTF-8 reads, for every commit and task in any order,
+    /// what each tree read alone gave before the indexed scan.
+    #[test]
+    fn a_shared_store_reads_every_task_at_every_commit_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let tasks = root.join("project-management/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        let task = |id: &str, uid: &str, status: &str, criterion: &str| {
+            format!("---\nid: {id}\nuid: {uid}\nstatus: {status}\nintegration_target: main\n---\n\n# {id}\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall {criterion}.\n")
+        };
+        let uid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let write = |name: &str, text: &[u8]| std::fs::write(tasks.join(name), text).unwrap();
+        let commit = |message: &str| {
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        };
+        for n in 1..=3 {
+            let id = format!("TSK-00{n}");
+            write(
+                &format!("{id}.md"),
+                task(&id, &uid(n), "todo", "start").as_bytes(),
+            );
+        }
+        commit("plan");
+        git(root, &["checkout", "-q", "-b", "side"]);
+        write(
+            "TSK-001.md",
+            task("TSK-001", &uid(1), "complete", "start").as_bytes(),
+        );
+        write(
+            "TSK-004.md",
+            task("TSK-004", &uid(4), "todo", "add").as_bytes(),
+        );
+        commit("side work");
+        write("TSK-009.md", b"---\nid: TSK-002\nstatus: [unclosed\n---\n");
+        commit("broken file");
+        git(root, &["checkout", "-q", "main"]);
+        write(
+            "TSK-002.md",
+            task("TSK-002", &uid(2), "complete", "change").as_bytes(),
+        );
+        std::fs::rename(tasks.join("TSK-003.md"), tasks.join("renamed.md")).unwrap();
+        commit("main work");
+        write(
+            "copy.md",
+            task("TSK-002", &uid(2), "todo", "change").as_bytes(),
+        );
+        commit("copy");
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "merge side", "side"],
+        );
+        std::fs::remove_file(tasks.join("copy.md")).unwrap();
+        std::fs::remove_file(tasks.join("TSK-009.md")).unwrap();
+        write("TSK-005.md", b"---\nid: TSK-005\nnote: caf\xff\n---\n");
+        commit("undecodable");
+        git(root, &["checkout", "-q", "-b", "late", "HEAD~2"]);
+        write(
+            "TSK-001.md",
+            task("TSK-001", &uid(1), "todo", "reopen").as_bytes(),
+        );
+        commit("reopen");
+        git(root, &["checkout", "-q", "main"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "merge late", "late"],
+        );
+
+        let repo = Repository::open(root).unwrap();
+        let mut walk = repo.revwalk().unwrap();
+        walk.push_glob("refs/heads/*").unwrap();
+        let commits: Vec<Oid> = walk.map(Result::unwrap).collect();
+        assert!(commits.len() >= 9, "{}", commits.len());
+        let identities: Vec<Identity> = (1..=6)
+            .map(|n| {
+                let id = format!("TSK-00{n}");
+                Identity::named(&id, (n != 3).then(|| uid(n)), &format!("{id}.md"))
+            })
+            .collect();
+        let shown = |held: Result<Held, String>| {
+            held.map(|held| {
+                let records = held
+                    .records
+                    .into_iter()
+                    .map(|(blob, record)| (blob, record.id, record.content))
+                    .collect::<Vec<_>>();
+                (records, held.uids, held.doubt)
+            })
+        };
+        let mut store = RecordStore::new(&repo);
+        let mut doubts = 0;
+        let mut holders = 0;
+        // Task-major, then commit-major, so the store's indices and marks
+        // are reused across tasks and across commits in both orders.
+        let order = identities
+            .iter()
+            .flat_map(|task| commits.iter().map(move |commit| (task, *commit)))
+            .chain(
+                commits
+                    .iter()
+                    .flat_map(|commit| identities.iter().map(move |task| (task, *commit))),
+            );
+        for (task, commit) in order {
+            let before = held_as_read_before(&repo, commit, task);
+            let after = shown(store.held_at(commit, task));
+            if let Ok((records, _, doubt)) = &before {
+                doubts += usize::from(doubt.is_some());
+                holders += usize::from(!records.is_empty());
+            }
+            assert_eq!(after, before, "{} at {commit}", task.id);
+        }
+        // The fixture reaches the cases it names: records held, and doubt
+        // from a file that does not parse, one that is not UTF-8 and two
+        // copies of one task.
+        assert!(
+            holders > 0 && doubts > 0,
+            "holders {holders}, doubts {doubts}"
+        );
+
+        // Judgements and recovered versions from one store shared by every
+        // task, whose walks replay a stored order, match a fresh store per
+        // task, which walks the history itself.
+        let head = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let side = repo.revparse_single("side").unwrap().id();
+        let judged = |store: &mut RecordStore<'_>, task: &Identity| {
+            let judgement = store.judge(
+                task,
+                &[head, side],
+                &Outside {
+                    head,
+                    tips: &[],
+                    at: None,
+                    own: &[],
+                    replaced: None,
+                },
+            );
+            let landing = match judgement.landing {
+                Landing::Landed { witness } => format!("landed {witness}"),
+                Landing::Planned => "planned".to_string(),
+                Landing::Unreadable(reason) => format!("unreadable {reason}"),
+                Landing::Elsewhere { holder, commit } => format!("elsewhere {holder} {commit}"),
+                Landing::Unjudged { reference, commit } => {
+                    format!("unjudged {reference} {commit}")
+                }
+            };
+            let criteria = match judgement.criteria {
+                Authority::Held(record) => format!("held {}", record.content),
+                Authority::Absent => "absent".to_string(),
+                Authority::Unknown(reason) => format!("unknown {reason}"),
+            };
+            let recovered = store
+                .recovered(task, &[head])
+                .map(|record| record.map(|record| record.content));
+            (landing, criteria, judgement.criteria_source, recovered)
+        };
+        let mut shared = RecordStore::new(&repo);
+        let mut landed = 0;
+        for task in identities.iter().chain(identities.iter().rev()) {
+            let alone = judged(&mut RecordStore::new(&repo), task);
+            landed += usize::from(alone.0.starts_with("landed"));
+            assert_eq!(judged(&mut shared, task), alone, "{}", task.id);
+        }
+        assert!(shared.orders.len() > 1, "{}", shared.orders.len());
+        assert!(landed > 0);
     }
 }

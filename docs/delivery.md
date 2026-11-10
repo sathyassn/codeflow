@@ -3,15 +3,15 @@
 <!-- Guide layer. Reader: an operator who runs agents and wants to know what
      they do alone and what they merge, and a contributor landing a change.
      Sources: cf-method/references/delivery-process.md (TSK-184, sections 1,
-     4 and 5), ADR-0076, SPC-013, docs/capabilities/CAP-010-duo-model-orchestration.md.
+     4 and 5), ADR-0076, ADR-0098, SPC-013, docs/capabilities/CAP-010-duo-model-orchestration.md.
      The method reference carries the narrative for agents; this page is the
      one home for human readers. Other guide pages point here. -->
 
 ## Concept
 
 **Work reaches `main` through one process: plan once, one pull request per
-task, one holistic review, one full gate per batch, and one pull request into
-`main` that the operator merges.**
+task, one holistic review, one full gate per batch, and a pull request into
+`main` that a person merges.**
 
 Every piece of work attaches to a task before substantive work starts, an
 existing one or a new one.
@@ -24,8 +24,18 @@ existing one or a new one.
 - Each task then goes the same way: one pull request that carries the whole
   change, one review by the other lineage, and a landing in a small batch with
   one full gate.
-- When the epic is done, one pull request carries it into `main`, and only a
-  person merges there.
+- A task pull request targets `main` when a person can merge it as it
+  becomes ready. Otherwise it lands on its epic's line, where agents merge,
+  and at every green line tip a checkpoint pull request from the line to
+  `main` is opened or refreshed for a person to merge when available
+  (ADR-0098). Only a person merges into `main`.
+- Each task or epic record changes only in its one home. A task's home is
+  the branch its `integration_target` names: its epic's line, the line a
+  standalone task targets, or `main`. An epic's home is the branch its
+  tasks target.
+- A line takes `main` only through the sync that `codeflow ci` admits
+  (TSK-1312), which never changes a record homed on the line. Until that
+  sync ships, it needs the carrying task the current checks require.
 
 This page is for the operator who runs agents and wants to know what to
 approve and merge, and for a contributor landing a change. ADR-0076 retired
@@ -63,10 +73,11 @@ From request to `main`, the work passes through the actors in this order:
       |      green: the integration line moves
       |      red: diagnose first, drop a member only on evidence
       v
-  primary    proves the epic once and raises one PR into main
-      |
+  primary    at every green line tip, opens or refreshes the
+      |      checkpoint PR into main; the last one carries the epic close
       v
-  operator   reviews and merges it; agents never merge into main
+  operator   reviews and merges it when available; agents never merge
+             into main
 ```
 
 The builder and reviewer steps repeat for each task, and the primary gates
@@ -92,11 +103,13 @@ each batch.
     new head.
   - Green moves the integration line. Red is diagnosed first, and a
     member leaves the batch only when evidence attributes the failure to it.
-  - When the last batch has landed, the primary proves the epic once on the
-    integration line, closes it and raises the one pull request into `main`.
+  - At every green line tip it opens or refreshes the checkpoint pull
+    request into `main`. When the last batch has landed, it proves the epic
+    once on the integration line and closes it, and the next checkpoint
+    carries the close.
 - **The operator** settles intent at the breakdown, decides any change of
-  intent midway, and reviews and merges that one pull request into `main`.
-  Agents never merge there.
+  intent midway, and reviews and merges each checkpoint pull request into
+  `main` when available. Agents never merge there.
 
 - A standalone pull request is its own candidate. It lands on the integration
   line it targets, or, when it targets `main`, it is the pull request the
