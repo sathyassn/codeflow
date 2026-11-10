@@ -821,7 +821,7 @@ const CHECKPOINT_HOMES: [&str; 2] = [
 ];
 
 /// TSK-416 AC-20 on the real commits: checkpoint 607 (`879a7a7f..2630d4854`,
-/// 997 commits and 383 merges) runs as hosted job 127659313186 ran it, with
+/// 997 non-merge commits and 383 merges) runs as hosted job 127659313186 ran it, with
 /// its pull request's `Task: EPC-022`. Before the fix it refused TSK-1062 as
 /// a completion outside the range, reached through `c677596d6`, an in-range
 /// merge rewriting the record; with the fix the line's completions are its
