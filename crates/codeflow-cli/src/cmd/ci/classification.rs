@@ -143,6 +143,11 @@ pub(super) enum Class {
     /// (ADR-0074); small edits land on it directly, and each nested project
     /// lands through its own repository.
     RootBranch(String),
+    /// A batch into the default target (TSK-1154 AC-16), selected by the
+    /// run (a `git.candidate_prefix` head landing on the default target
+    /// from its fetched tip), never by the body: each member's task is
+    /// read from the records at its own head.
+    MainBatch,
 }
 
 /// The existing unit whose reviewed false positive an exemption names.
@@ -275,6 +280,24 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 .into(),
         ),
     }
+}
+
+/// The class of a batch into the default target (TSK-1154 AC-16): the run
+/// selected it, and its members bind from their own records, so the body
+/// names no `Task:` line; one would name a single unit for a batch of
+/// several.
+fn main_batch_class(body: &str, tagged: &mut Vec<super::TaggedViolation>) -> Option<Class> {
+    if task_lines(body).is_empty() {
+        announce(&Class::MainBatch, None, &|_| false);
+        return Some(Class::MainBatch);
+    }
+    push(
+        tagged,
+        RULE,
+        "unclassified pull request: a batch into the default target carries no `Task:` line: each member's task is read from the records at its own reviewed head, so remove the line".to_string(),
+        HINT,
+    );
+    None
 }
 
 /// A planning amendment of `epics` (ADR-0078): each epic can be named, and
@@ -579,13 +602,14 @@ fn classification_applies(
 /// the merge-base, merge resolutions included. Returns the validated class,
 /// or `None` when the pull request was not classified.
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
+#[allow(clippy::too_many_lines)] // Linear classification steps; each rule lives in its own function.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
     body: &str,
     branch: &str,
     range: Option<&Range<'_>>,
-    release: Option<&ReleaseHead>,
+    (release, main_batch): (Option<&ReleaseHead>, bool),
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -619,6 +643,9 @@ pub(super) fn dispatch(
     }
     let files: Vec<GitName> = changes.iter().map(|(_, path)| path.clone()).collect();
     selection_check(root, branch, range, &files, tagged);
+    if main_batch {
+        return main_batch_class(body, tagged);
+    }
     let amendment_problem =
         |files: &[GitName]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
@@ -882,6 +909,9 @@ fn announce(class: &Class, line: Option<&EpicLineResult>, shown: &dyn Fn(&str) -
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
         }
+        Class::MainBatch => println!(
+            "codeflow ci: pull request class: batch into the default target (each member binds from the records at its own head)"
+        ),
         Class::Tracked { task_id } => println!(
             "codeflow ci: pull request class: tracked {} (from the Task: line)",
             if shown(task_id) { task_id } else { "the named task" }

@@ -398,6 +398,12 @@ catalog! {
     /// frozen criteria (TSK-433 AC-7).
     UNVERIFIED_LINE_FROZEN = Step::Codeflow("codeflow ci"),
         "land work on the line only by classified pull requests, and adopt each direct commit with a `line_adoptions` entry in its epic that a human reviewer approves in a planning pull request that lands on the line, so the line passes the epic-line proof; then rerun `codeflow ci`";
+    /// A criteria change this range may not make (ADR-0078, R-52): where
+    /// each kind of change lands (TSK-1154 AC-6). A task's own change rides
+    /// in its own pull request and then its landing candidate, never a
+    /// batched amendment.
+    CRITERIA_FROZEN = Step::Codeflow("codeflow ci"),
+        "a task's own criteria change lands in that task's own pull request, with a dated `- Amended YYYY-MM-DD: <what and why>` note inside each changed criterion, and reaches its line through the landing candidate, where `codeflow ci --line-tip <line>` judges each member at its own reviewed head, so it needs no separate amendment; another task's or an epic's criteria change through a planning amendment that names its epic and that a human reviewer approves (ADR-0078); a reopened task keeps its criteria; a completed standalone task's criteria text is corrected by a pull request of planning records only whose `Task:` line names it or its follow-up, keeping every criterion and tag (ADR-0080)";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
