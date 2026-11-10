@@ -324,7 +324,9 @@ fn destination_overlay(root: &Path, url: &str) -> Result<Option<String>, String>
 /// [`destination_overlay`] over `git config -z --list` output: entries end
 /// in NUL, and a key is followed by a newline and its value, or by nothing
 /// for a key with no value. Section and variable names are lowercase there;
-/// a subsection keeps its case, as git compares it.
+/// a subsection keeps its case, as git compares it. Any `remote.<url>`
+/// setting is found by the shared
+/// [`url_section_in`](super::remote_identity::url_section_in).
 fn overlay_in(listed: &[u8], url: &str) -> Option<String> {
     for entry in listed.split(|byte| *byte == 0) {
         if entry.is_empty() {
@@ -351,20 +353,8 @@ fn overlay_in(listed: &[u8], url: &str) -> Option<String> {
                 ));
             }
         }
-        if let Some(rest) = key.strip_prefix(b"remote.") {
-            let subsection = rest
-                .iter()
-                .rposition(|byte| *byte == b'.')
-                .map(|dot| &rest[..dot]);
-            if subsection == Some(url.as_bytes()) {
-                return Some(format!(
-                    "a remote configured under the name {}",
-                    display_url(url)
-                ));
-            }
-        }
     }
-    None
+    super::remote_identity::url_section_in(listed, url)
 }
 
 /// A legacy `remotes/<url>` or `branches/<url>` file in the common

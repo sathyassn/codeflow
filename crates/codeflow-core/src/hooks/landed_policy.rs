@@ -176,7 +176,10 @@ impl std::fmt::Display for Unasked {
 /// transport on the hermetic allow-list
 /// ([`crate::git::remote_identity::verify`], TSK-1184): an answer about
 /// another endpoint could label a populated remote empty and read policy
-/// from `HEAD`. The session guards
+/// from `HEAD`. The URL then passes the pre-push destination check
+/// ([`crate::git::remote_query::require_unredirected`], TSK-327 AC-6), so
+/// both callers ask only a destination validated the same way; neither
+/// configuration read honours `GIT_CONFIG`. The session guards
 /// ask it while the tracking namespace is empty, inside the harness hook
 /// timeout, so each question runs within the guard's lookup wait
 /// ([`QueryLimits::guard`](crate::git::remote_query::QueryLimits::guard)),
@@ -201,6 +204,9 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
         [url] => {
             crate::git::remote_identity::verify(root, remote, url, limits)
                 .map_err(Unasked::Identity)?;
+            // TSK-327 AC-6: the destination the pre-push query validates
+            // (AC-1) is validated here too, in the same isolated view.
+            crate::git::remote_query::require_unredirected(root, url).map_err(Unasked::Identity)?;
             crate::git::remote_query::advertises_any_ref(root, url, limits).map_err(Unasked::Query)
         }
         [] => Err(Unasked::Query(format!("{key} is not set"))),

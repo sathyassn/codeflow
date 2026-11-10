@@ -5751,6 +5751,90 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
     }
 }
 
+/// TSK-327 AC-6: a scratch adopter whose configured remote is an empty
+/// repository, while a rewrite to a populated one is included on a
+/// `gitdir` condition that a fetch through a symbolic link to the checkout
+/// applies. With `GIT_CONFIG` naming an empty file, which only `git config`
+/// reads, the identity check's listing used to miss the include, so the
+/// empty answer selected initialization policy from `HEAD` in place of the
+/// landed policy. The listing now reads what a fetch reads, so the load
+/// refuses and names the included file. Without the include the same
+/// adopter is initialization.
+#[cfg(unix)]
+#[test]
+fn ac6_a_hidden_rewrite_never_selects_initialization() {
+    let top = tempfile::tempdir().unwrap();
+    let empty = top.path().join("empty.git");
+    let populated = top.path().join("populated.git");
+    for bare in [&empty, &populated] {
+        git(
+            top.path(),
+            &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+        );
+    }
+    let real = top.path().join("real");
+    let link = top.path().join("link");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &real,
+        &["init", "--yes", "--minimal"],
+    );
+    // `init` commits the scaffold; the adopter works on a branch.
+    ok("git", &real, &["switch", "-c", "feat/ac6"]);
+    git(
+        &populated,
+        &[
+            "fetch",
+            "-q",
+            real.to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    git(&real, &["remote", "add", "origin", empty.to_str().unwrap()]);
+    let hidden = top.path().join("hidden.config");
+    std::fs::write(&hidden, "").unwrap();
+    let source = |hide: bool| {
+        let mut cmd = codeflow();
+        cmd.args(["doctor", "--check", "policy-source"])
+            .current_dir(&real);
+        if hide {
+            cmd.env("GIT_CONFIG", &hidden);
+        }
+        let out = cmd.output().unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr)
+    };
+    let control = source(true);
+    assert!(
+        control.contains("initialization: origin advertises no refs"),
+        "{control}"
+    );
+    let rewrite = top.path().join("rewrite.config");
+    std::fs::write(
+        &rewrite,
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = {}\n",
+            populated.display(),
+            empty.display()
+        ),
+    )
+    .unwrap();
+    git(
+        &real,
+        &[
+            "config",
+            &format!("includeIf.gitdir:{}/.git.path", link.display()),
+            rewrite.to_str().unwrap(),
+        ],
+    );
+    for (case, text) in [("plain", source(false)), ("hidden", source(true))] {
+        assert!(!text.contains("initialization"), "{case}: {text}");
+        assert!(text.contains("rewrite.config"), "{case}: {text}");
+        assert!(text.contains("never read from HEAD"), "{case}: {text}");
+    }
+}
+
 #[test]
 fn push_set_refuses_initialization_under_a_command_line_transport_setting() {
     // TSK-327: an empty destination is initialization only when the query

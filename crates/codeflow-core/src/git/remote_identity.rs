@@ -120,7 +120,11 @@ pub fn effective_urls(
 
 /// A git process that reads the repository at `root` with the configuration
 /// git itself would apply there: location variables cannot point it at
-/// another repository, and inherited configuration is kept on purpose.
+/// another repository, and inherited configuration is kept on purpose. The
+/// deprecated `GIT_CONFIG` file goes, as in [`super::judging_command`]: only
+/// `git config` reads it, so under it the configuration listing would not
+/// be what a fetch or push applies, and a rewrite or transport setting
+/// could hide from the checks here (TSK-327 AC-6).
 fn git_at(root: &Path) -> std::process::Command {
     let mut command = super::command();
     for variable in [
@@ -131,6 +135,7 @@ fn git_at(root: &Path) -> std::process::Command {
         "GIT_OBJECT_DIRECTORY",
         "GIT_NAMESPACE",
         "GIT_CEILING_DIRECTORIES",
+        "GIT_CONFIG",
     ] {
         command.env_remove(variable);
     }
@@ -221,8 +226,10 @@ pub const TRANSPORT_SETTINGS: &[&str] = &["vcs", "uploadpack", "receivepack"];
 /// [`TRANSPORT_SETTINGS`] in the configuration git applies at `root`, at
 /// any scope or through any include: a hermetic question of the URL would
 /// then not ask what a later fetch or push reaches. The refusal names the
-/// setting and its value (the helper or program). Owned by TSK-1184; the
-/// pre-push destination check (TSK-327) calls it for `remote.<url>`.
+/// setting and its value (the helper or program). Owned by TSK-1184. The
+/// pre-push destination check (TSK-327) does not call it: a URL given to
+/// `git ls-remote` reads every setting of its `remote.<url>` section, so
+/// that check refuses any of them through the stricter [`url_section_in`].
 ///
 /// # Errors
 ///
@@ -263,6 +270,37 @@ fn refuse_transport_settings(entries: &[Entry], subsection: &str) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// The `remote.<url>` section in `listed`, the output of `git config -z
+/// --list` (each entry is the key, then a newline and the value or nothing,
+/// then NUL), named for a message when any key sets it. `git ls-remote
+/// <url>` and `git fetch <url>` read `url` as a remote name first, so every
+/// setting of that section counts (its URL, push URL, helper, programs or
+/// fetch mapping), not only [`TRANSPORT_SETTINGS`]: this is stricter than
+/// [`require_native_transport`], which refuses only those three settings.
+/// Keys are compared as bytes; the subsection keeps its case, as
+/// git compares it. Owned with the transport check (TSK-1184); the pre-push
+/// destination check (TSK-327) calls it.
+#[must_use]
+pub fn url_section_in(listed: &[u8], url: &str) -> Option<String> {
+    for entry in listed.split(|byte| *byte == 0) {
+        let key = match entry.iter().position(|byte| *byte == b'\n') {
+            Some(at) => &entry[..at],
+            None => entry,
+        };
+        let Some(rest) = key.strip_prefix(b"remote.") else {
+            continue;
+        };
+        let subsection = rest
+            .iter()
+            .rposition(|byte| *byte == b'.')
+            .map(|dot| &rest[..dot]);
+        if subsection == Some(url.as_bytes()) {
+            return Some(format!("a remote configured under the name {}", shown(url)));
+        }
+    }
+    None
 }
 
 /// The keys a path-conditional include may not set: URL rewrites, remote
