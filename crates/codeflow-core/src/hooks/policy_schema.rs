@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 84] = [
+pub const SCHEMA: [KeySpec; 86] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -407,6 +407,16 @@ pub const SCHEMA: [KeySpec; 84] = [
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
+    KeySpec {
+        path: "git.push_budget_seconds",
+        kind: KeyKind::UInt,
+        valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
+        purpose: "How long the pre-push set may take before the hook reports the overrun, naming the slowest step and the slowest checks inside a `codeflow ci` step.",
+        notes: "Default 60. It only reports: a push over the budget still lands when its checks pass, and no check is skipped or shortened to meet it. \
+                The pre-push hook reads it from the default branch's committed policy as last fetched, never from a pushed head; with no such branch it uses the default. \
+                Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
+    },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
         path: "git.root_branch",
@@ -579,7 +589,8 @@ pub const SCHEMA: [KeySpec; 84] = [
         purpose: "Whether a matching ticket-reference trailer is REQUIRED on every commit.",
         notes: "Only meaningful when commit_ticket_keys is non-empty; `allow` \
                 behaves like `off` here (inactive); use warn or block to \
-                require. Merge/revert/fixup/squash commits are exempt.",
+                require. Merge/revert/fixup/squash commits are exempt; \
+                commit_ticket_merges opts merges in.",
     },
     KeySpec {
         path: "git.commit_ticket_pattern",
@@ -589,6 +600,18 @@ pub const SCHEMA: [KeySpec; 84] = [
         notes: "Strictly validated: an unparseable pattern is a loud error at \
                 the commit-msg hook, `codeflow ci`, and `codeflow validate` \
                 (at enforcement time it would silently fail open).",
+    },
+    KeySpec {
+        path: "git.commit_ticket_merges",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Whether a merge commit must carry a ticket-reference trailer too.",
+        notes: "Default off keeps merges exempt. warn or block judges every \
+                real merge, git's default `Merge ...` subject included, for a \
+                commit_ticket_keys trailer matching commit_ticket_pattern, in \
+                the commit-msg hook and `codeflow ci`; only meaningful when \
+                commit_ticket_keys is non-empty. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: breaking-change tripwire ------------------------------------
     KeySpec {
@@ -2064,10 +2087,13 @@ mod tests {
         assert_eq!(defaults["git"]["remote_query_timeout_seconds"], 30);
         assert_eq!(defaults["git"]["remote_query_attempts"], 3);
         assert_eq!(defaults["git"]["remote_fetch_timeout_seconds"], 120);
+        // TSK-1306: the push set budget takes the same values.
+        assert_eq!(defaults["git"]["push_budget_seconds"], 60);
         for key in [
             "remote_query_timeout_seconds",
             "remote_query_attempts",
             "remote_fetch_timeout_seconds",
+            "push_budget_seconds",
         ] {
             for value in ["1", "2", "600", "4294967296", "18446744073709551615"] {
                 let text = format!(r#"{{"git":{{"{key}":{value}}}}}"#);
