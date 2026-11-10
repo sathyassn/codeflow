@@ -2,6 +2,7 @@
 
 use clap::{ArgGroup, Args, Subcommand};
 use codeflow_core::registry::codeflow_home;
+use codeflow_core::testing::error::TestingError;
 use codeflow_core::testing::gate::{
     gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
 };
@@ -223,7 +224,16 @@ pub fn run(args: &TestArgs) -> i32 {
             }
         }
         Err(e) => {
-            eprintln!("codeflow test: {e}", e = crate::cmd::shown(&e));
+            let today = || eprintln!("codeflow test: {e}", e = crate::cmd::shown(&e));
+            if matches!(
+                e,
+                TestingError::ConfigInvalid { .. } | TestingError::UnsupportedSchemaVersion { .. }
+            ) {
+                let age = crate::cmd::binary_age(&root);
+                crate::cmd::unread_refusal("codeflow test", &age, "its test config", today);
+            } else {
+                today();
+            }
             1
         }
     }

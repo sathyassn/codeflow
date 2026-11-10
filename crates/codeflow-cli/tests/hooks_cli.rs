@@ -99,7 +99,10 @@ fn isolated_codeflow(mut cmd: Command) -> Command {
     isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        // A gate the command runs keeps its evidence under the fixture's own
+        // `target`, never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
     cmd
 }
 
@@ -2222,6 +2225,140 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// This account's home from the password database, whatever `HOME` says.
+#[cfg(unix)]
+fn password_database_home() -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut buffer = vec![0_u8; 1 << 16];
+    // SAFETY: an all-zero `passwd` is a valid plain C struct; `getpwuid_r`
+    // fills it, and `buffer` outlives every use of its strings.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &raw mut entry,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &raw mut result,
+        )
+    };
+    assert!(code == 0 && !result.is_null() && !entry.pw_dir.is_null());
+    // SAFETY: `pw_dir` is a NUL-terminated string inside `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()))
+}
+
+/// TSK-1184 delta 4: the SSH configuration allow lives in
+/// `~/.codeflow/authority/config.toml`: the edit guard refuses a Write or
+/// Edit of it, and every shipped preset denies the directory to the harness
+/// sandbox (Claude `denyWrite` and an `Edit` deny, Grok `deny`; the Codex
+/// profile is checked in `codex_config.rs`). A Bash write that spells the
+/// path in full rests on that sandbox (TSK-1386 covers it in the shell
+/// guards). The user config the allow used to live in,
+/// `~/.codeflow/config.toml`, is a file the edit guard lets an agent write,
+/// so it could not hold the allow.
+///
+/// Delta 5: while the directory does not exist, a Write under another case
+/// of it (`Authority`) is refused, since a volume that folds case opens it
+/// for the allow; and with `HOME` elsewhere, a Write of the allow under the
+/// account's home from the password database, where the reader opens it, is
+/// refused. The guard only judges these paths; nothing is written.
+#[test]
+fn agents_cannot_write_the_ssh_configuration_allow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".codeflow")).unwrap();
+    let mut wrong = Vec::new();
+    let cases = vec![
+        (home.join(".codeflow/authority/config.toml"), 2),
+        (home.join(".codeflow/Authority/config.toml"), 2),
+        (home.join(".codeflow/config.toml"), 0),
+        #[cfg(unix)]
+        (
+            password_database_home().join(".codeflow/authority/config.toml"),
+            2,
+        ),
+    ];
+    for (file, code) in cases {
+        for tool in ["Write", "Edit"] {
+            let payload = serde_json::json!({"tool_name": tool, "tool_input":{
+                "file_path": file, "content": "[policy_authority]\n",
+                "old_string": "a", "new_string": "b"}, "cwd": root})
+            .to_string();
+            let out = run_with_stdin(
+                codeflow()
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .args(["hook", "edit-guard"])
+                    .current_dir(&root),
+                &payload,
+            );
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(code) || (code == 2 && !err.contains("enforcement path")) {
+                wrong.push(format!(
+                    "edit-guard {tool} {}: exit {:?}, wanted {code}: {err}",
+                    file.display(),
+                    out.status.code(),
+                ));
+            }
+        }
+    }
+    for (name, preset) in [
+        (
+            "default",
+            include_str!("../../../assets/base/settings/default.json"),
+        ),
+        (
+            "acceptEdits",
+            include_str!("../../../assets/base/settings/acceptEdits.json"),
+        ),
+        (
+            "bypass-sandboxed",
+            include_str!("../../../assets/base/settings/bypass-sandboxed.json"),
+        ),
+    ] {
+        let preset: serde_json::Value = serde_json::from_str(preset).unwrap();
+        let listed = |list: &serde_json::Value, entry: &str| {
+            list.as_array()
+                .is_some_and(|list| list.iter().any(|item| item == entry))
+        };
+        if !listed(
+            &preset["sandbox"]["filesystem"]["denyWrite"],
+            "~/.codeflow/authority",
+        ) || !listed(
+            &preset["permissions"]["deny"],
+            "Edit(~/.codeflow/authority/**)",
+        ) {
+            wrong.push(format!(
+                "the {name} Claude preset lets agents write the authority directory"
+            ));
+        }
+    }
+    let grok = include_str!("../../../assets/base/grok/sandbox.toml");
+    let grok: toml::Value = toml::from_str(grok).unwrap();
+    for profile in ["cf-guard", "cf-guard-worktree"] {
+        let denied = grok["profiles"][profile]["deny"]
+            .as_array()
+            .is_some_and(|deny| {
+                [
+                    "/Users/*/.codeflow/authority",
+                    "/home/*/.codeflow/authority",
+                ]
+                .iter()
+                .all(|entry| deny.iter().any(|item| item.as_str() == Some(entry)))
+            });
+        if !denied {
+            wrong.push(format!(
+                "the Grok {profile} profile lets agents write the authority directory"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
@@ -6451,7 +6588,10 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
         .unwrap()
         .lines()
         .any(|line| line == "get"));
-    assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
+    // The destination answered, so no attempt waited out its timeout: the
+    // refusal is the authentication answer, never a "no answer" (TSK-1253:
+    // this was a 10 s wall-clock bound, which a loaded runner can pass).
+    assert!(!err.contains("no answer within"), "{took:?}: {err}");
     assert!(
         err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
@@ -11612,6 +11752,118 @@ fn an_automatic_merge_is_scanned_in_commit_msg() {
     // Control: the same merge whose result holds no key lands.
     std::fs::write(dir.path().join("merge-result.txt"), "merged\n").unwrap();
     let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// TSK-1350 AC-2 and AC-4: with `git.commit_ticket_merges` on, the wired
+// commit-msg hook refuses a `--no-ff` landing merge without its ticket
+// footer, for git's default subject and for an author's own, and the
+// refusal names the merge, the rule and the keys.
+#[cfg(unix)]
+#[test]
+fn a_landing_merge_without_its_ticket_footer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    init_repo(d, "integration/line");
+    write_policy(
+        d,
+        r#"{"schema_version":1,"git":{"commit_ticket_keys":["Refs"],"commit_ticket_required":"warn","commit_ticket_merges":"block"}}"#,
+    );
+    git(d, &["checkout", "-q", "-b", "task/x"]);
+    std::fs::write(d.join("thing.txt"), "thing\n").unwrap();
+    git(d, &["add", "thing.txt"]);
+    git(
+        d,
+        &["commit", "-q", "-m", "feat: add thing", "-m", "Refs: TSK-1"],
+    );
+    git(d, &["checkout", "-q", "integration/line"]);
+    wire_scan_hooks(d);
+
+    // Review F1: the one-parent exempt prefixes do not exempt a merge.
+    for subject in [
+        None,
+        Some("feat: land the thing"),
+        Some("fixup! land the thing"),
+        Some("squash! land the thing"),
+        Some("Revert \"feat: add thing\""),
+        Some("Reapply \"feat: add thing\""),
+    ] {
+        let mut args = vec!["merge", "--no-ff", "--no-edit", "task/x"];
+        if let Some(s) = subject {
+            args.extend(["-m", s]);
+        }
+        let out = run_wired_git(d, &args, None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{subject:?}: {stderr}");
+        assert!(
+            stderr.contains("policy rule git.commit_ticket_merges (block)"),
+            "{subject:?}: {stderr}"
+        );
+        let named = subject.unwrap_or("Merge branch 'task/x' into integration/line");
+        assert!(
+            stderr.contains(&format!("merge commit '{named}'")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("keys: Refs"), "{stderr}");
+        let _ = run_wired_git(d, &["merge", "--abort"], None);
+    }
+
+    // With the footer, both subject forms land.
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "Merge branch 'task/x' into integration/line",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "feat: land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "fixup! land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
     assert!(
         out.status.success(),
         "{}",

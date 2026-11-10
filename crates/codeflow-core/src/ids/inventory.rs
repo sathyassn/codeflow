@@ -65,6 +65,24 @@ pub fn code_refs(git: &Git) -> Result<Vec<(String, String)>, IdsError> {
 ///
 /// Returns an error when git fails.
 pub fn copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
+    copies_with(git, rev, &mut Uids::default())
+}
+
+/// What each record blob states as its `uid`, by blob id: `None` for a
+/// blob the batch read did not return, else the frontmatter value or the
+/// UTF-8 error that refuses it. A blob id names its bytes, so one answer
+/// serves every tree that holds the blob (TSK-1306): the branches of one
+/// repository share nearly all their record blobs, and each was read again
+/// for every branch tip.
+#[derive(Debug, Default)]
+pub struct Uids(HashMap<String, Option<Result<Option<String>, String>>>);
+
+/// [`copies_at`], reading only the blobs `uids` has not answered yet.
+///
+/// # Errors
+///
+/// Returns an error when git fails or a record is not valid UTF-8.
+pub fn copies_with(git: &Git, rev: &str, uids: &mut Uids) -> Result<Vec<Copy>, IdsError> {
     let files = git.tree(rev, &RECORD_ROOTS)?;
     let mut copies: Vec<Copy> = files
         .into_iter()
@@ -77,15 +95,30 @@ pub fn copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
             })
         })
         .collect();
-    let blobs: Vec<String> = copies.iter().map(|copy| copy.blob.clone()).collect();
-    let texts = git.blobs(&blobs)?;
+    let mut unread: Vec<String> = Vec::new();
+    let mut asked: HashSet<&str> = HashSet::new();
+    for copy in &copies {
+        if !uids.0.contains_key(&copy.blob) && asked.insert(copy.blob.as_str()) {
+            unread.push(copy.blob.clone());
+        }
+    }
+    let texts = git.blobs(&unread)?;
+    for blob in unread {
+        let answer = texts.get(&blob).map(|bytes| {
+            std::str::from_utf8(bytes)
+                .map(|text| frontmatter_value(text, "uid"))
+                .map_err(|error| error.to_string())
+        });
+        uids.0.insert(blob, answer);
+    }
     for copy in &mut copies {
-        copy.uid = match texts.get(&copy.blob) {
-            Some(bytes) => {
-                let text = std::str::from_utf8(bytes).map_err(|error| {
-                    IdsError::Git(format!("record {} is not valid UTF-8: {error}", copy.path))
-                })?;
-                frontmatter_value(text, "uid")
+        copy.uid = match &uids.0[&copy.blob] {
+            Some(Ok(uid)) => uid.clone(),
+            Some(Err(error)) => {
+                return Err(IdsError::Git(format!(
+                    "record {} is not valid UTF-8: {error}",
+                    copy.path
+                )))
             }
             None => None,
         };
@@ -100,12 +133,13 @@ pub fn copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
 /// Returns an error when git fails.
 pub fn on_every_ref(git: &Git) -> Result<Vec<RefRecords>, IdsError> {
     let mut cache: HashMap<String, Vec<Copy>> = HashMap::new();
+    let mut uids = Uids::default();
     let mut out = Vec::new();
     for (refname, sha) in code_refs(git)? {
         let copies = if let Some(copies) = cache.get(&sha) {
             copies.clone()
         } else {
-            let copies = copies_at(git, &sha)?;
+            let copies = copies_with(git, &sha, &mut uids)?;
             cache.insert(sha.clone(), copies.clone());
             copies
         };

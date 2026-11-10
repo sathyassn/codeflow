@@ -472,7 +472,7 @@ key = "land"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "land a batch on the integration line"
-action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "task PRs target `main` if a human merges each when ready, else a line; every reviewed, ready PR joins the line's candidate in dependency order; one full gate and one hosted run on the exact candidate; red: diagnose first; drop a member only when evidence blames it; green: the line takes the gated tree; open or refresh its checkpoint PR to `main`; one home per record; lines take `main` only by the admitted sync"
 see = [{ target = "cf-method", section = "Managing a body of work", must_open = true, reason = "landing modes and drift control" }]
 
 [[moment]]
@@ -480,7 +480,7 @@ key = "land"
 group = "delivery"
 tiers = ["minimal"]
 when = "land a batch on the integration line"
-action = "one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
+action = "a task PR targets `main` when a human can merge it as it becomes ready, else its epic line; one candidate per line at a time, lines in parallel, takes every PR reviewed and ready when the line lands, in dependency order; later ones join the next; a hand-resolved product hunk reopens that task's whole-unit review; one full gate and one hosted run on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree and its checkpoint PR to `main` is opened or refreshed; a record changes only in its one home, the branch its `integration_target` names (an epic: its tasks' branch); a line takes `main` only through the admitted sync, which never changes a line-homed record"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Bodies of work" }]
 
 [[moment]]
@@ -488,7 +488,7 @@ key = "close"
 group = "delivery"
 tiers = ["full"]
 when = "close an epic and open the PR to main"
-action = "prove the epic's criteria and journeys once on the final candidate, from task evidence; qualify once; `codeflow epic status <id> complete`; one PR to `main` naming the epic; the operator merges, never an agent"
+action = "prove the epic's criteria and journeys once on the final candidate, from task evidence; qualify once; `codeflow epic status <id> complete`; the checkpoint PR names the epic; the operator merges, never an agent"
 see = [{ target = "cf-ship", note = "steps 5 to 9" }]
 
 [[moment]]
@@ -496,7 +496,7 @@ key = "close"
 group = "delivery"
 tiers = ["standard"]
 when = "close a body of work and open the PR to main"
-action = "prove the body's criteria and journeys once on the final candidate, reusing settled unit evidence; one PR from the line to `main`; the operator merges, never an agent"
+action = "prove the body's criteria and journeys once on the final candidate, reusing settled unit evidence; the line's checkpoint PR to `main` carries the close; the operator merges, never an agent"
 see = [{ target = "cf-ship", note = "steps 5 to 9" }]
 
 [[moment]]
@@ -504,7 +504,7 @@ key = "close"
 group = "delivery"
 tiers = ["minimal"]
 when = "close a body of work and open the PR to main"
-action = "prove the body's criteria once on the final candidate, reusing each unit's settled evidence; one PR from the line to `main`; the operator merges, never an agent"
+action = "prove the body's criteria once on the final candidate, reusing each unit's settled evidence; the line's checkpoint PR to `main` carries the close; the operator merges, never an agent"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Protected branches" }]
 
 [[moment]]
