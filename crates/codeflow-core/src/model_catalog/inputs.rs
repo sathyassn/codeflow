@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{AnchoredAuthority, Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection};
+use super::{
+    AnchoredAuthority, Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection,
+    SCHEMA_VERSION,
+};
 
 const EMBEDDED: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -12,8 +15,9 @@ const RESOURCE: &str = "skills/cf-model-orchestrator/resources/current-ensemble.
 /// Read the installed managed catalog, falling back to the shipped catalog.
 ///
 /// # Errors
-/// Rejects unreadable or invalid catalogs, including any schema other than 5;
-/// never falls back past invalid data.
+/// Rejects unreadable or invalid catalogs, including any schema other than
+/// [`SCHEMA_VERSION`]; an earlier schema names `codeflow update`. Never falls
+/// back past invalid data.
 pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
     for prefix in [".agents", ".claude"] {
         let path = root.join(prefix).join(RESOURCE);
@@ -22,22 +26,13 @@ pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
                 let schema = serde_json::from_slice::<serde_json::Value>(&bytes)
                     .ok()
                     .and_then(|value| value["schema_version"].as_u64());
-                if schema.is_some_and(|version| version < 5) {
-                    format!(
-                        "{}: installed model catalog predates schema 5; run `codeflow update`",
+                match schema {
+                    Some(version) if version < SCHEMA_VERSION => format!(
+                        "{}: installed model catalog is schema {version}, which predates \
+                         schema {SCHEMA_VERSION}; run `codeflow update`",
                         path.display()
-                    )
-                } else if error.contains("missing field `") {
-                    // A schema 5 catalog from an earlier release lacks a
-                    // field this release added (TSK-1292: `launch`, seat
-                    // `effort` and `high_when`, `effort_floors`).
-                    format!(
-                        "{}: {error}; the installed model catalog predates this CodeFlow \
-                         release; run `codeflow update`",
-                        path.display()
-                    )
-                } else {
-                    error
+                    ),
+                    _ => error,
                 }
             });
         }

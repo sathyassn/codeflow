@@ -438,7 +438,7 @@ fn assert_update_round_trips(root: &Path) {
     );
 }
 
-/// TSK-085: the scaffolded catalog is the managed schema 5 roster and the
+/// TSK-085: the scaffolded catalog is the managed schema 6 roster and the
 /// model-bindings check accepts it after an update. A designated roster
 /// without full-suite records is advisory (WARN), never a failure.
 fn assert_model_bindings_after_update(root: &Path) {
@@ -1554,6 +1554,87 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
         format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
     )
     .unwrap();
+}
+
+/// The shipped catalog in the schema 5 shape an earlier release installed:
+/// no line `launch`, no seat `effort` or `high_when`, no `effort_floors`.
+fn schema_5_catalog() -> String {
+    let mut catalog: serde_json::Value = serde_json::from_str(&read(
+        &repo_root(),
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .unwrap();
+    catalog["schema_version"] = 5.into();
+    catalog.as_object_mut().unwrap().remove("effort_floors");
+    for line in catalog["lines"].as_array_mut().unwrap() {
+        line.as_object_mut().unwrap().remove("launch");
+    }
+    for seat in catalog["seats"].as_array_mut().unwrap() {
+        let seat = seat.as_object_mut().unwrap();
+        seat.remove("effort");
+        seat.remove("high_when");
+    }
+    format!("{}\n", serde_json::to_string_pretty(&catalog).unwrap())
+}
+
+/// TSK-1292 AC-6 (upgrade): a project an earlier release set up with the
+/// schema 5 catalog upgrades its binary. `models resolve` and doctor refuse
+/// the catalog, naming both schemas and `codeflow update`; after the update
+/// the catalog is the shipped one and resolve returns the new defaults.
+#[test]
+fn an_upgrade_refuses_a_schema_5_catalog_until_codeflow_update() {
+    const REFUSAL: &str =
+        "installed model catalog is schema 5, which predates schema 6; run `codeflow update`";
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--standard"]);
+    assert!(init.status.success(), "{}", output_text(&init));
+    let older = schema_5_catalog();
+    for tree in [".agents", ".claude"] {
+        record_as_installed(
+            &root,
+            &format!("{tree}/skills/cf-model-orchestrator/resources/current-ensemble.json"),
+            Some(&older),
+        );
+    }
+
+    let resolve = [
+        "models",
+        "resolve",
+        "--duty",
+        "unit-review",
+        "--host",
+        "claude-code",
+    ];
+    let refused = codeflow(&root, &[&resolve[..], &["--author", "claude"]].concat());
+    assert_eq!(refused.status.code(), Some(2), "{}", output_text(&refused));
+    assert!(
+        output_text(&refused).contains(REFUSAL),
+        "{}",
+        output_text(&refused)
+    );
+    let doctor = codeflow(&root, &["doctor", "--check", "model-bindings"]);
+    assert!(!doctor.status.success(), "{}", output_text(&doctor));
+    assert!(
+        output_text(&doctor).contains(REFUSAL),
+        "{}",
+        output_text(&doctor)
+    );
+
+    let update = codeflow(&root, &["update"]);
+    assert!(update.status.success(), "{}", output_text(&update));
+    let resolved = codeflow(
+        &root,
+        &[&resolve[..], &["--author", "claude", "--json"]].concat(),
+    );
+    assert!(resolved.status.success(), "{}", output_text(&resolved));
+    let result: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    let first = &result["participants"][0];
+    assert_eq!(first["seat"], "codex-primary");
+    assert_eq!(first["pinned_id"], "gpt-6.1-sol");
+    assert_eq!(first["effort"], "medium");
+    assert_model_bindings_after_update(&root);
 }
 
 /// The installed doctrine sentences a fresh scaffold must carry.
@@ -3130,6 +3211,22 @@ fn design_owner_lines(root: &Path) -> (String, String, String, Vec<String>) {
     (owner, first, second, versions)
 }
 
+/// Record both installed catalogs with `line` at `launch: either`, as an
+/// unmodified install, so a later `codeflow update` restores them cleanly.
+fn launch_line_as_either(root: &Path, line: &str) {
+    for tree in [".agents", ".claude"] {
+        let rel = format!("{tree}/skills/cf-model-orchestrator/resources/current-ensemble.json");
+        let mut catalog: serde_json::Value = serde_json::from_str(&read(root, &rel)).unwrap();
+        for entry in catalog["lines"].as_array_mut().unwrap() {
+            if entry["id"] == line {
+                entry["launch"] = "either".into();
+            }
+        }
+        let text = format!("{}\n", serde_json::to_string_pretty(&catalog).unwrap());
+        record_as_installed(root, &rel, Some(&text));
+    }
+}
+
 /// Commit, through the scaffolded hooks, a schema 2 selection naming
 /// `second` co-owner and a task record targeting `integration/design`.
 fn commit_design_authority(root: &Path, owner: &str, first: &str, second: &str) -> String {
@@ -3211,6 +3308,10 @@ fn resolve_json(root: &Path, duty: &str, extra: &[String]) -> serde_json::Value 
 fn a_fresh_project_resolves_design_to_its_committed_co_owner() {
     let (_tmp, root) = fresh("--standard");
     let (owner, first, second, first_versions) = design_owner_lines(&root);
+    // The shipped second line is `launch: subagent-only` (TSK-1292), so it
+    // never fills the seat; a project override (TSK-1294) may move it to
+    // `either`. Stand in for that override with the installed catalog.
+    launch_line_as_either(&root, &second);
     let selection = commit_design_authority(&root, &owner, &first, &second);
 
     let exclusions: Vec<String> = first_versions

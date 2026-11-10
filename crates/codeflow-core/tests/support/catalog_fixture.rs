@@ -40,7 +40,7 @@ pub fn fixture() -> Value {
     );
     second["label"] = json!("second-opinion");
     json!({
-        "schema_version":5,"policy_id":"fictional-pair",
+        "schema_version":6,"policy_id":"fictional-pair",
         "families":[
             {"id":"orchid","provider":"anthropic","lineage":"claude","harnesses":["claude-code"],"probes":["claude-cli-version"],"usage_bucket":"orchid-bucket"},
             {"id":"quartz","provider":"openai","lineage":"codex","harnesses":["codex-cli","codex-app"],"probes":["codex-cli-version"],"usage_bucket":"quartz-bucket"},

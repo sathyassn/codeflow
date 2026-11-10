@@ -46,13 +46,13 @@ fn assert_invalid(mut change: impl FnMut(&mut Value), reason: &str) {
 }
 
 #[test]
-fn schema_five_roundtrip_is_valid() {
+fn schema_six_roundtrip_is_valid() {
     let catalog = catalog();
     assert_eq!(
         Catalog::parse(&serde_json::to_vec(&catalog).unwrap())
             .unwrap()
             .schema_version,
-        5
+        6
     );
 }
 #[test]
@@ -1140,9 +1140,28 @@ fn schema_four_is_rejected_after_the_managed_switch() {
         .join(".agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(load_catalog(dir.path())
-        .unwrap_err()
-        .ends_with("installed model catalog predates schema 5; run `codeflow update`"));
+    assert!(load_catalog(dir.path()).unwrap_err().ends_with(
+        "installed model catalog is schema 4, which predates schema 6; run `codeflow update`"
+    ));
+}
+
+#[test]
+fn schema_five_is_refused_with_the_update_hint() {
+    let mut five = fixture();
+    five["schema_version"] = json!(5);
+    assert_eq!(
+        parse(&five).unwrap_err(),
+        "unsupported model catalog schema 5"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join(".agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&five).unwrap()).unwrap();
+    assert!(load_catalog(dir.path()).unwrap_err().ends_with(
+        "installed model catalog is schema 5, which predates schema 6; run `codeflow update`"
+    ));
 }
 
 #[test]

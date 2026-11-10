@@ -755,7 +755,7 @@
     ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "217106f28082fa5cd72bc84ba80919c0c6392f5db7abe1d6178ec280d680747a",
+      "sha256": "e1ae6d8803d5d26827a01c8e141b03f37f1033584f81bf3e22794374ca3854d0",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -2117,7 +2117,7 @@
     ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "217106f28082fa5cd72bc84ba80919c0c6392f5db7abe1d6178ec280d680747a",
+      "sha256": "e1ae6d8803d5d26827a01c8e141b03f37f1033584f81bf3e22794374ca3854d0",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {

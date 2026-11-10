@@ -1,4 +1,4 @@
-//! Schema 5 model catalog and deterministic duty resolution (ADR-0069).
+//! The managed model catalog and deterministic duty resolution (ADR-0069).
 //!
 //! This module reads data only. It never launches, probes, reads a clock, or
 //! authenticates an operator. Callers supply fresh native facts and anchored
@@ -32,7 +32,14 @@ pub use resolve::{
 };
 pub use selection::{BindingReference, ProjectSelection};
 
-/// Managed schema 5 data. Load through [`Catalog::parse`] before resolving.
+/// The managed catalog schema this binary reads. Schema 6 (TSK-1292) adds
+/// each line's `launch`, each seat's `effort` and `high_when`, and the
+/// catalog's `effort_floors`; an earlier schema is refused until
+/// `codeflow update` installs the current catalog.
+pub const SCHEMA_VERSION: u64 = 6;
+
+/// Managed catalog data at [`SCHEMA_VERSION`]. Load through
+/// [`Catalog::parse`] before resolving.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {

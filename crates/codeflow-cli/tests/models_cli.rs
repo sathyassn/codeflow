@@ -643,7 +643,7 @@ fn models_input_errors_use_stderr_and_exit_two() {
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8(output.stderr).unwrap().contains(reason));
     }
-    fixture.catalog(&json!({"schema_version":5}));
+    fixture.catalog(&json!({"schema_version":6}));
     let output = fixture.run("design", "none", &[]);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());

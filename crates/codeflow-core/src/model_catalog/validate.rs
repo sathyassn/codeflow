@@ -49,7 +49,7 @@ impl Catalog {
     /// # Errors
     /// Rejects unsupported native metadata and contradictory routing policy.
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 5 {
+        if self.schema_version != super::SCHEMA_VERSION {
             return Err(format!(
                 "unsupported model catalog schema {}",
                 self.schema_version

@@ -90,7 +90,7 @@ binding. Promotion still requires the complete full suite.
 
 ## Note (2026-09-25)
 
-Layer 4 is now the schema 5 model catalog (ADR-0069): families, product lines
+Layer 4 is now the model catalog (ADR-0069; schema 6 since TSK-1292): families, product lines
 with ordered versions, seats and duties, still one fully managed
 `current-ensemble.json`. It owns pinned ids, efforts and triggers in place of
 primary selectors and internal worker classes. A designation is not a

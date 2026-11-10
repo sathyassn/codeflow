@@ -134,7 +134,8 @@ not a promoted qualified binding.
 
 ## Note (2026-09-25)
 
-Item 2 is restated by ADR-0069. The managed catalog is schema 5; the standing
+Item 2 is restated by ADR-0069. The managed catalog is ADR-0069's (schema 6
+since TSK-1292); the standing
 seats are `claude-primary` and `codex-primary`; seat `grok-primary` serves its
 product line, whose current version is in ADR-0069's roster. The version named
 in item 2 is retired. Grok joins a review as a triggered participant on the

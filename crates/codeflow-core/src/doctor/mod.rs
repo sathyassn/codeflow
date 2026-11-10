@@ -1740,7 +1740,7 @@ fn check_config(opts: &Options) -> CheckResult {
     }
 }
 
-/// Validate the schema 5 catalog, the personal overlay, promoted binding
+/// Validate the managed catalog, the personal overlay, promoted binding
 /// records and the project selection, then report illustrative resolutions
 /// and the live drift signals that are observable without launching a model.
 ///
@@ -4637,7 +4637,7 @@ mod tests {
         opts.qualification_dir = Some(directory.path().to_path_buf());
         let result = check_model_bindings(&opts);
         // The unobservable binding alone is a note (DOCTOR_CANARY). The
-        // managed schema 5 catalog adds its standing warning until each
+        // managed catalog adds its standing warning until each
         // designated version has a full-suite record (ADR-0069), and a
         // warning outranks a note, so the check warns and still names the
         // binding doctor cannot probe.

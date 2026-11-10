@@ -21,8 +21,8 @@ fn opts(root: &Path) -> Options {
         project_dir: root.to_string_lossy().into_owned(),
         codeflow_home: Some(root.join("personal")),
         qualification_dir: Some(root.join("personal/qualified-bindings")),
-        look_path: Some(|_| panic!("schema 5 diagnostics must not probe")),
-        exec_command: Some(|_, _| panic!("schema 5 diagnostics must not launch")),
+        look_path: Some(|_| panic!("catalog diagnostics must not probe")),
+        exec_command: Some(|_, _| panic!("catalog diagnostics must not launch")),
         ..Options::default()
     }
 }
@@ -74,7 +74,7 @@ fn doctor_catalog_rows_and_advisory_warnings_without_launching() {
             );
         }
     }
-    // Schema 5 has no author facts here; a review gap is illustrative, not a
+    // The catalog has no author facts here; a review gap is illustrative, not a
     // configuration error. Warnings remain non-failing.
     assert!(result.message.contains("claude-code unit-review: open"));
 }
@@ -82,7 +82,7 @@ fn doctor_catalog_rows_and_advisory_warnings_without_launching() {
 #[test]
 fn doctor_catalog_overlay_and_project_violations_fail_closed() {
     let cases = [
-        (CATALOG, r#"{"schema_version":5}"#),
+        (CATALOG, r#"{"schema_version":6}"#),
         (
             "personal/model-catalog.local.json",
             r#"{"schema_version":1,"additions":[],"exclusions":["unknown"]}"#,

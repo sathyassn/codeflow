@@ -27,8 +27,8 @@ to schema 5 with the roster below, accepted 2026-09-25.
 
 ## Decision
 
-Keep the managed file name `current-ensemble.json`. Schema 5 describes
-families, ordered product versions, seats and duties. The engine returns data
+Keep the managed file name `current-ensemble.json`. Schema 5 (schema 6
+since TSK-1292; see the note of 2026-11-10) describes families, ordered product versions, seats and duties. The engine returns data
 and gaps; it never launches a model, probes availability or reads a clock.
 
 ```text
@@ -358,3 +358,22 @@ same-family approval never fills the independent review, and a standing
 review adds a named, labelled participant, so an extra family never votes
 silently. With no file or a schema 1 file every duty resolves exactly as
 before.
+
+## Note (2026-11-10)
+
+TSK-1292 moves the managed catalog to schema 6, applying the operator's
+model defaults of 2026-11-03. The model usage rules the orchestrator skill
+stated as prose are now catalog fields:
+
+- `launch` on each product line: `seat`, `subagent-only` or `either`. A
+  `subagent-only` line never fills a seat, and the refusal names the field.
+- `effort` on each seat: its default and its floor. `high_when` on each
+  seat: the named policies or trigger facts that raise it to high.
+- `effort_floors`: the floor for each worker duty, with a required
+  `default`. It replaces the floors the engine held as constants.
+
+A binary at schema 6 refuses a schema 5 file with a message that names
+both schemas and `codeflow update`; the update installs the current
+catalog. The user's harness choice of model and effort applies over the
+resolved suggestion; `codeflow models resolve --effective` records it in
+the sessions ledger and never re-launches a session.
