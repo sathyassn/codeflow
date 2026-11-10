@@ -27,6 +27,7 @@ mod codex_profile;
 mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
+mod instruction_overrides;
 mod remote_perimeter;
 mod sandbox;
 mod startup_files;
@@ -111,6 +112,11 @@ type UpdatePlanFn =
         &str,
     ) -> Result<Option<crate::scaffold::update::Decision>, crate::scaffold::ScaffoldError>;
 
+/// Callback that says which project overrides `codeflow update` would apply
+/// to the project at a root, checked as update checks them (TSK-1302).
+type OverridePlanFn =
+    fn(&Path) -> Result<crate::scaffold::overrides::Plan, crate::scaffold::ScaffoldError>;
+
 /// How a run ended: its exit code (`None` when a signal ended it) and what
 /// it printed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,6 +154,10 @@ pub struct Options {
     /// embedded assets. `None` says no file is repaired, so each gets the
     /// hand edit.
     pub update_plan: Option<UpdatePlanFn>,
+    /// The project overrides `codeflow update` would apply, by update's own
+    /// check against the shipped kernel, floor list and skills; the CLI
+    /// supplies it from its embedded assets. `None` checks no overrides.
+    pub override_plan: Option<OverridePlanFn>,
     /// The path the running doctor was started from, only to report
     /// whether PATH resolves `codeflow` elsewhere; never executed.
     pub codeflow_exe: Option<PathBuf>,
@@ -317,6 +327,7 @@ const CHECK_NAMES: &[&str] = &[
     "ci-perimeter",
     "remote-perimeter",
     "managed-drift",
+    "overrides",
     "customization",
     "instructions",
     "reading",
@@ -357,6 +368,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("remote-perimeter", remote_perimeter::check);
     m.insert("managed-drift", check_managed_drift);
+    m.insert("overrides", instruction_overrides::check);
     m.insert("customization", check_customization);
     m.insert("instructions", check_instructions);
     m.insert("reading", check_reading);
@@ -3641,8 +3653,21 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         else {
             continue;
         };
-        if sha256_hex(block.as_bytes()) != file.sha256 {
-            drifted.push(dest.clone());
+        let block_sha = sha256_hex(block.as_bytes());
+        if block_sha == file.sha256 {
+            continue;
+        }
+        // A block with project overrides applied matches its override
+        // record's effective hash, not the shipped one (TSK-1302).
+        match crate::scaffold::overrides::Record::read(&root, dest) {
+            Ok(Some(record))
+                if record.effective_sha256 == block_sha
+                    && record.pristine_sha256 == file.sha256 => {}
+            Ok(_) => drifted.push(dest.clone()),
+            Err(error) => {
+                let path = root.join(crate::scaffold::overrides::record::record_path(dest));
+                return input_failure("managed-drift", start, &path, error);
+            }
         }
     }
 
@@ -4513,7 +4538,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 26);
+        assert_eq!(check_names().len(), 27);
     }
 
     #[test]

@@ -794,6 +794,9 @@ catalog! {
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
         "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";
+    /// Project overrides declared but not yet applied (TSK-1302).
+    DOCTOR_OVERRIDES_PENDING = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which applies the overrides declared in .codeflow/overrides.toml and records what each replaces; then `codeflow doctor --check overrides` confirms it";
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";

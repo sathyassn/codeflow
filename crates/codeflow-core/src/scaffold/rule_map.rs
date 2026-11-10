@@ -206,15 +206,48 @@ pub enum BlockKind {
 }
 
 /// One always rule: a single line with at least one pointer.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
+    /// What the project override route may do with this rule (TSK-1302);
+    /// `None` is never overridden, and the shipped kernel has none.
+    #[serde(default)]
+    pub class: Option<UnitClass>,
+    /// Why a `fixed` rule is not an override target.
+    #[serde(default)]
+    pub fixed_reason: Option<String>,
     #[serde(default)]
     pub tiers: Option<Vec<Tier>>,
     pub title: String,
     pub text: String,
     pub see: Vec<String>,
+}
+
+/// The class a managed instruction unit declares for the project override
+/// route (TSK-1302). Only `Overridable` can be the target of an override;
+/// a unit with no class is treated like `Fixed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitClass {
+    /// States a floor named in `instruction-floors.toml`.
+    Floor,
+    /// Not a text-override target, for a recorded reason.
+    Fixed,
+    /// A project may replace it through `.codeflow/overrides.toml`.
+    Overridable,
+}
+
+impl UnitClass {
+    /// The class's name as the kernel and the section markers spell it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Floor => "floor",
+            Self::Fixed => "fixed",
+            Self::Overridable => "overridable",
+        }
+    }
 }
 
 /// Which of the map's two tables a moment row belongs to.
@@ -234,10 +267,16 @@ pub const DELIVERY_LEAD: &str = "Delivery, in the order work moves:";
 pub const SITUATION_LEAD: &str = "Situations that cut across stages:";
 
 /// One row of the "when you are about to" table.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Moment {
     pub key: String,
+    /// What the project override route may do with this row (TSK-1302).
+    #[serde(default)]
+    pub class: Option<UnitClass>,
+    /// Why a `fixed` row is not an override target.
+    #[serde(default)]
+    pub fixed_reason: Option<String>,
     pub group: Group,
     #[serde(default)]
     pub tiers: Option<Vec<Tier>>,
@@ -516,6 +555,17 @@ impl Kernel {
         }
     }
 
+    /// One moment as its rendered table row.
+    #[must_use]
+    pub fn render_moment(moment: &Moment) -> String {
+        format!(
+            "| {} | {} | {} |",
+            moment.when,
+            moment.action,
+            render_moment_pointers(&moment.see)
+        )
+    }
+
     fn render_moments(&self, tier: Tier, out: &mut String) {
         let rows = self.moments_for(tier);
         let mut first = true;
@@ -537,13 +587,8 @@ impl Kernel {
                 "{lead}\n\n| About to | Do this | Read |\n|---|---|---|\n"
             );
             for moment in group_rows {
-                let _ = writeln!(
-                    out,
-                    "| {} | {} | {} |",
-                    moment.when,
-                    moment.action,
-                    render_moment_pointers(&moment.see)
-                );
+                out.push_str(&Self::render_moment(moment));
+                out.push('\n');
             }
         }
     }
@@ -609,6 +654,8 @@ mod tests {
     fn a_rule_renders_as_one_line_with_its_pointers() {
         let rule = Rule {
             id: "x".into(),
+            class: None,
+            fixed_reason: None,
             tiers: None,
             title: "Title.".into(),
             text: "Text.".into(),

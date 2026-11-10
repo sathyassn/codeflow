@@ -208,6 +208,13 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
         "a managed destination and its pending record",
     ),
     (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "dest_shown",
+        "path",
+        1,
+        "a managed destination an override applies to",
+    ),
+    (
         "crates/codeflow-core/src/scaffold/update.rs",
         "decide",
         "path",

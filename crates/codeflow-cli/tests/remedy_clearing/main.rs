@@ -235,6 +235,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
+    ("DOCTOR_OVERRIDES_PENDING", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
@@ -3228,6 +3229,27 @@ fn clears_doctor_managed_drift() {
             run_printed(&root, &step, &[], &[]);
         },
     );
+}
+
+#[test]
+fn clears_doctor_overrides_pending() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    write(
+        &root,
+        ".codeflow/overrides.toml",
+        "schema_version = 1\n\n[[override]]\ntarget = \"rule:outcome\"\ntext = \"Name the result and who uses it.\"\n",
+    );
+    prove(
+        "DOCTOR_OVERRIDES_PENDING",
+        "not yet applied",
+        || doctor(&root, "overrides"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_OVERRIDES_PENDING", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+    assert!(read(&root, "AGENTS.md").contains("Name the result and who uses it."));
 }
 
 #[test]

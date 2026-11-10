@@ -1,0 +1,36 @@
+# The floors a project override can never reach (TSK-1302).
+#
+# `codeflow update` and `codeflow doctor` read this list before any override
+# in `.codeflow/overrides.toml`: an override that names a unit listed here is
+# refused with the floor's name and refusal, and nothing is written.
+#
+# Each unit is a declared name: `rule:<id>` or `moment:<key>` from
+# `rule-map.toml`, or `<skill>#<section-id>` from a managed skill's
+# `<!-- codeflow:section ... -->` marker. Every unit listed here carries
+# `class = "floor"` in the shipped text, and every unit classed `floor` is
+# listed here exactly once; the `instruction_overrides_contract` test fails
+# the build when the two disagree.
+#
+# Adding a floor is one `[[floor]]` entry plus classing its units `floor`;
+# the refusal tests read this list, so no code changes. This file is not
+# installed into projects.
+
+schema_version = 1
+
+[[floor]]
+name = "the git floor"
+refusal = "the git floor is never overridden: its rules, refusals and protected-branch duties stay as shipped"
+units = [
+  "rule:git",
+  "rule:forge-identity",
+  "moment:refusal",
+  "moment:secret",
+]
+
+[[floor]]
+name = "the non-relaxable command class"
+refusal = "the non-relaxable command class is never overridden: approval never unlocks it, and no override relaxes it"
+units = [
+  "rule:authority",
+  "moment:standing-rule",
+]

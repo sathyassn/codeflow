@@ -452,6 +452,72 @@ set is kept.
 | `git.work_planning` | `block` or `warn`, default `block` | The level at which `work start` and `codeflow ci` report the planning checks: a valid workgraph, a record for the task the branch carries, and that record anchored on its target. Pre-commit does not run them |
 | `git.conflict_markers` | default `block` | Reported as added. The pre-commit hook and `codeflow ci` refuse an unresolved conflict marker on a line a change adds to a text file; existing lines are not judged. A file that must hold markers, such as a test fixture or a page about git, sets `conflict-marker-size` for its path in `.gitattributes` to a length its markers do not have. A team that wants a softer start sets the key to `warn` or `off` in a reviewed policy change |
 
+### Override managed instructions
+
+A project can replace a managed always rule, a row of the "When you are
+about to" table, or a declared skill section, and keep the replacement
+through every `codeflow update`. Declare it in `.codeflow/overrides.toml`,
+which update never writes:
+
+```toml
+schema_version = 1
+
+[[override]]
+target = "rule:outcome"            # an always rule: `text` and/or `title`
+text = "Name the result and who uses it; our release notes are the evidence."
+
+[[override]]
+target = "moment:release"          # a table row: `action`
+action = "follow RELEASING.md; agents never publish or move tags"
+
+[[override]]
+target = "cf-present#completion"   # a declared skill section: `body`
+body = """
+Post the handoff line in the team channel and link the page.
+"""
+```
+
+Names come only from the shipped text of the binary you run: the rule and
+moment ids in the rule-map kernel, and the `<!-- codeflow:section id=...
+class=... -->` markers in the managed skills. Each unit declares a class:
+
+| Class | What an override of it does |
+|---|---|
+| `overridable` | Applied. A row override replaces fields, so the row's pointers stay shipped; a section override replaces the body, and the marker and heading stay shipped |
+| `fixed` | Refused with the unit's reason. The review rows are fixed: review policy is configured in `.codeflow/model-selection.json`, never by rewriting review text |
+| `floor` | Refused with the floor's name. The git floor and the non-relaxable command class are never overridden |
+
+Update checks the whole file before it writes anything, and any problem
+refuses the whole update with nothing applied: a floor or fixed unit, a name
+this version does not declare (removed, renamed or never shipped), the same
+unit twice, a row value of more than one line or holding marker text, a
+section body that would end the section early, hold a codeflow marker or
+leave a code fence open, an unknown field, or a result that would change
+anything outside the targeted units. Retarget or remove the entry it names
+and rerun.
+
+- Update merges your hand edits against the shipped text with your
+  overrides applied, so an override is never read as a hand edit and a hand
+  edit is never folded into the overrides. The record of what each override
+  replaced sits beside the baseline at
+  `.codeflow/.baseline/<file>.overrides.json`.
+- Each overridden write is journaled in `.codeflow/.pending-update/` first.
+  After an interruption, the next update finishes a write that landed, drops
+  one that did not, and refuses any other state without writing.
+- Removing an entry restores the shipped text on the next update.
+- `codeflow doctor --check overrides` lists each override with the shipped
+  text it replaces, warns while an override is not yet applied, and fails
+  with update's refusal.
+
+`[scaffold] ignore` in `.codeflow/project.toml` stops update from managing a
+whole file. It is not an override: it names no unit, keeps no floor and
+takes no shipped change, and `codeflow update` lists the file as ignored.
+
+To declare a new section in a shipped skill, add the marker on the line
+directly above its heading, with a class, in `assets/base/agents/skills/`;
+the `instruction_overrides_contract` test refuses a marker without a class,
+a nested section, and an `overridable` section holding floor text.
+
 ### Refusals and operator relief
 
 Agent sessions are judged by the landed policy on the remote, so a local
