@@ -187,6 +187,17 @@ pub fn shown(version: &str) -> String {
     }
 }
 
+/// The `scaffold_version` a project state pins, if any.
+pub(crate) fn pinned(state: &str) -> Result<Option<String>, String> {
+    let value: toml::Value =
+        toml::from_str(state).map_err(|error| format!("cannot parse state: {error}"))?;
+    Ok(value
+        .get("scaffold_version")
+        .and_then(toml::Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string))
+}
+
 /// One-line warning when the project's scaffold is behind the binary.
 /// Quiet (None) when the project is uninitialized or up to date.
 #[must_use]

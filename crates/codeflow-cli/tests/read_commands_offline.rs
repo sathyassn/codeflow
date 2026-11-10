@@ -38,6 +38,11 @@ fn with_env<'c>(command: &'c mut Command, trap: Option<&Path>) -> &'c mut Comman
             )),
     )
     .expect("joinable PATH");
+    // The journey plays a human: a marker inherited from an agent session
+    // would apply the agent-only rules to its commits.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
     command
         .env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)

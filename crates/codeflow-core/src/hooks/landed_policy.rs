@@ -128,7 +128,10 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
             Ok(true) => Err(format!(
                 "cannot read the policy authority: {remote} has refs but refs/remotes/{remote}/ holds none here; run git fetch {remote}"
             )),
-            Err(why) => Err(format!(
+            Err(Unasked::Identity(why)) => Err(format!(
+                "cannot read the policy authority: refs/remotes/{remote}/ holds no refs and the remote cannot be verified: {why}; the policy is never read from HEAD while it cannot"
+            )),
+            Err(Unasked::Query(why)) => Err(format!(
                 "cannot read the policy authority: refs/remotes/{remote}/ holds no refs and {remote} could not be asked whether it has any ({why}); run git fetch {remote} (git waits on its own terms, outside the guard); once its refs are here the guards read the policy locally and ask {remote} nothing"
             )),
         };
@@ -146,38 +149,62 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
     Ok(landed)
 }
 
+/// Why [`advertises_refs`] did not get an answer.
+enum Unasked {
+    /// The configured remote is not the one git fetches from and pushes to,
+    /// or its transport is outside the hermetic allow-list (TSK-1184).
+    Identity(String),
+    /// The URL could not be read or the remote could not be asked.
+    Query(String),
+}
+
+impl std::fmt::Display for Unasked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Identity(why) | Self::Query(why) => f.write_str(why),
+        }
+    }
+}
+
 /// Whether `remote` advertises any ref, asked at its one configured URL.
 /// The URL comes from the repository's configuration, so the question runs
 /// no configured command (see
 /// [`crate::git::remote_query::advertises_any_ref`]); a remote with no URL,
-/// several URLs, or one that is not UTF-8 is not asked. The session guards
+/// several URLs, or one that is not UTF-8 is not asked. Before it is asked,
+/// the URL must be the one git itself fetches from and pushes to, after
+/// `insteadOf`, `pushInsteadOf`, `pushurl` and include files, and use a
+/// transport on the hermetic allow-list
+/// ([`crate::git::remote_identity::verify`], TSK-1184): an answer about
+/// another endpoint could label a populated remote empty and read policy
+/// from `HEAD`. The session guards
 /// ask it while the tracking namespace is empty, inside the harness hook
 /// timeout, so each question runs within the guard's lookup wait
 /// ([`QueryLimits::guard`](crate::git::remote_query::QueryLimits::guard)),
 /// never a policy wait, and a remote that does not answer in time refuses
 /// with the fetch that removes the need to ask (TSK-1301).
-fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool, String> {
-    let config = repo.config().map_err(|e| e.to_string())?;
+fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool, Unasked> {
+    let config = repo.config().map_err(|e| Unasked::Query(e.to_string()))?;
     let key = format!("remote.{remote}.url");
     let mut urls = Vec::new();
     let mut entries = config
         .multivar(&key, None)
-        .map_err(|e| format!("cannot read {key}: {e}"))?;
+        .map_err(|e| Unasked::Query(format!("cannot read {key}: {e}")))?;
     while let Some(entry) = entries.next() {
-        let entry = entry.map_err(|e| format!("cannot read {key}: {e}"))?;
+        let entry = entry.map_err(|e| Unasked::Query(format!("cannot read {key}: {e}")))?;
         let url = entry
             .value()
-            .map_err(|_| format!("{key} is not valid UTF-8"))?;
+            .map_err(|_| Unasked::Query(format!("{key} is not valid UTF-8")))?;
         urls.push(url.to_string());
     }
+    let limits = crate::git::remote_query::QueryLimits::guard();
     match urls.as_slice() {
-        [url] => crate::git::remote_query::advertises_any_ref(
-            root,
-            url,
-            crate::git::remote_query::QueryLimits::guard(),
-        ),
-        [] => Err(format!("{key} is not set")),
-        _ => Err(format!("{key} has several values")),
+        [url] => {
+            crate::git::remote_identity::verify(root, remote, url, limits)
+                .map_err(Unasked::Identity)?;
+            crate::git::remote_query::advertises_any_ref(root, url, limits).map_err(Unasked::Query)
+        }
+        [] => Err(Unasked::Query(format!("{key} is not set"))),
+        _ => Err(Unasked::Query(format!("{key} has several values"))),
     }
 }
 
@@ -398,6 +425,31 @@ pub fn policy_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> 
     file_in(&repo, &tree, ".codeflow/policy.json", &shown)
 }
 
+/// How an error about a landed policy that fails the schema begins.
+const INVALID_POLICY: &str = "invalid policy at";
+
+/// Whether `error` says a landed policy failed the schema, rather than that
+/// a ref or Git object could not be read.
+#[must_use]
+pub fn is_invalid_policy(error: &str) -> bool {
+    error.starts_with(INVALID_POLICY)
+}
+
+/// The project state a revision holds, if any: a marker `codeflow ci` can
+/// trust because the range it judges cannot write it (TSK-1285).
+///
+/// # Errors
+/// The revision or its tree cannot be read.
+pub fn project_state_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let shown = crate::git::display_text(rev);
+    let tree = repo
+        .revparse_single(rev)
+        .and_then(|o| o.peel_to_tree())
+        .map_err(|e| format!("cannot read project state at {shown}: {e}"))?;
+    file_in(&repo, &tree, crate::scaffold::state::PROJECT_TOML, &shown)
+}
+
 /// The policy an authority commit holds, checked against the schema before
 /// it is read, or the shipped defaults when the commit has no policy file.
 /// The size and ignored-file rules read their keys here, so a value the
@@ -418,9 +470,9 @@ pub fn checked_policy_at(repo: &Repository, commit: git2::Oid) -> Result<Policy,
     };
     super::policy_schema::validate_policy_str(&text).map_err(|errors| {
         let shown: Vec<_> = errors.iter().map(ToString::to_string).collect();
-        format!("invalid policy at {short}: {}", shown.join("; "))
+        format!("{INVALID_POLICY} {short}: {}", shown.join("; "))
     })?;
-    serde_json::from_str(&text).map_err(|e| format!("invalid policy at {short}: {e}"))
+    serde_json::from_str(&text).map_err(|e| format!("{INVALID_POLICY} {short}: {e}"))
 }
 
 /// The text of the regular file at `path` in `tree`: `None` when the tree
@@ -475,7 +527,7 @@ fn at_commit(
         .map_err(|e| format!("cannot read policy source {shown}: {e}"))?;
     let policy = file_in(repo, &tree, ".codeflow/policy.json", shown)?
         .map_or_else(|| Ok(Policy::default()), |s| serde_json::from_str(&s))
-        .map_err(|e| format!("invalid policy at {shown}: {e}"))?;
+        .map_err(|e| format!("{INVALID_POLICY} {shown}: {e}"))?;
     let project = file_in(repo, &tree, ".codeflow/project.toml", shown)?
         .map(|s| toml::from_str(&s))
         .transpose()
@@ -834,7 +886,9 @@ mod tests {
             .unwrap()
             .set_str("remote.origin.url", "--upload-pack=touch owned")
             .unwrap();
-        let error = advertises_refs(&repo, dir.path(), "origin").unwrap_err();
+        let error = advertises_refs(&repo, dir.path(), "origin")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("starts with '-'"), "{error}");
         assert!(!dir.path().join("owned").exists());
     }

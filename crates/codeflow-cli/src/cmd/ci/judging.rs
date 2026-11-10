@@ -6,6 +6,7 @@
 use super::{print_source_banner, report_invalid_policy, rev_parse, short};
 use codeflow_core::hooks::policy::Policy;
 use codeflow_core::hooks::policy_schema;
+use codeflow_core::scaffold::too_old::BinaryAge;
 use std::path::Path;
 
 /// The commit whose policy judges the range.
@@ -105,14 +106,17 @@ pub(super) struct Judging {
 ///
 /// The policy judges the commit, branch, PR-body and work checks and their
 /// levels. Some inputs stay elsewhere, by design: the auto-detected range's
-/// protected branches come from the working copy (the range is found before
-/// any authority is known), the change class widens the authority's product
+/// protected branches, and the work prefixes that find a declared target,
+/// come from the working copy (the range is found before any authority is
+/// known; the pre-push hook finds the declared target under the authority's
+/// prefixes and passes it), the change class widens the authority's product
 /// and watched paths with the working copy's (neither side can narrow them),
 /// and the work-record baseline has its own source (`--baseline-from`).
 pub(super) fn judging_policy(
     root: &Path,
     authority: Option<&Authority>,
     working: Policy,
+    rules_out: Option<&Path>,
 ) -> Option<Judging> {
     let from_working = |working: Policy| {
         print_source_banner(root);
@@ -152,11 +156,14 @@ pub(super) fn judging_policy(
         }
     };
     if let Err(errors) = policy_schema::validate_policy_str(&text) {
-        eprintln!(
-            "codeflow ci: the range is judged with the policy at {}, which is invalid:",
-            short(base)
-        );
-        report_invalid_policy(&errors);
+        let age = BinaryAge::at_commit(root, base, env!("CARGO_PKG_VERSION"));
+        if !age.repository_is_newer() {
+            eprintln!(
+                "codeflow ci: the range is judged with the policy at {}, which is invalid:",
+                short(base)
+            );
+        }
+        report_invalid_policy(&errors, &age, rules_out);
         return None;
     }
     // The validator's strict deserialize already accepted the text.

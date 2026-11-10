@@ -202,7 +202,19 @@ impl Criterion {
     /// it; a tag inside the text, or only in an amendment note, is not a
     /// tag.
     fn has_tag(&self, tag: &str) -> bool {
-        opens_or_closes(&self.own_text(), tag)
+        self.may_hold(tag) && opens_or_closes(&self.own_text(), tag)
+    }
+
+    /// Whether the own text can hold `tag` at all, without building it. The
+    /// own text is pieces of `text` joined by spaces, each sub-bullet piece
+    /// starting at its marker, and a left-out note can only join two words
+    /// with a space, so a tag's first word, which holds no whitespace, is
+    /// always inside `text` when the own text holds the tag (TSK-1306: the
+    /// lifecycle check asked this of every task criterion for every epic
+    /// criterion).
+    fn may_hold(&self, tag: &str) -> bool {
+        let first = tag.split(' ').next().unwrap_or(tag);
+        self.text.contains(first)
     }
 
     /// What a text correction of a completed criterion keeps (ADR-0080):
@@ -221,6 +233,9 @@ impl Criterion {
     /// tag that opens or closes its own text (R-50), like the other tags.
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
+        if !self.may_hold(SERVES) {
+            return None;
+        }
         serves_tag(&self.own_text())
     }
 }
