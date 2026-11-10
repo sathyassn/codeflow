@@ -1,7 +1,7 @@
 //! What a change's declared inputs select, and the tests that guard the
 //! paths it touches (TSK-353).
 //!
-//! Nothing here narrows a run. [`super::delivery::select`] still runs every
+//! Nothing here narrows a run. The gate's `delivery::select` still runs every
 //! eligible target, because no local run record earns selection credit
 //! (ADR-0089). This module reports what each target's `narrow` and
 //! `input_class` declarations would select for a change, and which tests the

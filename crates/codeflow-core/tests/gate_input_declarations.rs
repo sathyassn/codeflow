@@ -75,6 +75,7 @@ fn eligible(config: &TestConfig, mode: &str) -> BTreeSet<String> {
         .collect()
 }
 
+#[allow(clippy::too_many_lines)] // one table: a row per AC-1 path class
 fn matrix() -> Vec<Row> {
     let records: (&[&str], &[&str]) = (&["codeflow-bin"], &["rust-build"]);
     vec![

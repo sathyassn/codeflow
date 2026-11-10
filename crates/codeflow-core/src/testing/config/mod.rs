@@ -649,17 +649,18 @@ fn validate_deadline(path: &Path, target: &TargetConfig) -> Result<(), TestingEr
     Ok(())
 }
 
-fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
-    let validate_globs = |patterns: &[String]| -> Result<(), TestingError> {
-        for pattern in patterns {
-            glob::Pattern::new(pattern).map_err(|error| TestingError::ConfigInvalid {
-                path: path.to_path_buf(),
-                message: format!("invalid glob {pattern:?}: {error}; repair the test config"),
-            })?;
-        }
-        Ok(())
-    };
-    validate_globs(&config.execution.run_everything)?;
+fn validate_glob_list(path: &Path, patterns: &[String]) -> Result<(), TestingError> {
+    for pattern in patterns {
+        glob::Pattern::new(pattern).map_err(|error| TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: format!("invalid glob {pattern:?}: {error}; repair the test config"),
+        })?;
+    }
+    Ok(())
+}
+
+/// Each `guards` rule names at least one path glob and one test command.
+fn validate_guards(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
     for rule in &config.guards {
         if rule.paths.is_empty() || rule.tests.iter().all(|test| test.trim().is_empty()) {
             return Err(TestingError::ConfigInvalid {
@@ -667,8 +668,15 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
                 message: "a guards rule needs at least one path and one test".into(),
             });
         }
-        validate_globs(&rule.paths)?;
+        validate_glob_list(path, &rule.paths)?;
     }
+    Ok(())
+}
+
+fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
+    let validate_globs = |patterns: &[String]| validate_glob_list(path, patterns);
+    validate_globs(&config.execution.run_everything)?;
+    validate_guards(path, config)?;
     for rule in config.defaults.coverage.iter().chain(
         config
             .targets
@@ -1102,6 +1110,30 @@ mod tests {
         assert_eq!(config.schema_version, "1.0");
         assert!(!config.execution.parallel);
         assert!(config.targets.is_empty());
+    }
+
+    #[test]
+    fn guards_rules_load_and_malformed_rules_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = |guards: &str| {
+            format!(r#"{{"schema_version": "1.0", "targets": [], "guards": {guards}}}"#)
+        };
+        let path = write_config(
+            dir.path(),
+            &config(r#"[{"paths": ["docs/**"], "tests": ["codeflow validate --docs"]}]"#),
+        );
+        let loaded = load_test_config(&path).unwrap();
+        assert_eq!(loaded.guards.len(), 1);
+        assert_eq!(loaded.guards[0].tests, ["codeflow validate --docs"]);
+        for bad in [
+            r#"[{"paths": [], "tests": ["t"]}]"#,
+            r#"[{"paths": ["docs/**"], "tests": [" "]}]"#,
+            r#"[{"paths": ["docs/[**"], "tests": ["t"]}]"#,
+            r#"[{"paths": ["docs/**"], "tests": ["t"], "runs": true}]"#,
+        ] {
+            let path = write_config(dir.path(), &config(bad));
+            assert!(load_test_config(&path).is_err(), "accepted {bad}");
+        }
     }
 
     #[test]
