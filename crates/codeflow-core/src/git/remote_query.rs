@@ -232,7 +232,9 @@ fn redacted_url(rest: &str) -> Option<String> {
 
 /// Redact each URL's userinfo and query or fragment, as [`display_url`]
 /// does, in a diagnostic that may quote several remote URLs. A URL ends at
-/// whitespace or a quote. Keep the original text for protocol parsing; use
+/// an ASCII separator (space, tab, CR or LF), a quote or an angle bracket;
+/// any other character, Unicode whitespace included, stays in the URL and
+/// is redacted with it. Keep the original text for protocol parsing; use
 /// this only for display.
 #[must_use]
 pub fn display_urls(text: &str) -> String {
@@ -245,7 +247,7 @@ pub fn display_urls(text: &str) -> String {
         }
         let rest = &text[start..];
         let end = rest
-            .find(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | '`' | '<' | '>'))
+            .find([' ', '\t', '\r', '\n', '\'', '"', '`', '<', '>'])
             .unwrap_or(rest.len());
         if let Some(redacted) = redacted_url(&rest[..end]) {
             shown.push_str(&text[copied..start]);
@@ -752,6 +754,24 @@ mod tests {
             "fatal: 'https://h.invalid/x.git?***' and https://***@h.invalid/y#*** done"
         );
         assert!(!shown.contains("FAKE"), "{shown}");
+        // A URL ends at each ASCII separator, and the text after it is
+        // kept. Unicode whitespace is not a separator (the whitespace
+        // contract scan): it stays in the URL, so a token after it is
+        // hidden with the rest of the query.
+        for separator in [' ', '\t', '\r', '\n'] {
+            let text = format!("from https://h.invalid/x?FAKE_TOKEN{separator}kept");
+            assert_eq!(
+                display_urls(&text),
+                format!("from https://h.invalid/x?***{separator}kept"),
+                "{separator:?}"
+            );
+        }
+        for space in ['\u{a0}', '\u{2003}', '\u{3000}'] {
+            let text = format!("from https://h.invalid/x?a{space}FAKE_TOKEN end");
+            let shown = display_urls(&text);
+            assert_eq!(shown, "from https://h.invalid/x?*** end", "{space:?}");
+            assert!(!shown.contains("FAKE"), "{space:?}: {shown}");
+        }
     }
 
     #[test]
