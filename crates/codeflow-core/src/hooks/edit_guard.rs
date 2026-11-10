@@ -1904,10 +1904,8 @@ mod tests {
         }
     }
 
-    /// Whether `target` is refused with `home` as the guard's home. An error
-    /// refuses at the hook adapter, but it is not the precise refusal these
-    /// tests want, so it fails the test with its message.
-    fn refused_under(f: &Fixture, home: &Path, target: &Path) -> bool {
+    /// The guard's verdict on a write to `target` with `home` as its home.
+    fn verdict_under(f: &Fixture, home: &Path, target: &Path) -> Result<Vec<Violation>, EditError> {
         let ctx = EditContext {
             cwd: &f.root,
             root: &f.root,
@@ -1915,10 +1913,32 @@ mod tests {
             git_common_dir: None,
             level: PolicyLevel::Block,
         };
-        let request = synthetic("write", json!({ "path": target }));
-        match evaluate(&request, &ctx) {
+        evaluate(&synthetic("write", json!({ "path": target })), &ctx)
+    }
+
+    /// Whether `target` is refused with `home` as the guard's home. An error
+    /// refuses at the hook adapter, but it is not the precise refusal these
+    /// tests want, so it fails the test with its message.
+    fn refused_under(f: &Fixture, home: &Path, target: &Path) -> bool {
+        match verdict_under(f, home, target) {
             Ok(violations) => !violations.is_empty(),
             Err(error) => panic!("home {}: {}: {error}", home.display(), target.display()),
+        }
+    }
+
+    /// Whether the guard cannot judge `target` and returns an error naming
+    /// `cause`, which the hook adapter turns into a refusal
+    /// (`codeflow hook edit-guard` exits 2).
+    #[cfg(windows)]
+    fn unjudged_under(f: &Fixture, home: &Path, target: &Path, cause: &str) -> bool {
+        match verdict_under(f, home, target) {
+            Ok(violations) => panic!(
+                "home {}: {}: judged, with {} findings",
+                home.display(),
+                target.display(),
+                violations.len()
+            ),
+            Err(error) => error.to_string().contains(cause),
         }
     }
 
@@ -2014,9 +2034,77 @@ mod tests {
         assert!(error.contains("every edit is refused"), "{error}");
     }
 
+    /// TSK-1400: an NT object namespace path (`\??\C:\x`) is kept as
+    /// written, never joined to the cwd, so the guard maps it to the file
+    /// Win32 opens.
+    #[test]
+    fn an_nt_namespace_path_is_recognised_by_its_prefix() {
+        for text in [r"\??\C:\x", "/??/C:/x", r"\??/UNC\h\s"] {
+            assert!(nt_namespace_text(text), "{text}");
+        }
+        for text in [r"\\?\C:\x", r"C:\??\x", r"\?\x", "??/x", r"\??"] {
+            assert!(!nt_namespace_text(text), "{text}");
+        }
+    }
+
+    /// Spellings of the authority directory under `plain`, the home as a
+    /// plain drive path (`C:\...`): those the guard maps to the directory,
+    /// and those it cannot map to one file, each with the cause its error
+    /// names.
+    #[cfg(windows)]
+    fn windows_authority_spellings(plain: &str) -> (Vec<String>, Vec<(String, &'static str)>) {
+        assert_eq!(&plain[1..3], r":\", "{plain}");
+        // `drive` is the letter and `rest` the path after `C:\`.
+        let (drive, rest) = (&plain[..1], &plain[3..]);
+        let covered = vec![
+            format!(r"{plain}\.codeflow\authority \config.toml"),
+            format!(r"{plain}\.codeflow\authority. \config.toml"),
+            format!(r"{plain}\.codeflow\authority\config.toml:notes"),
+            format!(r"{plain}\.codeflow\authority:notes"),
+            format!(r"\\?\{plain}\.codeflow\Authority\config.toml"),
+            format!(r"\\.\{plain}\.codeflow\authority\config.toml"),
+            format!(r"\??\{plain}\.codeflow\authority\config.toml"),
+            format!(r"\\localhost\{drive}$\{rest}\.codeflow\authority\config.toml"),
+            format!(r"\\127.0.0.1\{drive}$\{rest}\.codeflow\authority\config.toml"),
+            format!(r"\\?\UNC\localhost\{drive}$\{rest}\.codeflow\authority\config.toml"),
+        ];
+        let verbatim = "cannot map a verbatim path";
+        let stream = "alternate-stream";
+        let unjudged = vec![
+            (
+                format!(r"\\?\{plain}\.codeflow\authority.\config.toml"),
+                verbatim,
+            ),
+            (
+                format!(r"\\?\{plain}\.codeflow\authority \config.toml"),
+                verbatim,
+            ),
+            (
+                format!(r"{plain}\.codeflow\authority\config.toml::$DATA"),
+                stream,
+            ),
+            (
+                format!(r"{plain}\.codeflow::$INDEX_ALLOCATION\authority\config.toml"),
+                stream,
+            ),
+            (
+                format!(r"\\?\GLOBALROOT\Device\HarddiskVolume1\{rest}\.codeflow\authority\x"),
+                "device or verbatim namespace",
+            ),
+            (
+                format!(r"{drive}:.codeflow\authority\config.toml"),
+                "drive-relative",
+            ),
+        ];
+        (covered, unjudged)
+    }
+
     /// TSK-1400: the same coverage under the path spellings Windows accepts
     /// for one directory. Volumes with short names disabled give the long
-    /// spelling back, which still runs every other form.
+    /// spelling back, which still runs every other form. A spelling the
+    /// guard cannot map to one file (a verbatim name Win32 would change, a
+    /// stream type, another namespace, a drive-relative path) returns an
+    /// error, which the hook adapter refuses.
     #[cfg(windows)]
     #[test]
     fn the_authority_directory_is_covered_under_windows_spellings_of_the_home() {
@@ -2049,20 +2137,50 @@ mod tests {
             PathBuf::from(format!(r"\\?\{}", text(&long))),
             PathBuf::from(format!("{}.", text(&long))),
         ];
+        let (covered, unjudged) = windows_authority_spellings(&text(&long));
         for spelling in &homes {
+            let verbatim = text(spelling).starts_with(r"\\?\");
             for target in [
                 spelling.join(r".codeflow\Authority\config.toml"),
                 spelling.join(".codeflow/AUTHORITY/config.toml"),
-                spelling.join(r".codeflow\authority.\config.toml"),
                 long.join(r".codeflow\Authority\config.toml"),
                 short.join(".codeflow/Authority/config.toml"),
                 home.join(".codeflow/Authority/new"),
-            ] {
+            ]
+            .into_iter()
+            .chain(covered.iter().map(PathBuf::from))
+            {
                 assert!(
                     refused_under(&f, spelling, &target),
                     "home {}: {}",
                     spelling.display(),
                     target.display()
+                );
+            }
+            // Under a verbatim home the trailing dot stays in the name, so
+            // the path names another directory that no ordinary path can
+            // reach; the guard cannot map it and refuses with an error.
+            let dotted = spelling.join(r".codeflow\authority.\config.toml");
+            if verbatim {
+                assert!(
+                    unjudged_under(&f, spelling, &dotted, "cannot map a verbatim path"),
+                    "home {}: {}",
+                    spelling.display(),
+                    dotted.display()
+                );
+            } else {
+                assert!(
+                    refused_under(&f, spelling, &dotted),
+                    "home {}: {}",
+                    spelling.display(),
+                    dotted.display()
+                );
+            }
+            for (target, cause) in &unjudged {
+                assert!(
+                    unjudged_under(&f, spelling, Path::new(target), cause),
+                    "home {}: {target}",
+                    spelling.display()
                 );
             }
             assert!(
