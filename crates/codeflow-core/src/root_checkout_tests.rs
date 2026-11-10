@@ -2286,3 +2286,108 @@ fn r22_prepare_branch_uses_remote_when_default_is_absent() {
         BranchStep::Created { .. }
     ));
 }
+
+/// The words of `step` from `start` up to `end`, as the arguments after
+/// `git`.
+fn printed_git<'a>(step: &'a str, start: &str, end: &str) -> Vec<&'a str> {
+    let from = step
+        .find(start)
+        .unwrap_or_else(|| panic!("{start}: {step}"));
+    let rest = &step[from..];
+    let to = rest.find(end).unwrap_or_else(|| panic!("{end}: {step}"));
+    rest[..to]
+        .split_whitespace()
+        .skip_while(|word| *word != "git")
+        .skip(1)
+        .collect()
+}
+
+/// TSK-416 review: a root branch whose name starts with `-` follows `--`
+/// in the printed `git switch`, where git reads it as the branch. A
+/// current branch named so is renamed first (`git branch -m -- …`), since
+/// `git worktree add` takes no such branch: after `--` it adds a detached
+/// worktree, shown here. Git runs each printed step as written, and the
+/// new worktree is on the branch it continues. An ordinary name prints as
+/// it did.
+#[test]
+fn a_dashed_root_or_branch_is_never_printed_where_git_reads_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("repo"));
+    git(&root, &["update-ref", "refs/heads/-x", "HEAD"]);
+    git(&root, &["update-ref", "refs/heads/-y", "HEAD"]);
+    git(&root, &["symbolic-ref", "HEAD", "refs/heads/-y"]);
+    let repo = git2::Repository::open(&root).unwrap();
+    let dashed = RootBranch {
+        name: GitName::from_text("-x"),
+        source: RootBranchSource::OriginHead,
+    };
+    let step = head_finding(&repo, &GitPolicy::default(), &dashed, "repo")
+        .expect("the root is off its root branch")
+        .next_step;
+    assert!(
+        step.starts_with(
+            "run git switch -- -x at the root, then rename the branch with git branch -m -- -y \
+             <new-name>, since git worktree add does not take a branch whose name starts with -, \
+             and run git worktree add .worktrees/<slug> <new-name> to continue it in a worktree"
+        ),
+        "{step}"
+    );
+    let commit = CommitFinding {
+        repo: "repo".to_string(),
+        head: Head::Branch(GitName::from_text("-y")),
+        root_branch: dashed,
+    }
+    .next_step()
+    .to_string();
+    assert!(commit.contains("`git switch -- -x`"), "{commit}");
+    let plain = RootBranch {
+        name: GitName::from_text("main"),
+        source: RootBranchSource::Policy,
+    };
+    let step_plain = head_finding(&repo, &GitPolicy::default(), &plain, "repo")
+        .unwrap()
+        .next_step;
+    assert!(
+        step_plain.starts_with("run git switch main at the root"),
+        "{step_plain}"
+    );
+    // Git runs each printed step as written.
+    git(&root, &printed_git(&step, "git switch ", " at the root"));
+    assert_eq!(
+        git(&root, &["rev-parse", "--symbolic-full-name", "HEAD"]),
+        "refs/heads/-x",
+        "the switch"
+    );
+    let fill = |words: Vec<&str>| {
+        words
+            .into_iter()
+            .map(|word| word.replace("<new-name>", "renamed").replace("<slug>", "s"))
+            .collect::<Vec<_>>()
+    };
+    let rename = fill(printed_git(&step, "git branch -m ", ", since"));
+    git(
+        &root,
+        &rename.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let added = fill(printed_git(&step, "run git worktree add ", " to continue"));
+    git(&root, &added.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(
+        git(
+            &root.join(".worktrees/s"),
+            &["rev-parse", "--symbolic-full-name", "HEAD"]
+        ),
+        "refs/heads/renamed",
+        "the worktree"
+    );
+    // Why the rename: after `--`, `git worktree add` detaches.
+    git(&root, &["update-ref", "refs/heads/-z", "HEAD"]);
+    git(&root, &["worktree", "add", "--", ".worktrees/z", "-z"]);
+    assert_eq!(
+        git(
+            &root.join(".worktrees/z"),
+            &["rev-parse", "--symbolic-full-name", "HEAD"]
+        ),
+        "HEAD",
+        "git worktree add -- <path> -z"
+    );
+}

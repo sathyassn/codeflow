@@ -357,8 +357,11 @@ impl CommitFinding {
     /// The exact next step: the catalogued remedy.
     #[must_use]
     pub fn next_step(&self) -> crate::remedy::Remedy {
+        // A root branch read from `origin/HEAD` is the remote's name, which
+        // policy validation never sees, so one that starts with `-` follows
+        // `--` (TSK-416 review).
         let root = self.root_branch.name.to_string();
-        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &root)])
+        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &crate::git::git_operands(&[&root]))])
     }
 }
 
@@ -1502,13 +1505,33 @@ fn head_finding(
                     } else {
                         ", and git stash pop inside it if you stashed"
                     };
-                    format!(
-                        ", then git worktree add .worktrees/<slug> {b} to continue it in a \
-                         worktree{pop}"
-                    )
+                    // `git worktree add` reads a branch that starts with
+                    // `-` as an option, and after `--` it adds a detached
+                    // worktree at that commit instead of the branch, so
+                    // the step renames the branch first (TSK-416 review).
+                    let name = b.to_string();
+                    if crate::git::reads_as_option(&name) {
+                        format!(
+                            ", then rename the branch with git branch -m {} <new-name>, since git \
+                             worktree add does not take a branch whose name starts with -, and \
+                             run git worktree add .worktrees/<slug> <new-name> to continue it in \
+                             a worktree{pop}",
+                            crate::git::git_operands(&[&name])
+                        )
+                    } else {
+                        format!(
+                            ", then git worktree add .worktrees/<slug> {} to continue it in a \
+                             worktree{pop}",
+                            crate::git::shell_arg(&name)
+                        )
+                    }
                 }
                 Head::Detached(_) => String::new(),
             };
+            let switch = format!(
+                "run git switch {} at the root",
+                crate::git::git_operands(&[&root_branch.name.to_string()])
+            );
             Some(Finding {
                 severity: Severity::Warn,
                 rule: ROOT_BRANCH_KEY,
@@ -1519,10 +1542,7 @@ fn head_finding(
                     root_branch.name,
                     root_branch.source
                 ),
-                next_step: format!(
-                    "{save_step}run git switch {} at the root{continue_step}",
-                    root_branch.name
-                ),
+                next_step: format!("{save_step}{switch}{continue_step}"),
             })
         }
     }

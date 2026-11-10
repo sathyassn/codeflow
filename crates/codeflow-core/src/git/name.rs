@@ -439,6 +439,14 @@ pub fn shell_arg(text: &str) -> String {
     }
 }
 
+/// Whether git reads `name`, as printed, as an option: it starts with `-`.
+/// A remedy puts such a name after `--` or gives it as its full ref
+/// (TSK-416 review).
+#[must_use]
+pub fn reads_as_option(name: &str) -> bool {
+    display_text(name).starts_with('-')
+}
+
 /// `operands` as the operands of a git command a reader may paste: each
 /// one a [`shell_arg`], with `--` before them when one starts with `-`, so
 /// git reads none of them as an option. A remote or branch may be named
@@ -449,9 +457,7 @@ pub fn shell_arg(text: &str) -> String {
 #[must_use]
 pub fn git_operands(operands: &[&str]) -> String {
     let quoted: Vec<String> = operands.iter().map(|operand| shell_arg(operand)).collect();
-    let dashed = operands
-        .iter()
-        .any(|operand| display_text(operand).starts_with('-'));
+    let dashed = operands.iter().any(|operand| reads_as_option(operand));
     let joined = quoted.join(" ");
     if dashed {
         format!("-- {joined}")
