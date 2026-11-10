@@ -544,6 +544,24 @@ fn print_coverage_report(reports: &[CoverageReport]) {
             r.thresholds_passed,
             r.thresholds_failed,
         );
+        if let Some(totals) = &r.totals {
+            let measure =
+                |name: &str, count: Option<&codeflow_core::testing::coverage::CoverageCount>| {
+                    count.map(|c| format!("{name} {:.2}% ({}/{})", c.percent, c.covered, c.count))
+                };
+            let parts: Vec<String> = [
+                measure("lines", Some(&totals.lines)),
+                measure("functions", totals.functions.as_ref()),
+                measure("regions", totals.regions.as_ref()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let floor = r
+                .floor
+                .map_or_else(String::new, |f| format!("; line floor {f}%"));
+            println!("    totals: {}{floor}", parts.join(", "));
+        }
         for (file, pct, threshold) in &r.failing_files {
             let file = codeflow_core::git::display_line(file);
             println!("    below threshold: {file} {pct:.1}% < {threshold}");
