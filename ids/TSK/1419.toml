@@ -1,0 +1,11 @@
+id = "TSK-1419"
+uid = "51be2f88-a493-498f-bbab-999514fecc55"
+kind = "TSK"
+title = "The hosted policy check fetches the shared registry before codeflow ci judges a pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T21:34:00Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
