@@ -1,0 +1,11 @@
+id = "TSK-1415"
+uid = "1cf21504-741a-4cd0-9d53-382f39215638"
+kind = "TSK"
+title = "Remote protect admits only canonical integration line names, and doctor finds case twins"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T19:37:19Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
