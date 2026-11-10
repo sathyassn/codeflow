@@ -570,14 +570,6 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 
 - The range is bound to what is pushed.
 - An existing protected or `integration/` branch starts at its advertised tip.
-- A landing candidate, a branch named with `git.candidate_prefix`, starts at
-  its line's fetched tip and is judged into that line, once the binding in
-  the table above holds; otherwise the push is refused with
-  `work.landing_candidate` and its cause, and no `codeflow ci` runs for it.
-- A push of an epic line whose new tip is a landing candidate's tip (the
-  pushed ref's source, a local branch at that commit, or an advertised
-  candidate branch) is admitted only when that candidate binds to the line
-  and the push is a fast-forward of the line to it.
 - A branch with a declared target starts at the merge base with that target's
   advertised tip, read from the task record.
 - The hook names what it left to CI, such as an unresolved range.
@@ -587,6 +579,8 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 | Order | The hook's own ref rules run before any `codeflow ci`. Each `codeflow ci` runs every check, so the hook reports the same findings CI reports for the range. |
 | After a refusal | The later branches' checks and the release preflight do not run. The id sync still runs, so a pending reservation is published. The printed rerun repeats the refused step. |
 | A passing push | Every check runs, as before. |
+| A landing candidate | A branch named with `git.candidate_prefix` starts at its line's fetched tip and is judged into that line once the binding in the `codeflow ci` table above holds; otherwise the push is refused with `work.landing_candidate` and its cause, and no `codeflow ci` runs for it. |
+| A line push to a candidate's tip | A push of an epic line whose new tip is a landing candidate's tip (the pushed ref's source, a local branch at that commit, or an advertised candidate branch) is admitted only when that candidate binds to the line and the push fast-forwards the line to it. |
 | Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget only reports; it never refuses a push. `codeflow ci --timings` prints the time of every check. |
 
 `codeflow integrate` is the local landing path for protected branches. It
