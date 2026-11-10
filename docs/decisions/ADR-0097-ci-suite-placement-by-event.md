@@ -213,3 +213,20 @@ operator's decision of 15:34: Windows leaves line pushes. The Decision, the
 table, the Consequences and the history now say so. This record moved from
 PR 631 to the records pull request into `main` so the placement reaches
 `main` ahead of the line.
+
+## Note, 2026-11-10: who builds the daily skip
+
+The Decision assigns building this placement, "the daily Linux suites
+included", to TSK-1321 (PR 620). That can be read as TSK-1321 also
+building the daily row's "skipped when that tip was already tested", but
+TSK-1321 AC-11 adds only the daily run's Linux suites. The skip has two
+parts, owned elsewhere:
+
+- a tip that a daily run already passed is skipped by TSK-1314 AC-5,
+  which is complete;
+- a tip that a green line push already tested is skipped by TSK-1026
+  AC-20, which counts that push run for the Linux suites it ran.
+
+The placement and the Decision text above are unchanged. This note
+corrects only which task builds the skip, by the Director's ruling of
+2026-11-10 from a CI/CD plan audit.
