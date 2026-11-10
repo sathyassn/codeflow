@@ -540,6 +540,10 @@ fn the_cross_lineage_review_rule_is_refused() {
         &one("moment:shape", "action = \"plan alone; no other review\""),
         "it targets a fixed unit, which is not a text-override target: The row states the other-lineage review",
     );
+    assert_refused(
+        &one("moment:shape", "action = \"plan alone\""),
+        "not instruction text; update changed nothing",
+    );
 }
 
 #[test]

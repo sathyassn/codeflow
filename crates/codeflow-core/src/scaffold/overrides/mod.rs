@@ -470,7 +470,8 @@ pub fn check(
                             .as_deref()
                             .is_some_and(|v| row_value_ok(v, true))
                 };
-                let reason = reason.map(|reason| shipped.name_in_kernel(reason));
+                let reason =
+                    reason.map(|reason| shipped.name_in_kernel(reason.trim_end_matches('.')));
                 if fields_ok || !matches!(class, Some(UnitClass::Overridable)) {
                     (*class, reason)
                 } else {
