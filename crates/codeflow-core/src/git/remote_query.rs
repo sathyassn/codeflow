@@ -784,6 +784,38 @@ pub(crate) fn bounded_raw(
     bounded_bytes(command, deadline).map_err(local_read_failure)
 }
 
+/// How a bounded local git read ended when it gave an answer or an exit
+/// status the caller interprets, such as `remote get-url` exiting 2 for a
+/// remote that is not configured.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LocalAnswer {
+    /// Git exited successfully with these bytes on stdout.
+    Answer(Vec<u8>),
+    /// Git ran and exited unsuccessfully with this code.
+    Exit(Option<i32>),
+}
+
+/// Run a local git read within `deadline` and [`MAX_ANSWER_BYTES`], as the
+/// destination query's own reads run, for a caller that reads meaning into
+/// git's exit status (TSK-327 hook, guard and CI destination reads). A
+/// timeout, an oversized answer, a failure to run or a failed exit with an
+/// authentication marker is `Err`, so it can never be taken for a proven
+/// absence.
+///
+/// # Errors
+///
+/// Why git gave no answer or exit status within `deadline`.
+pub fn bounded_local(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<LocalAnswer, String> {
+    match bounded_bytes(command, deadline) {
+        Ok(bytes) => Ok(LocalAnswer::Answer(bytes)),
+        Err(Failure::Exit(code)) => Ok(LocalAnswer::Exit(code)),
+        Err(why) => Err(local_read_failure(why)),
+    }
+}
+
 /// Whether git's diagnostics carry an authentication marker. The bytes are
 /// matched as ASCII and never decoded: the text is not shown to anyone.
 fn authentication_failed(diagnostics: &[u8]) -> bool {

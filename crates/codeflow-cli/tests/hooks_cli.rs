@@ -5910,6 +5910,65 @@ fn ac6_a_stalled_destination_check_refuses_within_the_guard_wait() {
     );
 }
 
+/// TSK-327, the push hook: the destination's fetch refspecs decide whether
+/// an empty destination is initialization, so the read of them is bounded
+/// by the lookup's wait. A `git` first on `PATH` passes every other call to
+/// the real git and stalls (45 s) or fails (exit 128) only that read. Before
+/// the change the stalled read had no deadline: the hook waited it out and
+/// then chose initialization. Now both refuse and neither is initialization.
+#[cfg(unix)]
+#[test]
+fn push_set_never_turns_a_stalled_or_failed_destination_read_into_initialization() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git is on PATH");
+    let lone = tempfile::tempdir().unwrap();
+    init_repo(lone.path(), "feat/lone");
+    answering_destination(lone.path(), "origin");
+    let head = rev(lone.path(), "HEAD");
+    let url = push_url(lone.path(), "origin");
+    for (name, action, expected) in [
+        ("stall", "sleep 45", "no answer within 30s"),
+        ("fail", "exit 128", "exit status: 128"),
+    ] {
+        let stub = lone.path().join(".git").join(format!("stub-{name}"));
+        std::fs::create_dir(&stub).unwrap();
+        let script = stub.join("git");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \" $* \" in\n  *\" --get-all remote.origin.fetch \") {action} ;;\nesac\nexec '{}' \"$@\"\n",
+                real_git.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths(std::iter::once(stub).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["git-hook", "pre-push", "origin", &url])
+                .current_dir(lone.path())
+                .env("PATH", &path),
+            &format!("refs/heads/feat/lone {head} refs/heads/feat/lone {ZERO_SHA}"),
+        );
+        let took = started.elapsed();
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(1), "{name} {took:?}: {err}");
+        assert!(!err.contains("initialization"), "{name} {took:?}: {err}");
+        assert!(err.contains(expected), "{name} {took:?}: {err}");
+        assert!(
+            took < std::time::Duration::from_secs(42),
+            "{name} {took:?}: {err}"
+        );
+    }
+}
+
 #[test]
 fn push_set_refuses_initialization_under_a_command_line_transport_setting() {
     // TSK-327: an empty destination is initialization only when the query

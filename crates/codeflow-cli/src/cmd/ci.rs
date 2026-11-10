@@ -2936,20 +2936,28 @@ fn named_branch(base: &str) -> Option<String> {
 /// the destination whose policy judges the push, so an unreadable one refuses
 /// instead of reading as absent (OS text rule, issue 79).
 fn origin_url(root: &Path) -> Result<Option<String>, String> {
-    let out = codeflow_core::workgraph::history::command()
+    use codeflow_core::git::remote_query::{bounded_local, LocalAnswer, QueryLimits};
+    let mut command = codeflow_core::workgraph::history::command();
+    command
         .arg("-C")
         .arg(root)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .map_err(|error| format!("cannot query origin URL: {error}"))?;
-    if !out.status.success() {
-        return if out.status.code() == Some(2) {
-            Ok(None)
-        } else {
-            Err(format!("cannot query origin URL: {}", out.status))
-        };
-    }
-    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+        .args(["remote", "get-url", "origin"]);
+    // Read within the destination lookup's wait (TSK-327): a read that
+    // stalls, overflows or cannot run refuses; only exit 2 means absent.
+    let limits = QueryLimits::from_authority_or_default(root);
+    let stdout = match bounded_local(command, limits.timeout())
+        .map_err(|why| format!("cannot query origin URL: {why}"))?
+    {
+        LocalAnswer::Answer(stdout) => stdout,
+        LocalAnswer::Exit(Some(2)) => return Ok(None),
+        LocalAnswer::Exit(code) => {
+            return Err(format!(
+                "cannot query origin URL: git exited with {}",
+                code.map_or_else(|| "no exit code".to_string(), |code| code.to_string())
+            ))
+        }
+    };
+    let bytes = stdout.strip_suffix(b"\n").unwrap_or(&stdout);
     let url = std::str::from_utf8(bytes)
         .map_err(|_| {
             "the URL of `origin` is not valid UTF-8, so its policy cannot be asked".to_string()

@@ -147,14 +147,17 @@ fn run_checked_with_binary(
         }
     };
     let url = url.or(remote);
+    // The destination's configuration is read within the lookup's limits
+    // (TSK-327), so they are read first.
+    let limits = probe_limits(root, report);
     // Tracking refs describe the fetch location; they stand in for the push
     // location only when the two are the same.
     let tracking = match (remote, url) {
-        (Some(name), Some(url)) if fetches_from(root, name, url)? => Some(name),
+        (Some(name), Some(url)) if fetches_from(root, name, url, limits)? => Some(name),
         _ => None,
     };
     let namespace = match tracking {
-        Some(name) => tracking_namespace(root, name)?,
+        Some(name) => tracking_namespace(root, name, limits)?,
         None => None,
     };
     // Asked once, on first use, for every pushed branch and each
@@ -166,13 +169,13 @@ fn run_checked_with_binary(
     let fetch_failed: OnceCell<String> = OnceCell::new();
     let destination = Destination {
         url,
-        limits: probe_limits(root, report),
+        limits,
         listing: &listing,
         advertised: &advertised,
         answer: &answer,
         anchor: &anchor,
         fetch_failed: &fetch_failed,
-        fork: fork(root, url)?,
+        fork: fork(root, url, limits)?,
         namespace: namespace.as_deref(),
         tracking,
         policy,
@@ -1001,9 +1004,13 @@ fn is_finding_header(line: &str) -> bool {
 /// `refs/remotes/origin/`), read from its fetch refspecs. `None` for a URL or
 /// path pushed to directly, or a remote with no glob fetch refspec: that
 /// destination has no local history of its own to compare with.
-fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, String> {
+fn tracking_namespace(
+    root: &Path,
+    remote: &str,
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
     let key = format!("remote.{remote}.fetch");
-    let Some(out) = git(root, &["config", "-z", "--get-all", &key])? else {
+    let Some(out) = git_bounded(root, &["config", "-z", "--get-all", &key], limits)? else {
         return Ok(None);
     };
     Ok(out.split('\0').find_map(|spec| {
@@ -1018,10 +1025,14 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
 /// exact or glob (a glob is read up to its last `/` before the `*`, a
 /// superset). A destination that is not a full ref name cannot be checked,
 /// so it refuses (TSK-1077 review round 01 F2).
-fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String> {
+fn held_tracking_ref(
+    root: &Path,
+    remote: &str,
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
     let key = format!("remote.{remote}.fetch");
     let mut patterns = vec![format!("refs/remotes/{remote}/")];
-    if let Some(out) = git(root, &["config", "-z", "--get-all", &key])? {
+    if let Some(out) = git_bounded(root, &["config", "-z", "--get-all", &key], limits)? {
         for spec in out.split('\0').filter(|spec| !spec.is_empty()) {
             if spec.starts_with('^') {
                 continue;
@@ -1136,8 +1147,13 @@ fn target_policy(root: &Path, tip: &str) -> TargetPolicy {
 /// A note for a push that does not go to the configured `upstream`: its
 /// pull request may target the upstream, whose policy can differ from the
 /// candidate authority read here.
-fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
-    let Some(upstream) = git(root, &["config", "--get", "remote.upstream.url"])? else {
+fn fork(
+    root: &Path,
+    url: Option<&str>,
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
+    let Some(upstream) = git_bounded(root, &["config", "--get", "remote.upstream.url"], limits)?
+    else {
         return Ok(None);
     };
     let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
@@ -1187,7 +1203,7 @@ fn judged_by(
         let Some(remote) = destination.tracking else {
             return Ok(Judged::Initialization);
         };
-        let Some(held) = held_tracking_ref(root, remote)? else {
+        let Some(held) = held_tracking_ref(root, remote, destination.limits)? else {
             return Ok(Judged::Initialization);
         };
         return Err(format!(
@@ -1353,8 +1369,13 @@ impl Destination<'_> {
 
 /// Whether remote `name` fetches from `url`, so that its tracking refs
 /// describe the location pushed to. A `pushurl` elsewhere does not.
-fn fetches_from(root: &Path, name: &str, url: &str) -> Result<bool, String> {
-    Ok(git(root, &["remote", "get-url", name])?
+fn fetches_from(
+    root: &Path,
+    name: &str,
+    url: &str,
+    limits: remote_query::QueryLimits,
+) -> Result<bool, String> {
+    Ok(git_bounded(root, &["remote", "get-url", name], limits)?
         .is_some_and(|fetch| fetch.strip_suffix('\n').unwrap_or(&fetch) == url))
 }
 
@@ -2036,22 +2057,65 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, 
     git_answer(args, out)
 }
 
+/// [`git`] for a read of the destination's configuration on the hook path,
+/// run by [`remote_query::bounded_local`] within the lookup's `limits`
+/// (TSK-327): a read that stalls, overflows or cannot run refuses, and only
+/// git's own exit status can mean absence.
+fn git_bounded(
+    root: &Path,
+    args: &[&str],
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
+    let mut command = codeflow_core::git::judging_command();
+    command
+        .args(["-c", "core.commitGraph=false"])
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_NO_LAZY_FETCH", "1");
+    match remote_query::bounded_local(command, limits.timeout()).map_err(|why| {
+        format!(
+            "cannot read Git {} answer: {why}",
+            args.first().copied().unwrap_or("command")
+        )
+    })? {
+        remote_query::LocalAnswer::Answer(bytes) => answered(args, bytes),
+        remote_query::LocalAnswer::Exit(code) => unanswered(
+            args,
+            code,
+            &code.map_or_else(
+                || "ended without an exit code".to_string(),
+                |code| format!("exit status: {code}"),
+            ),
+        ),
+    }
+}
+
 fn git_answer(args: &[&str], out: std::process::Output) -> Result<Option<String>, String> {
     if !out.status.success() {
-        if out.status.code() == Some(2) && args.starts_with(&["remote", "get-url"]) {
-            return Ok(None);
-        }
-        if out.status.code() == Some(1) && missing_git_answer(args) {
-            return Ok(None);
-        }
-        return Err(format!(
-            "cannot read Git {} answer: {}",
-            args.first().copied().unwrap_or("command"),
-            out.status
-        ));
+        return unanswered(args, out.status.code(), &out.status.to_string());
     }
-    let text = String::from_utf8(out.stdout)
-        .map_err(|error| format!("cannot decode Git answer: {error}"))?;
+    answered(args, out.stdout)
+}
+
+/// A failed git exit: absence for the forms that define it, else refused.
+fn unanswered(args: &[&str], code: Option<i32>, shown: &str) -> Result<Option<String>, String> {
+    if code == Some(2) && args.starts_with(&["remote", "get-url"]) {
+        return Ok(None);
+    }
+    if code == Some(1) && missing_git_answer(args) {
+        return Ok(None);
+    }
+    Err(format!(
+        "cannot read Git {} answer: {shown}",
+        args.first().copied().unwrap_or("command")
+    ))
+}
+
+/// A successful git answer, decoded and checked.
+fn answered(args: &[&str], stdout: Vec<u8>) -> Result<Option<String>, String> {
+    let text =
+        String::from_utf8(stdout).map_err(|error| format!("cannot decode Git answer: {error}"))?;
     if args.starts_with(&["rev-parse", "--verify", "--quiet"]) {
         let oid = text.strip_suffix('\n').unwrap_or(&text);
         if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {

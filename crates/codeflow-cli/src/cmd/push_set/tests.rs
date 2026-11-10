@@ -637,7 +637,12 @@ fn r15_tracking_namespace_preserves_config_bytes() {
         "+refs/heads/*:refs/remotes/fixture/*\u{a0}",
     ]);
     assert_eq!(
-        tracking_namespace(history.local.path(), "fixture").unwrap(),
+        tracking_namespace(
+            history.local.path(),
+            "fixture",
+            remote_query::QueryLimits::guard()
+        )
+        .unwrap(),
         None
     );
 }
