@@ -62,6 +62,7 @@ Two pages link back to the decisions:
 | Git, merge, and CI policy | [ADR-0017](decisions/ADR-0017-codeflow-ci-portable-verification.md) | codeflow ci: CI portable, binary sourced verification | accepted | none |
 | Git, merge, and CI policy | [ADR-0020](decisions/ADR-0020-restore-original-commit-standard.md) | restore the original commit standard: 50/72 subject, bullet only body, block enforced | accepted | none |
 | Git, merge, and CI policy | [ADR-0098](decisions/ADR-0098-tasks-reach-main-directly-when-a-human-merges-as.md) | Tasks reach main directly when a human merges as they are ready, otherwise through checkpointed epic lines | accepted | none |
+| Git, merge, and CI policy | [ADR-0100](decisions/ADR-0100-projects-choose-up-to-date-branches-no-requireme.md) | Projects choose up-to-date branches, no requirement, or a merge queue | proposed | none |
 | Scaffold lifecycle and tiers | [ADR-0011](decisions/ADR-0011-update-orphan-reconciliation.md) | update reconciles orphaned managed files (prune on upstream rename/removal) | accepted | none |
 | Scaffold lifecycle and tiers | [ADR-0019](decisions/ADR-0019-enforcement-is-the-floor.md) | enforcement is the floor: tiers scale project management, not discipline | accepted | none |
 | Scaffold lifecycle and tiers | [ADR-0090](decisions/ADR-0090-retained-release-bases-and-a-sparse-pack-replace.md) | Retained release bases and a sparse pack replace the baseline tree and the manifest digest | accepted | none |

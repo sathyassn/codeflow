@@ -29,6 +29,14 @@
 //! authority environment that admits more than the default branch or that
 //! a second job references, and a foreign ruleset that requires a name no
 //! workflow on the default branch produces.
+//!
+//! `git.require_up_to_date` (TSK-1396, amending ADR-0081) chooses the
+//! up-to-date rule, read from the policy authority alone
+//! ([`remote::up_to_date_choice`]): `true` keeps everything above; `false`
+//! drops the up-to-date requirement from the default branch, the lines and
+//! the profile comparison and says why; `"merge_queue"` accepts a merge
+//! queue rule that binds everyone on the default branch in place of strict
+//! checks, and warns when the branch has neither.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -37,10 +45,12 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::{CheckResult, Options, Status};
+use crate::hooks::policy::UpToDate;
 use crate::remedy;
 use crate::remote::{
-    self, Profile, Targeting, AUTHORITY_PREFIX, DEFAULT_LINES, GITHUB_ACTIONS_APP_ID,
-    POLICY_WORKFLOW, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES, RULESET_LINE_CHECKS,
+    self, Profile, Targeting, UpToDateChoice, AUTHORITY_PREFIX, DEFAULT_LINES,
+    GITHUB_ACTIONS_APP_ID, POLICY_WORKFLOW, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES,
+    RULESET_LINE_CHECKS, UP_TO_DATE_KEY,
 };
 
 /// The environment that alone holds the authority App's key.
@@ -64,6 +74,9 @@ struct Source {
     /// Classic protection only: whether it binds administrators.
     enforce_admins: Option<bool>,
     classic: bool,
+    /// A `merge_queue` rule, which requires no check of its own but tests
+    /// each entry on the base it lands on.
+    queue: bool,
 }
 
 /// Whether everyone is held to a source.
@@ -76,14 +89,31 @@ enum Bypass {
     Unknown(String),
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn check(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = Path::new(&opts.project_dir);
     let policy = policy_list(root);
+    let up_to_date = remote::up_to_date_choice(root);
+    // The choice is named whenever it is not the default or a note goes
+    // with it, so a relaxed rule always says why.
+    let mut said: Vec<String> = Vec::new();
+    if !up_to_date.value.is_strict() {
+        said.push(up_to_date.line());
+    }
+    said.extend(up_to_date.notes.iter().cloned());
+    let said: String = said.iter().fold(String::new(), |mut all, part| {
+        all.push_str("; ");
+        all.push_str(part);
+        all
+    });
     let result = |status: Status, message: String| CheckResult {
         name: NAME.into(),
         status,
-        message: format!("{message}{}", policy.as_ref().map_or("", |(_, also)| also)),
+        message: format!(
+            "{message}{said}{}",
+            policy.as_ref().map_or("", |(_, also)| also)
+        ),
         duration: start.elapsed(),
     };
     let note =
@@ -134,13 +164,29 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let (classic, classic_unread) = classic_protection(&gh, &nwo, &branch);
 
     let sources = sources(&rules, classic.as_ref());
-    let problems = problems(opts, &nwo, &branch, &sources, required, &mut bypass_unread);
+    let problems = problems(
+        opts,
+        &nwo,
+        &branch,
+        &sources,
+        required,
+        up_to_date.value,
+        &mut bypass_unread,
+    );
     let profile = match opts.remote_profile.as_deref().map(Profile::parse) {
         None => None,
         Some(Ok(profile)) => Some(profile),
         Some(Err(why)) => return note(why),
     };
-    let extra = perimeter(&gh, &nwo, &branch, classic.as_ref(), profile, &problems);
+    let extra = perimeter(
+        &gh,
+        &nwo,
+        &branch,
+        classic.as_ref(),
+        profile,
+        &problems,
+        up_to_date.value,
+    );
     let base = base_answer(
         &nwo,
         &branch,
@@ -148,6 +194,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         &problems,
         classic_unread.as_ref(),
         &bypass_unread,
+        &up_to_date,
     );
 
     let mut message = match &base {
@@ -191,7 +238,13 @@ fn base_answer(
     problems: &[String],
     classic_unread: Option<&String>,
     bypass_unread: &[String],
+    up_to_date: &UpToDateChoice,
 ) -> Answer {
+    let on = match up_to_date.value {
+        UpToDate::Strict => "on an up-to-date branch",
+        UpToDate::Off => "without requiring an up-to-date branch",
+        UpToDate::MergeQueue => "on an up-to-date branch or through a merge queue",
+    };
     let mut unread: Vec<String> = classic_unread.into_iter().cloned().collect();
     unread.extend(bypass_unread.iter().cloned());
 
@@ -205,14 +258,14 @@ fn base_answer(
             format!("; {}", bypass_unread.join("; "))
         };
         return Answer::Note(format!(
-            "doctor cannot judge {nwo} {branch}: {why}, and the rulesets alone do not require every name in git.required_checks on an up-to-date branch for everyone{rest}"
+            "doctor cannot judge {nwo} {branch}: {why}, and the rulesets alone do not require every name in git.required_checks {on} for everyone{rest}"
         ));
     }
     if problems.is_empty() && !bypass_unread.is_empty() {
         // The rules look right, but a bypass list that cannot be read could
         // hold an actor who skips them, so this is not a pass.
         return Answer::Note(format!(
-            "{nwo} {branch} requires up-to-date checks, but doctor cannot confirm nobody can bypass them: {}",
+            "{nwo} {branch} requires its checks {on}, but doctor cannot confirm nobody can bypass them: {}",
             unread.join("; ")
         ));
     }
@@ -229,7 +282,7 @@ fn base_answer(
             .into_iter()
             .collect();
         Answer::Pass(format!(
-            "{nwo} {branch} requires {} on an up-to-date branch, including every name in git.required_checks{unread}",
+            "{nwo} {branch} requires {} {on}, including every name in git.required_checks{unread}",
             checks.join(", ")
         ))
     } else {
@@ -255,6 +308,7 @@ fn perimeter(
     classic: Option<&Value>,
     profile: Option<Profile>,
     problems: &[String],
+    up_to_date: UpToDate,
 ) -> Perimeter {
     let mut out = Perimeter::default();
     if classic
@@ -279,7 +333,7 @@ fn perimeter(
     open_windows(&rulesets, &mut out);
 
     if let Some(profile) = profile {
-        profile_gaps(&rulesets, profile, &mut out);
+        profile_gaps(&rulesets, profile, up_to_date, &mut out);
     }
 
     // The line pattern is C's, else the default.
@@ -289,7 +343,7 @@ fn perimeter(
         .and_then(|include| include.strip_prefix("refs/heads/"))
         .unwrap_or(DEFAULT_LINES)
         .to_string();
-    line_rules(&rulesets, &lines, profile.is_some(), &mut out);
+    line_rules(&rulesets, &lines, profile.is_some(), up_to_date, &mut out);
 
     loose_authority_pins(&rulesets, &mut out);
     declared_findings(gh, nwo, branch, &rulesets, &mut out);
@@ -475,7 +529,7 @@ fn rules_of<'a>(ruleset: &'a Value, kind: &'a str) -> impl Iterator<Item = &'a V
 }
 
 /// How the owned rulesets differ from `profile`.
-fn profile_gaps(rulesets: &[Value], profile: Profile, out: &mut Perimeter) {
+fn profile_gaps(rulesets: &[Value], profile: Profile, up_to_date: UpToDate, out: &mut Perimeter) {
     let mut gaps = Vec::new();
     for name in [
         RULESET_AUTHORITY_UPDATES,
@@ -507,7 +561,7 @@ fn profile_gaps(rulesets: &[Value], profile: Profile, out: &mut Perimeter) {
             if name == RULESET_AUTHORITY_UPDATES {
                 lacks.extend(update_gaps(ruleset, profile, out));
             } else {
-                lacks.extend(checks_gaps(ruleset, name, profile));
+                lacks.extend(checks_gaps(ruleset, name, profile, up_to_date));
             }
             if !lacks.is_empty() {
                 gaps.push(format!("ruleset {label}: {}", lacks.join(", ")));
@@ -563,8 +617,14 @@ fn update_gaps(ruleset: &Value, profile: Profile, out: &mut Perimeter) -> Vec<St
     lacks
 }
 
-/// How ruleset B or C differs from `profile`.
-fn checks_gaps(ruleset: &Value, name: &str, profile: Profile) -> Vec<String> {
+/// How ruleset B or C differs from `profile`. Strict checks are expected
+/// unless `git.require_up_to_date` is `false`, or `"merge_queue"` and B
+/// carries the merge queue rule.
+fn checks_gaps(ruleset: &Value, name: &str, profile: Profile, up_to_date: UpToDate) -> Vec<String> {
+    let queued = name == RULESET_AUTHORITY_CHECKS
+        && up_to_date == UpToDate::MergeQueue
+        && rules_of(ruleset, "merge_queue").next().is_some();
+    let strict_expected = up_to_date != UpToDate::Off && !queued;
     let mut lacks = Vec::new();
     let approvals = if name == RULESET_AUTHORITY_CHECKS {
         profile.approvals()
@@ -593,10 +653,18 @@ fn checks_gaps(ruleset: &Value, name: &str, profile: Profile) -> Vec<String> {
     let checks: Vec<&Value> = status_checks(ruleset).collect();
     if checks.is_empty() {
         lacks.push("it requires no status checks".to_string());
-    } else if rules_of(ruleset, "required_status_checks")
-        .any(|rule| rule["parameters"]["strict_required_status_checks_policy"] != true)
+    } else if strict_expected
+        && rules_of(ruleset, "required_status_checks")
+            .any(|rule| rule["parameters"]["strict_required_status_checks_policy"] != true)
     {
-        lacks.push("its checks are not strict".to_string());
+        lacks.push(
+            if name == RULESET_AUTHORITY_CHECKS && up_to_date == UpToDate::MergeQueue {
+                "its checks are not strict and it has no merge queue rule"
+            } else {
+                "its checks are not strict"
+            }
+            .to_string(),
+        );
     }
     let unpinned: Vec<&str> = checks
         .iter()
@@ -622,7 +690,13 @@ fn checks_gaps(ruleset: &Value, name: &str, profile: Profile) -> Vec<String> {
 
 /// The rules on the integration lines: a non-strict check rule, and no
 /// rule that requires a pull request.
-fn line_rules(rulesets: &[Value], lines: &str, asked: bool, out: &mut Perimeter) {
+fn line_rules(
+    rulesets: &[Value],
+    lines: &str,
+    asked: bool,
+    up_to_date: UpToDate,
+    out: &mut Perimeter,
+) {
     let mut targeting = Vec::new();
     for ruleset in rulesets.iter().filter(|r| r["enforcement"] == "active") {
         match remote::ruleset_targets(ruleset, lines, None) {
@@ -633,7 +707,9 @@ fn line_rules(rulesets: &[Value], lines: &str, asked: bool, out: &mut Perimeter)
                 .push(format!("ruleset {}: {why}", remote::ruleset_label(ruleset))),
         }
     }
-    for ruleset in &targeting {
+    // `false` relaxes the lines too; a merge queue is the default branch's
+    // alone, so the lines stay strict under it.
+    for ruleset in targeting.iter().filter(|_| up_to_date != UpToDate::Off) {
         if rules_of(ruleset, "required_status_checks")
             .any(|rule| rule["parameters"]["strict_required_status_checks_policy"] != true)
         {
@@ -851,30 +927,56 @@ fn classic_protection(
 /// requirement, is unbound when every rule that requires it can be
 /// bypassed; a bypass list that decides this and cannot be read is added
 /// to `bypass_unread`.
+#[allow(clippy::too_many_lines)]
 fn problems(
     opts: &Options,
     nwo: &str,
     branch: &str,
     sources: &[Source],
     required: &[String],
+    up_to_date: UpToDate,
     bypass_unread: &mut Vec<String>,
 ) -> Vec<String> {
-    if sources.is_empty() {
+    if sources.iter().all(|s| s.queue) {
         return vec![format!(
             "{branch} requires no status checks, so a pull request can merge without CI"
         )];
     }
     let mut problems = Vec::new();
-    let strict: Vec<usize> = (0..sources.len()).filter(|&i| sources[i].strict).collect();
-    if strict.is_empty() {
-        problems.push(format!(
-            "{branch} requires status checks but not that a branch be up to date ({}), so a pull request can merge on checks that ran against an older {branch}",
-            sources
-                .iter()
-                .map(|s| s.label.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+    let labels = || {
+        sources
+            .iter()
+            .filter(|s| !s.queue)
+            .map(|s| s.label.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // What gives the up-to-date requirement: strict check rules, and under
+    // `merge_queue` a merge queue rule too; under `false`, nothing is
+    // needed.
+    let current: Vec<usize> = (0..sources.len())
+        .filter(|&i| {
+            let s = &sources[i];
+            (s.strict && !s.queue) || (s.queue && up_to_date == UpToDate::MergeQueue)
+        })
+        .collect();
+    let need_current = match up_to_date {
+        UpToDate::Strict => Some("a branch to be up to date"),
+        UpToDate::MergeQueue => Some("a branch to be up to date or a merge queue"),
+        UpToDate::Off => None,
+    };
+    if need_current.is_some() && current.is_empty() {
+        problems.push(if up_to_date == UpToDate::MergeQueue {
+            format!(
+                "{branch} requires status checks but neither a merge queue nor that a branch be up to date ({}), although {UP_TO_DATE_KEY} is merge_queue, so a pull request can merge on checks that ran against an older {branch}",
+                labels()
+            )
+        } else {
+            format!(
+                "{branch} requires status checks but not that a branch be up to date ({}), so a pull request can merge on checks that ran against an older {branch}",
+                labels()
+            )
+        });
     }
     let missing: Vec<&str> = required
         .iter()
@@ -899,7 +1001,9 @@ fn problems(
             (carriers, name.clone())
         })
         .collect();
-    needs.push((strict, "a branch to be up to date".to_string()));
+    if let Some(need) = need_current {
+        needs.push((current, need.to_string()));
+    }
     let mut bypass: Vec<Option<Bypass>> = (0..sources.len()).map(|_| None).collect();
     for (carriers, _) in &needs {
         for &i in carriers {
@@ -1004,6 +1108,22 @@ fn bypass_of(opts: &Options, nwo: &str, source: &Source) -> Bypass {
 fn sources(rules: &Value, classic: Option<&Value>) -> Vec<Source> {
     let mut sources = Vec::new();
     for rule in rules.as_array().into_iter().flatten() {
+        if rule.get("type").and_then(Value::as_str) == Some("merge_queue") {
+            let id = rule.get("ruleset_id").and_then(Value::as_u64);
+            sources.push(Source {
+                label: id.map_or_else(
+                    || "a merge queue rule".to_string(),
+                    |id| format!("ruleset {id}"),
+                ),
+                strict: false,
+                contexts: Vec::new(),
+                ruleset_id: id,
+                enforce_admins: None,
+                classic: false,
+                queue: true,
+            });
+            continue;
+        }
         if rule.get("type").and_then(Value::as_str) != Some("required_status_checks") {
             continue;
         }
@@ -1023,6 +1143,7 @@ fn sources(rules: &Value, classic: Option<&Value>) -> Vec<Source> {
             ruleset_id: id,
             enforce_admins: None,
             classic: false,
+            queue: false,
         });
     }
     if let Some(checks) = classic
@@ -1055,6 +1176,7 @@ fn sources(rules: &Value, classic: Option<&Value>) -> Vec<Source> {
                     .and_then(|c| c.pointer("/enforce_admins/enabled"))
                     .and_then(Value::as_bool),
                 classic: true,
+                queue: false,
             });
         }
     }
@@ -1535,6 +1657,163 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("git.commit_ticket_pattern"), "{text}");
+    }
+
+    /// A clone of an origin whose `main` holds `committed` as the policy,
+    /// fetched, with `origin` then pointed at `https://github.com/o/r.git`
+    /// and the working copy's policy set to `working`.
+    fn committed_project(
+        committed: Option<&str>,
+        working: Option<&str>,
+    ) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let origin = git2::Repository::init_opts(base.join("origin"), &options).unwrap();
+        let mut index = origin.index().unwrap();
+        let mut files = vec![("README.md", "x\n")];
+        if let Some(policy) = committed {
+            files.push((".codeflow/policy.json", policy));
+        }
+        for (path, text) in files {
+            let file = base.join("origin").join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, text).unwrap();
+            index.add_path(Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = origin.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+        origin
+            .commit(Some("HEAD"), &signature, &signature, "test: x", &tree, &[])
+            .unwrap();
+        let work = base.join("work");
+        let clone = git2::Repository::clone(base.join("origin").to_str().unwrap(), &work).unwrap();
+        clone
+            .remote_set_url("origin", "https://github.com/o/r.git")
+            .unwrap();
+        if let Some(policy) = working {
+            write_policy(&work, policy);
+        }
+        (dir, work)
+    }
+
+    fn up_to_date_policy(value: &str) -> String {
+        format!(r#"{{"schema_version":1,"git":{{"require_up_to_date":{value}}}}}"#)
+    }
+
+    fn strict_exec(_: &str, args: &[&str]) -> Result<String, String> {
+        host(args, &ruleset(true), None, "[]")
+    }
+
+    fn loose_exec(_: &str, args: &[&str]) -> Result<String, String> {
+        host(args, &ruleset(false), None, "[]")
+    }
+
+    /// Non-strict checks and a merge queue rule, both from ruleset 7.
+    fn queued_exec(_: &str, args: &[&str]) -> Result<String, String> {
+        let mut rules: Vec<Value> = serde_json::from_str(&ruleset(false)).unwrap();
+        rules.push(serde_json::json!({
+            "type": "merge_queue",
+            "parameters": { "merge_method": "MERGE", "grouping_strategy": "ALLGREEN" },
+            "ruleset_source_type": "Repository", "ruleset_source": "o/r", "ruleset_id": 7
+        }));
+        host(args, &Value::Array(rules).to_string(), None, "[]")
+    }
+
+    /// TSK-1396 AC-1: doctor judges each committed value against strict
+    /// and non-strict live rules, and a relaxed value always says why.
+    #[test]
+    fn doctor_honours_each_committed_value() {
+        type Exec = fn(&str, &[&str]) -> Result<String, String>;
+        let off = up_to_date_policy("false");
+        let queue = up_to_date_policy(r#""merge_queue""#);
+        let cases: [(Option<&str>, Exec, bool, &str); 7] = [
+            (None, strict_exec, true, "o/r main requires"),
+            (
+                None,
+                loose_exec,
+                false,
+                "not that a branch be up to date (ruleset 7)",
+            ),
+            (
+                Some(&off),
+                strict_exec,
+                true,
+                "git.require_up_to_date: false (read from",
+            ),
+            (
+                Some(&off),
+                loose_exec,
+                true,
+                "git.require_up_to_date: false (read from",
+            ),
+            (
+                Some(&queue),
+                strict_exec,
+                true,
+                "git.require_up_to_date: merge_queue",
+            ),
+            (
+                Some(&queue),
+                loose_exec,
+                false,
+                "neither a merge queue nor that a branch be up to date",
+            ),
+            (
+                Some(&queue),
+                queued_exec,
+                true,
+                "git.require_up_to_date: merge_queue",
+            ),
+        ];
+        for (committed, exec, pass, needle) in cases {
+            let (_dir, work) = committed_project(committed, None);
+            let result = check(&opts(&work, exec));
+            let case = format!("{committed:?} pass={pass}");
+            if pass {
+                assert_eq!(result.status, Status::Pass, "{case}: {}", result.message);
+                assert!(
+                    !result.message.contains("not that a branch be up to date"),
+                    "{case}: {}",
+                    result.message
+                );
+            } else {
+                assert!(
+                    matches!(result.status, Status::Warn(_)),
+                    "{case}: {:?} {}",
+                    result.status,
+                    result.message
+                );
+            }
+            assert!(
+                result.message.contains(needle),
+                "{case}: {}",
+                result.message
+            );
+        }
+    }
+
+    /// TSK-1396 AC-1: a working copy set to `false` while the authority
+    /// has the key absent or `true` still warns, and says the working
+    /// value is ignored.
+    #[test]
+    fn a_working_copy_value_never_quiets_doctor() {
+        let off = up_to_date_policy("false");
+        let on = up_to_date_policy("true");
+        for committed in [None, Some(on.as_str())] {
+            let (_dir, work) = committed_project(committed, Some(&off));
+            let text = warn_text(&check(&opts(&work, loose_exec)));
+            assert!(
+                text.contains("not that a branch be up to date (ruleset 7)"),
+                "{committed:?}: {text}"
+            );
+            assert!(
+                text.contains("sets git.require_up_to_date to false, which is ignored"),
+                "{committed:?}: {text}"
+            );
+        }
     }
 
     #[test]

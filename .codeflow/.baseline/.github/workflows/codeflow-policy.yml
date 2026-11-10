@@ -24,10 +24,25 @@
 #
 # The verdict job is also the enforcing check of the shared id registry for
 # the pull request (SPC-013 R-14, R-20, R-109; ADR-0072); with durable work
-# tracking off, `codeflow ids check` passes with a note. This workflow has
-# no other trigger: pushes, the schedule and manual runs check the registry
-# in codeflow-registry.yml, so they create no check under a `trusted:` name,
-# not even a skipped one, which GitHub would count as passing.
+# tracking off, `codeflow ids check` passes with a note. Its only other
+# trigger is a merge queue entry (`merge_group`, below): pushes, the
+# schedule and manual runs check the registry in codeflow-registry.yml, so
+# they create no check under a `trusted:` name, not even a skipped one,
+# which GitHub would count as passing.
+#
+# A merge queue (git.require_up_to_date: "merge_queue", ADR-0100) needs
+# every required check on each queue entry, so the verdict job runs on
+# `merge_group` too, and no step that judges is skipped there. The
+# authority is then the queue's base commit (merge_group.base_sha), which
+# must be on the default branch, never the queue commit: the binary, the
+# pin and the policy come from it, and the queue commit is fetched as data
+# and judged as a range. Each pull request in the entry had its body and
+# branch judged by its own pull_request_target run, so the entry's run
+# reads no body and names no branch. GitHub runs this file from the queue
+# commit on that event, so a change to this file applies to its own queue
+# entry; the pull_request_target run of the pull request that makes the
+# change judged it first, and the workflow-change warning names it. Each
+# queue entry has its own concurrency group.
 #
 # Pull request runs share one concurrency group per pull request, and no
 # event cancels or replaces a run: `cancel-in-progress` is false and
@@ -58,12 +73,14 @@ name: codeflow-policy
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
+  group: ${{ github.event_name == 'merge_group' && format('{0}-queue-{1}', github.workflow, github.event.merge_group.head_sha) || format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
   cancel-in-progress: false
   queue: max
 
@@ -72,6 +89,12 @@ jobs:
     name: "trusted: commit standards"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # The authority commit: the run's own commit on pull_request_target
+    # (the default branch's tip), the queue's base commit on merge_group,
+    # and nothing for a merge_group event without one, which the first step
+    # refuses. It is never the queue commit.
+    env:
+      AUTHORITY_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name != 'merge_group' && github.sha || '' }}
     # Read access to pull requests serves the body step and nothing else;
     # the token stays read-only.
     permissions:
@@ -86,12 +109,21 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          AUTHORITY_SHA: ${{ github.sha }}
+          QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
-            echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not the default branch ${DEFAULT_BRANCH:-(unknown)} on pull_request_target; nothing is judged"; exit 1
-          fi
+          case "$EVENT" in
+            pull_request_target)
+              if [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+                echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not the default branch ${DEFAULT_BRANCH:-(unknown)} on pull_request_target; nothing is judged"; exit 1
+              fi ;;
+            merge_group)
+              if [ -z "$DEFAULT_BRANCH" ] || [ "$QUEUE_BASE_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+                echo "::error::this queue entry is for ${QUEUE_BASE_REF:-(unknown)}, not the default branch ${DEFAULT_BRANCH:-(unknown)}; nothing is judged"; exit 1
+              fi ;;
+            *)
+              echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not pull_request_target or merge_group; nothing is judged"; exit 1 ;;
+          esac
           if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
             echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is judged"; exit 1
           fi
@@ -101,12 +133,10 @@ jobs:
       # binary, the pin and the policy all come from this checkout.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.AUTHORITY_SHA }}
           fetch-depth: 0
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -224,8 +254,6 @@ jobs:
           echo "codeflow ${version} installed and verified against ${verified}"
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -234,18 +262,30 @@ jobs:
           fi
 
       # The base and the head are git data: fetched to refs, never checked
-      # out or run. Each must be the commit the event names.
+      # out or run. Each must be the commit the event names. A queue
+      # entry's head is the queue commit, and its base must be on the
+      # default branch.
       - name: Fetch the pull request's base and head as data
         env:
+          EVENT: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
+          if [ "$EVENT" = merge_group ]; then
+            git fetch --no-tags origin "+${QUEUE_REF}:refs/codeflow/pr-head"
+            if ! git merge-base --is-ancestor "$AUTHORITY_SHA" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
+              echo "::error::the queue's base ${AUTHORITY_SHA} is not on the default branch ${DEFAULT_BRANCH}; nothing is judged"; exit 1
+            fi
+          else
+            git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
+          fi
           fetched=$(git rev-parse refs/codeflow/pr-head)
           if [ "$fetched" != "$HEAD_SHA" ]; then
-            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
+            echo "::error::the head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
           fi
           git fetch --no-tags origin "+${BASE_SHA}:refs/codeflow/pr-base"
           if [ "$(git rev-parse refs/codeflow/pr-base)" != "$BASE_SHA" ]; then
@@ -253,8 +293,6 @@ jobs:
           fi
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -293,8 +331,6 @@ jobs:
           echo "pull request body judged: sha256 ${digest}"
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -309,9 +345,9 @@ jobs:
       # (--policy-from, --baseline-from), never the target's.
       - name: codeflow ci (commit + branch + PR-body standards)
         env:
-          AUTHORITY_SHA: ${{ github.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BODY_FILE: ${{ runner.temp }}/pr-body.md
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
@@ -322,11 +358,16 @@ jobs:
             echo "::error::the default branch at ${AUTHORITY_SHA} has no .codeflow/policy.json, so nothing is judged; land the policy on the default branch first (the adoption pull request that adds it fails this check by design)"
             exit 1
           fi
-          codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA" --pr-body-file "$BODY_FILE"
+          if [ "$EVENT" = merge_group ]; then
+            # A queue entry: its pull requests' bodies and branches were
+            # judged by their own runs; the queue commit's range is judged
+            # here with the authority's policy.
+            codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --actor unknown --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA"
+          else
+            codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --policy-from "$AUTHORITY_SHA" --baseline-from "$AUTHORITY_SHA" --pr-body-file "$BODY_FILE"
+          fi
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -345,8 +386,6 @@ jobs:
           fi
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -356,12 +395,10 @@ jobs:
 
       - name: codeflow ids check
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)
@@ -409,8 +446,6 @@ jobs:
           echo "the pull request head, base branch and body are unchanged since this run judged them"
 
       - name: Assert the authority checkout
-        env:
-          AUTHORITY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           head=$(git rev-parse --verify HEAD)

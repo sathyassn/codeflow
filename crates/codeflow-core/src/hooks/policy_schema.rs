@@ -91,6 +91,8 @@ pub enum KeyKind {
     String,
     /// A closed enum accepting exactly the listed values.
     Enum(&'static [&'static str]),
+    /// A JSON boolean, or exactly one of the listed strings.
+    BoolOr(&'static [&'static str]),
     /// A list of automation profile objects (SPC-013 R-82).
     Profiles,
     /// The PR-section mapping object (SPC-013 R-84).
@@ -113,6 +115,7 @@ impl KeyKind {
             Self::StringList => "string list",
             Self::String => "string",
             Self::Enum(_) => "enum",
+            Self::BoolOr(_) => "boolean or enum",
             Self::Profiles => "profile list",
             Self::SectionMapping | Self::ContentRule => "object",
             Self::RetryEntries => "entry list",
@@ -163,7 +166,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 86] = [
+pub const SCHEMA: [KeySpec; 87] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -502,6 +505,13 @@ pub const SCHEMA: [KeySpec; 86] = [
                 remote-perimeter` warns when the default branch's live rules do \
                 not require them. The shipped policy file does not list it, so an \
                 older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.require_up_to_date",
+        kind: KeyKind::BoolOr(&["merge_queue"]),
+        valid: "true | false | \"merge_queue\"",
+        purpose: "Whether a protected branch requires a pull request to be up to date with its base before it merges (ADR-0081, amended by ADR-0100).",
+        notes: "Default true, also when the key is absent: `codeflow remote protect` writes strict required checks and `codeflow doctor --check remote-perimeter` warns when the live rules are not strict. Cost: every pull request is updated and its checks run again whenever the base moves first. `false` writes non-strict checks and doctor stops warning about strictness and says why; its cost is that two pull requests each green on an older base can both merge and leave the branch red. `\"merge_queue\"` adds GitHub's merge queue rule to the default branch's checks ruleset with non-strict checks, and the shipped CI and policy workflows run on `merge_group`, so each entry is tested on the base it will land on; integration lines and other protected branches keep strict checks. A merge queue on GitHub needs an organization-owned repository (and a plan that offers it for a private one); remote protect refuses it, with the reason, for a user-owned repository, a provider without an adapter, or `--check-app`, and keeps the strict rule. A value other than true relaxes a protection, so both commands honour it only from the policy authority, the remote's default branch as last fetched (plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, no ref file that is a symbolic link); a working copy, a local branch, a repository without a remote and the environment never relax it, and a working copy that sets true keeps the strict rule. An update never lowers a live rule: remote protect does not turn off strictness a live ruleset already has, so an administrator turns it off on the host. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: commit format ----------------------------------------------
     KeySpec {
@@ -1549,6 +1559,7 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
 
 /// Validate one leaf `path`/`value` pair against its [`KeySpec`]; a path the
 /// schema does not know is an unknown-key error.
+#[allow(clippy::too_many_lines)]
 fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     if deprecated_key(path).is_some() {
         return;
@@ -1637,6 +1648,15 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
         KeyKind::PathRules => validate_path_rules(path, value, errors),
         KeyKind::ContentRule => validate_content_rule(path, value, errors),
+        KeyKind::BoolOr(values) => {
+            if !value.is_boolean() && !value.as_str().is_some_and(|s| values.contains(&s)) {
+                errors.push(PolicyError::invalid_value(
+                    path,
+                    value,
+                    &format!("true, false or one of: {}", values.join(", ")),
+                ));
+            }
+        }
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -1930,7 +1950,7 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 12] = [
+        const OPTIONAL: [&str; 13] = [
             "security.text_guard",
             "git.pr_section_mapping",
             "git.ignored_files",
@@ -1943,6 +1963,7 @@ mod tests {
             "security.script_bypass",
             "security.sandbox_retry",
             "security.sandbox_retry_allow",
+            "git.require_up_to_date",
         ];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
@@ -2004,6 +2025,29 @@ mod tests {
             "{}",
             errs[0]
         );
+    }
+
+    /// TSK-1396 AC-1: `git.require_up_to_date` takes `true`, `false` or
+    /// `"merge_queue"`, and refuses anything else naming the three.
+    #[test]
+    fn require_up_to_date_takes_true_false_or_merge_queue() {
+        for value in ["true", "false", r#""merge_queue""#] {
+            let text = format!(r#"{{"git":{{"require_up_to_date":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_ok(), "{value}");
+        }
+        for value in [r#""true""#, r#""queue""#, "1", "null", "[]"] {
+            let text = format!(r#"{{"git":{{"require_up_to_date":{value}}}}}"#);
+            let errs = validate_policy_str(&text).unwrap_err();
+            assert_eq!(errs.len(), 1, "{value}: {errs:?}");
+            assert_eq!(errs[0].key, "git.require_up_to_date");
+            assert!(
+                errs[0]
+                    .message
+                    .contains("true, false or one of: merge_queue"),
+                "{value}: {}",
+                errs[0]
+            );
+        }
     }
 
     #[test]

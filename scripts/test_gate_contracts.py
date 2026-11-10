@@ -244,6 +244,13 @@ class GateContracts(unittest.TestCase):
         "  cancel-in-progress: false\n"
         "  queue: max\n\n"
     )
+    # TSK-1396: with a merge queue trigger, each queue entry has its own
+    # group, keyed by its queue commit, and pull requests keep theirs.
+    POLICY_CONCURRENCY_QUEUE = POLICY_CONCURRENCY.replace(
+        "${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}",
+        "${{ github.event_name == 'merge_group' && format('{0}-queue-{1}', github.workflow, "
+        "github.event.merge_group.head_sha) || format('{0}-pr-{1}', github.workflow, "
+        "github.event.pull_request.number) }}")
     # The judging run reads the body when it runs, so a run that waited in
     # the queue judges the newest body, whichever event started it.
     POLICY_BODY = (
@@ -254,8 +261,10 @@ class GateContracts(unittest.TestCase):
 
     def assert_policy_queues_every_pull_request_run(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
-        self.assertIn(self.POLICY_CONCURRENCY, workflow)
-        self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
+        concurrency = (self.POLICY_CONCURRENCY_QUEUE if '\n  merge_group:\n' in workflow
+                       else self.POLICY_CONCURRENCY)
+        self.assertIn(concurrency, workflow)
+        self.assertLess(workflow.index(concurrency), workflow.index('\njobs:\n'))
         self.assertIn(self.POLICY_BODY, workflow)
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
         self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)

@@ -376,6 +376,18 @@ pub struct GitPolicy {
     /// [`DEFAULT_REQUIRED_CHECKS`], the shipped CI job names. The shipped
     /// policy file does not list it, so an older binary never meets the key.
     pub required_checks: Vec<String>,
+    /// Whether a protected branch requires a pull request to be up to date
+    /// with its base before it merges (TSK-1396, amending ADR-0081): `true`,
+    /// the default, also when absent; `false`; or `"merge_queue"`, where the
+    /// default branch tests each entry in the host's merge queue instead.
+    /// `codeflow remote protect` and `codeflow doctor --check
+    /// remote-perimeter` read it. A value other than `true` relaxes a
+    /// protection, so they honour it only from the policy authority, the
+    /// remote's default branch as last fetched
+    /// ([`up_to_date_choice`](crate::remote::up_to_date_choice)), never from
+    /// the working copy or the environment.
+    #[serde(skip_serializing_if = "UpToDate::is_strict")]
+    pub require_up_to_date: UpToDate,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     /// Max length of the commit *description* — the text after `type(scope): `.
@@ -701,6 +713,7 @@ impl Default for GitPolicy {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            require_up_to_date: UpToDate::Strict,
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert",
@@ -1012,6 +1025,65 @@ pub struct SecuritySection {
     pub text_guard: TextGuard,
 }
 
+/// The `git.require_up_to_date` values: JSON `true`, `false` or the string
+/// `"merge_queue"`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UpToDate {
+    /// `true`: a pull request merges only on checks that ran on a branch up
+    /// to date with its base (ADR-0081).
+    #[default]
+    Strict,
+    /// `false`: the checks need not have run on the current base.
+    Off,
+    /// `"merge_queue"`: the default branch merges through the host's merge
+    /// queue, which tests each entry on the base it will land on.
+    MergeQueue,
+}
+
+impl UpToDate {
+    /// The string value of the merge-queue setting.
+    pub const MERGE_QUEUE: &'static str = "merge_queue";
+
+    /// Whether this is the default, `true`.
+    #[must_use]
+    pub fn is_strict(&self) -> bool {
+        *self == Self::Strict
+    }
+
+    /// The value as the policy file spells it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "true",
+            Self::Off => "false",
+            Self::MergeQueue => Self::MERGE_QUEUE,
+        }
+    }
+}
+
+impl Serialize for UpToDate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Strict => serializer.serialize_bool(true),
+            Self::Off => serializer.serialize_bool(false),
+            Self::MergeQueue => serializer.serialize_str(Self::MERGE_QUEUE),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UpToDate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::Bool(true) => Ok(Self::Strict),
+            serde_json::Value::Bool(false) => Ok(Self::Off),
+            serde_json::Value::String(text) if text == Self::MERGE_QUEUE => Ok(Self::MergeQueue),
+            _ => Err(serde::de::Error::custom(
+                "git.require_up_to_date must be true, false or \"merge_queue\"",
+            )),
+        }
+    }
+}
+
 /// The `security.text_guard` values.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1311,6 +1383,40 @@ pub fn read_project_toml(root: &Path) -> Result<Option<toml::Value>, String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// TSK-1396 AC-1: the default is strict, also when the key is absent;
+    /// the three values read and write back as written, and the default is
+    /// never written out.
+    #[test]
+    fn require_up_to_date_reads_and_writes_its_three_values() {
+        use super::{Policy, UpToDate};
+        let read = |text: &str| -> Result<Policy, serde_json::Error> { serde_json::from_str(text) };
+        assert_eq!(read("{}").unwrap().git.require_up_to_date, UpToDate::Strict);
+        assert_eq!(Policy::default().git.require_up_to_date, UpToDate::Strict);
+        for (text, value) in [
+            ("true", UpToDate::Strict),
+            ("false", UpToDate::Off),
+            (r#""merge_queue""#, UpToDate::MergeQueue),
+        ] {
+            let policy = read(&format!(r#"{{"git":{{"require_up_to_date":{text}}}}}"#)).unwrap();
+            assert_eq!(policy.git.require_up_to_date, value, "{text}");
+            assert_eq!(serde_json::to_string(&value).unwrap(), text);
+        }
+        for text in [r#""false""#, r#""queue""#, "0", "null"] {
+            let error = read(&format!(r#"{{"git":{{"require_up_to_date":{text}}}}}"#)).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("must be true, false or \"merge_queue\""),
+                "{text}: {error}"
+            );
+        }
+        let written = serde_json::to_value(Policy::default()).unwrap();
+        assert!(
+            written["git"].get("require_up_to_date").is_none(),
+            "{written}"
+        );
+    }
 
     #[cfg(unix)]
     #[test]

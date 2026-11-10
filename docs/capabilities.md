@@ -284,7 +284,8 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 - `codeflow remote protect` writes GitHub rulesets it owns: one role moves
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
-  rule and reports what the plan cannot apply.
+  live rule, even when `git.require_up_to_date` turns strict checks off or
+  adds a merge queue, and reports what the plan cannot apply.
 - `codeflow doctor` runs twenty-six health checks on the repository and the
   tools around it, including the default branch's host rules.
 

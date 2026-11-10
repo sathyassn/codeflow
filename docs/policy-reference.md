@@ -40,6 +40,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree. | Default 200. A tree older than the depth is not found, so the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.branch_name_omit_words` | string list | `["secret","credentials"]` | an array of words of lower-case letters and digits | Words that work claim and epic new --integration leave out of a generated branch name. | A loose ref is a file named after its branch, and a sandbox can refuse to read a file by its name; git then reports that ref as broken. An entry matches anywhere inside a title word. The default holds the words the Claude Code sandbox was probed to refuse; set the list your harness needs, or an empty list to keep every word. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.require_up_to_date` | boolean or enum | `absent` | true \| false \| "merge_queue" | Whether a protected branch requires a pull request to be up to date with its base before it merges (ADR-0081, amended by ADR-0100). | Default true, also when the key is absent: `codeflow remote protect` writes strict required checks and `codeflow doctor --check remote-perimeter` warns when the live rules are not strict. Cost: every pull request is updated and its checks run again whenever the base moves first. `false` writes non-strict checks and doctor stops warning about strictness and says why; its cost is that two pull requests each green on an older base can both merge and leave the branch red. `"merge_queue"` adds GitHub's merge queue rule to the default branch's checks ruleset with non-strict checks, and the shipped CI and policy workflows run on `merge_group`, so each entry is tested on the base it will land on; integration lines and other protected branches keep strict checks. A merge queue on GitHub needs an organization-owned repository (and a plan that offers it for a private one); remote protect refuses it, with the reason, for a user-owned repository, a provider without an adapter, or `--check-app`, and keeps the strict rule. A value other than true relaxes a protection, so both commands honour it only from the policy authority, the remote's default branch as last fetched (plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, no ref file that is a symbolic link); a working copy, a local branch, a repository without a remote and the environment never relax it, and a working copy that sets true keeps the strict rule. An update never lowers a live rule: remote protect does not turn off strictness a live ruleset already has, so an administrator turns it off on the host. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
 | `git.commit_types` | string list | `["feat","fix","docs","refactor","test","chore","ci","perf","build","revert"]` | an array of lower-case conventional commit types | The whitelist of commit types. | Enforced under commit_format. |
 | `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_format. |
@@ -1149,8 +1150,9 @@ the project stood and is left out when the project has no commit yet.
 ## Remote protection
 
 `codeflow remote protect` writes the host rules as GitHub repository
-rulesets it owns by name. No policy key selects them: the flags below do,
-and nothing is stored (issue 279, TSK-1080).
+rulesets it owns by name. The flags below select them, and nothing is
+stored (issue 279, TSK-1080). One policy key, `git.require_up_to_date`,
+chooses how a branch is kept up to date (TSK-1396, below).
 
 The rulesets:
 
@@ -1247,6 +1249,58 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   unwritten. A second run with nothing to change writes nothing.
 - **Reducing a rule.** There is no command for it. An administrator edits
   the ruleset on the host, where the host records the change.
+
+### Up to date or a merge queue
+
+A check tests the merge of a branch with its base as the base was when the
+run started, so two pull requests each green on an older base can merge
+and leave the branch red (ADR-0081). `git.require_up_to_date` chooses how
+that is prevented:
+
+- `true` (the default, also when absent): ruleset B, ruleset C and
+  `codeflow protect <pattern>` write strict checks. Cost: each pull request
+  is updated and its checks rerun after every other merge.
+- `false`: all of them write checks that are not strict. Cost: nothing
+  stops a merge on checks that ran against an older base; whoever merges
+  confirms they ran on the current one.
+- `"merge_queue"`: ruleset B writes checks that are not strict plus
+  GitHub's `merge_queue` rule; ruleset C and `codeflow protect <pattern>`
+  keep strict checks. Cost: GitHub offers merge queues only to repositories
+  an organization owns, and the CI and policy workflows run again for each
+  queue entry.
+
+- **Only the committed value relaxes the rule.** `remote protect` and
+  `doctor` read the key from the remote's default branch as last fetched,
+  through plain remote-tracking refs, as `security.text_guard: relaxed`
+  is read. A value in the working copy, on a local branch or in the
+  environment, a repository without a remote and an authority that cannot
+  be read all keep `true`; a working copy that sets `true` keeps it too.
+  The report names the value and where it was read.
+- **An update never lowers a live strict rule.** After choosing `false`,
+  an administrator turns strictness off on the host.
+- **When no queue is added.** With `"merge_queue"`, a repository owned by
+  a user account, an owner `gh` does not report, `--check-app` (whose App
+  is not known to report for queue entries) and a provider other than
+  GitHub keep B strict, and the run is degraded with the reason. When the
+  host refuses the queue rule, for example on a plan without merge queues,
+  B is written with strict checks instead, and the dry run prints that
+  request beside the queued one.
+- **Doctor.** Under `false` doctor does not warn that checks are not
+  strict; under `"merge_queue"` a merge queue rule on the default branch
+  counts in place of strict checks. A relaxed value is named in every
+  message, and a working-copy value that is ignored is noted.
+- **Workflows.** The shipped CI and policy workflows trigger on
+  `merge_group` and run every job for a queue entry. The policy job judges
+  from the queue's base on the default branch and treats the queue commit
+  as data; the installed release and the trusted inputs come from the
+  queue's base. GitHub runs a queue entry's workflow file from the queue
+  commit, so a change to the workflow takes effect in the queue before it
+  lands; the pull request's own run, from the default branch, judged that
+  change first (ADR-0081 as amended).
+- **One entry builds at a time.** The queue rule sets
+  `max_entries_to_build` to 1: an entry built behind another has that
+  entry's queue commit as its base, which is not on the default branch, so
+  the policy job would refuse it. GitHub's other defaults are kept.
 
 ### Enablement order
 

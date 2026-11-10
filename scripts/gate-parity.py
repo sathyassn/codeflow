@@ -745,6 +745,9 @@ RELEASE_IF = ("${{ !cancelled() && needs.reuse.outputs.run == '' && (github.even
               "github.event.pull_request.base.ref) || github.event_name == 'push' && "
               "contains(fromJSON('[\"refs/heads/main\",\"refs/heads/master\"]'), github.ref) || "
               "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}")
+# TSK-1396: a merge queue entry into main runs the release parts too.
+RELEASE_IF_QUEUE = RELEASE_IF.replace("github.event_name == 'workflow_dispatch') }}",
+                                      "github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') }}")
 
 
 def release_job_problems(release: str, gate: str, workflow: str, released: list[str]) -> list[str]:
@@ -752,7 +755,7 @@ def release_job_problems(release: str, gate: str, workflow: str, released: list[
         return ["the workflow must have the gates-release job that runs the release-tier targets"]
     problems = []
     condition = re.search(r"^ {4}if:\s*(.+?)\s*$", release, re.M)
-    if not condition or condition.group(1) != RELEASE_IF:
+    if not condition or condition.group(1) not in (RELEASE_IF, RELEASE_IF_QUEUE):
         problems.append(f"the gates-release job's condition must be exactly `if: {RELEASE_IF}`, so it runs on "
                         "the release path and never on a pull request into integration/**")
     if "    needs: [reuse, gates-build]" not in [line.rstrip() for line in release.splitlines()]:
