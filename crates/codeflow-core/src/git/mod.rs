@@ -59,10 +59,14 @@ pub fn local_objects_only(command: &mut std::process::Command) -> &mut std::proc
 /// A judging Git process whose repository is selected by its explicit path.
 /// Inherited location, namespace, object-store and command-config variables
 /// cannot steer these reads (`GIT_NAMESPACE` would select which refs a local
-/// remote advertises, TSK-1077 review round 02 F4). `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`
-/// are kept on purpose: repository, user and system config remain in scope.
-/// This is not a sandbox against local-config tampering. Never changes the
-/// caller's env.
+/// remote advertises, TSK-1077 review round 02 F4). The deprecated
+/// `GIT_CONFIG` file goes too: only `git config` reads it, so a `git config`
+/// read under it would differ from what every other git command, a
+/// transport included, reads (TSK-327). `GIT_CONFIG_GLOBAL`,
+/// `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM` are kept on purpose:
+/// repository, user and system config remain in scope, as for any git
+/// command. This is not a sandbox against local-config tampering. Never
+/// changes the caller's env.
 #[must_use]
 pub fn judging_command() -> std::process::Command {
     let mut command = command();
@@ -74,23 +78,32 @@ pub fn judging_command() -> std::process::Command {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_COMMON_DIR",
         "GIT_NAMESPACE",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG",
     ] {
         command.env_remove(name);
     }
     for (name, _) in std::env::vars_os() {
-        let bytes = name.as_encoded_bytes();
-        if bytes
-            .strip_prefix(b"GIT_CONFIG_KEY_")
-            .or_else(|| bytes.strip_prefix(b"GIT_CONFIG_VALUE_"))
-            .is_some_and(|index| !index.is_empty() && index.iter().all(u8::is_ascii_digit))
-        {
+        if is_command_line_config(&name) {
             command.env_remove(name);
         }
     }
     command.env("GIT_NO_LAZY_FETCH", "1");
     command
+}
+
+/// Whether the environment variable `name` carries git's command-line
+/// configuration (`git -c`, `--config-env`, or the numbered
+/// `GIT_CONFIG_COUNT` keys and values), which git hands to every git a
+/// command starts, hooks included.
+#[must_use]
+pub fn is_command_line_config(name: &std::ffi::OsStr) -> bool {
+    let bytes = name.as_encoded_bytes();
+    bytes == b"GIT_CONFIG_PARAMETERS"
+        || bytes == b"GIT_CONFIG_COUNT"
+        || bytes
+            .strip_prefix(b"GIT_CONFIG_KEY_")
+            .or_else(|| bytes.strip_prefix(b"GIT_CONFIG_VALUE_"))
+            .is_some_and(|index| !index.is_empty() && index.iter().all(u8::is_ascii_digit))
 }
 
 /// A process for `program`. When `program` runs git (its last path part,

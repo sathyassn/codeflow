@@ -645,7 +645,7 @@ catalog! {
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
     /// A destination whose default-branch lookup could not be used.
     PUSH_DESTINATION_SILENT = Step::Git("git ls-remote"),
-        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push; when it answers but slowly, raise `git.remote_query_timeout_seconds` or `git.remote_query_attempts` on the default branch through a reviewed pull request";
+        "when the message names a setting that would send the lookup elsewhere, remove it or push to the URL it names; otherwise make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push; when it answers but slowly, raise `git.remote_query_timeout_seconds` or `git.remote_query_attempts` on the default branch through a reviewed pull request";
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";
