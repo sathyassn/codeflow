@@ -4021,49 +4021,55 @@ jobs:
                     self.policy_api(Some("POST"), input)
                 }
                 ["api", "-X", method, path, "--input", "-"] => {
-                    let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
-                    self.writes
-                        .borrow_mut()
-                        .push((format!("{method} {path}"), body.clone()));
-                    let id = if *method == "POST" {
-                        1000 + self.rulesets.borrow().len() as u64
-                    } else {
-                        path.rsplit('/').next().unwrap().parse().unwrap()
-                    };
-                    body["id"] = json!(id);
-                    body["source_type"] = json!("Repository");
-                    // As the scratch repository stored a write on
-                    // 2026-10-30: an `update` rule loses its parameter when
-                    // it is off, and a `pull_request` rule gains defaults.
-                    for rule in body["rules"].as_array_mut().into_iter().flatten() {
-                        let kind = rule["type"].as_str().unwrap_or_default().to_string();
-                        if kind == "update"
-                            && rule["parameters"]["update_allows_fetch_and_merge"] == json!(false)
-                        {
-                            rule.as_object_mut().unwrap().remove("parameters");
-                            continue;
-                        }
-                        if let ("pull_request", Some(p)) =
-                            (kind.as_str(), rule["parameters"].as_object_mut())
-                        {
-                            p.entry("required_reviewers").or_insert(json!([]));
-                            p.entry("require_extra_approval_for_unattributed_changes")
-                                .or_insert(json!(true));
-                            p.entry("allowed_merge_methods")
-                                .or_insert(json!(["merge", "squash", "rebase"]));
-                        }
-                    }
-                    self.rulesets.borrow_mut().insert(id, body.clone());
-                    if let Some(bypass) = &self.answer_bypass {
-                        body["bypass_actors"] = bypass.clone();
-                    }
-                    if let Some(conditions) = &self.answer_conditions {
-                        body["conditions"] = conditions.clone();
-                    }
-                    Ok(body.to_string())
+                    Ok(self.ruleset_write(method, path, input))
                 }
                 other => Err(format!("unexpected gh call {other:?}")),
             }
+        }
+
+        /// A ruleset `POST` or `PUT`: record it, store the body as the host
+        /// would, and answer it.
+        fn ruleset_write(&self, method: &str, path: &str, input: Option<&str>) -> String {
+            let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
+            self.writes
+                .borrow_mut()
+                .push((format!("{method} {path}"), body.clone()));
+            let id = if method == "POST" {
+                1000 + self.rulesets.borrow().len() as u64
+            } else {
+                path.rsplit('/').next().unwrap().parse().unwrap()
+            };
+            body["id"] = json!(id);
+            body["source_type"] = json!("Repository");
+            // As the scratch repository stored a write on
+            // 2026-10-30: an `update` rule loses its parameter when
+            // it is off, and a `pull_request` rule gains defaults.
+            for rule in body["rules"].as_array_mut().into_iter().flatten() {
+                let kind = rule["type"].as_str().unwrap_or_default().to_string();
+                if kind == "update"
+                    && rule["parameters"]["update_allows_fetch_and_merge"] == json!(false)
+                {
+                    rule.as_object_mut().unwrap().remove("parameters");
+                    continue;
+                }
+                if let ("pull_request", Some(p)) =
+                    (kind.as_str(), rule["parameters"].as_object_mut())
+                {
+                    p.entry("required_reviewers").or_insert(json!([]));
+                    p.entry("require_extra_approval_for_unattributed_changes")
+                        .or_insert(json!(true));
+                    p.entry("allowed_merge_methods")
+                        .or_insert(json!(["merge", "squash", "rebase"]));
+                }
+            }
+            self.rulesets.borrow_mut().insert(id, body.clone());
+            if let Some(bypass) = &self.answer_bypass {
+                body["bypass_actors"] = bypass.clone();
+            }
+            if let Some(conditions) = &self.answer_conditions {
+                body["conditions"] = conditions.clone();
+            }
+            body.to_string()
         }
 
         /// The Actions event policy endpoint (TSK-1347): the list, or a
