@@ -7314,6 +7314,122 @@ fn tsk416_a_reopen_completes_beside_a_local_main_behind_or_ahead() {
     }
 }
 
+/// TSK-416 review: a reopen's completion beside a local `main` that has
+/// diverged from `origin/main` refuses, naming both commits and a fresh
+/// clone. A worktree of the clone shares the diverged branch and refuses
+/// the same way. Following the instruction (push the task branch, clone
+/// from the URL `git remote get-url origin` prints, switch to the task
+/// branch) the same completion passes.
+#[test]
+fn tsk416_a_diverged_reopen_completes_from_the_fresh_clone_it_names() {
+    let landed_criteria = OWN_JOURNEY.replace("shall work.", "shall work well.");
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let _origin = tracked_origin(root);
+    let stale = head(root);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &landed_criteria, "Pending.\n"),
+    );
+    commit(root, "docs(records): amend the criteria");
+    git(root, &["push", "-q", "origin", "main"]);
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let first = block(
+        &reviewed,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    );
+    complete(root, "TSK-001", &landed_criteria, &first);
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+    );
+    let landed = head(root);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-q", "-c", "fix/TSK-001-again", &landed]);
+    let reopen = codeflow()
+        .args([
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "fix: a regression: found # here",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        reopen.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopen.stderr)
+    );
+    commit(root, "docs(records): reopen TSK-001");
+    write(root, "src/lib.rs", "pub fn work_again() {}\n");
+    let again = commit(root, "fix: repair the regression");
+    // The local `main` gains a commit `origin/main` lacks, off a point
+    // before the landing: the two have diverged.
+    git(root, &["switch", "-q", "--detach", &stale]);
+    write(root, "notes.txt", "unpushed\n");
+    let local = commit(root, "chore: an unpushed commit");
+    git(root, &["switch", "-q", "fix/TSK-001-again"]);
+    git(root, &["update-ref", "refs/heads/main", &local]);
+    let acceptance = inner(&block(
+        &again,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    ));
+
+    let refused = complete_with_block(root, "TSK-001", &acceptance, false);
+    assert_ne!(refused.0, 0, "{}", refused.1);
+    for part in [
+        "have diverged",
+        local.as_str(),
+        landed.as_str(),
+        "a worktree of this clone shares its branches",
+        "push the task branch",
+        "a fresh clone of the remote origin",
+        "`git remote get-url origin`",
+        "switch to the task branch there",
+    ] {
+        assert!(refused.1.contains(part), "{part}: {}", refused.1);
+    }
+    assert!(!refused.1.contains("worktree add"), "{}", refused.1);
+
+    // A worktree of this clone shares the diverged `main`.
+    let scratch = tempfile::tempdir().unwrap();
+    let linked = scratch.path().join("linked");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            linked.to_str().unwrap(),
+            "fix/TSK-001-again",
+        ],
+    );
+    let shared = complete_with_block(&linked, "TSK-001", &acceptance, false);
+    assert_ne!(shared.0, 0, "{}", shared.1);
+    assert!(shared.1.contains("have diverged"), "{}", shared.1);
+
+    // The instruction, followed.
+    git(root, &["push", "-q", "origin", "fix/TSK-001-again"]);
+    let url = git_out(root, &["remote", "get-url", "origin"]);
+    let fresh = scratch.path().join("fresh");
+    codeflow_fixture::clone(scratch.path(), &url, &fresh).run();
+    git(&fresh, &["config", "user.name", "T"]);
+    git(&fresh, &["config", "user.email", "t@example.test"]);
+    git(&fresh, &["switch", "-q", "fix/TSK-001-again"]);
+    let completed = complete_with_block(&fresh, "TSK-001", &acceptance, false);
+    assert_eq!(completed.0, 0, "{}", completed.1);
+}
+
 /// TSK-416 AC-7 and AC-8 (issue 573): the local `main` holds the landed
 /// completion and is behind `origin/main`, where the reopen and an amended
 /// criterion landed. The stale copy is no outside completion: the branch

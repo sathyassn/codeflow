@@ -188,26 +188,52 @@ impl QueryLimits {
 pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 
 /// `url` as it may be shown: the userinfo of a `scheme://` URL (a user, or
-/// `user:token`) becomes `***`, keeping the scheme, host and path. A URL may
-/// carry a credential, and every message and printed command can reach a
-/// log or a transcript. Only git itself receives the real URL. Other forms,
-/// such as a path or scp-style `host:path`, carry no userinfo and are
-/// returned unchanged.
+/// `user:token`) becomes `***`, and so does everything after its `?` or `#`
+/// (an `access_token=` query or a fragment), keeping the scheme, host and
+/// path. A URL may carry a credential in either place, and every message
+/// and printed command can reach a log or a transcript. Only git itself
+/// receives the real URL. Other forms, such as a path or scp-style
+/// `host:path`, are returned unchanged.
 #[must_use]
 pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
     let Some(start) = url.find("://").map(|at| at + 3) else {
         return std::borrow::Cow::Borrowed(url);
     };
-    let rest = &url[start..];
-    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
-    match authority.rfind('@') {
-        Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &rest[at..])),
+    match redacted_url(&url[start..]) {
+        Some(rest) => std::borrow::Cow::Owned(format!("{}{rest}", &url[..start])),
         None => std::borrow::Cow::Borrowed(url),
     }
 }
 
-/// Redact URL userinfo in a diagnostic that may quote several remote URLs.
-/// Keep the original text for protocol parsing; use this only for display.
+/// The part of a URL after its `://` with its userinfo and its query or
+/// fragment written `***`; `None` when it has neither.
+fn redacted_url(rest: &str) -> Option<String> {
+    let authority = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let userinfo = rest[..authority].rfind('@');
+    let query = rest[authority..].find(['?', '#']).map(|at| authority + at);
+    if userinfo.is_none() && query.is_none() {
+        return None;
+    }
+    let mut shown = String::with_capacity(rest.len());
+    let kept = userinfo.map_or(0, |at| {
+        shown.push_str("***");
+        at
+    });
+    match query {
+        // The `?` or `#` is ASCII, so `at + 1` is a boundary.
+        Some(at) => {
+            shown.push_str(&rest[kept..=at]);
+            shown.push_str("***");
+        }
+        None => shown.push_str(&rest[kept..]),
+    }
+    Some(shown)
+}
+
+/// Redact each URL's userinfo and query or fragment, as [`display_url`]
+/// does, in a diagnostic that may quote several remote URLs. A URL ends at
+/// whitespace or a quote. Keep the original text for protocol parsing; use
+/// this only for display.
 #[must_use]
 pub fn display_urls(text: &str) -> String {
     let mut shown = String::with_capacity(text.len());
@@ -219,12 +245,12 @@ pub fn display_urls(text: &str) -> String {
         }
         let rest = &text[start..];
         let end = rest
-            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '?' | '#'))
+            .find(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | '`' | '<' | '>'))
             .unwrap_or(rest.len());
-        if let Some(userinfo) = rest[..end].rfind('@') {
+        if let Some(redacted) = redacted_url(&rest[..end]) {
             shown.push_str(&text[copied..start]);
-            shown.push_str("***");
-            copied = start + userinfo;
+            shown.push_str(&redacted);
+            copied = start + end;
         }
     }
     shown.push_str(&text[copied..]);
@@ -717,6 +743,15 @@ mod tests {
         let text = "fatal: 'https://u:FAKE@one.invalid/x'\nTo ssh://FAKE@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path";
         assert_eq!(display_urls(text), "fatal: 'https://***@one.invalid/x'\nTo ssh://***@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path");
         assert_eq!(display_urls("plain diagnostic"), "plain diagnostic");
+        // TSK-416 review: a query or fragment token is hidden too, up to
+        // the quote or space that ends the URL.
+        let text = "fatal: 'https://h.invalid/x.git?access_token=FAKE_TOKEN_3b9' and https://u:FAKE@h.invalid/y#FAKE_TOKEN_3b9 done";
+        let shown = display_urls(text);
+        assert_eq!(
+            shown,
+            "fatal: 'https://h.invalid/x.git?***' and https://***@h.invalid/y#*** done"
+        );
+        assert!(!shown.contains("FAKE"), "{shown}");
     }
 
     #[test]
@@ -816,8 +851,19 @@ mod tests {
             ("https://FAKE_TOKEN_3b9@h.invalid", "https://***@h.invalid"),
             (
                 "ssh://git@h.invalid:22/x.git?q=a@b",
-                "ssh://***@h.invalid:22/x.git?q=a@b",
+                "ssh://***@h.invalid:22/x.git?***",
             ),
+            // TSK-416 review: a token in the query or fragment is a
+            // credential too.
+            (
+                "https://h.invalid/x.git?access_token=FAKE_TOKEN_3b9",
+                "https://h.invalid/x.git?***",
+            ),
+            (
+                "https://u:FAKE_TOKEN_3b9@h.invalid/x.git#FAKE_TOKEN_3b9",
+                "https://***@h.invalid/x.git#***",
+            ),
+            ("https://h.invalid?FAKE_TOKEN_3b9", "https://h.invalid?***"),
             ("https://a@b:FAKE@h.invalid/x", "https://***@h.invalid/x"),
             ("https://h.invalid/u@x.git", "https://h.invalid/u@x.git"),
             ("git@h.invalid:x.git", "git@h.invalid:x.git"),

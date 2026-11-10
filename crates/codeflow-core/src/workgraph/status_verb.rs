@@ -605,8 +605,12 @@ fn pinned_commit(
         };
         let fetched_tip =
             shown(&fetched).map_or_else(|| "absent here".to_string(), |tip| format!("at {tip}"));
+        // Each argument a reader may paste is quoted: a ref name can hold
+        // `$(…)`, `;` or a backtick (TSK-416 review).
         return Err(format!(
-            "`{value}` is ambiguous here: the local ref {shadow} at {shadow_tip} is spelled like the fetched {fetched} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full (`{fetched}`, as in `--base {fetched}`), or rename the local ref (`git branch -m {value} <new-name>` for a branch)"
+            "`{value}` is ambiguous here: the local ref {shadow} at {shadow_tip} is spelled like the fetched {fetched} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full (`{fetched}`, as in `--base {}`), or rename the local ref (`git branch -m {} <new-name>` for a branch)",
+            crate::git::shell_arg(&fetched),
+            crate::git::shell_arg(value)
         ));
     }
     Ok(read(&fetched))
@@ -1251,6 +1255,61 @@ mod tests {
             target_commit(&repo, Some("fork/main")).unwrap(),
             Some(local)
         );
+    }
+
+    /// TSK-416 review: the ambiguity refusal's commands reach a shell as
+    /// the arguments they name when the branch name holds `$(…)` and `;`;
+    /// each runs here under a shell whose `git` prints its arguments. (A
+    /// backtick would split the message's own code spans; `shell_arg`'s test
+    /// covers it.)
+    #[test]
+    #[cfg(unix)]
+    fn the_ambiguity_remedy_quotes_a_name_holding_shell_syntax() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let tip = repo
+            .commit(None, &signature, &signature, "tip", &tree, &[])
+            .unwrap();
+        let value = "origin/m$(id);x";
+        repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+            .unwrap();
+        repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+            .unwrap();
+        let error = target_commit(&repo, Some(value)).unwrap_err();
+        let base = error
+            .split('`')
+            .find(|span| span.starts_with("--base "))
+            .unwrap_or_else(|| panic!("{error}"));
+        let rename = error
+            .split('`')
+            .find(|span| span.starts_with("git branch -m "))
+            .unwrap_or_else(|| panic!("{error}"));
+        for (command, expected) in [
+            (
+                format!("git {base}"),
+                format!("--base\nrefs/remotes/{value}\n"),
+            ),
+            (
+                rename.replace(" <new-name>", " new"),
+                format!("branch\n-m\n{value}\nnew\n"),
+            ),
+        ] {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                expected,
+                "{command}: {error}"
+            );
+        }
     }
 
     #[test]

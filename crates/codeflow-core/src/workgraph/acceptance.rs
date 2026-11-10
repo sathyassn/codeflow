@@ -2624,6 +2624,11 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
 ///   read, refuses, naming both refs and commits and a remedy that runs
 ///   under the guard.
 ///
+/// Every fetched tip is read before the local tip is dropped or kept, so
+/// the order the refs are listed in never decides (TSK-416 review): a
+/// fetched tip that holds the local one does not excuse another that has
+/// diverged from it or whose ancestry cannot be read.
+///
 /// # Errors
 /// Returns the reason when a ref or the ancestry cannot be read, or when
 /// the local branch and a fetched tip have diverged.
@@ -2638,25 +2643,40 @@ pub(super) fn judged_target_tips(
     let [(local_ref, local_tip)] = local.as_slice() else {
         return Ok(fetched.into_iter().chain(local).collect());
     };
-    let descends = |of: Oid, ancestor: Oid, fetched_ref: &str| {
+    let descends = |of: Oid, ancestor: Oid, fetched_ref: &str, fetched_tip: Oid| {
         history::descendant_of(repo, of, ancestor).map_err(|error| {
             format!(
-                "cannot read the ancestry of {local_ref} at {local_tip} against {fetched_ref}: {}; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> {fetched_ref}`)",
-                error.message()
+                "cannot read the ancestry of {local_ref} at {local_tip} against {fetched_ref} at {fetched_tip}: {}; {}",
+                error.message(),
+                reopen_remedy(fetched_ref)
             )
         })
     };
+    let mut held = false;
     for (fetched_ref, fetched_tip) in &fetched {
-        if fetched_tip == local_tip || descends(*fetched_tip, *local_tip, fetched_ref)? {
-            return Ok(fetched);
+        if fetched_tip == local_tip
+            || descends(*fetched_tip, *local_tip, fetched_ref, *fetched_tip)?
+        {
+            held = true;
+            continue;
         }
-        if !descends(*local_tip, *fetched_tip, fetched_ref)? {
+        if !descends(*local_tip, *fetched_tip, fetched_ref, *fetched_tip)? {
             return Err(format!(
-                "the local branch {local_ref} at {local_tip} and {fetched_ref} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; judge from a fresh worktree of the fetched line (`git worktree add --detach <path> {fetched_ref}`), after a plain `git fetch origin`, which does not move the local branch"
+                "the local branch {local_ref} at {local_tip} and {fetched_ref} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; {}",
+                reopen_remedy(fetched_ref)
             ));
         }
     }
+    if held {
+        return Ok(fetched);
+    }
     Ok(fetched.into_iter().chain(local).collect())
+}
+
+/// The remedy for a reopen that cannot settle its target's local copy
+/// ([`super::work_start::fresh_clone_retry`]).
+fn reopen_remedy(fetched_ref: &str) -> String {
+    super::work_start::fresh_clone_retry(super::work_start::remote_of(fetched_ref))
 }
 
 /// Every tip of the target `name` this clone knows, with the reference
@@ -6587,20 +6607,23 @@ mod judged_tip_tests {
             "refs/remotes/origin/main",
             fetched.as_str(),
             "have diverged",
-            "git worktree add --detach <path> refs/remotes/origin/main",
-            "git fetch origin",
+            // TSK-416 review: a worktree shares the diverged branch, so the
+            // remedy is a fresh clone, named by its remote, never its URL.
+            "a worktree of this clone shares its branches",
+            "a fresh clone of the remote origin",
+            "`git remote get-url origin`",
         ] {
             assert!(error.contains(part), "{part}: {error}");
         }
+        assert!(!error.contains("worktree add"), "{error}");
+        assert!(!error.contains("/nowhere"), "{error}");
         assert!(!error.contains("update-ref"), "{error}");
         assert!(!error.contains("stale"), "{error}");
     }
 
-    #[test]
-    fn a_local_tip_whose_ancestry_cannot_be_read_refuses() {
-        let (dir, base) = fixture();
-        let root = dir.path();
-        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+    /// A commit whose parent is missing: it resolves, and its ancestry
+    /// cannot be read.
+    fn broken_commit(root: &std::path::Path) -> String {
         let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
         let path = root.join(".git/broken-commit");
         std::fs::write(
@@ -6611,7 +6634,7 @@ mod judged_tip_tests {
             ),
         )
         .unwrap();
-        let broken = git(
+        git(
             root,
             &[
                 "hash-object",
@@ -6621,20 +6644,84 @@ mod judged_tip_tests {
                 "--literally",
                 path.to_str().unwrap(),
             ],
-        );
+        )
+    }
+
+    /// TSK-416 review: every fetched tip is read before the local tip is
+    /// dropped. Two fetched tips name `main`: the upstream on `up`, listed
+    /// first, and `origin/main`. One equals the local tip; the other has
+    /// diverged from it or cannot have its ancestry read. Whichever is
+    /// listed first, the judgment refuses naming the other and both commits.
+    #[test]
+    fn every_fetched_tip_is_read_whatever_order_the_refs_are_listed_in() {
+        for redundant_first in [true, false] {
+            for unreadable in [false, true] {
+                let (dir, base) = fixture();
+                let root = dir.path();
+                git(root, &["config", "remote.up.url", "/nowhere"]);
+                git(
+                    root,
+                    &[
+                        "config",
+                        "remote.up.fetch",
+                        "+refs/heads/*:refs/remotes/up/*",
+                    ],
+                );
+                git(root, &["config", "branch.main.remote", "up"]);
+                git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+                let local = commit(root, "local");
+                let other = if unreadable {
+                    broken_commit(root)
+                } else {
+                    git(root, &["switch", "-q", "--detach", &base]);
+                    commit(root, "fetched")
+                };
+                let (redundant_ref, other_ref) = if redundant_first {
+                    ("refs/remotes/up/main", "refs/remotes/origin/main")
+                } else {
+                    ("refs/remotes/origin/main", "refs/remotes/up/main")
+                };
+                git(root, &["update-ref", redundant_ref, &local]);
+                git(root, &["update-ref", other_ref, &other]);
+                let label = format!("redundant first: {redundant_first}, unreadable: {unreadable}");
+                let error = match tips(root) {
+                    Ok(tips) => panic!("{label}: judged {tips:?}"),
+                    Err(error) => error,
+                };
+                let cause = if unreadable {
+                    "cannot read the ancestry of refs/heads/main"
+                } else {
+                    "have diverged"
+                };
+                for part in [cause, other_ref, other.as_str(), local.as_str()] {
+                    assert!(error.contains(part), "{label}: {part}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_local_tip_whose_ancestry_cannot_be_read_refuses() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        let broken = broken_commit(root);
         git(root, &["update-ref", "refs/heads/main", &broken]);
         let error = tips(root).unwrap_err();
         assert!(
             error.contains("cannot read the ancestry of refs/heads/main"),
             "{error}"
         );
-        assert!(error.contains(&broken), "{error}");
-        // TSK-416 AC-9: the remedy works from the fetched line and runs
-        // under the guard.
-        assert!(
-            error.contains("git worktree add --detach <path> refs/remotes/origin/main"),
-            "{error}"
-        );
+        // TSK-416 review: both commits are named, the fetched one too, and
+        // the remedy is a fresh clone, whose refs and objects are its own.
+        for part in [
+            broken.as_str(),
+            &format!("against refs/remotes/origin/main at {base}"),
+            "a fresh clone of the remote origin",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+        assert!(!error.contains("worktree add"), "{error}");
         assert!(!error.contains("update-ref"), "{error}");
     }
 
@@ -6649,7 +6736,7 @@ mod judged_tip_tests {
         let blob = git(root, &["hash-object", "-w", "--stdin"]);
         std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
         let fresh_clone = [
-            "a fresh clone of the remote, made from outside this clone (`git clone ",
+            "a fresh clone of the remote origin, made from outside this clone (`git clone <url> <path>`, where `git remote get-url origin` prints the url)",
             "`git branch -d -r origin/main`, then `git fetch origin`",
             "which the guard leaves to the operator",
         ];

@@ -150,9 +150,10 @@ pub enum WorkStartError {
         "local branch '{local}' and '{remote}' have diverged ('{local}' at {local_tip} \
          with {ahead} commit(s) only there, '{remote}' at {remote_tip} with {behind} only \
          there), so the work target is ambiguous; judge against the fetched line by naming \
-         it with `--into {remote}` where the command takes it, or work from a fresh \
-         worktree of it (`git worktree add --detach <path> {remote}`); a plain \
-         `git fetch origin` refreshes '{remote}' without moving '{local}'"
+         it with `--into {}` where the command takes it, or {}; a plain `git fetch origin` \
+         refreshes '{remote}' without moving '{local}'",
+        crate::git::shell_arg(.remote),
+        fresh_clone_retry(remote_of(.remote))
     )]
     DivergedTarget {
         local: String,
@@ -380,28 +381,20 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
         (None, None) => "a target git cannot read".to_string(),
     };
     let present = target.is_some_and(|oid| repo.find_object(oid, None).is_ok());
-    // The url, its userinfo redacted, so the remedy runs as printed.
-    let fresh_clone = |remote: &str| {
-        let url = repo
-            .find_remote(remote)
-            .ok()
-            .and_then(|found| found.url().ok().map(str::to_string))
-            .map_or_else(
-                || format!("<url of {remote}>"),
-                |url| crate::git::display_text(&crate::git::remote_query::display_url(&url)),
-            );
-        format!("work from a fresh clone of the remote, made from outside this clone (`git clone {url} <path>`)")
-    };
+    let quoted = crate::git::shell_arg;
     let remedy = match reference
         .strip_prefix("refs/remotes/")
         .and_then(|rest| rest.split_once('/').map(|(remote, _)| (remote, rest)))
     {
         Some((remote, _)) if present => format!(
-            "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain `git fetch {remote}`, which rewrites {reference} from the remote and moves no local branch"
+            "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain `git fetch {}`, which rewrites {reference} from the remote and moves no local branch",
+            quoted(remote)
         ),
         Some((remote, short)) => format!(
-            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it (`git branch -d -r {short}`, then `git fetch {remote}`), which the guard leaves to the operator",
-            fresh_clone(remote)
+            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it (`git branch -d -r {}`, then `git fetch {}`), which the guard leaves to the operator",
+            fresh_clone(remote),
+            quoted(short),
+            quoted(remote)
         ),
         None => format!(
             "{reference} cannot be resolved, so the line it names cannot be judged; check this clone with `git fsck`, or {}",
@@ -411,6 +404,41 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
     format!(
         "{reference} points at {points_at}, which is not a commit this clone can read ({}); {remedy}",
         error.message()
+    )
+}
+
+/// The remote a fetched ref (`refs/remotes/<remote>/…` or `<remote>/…`)
+/// names, else `origin`.
+pub(crate) fn remote_of(reference: &str) -> &str {
+    reference
+        .strip_prefix("refs/remotes/")
+        .unwrap_or(reference)
+        .split_once('/')
+        .map_or("origin", |(remote, _)| remote)
+}
+
+/// The fresh-clone remedy for `remote`, naming the remote and never its
+/// URL: a URL can carry a credential in its userinfo, query or fragment,
+/// and a message reaches logs and transcripts (TSK-416 review). A clone has
+/// its own refs, so what made this clone's judgment refuse is not there; a
+/// worktree of this clone would share them. The remote is quoted as one
+/// shell argument.
+pub(crate) fn fresh_clone(remote: &str) -> String {
+    let remote = crate::git::shell_arg(remote);
+    format!(
+        "work from a fresh clone of the remote {remote}, made from outside this clone (`git clone <url> <path>`, where `git remote get-url {remote}` prints the url)"
+    )
+}
+
+/// The remedy when this clone's local copy of a line cannot be settled
+/// against the fetched one (diverged, or its ancestry unreadable): rerun
+/// the command from a fresh clone, whose local branch is the fetched
+/// line, on the task branch pushed from here. A worktree of this clone
+/// shares its branches, so it would refuse the same way (TSK-416 review).
+pub(crate) fn fresh_clone_retry(remote: &str) -> String {
+    format!(
+        "a worktree of this clone shares its branches and would refuse the same way, so push the task branch, {}, switch to the task branch there and run this again",
+        fresh_clone(remote)
     )
 }
 
@@ -6034,10 +6062,18 @@ mod tests {
                 .to_string();
             assert!(message.contains(&tip), "{reference}: {message}");
         }
-        assert!(
-            message.contains("git worktree add --detach <path> refs/remotes/origin/main"),
-            "{message}"
-        );
+        // TSK-416 review: a worktree shares the diverged branch, so the
+        // remedy is `--into` or a fresh clone, named by its remote.
+        for part in [
+            "`--into refs/remotes/origin/main`",
+            "a worktree of this clone shares its branches",
+            "a fresh clone of the remote origin",
+            "`git remote get-url origin`",
+            "switch to the task branch there",
+        ] {
+            assert!(message.contains(part), "{part}: {message}");
+        }
+        assert!(!message.contains("worktree add"), "{message}");
         assert!(
             !message.contains("rebase") && !message.contains("reset"),
             "{message}"
@@ -6067,7 +6103,7 @@ mod tests {
         // a plain fetch.
         let fresh_clone = [
             "a fetch cannot rewrite the ref while its object is missing",
-            "a fresh clone of the remote, made from outside this clone (`git clone ",
+            "a fresh clone of the remote origin, made from outside this clone (`git clone <url> <path>`, where `git remote get-url origin` prints the url)",
             "`git branch -d -r origin/main`, then `git fetch origin`",
             "which the guard leaves to the operator",
         ];
@@ -6108,6 +6144,63 @@ mod tests {
                 assert!(!message.contains("update-ref"), "{reader}: {message}");
                 assert!(!message.contains("unavailable"), "{reader}: {message}");
             }
+        }
+    }
+
+    /// TSK-416 review: the remedy names the remote and never prints its
+    /// URL, whose userinfo, query or path a reader must not see or paste,
+    /// and each command it prints reaches a shell as the arguments it
+    /// names, whatever the remote's name holds. Each command without a
+    /// `<placeholder>` runs here under a shell whose `git` prints its
+    /// arguments.
+    #[test]
+    #[cfg(unix)]
+    fn an_unresolvable_tip_remedy_prints_no_url_and_quotes_each_argument() {
+        for (remote, url) in [
+            (
+                "origin",
+                "https://u:FAKE_TOKEN_3b9@h.invalid/x.git?access_token=FAKE_TOKEN_3b9#FAKE_TOKEN_3b9",
+            ),
+            ("origin", "/srv/with space/x.git"),
+            // A backtick would split the message's own code spans, which
+            // this test reads; `shell_arg`'s test covers it.
+            ("o$(id);x", "/nowhere"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            Repository::init(root).unwrap();
+            git(root, &["config", &format!("remote.{remote}.url"), url]);
+            let refs = root.join(".git/refs/remotes").join(remote);
+            fs::create_dir_all(&refs).unwrap();
+            fs::write(refs.join("main"), format!("{}\n", "1".repeat(40))).unwrap();
+            let message =
+                unresolvable_reference(root, &format!("refs/remotes/{remote}/main")).unwrap();
+            let commands: Vec<&str> = message
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("git ") && !span.contains('<'))
+                .collect();
+            for command in &commands {
+                let out = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{command}");
+                let printed = String::from_utf8_lossy(&out.stdout);
+                let last = printed.lines().last().unwrap_or_default();
+                assert!(
+                    last == remote || last == format!("{remote}/main"),
+                    "{command} gave {printed}"
+                );
+                assert!(!printed.contains("uid="), "{command} ran id: {printed}");
+            }
+            for hidden in ["FAKE_TOKEN", "with space", "/nowhere", "h.invalid"] {
+                assert!(!message.contains(hidden), "{hidden}: {message}");
+            }
+            // The fetch, the ref deletion and the URL lookup.
+            assert_eq!(commands.len(), 3, "{message}");
         }
     }
 

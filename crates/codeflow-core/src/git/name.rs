@@ -418,6 +418,27 @@ pub fn display_text(text: &str) -> String {
     GitName::from_text(text).display().to_string()
 }
 
+/// `text` as one argument of a command a reader may paste into a POSIX
+/// shell: its [`display_text`] form, unchanged when every character is one
+/// a shell reads literally (letters, digits and `_-./:@%+=,`), else in
+/// single quotes, each `'` written `'\''`. A ref, remote or path can hold
+/// `$(…)`, `;`, a backtick or a space, and quoting keeps each of them inside
+/// the one argument instead of running it (TSK-416 review).
+#[must_use]
+pub fn shell_arg(text: &str) -> String {
+    let shown = display_text(text);
+    let literal = !shown.is_empty()
+        && shown.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',')
+        });
+    if literal {
+        shown
+    } else {
+        format!("'{}'", shown.replace('\'', r"'\''"))
+    }
+}
+
 /// Output text as a terminal may show it: each control, format and
 /// separator character other than a line break or tab escaped, as
 /// [`display_text`] escapes them; backslashes are kept. For text that
@@ -681,6 +702,39 @@ pub fn parse_nul_list(bytes: &[u8]) -> Vec<GitName> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-416 review: each value reaches a shell as one literal argument,
+    /// whatever it holds, and an ordinary name prints unchanged.
+    #[test]
+    #[cfg(unix)]
+    fn a_shell_arg_is_one_literal_argument() {
+        assert_eq!(
+            shell_arg("refs/remotes/origin/main"),
+            "refs/remotes/origin/main"
+        );
+        assert_eq!(shell_arg("origin"), "origin");
+        let scratch = tempfile::tempdir().unwrap();
+        let marker = scratch.path().join("ran");
+        let marker = marker.to_str().unwrap();
+        for value in [
+            format!("o$(touch {marker})"),
+            format!("main;touch {marker}"),
+            format!("x`touch {marker}`"),
+            "/srv/a repo/x.git".to_string(),
+            "it's".to_string(),
+            "~/x".to_string(),
+            String::new(),
+        ] {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf %s {}", shell_arg(&value)))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{value}");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), value);
+            assert!(!std::path::Path::new(marker).exists(), "{value} ran");
+        }
+    }
 
     #[test]
     fn two_names_that_differ_only_in_an_invalid_byte_stay_two_names() {

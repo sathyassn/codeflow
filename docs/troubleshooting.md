@@ -341,9 +341,16 @@ git sets when a line is cut from `origin/main`, is never read for the line.
   `task status complete`, and `the local branch ... and ... have diverged`,
   from a reopen's completion, name both tips by commit. Judge against the
   fetched line: name it with `--into <ref>` where the command takes it, or
-  work from a fresh worktree of it (`git worktree add --detach <path>
-  <ref>`). A plain `git fetch origin` refreshes the fetched ref without
-  moving the local branch.
+  push the task branch and work from a fresh clone made from outside this
+  clone (`git clone <url> <path>`, where `git remote get-url <remote>`
+  prints the url), whose local branch is the fetched line. Then switch to
+  the task branch there and run the command again. A worktree of this clone
+  shares its branches, so it refuses the same way. A plain `git fetch
+  origin` refreshes the fetched ref without moving the local branch.
+- `cannot read the ancestry of refs/heads/<line> at <sha> against <ref> at
+  <sha>`, from a reopen's completion, names both commits. The object store
+  is missing part of the local branch's history, so work from a fresh clone
+  as above.
 - `predecessor branch <branch> has a copy at <sha> that is ahead of the pin`
   or `has diverged from the pin` means a copy of the predecessor's branch
   moved past the reviewed head. Rebase on its new reviewed head and pin that,
@@ -353,7 +360,8 @@ git sets when a line is cut from `origin/main`, is never read for the line.
   is not a commit, so the line cannot be judged. When the object is here
   and is not a commit, a plain `git fetch <remote>` rewrites the ref. When
   the object is missing, every fetch stops on it, so work from a fresh clone
-  made from outside this clone (`git clone <url> <path>`). Repairing this
+  made from outside this clone (`git clone <url> <path>`; the message names
+  the remote, never its url, which can hold a credential). Repairing this
   clone deletes the ref so a fetch can recreate it (`git branch -d -r
   <remote>/<line>`, then `git fetch <remote>`), which the guard leaves to
   the operator.

@@ -3208,8 +3208,8 @@ fn guard_verdict(root: &Path, shell: &str) -> (Option<i32>, String) {
 /// - An object that is here and is not a commit: `work next` names a plain
 ///   fetch, which rewrites the ref, and `work next` then reads the line.
 ///
-/// The remedy for the other refusals, a fresh worktree of the fetched
-/// line, passes the guard too, once the fetched ref resolves.
+/// The refusal names the remote, never its URL (TSK-416 review); the
+/// clone is made from the URL `git remote get-url` prints.
 #[test]
 fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard() {
     let dir = fixture();
@@ -3236,24 +3236,23 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
     for part in [
         format!("refs/remotes/origin/main points at {missing}"),
         "not a commit this clone can read".to_string(),
-        format!(
-            "a fresh clone of the remote, made from outside this clone (`git clone {url} <path>`)"
-        ),
+        "a fresh clone of the remote origin, made from outside this clone (`git clone <url> <path>`, where `git remote get-url origin` prints the url)".to_string(),
         "`git branch -d -r origin/main`, then `git fetch origin`".to_string(),
         "which the guard leaves to the operator".to_string(),
     ] {
         assert!(said.contains(&part), "{part}: {said}");
     }
+    // The remedy names the remote; git's own fetch error before it may
+    // quote the URL, which display redaction covers.
+    let remedy = &said[said.find("the fetched tip cannot be resolved").unwrap()..];
+    assert!(!remedy.contains(&url), "{said}");
     assert!(!said.contains("update-ref"), "{said}");
     assert!(claimed(root, "TSK-001").is_empty(), "{said}");
+    assert_eq!(git(root, &["remote", "get-url", "origin"]), url);
 
     let scratch = tempfile::tempdir().unwrap();
     let clone = scratch.path().join("fresh");
     let fresh_clone = format!("git clone {url} {}", clone.display());
-    let fresh_worktree = format!(
-        "git worktree add --detach {} refs/remotes/origin/main",
-        scratch.path().join("line").display()
-    );
     // The guard reads this clone's policy from the broken ref, so it fails
     // closed here; the clone is made from outside it, as the remedy says,
     // here from a session in another, healthy repository.
@@ -3293,9 +3292,6 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
         git(root, &["rev-parse", "refs/remotes/origin/main"]),
         fetched
     );
-    let (code, printed) = guard_verdict(root, &fresh_worktree);
-    assert_eq!(code, Some(0), "{fresh_worktree}: {printed}");
-    assert!(!printed.contains("BLOCKED"), "{fresh_worktree}: {printed}");
     let next = cli(root, &["work", "next"], None);
     succeeds(&next);
     assert!(!text(&next).contains("points at"), "{}", text(&next));
