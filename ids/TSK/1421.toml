@@ -1,0 +1,11 @@
+id = "TSK-1421"
+uid = "8aaa14b3-4bdf-4183-865b-d86fd43fa3ee"
+kind = "TSK"
+title = "A project can require extra sections in its task, epic and spec records"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T21:34:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
