@@ -168,11 +168,9 @@ fn pre_commit_engine(
             report.violations.extend(paths.violations);
             report.status.extend(paths.notes);
         }
-        Err(error) => report.violations.push(Violation::always_blocking(
-            "git.path_policy",
-            format!("cannot verify staged paths: {error}"),
-            "repair the named policy source or Git object, then retry",
-        )),
+        Err(error) => report
+            .violations
+            .push(unverified_staged_paths(root, &error)),
     }
 
     if policy.secret_scan.is_active() {
@@ -187,6 +185,30 @@ fn pre_commit_engine(
     }
 
     Ok(report)
+}
+
+/// The refusal when the staged paths cannot be judged. A landed policy this
+/// binary cannot read, in a repository that declares a newer `CodeFlow`, is
+/// the too-old refusal (TSK-1285); it blocks the same way.
+fn unverified_staged_paths(root: &Path, error: &str) -> Violation {
+    let unread_policy = super::landed_policy::is_invalid_policy(error);
+    let age = crate::scaffold::too_old::BinaryAge::at_root(root, env!("CARGO_PKG_VERSION"));
+    if let Some(refusal) = age.too_old("its policy").filter(|_| unread_policy) {
+        return Violation::always_blocking(
+            crate::scaffold::too_old::RULE,
+            refusal.message,
+            &refusal.remedy,
+        );
+    }
+    let doubt = age
+        .may_be_older()
+        .filter(|_| unread_policy)
+        .map_or_else(String::new, |line| format!("; {line}"));
+    Violation::always_blocking(
+        "git.path_policy",
+        format!("cannot verify staged paths: {error}{doubt}"),
+        "repair the named policy source or Git object, then retry",
+    )
 }
 
 /// The staged secret scan: the built-in patterns, then, when the policy
@@ -1686,9 +1708,12 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
         .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
 
-/// Time budget for the whole pre-push set. A push set that takes longer still
+/// The shipped time budget for the whole pre-push set,
+/// [`super::limits::PUSH_BUDGET`]; a project sets its own with
+/// `git.push_budget_seconds` (TSK-1306). A push set that takes longer still
 /// runs to its verdict, but the hook names the slowest step (TSK-132).
-pub const PUSH_SET_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+pub const PUSH_SET_BUDGET: std::time::Duration =
+    std::time::Duration::from_secs(super::limits::PUSH_BUDGET.default);
 
 /// One timed step of the push set.
 #[derive(Debug, Clone)]
@@ -1697,10 +1722,15 @@ pub struct PushStep {
     /// (TSK-449).
     pub name: String,
     pub duration: std::time::Duration,
+    /// The step's slowest parts, slowest first, where it reports them: a
+    /// `codeflow ci` step's slowest checks (TSK-1306). Empty otherwise.
+    pub parts: Vec<(String, std::time::Duration)>,
 }
 
 /// When the whole push set took longer than `budget`, the note naming its
-/// slowest built-in step and the push-set rule that drops it.
+/// slowest built-in step, the slowest checks inside it where the step
+/// reports them, and the push-set rule that drops it. The note reports the
+/// overrun; it never refuses the push.
 #[must_use]
 pub fn over_budget_note(
     steps: &[PushStep],
@@ -1716,14 +1746,26 @@ pub fn over_budget_note(
         budget.as_secs()
     );
     Some(match steps.iter().max_by_key(|s| s.duration) {
-        Some(slow) => crate::remedy::Finding::new(
-            format!(
-                "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key",
-                slow.name,
-                slow.duration.as_secs_f64()
-            ),
-            crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy(),
-        ),
+        Some(slow) => {
+            let inside = if slow.parts.is_empty() {
+                String::new()
+            } else {
+                let parts: Vec<String> = slow
+                    .parts
+                    .iter()
+                    .map(|(check, spent)| format!("{check} {:.1}s", spent.as_secs_f64()))
+                    .collect();
+                format!("; slowest checks in it: {}", parts.join(", "))
+            };
+            crate::remedy::Finding::new(
+                format!(
+                    "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key{inside}",
+                    slow.name,
+                    slow.duration.as_secs_f64()
+                ),
+                crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy(),
+            )
+        }
         None => crate::remedy::Finding::new(head, crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy()),
     })
 }
@@ -3949,7 +3991,41 @@ mod tests {
         PushStep {
             name: name.into(),
             duration: std::time::Duration::from_secs(secs),
+            parts: Vec::new(),
         }
+    }
+
+    /// TSK-1306 AC-1: over the budget, the note names the slowest checks
+    /// inside a `codeflow ci` step, in the order the step gave them; under
+    /// it, nothing is printed. A project budget is the threshold.
+    #[test]
+    fn over_budget_names_the_slowest_checks_inside_ci() {
+        let mut ci = step("codeflow ci --head abc --branch feat/x", 70);
+        ci.parts = vec![
+            (
+                "acceptance".into(),
+                std::time::Duration::from_millis(41_200),
+            ),
+            (
+                "work-records".into(),
+                std::time::Duration::from_millis(20_050),
+            ),
+        ];
+        let steps = [ci, step("release preflight (feat/x)", 2)];
+        let total = std::time::Duration::from_secs(72);
+        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
+        assert!(
+            note.contains("slowest checks in it: acceptance 41.2s, work-records 20.1s"),
+            "{note}"
+        );
+        let budget = std::time::Duration::from_secs(90);
+        assert!(over_budget_note(&steps, total, budget).is_none());
+        let note = over_budget_note(&steps, total, std::time::Duration::from_secs(30))
+            .unwrap()
+            .to_string();
+        assert!(note.contains("over its 30s budget"), "{note}");
     }
 
     #[test]

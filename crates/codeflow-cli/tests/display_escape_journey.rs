@@ -42,7 +42,10 @@ fn codeflow(root: &Path) -> Command {
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("GIT_INDEX_FILE")
+        // The test process's build folder is never the fixture's: the gate
+        // keeps its evidence under the fixture's own `target` (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
     cmd
 }
 
