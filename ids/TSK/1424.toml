@@ -1,0 +1,11 @@
+id = "TSK-1424"
+uid = "ea793954-c29e-4e47-b1cf-b48564e52d63"
+kind = "TSK"
+title = "Integration lines require the line check names, and remote protect plans them"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-10T21:36:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
