@@ -315,6 +315,45 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
     }
 }
 
+/// A schema 5 catalog installed by an earlier release lacks the fields this
+/// release added. Resolution refuses it and names the field and the update
+/// that refreshes it, never a bare parse error.
+#[test]
+fn an_earlier_release_catalog_is_refused_with_the_update_hint() {
+    for strip in ["launch", "effort_floors", "high_when"] {
+        let project = Project::new();
+        let mut catalog = managed();
+        match strip {
+            "launch" => {
+                for line in catalog["lines"].as_array_mut().unwrap() {
+                    line.as_object_mut().unwrap().remove("launch");
+                }
+            }
+            "high_when" => {
+                for seat in catalog["seats"].as_array_mut().unwrap() {
+                    seat.as_object_mut().unwrap().remove("high_when");
+                }
+            }
+            field => {
+                catalog.as_object_mut().unwrap().remove(field);
+            }
+        }
+        std::fs::write(
+            project.root().join(CATALOG),
+            serde_json::to_string_pretty(&catalog).unwrap(),
+        )
+        .unwrap();
+        let output = project.run(&["--duty", "orchestrate", "--host", "claude-code"]);
+        assert_eq!(output.status.code(), Some(2), "{strip}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("missing field `{strip}`"))
+                && stderr.contains("run `codeflow update`"),
+            "{strip}: {stderr}"
+        );
+    }
+}
+
 /// The one `effective_model` event under the project's state directory.
 fn find_effective_record(root: &Path) -> Value {
     let mut stack = vec![root.to_path_buf()];

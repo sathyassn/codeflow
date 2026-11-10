@@ -27,6 +27,15 @@ pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
                         "{}: installed model catalog predates schema 5; run `codeflow update`",
                         path.display()
                     )
+                } else if error.contains("missing field `") {
+                    // A schema 5 catalog from an earlier release lacks a
+                    // field this release added (TSK-1292: `launch`, seat
+                    // `effort` and `high_when`, `effort_floors`).
+                    format!(
+                        "{}: {error}; the installed model catalog predates this CodeFlow \
+                         release; run `codeflow update`",
+                        path.display()
+                    )
                 } else {
                     error
                 }
