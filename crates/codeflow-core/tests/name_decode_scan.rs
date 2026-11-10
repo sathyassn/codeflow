@@ -2431,6 +2431,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:push-bounded-lines",
     ),
+    // Reads for-each-ref LF rows once; each row is one exact branch name, never trimmed (TSK-1351).
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "candidate_at",
+        "split_terminator",
+        1,
+        "framing:push-candidate-ref-lines",
+    ),
     // Trims stderr only to explain why the commit inventory is unknown.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
@@ -6724,6 +6732,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "push-bounded-lines",
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "bounded_by",
+    ),
+    (
+        "push-candidate-ref-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "candidate_at",
     ),
     (
         "recall-index-file-records",

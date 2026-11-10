@@ -528,7 +528,12 @@ fn candidate_at(
         ],
     )?
     .unwrap_or_default();
-    if let Some(name) = local.lines().find(|name| policy.is_candidate_branch(name)) {
+    // One ref name per line: only `\n` separates them, as a name may hold
+    // any other character.
+    if let Some(name) = local
+        .split_terminator('\n')
+        .find(|name| policy.is_candidate_branch(name))
+    {
         return Ok(Some(name.to_string()));
     }
     Ok(advertised.and_then(|branches| {
