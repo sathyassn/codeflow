@@ -689,6 +689,81 @@ fn a_destination_other_than_origin_is_refused() {
     );
 }
 
+/// AC-3: the hand-off names a policy authority whose candidate prefix is
+/// `land/`, while the destination's default branch says `candidate/`.
+/// Whether the pushed `candidate/` ref is a candidate is decided by the
+/// destination's policy, so the push is refused by the candidate binding
+/// for the mismatched authority, never judged as an ordinary branch.
+#[test]
+fn a_hand_off_under_another_candidate_prefix_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    git(root, &["switch", "-q", "-c", "other-prefix", "main"]);
+    let path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    policy["git"]["candidate_prefix"] = serde_json::Value::from("land/");
+    std::fs::write(&path, format!("{policy:#}\n")).unwrap();
+    let other = commit(root, "chore(policy): name candidates land/");
+    git(root, &["switch", "-q", CANDIDATE]);
+    let judged = hand_off_with(
+        &fixture,
+        CANDIDATE,
+        &candidate,
+        &fixture.line_tip,
+        &Claims {
+            policy_from: Claim::Named(&other),
+            ..Claims::default()
+        },
+    );
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "a hand-off under another candidate prefix",
+        &[
+            "work.landing_candidate",
+            &format!(
+                "the hand-off's policy authority {} is not the tip of 'main' the destination advertises",
+                &other[..9]
+            ),
+        ],
+    );
+}
+
+/// AC-3: the destination's default branch moved to a commit this clone has
+/// never held. Its policy cannot be read here, so the hand-off is refused
+/// with the remedy to fetch, never judged under the caller's policy.
+#[test]
+fn a_default_tip_this_clone_lacks_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    git(root, &["switch", "-q", "-c", "unfetched", "main"]);
+    write(root, "notes/unfetched.txt", "landed elsewhere\n");
+    let unfetched = commit(root, "docs(notes): land on main elsewhere");
+    seed_push(root, &["unfetched:refs/heads/main"]);
+    let main = git_out(root, &["rev-parse", "main"]);
+    git(root, &["update-ref", "refs/remotes/origin/main", &main]);
+    git(root, &["switch", "-q", CANDIDATE]);
+    git(root, &["branch", "-q", "-D", "unfetched"]);
+    git(root, &["reflog", "expire", "--expire=now", "--all"]);
+    git(root, &["gc", "-q", "--prune=now"]);
+    let judged = hand_off(&fixture, CANDIDATE, &candidate, &fixture.line_tip);
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "a default tip this clone lacks",
+        &[
+            "work.landing_candidate",
+            &format!(
+                "the tip of 'main' the destination advertises, {}, is not in this clone; fetch and push again",
+                &unfetched[..9]
+            ),
+        ],
+    );
+}
+
 /// A criteria change to TSK-001 that no member's reviewed head made.
 fn foreign_criteria(root: &Path) {
     let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();

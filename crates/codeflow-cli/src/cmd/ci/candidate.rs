@@ -5,10 +5,12 @@
 //! as `--into`. This check never trusts that hand-off: it binds the pushed
 //! branch again from its own reads, the fetched line tip, the records at
 //! the default branch's tip and at that line tip, and its own read of the
-//! destination, which must be `origin`'s push URL. The advertisement the
-//! hand-off carries is required and is a claim: it must match that read
-//! ref for ref. It refuses with the cause when the binding does not hold,
-//! when the destination cannot be read or is not `origin`, when the two
+//! destination, which must be `origin`'s push URL. On the hook's path the
+//! policy at the default branch tip of that read decides whether the
+//! pushed ref is a candidate, never the policy the caller names. The
+//! advertisement the hand-off carries is required and is a claim: it must
+//! match that read at HEAD's target and every branch tip. It refuses with
+//! the cause when the binding does not hold, when the destination cannot be read or is not `origin`, when the two
 //! reads differ (the destination moved, or the hand-off is not its), or
 //! when a claim of the hand-off (the policy authority, `--into`, the base)
 //! is missing or differs from what it established. A bound candidate is then judged as
@@ -47,18 +49,76 @@ pub(super) fn check(
     ran: &mut Vec<&str>,
 ) -> Option<Bound> {
     let branch = pushed_ref?.strip_prefix("refs/heads/")?;
+    let shown = codeflow_core::git::display_text(branch);
+    let refuse = |tagged: &mut Vec<super::TaggedViolation>, cause: String| {
+        tagged.push(super::TaggedViolation {
+            sha: None,
+            violation: Violation::always_blocking(
+                landing_candidate::RULE,
+                format!("'{shown}' is not judged as a landing candidate of a line: {cause}"),
+                landing_candidate::REMEDY,
+            ),
+        });
+    };
+    // On the pre-push hook's path (a pushed ref with the destination's
+    // advertisement), whether the ref is a candidate at all is decided by
+    // the policy at the default branch's tip as this run reads the
+    // destination, never by the policy the caller names: a `--policy-from`
+    // with another prefix would otherwise skip the binding. The caller's
+    // authority is compared with that tip in [`bind`]. The hook's push asks
+    // the destination once for every other ref, so this run reads it again
+    // only for a ref that is a candidate under the caller's policy or under
+    // the policy at the default tip the hand-off claims, or whose claimed
+    // tip this clone cannot read; a ref that is a candidate under neither
+    // is judged as the ordinary hand-off it claims to be.
+    let at_destination: codeflow_core::hooks::policy::Policy;
+    let (git, read) = if let (Some(url), Some(listed)) = (destination, advertisement) {
+        let claimed = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
+            .ok()
+            .and_then(|claimed| claimed.default)
+            .map(|(_, tip)| {
+                policy_at(
+                    root,
+                    "the default branch the hand-off claims",
+                    &tip.to_string(),
+                )
+            });
+        let maybe = git.is_candidate_branch(branch)
+            || match claimed {
+                Some(Ok(policy)) => policy.git.is_candidate_branch(branch),
+                Some(Err(_)) | None => true,
+            };
+        if !maybe {
+            return None;
+        }
+        match destination_policy(root, git, url) {
+            Ok((read, policy)) => {
+                at_destination = policy;
+                (&at_destination.git, Some(read))
+            }
+            Err(cause) => {
+                ran.push("landing-candidate");
+                refuse(
+                    tagged,
+                    format!("whether it is one is decided by the policy at the destination's default branch tip, and {cause}"),
+                );
+                return None;
+            }
+        }
+    } else {
+        (git, None)
+    };
     if !git.is_candidate_branch(branch) {
         return None;
     }
     ran.push("landing-candidate");
-    let shown = codeflow_core::git::display_text(branch);
     match bind(
         root,
         branch,
         git,
         claims,
         (base, head),
-        (destination, advertisement),
+        (destination, advertisement, read.as_ref()),
     ) {
         Ok(bound) => {
             let pulls = bound
@@ -81,14 +141,7 @@ pub(super) fn check(
             Some(bound)
         }
         Err(cause) => {
-            tagged.push(super::TaggedViolation {
-                sha: None,
-                violation: Violation::always_blocking(
-                    landing_candidate::RULE,
-                    format!("'{shown}' is not judged as a landing candidate of a line: {cause}"),
-                    landing_candidate::REMEDY,
-                ),
-            });
+            refuse(tagged, cause);
             None
         }
     }
@@ -127,21 +180,27 @@ pub(super) fn unnamed_line(
 /// hold or cannot be read. Every destination tip comes from this run's own
 /// read of the destination, which must be `origin`'s push URL; the
 /// advertisement the hand-off carries is a claim that read must match ref
-/// for ref. Each other claim the hand-off makes (the policy authority,
-/// `--into`, the base) must match what this run establishes, and a missing
-/// claim is refused, never filled in.
+/// at HEAD's target and every branch tip; `git` is the policy at the
+/// default branch tip of that read. Each other claim the hand-off makes
+/// (the policy authority, `--into`, the base) must match what this run
+/// establishes, and a missing claim is refused, never filled in.
 fn bind(
     root: &Path,
     branch: &str,
     git: &GitPolicy,
     (authority, into): (Option<&str>, Option<&str>),
     (base, head): (Option<&str>, &str),
-    (destination, advertisement): (Option<&str>, Option<&str>),
+    (destination, advertisement, read): (
+        Option<&str>,
+        Option<&str>,
+        Option<&codeflow_core::workgraph::release_line::Destination>,
+    ),
 ) -> Result<Bound, String> {
-    let (Some(url), Some(listed)) = (destination, advertisement) else {
+    let (Some(url), Some(listed), Some(read)) = (destination, advertisement, read) else {
         return Err("the run holds no destination advertisement (`--destination` with `--advertisement-stdin`, as the pre-push hook hands over), so the line's tip and the default branch's tip cannot be established independently".to_string());
     };
-    let asked = destination_read(root, git, url, listed)?;
+    matching_claim(root, git, url, listed, read)?;
+    let asked = read;
     // The default branch and its tip, as the destination advertises them:
     // the line's own target, and the records that must bind the line.
     let (target, default_tip) = asked
@@ -210,21 +269,94 @@ fn bind(
     Ok(Bound { line, target })
 }
 
-/// The destination `url` as this run reads it, once `url` is shown to be
-/// `origin`'s push URL and the hand-off's advertisement `listed` is shown
-/// to match the read ref for ref. The read uses the timeout and attempts
-/// of the policy that judges the push, as the hook's own read does.
+/// The destination `url` as this run reads it, and the policy at the tip
+/// of the default branch it advertises, read from this clone's objects.
+/// The read uses the timeout and attempts of `git`, the policy the caller
+/// names; that can only make the read fail, which refuses.
 ///
 /// # Errors
 ///
-/// Returns why `url` is not `origin`'s push URL, why the destination or
-/// the hand-off's advertisement cannot be read, or which refs differ.
-fn destination_read(
+/// Returns why the destination cannot be read, why it names no default
+/// branch, or why that tip's policy cannot be read here (a tip this clone
+/// has not fetched names the remedy), never falling back to `git`.
+fn destination_policy(
+    root: &Path,
+    git: &GitPolicy,
+    url: &str,
+) -> Result<
+    (
+        codeflow_core::workgraph::release_line::Destination,
+        codeflow_core::hooks::policy::Policy,
+    ),
+    String,
+> {
+    use codeflow_core::git::remote_query::QueryLimits;
+    use codeflow_core::workgraph::release_line;
+    let limits = QueryLimits::from_git(git);
+    let read = release_line::advertisement(root, url, limits)
+        .and_then(|text| release_line::from_advertisement(url, &text))
+        .map_err(|error| format!("this run cannot read the destination itself: {error}"))?;
+    let Some((name, tip)) = read.default.clone() else {
+        return Err(
+            "the destination advertises no default branch whose policy could decide it".into(),
+        );
+    };
+    let shown = format!("'{}'", codeflow_core::git::display_text(&name));
+    let policy = policy_at(root, &shown, &tip.to_string())?;
+    Ok((read, policy))
+}
+
+/// The policy at `tip`, the tip of the branch `what` names, read from this
+/// clone's objects; the shipped defaults when that tree proves the policy
+/// file absent, as the judging policy does.
+///
+/// # Errors
+///
+/// Returns why `tip` is not in this clone (with the remedy to fetch) or
+/// why its policy cannot be read or is invalid.
+fn policy_at(
+    root: &Path,
+    what: &str,
+    tip: &str,
+) -> Result<codeflow_core::hooks::policy::Policy, String> {
+    let short = &tip[..tip.len().min(9)];
+    if super::rev_parse(root, tip)?.is_none() {
+        return Err(format!(
+            "the tip of {what} the destination advertises, {short}, is not in this clone; fetch and push again"
+        ));
+    }
+    let unreadable =
+        |why: &str| format!("the policy at the tip of {what}, {short}, cannot be read: {why}");
+    match codeflow_core::hooks::landed_policy::policy_text_at(root, tip)
+        .map_err(|why| unreadable(&why))?
+    {
+        None => Ok(codeflow_core::hooks::policy::Policy::default()),
+        Some(text) => {
+            codeflow_core::hooks::policy_schema::validate_policy_str(&text).map_err(|errors| {
+                let shown: Vec<_> = errors.iter().map(ToString::to_string).collect();
+                unreadable(&shown.join("; "))
+            })?;
+            serde_json::from_str(&text).map_err(|error| unreadable(&error.to_string()))
+        }
+    }
+}
+
+/// The destination `read`, once `url` is shown to be `origin`'s push URL
+/// and the hand-off's advertisement `listed` is shown to match the read at
+/// HEAD's target and every branch tip. Tags are not compared: nothing the
+/// binding reads comes from a tag.
+///
+/// # Errors
+///
+/// Returns why `url` is not `origin`'s push URL, why the hand-off's
+/// advertisement cannot be read, or which refs differ.
+fn matching_claim(
     root: &Path,
     git: &GitPolicy,
     url: &str,
     listed: &str,
-) -> Result<codeflow_core::workgraph::release_line::Destination, String> {
+    read: &codeflow_core::workgraph::release_line::Destination,
+) -> Result<(), String> {
     use codeflow_core::git::remote_query::{display_urls, QueryLimits};
     use codeflow_core::workgraph::release_line;
     let shown = display_urls(url);
@@ -244,11 +376,6 @@ fn destination_read(
     let claimed = release_line::from_advertisement(url, listed).map_err(|error| {
         format!("the hand-off's advertisement of the destination cannot be read: {error}")
     })?;
-    let read = release_line::advertisement(root, url, limits)
-        .and_then(|text| release_line::from_advertisement(url, &text))
-        .map_err(|error| {
-            format!("this run cannot read the destination itself, so the hand-off's advertisement cannot be checked: {error}")
-        })?;
     let mut moved: Vec<String> = Vec::new();
     if claimed.default.as_ref().map(|(name, _)| name) != read.default.as_ref().map(|(name, _)| name)
     {
@@ -261,7 +388,7 @@ fn destination_read(
             .map(|(name, tip)| (name.clone(), tip.to_string()))
             .collect()
     };
-    let (claimed_tips, read_tips) = (tips(&claimed), tips(&read));
+    let (claimed_tips, read_tips) = (tips(&claimed), tips(read));
     for name in claimed_tips.keys().chain(read_tips.keys()) {
         let shown_name = codeflow_core::git::display_text(name);
         if claimed_tips.get(name) != read_tips.get(name) && !moved.contains(&shown_name) {
@@ -277,5 +404,5 @@ fn destination_read(
             if count > 5 { ", ..." } else { "" }
         ));
     }
-    Ok(read)
+    Ok(())
 }
