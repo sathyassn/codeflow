@@ -2921,6 +2921,74 @@ fn doctor_names_an_include_by_its_entry_and_never_its_value() {
     }
 }
 
+/// TSK-416 review round 7: a remote's name is the subsection of its
+/// `remote.<name>.url` key and can be a URL with a credential. Through the
+/// real binary, the session digest and the git guard name such a remote
+/// by its place among the configured remotes and print the name nowhere:
+/// not as itself, inside a tracking ref, or in a pasted step. The sole
+/// remote is read with no tracking refs, and, for a name that can be a
+/// ref, with its default branch and an integration line fetched. The
+/// credentials are synthetic.
+#[test]
+fn the_digest_and_the_guard_never_print_a_credential_remote_name() {
+    for (name, fetched) in [
+        ("https://user:OPAQUECANARY@host.invalid", false),
+        ("user-OPAQUECANARY@host.invalid", false),
+        ("user-OPAQUECANARY@host.invalid", true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let config = dir.path().join(".git").join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let text = format!("{text}[remote \"{name}\"]\n\turl = file:///nonexistent/remote.git\n");
+        std::fs::write(&config, text).unwrap();
+        if fetched {
+            for reference in ["main", "integration/line"] {
+                git(
+                    dir.path(),
+                    &[
+                        "update-ref",
+                        &format!("refs/remotes/{name}/{reference}"),
+                        "HEAD",
+                    ],
+                );
+            }
+            git(
+                dir.path(),
+                &[
+                    "symbolic-ref",
+                    &format!("refs/remotes/{name}/HEAD"),
+                    &format!("refs/remotes/{name}/main"),
+                ],
+            );
+        }
+        let orient = codeflow()
+            .arg("orient")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let outputs = [
+            orient,
+            guard_run("git status", dir.path()),
+            guard_run("git fetch", dir.path()),
+            guard_run("git push", dir.path()),
+        ];
+        let case = format!("{name} (fetched: {fetched})");
+        let mut withheld = false;
+        for out in outputs {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
+            assert!(!text.contains("host.invalid"), "{case}: {text}");
+            withheld |= text.contains("<remote 1, name withheld>");
+        }
+        assert!(withheld, "{case}: the remote is named by its place");
+    }
+}
+
 #[test]
 fn exec_guard_blocks_powershell_catastrophe_with_exit_2() {
     let dir = tempfile::tempdir().unwrap();

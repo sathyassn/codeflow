@@ -97,6 +97,16 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a synthetic remote name whose URL is unset or set to local paths; the refusal comes before any transport (TSK-416 round 6)",
     ),
     (
+        "codeflow-core/src/hooks/ref_authority.rs",
+        "host.invalid",
+        "a synthetic remote name, never a URL: the remote's URLs are file:// paths, so any question goes to a local path (TSK-416 round 7)",
+    ),
+    (
+        "codeflow-core/src/security/git.rs",
+        "host.invalid",
+        "a synthetic remote name, never a URL: the remotes' URLs are file:// paths or read from configuration only, and the test asks no remote (TSK-416 round 7)",
+    ),
+    (
         "codeflow-core/src/git/remote_query.rs",
         "USERCANARY",
         "a credential in a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
