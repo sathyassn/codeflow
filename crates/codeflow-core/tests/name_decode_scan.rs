@@ -4205,22 +4205,8 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // TSK-1302: strips only LF and CR line endings to compare a whole shipped
-    // line with the exact replaced text; no other character is removed.
-    (
-        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
-        "apply_units",
-        "trim_end_matches",
-        2,
-        "grammar:lf-crlf-line-endings",
-    ),
-    (
-        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
-        "only_units_changed",
-        "trim_end_matches",
-        2,
-        "grammar:lf-crlf-line-endings",
-    ),
+    // TSK-1302: strips only LF and CR line endings to read a heading line;
+    // no other character is removed.
     (
         "crates/codeflow-core/src/scaffold/overrides/sections.rs",
         "heading_level",
@@ -4272,7 +4258,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // LF/CRLF framing only rejects unresolved conflict markers; accepted file bytes are never normalized or used as names.
     (
         "crates/codeflow-core/src/scaffold/update/pending.rs",
-        "PendingResolution::read",
+        "PendingResolution::read_projected",
         "split_terminator",
         1,
         "schema-reject-only",

@@ -37,6 +37,9 @@ pub enum SectionError {
     /// A declared section whose heading is deeper than the declared section
     /// it would sit inside.
     Nested { line: usize },
+    /// A setext heading inside a declared section at the section's level or
+    /// higher: declared sections end only at ATX headings.
+    Setext { line: usize },
 }
 
 impl SectionError {
@@ -48,7 +51,8 @@ impl SectionError {
             | Self::NoHeading { line }
             | Self::DuplicateId { line }
             | Self::MarkerInFence { line }
-            | Self::Nested { line } => *line,
+            | Self::Nested { line }
+            | Self::Setext { line } => *line,
         }
     }
 
@@ -61,6 +65,9 @@ impl SectionError {
             Self::DuplicateId { .. } => "two section markers share one id",
             Self::MarkerInFence { .. } => "a section marker is inside a code fence",
             Self::Nested { .. } => "a declared section is nested inside another",
+            Self::Setext { .. } => {
+                "a declared section holds a setext heading at its level or higher"
+            }
         }
     }
 }
@@ -122,11 +129,135 @@ pub fn heading_level(line: &str) -> Option<usize> {
     (after.is_empty() || after.starts_with(' ') || after.starts_with('\t')).then_some(hashes)
 }
 
-/// Whether `line` opens or closes a fenced code block.
+/// An open fenced code block: its delimiter character and run length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fence {
+    ch: u8,
+    len: usize,
+}
+
+/// The delimiter run of a fence line: up to three spaces, then three or more
+/// backticks or tildes. Returns the character, the run length and the rest
+/// of the line without its line break.
+fn fence_run(line: &str) -> Option<(u8, usize, &str)> {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let ch = *rest.as_bytes().first()?;
+    if ch != b'`' && ch != b'~' {
+        return None;
+    }
+    let len = rest.bytes().take_while(|&b| b == ch).count();
+    (len >= 3).then(|| (ch, len, &rest[len..]))
+}
+
+/// The fence `line` opens, as `CommonMark` reads it: a backtick fence's info
+/// string holds no backtick.
 #[must_use]
-pub fn is_fence(line: &str) -> bool {
-    let trimmed = line.trim_start_matches(' ');
-    line.len() - trimmed.len() <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~"))
+pub fn fence_opening(line: &str) -> Option<Fence> {
+    let (ch, len, info) = fence_run(line)?;
+    (ch == b'~' || !info.contains('`')).then_some(Fence { ch, len })
+}
+
+/// Whether `line` closes `fence`: the same character, a run at least as
+/// long as the opening one, and nothing after it but spaces and tabs.
+#[must_use]
+pub fn closes(fence: Fence, line: &str) -> bool {
+    fence_run(line).is_some_and(|(ch, len, rest)| {
+        ch == fence.ch && len >= fence.len && rest.bytes().all(|b| b == b' ' || b == b'\t')
+    })
+}
+
+/// The fence state after `line`, and whether `line` is a fence delimiter.
+#[must_use]
+pub fn step_fence(open: Option<Fence>, line: &str) -> (Option<Fence>, bool) {
+    match open {
+        Some(fence) if closes(fence, line) => (None, true),
+        Some(fence) => (Some(fence), false),
+        None => match fence_opening(line) {
+            Some(fence) => (Some(fence), true),
+            None => (None, false),
+        },
+    }
+}
+
+/// The level of a setext heading underline, if `line` is one: up to three
+/// spaces, then a run of `=` (level 1) or `-` (level 2), then only spaces
+/// and tabs. It underlines the line before it when that line is paragraph
+/// text, which the caller decides.
+#[must_use]
+pub fn setext_level(line: &str) -> Option<usize> {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let ch = *rest.as_bytes().first()?;
+    let level = match ch {
+        b'=' => 1,
+        b'-' => 2,
+        _ => return None,
+    };
+    let run = rest.bytes().take_while(|&b| b == ch).count();
+    rest.as_bytes()[run..]
+        .iter()
+        .all(|&b| b == b' ' || b == b'\t')
+        .then_some(level)
+}
+
+/// Whether `line` can be the text line a setext underline turns into a
+/// heading: not blank, not an ATX heading and not a fence delimiter. This
+/// reads more lines as paragraph text than `CommonMark` does, which only
+/// widens what a replacement body refuses.
+fn may_be_paragraph(line: &str) -> bool {
+    !line.bytes().all(|b| b.is_ascii_whitespace())
+        && heading_level(line).is_none()
+        && fence_run(line).is_none()
+        && setext_level(line).is_none()
+}
+
+/// The end condition of a raw HTML block `line` starts (`CommonMark` block
+/// types 1 to 5), which runs past blank lines and headings until a line
+/// holds it.
+fn html_block_end(line: &str) -> Option<&'static str> {
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let lower = rest.to_ascii_lowercase();
+    for tag in ["script", "pre", "style", "textarea"] {
+        if let Some(after) = lower.strip_prefix('<').and_then(|l| l.strip_prefix(tag)) {
+            if after.is_empty() || after.starts_with([' ', '\t', '>', '\n', '\r']) {
+                return Some(match tag {
+                    "script" => "</script>",
+                    "pre" => "</pre>",
+                    "style" => "</style>",
+                    _ => "</textarea>",
+                });
+            }
+        }
+    }
+    if lower.starts_with("<!--") {
+        return Some("-->");
+    }
+    if lower.starts_with("<?") {
+        return Some("?>");
+    }
+    if lower.starts_with("<![cdata[") {
+        return Some("]]>");
+    }
+    if lower
+        .strip_prefix("<!")
+        .and_then(|after| after.bytes().next())
+        .is_some_and(|b| b.is_ascii_alphabetic())
+    {
+        return Some(">");
+    }
+    None
 }
 
 fn parse_marker(line: &str) -> Option<(String, Option<UnitClass>)> {
@@ -175,7 +306,7 @@ pub fn parse(text: &str) -> Result<Doc, SectionError> {
     let mut segments = Vec::new();
     let mut outside = String::new();
     let mut ids = std::collections::BTreeSet::new();
-    let mut in_fence = false;
+    let mut in_fence: Option<Fence> = None;
     let mut index = 0;
     // The level of the declared section that just ended at a marker, to
     // refuse a deeper marker that would sit inside it.
@@ -183,7 +314,7 @@ pub fn parse(text: &str) -> Result<Doc, SectionError> {
     while index < lines.len() {
         let line = lines[index];
         if is_marker_line(line) {
-            if in_fence {
+            if in_fence.is_some() {
                 return Err(SectionError::MarkerInFence { line: index + 1 });
             }
             let Some((id, class)) = parse_marker(line) else {
@@ -207,22 +338,32 @@ pub fn parse(text: &str) -> Result<Doc, SectionError> {
             let header = format!("{line}{heading}");
             index += 2;
             let mut body = String::new();
-            let mut fence = false;
+            let mut fence: Option<Fence> = None;
+            // The line before, when it may be paragraph text a setext
+            // underline turns into a heading; the heading line never is.
+            let mut paragraph = false;
             ended_at_marker = None;
             while index < lines.len() {
                 let next = lines[index];
                 if is_marker_line(next) {
-                    if fence {
+                    if fence.is_some() {
                         return Err(SectionError::MarkerInFence { line: index + 1 });
                     }
                     ended_at_marker = Some(level);
                     break;
                 }
-                if is_fence(next) {
-                    fence = !fence;
-                } else if !fence && heading_level(next).is_some_and(|l| l <= level) {
-                    break;
+                let was_open = fence.is_some();
+                let (after, delimiter) = step_fence(fence, next);
+                fence = after;
+                if !was_open && !delimiter {
+                    if heading_level(next).is_some_and(|l| l <= level) {
+                        break;
+                    }
+                    if paragraph && setext_level(next).is_some_and(|l| l <= level) {
+                        return Err(SectionError::Setext { line: index + 1 });
+                    }
                 }
+                paragraph = !was_open && !delimiter && may_be_paragraph(next);
                 body.push_str(next);
                 index += 1;
             }
@@ -237,9 +378,7 @@ pub fn parse(text: &str) -> Result<Doc, SectionError> {
             continue;
         }
         ended_at_marker = None;
-        if is_fence(line) {
-            in_fence = !in_fence;
-        }
+        in_fence = step_fence(in_fence, line).0;
         outside.push_str(line);
         index += 1;
     }
@@ -264,6 +403,27 @@ impl Doc {
             }
         }
         out
+    }
+
+    /// The byte range of the body of the declared section with `id` in
+    /// [`Doc::text`].
+    #[must_use]
+    pub fn body_range(&self, id: &str) -> Option<std::ops::Range<usize>> {
+        let mut offset = 0;
+        for segment in &self.segments {
+            match segment {
+                Segment::Outside(text) => offset += text.len(),
+                Segment::Section(section) => {
+                    let start = offset + section.header.len();
+                    let end = start + section.body.len();
+                    if section.id == id {
+                        return Some(start..end);
+                    }
+                    offset = end;
+                }
+            }
+        }
+        None
     }
 
     /// The declared section with `id`.
@@ -294,6 +454,9 @@ pub enum BodyProblem {
     EndsSection,
     /// An open code fence, which would hide the headings and markers after it.
     OpenFence,
+    /// A raw HTML block (a comment, `<pre>`, `<script>` and the like) left
+    /// open, which would hide the text after it in the same way.
+    OpenHtmlBlock,
 }
 
 impl BodyProblem {
@@ -311,6 +474,9 @@ impl BodyProblem {
             Self::OpenFence => {
                 "the replacement leaves a code fence open, which would hide the headings and markers after it"
             }
+            Self::OpenHtmlBlock => {
+                "the replacement leaves a raw HTML block open, which would hide the headings and markers after it"
+            }
         }
     }
 }
@@ -324,19 +490,52 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
     if body.trim().is_empty() {
         return Err(BodyProblem::Empty);
     }
-    let mut fence = false;
+    let mut fence: Option<Fence> = None;
+    let mut html: Option<&str> = None;
+    // The line before may be paragraph text; the shipped heading line before
+    // the body never is.
+    let mut paragraph = false;
     for line in body.split_inclusive('\n') {
         if line.to_ascii_lowercase().contains("codeflow:") {
             return Err(BodyProblem::StructuralMarker);
         }
-        if is_fence(line) {
-            fence = !fence;
-        } else if !fence && heading_level(line).is_some_and(|l| l <= level) {
+        if let Some(end) = html {
+            if line.to_ascii_lowercase().contains(end) {
+                html = None;
+            }
+            paragraph = false;
+            continue;
+        }
+        let was_open = fence.is_some();
+        let (after, delimiter) = step_fence(fence, line);
+        fence = after;
+        if was_open || delimiter {
+            paragraph = false;
+            continue;
+        }
+        if heading_level(line).is_some_and(|l| l <= level)
+            || (paragraph && setext_level(line).is_some_and(|l| l <= level))
+        {
             return Err(BodyProblem::EndsSection);
         }
+        if let Some(end) = html_block_end(line) {
+            // The end condition may sit on the opening line itself, after
+            // the opener.
+            let opener = line.trim_start_matches(' ');
+            let after = opener.get(2..).unwrap_or_default().to_ascii_lowercase();
+            if !after.contains(end) {
+                html = Some(end);
+            }
+            paragraph = false;
+            continue;
+        }
+        paragraph = may_be_paragraph(line);
     }
-    if fence {
+    if fence.is_some() {
         return Err(BodyProblem::OpenFence);
+    }
+    if html.is_some() {
+        return Err(BodyProblem::OpenHtmlBlock);
     }
     Ok(())
 }

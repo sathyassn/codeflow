@@ -237,14 +237,7 @@ pub fn decide(
             Some(record) => {
                 let rebuilt = base
                     .as_deref()
-                    .filter(|base| {
-                        record.pristine_sha256 == hash::sha256_hex(base.as_bytes())
-                            && recorded == Some(record.pristine_sha256.as_str())
-                    })
-                    .and_then(|base| overrides::apply_units(base, &record.applied))
-                    .filter(|effective| {
-                        hash::sha256_hex(effective.as_bytes()) == record.effective_sha256
-                    });
+                    .and_then(|base| overrides::rebuild(&record, base, recorded));
                 let Some(rebuilt) = rebuilt else {
                     return Ok(Some(Decision::Unproven(Shown::fixed(
                         "the override record does not match the installed baseline and manifest",
@@ -301,13 +294,17 @@ pub fn decide(
 
 /// The project overrides `codeflow update` would apply, by destination,
 /// checked exactly as update checks them and writing nothing (TSK-1302).
-/// Empty when the project declares no override and holds no override
-/// record. Doctor reads it.
+/// Each planned file carries its effective rendering from this binary's
+/// shipped text and `.codeflow/overrides.toml`, and the effective baseline
+/// update's own reconstruction rebuilds from its record. Empty when the
+/// project declares no override and holds no override record or journal.
+/// Doctor reads it.
 ///
 /// # Errors
 ///
-/// The refusal update would print for the override file, or an input that
-/// cannot be read.
+/// The refusal update would print for the override file or a record, a
+/// journal an interrupted update left (update finishes or refuses it first),
+/// or an input that cannot be read.
 pub fn override_plan(
     source: &dyn super::AssetSource,
     root: &Path,
@@ -316,9 +313,10 @@ pub fn override_plan(
     let state = ProjectState::load(root)?;
     let ignore = ScaffoldConfig::load(root)?;
     let manifest = ScaffoldManifest::load(source)?;
+    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
     let ctx = update_context(root, &state, binary_version);
     let mut scratch = Report::new(Shown::default());
-    overrides::prepare(
+    let mut plan = overrides::prepare(
         source,
         root,
         &manifest,
@@ -326,7 +324,19 @@ pub fn override_plan(
         &state.permission_preset,
         &ignore,
         &mut |entry| render_entry(source, entry, &ctx, &mut scratch),
-    )
+    )?;
+    for dest in plan.dests.keys() {
+        if overrides::record::Journal::read(root, dest)?.is_some() {
+            return Err(ScaffoldError::invalid(
+                shown!("override state of {}", overrides::dest_shown(dest)),
+                Shown::fixed(
+                    "an interrupted update left a journal for this file; `codeflow update` finishes the write or refuses it",
+                ),
+            ));
+        }
+    }
+    plan.load_old(root, &installed, &overrides::Projected::default())?;
+    Ok(plan)
 }
 
 /// Why update skips `entry` before reading it (`[scaffold] ignore`, the
@@ -423,19 +433,18 @@ fn update_writes(
         &ignore,
         &mut |entry| render_entry(source, entry, &ctx, &mut scratch),
     )?;
-    // Then settle what an interrupted update left: roll a landed write
-    // forward, drop one that never landed, refuse any other state.
-    let recovered = overrides::recover(root, &manifest, &mut installed)?;
-    if recovered > 0 {
-        report.notes.push(shown!(
-            "finished {} file write(s) an interrupted update had journaled",
-            Shown::count(recovered)
-        ));
-    }
+    // Then decide, still writing nothing, what an interrupted update left:
+    // roll a landed write forward, drop one that never landed, refuse any
+    // other state. Its metadata is projected in memory, so the resolutions
+    // and records below are checked against the state this update leaves.
+    let recovery = overrides::plan_recovery(root, &manifest, &installed, &plan)?;
+    let mut projected = overrides::Projected::default();
+    let mut next_installed = installed.clone();
+    recovery.project(&manifest, &mut next_installed, &mut projected);
     // Validate every outstanding resolution before writing anything, including
     // state, reports and files that precede the conflicted entry in the manifest.
     // Include old entries so pruning cannot discard an unresolved proposal.
-    let managed: std::collections::BTreeSet<_> = installed
+    let managed: std::collections::BTreeSet<_> = next_installed
         .files
         .iter()
         .filter(|(_, file)| file.ownership == Ownership::Managed)
@@ -454,28 +463,48 @@ fn update_writes(
         .collect();
     let mut resolved = Vec::new();
     for dest in managed {
-        if let Some(pending) = PendingResolution::read(root, dest, &installed)? {
+        let baseline = projected.baselines.get(dest).map(String::as_str);
+        if let Some(pending) =
+            PendingResolution::read_projected(root, dest, &next_installed, baseline)?
+        {
             resolved.push((dest.to_string(), pending));
         }
     }
     for (dest, pending) in &resolved {
-        Baseline::write(root, dest, &pending.shipped)?;
+        projected
+            .baselines
+            .insert(dest.clone(), pending.shipped.clone());
         // `read` requires a manifest entry with a known shipped hash.
-        if let Some(file) = installed.files.get_mut(dest) {
+        if let Some(file) = next_installed.files.get_mut(dest) {
             file.sha256 = hash::sha256_hex(pending.shipped.as_bytes());
         }
     }
-    if !resolved.is_empty() {
-        // Persist the accepted base before dropping its pending record. A retry
-        // accepts either old or new metadata after an interrupted write.
+    // Each overridden file's record must match the installed baseline it
+    // was applied to, as this update leaves both; the effective baseline is
+    // rebuilt from it. This is the last check before the first write.
+    plan.load_old(root, &next_installed, &projected)?;
+    // Every check passed: only now write the recovered and resolved
+    // metadata. The installed manifest is stored before any journal or
+    // pending record is dropped, so a retry after an interruption here
+    // accepts either old or new metadata.
+    recovery.commit(root)?;
+    for (dest, pending) in &resolved {
+        Baseline::write(root, dest, &pending.shipped)?;
+    }
+    installed = next_installed;
+    if !recovery.is_empty() || !resolved.is_empty() {
         installed.store(root)?;
+        recovery.finish(root)?;
         for (dest, _) in &resolved {
             remove_beneath_root(root, &pending::path(dest))?;
         }
     }
-    // Each overridden file's record must match the installed baseline it
-    // was applied to; the effective baseline is rebuilt from it.
-    plan.load_old(root, &installed)?;
+    if !recovery.is_empty() {
+        report.notes.push(shown!(
+            "finished {} file write(s) an interrupted update had journaled",
+            Shown::count(recovery.len())
+        ));
+    }
     if !plan.dests.is_empty() {
         report.notes.push(shown!(
             "project overrides from {} apply to {} file(s)",

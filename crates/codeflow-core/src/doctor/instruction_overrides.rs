@@ -14,6 +14,7 @@ use std::time::Instant;
 use super::{input_failure, CheckResult, Options, Status};
 use crate::remedy;
 use crate::scaffold::overrides::{record, AppliedUnit, DestPlan, Target};
+use crate::scaffold::sha256_hex;
 
 const NAME: &str = "overrides";
 
@@ -49,22 +50,38 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     if plan.dests.is_empty() {
         return result(Status::Pass, "no project overrides".into());
     }
+    let installed = match super::read_installed_manifest(&root) {
+        Ok(installed) => installed,
+        Err(error) => {
+            let path = crate::scaffold::state::InstalledManifest::path(&root);
+            return input_failure(NAME, start, &path, error);
+        }
+    };
     let mut applied = Vec::new();
     let mut pending = Vec::new();
+    let mut differs = Vec::new();
     for (dest, dest_plan) in &plan.dests {
-        let state = match applied_state(&root, dest, dest_plan) {
-            Ok(state) => state,
-            Err(error) => {
-                let path = root.join(record::record_path(dest));
-                return input_failure(NAME, start, &path, error);
-            }
-        };
-        if !state {
-            pending.push(dest.clone());
+        let installed_sha = installed.files.get(dest).map(|file| file.sha256.as_str());
+        match dest_state(&root, dest, dest_plan, installed_sha) {
+            Ok(State::Applied) => {}
+            Ok(State::Pending) => pending.push(dest.clone()),
+            Ok(State::Differs) => differs.push(dest.clone()),
+            Err(error) => return input_failure(NAME, start, &root.join(dest), error),
         }
         for unit in &dest_plan.applied {
             applied.push(describe(dest, unit));
         }
+    }
+    if !differs.is_empty() {
+        return result(
+            Status::Fail,
+            format!(
+                "{} holds text that is neither the shipped text with the declared overrides nor what \
+                 `codeflow update` last wrote and recorded: an undeclared edit or unverified state, \
+                 which no override accounts for; `codeflow update` merges it or writes a .new proposal",
+                differs.join(", ")
+            ),
+        );
     }
     let listing = if applied.is_empty() {
         "no override applies; the shipped text is restored".to_string()
@@ -84,18 +101,54 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     )
 }
 
-/// Whether update last applied exactly this plan to `dest`: its record
-/// holds the same units with the same shipped and replacement text, and a
-/// file whose overrides were all removed has no record left.
-fn applied_state(
+/// Where one overridden file stands.
+enum State {
+    /// The file is the shipped text with the declared overrides, as this
+    /// binary computes it, and update's record says so.
+    Applied,
+    /// The file is what update last wrote and recorded, or the shipped text
+    /// before any override: `codeflow update` applies the declared set.
+    Pending,
+    /// Anything else.
+    Differs,
+}
+
+/// The state of `dest`. Every comparison is with text this binary computes:
+/// the effective rendering from its shipped text and the declared overrides,
+/// and the effective baseline update's reconstruction rebuilt from the
+/// record and checked against the baseline and `installed_sha`. A digest the
+/// project wrote counts only when it equals that computation.
+fn dest_state(
     root: &Path,
     dest: &str,
     plan: &DestPlan,
-) -> Result<bool, crate::scaffold::ScaffoldError> {
-    Ok(match record::Record::read(root, dest)? {
-        Some(record) => record.applied == plan.applied,
-        None => plan.applied.is_empty(),
-    })
+    installed_sha: Option<&str>,
+) -> Result<State, crate::scaffold::ScaffoldError> {
+    let Some(current) =
+        crate::scaffold::state::read_beneath_root(root, dest)?.and_then(|text| plan.unit_of(&text))
+    else {
+        return Ok(State::Differs);
+    };
+    let expected = plan.effective_unit();
+    if expected.as_deref() == Some(current.as_str()) {
+        let recorded = match &plan.old {
+            Some((record, _)) => {
+                record.applied == plan.applied
+                    && record.effective_sha256 == sha256_hex(current.as_bytes())
+            }
+            None => plan.applied.is_empty() && record::Record::read(root, dest)?.is_none(),
+        };
+        return Ok(if recorded {
+            State::Applied
+        } else {
+            State::Pending
+        });
+    }
+    let last = match &plan.old {
+        Some((_, effective)) => effective == &current,
+        None => Some(sha256_hex(current.as_bytes()).as_str()) == installed_sha,
+    };
+    Ok(if last { State::Pending } else { State::Differs })
 }
 
 /// One applied unit as doctor prints it: the target, the file and the

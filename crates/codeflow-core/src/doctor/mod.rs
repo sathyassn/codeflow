@@ -3631,6 +3631,10 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
     };
 
     let mut drifted: Vec<String> = Vec::new();
+    // The project overrides as this binary computes them from its shipped
+    // text and `.codeflow/overrides.toml` (TSK-1302), read once when a block
+    // differs from the record. No digest the project wrote is evidence here.
+    let mut overridden: Option<Option<crate::scaffold::overrides::Plan>> = None;
     for (dest, file) in &installed.files {
         if file.ownership != Ownership::ManagedRegion {
             continue;
@@ -3657,17 +3661,18 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         if block_sha == file.sha256 {
             continue;
         }
-        // A block with project overrides applied matches its override
-        // record's effective hash, not the shipped one (TSK-1302).
-        match crate::scaffold::overrides::Record::read(&root, dest) {
-            Ok(Some(record))
-                if record.effective_sha256 == block_sha
-                    && record.pristine_sha256 == file.sha256 => {}
-            Ok(_) => drifted.push(dest.clone()),
-            Err(error) => {
-                let path = root.join(crate::scaffold::overrides::record::record_path(dest));
-                return input_failure("managed-drift", start, &path, error);
-            }
+        // A block with project overrides applied is not drift only when it
+        // is exactly the shipped block with the declared overrides, as this
+        // binary renders and checks them; a refused or unverified override
+        // state proves nothing.
+        let plan = overridden
+            .get_or_insert_with(|| opts.override_plan.and_then(|plan_of| plan_of(&root).ok()));
+        let expected = plan
+            .as_ref()
+            .and_then(|plan| plan.dests.get(dest))
+            .and_then(crate::scaffold::overrides::DestPlan::effective_unit);
+        if expected.as_deref() != Some(block.as_str()) {
+            drifted.push(dest.clone());
         }
     }
 

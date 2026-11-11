@@ -566,118 +566,119 @@ pub fn check(
     Ok(checked)
 }
 
-/// Replace exact lines and section bodies of `text`; `None` when a unit's
-/// shipped text is not where it must be (a row line not exactly once, a
-/// section not found or its body not the recorded one).
-#[must_use]
-pub fn apply_units(text: &str, units: &[AppliedUnit]) -> Option<String> {
-    let mut out = text.to_string();
+/// Where each unit sits in `text`: the byte range its shipped text
+/// occupies, in order of position. Rows are found as the one line whose text
+/// (without its line break) is the shipped row; sections by the shipped
+/// text's own markers, parsed once. `None` when a unit's shipped text is not
+/// where it must be (a row line not exactly once, a section not found or its
+/// body not the recorded one) or two units overlap.
+fn unit_ranges<'a>(
+    text: &str,
+    units: &'a [AppliedUnit],
+) -> Option<Vec<(std::ops::Range<usize>, &'a AppliedUnit)>> {
+    let mut doc = None;
+    let mut ranges = Vec::new();
     for unit in units {
-        match Target::parse(&unit.entry.target)? {
+        let range = match Target::parse(&unit.entry.target)? {
             Target::Rule(_) | Target::Moment(_) => {
-                let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
-                let positions: Vec<usize> = lines
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, line)| line.trim_end_matches(['\n', '\r']) == unit.replaced)
-                    .map(|(index, _)| index)
-                    .collect();
-                let [position] = positions.as_slice() else {
-                    return None;
-                };
-                let ending =
-                    &lines[*position][lines[*position].trim_end_matches(['\n', '\r']).len()..];
-                let replacement = format!("{}{ending}", unit.replacement);
-                lines[*position] = &replacement;
-                out = lines.concat();
+                let mut found = None;
+                let mut offset = 0;
+                for line in text.split_inclusive('\n') {
+                    let content = line.strip_suffix('\n').unwrap_or(line);
+                    let content = content.strip_suffix('\r').unwrap_or(content);
+                    if content == unit.replaced {
+                        if found.is_some() {
+                            return None;
+                        }
+                        found = Some(offset..offset + content.len());
+                    }
+                    offset += line.len();
+                }
+                found?
             }
             Target::Section { id, .. } => {
-                let mut doc = sections::parse(&out).ok()?;
-                let section = doc.segments.iter_mut().find_map(|segment| match segment {
-                    sections::Segment::Section(section) if section.id == id => Some(section),
-                    _ => None,
-                })?;
-                if section.body != unit.replaced {
+                if doc.is_none() {
+                    doc = Some(sections::parse(text).ok()?);
+                }
+                let range = doc.as_ref()?.body_range(&id)?;
+                if text.get(range.clone())? != unit.replaced {
                     return None;
                 }
-                section.body.clone_from(&unit.replacement);
-                out = doc.text();
+                range
             }
-        }
+        };
+        ranges.push((range, unit));
     }
+    ranges.sort_by_key(|(range, _)| range.start);
+    ranges
+        .windows(2)
+        .all(|pair| pair[0].0.end <= pair[1].0.start)
+        .then_some(ranges)
+}
+
+/// Replace exact lines and section bodies of `text`, every unit located in
+/// `text` itself before any replacement, so a replacement never moves where
+/// another unit is found. `None` when a unit is not found exactly once, or
+/// two units overlap.
+#[must_use]
+pub fn apply_units(text: &str, units: &[AppliedUnit]) -> Option<String> {
+    let ranges = unit_ranges(text, units)?;
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (range, unit) in ranges {
+        out.push_str(&text[at..range.start]);
+        out.push_str(&unit.replacement);
+        at = range.end;
+    }
+    out.push_str(&text[at..]);
     Some(out)
 }
 
 /// Whether `effective` is `pristine` with exactly the targeted units
-/// changed: every other line, segment, marker and heading byte-identical.
+/// replaced. The units are located in the shipped `pristine` text, and every
+/// byte of `effective` outside them is compared directly with `pristine`;
+/// `effective` is never parsed, so a replacement that would confuse a parser
+/// cannot hide a change.
 #[must_use]
 pub fn only_units_changed(pristine: &str, effective: &str, units: &[AppliedUnit]) -> bool {
-    let rows: Vec<&AppliedUnit> = units
-        .iter()
-        .filter(|unit| {
-            matches!(
-                Target::parse(&unit.entry.target),
-                Some(Target::Rule(_) | Target::Moment(_))
-            )
-        })
-        .collect();
-    let section_ids: BTreeMap<String, &AppliedUnit> = units
-        .iter()
-        .filter_map(|unit| match Target::parse(&unit.entry.target) {
-            Some(Target::Section { id, .. }) => Some((id, unit)),
-            _ => None,
-        })
-        .collect();
-    if section_ids.is_empty() {
-        let before: Vec<&str> = pristine.split_inclusive('\n').collect();
-        let after: Vec<&str> = effective.split_inclusive('\n').collect();
-        if before.len() != after.len() {
-            return false;
-        }
-        let mut changed = 0;
-        for (old, new) in before.iter().zip(&after) {
-            if old == new {
-                continue;
-            }
-            let old_text = old.trim_end_matches(['\n', '\r']);
-            let new_text = new.trim_end_matches(['\n', '\r']);
-            if !rows
-                .iter()
-                .any(|unit| unit.replaced == old_text && unit.replacement == new_text)
-            {
-                return false;
-            }
-            changed += 1;
-        }
-        return changed == rows.iter().filter(|u| u.replaced != u.replacement).count();
-    }
-    if !rows.is_empty() {
+    let Some(ranges) = unit_ranges(pristine, units) else {
         return false;
+    };
+    let mut at = 0;
+    let mut rest = effective;
+    for (range, unit) in ranges {
+        let Some(after) = rest
+            .strip_prefix(&pristine[at..range.start])
+            .and_then(|after| after.strip_prefix(unit.replacement.as_str()))
+        else {
+            return false;
+        };
+        rest = after;
+        at = range.end;
     }
+    rest == &pristine[at..]
+}
+
+/// Whether the declared sections of `effective` are the shipped ones, in
+/// order, with the same markers and headings: a structural check on top of
+/// [`only_units_changed`], with the same parser the shipped text is read by.
+fn same_sections(pristine: &str, effective: &str) -> bool {
     let (Ok(before), Ok(after)) = (sections::parse(pristine), sections::parse(effective)) else {
         return false;
     };
-    if before.segments.len() != after.segments.len() {
-        return false;
-    }
-    before
-        .segments
-        .iter()
-        .zip(&after.segments)
-        .all(|pair| match pair {
-            (sections::Segment::Outside(a), sections::Segment::Outside(b)) => a == b,
-            (sections::Segment::Section(a), sections::Segment::Section(b)) => {
-                a.id == b.id
-                    && a.class == b.class
-                    && a.header == b.header
-                    && a.level == b.level
-                    && match section_ids.get(&a.id) {
-                        Some(unit) => a.body == unit.replaced && b.body == unit.replacement,
-                        None => a.body == b.body,
-                    }
-            }
-            _ => false,
-        })
+    let shape = |doc: &sections::Doc| -> Vec<(String, Option<UnitClass>, String, usize)> {
+        doc.sections()
+            .map(|section| {
+                (
+                    section.id.clone(),
+                    section.class,
+                    section.header.clone(),
+                    section.level,
+                )
+            })
+            .collect()
+    };
+    shape(&before) == shape(&after)
 }
 
 /// The applied units of `checked` for one rendered managed file.
@@ -772,11 +773,34 @@ fn units_for(
 pub struct DestPlan {
     /// The units to apply now, in declaration order.
     pub applied: Vec<AppliedUnit>,
+    /// The shipped text the pristine baseline holds: the whole rendering of
+    /// a managed file, the managed block of a managed-region file.
+    pub pristine: String,
     /// The shipped rendering with the units applied (the whole file).
     pub effective: String,
+    /// The block format of a managed-region file; `None` for a managed file.
+    pub region: Option<RegionFormat>,
     /// The record update left last time, with its effective baseline
     /// rebuilt from the pristine baseline: the merge base.
     pub old: Option<(Record, String)>,
+}
+
+impl DestPlan {
+    /// The part of `text` an override record hashes: the whole file, or the
+    /// managed block of a managed-region file.
+    #[must_use]
+    pub fn unit_of(&self, text: &str) -> Option<String> {
+        match self.region {
+            None => Some(text.to_string()),
+            Some(format) => region::extract_block(text, format),
+        }
+    }
+
+    /// The effective text the record of this plan hashes.
+    #[must_use]
+    pub fn effective_unit(&self) -> Option<String> {
+        self.unit_of(&self.effective)
+    }
 }
 
 /// The override work of one update, by destination.
@@ -785,10 +809,20 @@ pub struct Plan {
     pub dests: BTreeMap<String, DestPlan>,
 }
 
+/// Metadata an update is about to write, which the checks before the first
+/// write read in place of what is on disk: pristine baselines and override
+/// records (`None` removes one), by destination.
+#[derive(Debug, Clone, Default)]
+pub struct Projected {
+    pub baselines: BTreeMap<String, String>,
+    pub records: BTreeMap<String, Option<Record>>,
+}
+
 /// Check the declared overrides and compute every affected file's effective
 /// rendering, before update writes anything. `render` renders a manifest
-/// entry as update would. Files with a record but no override now get a
-/// plan too, so an override removed from the file restores the shipped text.
+/// entry as update would. Files with a record or a journal but no override
+/// now get a plan too, so an override removed from the file restores the
+/// shipped text and an interrupted write can be checked against it.
 ///
 /// # Errors
 ///
@@ -807,11 +841,16 @@ pub fn prepare(
     let files = candidates(manifest, tier, preset, ignore);
     let mut recorded = BTreeSet::new();
     for file in &files {
-        if read_beneath_root(root, &record::record_path(&file.dest))
-            .map_err(|_| record_unreadable(&file.dest))?
-            .is_some()
-        {
-            recorded.insert(file.dest.clone());
+        for path in [
+            record::record_path(&file.dest),
+            record::journal_path(&file.dest),
+        ] {
+            if read_beneath_root(root, &path)
+                .map_err(|_| record_unreadable(&file.dest))?
+                .is_some()
+            {
+                recorded.insert(file.dest.clone());
+            }
         }
     }
     if entries.is_empty() && recorded.is_empty() {
@@ -835,32 +874,38 @@ pub fn prepare(
         if applied.is_empty() && !recorded.contains(&file.dest) {
             continue;
         }
+        let more_than_targeted = || {
+            file_refused(shown!(
+                "applying the overrides to {} would change more than the targeted units",
+                dest_shown(&file.dest)
+            ))
+        };
         let effective = apply_units(&rendered, &applied)
             .filter(|effective| only_units_changed(&rendered, effective, &applied))
-            .ok_or_else(|| {
-                file_refused(shown!(
-                    "applying the overrides to {} would change more than the targeted units",
-                    dest_shown(&file.dest)
-                ))
-            })?;
-        if file.ownership == Ownership::ManagedRegion {
+            .filter(|effective| same_sections(&rendered, effective))
+            .ok_or_else(more_than_targeted)?;
+        let (pristine, region) = if file.ownership == Ownership::ManagedRegion {
             let format = file.region.unwrap_or(RegionFormat::Markdown);
             let both = region::extract_block(&rendered, format)
-                .zip(region::extract_block(&effective, format));
-            let rows_inside =
-                both.is_some_and(|(before, after)| only_units_changed(&before, &after, &applied));
-            if !rows_inside {
+                .zip(region::extract_block(&effective, format))
+                .filter(|(before, after)| only_units_changed(before, after, &applied));
+            let Some((pristine, _)) = both else {
                 return Err(file_refused(shown!(
                     "an overridden row of {} is not inside its managed block",
                     dest_shown(&file.dest)
                 )));
-            }
-        }
+            };
+            (pristine, Some(format))
+        } else {
+            (rendered.clone(), None)
+        };
         plan.dests.insert(
             file.dest.clone(),
             DestPlan {
                 applied,
+                pristine,
                 effective,
+                region,
                 old: None,
             },
         );
@@ -875,11 +920,28 @@ fn record_unreadable(dest: &str) -> ScaffoldError {
     )
 }
 
+/// Rebuild the effective baseline a record claims: the pristine baseline
+/// with the record's applied set and nothing else. `None` unless the
+/// baseline hashes to the record's pristine hash and to `installed`, the
+/// installed manifest's hash, every unit is where the record says, and the
+/// result hashes to the record's effective hash.
+#[must_use]
+pub fn rebuild(record: &Record, baseline: &str, installed: Option<&str>) -> Option<String> {
+    let pristine_hash = hash::sha256_hex(baseline.as_bytes());
+    if record.pristine_sha256 != pristine_hash || installed != Some(pristine_hash.as_str()) {
+        return None;
+    }
+    apply_units(baseline, &record.applied)
+        .filter(|effective| only_units_changed(baseline, effective, &record.applied))
+        .filter(|effective| hash::sha256_hex(effective.as_bytes()) == record.effective_sha256)
+}
+
 impl Plan {
     /// Load each planned file's record and rebuild its effective baseline
     /// from the pristine baseline, refusing a record that does not match the
-    /// installed state. `pending` maps a destination to the pristine hash a
-    /// finished conflict resolution just accepted.
+    /// installed state. `installed` and `projected` are the metadata as the
+    /// update is about to leave it: what is on disk, with the writes this
+    /// update has decided but not yet made.
     ///
     /// # Errors
     ///
@@ -890,24 +952,24 @@ impl Plan {
         &mut self,
         root: &Path,
         installed: &InstalledManifest,
+        projected: &Projected,
     ) -> Result<(), ScaffoldError> {
         for (dest, plan) in &mut self.dests {
-            let Some(record) = record::Record::read(root, dest)? else {
+            let record = match projected.records.get(dest) {
+                Some(record) => record.clone(),
+                None => record::Record::read(root, dest)?,
+            };
+            let Some(record) = record else {
                 continue;
             };
             // The baseline is the pristine text: the whole file for a managed
             // file, the managed block for a managed-region file.
-            let baseline = Baseline::read(root, dest)?.unwrap_or_default();
-            let pristine = baseline.as_str();
-            let pristine_hash = hash::sha256_hex(pristine.as_bytes());
+            let baseline = match projected.baselines.get(dest) {
+                Some(text) => text.clone(),
+                None => Baseline::read(root, dest)?.unwrap_or_default(),
+            };
             let installed_hash = installed.files.get(dest).map(|file| file.sha256.as_str());
-            let rebuilt = apply_units(pristine, &record.applied)
-                .filter(|_| record.pristine_sha256 == pristine_hash)
-                .filter(|_| installed_hash == Some(pristine_hash.as_str()))
-                .filter(|effective| {
-                    hash::sha256_hex(effective.as_bytes()) == record.effective_sha256
-                });
-            let Some(effective) = rebuilt else {
+            let Some(effective) = rebuild(&record, &baseline, installed_hash) else {
                 return Err(ScaffoldError::invalid(
                     shown!("override state of {}", dest_shown(dest)),
                     Shown::fixed(
@@ -936,67 +998,164 @@ pub fn journal_candidates(
         .collect()
 }
 
-/// Resolve every journal an interrupted update left, before update writes
-/// anything else: roll forward a write that landed, drop one that did not,
-/// and refuse any other state without writing. Every journal is classified
-/// before the first one is acted on.
-///
-/// # Errors
-///
-/// A journal that does not parse or matches neither generation.
-pub fn recover(
-    root: &Path,
-    manifest: &ScaffoldManifest,
-    installed: &mut InstalledManifest,
-) -> Result<usize, ScaffoldError> {
-    let candidates = journal_candidates(manifest, installed);
-    let mut actions = Vec::new();
-    for dest in &candidates {
-        let Some(journal) = record::Journal::read(root, dest)? else {
-            continue;
-        };
-        let now = record::Journal::observe(
-            root,
-            dest,
-            installed.files.get(dest).map(|file| file.sha256.as_str()),
-        )?;
-        match record::classify(&journal, &now) {
-            record::Recovery::Refuse => return Err(record::refusal(dest)),
-            recovery => actions.push((dest.clone(), journal, recovery)),
+/// Whether a journal's payload is exactly what this update writes for
+/// `dest`: the shipped pristine text this binary renders, and a record whose
+/// applied set is the declared overrides as this binary checks them (so it
+/// covers only authorized, overridable units), which rebuilds from that
+/// pristine text to the effective text and names the bytes the journal says
+/// were written.
+fn payload_is_this_update(journal: &record::Journal, plan: Option<&DestPlan>) -> bool {
+    let Some(plan) = plan else {
+        return false;
+    };
+    let pristine_hash = hash::sha256_hex(journal.baseline_text.as_bytes());
+    if journal.baseline_text != plan.pristine
+        || journal.new.installed.as_deref() != Some(pristine_hash.as_str())
+    {
+        return false;
+    }
+    match &journal.record {
+        None => plan.applied.is_empty(),
+        Some(record) => {
+            record.applied == plan.applied
+                && Some(&record.written_sha256) == journal.new.file.as_ref()
+                && rebuild(record, &journal.baseline_text, Some(&pristine_hash))
+                    .is_some_and(|effective| plan.effective_unit().as_ref() == Some(&effective))
         }
     }
-    let count = actions.len();
-    for (dest, journal, recovery) in &actions {
-        if *recovery == record::Recovery::RollForward {
+}
+
+/// What the journals an interrupted update left resolve to, decided before
+/// anything is written: each journal and what to do with it.
+#[derive(Debug, Clone, Default)]
+pub struct Recovery {
+    actions: Vec<(String, record::Journal, record::Recovery)>,
+}
+
+impl Recovery {
+    /// How many journals this recovery resolves.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// Whether there is no journal to resolve.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+
+    fn rolled_forward(&self) -> impl Iterator<Item = (&String, &record::Journal)> {
+        self.actions
+            .iter()
+            .filter(|(_, _, recovery)| *recovery == record::Recovery::RollForward)
+            .map(|(dest, journal, _)| (dest, journal))
+    }
+
+    /// Apply the metadata a roll forward writes to `installed` and
+    /// `projected`, in memory only, so every check before the first write
+    /// reads the state this update leaves.
+    pub fn project(
+        &self,
+        manifest: &ScaffoldManifest,
+        installed: &mut InstalledManifest,
+        projected: &mut Projected,
+    ) {
+        for (dest, journal) in self.rolled_forward() {
+            projected
+                .baselines
+                .insert(dest.clone(), journal.baseline_text.clone());
+            projected
+                .records
+                .insert(dest.clone(), journal.record.clone());
+            let Some(sha) = &journal.new.installed else {
+                continue;
+            };
+            if let Some(file) = installed.files.get_mut(dest) {
+                file.sha256.clone_from(sha);
+            } else if let Some(entry) = manifest.entries.iter().find(|e| &e.dest == dest) {
+                installed.files.insert(
+                    dest.clone(),
+                    super::state::InstalledFile {
+                        src: entry.src.clone(),
+                        ownership: entry.ownership,
+                        sha256: sha.clone(),
+                        exec: entry.exec,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Write the baselines and records of every roll forward. The installed
+    /// manifest is stored by the caller, then [`Recovery::finish`] removes
+    /// the journals.
+    ///
+    /// # Errors
+    ///
+    /// IO failures, or a symlinked path.
+    pub fn commit(&self, root: &Path) -> Result<(), ScaffoldError> {
+        for (dest, journal) in self.rolled_forward() {
             Baseline::write(root, dest, &journal.baseline_text)?;
             match &journal.record {
                 Some(record) => record.write(root, dest)?,
                 None => record::remove_record(root, dest)?,
             }
-            if let Some(sha) = &journal.new.installed {
-                if let Some(file) = installed.files.get_mut(dest) {
-                    file.sha256.clone_from(sha);
-                } else if let Some(entry) = manifest.entries.iter().find(|e| &e.dest == dest) {
-                    installed.files.insert(
-                        dest.clone(),
-                        super::state::InstalledFile {
-                            src: entry.src.clone(),
-                            ownership: entry.ownership,
-                            sha256: sha.clone(),
-                            exec: entry.exec,
-                        },
-                    );
-                }
-            }
         }
+        Ok(())
     }
-    if count > 0 {
-        installed.store(root)?;
-        for (dest, _, _) in &actions {
+
+    /// Remove every resolved journal, once its metadata is stored.
+    ///
+    /// # Errors
+    ///
+    /// IO failures, or a symlinked journal path.
+    pub fn finish(&self, root: &Path) -> Result<(), ScaffoldError> {
+        for (dest, _, _) in &self.actions {
             record::remove_journal(root, dest)?;
         }
+        Ok(())
     }
-    Ok(count)
+}
+
+/// Decide what every journal an interrupted update left resolves to, writing
+/// nothing: roll forward a write that landed and whose payload is exactly
+/// what this update writes, drop one that never landed, and refuse any other
+/// state. Every journal is decided before any is acted on, and the caller
+/// checks the whole projected state before it commits.
+///
+/// # Errors
+///
+/// A journal that does not parse, whose payload does not match its digests
+/// or this update, or that matches neither generation.
+pub fn plan_recovery(
+    root: &Path,
+    manifest: &ScaffoldManifest,
+    installed: &InstalledManifest,
+    plan: &Plan,
+) -> Result<Recovery, ScaffoldError> {
+    let mut recovery = Recovery::default();
+    for dest in journal_candidates(manifest, installed) {
+        let Some(journal) = record::Journal::read(root, &dest)? else {
+            continue;
+        };
+        let now = record::Journal::observe(
+            root,
+            &dest,
+            installed.files.get(&dest).map(|file| file.sha256.as_str()),
+        )?;
+        let action = record::classify(&journal, &now);
+        match action {
+            record::Recovery::Refuse => return Err(record::refusal(&dest)),
+            record::Recovery::RollForward
+                if !payload_is_this_update(&journal, plan.dests.get(&dest)) =>
+            {
+                return Err(record::payload_refusal(&dest));
+            }
+            _ => recovery.actions.push((dest, journal, action)),
+        }
+    }
+    Ok(recovery)
 }
 
 #[cfg(test)]

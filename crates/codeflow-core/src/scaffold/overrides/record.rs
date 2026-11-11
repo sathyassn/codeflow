@@ -264,6 +264,21 @@ impl Journal {
                 Shown::fixed("an interrupted update left a journal with an unknown schema version"),
             ));
         }
+        // The payload a roll forward writes must be the bytes the journal's
+        // new state names: the baseline text and the record, by digest.
+        let baseline = Some(hash::sha256_hex(journal.baseline_text.as_bytes()));
+        let record = journal
+            .record
+            .as_ref()
+            .map(|record| hash::sha256_hex(&record.bytes()));
+        if baseline != journal.new.baseline || record != journal.new.record {
+            return Err(invalid(
+                dest,
+                Shown::fixed(
+                    "an interrupted update left a journal whose baseline or record does not match the digests it names",
+                ),
+            ));
+        }
         Ok(Some(journal))
     }
 }
@@ -318,6 +333,20 @@ pub fn refusal(dest: &str) -> ScaffoldError {
             "an interrupted update left this file in a state that matches neither the state before it nor the state it was writing; \
              check the file, its baseline under .codeflow/.baseline and its journal under .codeflow/.pending-update, \
              restore one coherent state, then rerun codeflow update",
+        ),
+    )
+}
+
+/// The refusal for a landed write whose journal holds metadata other than
+/// what this update writes for the file.
+#[must_use]
+pub fn payload_refusal(dest: &str) -> ScaffoldError {
+    invalid(
+        dest,
+        Shown::fixed(
+            "an interrupted update left a journal whose baseline or override record is not the shipped text and \
+             declared overrides this update applies; restore the file and its metadata to one coherent state, \
+             or rerun with the build and .codeflow/overrides.toml of the interrupted update",
         ),
     )
 }
