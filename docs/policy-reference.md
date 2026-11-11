@@ -817,7 +817,10 @@ bare (TSK-1344). The code holds the program names in
   `herdr-core/templates` (the folders from the guard's environment and
   from each `XDG_CONFIG_HOME` or `APPDATA` the line assigns, `hc exec
   --env` included; an assigned value that is not one readable absolute
-  folder refuses); `hc exec [options] <program> <args>...` with each
+  folder refuses, and so does a line where a builtin writes a variable or
+  a shell assignment gives any variable a value other than a literal
+  number or an absolute path, which clears when the variable is set on
+  another line); `hc exec [options] <program> <args>...` with each
   `--env K=V` as an assignment; `hc machine add --via <command>`; `herdr
   pane run <pane> <command>`; `herdr agent start <name> --kind <kind>
   [options] -- <args>...`, judged as `<kind> <args>...`.

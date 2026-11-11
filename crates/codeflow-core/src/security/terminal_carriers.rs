@@ -1076,13 +1076,21 @@ fn builtin_words<'w>(rest: &'w [String], valued: &str) -> (Vec<(char, &'w str)>,
 const TEMPLATE_UNREAD: &str = "a command on the line can set a template folder variable in a \
      form the guard cannot read, so it cannot tell which templates `hc` reads";
 
+/// The refusal of a template lookup when a command on the line writes a
+/// variable with a value the guard cannot rule out ([`writes_variable`],
+/// [`numeric_safe`]), with the forms that clear it.
+const TEMPLATE_WRITE: &str = "a command on the line writes a shell variable with a value the \
+     guard cannot read, so it cannot tell which templates `hc` reads; set the variable to a \
+     literal number or an absolute path, or set it on another line";
+
 /// Programs that set no shell variable, so their operands are data: plain
 /// programs, test and no-op builtins, and the shells, launchers and
 /// carriers that run their commands in a process of their own. Any other
 /// command whose words name a template folder variable, or hold an
 /// expansion, refuses a template lookup ([`template_assignments`]). The
 /// test builtins evaluate the operands of their numeric comparisons, which
-/// [`Arithmetic`] judges.
+/// [`Arithmetic`] judges. None of these writes a variable through an
+/// option; the builtins that do are refused by [`writes_variable`].
 const NON_WRITERS: &[&str] = &[
     "echo",
     "test",
@@ -1206,10 +1214,15 @@ fn expansion_assigns(text: &str) -> bool {
 /// The template lookup refuses when a command can set one of
 /// [`TEMPLATE_VARIABLES`] in a way the guard cannot read: an assignment
 /// whose destination holds an expansion; an expansion that assigns as it
-/// expands; a name reference whose target is, or may be, one of them; a
-/// builtin destination that names one (`read`, `printf -v`, `mapfile`,
-/// `getopts`, `for`); and any command outside [`NON_WRITERS`] and these
-/// builtins whose words name one or hold an expansion. Names match whole.
+/// expands; a name reference whose target is, or may be, one of them; and
+/// any command outside [`NON_WRITERS`] and the builtins read here whose
+/// words name one or hold an expansion. Names match whole.
+///
+/// It also refuses where a write may be evaluated as arithmetic, since the
+/// guard cannot know whether a destination is numeric: any builtin that
+/// writes a variable, whatever the destination ([`writes_variable`]), and
+/// an assignment, as a statement, a command prefix or a declaration, whose
+/// value is not a literal number or absolute path ([`numeric_safe`]).
 fn template_assignments<'w>(
     words: &'w [String],
     expanding: &[bool],
@@ -1228,12 +1241,19 @@ fn template_assignments<'w>(
         None => words.len(),
     };
     let mut found = Vec::new();
+    // The assignments before the first other word are the shell's own; a
+    // launcher's (`env A=B`) set only its program's environment.
+    let mut shell = true;
     for word in &words[..at] {
-        let Some((name, _)) = word.split_once('=') else {
+        let Some((name, value)) = word.split_once('=') else {
+            shell = false;
             continue;
         };
         if unread_destination(name) {
             return unread();
+        }
+        if shell && !numeric_safe(value) {
+            return Err(TEMPLATE_WRITE.to_string());
         }
         arithmetic.assignment(word);
         found.push(word);
@@ -1262,29 +1282,15 @@ fn template_assignments<'w>(
     if !code_read(&words[at..], arithmetic) {
         return unread();
     }
-    let destinations: Vec<&str> = match name {
+    if writes_variable(name, rest) {
+        return Err(TEMPLATE_WRITE.to_string());
+    }
+    match name {
         "export" | "declare" | "typeset" | "local" | "readonly" | "integer" | "float" => {
             found.extend(declared(name, rest, arithmetic)?);
-            Vec::new()
         }
-        "read" => {
-            let (values, operands) = builtin_words(rest, "adinNptu");
-            values
-                .iter()
-                .filter(|(letter, _)| *letter == 'a')
-                .map(|(_, value)| *value)
-                .chain(operands)
-                .collect()
-        }
-        "mapfile" | "readarray" => builtin_words(rest, "dnOsuCc").1,
-        "printf" => builtin_words(rest, "v")
-            .0
-            .iter()
-            .map(|(_, value)| *value)
-            .collect(),
-        "getopts" => rest.iter().skip(1).take(1).map(String::as_str).collect(),
-        "for" | "select" => rest.iter().take(1).map(String::as_str).collect(),
-        known if NON_WRITERS.contains(&known) => Vec::new(),
+        "printf" => {}
+        known if NON_WRITERS.contains(&known) => {}
         // Any other command, a builtin or function that may write a
         // variable among them, refuses when a word names one or the guard
         // cannot read what a word becomes.
@@ -1303,18 +1309,52 @@ fn template_assignments<'w>(
             for word in &words[at..] {
                 arithmetic.assignment(word);
             }
-            Vec::new()
         }
-    };
-    if destinations.iter().any(|destination| {
-        unread_destination(destination) || template_variable(destination).is_some()
-    }) {
-        return unread();
-    }
-    for destination in destinations {
-        arithmetic.subscript(destination);
     }
     Ok(found)
+}
+
+/// Whether the builtin `name` writes a shell variable with its words
+/// (`rest`), whatever the destination. The guard cannot know a
+/// destination's attributes: a variable may already be numeric with no
+/// declaration on the line (a shell's own numeric parameters, or an
+/// attribute set earlier in the session), and a value
+/// written to one is evaluated as arithmetic, which may read and assign
+/// any name. So every such write refuses a template lookup: the readers
+/// and loop variables, and the builtins that write through an option.
+fn writes_variable(name: &str, rest: &[String]) -> bool {
+    let flagged = |letters: &[char]| {
+        rest.iter().any(|word| {
+            word.len() > 1 && word.starts_with(['-', '+']) && word[1..].contains(letters)
+        })
+    };
+    match name {
+        "read" | "mapfile" | "readarray" | "getopts" | "for" | "select" | "vared" | "getln"
+        | "zparseopts" | "zformat" | "zregexparse" | "sysread" | "zselect" | "ztcp" | "zsocket"
+        | "zpty" | "zstyle" | "zle" | "compadd" | "private" => true,
+        "printf" | "print" => flagged(&['v']),
+        "wait" => flagged(&['p']),
+        "set" => flagged(&['A']),
+        "strftime" => flagged(&['s']),
+        "stat" | "zstat" => flagged(&['A', 'H']),
+        "compgen" => flagged(&['V']),
+        _ => false,
+    }
+}
+
+/// Whether an assigned `value` cannot reach arithmetic when its
+/// destination is numeric: a literal number expression
+/// ([`literal_expression`]), or a literal absolute path, which numeric
+/// evaluation rejects at its leading `/` before it reads any name. Any
+/// other value refuses a template lookup, for every destination, because
+/// the destination may already be numeric ([`writes_variable`]). An
+/// `hc run` line that sets another variable to a word, such as
+/// `MODE=fast hc run peer`, refuses: an accepted over-refusal.
+fn numeric_safe(value: &str) -> bool {
+    let path = value.starts_with('/')
+        && !value.contains(['$', '`', '~', '(', ')', '{', '}', '*', '?', '[', ']', '\\'])
+        && !value.chars().any(char::is_control);
+    path || literal_expression(value)
 }
 
 /// Whether the code a command (`words`, from its program on) has the
@@ -1399,7 +1439,11 @@ fn declared<'w>(
             }
             continue;
         }
-        if target.is_some() {
+        if let Some(value) = target {
+            // A declared value is written as an assignment's is.
+            if !numeric_safe(value) {
+                return Err(TEMPLATE_WRITE.to_string());
+            }
             found.push(word);
         }
     }
@@ -1527,6 +1571,18 @@ impl Arithmetic {
                 self.expressions.push(body);
             }
             at = after;
+        }
+        // `${name=word}`, `${name:=word}` and `${name::=word}` assign the
+        // word to the name, which may be numeric ([`writes_variable`]).
+        let assigns = match chars.get(at) {
+            Some('=') => true,
+            Some(':') => {
+                chars.get(at + 1) == Some(&'=') || chars[at + 1..].starts_with(&[':', '='])
+            }
+            _ => false,
+        };
+        if assigns {
+            return None;
         }
         let modifier = matches!(chars.get(at + 1), Some('-' | '=' | '?' | '+'));
         if chars.get(at) == Some(&':') && !modifier {
@@ -2200,7 +2256,16 @@ mod tests {
         let dir = temp.path().join("herdr-core").join("templates");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("peer.md"), "---\ncommand: claude -p\n---\n").unwrap();
-        let root = crate::portable_path::slashed(temp.path());
+        // The root as a shell writes an absolute path, starting with `/`,
+        // since only such a path value is read.
+        let real = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let slashed = crate::portable_path::slashed(&real);
+        let root = match slashed.split_once(":/") {
+            Some((drive, rest)) if drive.len() == 1 => {
+                format!("/{}/{rest}", drive.to_ascii_lowercase())
+            }
+            _ => slashed,
+        };
         let template = |command: &str| -> Vec<String> {
             let found = read(command);
             assert!(found.unread.is_empty(), "{command}: {:?}", found.unread);
@@ -2244,7 +2309,10 @@ mod tests {
             format!("printf '%s' 'APPDATA=1'; APPDATA='{root}' hc run peer"),
             format!("trap -p DEBUG; APPDATA='{root}' hc run peer"),
             format!("trap - DEBUG; APPDATA='{root}' hc run peer"),
-            format!("read n < values; APPDATA='{root}' hc run peer"),
+            // A literal number assigned to another variable cannot reach
+            // arithmetic it does not already hold.
+            format!("X=1 APPDATA='{root}' hc run peer"),
+            format!("X=1; APPDATA='{root}' hc run peer"),
         ] {
             assert_eq!(template(&command), vec!["claude -p"], "{command}");
         }
@@ -2365,12 +2433,64 @@ mod tests {
             "local -i n; getopts ab n; hc run peer",
             "float n; for n in x; do :; done; hc run peer",
             "typeset -E n; read n; hc run peer",
+            // A destination may be numeric with no declaration on the line,
+            // as a shell's own numeric parameters are, so every builtin
+            // write refuses, whatever the destination.
+            "read SECONDS < values; hc run peer",
+            "read n < values; hc run peer",
+            "mapfile n < values; hc run peer",
+            "printf -v n %s x; hc run peer",
+            "print -v n x; hc run peer",
+            "print -rv n x; hc run peer",
+            "getopts ab n; hc run peer",
+            "for n in x; do :; done; hc run peer",
+            "select n in x; do :; done; hc run peer",
+            "wait -p n; hc run peer",
+            "set -A n x; hc run peer",
+            "zparseopts -a n x; hc run peer",
+            "compgen -V n -W x; hc run peer",
+            ": ${SECONDS=v}; hc run peer",
+            ": ${SECONDS:=v}; hc run peer",
+            ": ${SECONDS::=v}; hc run peer",
+            // So does an assignment whose value is not a literal number or
+            // absolute path, to any name: `MODE=fast hc run peer` refuses
+            // too, an accepted over-refusal.
+            "SECONDS=v; hc run peer",
+            "X=v hc run peer",
+            "MODE=fast hc run peer",
+            "export SECONDS=v; hc run peer",
+            "X=1/v hc run peer",
+            "X=/v~ hc run peer",
+            "FOO=$BAR hc run -- ls",
+            "read MY_APPDATA; hc run -- ls",
+            // Assigning default syntax is read in single quotes too, an
+            // accepted over-refusal.
+            "echo '${APPDATA:=relative}'; hc run -- ls",
         ];
         let passed: Vec<_> = refusing
             .into_iter()
             .filter(|command| !template_refused(command))
             .collect();
         assert!(passed.is_empty(), "not refused: {passed:?}");
+        for control in [
+            "X=1 hc run peer",
+            "X=/opt/x hc run peer",
+            "printf '%s' x; hc run peer",
+        ] {
+            assert!(!template_refused(control), "refused: {control}");
+        }
+        // The refusal names the forms that clear it.
+        for command in ["MODE=fast hc run peer", "read n; hc run peer"] {
+            let found = read(command);
+            assert!(
+                found
+                    .unread
+                    .iter()
+                    .any(|u| u.contains("a literal number or an absolute path")),
+                "{command}: {:?}",
+                found.unread
+            );
+        }
         let data = "printf '%s' '(( v ))'; hc run -- ls";
         assert!(!read(data).unread.is_empty(), "not refused: {data}");
     }
@@ -2384,15 +2504,11 @@ mod tests {
             "hc run echo XDG_CONFIG_HOME=relative",
             "hc exec -- printf %s APPDATA=relative",
             "echo APPDATA=relative && hc run -- ls",
-            // An expansion in an assignment to another variable, a
-            // variable's name as data, and default syntax in single quotes
-            // set no template folder.
-            "FOO=$BAR hc run -- ls",
+            // A variable's name as data, and an expansion in an assignment
+            // a launcher passes to its program, set no template folder.
             "printf '%s' APPDATA; hc run -- ls",
-            "echo '${APPDATA:=relative}'; hc run -- ls",
-            // A destination that only contains a variable's name is
-            // another variable.
-            "read MY_APPDATA; hc run -- ls",
+            "env FOO=$BAR hc run -- ls",
+            // A reference to another plain name is read.
             "declare -n ref=OTHER; ref=/x; hc run -- ls",
         ];
         let refused: Vec<_> = commands
