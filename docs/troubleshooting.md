@@ -341,12 +341,18 @@ git sets when a line is cut from `origin/main`, is never read for the line.
   `task status complete`, and `the local branch ... and ... have diverged`,
   from a reopen's completion, name both tips by commit. Judge against the
   fetched line: name it with `--into <ref>` where the command takes it, or
-  push the task branch and work from a fresh clone made from outside this
-  clone (`git clone <url> <path>`, where `git remote get-url <remote>`
-  prints the url), whose local branch is the fetched line. Then switch to
-  the task branch there and run the command again. A worktree of this clone
-  shares its branches, so it refuses the same way. A plain `git fetch
-  origin` refreshes the fetched ref without moving the local branch.
+  push the task branch to its remote and work from a fresh clone of the
+  line's remote, made from outside this clone with that remote's URL (`git
+  clone <url> <path>`); its local branch is the fetched line. The message
+  names the line's remote, never its URL, which can hold a credential. When
+  the task branch was pushed to another remote, as with a fork, add that
+  remote in the fresh clone under a name of its own and fetch it (`git
+  remote add <name> <url>`, then `git fetch <name>`). Then switch to the
+  task branch at the head pushed from here (`git switch -c <task-branch>
+  <name>/<task-branch>`, or `git switch <task-branch>` when the clone's own
+  remote holds it) and run the command again. A worktree of this clone
+  shares its branches, so it refuses the same way. A plain fetch of the
+  line's remote refreshes the fetched ref without moving the local branch.
 - `cannot read the ancestry of refs/heads/<line> at <sha> against <ref> at
   <sha>`, from a reopen's completion, names both commits. The object store
   is missing part of the local branch's history, so work from a fresh clone
