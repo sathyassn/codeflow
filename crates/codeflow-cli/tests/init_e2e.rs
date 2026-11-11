@@ -1703,6 +1703,13 @@ fn seat_pin_effort(result: &serde_json::Value) -> (String, String, String) {
 #[test]
 fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     let (_tmp, root) = fresh("--standard");
+    fresh_install_ships_the_table(&root);
+    fresh_install_resolves_the_defaults(&root);
+    fresh_install_records_the_harness_choice(&root);
+}
+
+/// The installed catalog is the shipped one, with its seats and launch.
+fn fresh_install_ships_the_table(root: &Path) {
     let managed = read(
         &repo_root(),
         "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
@@ -1710,7 +1717,7 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     for tree in [".agents", ".claude"] {
         assert_eq!(
             read(
-                &root,
+                root,
                 &format!("{tree}/skills/cf-model-orchestrator/resources/current-ensemble.json")
             ),
             managed,
@@ -1759,7 +1766,11 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
             "{expected}: {launch:?}"
         );
     }
+}
 
+/// The built binary resolves the 2026-11-03 defaults from that catalog and
+/// keeps Fable and Astra to subagent routes.
+fn fresh_install_resolves_the_defaults(root: &Path) {
     let triple = |s: &str, p: &str, e: &str| (s.to_owned(), p.to_owned(), e.to_owned());
     for (host, expected) in [
         (
@@ -1772,11 +1783,11 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
         ),
         ("grok-cli", triple("grok-primary", "grok-4.7", "medium")),
     ] {
-        let result = models_json(&root, &["--duty", "orchestrate", "--host", host]);
+        let result = models_json(root, &["--duty", "orchestrate", "--host", host]);
         assert_eq!(seat_pin_effort(&result), expected, "{host}");
     }
     let review = models_json(
-        &root,
+        root,
         &[
             "--duty",
             "unit-review",
@@ -1806,11 +1817,11 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
         "claude",
     ];
     assert_eq!(
-        seat_pin_effort(&models_json(&root, &general)),
+        seat_pin_effort(&models_json(root, &general)),
         triple("grok-primary", "grok-4.7", "medium")
     );
     let raised = models_json(
-        &root,
+        root,
         &[&general[..], &["--trigger", "security-sensitive change"]].concat(),
     );
     assert_eq!(
@@ -1819,7 +1830,7 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     );
     // Fable runs as a worker; no seat anywhere resolves Fable or Astra.
     let reasoning = models_json(
-        &root,
+        root,
         &[
             "--duty",
             "reasoning-support",
@@ -1838,17 +1849,19 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
         "{reasoning}"
     );
     for host in ["claude-code", "codex-app", "grok-cli"] {
-        let result = models_json(&root, &["--duty", "orchestrate", "--host", host]);
+        let result = models_json(root, &["--duty", "orchestrate", "--host", host]);
         let pin = &result["participants"][0]["pinned_id"];
         assert!(
             pin != "claude-fable-5-1" && pin != "gpt-6-astra",
             "{host}: {result}"
         );
     }
+}
 
-    // The harness choice is recorded in the session's own ledger file.
+/// The harness choice is recorded in the session's own ledger file.
+fn fresh_install_records_the_harness_choice(root: &Path) {
     let recorded = models_json(
-        &root,
+        root,
         &[
             "--duty",
             "orchestrate",
