@@ -60,6 +60,12 @@ struct ResolveArgs {
     #[arg(long, requires = "session")]
     effective: Option<String>,
     /// The harness's id for this session, as its hooks receive it: the --effective record goes to that session's ledger file, beside its session summary.
+    // Required, with no default: codeflow learns a session id only from the
+    // SessionEnd hook payload (`hooks/session_summary.rs`). The harness
+    // markers in `root_checkout::AGENT_MARKERS` are read for presence only,
+    // Claude Code exports no session id there, and nothing ties a Codex or
+    // Grok variable's value to the payload id, so a guessed default could
+    // file the record under another session.
     #[arg(long, requires = "effective")]
     session: Option<String>,
     /// Print the resolution as JSON; input errors go to stderr with exit 2.
