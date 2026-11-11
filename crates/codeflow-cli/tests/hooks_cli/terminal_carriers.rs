@@ -345,6 +345,166 @@ fn every_hc_run_refuses_in_both_guards() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// Wrapper names are matched the way carrier names are, so a wrapper the
+/// host finds under another spelling still has its command read; a wrapper
+/// that only prints or searches stays data.
+#[test]
+fn wrapper_names_match_as_carrier_names_do() {
+    let fixture = Fixture::new();
+    let native = ["C:", "tools", "gsudo.exe"].join("\\");
+    let mut wrong = Vec::new();
+    for command in [
+        "gsudo.exe 'hc run peer'".to_string(),
+        "GSUDO 'hc run peer'".to_string(),
+        "GSUDO.EXE 'hc run peer'".to_string(),
+        "/usr/bin/SUDO hc run peer".to_string(),
+        "SUDO.exe sh -c 'hc run peer'".to_string(),
+        "Doas.Exe hc run peer".to_string(),
+        "PKEXEC.EXE /bin/sh -c 'hc run peer'".to_string(),
+        "Busybox.exe env hc run peer".to_string(),
+        format!("'{native}' 'hc run peer'"),
+        format!("\"{native}\" hc run peer"),
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, &command);
+            if !refused(&out, HC_RUN_REFUSAL) {
+                wrong.push(format!(
+                    "{hook} should refuse: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    // The privilege rule refuses these wrappers by itself, so the data-only
+    // lines are checked against the carrier rule alone.
+    for command in [
+        "gsudo.exe grep 'hc run' notes.txt".to_string(),
+        "GSUDO echo 'hc run peer'".to_string(),
+        "/usr/bin/SUDO grep 'hc run' notes.txt".to_string(),
+        format!("'{native}' echo 'hc run peer'"),
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, &command);
+            if String::from_utf8_lossy(&out.stderr).contains(HC_RUN_REFUSAL) {
+                wrong.push(format!(
+                    "{hook} should not apply the carrier rule: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// What the guards print for a carrier name with no proof, and for a
+/// wrapper or launcher whose command cannot be read.
+const UNPROVEN_REFUSAL: &str = "could not prove it is data";
+const UNREAD_COMMAND_REFUSAL: &str = "cannot be read";
+
+/// A carrier name needs an execution classification or a data proof, under
+/// any program, and a wrapper or launcher whose command cannot be read
+/// refuses, in both guards. Text a modeled grammar reads as data passes,
+/// and data that reaches a command on the same line does not.
+#[test]
+fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
+    let fixture = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        // A launcher on no list, a command string it is given, nested strings.
+        "uv run hc run peer",
+        "uv run 'hc run peer'",
+        "frobnicate --flag hc",
+        "uv run 'sh -c \"hc run peer\"'",
+        "uv run 'frobnicate \"hc run peer\"'",
+        // Data that reaches a command on the same line.
+        "echo 'hc run peer' | sh",
+        "printf '%s' 'hc run peer' | bash -s",
+        "echo hc run peer | frobnicate",
+        // The accepted cost: a bare carrier name given to a program with no
+        // modeled data role.
+        "ls hc",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, command);
+            if !refused(&out, UNPROVEN_REFUSAL) && !refused(&out, HC_RUN_REFUSAL) {
+                wrong.push(format!(
+                    "{hook} should refuse: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    for command in [
+        // A wrapper or launcher whose command is a word the guard cannot fill in.
+        "gsudo \"$COMMAND\"",
+        "sudo -E \"$COMMAND\"",
+        "doas \"$COMMAND\" peer",
+        "env \"$COMMAND\"",
+        "env A=B \"$COMMAND\" peer",
+        "nohup \"$COMMAND\" peer",
+        "timeout 5 \"$COMMAND\"",
+        "nice -n 5 \"$COMMAND\"",
+        "find . -maxdepth 0 -exec \"$COMMAND\" {} \\;",
+        "echo x | xargs \"$COMMAND\"",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, command);
+            if !refused(&out, UNREAD_COMMAND_REFUSAL) {
+                wrong.push(format!(
+                    "{hook} should refuse as unread: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    // Data a modeled grammar reads passes.
+    for command in [
+        "grep 'hc run' notes.txt",
+        "grep -rn hc docs",
+        "echo 'hc run peer'",
+        "echo hc run | grep hc",
+        "which hc",
+        "busybox grep 'hc run' notes.txt",
+        "nice grep 'hc run' notes.txt",
+        "timeout 5 echo 'hc run peer'",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, command);
+            if !passed(&out) {
+                wrong.push(format!(
+                    "{hook} should allow: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    // The privilege rule refuses these wrappers by itself, and the `gh`
+    // and `git` forms meet their own rules, so the data-only lines are
+    // checked against the carrier rule alone.
+    for command in [
+        "sudo grep 'hc run' notes.txt",
+        "gsudo echo 'hc run peer'",
+        "gsudo gh pr create --body 'hc run peer'",
+        "gh pr create --body 'hc run peer'",
+        "gh pr create --title 'hc run peer' --body x",
+        "git commit -m 'hc run peer'",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, command);
+            let said = String::from_utf8_lossy(&out.stderr);
+            if said.contains(UNPROVEN_REFUSAL)
+                || said.contains(UNREAD_COMMAND_REFUSAL)
+                || said.contains(HC_RUN_REFUSAL)
+            {
+                wrong.push(format!(
+                    "{hook} should not apply the carrier rule: {command}: {said}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The secret-read rules still judge what a carrier reads: a carried
 /// recursive read of a secret store, and the files `hc file read`, `hc put`
 /// and `hc update --from` read.

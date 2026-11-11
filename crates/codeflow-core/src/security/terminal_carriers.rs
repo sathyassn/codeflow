@@ -125,8 +125,9 @@ impl Carried {
 }
 
 /// The name a program word runs as, matched the way the host finds the
-/// program.
-fn carrier_name(program: &str) -> String {
+/// program. The wrapper traversal in `outward` reads its wrapper names the
+/// same way.
+pub(crate) fn carrier_name(program: &str) -> String {
     let name = super::dangerous::program_name(program);
     match name.strip_suffix(".exe") {
         Some(stem) => stem.to_string(),
@@ -150,7 +151,16 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
     let homes = std::iter::once(crate::portable_path::user_home())
         .chain(crate::hooks::git_guard::line_home::assigned().map(Some));
     for home in homes {
-        for call in super::outward::unwrapped_commands(command, cwd, home.as_deref()) {
+        let calls = super::outward::unwrapped_commands(command, cwd, home.as_deref());
+        // Each carrier name the guard found without proof that it is data
+        // or that something runs it, and each wrapper or launcher whose
+        // command it cannot read, refuses.
+        for (form, why) in
+            super::outward::unproven_carrier_references(command, cwd, home.as_deref())
+        {
+            out.unread(&form, why);
+        }
+        for call in &calls {
             let Some(program) = call.args.first() else {
                 continue;
             };
@@ -1686,6 +1696,144 @@ mod tests {
         let words = |line: &str| -> Vec<String> { vec![line.to_string(), "ls".to_string()] };
         for program in ["HC.EXE", native.as_str()] {
             assert!(fully_read(&words(program)), "{program}");
+        }
+    }
+
+    /// Wrapper names are matched the way carrier names are, so the command
+    /// a wrapper runs is read under each name the host accepts, and what a
+    /// wrapper only prints or searches stays data.
+    #[test]
+    fn wrapper_names_match_as_carrier_names_do() {
+        let native = ["C:", "tools", "gsudo.exe"].join("\\");
+        for command in [
+            "gsudo.exe 'hc run peer'".to_string(),
+            "GSUDO 'hc run peer'".to_string(),
+            "/usr/bin/SUDO hc run peer".to_string(),
+            "Doas.Exe sh -c 'hc run peer'".to_string(),
+            "PKEXEC.EXE /bin/sh -c 'hc run peer'".to_string(),
+            "Busybox.exe env hc run peer".to_string(),
+            "Chrt.exe 1 hc run peer".to_string(),
+            "Taskset.exe -c 0 hc run peer".to_string(),
+            "ARCH.EXE -arm64 hc run peer".to_string(),
+            format!("'{native}' 'hc run peer'"),
+        ] {
+            assert!(hc_run_refused(&command), "{command}");
+        }
+        for command in [
+            "gsudo.exe grep 'hc run' notes.txt",
+            "GSUDO echo 'hc run peer'",
+            "/usr/bin/SUDO grep 'hc run' notes.txt",
+        ] {
+            assert_eq!(read(command), Carried::default(), "{command}");
+        }
+    }
+
+    /// Whether the line names a carrier where the guard has no proof that
+    /// it is data, or runs a command through a wrapper or launcher that
+    /// the guard cannot read.
+    fn unproven(command: &str) -> bool {
+        read(command)
+            .unread
+            .iter()
+            .any(|u| u.contains("could not prove it is data") || u.contains("cannot be read"))
+    }
+
+    /// A carrier name needs a proof, whatever program holds it: a launcher
+    /// that is on no list, a command string it is given, and a string
+    /// nested in a string all refuse.
+    #[test]
+    fn a_carrier_name_without_proof_refuses_under_any_program() {
+        for command in [
+            "uv run hc run peer",
+            "uv run 'hc run peer'",
+            "frobnicate --flag hc run peer",
+            "frobnicate 'echo ok; hc run peer'",
+            "uv run 'sh -c \"hc run peer\"'",
+            "uv run 'frobnicate \"hc run peer\"'",
+            "uv run frobnicate hc",
+            "echo hc run | frobnicate",
+        ] {
+            assert!(unproven(command), "{command}");
+        }
+    }
+
+    /// A wrapper or launcher whose command the guard cannot read refuses,
+    /// with no carrier name on the line. A program on neither list keeps
+    /// its unfilled arguments as the residual: the guard cannot know which
+    /// one the program runs.
+    #[test]
+    fn an_unread_command_behind_a_wrapper_or_launcher_refuses() {
+        for command in [
+            "gsudo \"$COMMAND\"",
+            "sudo -E \"$COMMAND\"",
+            "sudo -u \"$USER\" grep x f",
+            "doas \"$COMMAND\" peer",
+            "busybox \"$COMMAND\"",
+            "env \"$COMMAND\"",
+            "env A=B \"$COMMAND\" peer",
+            "nohup \"$COMMAND\" peer",
+            "timeout 5 \"$COMMAND\"",
+            "nice -n 5 \"$COMMAND\"",
+            "setsid \"$COMMAND\"",
+            "find . -maxdepth 0 -exec \"$COMMAND\" {} \\;",
+            "echo x | xargs \"$COMMAND\"",
+        ] {
+            assert!(unproven(command), "{command}");
+        }
+        for command in [
+            "frobnicate \"$COMMAND\"",
+            "uv run \"$COMMAND\"",
+            "sudo ls \"$DIR\"",
+            "env A=B ls \"$DIR\"",
+        ] {
+            assert!(!unproven(command), "{command}");
+        }
+    }
+
+    /// Text a modeled grammar reads as data never refuses, behind a
+    /// wrapper or launcher too; text that reaches a command on the same
+    /// line does not keep that proof.
+    #[test]
+    fn modeled_data_roles_pass_and_data_fed_to_a_command_does_not() {
+        for command in [
+            "grep 'hc run' notes.txt",
+            "grep -rn hc docs",
+            "egrep 'hc|herdr' notes.txt",
+            "echo 'hc run peer'",
+            "echo hc run | grep hc",
+            "printf '%s\\n' 'hc run peer'",
+            "which hc",
+            "gh pr create --body 'hc run peer'",
+            "gh pr create --title 'hc run peer' --body 'x'",
+            "gh pr comment 5 -b 'hc run peer'",
+            "git commit -m 'hc run peer'",
+            "git commit --message 'hc run peer'",
+            "sudo grep 'hc run' notes.txt",
+            "gsudo echo 'hc run peer'",
+            "gsudo gh pr create --body 'hc run peer'",
+            "busybox grep 'hc run' notes.txt",
+            "nice grep 'hc run' notes.txt",
+            "timeout 5 echo 'hc run peer'",
+            "env A=B git commit -m 'hc run peer'",
+            "git commit -m \"$(cat <<'EOF'\nfix: guard text\n\n- hc run peer refuses\nEOF\n)\"",
+        ] {
+            assert!(!unproven(command), "{command}");
+            assert_eq!(read(command), Carried::default(), "{command}");
+        }
+        for command in [
+            "echo 'hc run peer' | sh",
+            "printf '%s' 'hc run peer' | bash -s",
+            "echo hc run peer | frobnicate",
+            "sh -c \"$(echo 'hc run peer')\"",
+            "echo 'hc run peer'; frobnicate \"$(date)\"",
+            "grep \"$(hc run peer)\" notes.txt",
+            "git commit -m \"$(hc run peer)\"",
+        ] {
+            assert!(
+                unproven(command) || hc_run_refused(command),
+                "{command}: {:?}",
+                read(command)
+            );
         }
     }
 

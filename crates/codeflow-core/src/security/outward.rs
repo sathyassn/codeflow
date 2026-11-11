@@ -156,6 +156,9 @@ struct Parsed {
     /// A shell (`source` and `.` included) or an interpreter family runs
     /// somewhere on the line (TSK-302 review round 8).
     runs: bool,
+    /// The launchers the walk unwrapped whose command is a word the guard
+    /// cannot fill in (TSK-1344).
+    unread_launchers: Vec<String>,
 }
 
 /// One interpreter call (TSK-302, issue 173): the words it receives other
@@ -236,6 +239,12 @@ pub(crate) struct Unwrapped {
 pub(crate) const UNVERIFIED_ENV_DIRECTORY: &str = "__unverified_env_directory";
 
 pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
+    unwrapped_line(command, cwd, home).0
+}
+
+/// The commands of [`unwrapped_commands`] and the names of the launchers
+/// the walk unwrapped whose command is a word the guard cannot fill in.
+fn unwrapped_line(command: &str, cwd: &Path, home: Option<&Path>) -> (Vec<Unwrapped>, Vec<String>) {
     let mut parsed = Parsed {
         resolve_shell: true,
         shell_home: home.map(Path::to_path_buf),
@@ -243,7 +252,7 @@ pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>)
         ..Parsed::default()
     };
     visit(command, Some(cwd), 0, &mut parsed);
-    parsed.commands
+    (parsed.commands, parsed.unread_launchers)
 }
 
 /// What the line's shells and interpreters read (TSK-302 review rounds 7
@@ -1898,7 +1907,14 @@ fn argv(
             None
         }
         _ => {
-            unmodeled_launch(name, rest, pattern_tail(patterns, rest.len()), depth, out);
+            unmodeled_launch(
+                program,
+                name,
+                rest,
+                pattern_tail(patterns, rest.len()),
+                depth,
+                out,
+            );
             // The wrappers git-guard reads a carried command from keep it
             // here too, in the directory the wrapper runs in (TSK-1344).
             if crate::hooks::git_guard::COMMAND_CARRIERS.contains(&name) {
@@ -1910,6 +1926,12 @@ fn argv(
         }
     };
     if let Some(inner) = inner {
+        if inner
+            .first()
+            .is_some_and(|word| crate::hooks::git_guard::unresolved_word(word))
+        {
+            out.unread_launchers.push(name.to_string());
+        }
         // A launcher `fd` runs with nothing after it runs each path `fd`
         // hands it, a program the guard cannot read: the walk stands with
         // an unresolved command over an unread root, as an empty exec value
@@ -2036,6 +2058,7 @@ const LAUNCHED_READERS: &[&str] = &[
 /// option values are data, never script strings: documentation text written
 /// with them stays allowed (TSK-302 AC-5).
 fn unmodeled_launch(
+    program: &str,
     name: &str,
     rest: &[String],
     patterns: Option<&[bool]>,
@@ -2132,7 +2155,7 @@ fn unmodeled_launch(
     // so prose and the other commands in the string are not (TSK-1344). The
     // directory the wrapper runs in is unknown, so the carried command
     // refuses where it needs one.
-    if CARRIER_WRAPPERS.contains(&name) {
+    if is_carrier_wrapper(program) {
         keep_wrapped_carriers(rest, patterns, depth, out);
     }
     out.calls.extend(inner.calls);
@@ -2158,10 +2181,7 @@ fn keep_wrapped_carriers(
     if let Some(at) = wrapper_command_string(rest) {
         visit(&rest[at], None, depth + 1, &mut carrier);
     }
-    if let Some(at) = rest
-        .iter()
-        .position(|word| starts_wrapped_command(crate::hooks::git_guard::launcher_name(word)))
-    {
+    if let Some(at) = rest.iter().position(|word| starts_wrapped_command(word)) {
         argv(
             &rest[at..],
             pattern_tail(patterns, rest.len() - at),
@@ -2188,14 +2208,22 @@ const CARRIER_WRAPPERS: &[&str] = &[
     "sudo", "doas", "chrt", "taskset", "arch", "gsudo", "pkexec", "busybox",
 ];
 
+/// Whether the program word names a wrapper from [`CARRIER_WRAPPERS`],
+/// matched the way carrier names are.
+fn is_carrier_wrapper(program: &str) -> bool {
+    let name = crate::security::terminal_carriers::carrier_name(program);
+    CARRIER_WRAPPERS.contains(&name.as_str())
+}
+
 /// Whether a wrapper from [`CARRIER_WRAPPERS`] may run the command that
-/// starts with this program name: a carrier, a launcher the traversal
+/// starts with this program word: a carrier, a launcher the traversal
 /// reads, another wrapper, a shell or an interpreter.
-fn starts_wrapped_command(name: &str) -> bool {
+fn starts_wrapped_command(program: &str) -> bool {
+    let name = crate::hooks::git_guard::launcher_name(program);
     crate::security::terminal_carriers::is_carrier_program(name)
         || MODELED_LAUNCHERS.contains(&name)
         || crate::hooks::git_guard::COMMAND_CARRIERS.contains(&name)
-        || CARRIER_WRAPPERS.contains(&name)
+        || is_carrier_wrapper(program)
         || crate::hooks::git_guard::is_shell(name)
         || interpreter_family(name).is_some()
 }
@@ -2217,6 +2245,215 @@ fn wrapper_command_string(rest: &[String]) -> Option<usize> {
         after_option = option;
     }
     None
+}
+
+/// Why a terminal carrier name found in a call's words refuses.
+const UNPROVEN_CARRIER: &str = "found where the guard could not prove it is data (accepted: a \
+     modeled data role such as a search pattern, a message body or a printed operand, or \
+     keeping the text in a file)";
+
+/// Why a wrapper or launcher whose command cannot be read refuses.
+const UNREAD_COMMAND: &str = "the command it runs cannot be read, so the guard cannot tell \
+     whether that command is a terminal carrier";
+
+/// Why a command line nested too deeply refuses.
+const TOO_DEEP: &str = "its words are nested too deeply for the guard to read";
+
+/// How many levels of command line inside a word the reading follows.
+const REFERENCE_DEPTH: usize = 6;
+
+/// Every place the line names a terminal carrier without proof, as the
+/// form and why it refuses (TSK-1344). Each carrier name in a call's words
+/// needs one of two proofs: the line runs it (the call list holds a call
+/// that starts at that word), or the program that holds it reads it as data
+/// by a modeled grammar and argument role ([`data_role`]). Quoting is not a
+/// proof, and the wrappers the traversal reads are precision for the first
+/// proof, never the test. A wrapper or launcher whose command position
+/// holds a word the guard cannot fill in refuses too ([`unread_command`]).
+///
+/// A program that is neither a launcher nor a wrapper is judged by its
+/// literal carrier names only; an unresolved word in its arguments is the
+/// residual, because the guard cannot know which argument the program runs.
+pub(crate) fn unproven_carrier_references(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Vec<(String, &'static str)> {
+    let (calls, launchers) = unwrapped_line(command, cwd, home);
+    let mut found: Vec<_> = launchers
+        .into_iter()
+        .map(|name| (name, UNREAD_COMMAND))
+        .collect();
+    scan_references(&calls, &calls, cwd, home, 0, &mut found);
+    found
+}
+
+/// One pass of [`unproven_carrier_references`] over `calls`: the line's own
+/// calls, or the calls read out of a word that holds a command line, which
+/// count only where the line does not already run them.
+fn scan_references(
+    calls: &[Unwrapped],
+    real: &[Unwrapped],
+    cwd: &Path,
+    home: Option<&Path>,
+    depth: usize,
+    found: &mut Vec<(String, &'static str)>,
+) {
+    use crate::security::terminal_carriers::{carrier_name, is_carrier_program};
+    for call in calls {
+        let Some(program) = call.args.first() else {
+            continue;
+        };
+        if depth > 0 && real.iter().any(|run| run.args == call.args) {
+            continue;
+        }
+        if is_carrier_program(program) {
+            // The line's own carrier calls are read by the carrier grammar.
+            if depth > 0 {
+                found.push((carrier_name(program), UNPROVEN_CARRIER));
+            }
+            continue;
+        }
+        if let Some(form) = unread_command(call, calls) {
+            found.push((form, UNREAD_COMMAND));
+        }
+        let end = owned_words_end(call, calls);
+        for at in 1..end {
+            let word = &call.args[at];
+            let proven = !crate::hooks::git_guard::unresolved_word(word)
+                && match data_role(&call.args, at) {
+                    Some(DataRole::Plain) => true,
+                    Some(DataRole::Printed) => !feeds_an_executor(call, real),
+                    None => false,
+                };
+            if proven {
+                continue;
+            }
+            if is_carrier_program(word) {
+                if !real.iter().any(|run| run.args == call.args[at..]) {
+                    found.push((carrier_name(word), UNPROVEN_CARRIER));
+                }
+                continue;
+            }
+            if word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._/+:=@%,-".contains(c))
+            {
+                continue;
+            }
+            if depth >= REFERENCE_DEPTH {
+                found.push(("a nested command line".to_string(), TOO_DEEP));
+                continue;
+            }
+            let (nested, launchers) =
+                unwrapped_line(word, call.cwd.as_deref().unwrap_or(cwd), home);
+            found.extend(launchers.into_iter().map(|name| (name, UNREAD_COMMAND)));
+            scan_references(&nested, real, cwd, home, depth + 1, found);
+        }
+    }
+}
+
+/// The index where the words a call owns end: a launcher's own words come
+/// first, and the command it runs, which the call list holds as a call of
+/// its own, is judged there.
+fn owned_words_end(call: &Unwrapped, calls: &[Unwrapped]) -> usize {
+    (1..call.args.len())
+        .find(|&at| calls.iter().any(|run| run.args == call.args[at..]))
+        .unwrap_or(call.args.len())
+}
+
+/// The form of a wrapper or supplier whose command position holds a word
+/// the guard cannot fill in. A wrapper's command is found by its leading
+/// words, and an expansion among them is unread. A command an `xargs` or
+/// `find -exec` supplies is a call with a supplier. The modeled launchers
+/// are read where [`argv`] unwraps them, which records each one whose
+/// command is such a word in `unread_launchers`.
+fn unread_command(call: &Unwrapped, calls: &[Unwrapped]) -> Option<String> {
+    let program = call.args.first()?;
+    let name = crate::security::terminal_carriers::carrier_name(program);
+    if call.supplier.is_some() {
+        return call
+            .args
+            .first()
+            .filter(|word| crate::hooks::git_guard::unresolved_word(word))
+            .map(|_| "launcher".to_string());
+    }
+    if is_carrier_wrapper(program) {
+        let mut after_option = false;
+        for (at, word) in call.args.iter().enumerate().skip(1) {
+            if calls.iter().any(|run| run.args == call.args[at..]) {
+                return None;
+            }
+            if crate::hooks::git_guard::unresolved_word(word) {
+                return Some(name);
+            }
+            let option = word.starts_with('-') && word.len() > 1;
+            if !option && !after_option {
+                return None;
+            }
+            after_option = option;
+        }
+        return None;
+    }
+    None
+}
+
+/// What a program does with a word it reads as data.
+#[derive(Clone, Copy)]
+enum DataRole {
+    /// The word is searched for, named as a file or used as a message,
+    /// and goes nowhere else.
+    Plain,
+    /// The word is printed, so a later command on the line can read it.
+    Printed,
+}
+
+/// The modeled data roles: `echo` and `printf` operands, every operand of
+/// `grep` and `which` families, and the values of the message options of
+/// `git` and the body and title options of `gh`. A wrapper hands the
+/// roles of the program that directly follows it.
+fn data_role(args: &[String], at: usize) -> Option<DataRole> {
+    let program = args.first()?;
+    if at == 0 {
+        return None;
+    }
+    if is_carrier_wrapper(program) {
+        return data_role(args.get(1..)?, at - 1);
+    }
+    let name = crate::security::terminal_carriers::carrier_name(program);
+    let before = args.get(at - 1).map(String::as_str);
+    match name.as_str() {
+        "echo" | "printf" => Some(DataRole::Printed),
+        "grep" | "egrep" | "fgrep" | "which" | "whereis" => Some(DataRole::Plain),
+        "git" if matches!(before, Some("-m" | "--message")) => Some(DataRole::Plain),
+        "gh" if matches!(before, Some("--body" | "-b" | "--title" | "-t" | "--notes")) => {
+            Some(DataRole::Plain)
+        }
+        _ => None,
+    }
+}
+
+/// Whether another call on the line can run what `call` prints: a call
+/// that reads stdin or holds an expansion and is not one of the readers
+/// that only display, count or filter text.
+fn feeds_an_executor(call: &Unwrapped, real: &[Unwrapped]) -> bool {
+    const READERS: &[&str] = &[
+        "cat", "grep", "egrep", "fgrep", "head", "tail", "wc", "sort", "uniq", "tee", "cut", "tr",
+        "less", "more", "nl", "tac", "rev", "fold", "echo", "printf",
+    ];
+    real.iter().any(|other| {
+        let Some(program) = other.args.first() else {
+            return false;
+        };
+        let name = crate::security::terminal_carriers::carrier_name(program);
+        other.args != call.args
+            && !READERS.contains(&name.as_str())
+            && (other.stdin_bound
+                || other
+                    .args
+                    .iter()
+                    .any(|word| crate::hooks::git_guard::unresolved_word(word)))
+    })
 }
 
 /// Whether one word holds more than a bare name: a shell blank (space,

@@ -826,9 +826,27 @@ bare (TSK-1344). The code holds the program names in
   after the wrappers the guards unwrap, including `flock`, `script`,
   `watch`, `parallel`, `arch`, `sudo`, `doas`, `gsudo`, `pkexec`, `busybox`,
   `chrt` and `taskset`, and inside the shell command string or command line
-  a wrapper runs (`pkexec sh -c '...'`, `busybox sh -c '...'`, `gsudo '...'`).
+  a wrapper runs. Wrapper names are matched the way carrier names are.
   Quoted arguments of a program the wrapper runs, such as a search pattern,
-  stay data. To start a program in a Herdr terminal, start it outside a guarded session,
+  stay data. The list of wrappers only improves what the guard reads; it is
+  not the test. A carrier name in the words of any program refuses unless
+  the line runs it, which the guard then judges, or a modeled data role
+  proves the word is data. The modeled data roles are, by class: every
+  operand of the search programs (`grep` family) and of `which` and
+  `whereis`; the operands `echo` and `printf` print; the message values of
+  `git`; and the body and title values of `gh`. A wrapper hands on the roles
+  of the program that directly follows it. Quoting is not a proof, a word
+  that holds a substitution is never data, and printed text loses its role
+  when another command on the line reads standard input or holds a word the
+  guard cannot fill in. A word the guard cannot prove is data refuses, naming
+  the carrier and the accepted forms: a modeled data role, or the text kept
+  in a file. A wrapper or launcher whose command is a word the guard cannot
+  fill in refuses too, because the guard cannot tell whether that command is
+  a carrier. The residual, by class: a program that is neither a modeled
+  launcher nor a listed wrapper is judged by the carrier names it holds
+  literally, and an unfilled word among its arguments is not judged, because
+  the guard cannot know which argument the program runs; commands hidden in
+  files or in external programs are outside a text rule. To start a program in a Herdr terminal, start it outside a guarded session,
   or through the host's own terminal. A guarded form returns when the Herdr
   app's dispatch contract is known.
 - Directory: `--cwd` from where the line runs, else that directory, so a
