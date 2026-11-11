@@ -2339,8 +2339,14 @@ fn configuration_operands_and_missing_includes_allow_ordinary_git_commands() {
         output.contains("missing; contributes no configuration"),
         "{output}"
     );
+    // The include is named by its entry, never by its path (TSK-416 review
+    // round 5).
     assert!(
-        output.contains(dir.path().join("missing").to_str().unwrap()),
+        output.contains("include entry 1 of the global configuration"),
+        "{output}"
+    );
+    assert!(
+        !output.contains(dir.path().join("missing").to_str().unwrap()),
         "{output}"
     );
 }
@@ -2783,7 +2789,10 @@ fn installed_exec_guard_and_include_diagnostic_journey() {
         String::from_utf8_lossy(&doctor.stdout),
         String::from_utf8_lossy(&doctor.stderr)
     );
-    assert!(output.contains("included-config"), "{output}");
+    assert!(
+        output.contains("include entry 1 of the repository configuration"),
+        "{output}"
+    );
     assert!(output.contains("writable"), "{output}");
 }
 
@@ -2795,7 +2804,10 @@ fn doctor_reports_writable_global_and_system_include_files() {
     let included = dir.path().join("included-config");
     std::fs::write(&parent, "[include]\n path = included-config\n").unwrap();
     std::fs::write(&included, "[core]\n pager = planted\n").unwrap();
-    for variable in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+    for (variable, scope) in [
+        ("GIT_CONFIG_GLOBAL", "global"),
+        ("GIT_CONFIG_SYSTEM", "system"),
+    ] {
         let out = codeflow()
             .env(variable, &parent)
             .env("GIT_CONFIG_NOSYSTEM", "false")
@@ -2809,45 +2821,101 @@ fn doctor_reports_writable_global_and_system_include_files() {
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(
-            output.contains("included-config") && output.contains("writable"),
+            output.contains(&format!("include entry 1 of the {scope} configuration"))
+                && output.contains("writable"),
             "{variable}: {output}"
         );
     }
 }
 
-/// TSK-416 review round 4: an include value from an untrusted
-/// configuration can hold a credential. Doctor names the include with the
-/// credential redacted, and its remedy asks for no `git config` read that
-/// would print the value. The credential is synthetic.
-#[test]
-fn doctor_shows_an_include_path_without_its_credential() {
+/// Doctor's `git-config-includes` output for a repository whose
+/// configuration holds one include entry with `value`. When `present`,
+/// the file Git resolves the value to, as a path relative to the git
+/// directory, exists and is readable, so discovery succeeds. The global and
+/// system configuration are empty, so the entry is the only include.
+fn doctor_includes_with(value: &str, present: Option<&str>) -> String {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");
-    let config = dir.path().join(".git").join("config");
+    let git_dir = dir.path().join(".git");
+    let config = git_dir.join("config");
     let mut text = std::fs::read_to_string(&config).unwrap();
-    text.push_str("[include]\n\tpath = https://user:OPAQUECANARY@host.invalid/config\n");
+    text.push_str(&format!("[include]\n\tpath = {value}\n"));
     std::fs::write(&config, text).unwrap();
+    if let Some(resolved) = present {
+        let file = git_dir.join(resolved);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "[user]\n\tname = fixture\n").unwrap();
+    }
+    let empty = dir.path().join("empty-config");
+    std::fs::write(&empty, "").unwrap();
     let out = codeflow()
         .args(["doctor", "--check", "git-config-includes"])
+        .env("GIT_CONFIG_GLOBAL", &empty)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(dir.path())
         .output()
         .unwrap();
-    let output = format!(
+    format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!output.contains("OPAQUECANARY"), "{output}");
-    assert!(!output.contains("user:"), "{output}");
-    // Wherever the include is named, it is named redacted.
-    assert_eq!(
-        output.matches("host.invalid").count(),
-        output.matches("***@host.invalid").count(),
-        "{output}"
-    );
-    assert!(output.contains("git-config-includes"), "{output}");
-    for listing in ["--get-all", "--get-regexp", "--show-origin", "--list"] {
-        assert!(!output.contains(listing), "{listing}: {output}");
+    )
+}
+
+/// TSK-416 review rounds 4 and 5: an include value from an untrusted
+/// configuration can hold a credential, in its userinfo or its query, and
+/// git resolves a URL-shaped value as a path relative to the git directory.
+/// Doctor names the include by its entry and prints neither the value nor
+/// the path it resolves to, whether that file exists or not, and its remedy
+/// asks for no `git config` read that would print the value. The
+/// credentials are synthetic.
+#[test]
+fn doctor_names_an_include_by_its_entry_and_never_its_value() {
+    let entry = "include entry 1 of the repository configuration (.git/config)";
+    let query = "https://host.invalid/config?access_token=OPAQUECANARY";
+    let userinfo = "https://user:OPAQUECANARY@host.invalid/config";
+    let mut cases = vec![(query, None), (userinfo, None)];
+    // Unix collapses the repeated slash; Windows refuses `:` and `?` in a
+    // file name, so the existing-file cases run on Unix.
+    if cfg!(unix) {
+        cases.extend([
+            (
+                query,
+                Some("https:/host.invalid/config?access_token=OPAQUECANARY"),
+            ),
+            (
+                userinfo,
+                Some("https:/user:OPAQUECANARY@host.invalid/config"),
+            ),
+        ]);
+    }
+    for (value, present) in cases {
+        let output = doctor_includes_with(value, present);
+        let case = format!("{value} (file present: {})", present.is_some());
+        assert!(!output.contains("OPAQUECANARY"), "{case}: {output}");
+        assert!(!output.contains("host.invalid"), "{case}: {output}");
+        assert!(output.contains(entry), "{case}: {output}");
+        if present.is_some() {
+            // Discovery succeeded and reported the include, not a generic
+            // refusal.
+            assert!(
+                output.contains(&format!("{entry} (present; writability not verified)")),
+                "{case}: {output}"
+            );
+            assert!(
+                !output.contains("cannot be established"),
+                "{case}: {output}"
+            );
+        } else if cfg!(unix) {
+            assert!(
+                output.contains(&format!("{entry} (missing; contributes no configuration)")),
+                "{case}: {output}"
+            );
+        }
+        assert!(output.contains("git-config-includes"), "{case}: {output}");
+        for listing in ["--get-all", "--get-regexp", "--show-origin", "--list"] {
+            assert!(!output.contains(listing), "{listing}: {case}: {output}");
+        }
     }
 }
 
