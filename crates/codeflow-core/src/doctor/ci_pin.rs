@@ -385,7 +385,9 @@ fn target_check<'s>(
     state: Option<&'s str>,
 ) -> Result<(&'s str, String, String), PinReport> {
     let digest_warning = |version: &str, problem: String| PinReport {
-        status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("pin_option", &pin_option(version))])),
+        status: Status::Warn(
+            remedy::DOCTOR_CI_DIGEST.with(&[("pin_option", &pin_option(version))]),
+        ),
         message: format!("on {target}, {problem}"),
     };
     let no_pin = || PinReport {
@@ -1291,7 +1293,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{remedy}"));
             let out = std::process::Command::new("sh")
                 .arg("-c")
-                .arg(format!("codeflow() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+                .arg(format!(
+                    "codeflow() {{ printf '%s\\0' \"$@\"; }}; {command}"
+                ))
                 .output()
                 .unwrap();
             assert!(out.status.success(), "{command}");

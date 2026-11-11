@@ -3281,7 +3281,8 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
     let said = text(&out);
     for part in [
         format!("refs/remotes/origin/main points at {blob}"),
-        "plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main".to_string(),
+        "plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main"
+            .to_string(),
     ] {
         assert!(said.contains(&part), "{part}: {said}");
     }

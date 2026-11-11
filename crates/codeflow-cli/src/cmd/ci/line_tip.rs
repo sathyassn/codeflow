@@ -315,6 +315,9 @@ mod tests {
         assert_eq!(flag("--into", Some("-x")), "--into=-x");
         assert_eq!(flag("--into", None), "--into <LINE>");
         let hidden = flag("--into", Some("a\u{200b}b"));
-        assert!(!hidden.contains('\u{200b}') && !hidden.contains("200b"), "{hidden}");
+        assert!(
+            !hidden.contains('\u{200b}') && !hidden.contains("200b"),
+            "{hidden}"
+        );
     }
 }

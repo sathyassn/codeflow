@@ -419,7 +419,10 @@ fn fetch_from_repository(
         ));
     };
     // Remote::url already expands insteadOf. Config retains the literal URL.
-    let raw = match repo.config().and_then(|config| config.get_string(&format!("remote.{name}.url"))) {
+    let raw = match repo
+        .config()
+        .and_then(|config| config.get_string(&format!("remote.{name}.url")))
+    {
         Ok(raw) => raw,
         Err(error) => return Some(raw_url_unread(name, &error.message())),
     };
@@ -507,9 +510,7 @@ fn fetch_remote<'repo>(
     }
     for name in names {
         let remote = read(name)?;
-        let url = remote
-            .url()
-            .map_err(|error| unread(" URL", name, &error))?;
+        let url = remote.url().map_err(|error| unread(" URL", name, &error))?;
         if url == selected {
             return Ok(Some(remote));
         }
@@ -1071,12 +1072,21 @@ mod tests {
         ] {
             let why = fetch(dir.path(), &args, false).expect("a refusal");
             assert!(!why.contains("OPAQUECANARY"), "{why}");
-            for listing in ["git config", "--show-origin", "--get-regexp", "remote -v", "get-url"] {
+            for listing in [
+                "git config",
+                "--show-origin",
+                "--get-regexp",
+                "remote -v",
+                "get-url",
+            ] {
                 assert!(!why.contains(listing), "{listing}: {why}");
             }
         }
         let hostile = fetch(rewrite.path(), &["o$(id)".to_string()], false).unwrap();
-        assert!(hostile.contains("effective URL for o$(id) differs"), "{hostile}");
+        assert!(
+            hostile.contains("effective URL for o$(id) differs"),
+            "{hostile}"
+        );
         assert!(hostile.contains("with an editor"), "{hostile}");
         // Each refusal shows a hostile name escaped, in prose only.
         let differs = effective_url_differs("o$(id)\u{1b}");

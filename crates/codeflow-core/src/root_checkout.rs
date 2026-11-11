@@ -1543,9 +1543,7 @@ fn head_finding(
                         .placeholder("<new-name>")
                         .render();
                     match (add, rename) {
-                        (Some(add), _) => format!(
-                            ", then {add} to continue it in a worktree{pop}"
-                        ),
+                        (Some(add), _) => format!(", then {add} to continue it in a worktree{pop}"),
                         (None, Some(rename)) => format!(
                             ", then rename the branch with {rename}, since git worktree add \
                              does not take a branch whose name starts with -, and run git \

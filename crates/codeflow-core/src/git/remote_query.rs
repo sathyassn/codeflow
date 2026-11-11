@@ -307,9 +307,14 @@ fn withheld(text: &str) -> String {
         AUTHENTICATION_FAILED
     } else {
         let lower = text.to_ascii_lowercase();
-        if ["could not resolve", "unable to access", "connection", "timed out"]
-            .iter()
-            .any(|marker| lower.contains(marker))
+        if [
+            "could not resolve",
+            "unable to access",
+            "connection",
+            "timed out",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
         {
             "the remote could not be reached"
         } else if ["not found", "does not appear to be a git repository"]
@@ -1049,7 +1054,10 @@ mod tests {
         // A short password could be part of ordinary words, so text that
         // still holds it is withheld; its class is relayed.
         config
-            .set_str("remote.short.url", "https://SHORTPWUSER:ab12@h4.invalid/s.git")
+            .set_str(
+                "remote.short.url",
+                "https://SHORTPWUSER:ab12@h4.invalid/s.git",
+            )
             .unwrap();
         let shown = relay_diagnostic(
             dir.path(),
@@ -1079,7 +1087,10 @@ mod tests {
         let repo = git2::Repository::init(dir.path()).unwrap();
         let mut config = repo.config().unwrap();
         for (key, value) in [
-            ("remote.origin.url", "https://OPAQUECANARY:z9@host.invalid/repo"),
+            (
+                "remote.origin.url",
+                "https://OPAQUECANARY:z9@host.invalid/repo",
+            ),
             ("remote.token.url", "https://TOKENUSERCANARY@t.invalid/repo"),
             (
                 "remote.encoded.url",
@@ -1094,7 +1105,10 @@ mod tests {
         }
         for (text, secret) in [
             ("remote: OPAQUECANARY rejected", "OPAQUECANARY"),
-            ("remote: user TOKENUSERCANARY is suspended", "TOKENUSERCANARY"),
+            (
+                "remote: user TOKENUSERCANARY is suspended",
+                "TOKENUSERCANARY",
+            ),
             ("remote: OPAQUE.ENCODED rejected", "OPAQUE.ENCODED"),
             ("remote: OPAQUE%2EENCODED rejected", "OPAQUE%2EENCODED"),
             ("remote: REWRITTENUSER has no access", "REWRITTENUSER"),
@@ -1106,7 +1120,10 @@ mod tests {
         // A short user name could be part of ordinary words, so text that
         // still holds it is withheld, with its class only.
         config
-            .set_str("remote.short.url", "https://bob:long-password-1@s.invalid/repo")
+            .set_str(
+                "remote.short.url",
+                "https://bob:long-password-1@s.invalid/repo",
+            )
             .unwrap();
         let shown = relay_diagnostic(
             dir.path(),

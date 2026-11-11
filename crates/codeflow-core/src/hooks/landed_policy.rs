@@ -266,17 +266,17 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
         )));
     }
     let shown = crate::git::display_text(&target);
-    let branch = repo.find_reference(&target).map_err(|error| {
-        format!("cannot read policy source {shown}: {error}; {fetch}")
-    })?;
+    let branch = repo
+        .find_reference(&target)
+        .map_err(|error| format!("cannot read policy source {shown}: {error}; {fetch}"))?;
     let Some(oid) = branch.target() else {
         return Err(not_branch(&format!(
             "names {shown}, which is itself symbolic"
         )));
     };
-    let commit = repo.find_commit(oid).map_err(|error| {
-        format!("cannot read policy source {shown} at {oid}: {error}; {fetch}")
-    })?;
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|error| format!("cannot read policy source {shown} at {oid}: {error}; {fetch}"))?;
     Ok(Authority {
         reference: target,
         sha: commit.id().to_string(),

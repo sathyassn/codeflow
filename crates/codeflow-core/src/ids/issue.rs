@@ -1161,14 +1161,10 @@ mod tests {
             assert!(init.status.success());
             let git = super::Git::new(root.path());
             super::state::update(&git, |state| {
-                state
-                    .last_verified
-                    .insert(remote.to_string(), last.clone());
+                state.last_verified.insert(remote.to_string(), last.clone());
             })
             .unwrap();
-            let error = super::verify_descent(&git, remote)
-                .unwrap_err()
-                .to_string();
+            let error = super::verify_descent(&git, remote).unwrap_err().to_string();
             let command = error
                 .split('`')
                 .find(|span| span.starts_with("git push "))

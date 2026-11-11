@@ -450,8 +450,7 @@ mod tests {
             "refs/remotes/origin/integration/EPC-001-x$(touch {})",
             marker.display()
         );
-        let (_, remedy) =
-            direct_commit_refusal("integration/EPC-001-x", &["a".repeat(40)], &reset);
+        let (_, remedy) = direct_commit_refusal("integration/EPC-001-x", &["a".repeat(40)], &reset);
         let command = remedy
             .split('`')
             .find(|span| span.starts_with("git reset "))

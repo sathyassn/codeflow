@@ -208,7 +208,11 @@ pub fn create_follow_up_with(
     // checked before this point (TSK-416 review). The command is rendered
     // from the raw value, and names shown in prose are escaped (TSK-388).
     let full = format!("refs/heads/{target}");
-    let start = if target.starts_with('-') { &full } else { &target };
+    let start = if target.starts_with('-') {
+        &full
+    } else {
+        &target
+    };
     let switch = |head: &'static str| {
         crate::git::pasted::step(
             &crate::git::Pasted::new(head)

@@ -2423,7 +2423,11 @@ fn a_hidden_character_in_a_branch_name_prints_no_command() {
         "{step}"
     );
     // The message names both branches escaped.
-    assert!(finding.message.contains(r"ma\u{200b}in"), "{}", finding.message);
+    assert!(
+        finding.message.contains(r"ma\u{200b}in"),
+        "{}",
+        finding.message
+    );
     let commit = CommitFinding {
         repo: "repo".to_string(),
         head: Head::Branch(GitName::from_text("fe\u{200b}at")),
@@ -2522,7 +2526,9 @@ fn the_checkpoint_hint_keeps_a_hostile_root_branch_as_one_argument() {
             .unwrap_or_else(|| panic!("{report}"));
         let out = std::process::Command::new("sh")
             .arg("-c")
-            .arg(format!("codeflow() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .arg(format!(
+                "codeflow() {{ printf '%s\\0' \"$@\"; }}; {command}"
+            ))
             .output()
             .unwrap();
         assert!(out.status.success(), "{command}");
@@ -2538,5 +2544,8 @@ fn the_checkpoint_hint_keeps_a_hostile_root_branch_as_one_argument() {
     }
     .to_string();
     assert!(!hidden.contains("codeflow integrate w"), "{hidden}");
-    assert!(hidden.contains("no command is printed to paste"), "{hidden}");
+    assert!(
+        hidden.contains("no command is printed to paste"),
+        "{hidden}"
+    );
 }

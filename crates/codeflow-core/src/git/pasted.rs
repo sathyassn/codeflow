@@ -206,14 +206,14 @@ impl Pasted<'_> {
     /// command renders.
     #[must_use]
     pub fn unprinted(&self) -> Option<&'static str> {
-        let values = self
-            .options
-            .iter()
-            .map(|(_, value)| *value)
-            .chain(self.operands.iter().filter_map(|operand| match operand {
-                Operand::Value(value) => Some(*value),
-                Operand::Placeholder(_) => None,
-            }));
+        let values =
+            self.options
+                .iter()
+                .map(|(_, value)| *value)
+                .chain(self.operands.iter().filter_map(|operand| match operand {
+                    Operand::Value(value) => Some(*value),
+                    Operand::Placeholder(_) => None,
+                }));
         for value in values {
             if value.is_none_or(|value| value.chars().any(hidden)) {
                 return Some(NOT_PRINTED);
@@ -325,7 +325,13 @@ mod tests {
         assert_eq!(fetch(&["-x"]), "git fetch --prune -- -x");
         assert_eq!(
             shell_argv(&fetch(&["--upload-pack=touch_pwned", "main"])),
-            ["fetch", "--prune", "--", "--upload-pack=touch_pwned", "main"]
+            [
+                "fetch",
+                "--prune",
+                "--",
+                "--upload-pack=touch_pwned",
+                "main"
+            ]
         );
         assert_eq!(
             shell_argv(&fetch(&["origin", "-o$(id)"])),
@@ -366,18 +372,29 @@ mod tests {
             .render()
             .unwrap();
         assert_eq!(into, "codeflow work start --into=-x TSK-1");
-        assert_eq!(
-            shell_argv(&into),
-            ["work", "start", "--into=-x", "TSK-1"]
-        );
+        assert_eq!(shell_argv(&into), ["work", "start", "--into=-x", "TSK-1"]);
         let rerun = argv(
             "codeflow",
-            &["ci", "--branch", "feat/x$(id)", "--into=-x", "--pushed-ref", "refs/heads/a b"],
+            &[
+                "ci",
+                "--branch",
+                "feat/x$(id)",
+                "--into=-x",
+                "--pushed-ref",
+                "refs/heads/a b",
+            ],
         )
         .unwrap();
         assert_eq!(
             shell_argv(&rerun),
-            ["ci", "--branch", "feat/x$(id)", "--into=-x", "--pushed-ref", "refs/heads/a b"]
+            [
+                "ci",
+                "--branch",
+                "feat/x$(id)",
+                "--into=-x",
+                "--pushed-ref",
+                "refs/heads/a b"
+            ]
         );
         assert_eq!(argv("codeflow", &["ci", "--branch", "a\u{202e}b"]), None);
         assert_eq!(
@@ -385,7 +402,10 @@ mod tests {
             Some("--line-tip 'a b'")
         );
         assert_eq!(
-            shell_argv(&format!("codeflow ci {}", option("--into", "o$(id)").unwrap())),
+            shell_argv(&format!(
+                "codeflow ci {}",
+                option("--into", "o$(id)").unwrap()
+            )),
             ["ci", "--into", "o$(id)"]
         );
     }
