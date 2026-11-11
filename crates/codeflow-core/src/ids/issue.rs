@@ -673,11 +673,7 @@ pub struct SyncReport {
 /// promisor remote on a git too old to honour that is refused first, as the
 /// commit-time scan refuses it.
 pub fn sync(root: &Path) -> Result<SyncReport, IdsError> {
-    let git = Git::bounded(
-        root,
-        crate::git::remote_query::QueryLimits::from_authority_or_default(root),
-    );
-    crate::hooks::gitleaks::require_offline_objects(root).map_err(IdsError::Git)?;
+    let git = Git::for_pre_push(root)?;
     let _lock = state::lock(&git)?;
     if !git.has_remote(AUTHORITY)? {
         return Ok(SyncReport {

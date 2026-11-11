@@ -39,6 +39,23 @@ impl InputWriter {
             Ok(result) => result,
         }
     }
+
+    /// [`InputWriter::finish`], waiting at most `wait` for the write to
+    /// end. A writer still blocked then is never joined: it is left to end
+    /// when its pipe closes, and the answer is `None`. A caller whose child
+    /// has been ended with its process group uses this, so a descendant that
+    /// escaped the group and still holds the pipe cannot hold the caller.
+    #[must_use]
+    pub fn finish_within(self, wait: std::time::Duration) -> Option<std::io::Result<()>> {
+        let until = std::time::Instant::now() + wait;
+        while !self.is_finished() {
+            if std::time::Instant::now() >= until {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Some(self.finish())
+    }
 }
 
 /// Start `command` with `input` written to its stdin from its own thread.

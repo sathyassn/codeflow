@@ -666,8 +666,11 @@ fn bounded_run(command: std::process::Command, deadline: Duration) -> Result<Ran
 
 /// [`bounded_run`], with `input` written to git's stdin from its own thread
 /// when given ([`crate::git::spawn_with_input_stopping`]), so a stdin-fed
-/// read such as `cat-file --batch` has the same deadline and answer cap. A
-/// write that has not ended by then ends with git's group.
+/// read such as `cat-file --batch` has the same deadline and answer cap.
+/// The write must end within the deadline too: git is reaped only after it
+/// ends, so a descendant that keeps stdin open and never reads is ended
+/// with git's group at the deadline. The writer is then joined for at most
+/// [`STDERR_GRACE`] and otherwise left to its closed pipe, never waited on.
 fn bounded_run_input(
     mut command: std::process::Command,
     input: Option<&[u8]>,
@@ -693,12 +696,13 @@ fn bounded_run_input(
     };
     let (mut child, writer) =
         started.map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
-    let ran = bounded_wait(&mut child, deadline);
+    let ran = bounded_wait(&mut child, writer.as_ref(), deadline);
     if let Some(writer) = writer {
-        // The group is ended on every failure above, which closes the pipe,
-        // so the writer has finished or is about to.
-        let written = writer.finish();
-        if ran.is_ok() {
+        // An answer means the write already ended. Every failure above
+        // ended git's group, which closes the pipe, so the write ends at
+        // once unless a process outside the group holds it.
+        let written = writer.finish_within(STDERR_GRACE);
+        if let (Ok(_), Some(written)) = (&ran, written) {
             written
                 .map_err(|error| Failure::Other(format!("writing its input failed: {error}")))?;
         }
@@ -707,7 +711,13 @@ fn bounded_run_input(
 }
 
 /// Collect a started git's answer within `deadline`; see [`bounded_run`].
-fn bounded_wait(child: &mut std::process::Child, deadline: Duration) -> Result<Ran, Failure> {
+/// When `writer` feeds git's stdin, git is reaped only after the write
+/// ends, within the same deadline.
+fn bounded_wait(
+    child: &mut std::process::Child,
+    writer: Option<&crate::git::InputWriter>,
+    deadline: Duration,
+) -> Result<Ran, Failure> {
     let Some(stdout) = child.stdout.take() else {
         kill_group(child);
         return Err(Failure::Other("could not read its answer".to_string()));
@@ -773,6 +783,18 @@ fn bounded_wait(child: &mut std::process::Child, deadline: Duration) -> Result<R
                 kill_group(child);
                 return Err(timed_out());
             }
+        }
+    }
+    // Git can exit before its input is written when a descendant it started
+    // keeps stdin open and never reads. Git stays unreaped until the write
+    // ends, so its group can still be ended at the deadline.
+    if let Some(writer) = writer {
+        while !writer.is_finished() {
+            if expired() {
+                kill_group(child);
+                return Err(timed_out());
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
     // Git's stderr closes when it exits unless a descendant it started, such
@@ -1178,6 +1200,19 @@ mod tests {
         let why = stalled.unwrap_err();
         assert!(why.timed_out, "{why:?}");
         assert!(why.reason.contains("within 1s"), "{why:?}");
+        assert!(took < Duration::from_secs(10), "took {took:?}");
+        // The parent exits at once, closing its stdout and stderr, while a
+        // descendant keeps stdin open and never reads; the input outgrows
+        // the pipe, so only ending the group frees the writer.
+        let started = Instant::now();
+        let held = bounded_output_with_input(
+            shell("exec 3<&0; sleep 30 <&3 >/dev/null 2>&1 & exit 0"),
+            &input,
+            Duration::from_secs(1),
+        );
+        let took = started.elapsed();
+        let why = held.unwrap_err();
+        assert!(why.timed_out, "{why:?}");
         assert!(took < Duration::from_secs(10), "took {took:?}");
         let oversized = bounded_output_with_input(
             shell("cat >/dev/null; head -c 17000000 /dev/zero"),

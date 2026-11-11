@@ -46,14 +46,21 @@ impl Git {
     }
 
     /// [`Git::bounded`] within the lookup limits the authority's
-    /// configuration sets, as the pre-push hook's registry reads run. No
-    /// guard runs them: a guard builds only `QueryLimits::guard`.
-    #[must_use]
-    pub fn for_pre_push(root: &Path) -> Git {
-        Git::bounded(
+    /// configuration sets, as the pre-push hook's registry reads run (the id
+    /// sync and the append-only check). No guard runs them: a guard builds
+    /// only `QueryLimits::guard`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a repository with a promisor remote on a git too old to
+    /// honour the no-lazy-fetch setting, as the commit-time scan does: there
+    /// a missing object would start a fetch outside every deadline.
+    pub fn for_pre_push(root: &Path) -> Result<Git, IdsError> {
+        crate::hooks::gitleaks::require_offline_objects(root).map_err(IdsError::Git)?;
+        Ok(Git::bounded(
             root,
             crate::git::remote_query::QueryLimits::from_authority_or_default(root),
-        )
+        ))
     }
 
     /// The deadline for `args` when limits are set: the fetch wait for a

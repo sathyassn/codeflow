@@ -1673,11 +1673,12 @@ fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut Stage
     // Within the lookup limits, and reading local objects only (TSK-327):
     // a stalled or oversized read, or a promised object the clone lacks,
     // blocks below instead of holding the push or starting a fetch.
-    let git = crate::ids::Git::for_pre_push(root);
     let exclude =
         (!is_zero_sha(&r.remote_sha) && !r.remote_sha.is_empty()).then_some(r.remote_sha.as_str());
-    let findings = crate::ids::Ledger::read(&git, &r.local_sha)
-        .and_then(|ledger| ledger.range_violations(&git, exclude));
+    let findings = crate::ids::Git::for_pre_push(root).and_then(|git| {
+        crate::ids::Ledger::read(&git, &r.local_sha)
+            .and_then(|ledger| ledger.range_violations(&git, exclude))
+    });
     match findings {
         Ok(findings) => {
             for finding in findings {

@@ -743,6 +743,81 @@ fn a_stalled_registry_push_after_a_good_fetch_blocks_the_push() {
     assert!(took < std::time::Duration::from_secs(50), "{took:?}: {out}");
 }
 
+/// TSK-327: the registry's append-only check reads with lazy fetch off,
+/// which a git before 2.46 may ignore in a repository with a promisor
+/// remote. A registry-only push (which runs no id sync) through the
+/// pre-push entry point, with a `git` first on `PATH` reporting 2.40, is
+/// refused as the sync and the commit-time scan refuse it. Before, the
+/// check read the range anyway.
+#[cfg(unix)]
+#[test]
+fn a_registry_push_refuses_a_promisor_on_a_git_too_old_to_read_locally() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let (_dest, _rewrite) = pending_reservation(&root);
+    git(&root, &["config", "remote.origin.promisor", "true"]);
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    let bin = dir.path().join("old-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\nif [ \"$*\" = version ]; then echo 'git version 2.40.0'; exit 0; fi\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let registry = text(&run(
+        "git",
+        &root,
+        &["rev-parse", "refs/heads/codeflow/registry"],
+    ));
+    let url = text(&run(
+        "git",
+        &root,
+        &["remote", "get-url", "--push", "origin"],
+    ));
+    let mut cmd = command(exe().to_str().unwrap(), &root);
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value)
+        .unwrap()
+        .to_owned();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path)))
+            .unwrap();
+    let mut child = cmd
+        .env("PATH", path)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/codeflow/registry {} refs/heads/codeflow/registry {}",
+        registry.trim(),
+        "0".repeat(40)
+    )
+    .unwrap();
+    let ran = child.wait_with_output().unwrap();
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{out}");
+    assert!(
+        out.contains("registry.append_only") && out.contains("upgrade git to 2.46"),
+        "{out}"
+    );
+}
+
 #[test]
 fn clears_doctor_id_registry() {
     // The full tier keeps an id registry; with no remote it is local.
