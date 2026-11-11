@@ -290,8 +290,8 @@ mod tests {
 
     /// TSK-416 review round 7: a refused remote-tracking ref and its reflog
     /// hold the remote's name, configuration text that can carry a
-    /// credential, so the report names that remote by its place among the
-    /// configured remotes. The credential is synthetic.
+    /// credential, so the report shows that remote withheld. The credential
+    /// is synthetic.
     #[cfg(unix)]
     #[test]
     fn a_refused_tracking_ref_withholds_a_credential_remote_name() {
@@ -312,7 +312,7 @@ mod tests {
         assert!(!line.contains("OPAQUECANARY"), "{line}");
         assert!(!line.contains("host.invalid"), "{line}");
         assert!(
-            line.contains("refs/remotes/<remote 1, name withheld>/denied"),
+            line.contains("refs/remotes/<a remote, name withheld>/denied"),
             "{line}"
         );
     }

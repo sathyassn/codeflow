@@ -1257,7 +1257,8 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
 /// substitution, and a name starting with `-` follows `--`. Since review
 /// round 7 only a plain name of a configured remote is pasted; any other
 /// name, one a terminal cannot show as itself included, gets no command,
-/// only the rename with an editor (review round 9).
+/// only a fresh clone or a rename through a Git client (review rounds 9
+/// and 10).
 #[cfg(unix)]
 #[test]
 fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
@@ -1302,18 +1303,11 @@ fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
         assert_eq!(arguments, expected, "{step}");
     }
     // A name that is a URL with a credential (synthetic), holds shell
-    // syntax or a character a terminal hides gets only the rename.
-    for (at, hidden) in hidden.iter().enumerate() {
+    // syntax or a character a terminal hides gets only the steps for a
+    // withheld remote, with no place in a file (review round 10).
+    for hidden in &hidden {
         let step = prune_step(root, hidden);
-        assert_eq!(
-            step,
-            codeflow_core::security::git::withheld_remote_step(root, hidden)
-        );
-        let section = ["3rd", "4th", "5th"][at];
-        assert!(
-            step.contains(&format!("finds its {section} [remote] section")),
-            "{step}"
-        );
+        assert_eq!(step, codeflow_core::security::git::WITHHELD_REMOTE_STEP);
         for shown in [
             hidden,
             "OPAQUECANARY",
@@ -1321,27 +1315,31 @@ fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
             "$(",
             r"o\u{200b}x",
             "`git",
+            "[remote]",
+            "3rd",
         ] {
             assert!(!step.contains(shown), "{shown}: {step}");
         }
     }
 }
 
-/// TSK-416 review round 9, finding 1: a withheld remote that
-/// `remote.<name>.skipFetchAll` keeps out of `git fetch --all` gets no
-/// shell step, only the rename with an editor, located by its `[remote]`
-/// section. The rename, done here by rewriting the section, and the
-/// ordinary prune step printed for the plain name prune the renamed
-/// remote's stale tracking ref. The credentials are synthetic; the remote
-/// fetches from a local path, and its push URL only carries the password
-/// `abc12` into the inventory.
+/// TSK-416 review rounds 9 and 10: a withheld remote that
+/// `remote.<name>.skipFetchAll` keeps out of `git fetch --all`, whose
+/// destination now advertises no branches while this clone still holds
+/// the tracking ref it fetched, gets no shell step and no place in a file,
+/// only a fresh clone or a rename through a Git client. A fresh clone of
+/// the same destination, whose remote has the plain name `origin`, holds
+/// no tracking ref, so the push is judged as initialization there; the
+/// failing clone is left as it was, with no ref added. The credentials
+/// are synthetic; the remote fetches from a local path, and its push URL
+/// only carries the password `abc12` into the inventory.
 #[cfg(unix)]
 #[test]
-fn a_skip_fetch_all_remote_is_pruned_after_the_rename() {
+fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
     for name in ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"] {
         let h = History::new();
         let root = h.local.path();
-        let source = h.local.path().to_str().unwrap();
+        let source = h.remote.path().to_str().unwrap();
         for (key, value) in [
             ("url", source.to_string()),
             (
@@ -1353,41 +1351,37 @@ fn a_skip_fetch_all_remote_is_pruned_after_the_rename() {
         ] {
             h.git(&["config", &format!("remote.{name}.{key}"), &value]);
         }
+        // The clone fetched the destination's branch; the destination then
+        // lost every branch.
+        h.git(&["fetch", "-q", "--", name]);
+        command(h.remote.path(), &["update-ref", "-d", "refs/heads/main"]);
+        let held = held_tracking_ref(root, name).unwrap();
+        assert_eq!(
+            held.as_deref(),
+            Some(format!("refs/remotes/{name}/main").as_str())
+        );
         let step = prune_step(root, name);
-        for hidden in ["$(", "OPAQUECANARY", "host.invalid", "abc12", "`git"] {
+        assert_eq!(step, codeflow_core::security::git::WITHHELD_REMOTE_STEP);
+        for hidden in [
+            "$(",
+            "OPAQUECANARY",
+            "host.invalid",
+            "abc12",
+            "`git",
+            "1st",
+            "[remote]",
+            "remote 1",
+        ] {
             assert!(!step.contains(hidden), "{name}: {hidden}: {step}");
         }
-        assert!(
-            step.starts_with(
-                "the operator opens .git/config in an editor, finds its 1st [remote] section"
-            ),
-            "{step}"
-        );
-        // The rename with an editor: the section header and its fetch line
-        // take the plain name `fork`.
-        let config = root.join(".git").join("config");
-        let text = std::fs::read_to_string(&config).unwrap();
-        let renamed = text
-            .replace(&format!("[remote \"{name}\"]"), "[remote \"fork\"]")
-            .replace(&format!("refs/remotes/{name}/"), "refs/remotes/fork/");
-        assert_ne!(renamed, text);
-        std::fs::write(&config, renamed).unwrap();
-        // The renamed remote's stale ref is pruned by the ordinary step.
-        let stale = "refs/remotes/fork/gone";
-        h.git(&["update-ref", stale, "HEAD"]);
-        let step = prune_step(root, "fork");
-        assert_eq!(step, "run git fetch --prune fork", "{name}");
-        let arguments: Vec<&str> = step
-            .strip_prefix("run git ")
-            .unwrap()
-            .split_whitespace()
-            .collect();
-        h.git(&arguments);
-        let held = git2::Repository::open(root)
-            .unwrap()
-            .find_reference(stale)
-            .is_ok();
-        assert!(!held, "{name}: {step}");
+        assert!(step.contains("fresh clone"), "{step}");
+        // A fresh clone of the same destination holds no tracking ref for
+        // it; the failing clone is unchanged.
+        let fresh = tempfile::tempdir().unwrap();
+        command(fresh.path(), &["clone", "-q", "--", source, "clone"]);
+        let clone = fresh.path().join("clone");
+        assert_eq!(held_tracking_ref(&clone, "origin").unwrap(), None, "{name}");
+        assert_eq!(held_tracking_ref(root, name).unwrap(), held, "{name}");
     }
 }
 

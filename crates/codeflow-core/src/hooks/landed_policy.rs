@@ -212,8 +212,8 @@ fn remote_command(
 }
 
 /// "run git fetch <remote>"; a remote whose name messages withhold (TSK-416
-/// review round 7) gets no command, only the rename with an editor, after
-/// which a rerun prints this step for the plain name (review round 9).
+/// review round 7) gets no command, only a fresh clone or a rename through
+/// a Git client (review rounds 9 and 10).
 fn fetch_step(root: &Path, remote: &str) -> String {
     remote_command(root, "git fetch", remote, None).map_or_else(
         || crate::security::git::withheld_remote_step(root, remote),
@@ -948,8 +948,8 @@ mod tests {
 
     /// TSK-416 review round 7: the sole remote's name is the subsection of
     /// its url key and can be a URL with a credential. Reading the policy
-    /// authority names that remote by its place among the configured
-    /// remotes in every message, its tracking refs and steps included,
+    /// authority shows that remote withheld, with no number or place, in
+    /// every message, its tracking refs and steps included,
     /// whether its refs are missing, its default branch is unset or the
     /// policy is read from it. The credentials are synthetic.
     #[test]
@@ -957,7 +957,10 @@ mod tests {
         let check = |text: &str, case: &str| {
             assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
             assert!(!text.contains("host.invalid"), "{case}: {text}");
-            assert!(text.contains("<remote 1, name withheld>"), "{case}: {text}");
+            assert!(
+                text.contains(crate::security::git::WITHHELD_REMOTE),
+                "{case}: {text}"
+            );
         };
         for name in [
             "https://user:OPAQUECANARY@host.invalid",
@@ -996,7 +999,7 @@ mod tests {
             .unwrap();
             let landed = load_local(root).unwrap();
             check(&landed.source, &format!("{name}: policy source"));
-            assert_eq!(landed.source, "refs/remotes/<remote 1, name withheld>/main");
+            assert_eq!(landed.source, "refs/remotes/<a remote, name withheld>/main");
             // A symbolic link on the way to the ref file is a doubt that
             // names the ref the same way.
             #[cfg(unix)]
@@ -1073,15 +1076,18 @@ mod tests {
             let repo = Repository::open(root).unwrap();
             let error = default_branch(&repo, root, remote).unwrap_err();
             if set_head.is_empty() {
-                // Round 9: no command names a withheld remote; its one step
-                // is a rename with an editor.
-                let rename = crate::security::git::withheld_remote_step(root, remote);
+                // Rounds 9 and 10: no command names a withheld remote; its
+                // steps are a fresh clone or a rename through a Git client.
+                let steps = crate::security::git::withheld_remote_step(root, remote);
                 for text in [&error, &fetch_step(root, remote)] {
                     assert!(!text.contains("$("), "{text}");
                     assert!(!text.contains("`git"), "{text}");
-                    assert!(text.contains(&rename), "{text}");
+                    assert!(text.contains(&steps), "{text}");
                 }
-                assert!(error.contains("<remote 1, name withheld>"), "{error}");
+                assert!(
+                    error.contains(crate::security::git::WITHHELD_REMOTE),
+                    "{error}"
+                );
                 continue;
             }
             let set_head_line = error
@@ -1110,17 +1116,17 @@ mod tests {
         }
     }
 
-    /// TSK-416 review round 9, finding 1: the sole remote's name is
-    /// withheld, and `remote.<name>.skipFetchAll` keeps it out of `git
-    /// fetch --all`. The refusals hold no shell step that names it, only the
-    /// rename with an editor, located by its `[remote]` section. The rename,
-    /// done here by rewriting the section, and the ordinary steps the rerun
-    /// prints for the plain name clear the refusal. The credentials are
-    /// synthetic; the remote fetches from a local path, and its push URL
-    /// only carries the password `abc12` into the inventory.
+    /// TSK-416 review rounds 9 and 10: the sole remote's name is withheld,
+    /// and `remote.<name>.skipFetchAll` keeps it out of `git fetch --all`.
+    /// The refusals hold no shell step that names it and no place in a
+    /// file, only a fresh clone or a rename through a Git client. A fresh
+    /// clone of the same source, whose remote has the plain name `origin`,
+    /// clears the refusal; the failing clone is left as it was. The
+    /// credentials are synthetic; the remote fetches from a local path, and
+    /// its push URL only carries the password `abc12` into the inventory.
     #[test]
     #[cfg(unix)]
-    fn a_skip_fetch_all_remote_recovers_by_the_rename_and_plain_steps() {
+    fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
         for name in ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"] {
             let (dir, _) = repository(b"");
             let root = dir.path();
@@ -1154,53 +1160,46 @@ mod tests {
             let error = default_branch(&repo, root, name).unwrap_err();
             let refused = load_local(root).err().unwrap();
             for text in [&error, &refused, &fetch_step(root, name)] {
-                for hidden in ["$(", "OPAQUECANARY", "host.invalid", "abc12", "`git"] {
+                for hidden in [
+                    "$(",
+                    "OPAQUECANARY",
+                    "host.invalid",
+                    "abc12",
+                    "`git",
+                    "1st",
+                    "[remote]",
+                    "remote 1",
+                ] {
                     assert!(!text.contains(hidden), "{name}: {hidden}: {text}");
                 }
             }
             assert!(refused.contains("holds no refs"), "{refused}");
             assert!(
-                error.contains(
-                    "the operator opens .git/config in an editor, finds its 1st [remote] section"
-                ),
+                error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
                 "{error}"
             );
-            // The rename with an editor: the section header and its fetch
-            // line take the plain name `fork`.
-            let config = root.join(".git").join("config");
-            let text = std::fs::read_to_string(&config).unwrap();
-            let renamed = text
-                .replace(&format!("[remote \"{name}\"]"), "[remote \"fork\"]")
-                .replace(&format!("refs/remotes/{name}/"), "refs/remotes/fork/");
-            assert_ne!(renamed, text);
-            std::fs::write(&config, renamed).unwrap();
-            // The rerun prints the ordinary steps for the plain name, and
-            // following them clears the refusal.
-            let repo = Repository::open(root).unwrap();
-            let error = default_branch(&repo, root, "fork").unwrap_err();
-            let set_head_line = error
-                .split("the operator runs ")
-                .nth(1)
-                .and_then(|rest| rest.split(" (").next())
-                .unwrap_or_else(|| panic!("{error}"));
-            let fetch_line = error
-                .split(" (")
-                .nth(1)
-                .and_then(|rest| rest.split(" records it too").next())
-                .unwrap_or_else(|| panic!("{error}"));
-            assert_eq!(shell_argv(fetch_line), ["fetch", "fork"], "{error}");
-            let set_head = shell_argv(set_head_line);
+            // The failing clone is left as it was; a fresh clone of the same
+            // source, whose remote takes the plain name `origin`, reads the
+            // policy authority.
+            let fresh = tempfile::tempdir().unwrap();
+            let out = crate::git::command()
+                .args(["clone", "-q", "--"])
+                .arg(root)
+                .arg(fresh.path().join("clone"))
+                .output()
+                .unwrap();
             assert!(
-                set_head.starts_with(&["remote".to_string(), "set-head".to_string()])
-                    && set_head.contains(&"fork".to_string())
-                    && set_head.contains(&"-a".to_string()),
-                "{error}"
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
             );
-            for line in [fetch_line, set_head_line] {
-                let arguments = shell_argv(line);
-                run(&arguments.iter().map(String::as_str).collect::<Vec<_>>());
-            }
-            assert!(load_local(root).is_ok(), "{name}: {error}");
+            assert!(load_local(root).is_err(), "{name}");
+            let landed = load_local(&fresh.path().join("clone")).unwrap();
+            assert!(
+                landed.source.starts_with("refs/remotes/origin/"),
+                "{name}: {}",
+                landed.source
+            );
         }
     }
 }

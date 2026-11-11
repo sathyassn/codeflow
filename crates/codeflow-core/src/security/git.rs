@@ -374,22 +374,22 @@ pub fn remote_name_shown(root: &Path, name: &str) -> bool {
         && crate::git::remote_query::holds_configured_credential(root, name) == Some(false)
 }
 
+/// How a message shows a remote whose name it withholds. It carries no
+/// number or place: a place in the configuration file cannot be counted
+/// the way Git counts it in every case (TSK-416 review round 10), and a
+/// wrong one points the operator at another remote.
+pub const WITHHELD_REMOTE: &str = "<a remote, name withheld>";
+
 /// A configured remote as a message names it: the name itself when
-/// [`remote_name_shown`] allows it, else `<remote N, name withheld>`, N
-/// being the place of its first `[remote]` section among the `[remote]`
-/// sections of the repository's configuration file, or `<remote, name
-/// withheld>` when no section there defines it. The only step for a
-/// withheld remote is a rename with an editor ([`withheld_remote_step`]);
-/// no command names it.
+/// [`remote_name_shown`] allows it, else [`WITHHELD_REMOTE`]. The steps for
+/// a withheld remote are a fresh clone or a rename through a Git client
+/// ([`withheld_remote_step`]); no command names it.
 #[must_use]
 pub fn shown_remote(root: &Path, name: &str) -> String {
     if remote_name_shown(root, name) {
         return name.to_string();
     }
-    let place = remote_sections(root, name)
-        .and_then(|(_, sections)| sections.first().copied())
-        .map_or_else(String::new, |at| format!(" {at}"));
-    format!("<remote{place}, name withheld>")
+    WITHHELD_REMOTE.to_string()
 }
 
 /// The names of the configured remotes of the repository at `root`, in
@@ -418,90 +418,26 @@ fn configured_remote_names(root: &Path) -> Option<Vec<Vec<u8>>> {
     Some(names)
 }
 
-/// The repository configuration file of the repository at `root` as a
-/// step names it (relative to the working tree when inside it), and the
-/// places of the `[remote]` sections in that file that define the remote
-/// `name`, each counted among that file's `[remote]` sections in file
-/// order, by the parser that reads the remote. Settings an included file
-/// holds are not that file's sections and are not counted. A section is
-/// counted from its settings, so a section header with none is not
-/// counted, and two headers for one remote in a row count once. `None`
-/// when the file cannot be read.
-fn remote_sections(root: &Path, name: &str) -> Option<(String, Vec<usize>)> {
-    let repo = git2::Repository::discover(root).ok()?;
-    let path = repo.commondir().join("config");
-    let config = git2::Config::open(&path).ok()?;
-    let mut entries = config.entries(None).ok()?;
-    let mut count = 0;
-    let mut current: Option<Vec<u8>> = None;
-    let mut places = Vec::new();
-    while let Some(entry) = entries.next() {
-        let entry = entry.ok()?;
-        let subsection = (entry.include_depth() == 0)
-            .then(|| entry.name_bytes().strip_prefix(b"remote."))
-            .flatten()
-            .and_then(|rest| {
-                let last = rest.iter().rposition(|byte| *byte == b'.')?;
-                (last > 0).then(|| rest[..last].to_vec())
-            });
-        if subsection.is_some() && subsection != current {
-            count += 1;
-            if subsection.as_deref() == Some(name.as_bytes()) {
-                places.push(count);
-            }
-        }
-        current = subsection;
-    }
-    let shown = repo
-        .workdir()
-        .and_then(|workdir| path.strip_prefix(workdir).ok())
-        .unwrap_or(&path);
-    Some((crate::git::display_path(shown), places))
-}
-
-/// `1st`, `2nd`, `3rd`, `4th` and so on.
-fn ordinal(n: usize) -> String {
-    let suffix = match (n % 10, n % 100) {
-        (_, 11..=13) => "th",
-        (1, _) => "st",
-        (2, _) => "nd",
-        (3, _) => "rd",
-        _ => "th",
-    };
-    format!("{n}{suffix}")
-}
-
-/// The one step for a remote [`shown_remote`] withholds (TSK-416 review
-/// round 9): the operator renames it to a plain name with an editor and
-/// reruns, which then gives the ordinary steps for that name. No command
-/// names a withheld remote, since a name that holds shell syntax runs it
-/// when typed or pasted, and listing remotes prints a name that holds a
-/// credential. The remote is located by its `[remote]` section in the
-/// repository's configuration file, counted by libgit2, which reads it.
+/// The steps for a remote [`shown_remote`] withholds (TSK-416 review
+/// rounds 9 and 10). No command names a withheld remote, since a name that
+/// holds shell syntax runs it when typed or pasted, and listing remotes
+/// prints a name that holds a credential. Nor is the remote located in a
+/// configuration file: a place there cannot be counted the way Git counts
+/// it in every case, and a rename of the configuration alone leaves the
+/// remote's refs and the branches' upstream settings under the old name.
+/// So the operator either works from a fresh clone with a plain remote
+/// name, or renames the remote through a Git client that also moves its
+/// refs and upstream settings, then reruns. A name no remote is configured
+/// under now gets the fresh clone, or the removal of its refs outside the
+/// guard.
 #[must_use]
 pub fn withheld_remote_step(root: &Path, name: &str) -> String {
-    let rename = "renames it to a plain name (ASCII letters, digits, `.`, `_` or `-`) in its header and in its `fetch` lines, and reruns; no command here names that remote, since its name is not safe to print, paste or type";
     let configured = configured_remote_names(root)
         .is_none_or(|names| names.iter().any(|each| each == name.as_bytes()));
     if !configured {
-        return "no remote is configured under that name now, so no fetch reaches its refs and no command here names them, since a name kept only in a ref cannot be checked for a credential; the operator works from a fresh clone, or removes those refs from a git client outside the guard".into();
+        return "no remote is configured under that name now, so no fetch reaches its refs and no command here names them, since a name kept only in a ref cannot be checked for a credential; the operator works from a fresh clone of the repository whose remote has a plain name (ASCII letters, digits, `.`, `_` or `-`), or removes those refs with a Git client outside the guard".into();
     }
-    match remote_sections(root, name) {
-        Some((file, places)) if !places.is_empty() => {
-            let sections = places
-                .iter()
-                .map(|at| ordinal(*at))
-                .collect::<Vec<_>>()
-                .join(" and ");
-            let plural = if places.len() > 1 { "s" } else { "" };
-            format!(
-                "the operator opens {file} in an editor, finds its {sections} [remote] section{plural} (counting only [remote] sections, as of this run), whose name can hold a URL or credential, {rename}"
-            )
-        }
-        _ => format!(
-            "the operator opens the configuration file that defines that remote in an editor (it is not a [remote] section of this repository's own configuration file, so it may be a global or included file), finds the [remote] section whose name holds a URL or credential, {rename}"
-        ),
-    }
+    WITHHELD_REMOTE_STEP.to_string()
 }
 
 /// A ref name as a message shows it, with the name of any configured remote
@@ -530,7 +466,7 @@ fn remote_ref(root: &Path, reference: &str, escape: fn(&str) -> String) -> Strin
     let Some(rest) = reference.strip_prefix("refs/remotes/") else {
         return escape(reference);
     };
-    let withheld = || "refs/remotes/<remote, name withheld>/<ref>".to_string();
+    let withheld = || format!("refs/remotes/{WITHHELD_REMOTE}/<ref>");
     let Some(remotes) = configured_remote_names(root) else {
         return withheld();
     };
@@ -561,7 +497,7 @@ fn remote_ref(root: &Path, reference: &str, escape: fn(&str) -> String) -> Strin
 #[must_use]
 pub fn shown_git_remote(root: &Path, name: &crate::git::GitName) -> String {
     std::str::from_utf8(name.bytes()).map_or_else(
-        |_| "<remote, name withheld>".to_string(),
+        |_| WITHHELD_REMOTE.to_string(),
         |name| shown_remote(root, name),
     )
 }
@@ -605,7 +541,7 @@ impl WithheldRemotes {
                 match std::str::from_utf8(bytes) {
                     Ok(name) if remote_name_shown(root, name) => None,
                     Ok(name) => Some((name.to_string(), escaped, shown_remote(root, name))),
-                    Err(_) => Some((escaped.clone(), escaped, "<remote, name withheld>".into())),
+                    Err(_) => Some((escaped.clone(), escaped, WITHHELD_REMOTE.into())),
                 }
             })
             .collect();
@@ -679,11 +615,9 @@ pub fn shown_tracking(root: &Path, short: &str) -> String {
     full
 }
 
-/// The step that renames a remote [`shown_remote`] withholds, which pastes
-/// no name: the operator gives it a plain name with an editor in the
-/// configuration file that defines it, since printing the configuration
-/// shows remote names and URLs, which can hold a credential.
-pub const WITHHELD_REMOTE_STEP: &str = "the operator gives that remote a plain name (ASCII letters, digits, `.`, `_` or `-`) with an editor in the configuration file that defines it, in its [remote] section header and its `fetch` lines, and reruns, since printing the configuration shows remote names and URLs, which can hold a credential";
+/// The steps for a configured remote [`shown_remote`] withholds, which
+/// name no command and no remote ([`withheld_remote_step`]).
+pub const WITHHELD_REMOTE_STEP: &str = "that remote's name can hold a URL or credential, so codeflow does not print it, and no command here names it, since its name is not safe to print, paste or type; the operator either works from a fresh clone of the repository whose remote has a plain name (ASCII letters, digits, `.`, `_` or `-`), or renames the remote to a plain name with a Git client that also moves its remote-tracking refs and the upstream settings of the branches that track it, and then reruns";
 
 /// A configuration section name, as `git config --rename-section` takes
 /// it, shown as [`shown_config_key`] shows a key: `filter.<name>` for a
@@ -956,8 +890,8 @@ mod tests {
 
     /// TSK-416 review round 7: a remote's name prints only when it is plain
     /// and the credential inventory does not flag it; any other remote is
-    /// named by its place among the configured remotes, in a ref name, a
-    /// short tracking name and free text alike. The credentials are
+    /// shown withheld, with no number or place (review round 10), in a ref
+    /// name, a short tracking name and free text alike. The credentials are
     /// synthetic.
     #[test]
     fn a_remote_name_prints_only_when_plain_and_unflagged() {
@@ -992,16 +926,14 @@ mod tests {
         assert!(plain_remote_name(flagged));
         assert!(!remote_name_shown(root, flagged));
         assert!(remote_name_shown(root, "origin"));
-        // The place among the file's [remote] sections: origin,
-        // https://…, user@…, OPAQUECANARY (review round 9).
+        // No number or place is shown (review round 10).
         assert_eq!(shown_remote(root, "origin"), "origin");
-        assert_eq!(shown_remote(root, flagged), "<remote 4, name withheld>");
-        assert_eq!(shown_remote(root, url_name), "<remote 2, name withheld>");
-        assert_eq!(shown_remote(root, at_name), "<remote 3, name withheld>");
-        assert_eq!(shown_remote(root, "gone:x"), "<remote, name withheld>");
+        for name in [flagged, url_name, at_name, "gone:x"] {
+            assert_eq!(shown_remote(root, name), WITHHELD_REMOTE, "{name}");
+        }
         assert_eq!(
             shown_ref(root, &format!("refs/remotes/{at_name}/main")),
-            "refs/remotes/<remote 3, name withheld>/main"
+            "refs/remotes/<a remote, name withheld>/main"
         );
         assert_eq!(
             shown_ref(root, "refs/remotes/origin/main"),
@@ -1016,23 +948,20 @@ mod tests {
         ] {
             assert_eq!(
                 shown_ref(root, kept),
-                "refs/remotes/<remote, name withheld>/<ref>"
+                "refs/remotes/<a remote, name withheld>/<ref>"
             );
         }
         assert!(!remote_name_shown(root, "old"));
         assert_eq!(
             shown_tracking(root, &format!("{at_name}/main")),
-            "<remote 3, name withheld>/main"
+            "<a remote, name withheld>/main"
         );
         let text = format!("fetch {url_name} failed; also on {at_name}/topic; origin/main is fine");
         let scrubbed = without_remote_names(root, &text);
         assert!(!scrubbed.contains("OPAQUECANARY"), "{scrubbed}");
         assert!(!scrubbed.contains("host.invalid"), "{scrubbed}");
         assert!(scrubbed.contains("origin/main"), "{scrubbed}");
-        assert_eq!(
-            shown_remote_or_url(root, url_name),
-            "<remote 2, name withheld>"
-        );
+        assert_eq!(shown_remote_or_url(root, url_name), WITHHELD_REMOTE);
         assert!(
             !shown_remote_or_url(root, "https://u:OPAQUECANARY@y.invalid/r")
                 .contains("OPAQUECANARY")
@@ -1042,7 +971,7 @@ mod tests {
         assert!(!remote_name_shown(outside.path(), "origin"));
         assert_eq!(
             shown_ref(outside.path(), "refs/remotes/origin/main"),
-            "refs/remotes/<remote, name withheld>/<ref>"
+            "refs/remotes/<a remote, name withheld>/<ref>"
         );
     }
 
@@ -1075,25 +1004,17 @@ mod tests {
         assert!(!remote_name_shown(root, "fork-abc12"));
         assert!(remote_name_shown(root, "fork"));
         assert!(remote_name_shown(root, "origin"));
-        // The second [remote] section of the file: fork, fork-abc12, origin.
-        assert_eq!(
-            shown_remote(root, "fork-abc12"),
-            "<remote 2, name withheld>"
-        );
-        // Its one step is a rename with an editor, located by section; no
-        // command names the remote (review round 9).
+        assert_eq!(shown_remote(root, "fork-abc12"), WITHHELD_REMOTE);
+        // Its steps are a fresh clone or a rename through a Git client that
+        // moves the remote's refs and upstream settings; no command and no
+        // place in a file names the remote (review rounds 9 and 10).
         let step = withheld_remote_step(root, "fork-abc12");
-        assert!(
-            step.starts_with(
-                "the operator opens .git/config in an editor, finds its 2nd [remote] section (counting only [remote] sections, as of this run)"
-            ),
-            "{step}"
-        );
-        assert!(!step.contains("abc12"), "{step}");
-        assert!(!step.contains("`git"), "{step}");
-        assert_eq!(ordinal(1), "1st");
-        assert_eq!(ordinal(12), "12th");
-        assert_eq!(ordinal(23), "23rd");
+        assert_eq!(step, WITHHELD_REMOTE_STEP);
+        assert!(step.contains("fresh clone"), "{step}");
+        assert!(step.contains("upstream settings"), "{step}");
+        for unsafe_text in ["abc12", "`git", "$(", "[remote]", "2nd", "editor"] {
+            assert!(!step.contains(unsafe_text), "{unsafe_text}: {step}");
+        }
         for text in [
             shown_ref(root, "refs/remotes/fork-abc12/main"),
             shown_tracking(root, "fork-abc12/main"),
@@ -1165,7 +1086,7 @@ mod tests {
             assert!(!scrubbed.contains("OPAQUECANARY"), "{scrubbed}");
             assert!(!scrubbed.contains("host.invalid"), "{scrubbed}");
         }
-        assert!(acquired.scrub(&text).contains("<remote 1, name withheld>"));
+        assert!(acquired.scrub(&text).contains(WITHHELD_REMOTE));
         assert!(!remote_name_shown(root, "origin"));
     }
 }

@@ -931,9 +931,8 @@ fn branch_option(branch: &str) -> String {
 /// name holding `$(…)` stays one argument and one starting with `-`
 /// follows `--` (TSK-416 review round 2). A remote whose name messages
 /// withhold, since configuration text can be a URL with a credential
-/// (review round 7), gets no command, only the rename with an editor,
-/// after which a rerun prints this step for the plain name (review round
-/// 9).
+/// (review round 7), gets no command, only a fresh clone or a rename
+/// through a Git client (review rounds 9 and 10).
 fn prune_step(root: &Path, remote: &str) -> String {
     let unnamed = || codeflow_core::security::git::withheld_remote_step(root, remote);
     if !codeflow_core::security::git::remote_name_shown(root, remote) {

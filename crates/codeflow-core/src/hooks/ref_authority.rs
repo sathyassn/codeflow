@@ -320,9 +320,10 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
 /// refusing. A remote name picks the fetch mapping the guard proves does not
 /// write policy authority, and a name it cannot read is a remote it cannot
 /// prove, so skipping it would let `git fetch` or `git remote update` run an
-/// unchecked mapping. The operator lists the remotes by name with `git
-/// remote`, which prints no URL, since a URL can hold a credential (TSK-416
-/// review round 3).
+/// unchecked mapping. No step lists the remotes: a URL can hold a
+/// credential (TSK-416 review round 3), and so can a remote's name, which
+/// `git remote` prints (review rounds 9 and 10), so the steps are those for
+/// any withheld remote.
 pub(super) fn utf8_remote_names(
     remotes: &git2::string_array::StringArray,
 ) -> Result<Vec<String>, String> {
@@ -330,7 +331,10 @@ pub(super) fn utf8_remote_names(
         .iter_bytes()
         .map(|name| {
             std::str::from_utf8(name).map(str::to_owned).map_err(|_| {
-                "a configured remote name is not valid UTF-8, so its fetch mapping cannot be checked; the operator lists the remotes by name with `git remote`, which prints no URL, and renames that remote in the configuration files with an editor".to_string()
+                format!(
+                    "a configured remote name is not valid UTF-8, so its fetch mapping cannot be checked; {}",
+                    crate::security::git::WITHHELD_REMOTE_STEP
+                )
             })
         })
         .collect()
@@ -1114,12 +1118,11 @@ mod tests {
             }
         }
         // Since review round 7 a name that is not plain is withheld, and
-        // since round 9 the remote is named by the place of its [remote]
-        // section in the repository's configuration file.
+        // since round 10 with no number or place.
         let hostile = fetch(rewrite.path(), &["o$(id)".to_string()], false).unwrap();
         assert!(!hostile.contains("o$(id)"), "{hostile}");
         assert!(
-            hostile.contains("effective URL for <remote 2, name withheld> differs"),
+            hostile.contains("effective URL for <a remote, name withheld> differs"),
             "{hostile}"
         );
         assert!(hostile.contains("with an editor"), "{hostile}");
@@ -1130,7 +1133,7 @@ mod tests {
         for why in [&differs, &unread] {
             assert!(!why.contains('\u{1b}'), "{why}");
             assert!(!why.contains("$(id)"), "{why}");
-            assert!(why.contains("<remote, name withheld>"), "{why}");
+            assert!(why.contains(crate::security::git::WITHHELD_REMOTE), "{why}");
             assert!(!why.contains("entry is not unique"), "{why}");
             assert!(!why.contains('`'), "no command: {why}");
             assert!(why.contains("with an editor"), "{why}");
@@ -1139,8 +1142,8 @@ mod tests {
 
     /// TSK-416 review round 7: the sole remote's name is a URL with a
     /// credential. When its url is rewritten, or set twice, the fetch
-    /// check and the guard name that remote by its place among the
-    /// configured remotes and print the name nowhere. The credentials are
+    /// check and the guard show that remote withheld and print the name
+    /// nowhere. The credentials are
     /// synthetic.
     #[test]
     fn a_fetch_refusal_never_prints_a_credential_remote_name() {
@@ -1165,7 +1168,7 @@ mod tests {
                 .write_all(extra.as_bytes())
                 .unwrap();
             let why = fetch(dir.path(), &[], false).expect("a refusal");
-            assert!(why.contains("<remote 1, name withheld>"), "{why}");
+            assert!(why.contains(crate::security::git::WITHHELD_REMOTE), "{why}");
             let report = format!("{:?}", r21_report_command(dir.path(), "git fetch"));
             for text in [&why, &report] {
                 assert!(!text.contains("OPAQUECANARY"), "{text}");
@@ -1176,9 +1179,11 @@ mod tests {
 
     /// TSK-416 review round 3, finding 3: the steps that replaced `git
     /// remote -v` and a full `git config --show-origin --list` print no URL:
-    /// a remote name that is not UTF-8 points at `git remote`, which lists
-    /// names only. A configuration git cannot read, here because its bad
-    /// line holds a credential, points at the file with an editor and runs
+    /// a remote name that is not UTF-8 gets the steps for a withheld remote,
+    /// which list nothing, since `git remote` prints names that can hold a
+    /// credential (review round 10). A configuration git cannot read, here
+    /// because its bad line holds a credential, points at the file with an
+    /// editor and runs
     /// no git command, since git's parse error can quote that line (round
     /// 4). All credentials here are synthetic.
     #[test]
@@ -1188,8 +1193,11 @@ mod tests {
         );
         let repo = git2::Repository::open(dir.path()).unwrap();
         let why = utf8_remote_names(&repo.remotes().unwrap()).unwrap_err();
-        assert!(why.contains("`git remote`, which prints no URL"), "{why}");
-        assert!(!why.contains("remote -v"), "{why}");
+        assert!(
+            why.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+            "{why}"
+        );
+        assert!(!why.contains("git remote"), "{why}");
         assert!(!why.contains("OPAQUECANARY"), "{why}");
         for bad in [
             b"[broken\n".as_slice(),

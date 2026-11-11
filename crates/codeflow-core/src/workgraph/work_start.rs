@@ -416,9 +416,9 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
             "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain fetch of the remote ({}), which rewrites {shown} from the remote and moves no local branch",
             step(&Pasted::new("git fetch").value(&remote))
         ),
-        // No command names a withheld remote: its only step is a rename
-        // with an editor, after which a rerun gives the plain-name fetch
-        // (TSK-416 review round 9).
+        // No command names a withheld remote: its steps are a fresh clone
+        // or a rename through a Git client (TSK-416 review rounds 9 and
+        // 10).
         Some((remote, _)) if present => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged; {}",
             crate::security::git::withheld_remote_step(root, &remote)
@@ -430,7 +430,7 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
             step(&Pasted::new("git fetch").value(&remote))
         ),
         // Repairing this clone deletes a ref that holds the withheld name,
-        // which a rename leaves in place, so only the fresh clone is given.
+        // which no step may name, so only the fresh clone is given.
         Some((remote, _)) => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes that ref, whose name holds a remote name messages withhold, so no step here names it",
             fresh_clone(&crate::security::git::shown_remote(root, &remote))
@@ -5955,8 +5955,8 @@ mod tests {
 
     /// TSK-416 review round 7: a remote's name is configuration text and
     /// can carry a credential. A diverged target, and a fetched ref that
-    /// names no commit or a missing object, name that remote by its place
-    /// among the configured remotes, and no step pastes its name. The
+    /// names no commit or a missing object, show that remote withheld, and
+    /// no step pastes its name. The
     /// credential is synthetic.
     #[test]
     fn work_target_refusals_never_print_a_credential_remote_name() {
@@ -5964,7 +5964,10 @@ mod tests {
         let check = |text: &str, case: &str| {
             assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
             assert!(!text.contains("host.invalid"), "{case}: {text}");
-            assert!(text.contains("<remote 1, name withheld>"), "{case}: {text}");
+            assert!(
+                text.contains(crate::security::git::WITHHELD_REMOTE),
+                "{case}: {text}"
+            );
         };
         let dir = fixture();
         add_remote(dir.path(), name, true);
@@ -6362,7 +6365,10 @@ mod tests {
             // ref holding the name, gets no step.
             if !crate::security::git::remote_name_shown(root, remote) {
                 assert!(!message.contains(remote), "{message}");
-                assert!(message.contains("<remote 1, name withheld>"), "{message}");
+                assert!(
+                    message.contains(crate::security::git::WITHHELD_REMOTE),
+                    "{message}"
+                );
                 assert!(commands.is_empty(), "{message}");
                 assert!(!message.contains("`git fetch"), "{message}");
                 assert!(!message.contains("`git branch"), "{message}");
@@ -6483,20 +6489,19 @@ mod tests {
         }
     }
 
-    /// TSK-416 review round 9, finding 1: a withheld remote that
+    /// TSK-416 review rounds 9 and 10: a withheld remote that
     /// `remote.<name>.skipFetchAll` keeps out of `git fetch --all`, whose
     /// tip names an object that is not a commit or one that is missing,
-    /// gets no shell step that names it: only the rename with an editor,
-    /// located by its `[remote]` section, or, for a missing object, a fresh
-    /// clone. After the rename, done here by rewriting the section, the ref
-    /// kept under the old name belongs to no configured remote and is
-    /// withheld whole, and the renamed remote's same tip is repaired by the
-    /// ordinary steps printed for the plain name. The credentials are
-    /// synthetic; the remote fetches from a local path, and its push URL
-    /// only carries the password `abc12` into the inventory.
+    /// gets no shell step that names it and no place in a file: a fresh
+    /// clone or a rename through a Git client, or, for a missing object, a
+    /// fresh clone. A fresh clone of the same source, whose remote has the
+    /// plain name `origin`, resolves the line; the failing clone is left as
+    /// it was, with no ref added. The credentials are synthetic; the remote
+    /// fetches from a local path, and its push URL only carries the
+    /// password `abc12` into the inventory.
     #[test]
     #[cfg(unix)]
-    fn a_skip_fetch_all_remote_tip_recovers_after_the_rename() {
+    fn a_skip_fetch_all_remote_tip_recovers_from_a_fresh_clone() {
         let cases = ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"]
             .into_iter()
             .flat_map(|name| [(name, false), (name, true)]);
@@ -6539,79 +6544,63 @@ mod tests {
                     .unwrap()
                     .to_string()
             };
-            let bad_tip = |remote: &str| {
-                let refs = root.join(".git/refs/remotes").join(remote);
-                fs::create_dir_all(&refs).unwrap();
-                fs::write(refs.join("main"), format!("{target}\n")).unwrap();
-                format!("refs/remotes/{remote}/main")
-            };
-            let fetched = bad_tip(name);
+            let refs = root.join(".git/refs/remotes").join(name);
+            fs::create_dir_all(&refs).unwrap();
+            fs::write(refs.join("main"), format!("{target}\n")).unwrap();
+            let fetched = format!("refs/remotes/{name}/main");
             let message = unresolvable_reference(root, &fetched).unwrap();
-            let clean = |text: &str| {
-                for hidden in [
-                    "$(",
-                    "OPAQUECANARY",
-                    "host.invalid",
-                    "abc12",
-                    "`git fetch",
-                    "`git branch",
-                ] {
-                    assert!(!text.contains(hidden), "{name}: {hidden}: {text}");
-                }
-            };
-            clean(&message);
+            for hidden in [
+                "$(",
+                "OPAQUECANARY",
+                "host.invalid",
+                "abc12",
+                "`git fetch",
+                "`git branch",
+                "`git remote",
+                "1st",
+                "[remote]",
+                "remote 1",
+            ] {
+                assert!(!message.contains(hidden), "{name}: {hidden}: {message}");
+            }
+            assert!(message.contains("fresh clone"), "{message}");
             if missing {
                 assert!(message.contains("no step here names it"), "{message}");
             } else {
                 assert!(
-                    message.contains(
-                        "the operator opens .git/config in an editor, finds its 1st [remote] section"
-                    ),
+                    message.contains(crate::security::git::WITHHELD_REMOTE_STEP),
                     "{message}"
                 );
             }
-            // The rename with an editor: the section header and its fetch
-            // line take the plain name `fork`.
-            let config = root.join(".git").join("config");
-            let text = fs::read_to_string(&config).unwrap();
-            let renamed = text
-                .replace(&format!("[remote \"{name}\"]"), "[remote \"fork\"]")
-                .replace(&format!("refs/remotes/{name}/"), "refs/remotes/fork/");
-            assert_ne!(renamed, text);
-            fs::write(&config, renamed).unwrap();
-            // The ref kept under the old name belongs to no configured
-            // remote: withheld whole.
-            let kept = unresolvable_reference(root, &fetched).unwrap();
-            clean(&kept);
-            assert!(
-                kept.starts_with("refs/remotes/<remote, name withheld>/<ref> points at"),
-                "{kept}"
+            // A fresh clone of the same source, whose remote takes the
+            // plain name `origin`, resolves the line; the failing clone is
+            // left as it was.
+            let fresh = tempfile::tempdir().unwrap();
+            let clone = fresh.path().join("clone");
+            git(
+                fresh.path(),
+                &["clone", "-q", "--", source, clone.to_str().unwrap()],
             );
-            if missing {
-                // A fresh clone is the remedy; the kept ref is not repaired
-                // in place.
-                continue;
-            }
-            // The renamed remote's same tip gets the ordinary step, which
-            // repairs it.
-            let renamed_tip = bad_tip("fork");
-            let message = unresolvable_reference(root, &renamed_tip).unwrap();
-            let commands: Vec<&str> = message
-                .split('`')
-                .skip(1)
-                .step_by(2)
-                .filter(|span| span.starts_with("git "))
-                .collect();
-            assert_eq!(commands, ["git fetch fork"], "{message}");
-            git(root, &["fetch", "fork"]);
             assert!(
-                unresolvable_reference(root, &renamed_tip).is_none(),
-                "{message}"
+                unresolvable_reference(root, &fetched).is_some(),
+                "{name}: the failing clone is unchanged"
             );
-            let repo = Repository::open(root).unwrap();
-            let head = repo.head().unwrap().target().unwrap();
+            assert!(
+                unresolvable_reference(&clone, "refs/remotes/origin/main").is_none(),
+                "{name}: {message}"
+            );
+            let head = Repository::open(root)
+                .unwrap()
+                .head()
+                .unwrap()
+                .target()
+                .unwrap();
             assert_eq!(
-                repo.find_reference(&renamed_tip).unwrap().target(),
+                Repository::open(&clone)
+                    .unwrap()
+                    .find_reference("refs/remotes/origin/main")
+                    .unwrap()
+                    .target(),
                 Some(head),
                 "{message}"
             );

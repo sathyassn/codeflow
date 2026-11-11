@@ -2923,8 +2923,8 @@ fn doctor_names_an_include_by_its_entry_and_never_its_value() {
 
 /// TSK-416 review round 7: a remote's name is the subsection of its
 /// `remote.<name>.url` key and can be a URL with a credential. Through the
-/// real binary, the session digest and the git guard name such a remote
-/// by its place among the configured remotes and print the name nowhere:
+/// real binary, the session digest and the git guard show such a remote
+/// withheld and print the name nowhere:
 /// not as itself, inside a tracking ref, or in a pasted step. The sole
 /// remote is read with no tracking refs, and, for a name that can be a
 /// ref, with its default branch and an integration line fetched. The
@@ -2983,9 +2983,9 @@ fn the_digest_and_the_guard_never_print_a_credential_remote_name() {
             );
             assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
             assert!(!text.contains("host.invalid"), "{case}: {text}");
-            withheld |= text.contains("<remote 1, name withheld>");
+            withheld |= text.contains("<a remote, name withheld>");
         }
-        assert!(withheld, "{case}: the remote is named by its place");
+        assert!(withheld, "{case}: the remote is shown withheld");
     }
 }
 

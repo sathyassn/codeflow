@@ -2901,16 +2901,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // TSK-416 review round 9: the [remote] sections a rename step locates
-    // a withheld remote by; an unreadable repository gives no place, and
-    // the step then names no section.
-    (
-        "crates/codeflow-core/src/security/git.rs",
-        "remote_sections",
-        "obtain-absent:Repository::discover",
-        1,
-        "display",
-    ),
     (
         "crates/codeflow-core/src/security/git.rs",
         "WithheldRemotes::read",
