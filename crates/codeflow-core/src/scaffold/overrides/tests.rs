@@ -199,3 +199,88 @@ fn a_body_that_would_hide_later_text_is_refused() {
     assert_eq!(sections::check_body("<!-- note -->\ntext\n", 2), Ok(()));
     assert_eq!(sections::check_body("<pre>\nx\n</pre>\n", 2), Ok(()));
 }
+
+fn loop_unit(replacement: &str) -> AppliedUnit {
+    AppliedUnit {
+        entry: entry("skill#loop"),
+        replaced: "\nbody one\n\n".into(),
+        replacement: replacement.into(),
+    }
+}
+
+/// The two forms a fence state machine misreads hide the protected section
+/// after the overridable one, although every byte outside the unit is
+/// unchanged: the `CommonMark` oracle sees it. The other two ambiguous forms
+/// leave the protected section intact under the oracle; the body check
+/// refuses all four.
+#[test]
+fn the_oracle_sees_a_body_that_hides_the_protected_section() {
+    use sections::{check_body, BodyProblem};
+    for body in ["- ```\n  ```\n```\n", "text\r```\n"] {
+        let unit = loop_unit(body);
+        let out = apply_units(GUARDED, std::slice::from_ref(&unit)).unwrap();
+        assert!(
+            only_units_changed(GUARDED, &out, std::slice::from_ref(&unit)),
+            "the bytes alone pass: {body:?}"
+        );
+        assert!(!oracle::same_structure(GUARDED, &out, &[unit]), "{body:?}");
+    }
+    for body in [
+        "> ```\n> quoted\n",
+        "text\n\n    indented code\n",
+        "````\n```\nnested\n```\n````\n",
+        "- one\n- two\n\nafter\n",
+    ] {
+        let unit = loop_unit(body);
+        let out = apply_units(GUARDED, std::slice::from_ref(&unit)).unwrap();
+        assert!(oracle::same_structure(GUARDED, &out, &[unit]), "{body:?}");
+    }
+    assert_eq!(
+        check_body("- ```\n  ```\n```\n", 2),
+        Err(BodyProblem::NestedBlock)
+    );
+    assert_eq!(
+        check_body("> ```\n> quoted\n", 2),
+        Err(BodyProblem::NestedBlock)
+    );
+    assert_eq!(
+        check_body("  ```\nx\n```\n", 2),
+        Err(BodyProblem::NestedBlock)
+    );
+    assert_eq!(check_body("- <!-- x\n", 2), Err(BodyProblem::NestedBlock));
+    assert_eq!(
+        check_body("text\n\n    indented code\n", 2),
+        Err(BodyProblem::IndentedCode)
+    );
+    assert_eq!(
+        check_body("text\r```\n", 2),
+        Err(BodyProblem::CarriageReturn)
+    );
+    assert_eq!(check_body("- open\n", 2), Err(BodyProblem::OpenContainer));
+    assert_eq!(
+        check_body("> open\nlazy\n", 2),
+        Err(BodyProblem::OpenContainer)
+    );
+    assert_eq!(check_body("- closed\n\n", 2), Ok(()));
+    assert_eq!(check_body("- a\n- b\n\nafter\n", 2), Ok(()));
+    assert_eq!(check_body("- a\n  continued\n\n", 2), Ok(()));
+}
+
+/// Row units inside a list and a table keep the block structure.
+#[test]
+fn the_oracle_accepts_row_replacements() {
+    let text = "# Map\n\n- **One.** first\n- **Two.** second\n\n| When | Do |\n|---|---|\n| a | b |\n| c | d |\n";
+    let units = [
+        row(
+            "rule:one",
+            "- **One.** first",
+            "- **One.** our first, longer",
+        ),
+        row("moment:a", "| a | b |", "| a | ours |"),
+    ];
+    let out = apply_units(text, &units).unwrap();
+    assert!(oracle::same_structure(text, &out, &units));
+    let broken = [row("rule:one", "- **One.** first", "```")];
+    let out = apply_units(text, &broken).unwrap();
+    assert!(!oracle::same_structure(text, &out, &broken));
+}

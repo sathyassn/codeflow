@@ -995,3 +995,159 @@ fn closed_fences_and_thematic_breaks_are_accepted() {
         assert!(read(root, dest).contains(body), "{dest}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Security delta at e9b8536ef (Codex, CHANGES): a record consistent with
+// itself still names only units the binary lets a project override, at the
+// place the binary finds them; Markdown forms parsers disagree on are refused.
+// ---------------------------------------------------------------------------
+
+const GIT_FLOOR_ROW: &str = "- **Git floor [enforced].**";
+const WEAKENED_FLOOR: &str = "- **Git floor [enforced].** Commit anywhere.";
+
+/// The shipped git floor row of the pristine `AGENTS.md` block.
+fn floor_row(root: &Path) -> String {
+    baseline(root, AGENTS)
+        .lines()
+        .find(|line| line.starts_with(GIT_FLOOR_ROW))
+        .expect("the git floor row")
+        .to_string()
+}
+
+/// Write `record` for `AGENTS.md` with its effective digest recomputed, and
+/// put the block it claims into the file: a forgery consistent with itself.
+fn forge_agents(root: &Path, mut record: Record) {
+    let pristine = baseline(root, AGENTS);
+    let effective = scaffold::overrides::apply_units(&pristine, &record.applied)
+        .expect("the forged units apply");
+    record.effective_sha256 = scaffold::sha256_hex(effective.as_bytes());
+    record.write(root, AGENTS).unwrap();
+    let current = read(root, AGENTS);
+    let block = scaffold::region::extract_block(&current, scaffold::RegionFormat::Markdown)
+        .expect("the managed block");
+    write(root, AGENTS, &current.replacen(&block, &effective, 1));
+}
+
+fn assert_forgery_refused(root: &Path) {
+    let overrides = doctor_overrides(root, plan_v1);
+    assert_eq!(overrides.status, Status::Fail, "{overrides:?}");
+    let before = snapshot(root);
+    let error = run(&v1(), root, "3.0.0").expect_err("update refuses the record");
+    assert!(
+        error.contains("does not match the installed baseline"),
+        "{error}"
+    );
+    assert_eq!(snapshot(root), before, "a refusal writes nothing");
+}
+
+/// A record naming `rule:git`, which carries the shipped floor row as
+/// replaced and a weakened floor as replacement, with every digest
+/// recomputed: doctor fails, never "not yet applied", and update refuses.
+#[test]
+fn a_coherent_record_naming_a_floor_unit_is_refused() {
+    let dir = scaffold();
+    let root = dir.path();
+    write(root, ".codeflow/overrides.toml", OVERRIDES);
+    update_v1(root);
+    let mut record = Record::read(root, AGENTS).unwrap().unwrap();
+    record.applied.push(scaffold::overrides::AppliedUnit {
+        entry: scaffold::overrides::Entry {
+            target: "rule:git".into(),
+            title: None,
+            text: Some("Commit anywhere.".into()),
+            action: None,
+            body: None,
+        },
+        replaced: floor_row(root),
+        replacement: WEAKENED_FLOOR.into(),
+    });
+    forge_agents(root, record);
+    assert!(read(root, AGENTS).contains(WEAKENED_FLOOR));
+    assert_forgery_refused(root);
+}
+
+/// A record naming the overridable `rule:outcome` whose replaced text is
+/// the git floor row: the range is not the one the binary finds for that
+/// name, so the record is refused.
+#[test]
+fn a_record_whose_range_is_not_its_unit_is_refused() {
+    let dir = scaffold();
+    let root = dir.path();
+    write(root, ".codeflow/overrides.toml", OVERRIDES);
+    update_v1(root);
+    let mut record = Record::read(root, AGENTS).unwrap().unwrap();
+    let outcome = record
+        .applied
+        .iter_mut()
+        .find(|unit| unit.entry.target == "rule:outcome")
+        .expect("the outcome unit");
+    outcome.replaced = floor_row(root);
+    outcome.replacement = WEAKENED_FLOOR.into();
+    forge_agents(root, record);
+    assert!(read(root, AGENTS).contains(WEAKENED_FLOOR));
+    assert_forgery_refused(root);
+}
+
+/// A third scaffold version that rewords the overridden outcome rule, so a
+/// record made from the first version holds a row the binary no longer
+/// renders.
+struct V3(DirSource);
+
+const OUTCOME_V1: &str = "who uses it and the evidence that would establish it";
+const OUTCOME_V3: &str = "who uses it and the proof that would establish it";
+
+impl AssetSource for V3 {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let Some(bytes) = self.0.read(path)? else {
+            return Ok(None);
+        };
+        if !matches!(
+            path,
+            "base/rule-map.toml" | "base/AGENTS.md.tmpl" | "base/AGENTS.full.md.tmpl"
+        ) {
+            return Ok(Some(bytes));
+        }
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(
+            text.contains(OUTCOME_V1),
+            "{path} no longer holds {OUTCOME_V1:?}"
+        );
+        Ok(Some(text.replacen(OUTCOME_V1, OUTCOME_V3, 1).into_bytes()))
+    }
+}
+
+fn plan_v3(root: &Path) -> Result<scaffold::overrides::Plan, scaffold::ScaffoldError> {
+    update_mod::override_plan(&V3(v1()), root, "3.0.2")
+}
+
+/// A record made from an older shipped text stays valid: it is checked
+/// against the baseline it was made from, where the binary finds the unit by
+/// its identity even though the binary now renders the row differently.
+#[test]
+fn an_older_legitimate_record_still_passes() {
+    let dir = scaffold();
+    let root = dir.path();
+    write(root, ".codeflow/overrides.toml", OVERRIDES);
+    update_v1(root);
+    let pending = doctor_overrides(root, plan_v3);
+    assert!(pending.status.is_warn(), "{pending:?}");
+    run(&V3(v1()), root, "3.0.2").unwrap_or_else(|error| panic!("update fails: {error}"));
+    assert_overridden(root);
+    assert!(!baseline(root, AGENTS).contains(OUTCOME_V1));
+    assert!(baseline(root, AGENTS).contains(OUTCOME_V3));
+    assert_eq!(doctor_overrides(root, plan_v3).status, Status::Pass);
+}
+
+#[test]
+fn markdown_forms_parsers_disagree_on_are_refused() {
+    let body = |text: &str| one("cf-present#completion", &format!("body = '''\n{text}'''"));
+    let nested = "inside a list item or block quote, or under indentation";
+    assert_refused(&body("- ```\n  ```\n```\n"), nested);
+    assert_refused(&body("> ```\n> quoted fence\n"), nested);
+    assert_refused(&body("text\n\n    indented code\n"), "indented code block");
+    assert_refused(
+        &one("cf-present#completion", "body = \"text\\r```\\nhidden\\n\""),
+        "carriage return",
+    );
+    assert_refused(&body("- an item at the end\n"), "ends inside a list item");
+}
