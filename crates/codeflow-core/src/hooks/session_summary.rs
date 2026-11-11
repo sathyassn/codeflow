@@ -249,18 +249,35 @@ pub struct EffectiveSession {
     pub effort: String,
     /// The host harness id the session runs in.
     pub host: String,
+    /// The harness's own session id, the one its `SessionEnd` hook payload
+    /// carries, so the record lands beside that session's summary.
     pub session_id: Option<String>,
     pub timestamp: String,
 }
 
 impl EffectiveSession {
-    /// Parse `<model>@<effort>` as the harness reports them.
+    /// Parse `<model>@<effort>` as the harness reports them, for the
+    /// harness session `session`.
     ///
     /// # Errors
     /// Either part is empty or holds a character outside printable ASCII
     /// (a space, a control or a non-ASCII character), or the `@` is missing
-    /// or doubled.
-    pub fn parse(value: &str, host: &str) -> Result<Self, String> {
+    /// or doubled; or the session id is empty, longer than 128 characters,
+    /// or holds a character other than an ASCII letter, digit, `-` or `_`
+    /// (it names the session's ledger file).
+    pub fn parse(value: &str, host: &str, session: &str) -> Result<Self, String> {
+        if session.is_empty()
+            || session.len() > 128
+            || !session
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(
+                "session must be the harness session id: 1 to 128 ASCII letters, digits, `-` \
+                 or `_`"
+                    .into(),
+            );
+        }
         let (model, effort) = value
             .split_once('@')
             .ok_or("effective must be <model>@<effort>")?;
@@ -277,7 +294,7 @@ impl EffectiveSession {
             model: model.into(),
             effort: effort.into(),
             host: host.into(),
-            session_id: None,
+            session_id: Some(session.into()),
             timestamp: rfc3339_utc_now(),
         })
     }

@@ -32,9 +32,10 @@ CodeFlow suggests each seat's model and effort from the managed catalog;
 choose in your own harness apply over that suggestion.
 
 - CodeFlow records the effective model and effort with
-  `codeflow models resolve --effective <model>@<effort>`, which appends an
-  `effective_model` event to the sessions ledger and leaves the resolution
-  unchanged.
+  `codeflow models resolve --effective <model>@<effort> --session <id>`,
+  which appends an `effective_model` event to that session's sessions-ledger
+  file and leaves the resolution unchanged. The id is the one the harness
+  gives its hooks, so the record sits beside the session's summary.
 - CodeFlow never re-launches a session to change its model or effort.
 
 ## Architecture

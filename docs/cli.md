@@ -368,7 +368,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--override <OVERRIDE_ID>` | Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task. |
 | | `--route <ROUTE>` | Exact override invocation route: `<seat-or-line>@<harness>`. |
 | | `--effort <EFFORT>` | Exact override invocation effort. |
-| | `--effective <EFFECTIVE>` | The model and effort this session's harness runs at, `<model>@<effort>`: recorded to the sessions ledger as given; the resolution is unchanged and nothing is re-launched. |
+| | `--effective <EFFECTIVE>` | The model and effort this session's harness runs at, `<model>@<effort>`: recorded to the sessions ledger as given; the resolution is unchanged and nothing is re-launched. Requires --session. |
+| | `--session <SESSION>` | The harness's id for this session, as its hooks receive it: the --effective record goes to that session's ledger file, beside its session summary. |
 | | `--json` | Print the resolution as JSON; input errors go to stderr with exit 2. |
 
 ### Present

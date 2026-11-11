@@ -56,9 +56,12 @@ struct ResolveArgs {
     /// Exact override invocation effort.
     #[arg(long)]
     effort: Option<String>,
-    /// The model and effort this session's harness runs at, `<model>@<effort>`: recorded to the sessions ledger as given; the resolution is unchanged and nothing is re-launched.
-    #[arg(long)]
+    /// The model and effort this session's harness runs at, `<model>@<effort>`: recorded to the sessions ledger as given; the resolution is unchanged and nothing is re-launched. Requires --session.
+    #[arg(long, requires = "session")]
     effective: Option<String>,
+    /// The harness's id for this session, as its hooks receive it: the --effective record goes to that session's ledger file, beside its session summary.
+    #[arg(long, requires = "effective")]
+    session: Option<String>,
     /// Print the resolution as JSON; input errors go to stderr with exit 2.
     #[arg(long)]
     json: bool,
@@ -69,6 +72,7 @@ struct EffectiveReport {
     model: String,
     effort: String,
     host: String,
+    session: Option<String>,
     applies_over_suggestion: bool,
     recorded_to: Option<String>,
 }
@@ -79,8 +83,11 @@ fn record_effective(args: &ResolveArgs) -> Result<Option<EffectiveReport>, Strin
     let Some(value) = &args.effective else {
         return Ok(None);
     };
-    let session =
-        codeflow_core::hooks::session_summary::EffectiveSession::parse(value, &args.host)?;
+    let session = codeflow_core::hooks::session_summary::EffectiveSession::parse(
+        value,
+        &args.host,
+        args.session.as_deref().unwrap_or_default(),
+    )?;
     let root = super::repo_root()?;
     let recorded_to = match codeflow_core::hooks::session_summary::record_effective(&root, &session)
     {
@@ -98,6 +105,7 @@ fn record_effective(args: &ResolveArgs) -> Result<Option<EffectiveReport>, Strin
         model: session.model,
         effort: session.effort,
         host: session.host,
+        session: session.session_id,
         applies_over_suggestion: true,
         recorded_to,
     }))
@@ -122,6 +130,7 @@ pub fn run(args: &ModelsArgs) -> i32 {
                     "model": effective.model,
                     "effort": effective.effort,
                     "host": effective.host,
+                    "session": effective.session,
                     "applies_over_suggestion": effective.applies_over_suggestion,
                     "recorded_to": effective.recorded_to,
                 });
@@ -139,10 +148,11 @@ pub fn run(args: &ModelsArgs) -> i32 {
         render_text(&result);
         if let Some(effective) = &effective {
             println!(
-                "effective session: model={} effort={} host={} (the harness choice applies over the suggestion; {})",
+                "effective session: model={} effort={} host={} session={} (the harness choice applies over the suggestion; {})",
                 crate::cmd::shown(&effective.model),
                 crate::cmd::shown(&effective.effort),
                 effective.host,
+                effective.session.as_deref().unwrap_or_default(),
                 effective.recorded_to.as_deref().map_or_else(
                     || "not recorded".to_owned(),
                     |path| format!("recorded to {}", crate::cmd::shown(&path.to_owned()))

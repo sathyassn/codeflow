@@ -97,6 +97,15 @@ fn the_seats_resolve_the_operator_defaults() {
         first(&host),
         triple("claude-primary", "claude-opus-5-5", "high")
     );
+    // Every host's orchestrate route runs at that seat's own effort.
+    for (host, expected) in [
+        ("codex-app", triple("codex-primary", "gpt-6.1-sol", "medium")),
+        ("codex-cli", triple("codex-primary", "gpt-6.1-sol", "medium")),
+        ("grok-cli", triple("grok-primary", "grok-4.7", "medium")),
+    ] {
+        let result = project.resolve(&["--duty", "orchestrate", "--host", host]);
+        assert_eq!(first(&result), expected, "{host}");
+    }
     let codex = project.resolve(&[
         "--duty",
         "unit-review",
@@ -274,15 +283,22 @@ fn sonnet_and_luna_still_resolve_when_a_route_names_them() {
 }
 
 /// AC-9: a session the harness started at another model or effort runs
-/// unchanged. The resolution is identical with and without `--effective`,
-/// and the effective model and effort are stored in the sessions ledger.
+/// unchanged. The resolution is identical with and without `--effective`;
+/// the output adds only an `effective_session` object (JSON) or one
+/// `effective session:` line (text). The record is stored under the
+/// harness session id, in that session's ledger file.
 #[test]
 fn a_harness_choice_is_recorded_and_changes_nothing() {
     let project = Project::new();
     let args = ["--duty", "orchestrate", "--host", "claude-code"];
     let plain = project.resolve(&args);
     let mut with = args.to_vec();
-    with.extend(["--effective", "claude-sonnet-5-5@low"]);
+    with.extend([
+        "--effective",
+        "claude-sonnet-5-5@low",
+        "--session",
+        "4f1c-session-one",
+    ]);
     let output = project.run(&with);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let mut recorded: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -296,54 +312,138 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
     assert_eq!(effective["model"], "claude-sonnet-5-5");
     assert_eq!(effective["effort"], "low");
     assert_eq!(effective["host"], "claude-code");
+    assert_eq!(effective["session"], "4f1c-session-one");
     assert_eq!(effective["applies_over_suggestion"], true);
-    // The record is stored, not only echoed.
-    let ledger = find_effective_record(&project.root().join(".git"));
-    assert_eq!(ledger["event"], "effective_model");
-    assert_eq!(ledger["model"], "claude-sonnet-5-5");
-    assert_eq!(ledger["effort"], "low");
-    assert_eq!(ledger["source"], "harness choice");
+    // The record is stored, not only echoed, in the session's own file.
     let path = effective["recorded_to"].as_str().unwrap();
-    assert!(path.ends_with("sessions.jsonl"), "{path}");
-    // A malformed value is an input error, and nothing resolves.
-    for bad in [
-        "no-at-sign",
-        "@high",
-        "model@",
-        "a b@high",
-        "model@hi\u{2003}gh",
-        "mod\u{1b}el@high",
+    assert!(
+        path.ends_with("sessions-ses-4f1c-session-one.jsonl"),
+        "{path}"
+    );
+    let ledger = session_events(project.root(), "4f1c-session-one");
+    assert_eq!(ledger.len(), 1, "{ledger:?}");
+    assert_eq!(ledger[0]["event"], "effective_model");
+    assert_eq!(ledger[0]["session_id"], "ses-4f1c-session-one");
+    assert_eq!(ledger[0]["model"], "claude-sonnet-5-5");
+    assert_eq!(ledger[0]["effort"], "low");
+    assert_eq!(ledger[0]["source"], "harness choice");
+    // Malformed values are input errors, and nothing resolves; so is a
+    // session id that is not one word of ASCII letters, digits, - or _.
+    for (effective, session) in [
+        ("no-at-sign", "s1"),
+        ("@high", "s1"),
+        ("model@", "s1"),
+        ("a b@high", "s1"),
+        ("model@hi\u{2003}gh", "s1"),
+        ("mod\u{1b}el@high", "s1"),
+        ("model@high", ""),
+        ("model@high", "../escape"),
+        ("model@high", "a b"),
     ] {
         let mut args = args.to_vec();
-        args.extend(["--effective", bad]);
+        args.extend(["--effective", effective, "--session", session]);
         let output = project.run(&args);
-        assert_eq!(output.status.code(), Some(2), "{bad}: {output:?}");
-        assert!(output.stdout.is_empty(), "{bad}");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{effective} {session}: {output:?}"
+        );
+        assert!(output.stdout.is_empty(), "{effective} {session}");
+    }
+    // --effective needs --session, and --session needs --effective.
+    for extra in [["--effective", "model@high"], ["--session", "s1"]] {
+        let mut args = args.to_vec();
+        args.extend(extra);
+        assert_eq!(project.run(&args).status.code(), Some(2), "{extra:?}");
+    }
+}
+
+/// AC-9: two sessions in one worktree on one host record their harness
+/// choices apart, and each record sits beside that session's own summary,
+/// whose `SessionEnd` hook payload carries the same id.
+#[test]
+fn harness_choices_correlate_with_their_own_session() {
+    let project = Project::new();
+    for (session, effective) in [
+        ("session-a", "claude-opus-5-5@high"),
+        ("session-b", "claude-sonnet-5-5@medium"),
+    ] {
+        let output = project.run(&[
+            "--duty",
+            "orchestrate",
+            "--host",
+            "claude-code",
+            "--effective",
+            effective,
+            "--session",
+            session,
+        ]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        session_end(project.root(), session);
+    }
+    for (session, model) in [
+        ("session-a", "claude-opus-5-5"),
+        ("session-b", "claude-sonnet-5-5"),
+    ] {
+        let events = session_events(project.root(), session);
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| e["event"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["effective_model", "session_end"],
+            "{session}: {events:?}"
+        );
+        for event in &events {
+            assert_eq!(event["session_id"], format!("ses-{session}").as_str());
+        }
+        assert_eq!(events[0]["model"], model, "{session}");
     }
 }
 
 // The upgrade from a schema 5 catalog (refused, then `codeflow update`) is
 // `init_e2e.rs` `an_upgrade_refuses_a_schema_5_catalog_until_codeflow_update`.
 
-/// The one `effective_model` event under the project's state directory.
-fn find_effective_record(root: &Path) -> Value {
-    let mut stack = vec![root.to_path_buf()];
+/// Run the `SessionEnd` hook for `session` the way a harness does.
+fn session_end(root: &Path, session: &str) {
+    use std::io::Write as _;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(root)
+        .env("CODEFLOW_HOME", root.join("personal"))
+        .args(["hook", "session-summary"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!(r#"{{"session_id":"{session}","reason":"other"}}"#).as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
+/// Every event in `session`'s sessions-ledger file under the project's
+/// state directory, in file order.
+fn session_events(root: &Path, session: &str) -> Vec<Value> {
+    let name = format!("sessions-ses-{session}.jsonl");
+    let mut stack = vec![root.join(".git")];
     let mut found = Vec::new();
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.file_name().is_some_and(|n| n == "sessions.jsonl") {
+            } else if path.file_name().is_some_and(|n| n == name.as_str()) {
                 for line in std::fs::read_to_string(&path).unwrap().lines() {
-                    let event: Value = serde_json::from_str(line).unwrap();
-                    if event["event"] == "effective_model" {
-                        found.push(event);
-                    }
+                    found.push(serde_json::from_str(line).unwrap());
                 }
             }
         }
     }
-    assert_eq!(found.len(), 1, "{found:?}");
-    found.remove(0)
+    found
 }
