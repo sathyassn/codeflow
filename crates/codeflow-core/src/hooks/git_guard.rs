@@ -13785,6 +13785,32 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
         .unzip()
 }
 
+/// The same argument vector with, for each word, whether the shell fills in
+/// part of it when the command runs: a `$` or backtick outside single
+/// quotes ([`ShellWord::expands`]), or a substitution the segmenter lifted
+/// out.
+pub(crate) fn command_argv_expanding(segment: &str) -> (Vec<String>, Vec<bool>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| {
+            let fills = word.expands || has_substitution(&word.text);
+            (word.text, fills)
+        })
+        .unzip()
+}
+
+/// Every word of [`shell_tokens`], redirections included, with the same
+/// mark as [`command_argv_expanding`].
+pub(crate) fn shell_tokens_expanding(segment: &str) -> Vec<(String, bool)> {
+    shell_words(segment)
+        .into_iter()
+        .map(|word| {
+            let fills = word.expands || has_substitution(&word.text);
+            (word.text, fills)
+        })
+        .collect()
+}
+
 /// The words of [`command_argv`] with their parse.
 fn argv_words(segment: &str) -> Vec<ShellWord> {
     let words = shell_words(segment);
