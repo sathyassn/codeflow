@@ -139,15 +139,15 @@ pub fn same_structure(pristine: &str, effective: &str, units: &[AppliedUnit]) ->
     rows_kept && outside(pristine, &before, in_pristine) == outside(effective, &after, in_effective)
 }
 
-/// The text of every table cell that starts inside `span`, as Markdown reads
-/// the cells.
+/// The bytes of every table cell that starts inside `span`, as Markdown
+/// reads the cells; padding counts, so any change to a cell shows.
 fn cells<'a>(text: &'a str, span: &Range<usize>) -> Vec<&'a str> {
     Parser::new_ext(text, Options::ENABLE_TABLES)
         .into_offset_iter()
         .filter(|(event, range)| {
             matches!(event, Event::Start(Tag::TableCell)) && span.contains(&range.start)
         })
-        .map(|(_, range)| text[range].trim())
+        .map(|(_, range)| &text[range])
         .collect()
 }
 
