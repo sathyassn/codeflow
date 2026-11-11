@@ -87,8 +87,21 @@ impl AssetSource for V2 {
     }
 }
 
+/// Point `CODEX_HOME` at a folder that does not exist, once for the process,
+/// so the override budget reads no user Codex config and these tests do not
+/// depend on the developer's own. The lowest-limit rules over a user config
+/// are covered where the home is an argument (`overrides::budget`).
+fn isolate_codex_home() {
+    static HOME: std::sync::Once = std::sync::Once::new();
+    HOME.call_once(|| {
+        let home = std::env::temp_dir().join(format!("no-codex-home-{}", std::process::id()));
+        std::env::set_var("CODEX_HOME", home);
+    });
+}
+
 fn scaffold() -> tempfile::TempDir {
     isolate_git();
+    isolate_codex_home();
     let dir = tempfile::tempdir().expect("project tempdir");
     git_isolation::own_repository(dir.path());
     let options = InitOptions {
@@ -1046,14 +1059,20 @@ fn an_oversized_early_row_is_refused_before_it_passes_the_default_limit() {
     run(&v1(), dir.path(), "3.0.0").expect("a small replacement is kept");
 }
 
-/// A limit set in `.codex/config.toml` replaces the default, in both
-/// directions, and the block's end sits exactly on it.
+/// A limit set in `.codex/config.toml` can only lower the budget: a raised
+/// value is no proof of the limit a session runs under, because an untrusted
+/// project's config is ignored and a flag or profile outranks it. The block's
+/// end sits exactly on a lowered limit.
 #[test]
-fn a_configured_limit_replaces_the_default() {
+fn a_configured_limit_only_lowers_the_budget() {
     let raised = "project_doc_max_bytes = 131072\n";
-    let dir = limited(Some(raised), &outcome_text(40 * 1024));
-    run(&v1(), dir.path(), "3.0.0").expect("a raised limit holds the long replacement");
-    assert!(read(dir.path(), AGENTS).contains(&"a".repeat(40 * 1024)));
+    assert_limit_refused(
+        Some(raised),
+        &outcome_text(40 * 1024),
+        "past the 32768-byte instruction limit (Codex's default)",
+    );
+    let dir = limited(Some(raised), &outcome_text(1024));
+    run(&v1(), dir.path(), "3.0.0").expect("a small replacement fits under a raised setting");
 
     let lowered = "project_doc_max_bytes = 4096\n";
     assert_limit_refused(
@@ -1149,7 +1168,7 @@ fn text_a_reviewer_cannot_see_is_refused() {
     ] {
         assert_refused(&body(&format!("Post{hidden} it.\n")), CONCEALED);
     }
-    let row = "each one line with no `<!--`, `-->`, `codeflow:` or invisible character";
+    let row = "each one line with no `<!--`, `-->`, `codeflow:`, raw HTML";
     for hidden in ["\\u202E", "\\u200B", "\\u2060", "\\u001B"] {
         assert_refused(
             &one(
@@ -1167,6 +1186,51 @@ fn text_a_reviewer_cannot_see_is_refused() {
             "a moment override sets only `action`",
         );
     }
+}
+
+/// Delta review at c544610e9 (Codex, CHANGES): raw HTML can hide text from a
+/// reviewer by attribute or style, so override text holds none, in a body or
+/// in a row. A tag written as code stays allowed.
+#[test]
+fn raw_html_in_override_text_is_refused() {
+    let raw = "holds raw HTML";
+    let body = |text: &str| {
+        one(
+            "cf-present#completion",
+            &format!("body = \"\"\"\n{text}\"\"\""),
+        )
+    };
+    assert_refused(&body("Post <span hidden>the secret</span> now.\n"), raw);
+    assert_refused(
+        &body("Post it.\n\n<div style=\\\"display:none\\\">\nsecret\n</div>\n"),
+        raw,
+    );
+    assert_refused(&body("Post it.\n\n<details>\nsecret\n</details>\n"), raw);
+    let row = "raw HTML (a tag in a code span is fine)";
+    assert_refused(
+        &one(
+            "rule:outcome",
+            "text = \"Name it <span hidden>secret</span> now.\"",
+        ),
+        row,
+    );
+    assert_refused(
+        &one(
+            "moment:build",
+            "action = \"build <b style='font-size:0'>it</b>\"",
+        ),
+        row,
+    );
+
+    let dir = limited(
+        None,
+        &one(
+            "moment:build",
+            "action = \"build, then run `codeflow work claim <id>`\"",
+        ),
+    );
+    run(&v1(), dir.path(), "3.0.0").expect("a tag in a code span is text");
+    assert!(read(dir.path(), AGENTS).contains("build, then run `codeflow work claim <id>`"));
 }
 
 // ---------------------------------------------------------------------------

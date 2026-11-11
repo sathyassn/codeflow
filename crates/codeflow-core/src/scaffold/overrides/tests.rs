@@ -210,7 +210,11 @@ fn a_body_that_would_hide_later_text_is_refused() {
             "{html:?}"
         );
     }
-    assert_eq!(sections::check_body("<pre>\nx\n</pre>\n", 2), Ok(()));
+    // A closed block is still raw HTML.
+    assert_eq!(
+        sections::check_body("<pre>\nx\n</pre>\n", 2),
+        Err(BodyProblem::RawHtml)
+    );
 }
 
 fn loop_unit(replacement: &str) -> AppliedUnit {
@@ -297,6 +301,31 @@ fn the_oracle_accepts_row_replacements() {
     let broken = [row("rule:one", "- **One.** first", "```")];
     let out = apply_units(text, &broken).unwrap();
     assert!(!oracle::same_structure(text, &out, &broken));
+}
+
+/// A replacement that holds raw HTML passes the byte comparison, but the
+/// independent parse refuses it; a tag in a code span is text and passes.
+#[test]
+fn the_oracle_refuses_raw_html_inside_a_unit() {
+    let text = "# Map\n\n- **One.** first\n- **Two.** second\n\n| When | Do |\n|---|---|\n| a | b |\n| c | d |\n";
+    for units in [
+        [row(
+            "rule:one",
+            "- **One.** first",
+            "- **One.** <span hidden>x</span> first",
+        )],
+        [row("moment:a", "| a | b |", "| a | <b style=\"x\">b</b> |")],
+    ] {
+        let out = apply_units(text, &units).unwrap();
+        assert!(only_units_changed(text, &out, &units));
+        assert!(!oracle::same_structure(text, &out, &units), "{out}");
+    }
+    let code = [row("moment:a", "| a | b |", "| a | claim `<id>` |")];
+    let out = apply_units(text, &code).unwrap();
+    assert!(oracle::same_structure(text, &out, &code));
+    let unit = loop_unit("<div hidden>\nx\n</div>\n");
+    let out = apply_units(GUARDED, std::slice::from_ref(&unit)).unwrap();
+    assert!(!oracle::same_structure(GUARDED, &out, &[unit]));
 }
 
 #[test]
