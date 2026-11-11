@@ -2654,7 +2654,9 @@ pub(super) fn judged_target_tips(
             format!(
                 "cannot read the ancestry of {} at {local_tip} against {} at {fetched_tip}: {}; {}",
                 crate::git::display_text(local_ref),
-                crate::git::display_text(fetched_ref),
+                // The fetched ref holds its remote's name, shown only when
+                // plain (TSK-416 review round 7).
+                crate::security::git::shown_ref(repo.commondir(), fetched_ref),
                 error.message(),
                 reopen_remedy(repo, fetched_ref)
             )
@@ -2672,7 +2674,7 @@ pub(super) fn judged_target_tips(
             return Err(format!(
                 "the local branch {} at {local_tip} and {} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; {}",
                 crate::git::display_text(local_ref),
-                crate::git::display_text(fetched_ref),
+                crate::security::git::shown_ref(repo.commondir(), fetched_ref),
                 reopen_remedy(repo, fetched_ref)
             ));
         }
@@ -2688,7 +2690,7 @@ pub(super) fn judged_target_tips(
 /// the diverged fetched ref came from, which need not be the remote the
 /// task branch is pushed to (TSK-416 review round 2).
 fn reopen_remedy(repo: &Repository, fetched_ref: &str) -> String {
-    super::work_start::fresh_clone_retry(&super::work_start::remote_of(repo, fetched_ref))
+    super::work_start::fresh_clone_retry(&super::work_start::shown_remote_of(repo, fetched_ref))
 }
 
 /// Every tip of the target `name` this clone knows, with the reference

@@ -464,7 +464,12 @@ fn plan_check(
             .map_err(|error| vec![error.to_string()])?;
     println!(
         "work start: {} anchored at {} for {} -> {}",
-        report.task_id, report.merge_base, report.branch, report.target
+        report.task_id,
+        report.merge_base,
+        report.branch,
+        // A fork's tracking ref holds its remote's name, shown only when
+        // plain (TSK-416 review round 7).
+        codeflow_core::security::git::without_remote_names(root, &report.target)
     );
     if let Some(note) = report.base_note {
         println!("  {}", crate::cmd::shown(&note));

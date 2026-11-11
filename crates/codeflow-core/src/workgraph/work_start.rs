@@ -155,17 +155,12 @@ pub enum WorkStartError {
 /// A local branch and its fetched upstream that have diverged.
 #[derive(Debug, Error)]
 #[error(
-    "local branch '{}' and '{}' have diverged ('{}' at {local_tip} \
-     with {ahead} commit(s) only there, '{}' at {remote_tip} with {behind} only \
-     there), so the work target is ambiguous; {}, or {}; a plain fetch of the remote \
-     refreshes '{}' without moving '{}'",
+    "local branch '{}' and '{shown_remote}' have diverged ('{}' at {local_tip} \
+     with {ahead} commit(s) only there, '{shown_remote}' at {remote_tip} with {behind} only \
+     there), so the work target is ambiguous; {steps}; a plain fetch of the remote \
+     refreshes '{shown_remote}' without moving '{}'",
     crate::git::display_text(.local),
-    crate::git::display_text(.remote),
     crate::git::display_text(.local),
-    crate::git::display_text(.remote),
-    into_fetched(.remote),
-    fresh_clone_retry(.line_remote),
-    crate::git::display_text(.remote),
     crate::git::display_text(.local)
 )]
 pub struct DivergedTarget {
@@ -174,6 +169,12 @@ pub struct DivergedTarget {
     pub remote: String,
     /// The configured remote that ref belongs to.
     pub line_remote: String,
+    /// The fetched ref as messages show it, its remote's name withheld
+    /// unless plain (TSK-416 review round 7).
+    pub shown_remote: String,
+    /// The two remedies, rendered where the repository is at hand: judge
+    /// against the fetched line, or retry from a fresh clone.
+    pub steps: String,
     pub local_tip: String,
     pub remote_tip: String,
     pub ahead: usize,
@@ -390,38 +391,58 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
     let symbolic = found
         .as_ref()
         .and_then(|found| found.symbolic_target().ok().flatten());
+    // A ref is the remote's to name, so it is shown escaped (TSK-388), with
+    // a remote's name in it withheld unless plain (TSK-416 review round 7),
+    // and each command is rendered from the raw values (TSK-416 review).
+    let root = repo.commondir();
     let points_at = match (target, symbolic) {
         (Some(oid), _) => oid.to_string(),
-        (None, Some(symbolic)) => format!("the symbolic ref {symbolic}"),
+        (None, Some(symbolic)) => format!(
+            "the symbolic ref {}",
+            crate::security::git::shown_ref(root, symbolic)
+        ),
         (None, None) => "a target git cannot read".to_string(),
     };
     let present = target.is_some_and(|oid| repo.find_object(oid, None).is_ok());
-    // A ref is the remote's to name, so it is shown escaped (TSK-388), and
-    // each command is rendered from the raw values (TSK-416 review).
-    let shown = crate::git::display_text(reference);
-    let remedy = match reference
+    let shown = crate::security::git::shown_ref(root, reference);
+    let remote = reference
         .strip_prefix("refs/remotes/")
-        .map(|short| (remote_of(repo, reference), short))
-    {
-        Some((remote, _)) if present => format!(
+        .map(|short| (remote_of(repo, reference), short));
+    let named = remote
+        .as_ref()
+        .is_some_and(|(remote, _)| crate::security::git::remote_name_shown(root, remote));
+    let remedy = match remote {
+        Some((remote, _)) if present && named => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain fetch of the remote ({}), which rewrites {shown} from the remote and moves no local branch",
             step(&Pasted::new("git fetch").value(&remote))
         ),
-        Some((remote, short)) => format!(
+        Some(_) if present => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with `git fetch --all`, which fetches its remote without naming it, rewrites {shown} from the remote and moves no local branch"
+        ),
+        Some((remote, short)) if named => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it ({}, then {}), which the guard leaves to the operator",
             fresh_clone(&remote),
             step(&Pasted::new("git branch -d -r").value(short)),
             step(&Pasted::new("git fetch").value(&remote))
+        ),
+        Some((remote, _)) => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it, which the guard leaves to the operator: {}, then deletes the ref under the new name (`git branch -d -r <new-name>/<branch>`) and runs `git fetch --all`",
+            fresh_clone(&crate::security::git::shown_remote(root, &remote)),
+            crate::security::git::WITHHELD_REMOTE_STEP
         ),
         None => format!(
             "{shown} cannot be resolved, so the line it names cannot be judged; check this clone with `git fsck`, or {}",
             fresh_clone("origin")
         ),
     };
-    format!(
-        "{shown} points at {points_at}, which is not a commit this clone can read ({}); {remedy}",
-        error.message()
-    )
+    let message = crate::git::display_text(error.message());
+    let message = match reference.strip_prefix("refs/remotes/") {
+        Some(_) => {
+            crate::security::git::without_remote_name(root, &remote_of(repo, reference), &message)
+        }
+        None => message,
+    };
+    format!("{shown} points at {points_at}, which is not a commit this clone can read ({message}); {remedy}")
 }
 
 /// "fetch it" with the fetch of `branch` from `remote` rendered from the
@@ -435,8 +456,13 @@ pub fn fetch_it(remote: &str, branch: &str) -> String {
 }
 
 /// The step that names the fetched line `remote`, a full ref, as the work
-/// target with `--into`, rendered from the raw ref (TSK-416 review).
-pub(crate) fn into_fetched(remote: &str) -> String {
+/// target with `--into`, rendered from the raw ref (TSK-416 review); a ref
+/// whose remote's name messages withhold is not printed to paste (review
+/// round 7).
+pub(crate) fn into_fetched(repo: &Repository, remote: &str) -> String {
+    if !crate::security::git::remote_name_shown(repo.commondir(), &remote_of(repo, remote)) {
+        return "judge against the fetched line by naming its full ref with `--into` where the command takes it; the ref holds a remote name that can carry a credential, so it is not printed to paste".to_string();
+    }
     match crate::git::pasted::option("--into", remote) {
         Some(option) => format!(
             "judge against the fetched line by naming it with `{option}` where the command takes it"
@@ -467,7 +493,14 @@ pub(crate) fn remote_of(repo: &Repository, reference: &str) -> String {
         .to_string()
 }
 
-/// The fresh-clone step for `remote`. It names the remote and prints no
+/// [`remote_of`] as messages show it: the remote's name withheld unless
+/// plain (TSK-416 review round 7).
+pub(crate) fn shown_remote_of(repo: &Repository, reference: &str) -> String {
+    crate::security::git::shown_remote(repo.commondir(), &remote_of(repo, reference))
+}
+
+/// The fresh-clone step for `remote`, the remote as a message shows it
+/// ([`shown_remote_of`], or a fixed name). It names the remote and prints no
 /// command that shows its URL: the configured URL, or the one an
 /// `insteadOf` rule rewrites it to, can carry a credential in its
 /// userinfo, query or fragment, and a message reaches logs and transcripts
@@ -645,7 +678,8 @@ fn local_or_upstream(
     };
     let Some(upstream_id) = reference_commit(repo, &upstream_ref)? else {
         return Err(WorkStartError::Repository(format!(
-            "configured upstream {upstream_ref} does not resolve"
+            "configured upstream {} does not resolve",
+            crate::security::git::shown_ref(repo.commondir(), &upstream_ref)
         )));
     };
     if upstream_id == local_id {
@@ -662,6 +696,12 @@ fn local_or_upstream(
         (ahead, behind) => Err(WorkStartError::DivergedTarget(Box::new(DivergedTarget {
             local: local.to_string(),
             line_remote: remote_of(repo, &upstream),
+            shown_remote: crate::security::git::shown_ref(repo.commondir(), &upstream),
+            steps: format!(
+                "{}, or {}",
+                into_fetched(repo, &upstream),
+                fresh_clone_retry(&shown_remote_of(repo, &upstream))
+            ),
             remote: upstream,
             local_tip: local_id.to_string(),
             remote_tip: upstream_id.to_string(),
@@ -3754,6 +3794,12 @@ fn pinned_dependency(
         }
     }
     if !landed {
+        // A ref read can be a fork's `<remote>/<branch>`, whose remote name
+        // is shown only when plain (TSK-416 review round 7).
+        let read: Vec<String> = read
+            .iter()
+            .map(|name| crate::security::git::shown_tracking(repo.commondir(), name))
+            .collect();
         return Err(refuse(not_landed_reason(&read, &unfetched)));
     }
     let at_pin = commit
@@ -4451,10 +4497,12 @@ impl ReviewRepositories {
                 // be looked up, so the answer is a refusal, never another
                 // remote's repository.
                 let remote = GitName::from_bytes(remote);
-                let remote = remote.rule_text().map_err(|error| {
+                // The name is withheld: configuration text can hold a
+                // credential (TSK-416 review round 7).
+                let remote = remote.rule_text().map_err(|_| {
                     format!(
-                        "cannot verify review for this pin: a remote name is not valid UTF-8 ({})",
-                        error.display()
+                        "cannot verify review for this pin: a remote name is not valid UTF-8; {}",
+                        crate::security::git::WITHHELD_REMOTE_STEP
                     )
                 })?;
                 names.insert(remote.to_string());
@@ -5888,6 +5936,54 @@ mod tests {
         dir
     }
 
+    /// TSK-416 review round 7: a remote's name is configuration text and
+    /// can carry a credential. A diverged target, and a fetched ref that
+    /// names no commit or a missing object, name that remote by its place
+    /// among the configured remotes, and no step pastes its name. The
+    /// credential is synthetic.
+    #[test]
+    fn work_target_refusals_never_print_a_credential_remote_name() {
+        let name = "user-OPAQUECANARY@host.invalid";
+        let check = |text: &str, case: &str| {
+            assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
+            assert!(!text.contains("host.invalid"), "{case}: {text}");
+            assert!(text.contains("<remote 1, name withheld>"), "{case}: {text}");
+        };
+        let dir = fixture();
+        add_remote(dir.path(), name, true);
+        git(
+            dir.path(),
+            &["update-ref", &format!("refs/remotes/{name}/main"), "HEAD"],
+        );
+        advance_remote_main(dir.path(), name);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "local"],
+        );
+        let diverged = resolve_work_target_checked(dir.path(), Some("main")).unwrap_err();
+        assert!(
+            matches!(diverged, WorkStartError::DivergedTarget(_)),
+            "{diverged:?}"
+        );
+        check(&diverged.to_string(), "diverged");
+        let repo = Repository::open(dir.path()).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap();
+        let not_commit = format!("refs/remotes/{name}/blob");
+        repo.reference(&not_commit, blob, true, "fixture").unwrap();
+        check(
+            &unresolvable_reference(dir.path(), &not_commit).unwrap(),
+            "not a commit",
+        );
+        let missing = format!("refs/remotes/{name}/missing");
+        let file = repo.path().join(&missing);
+        std::fs::write(&file, format!("{}\n", "1".repeat(40))).unwrap();
+        let error = repo
+            .find_reference(&missing)
+            .and_then(|found| found.peel_to_commit())
+            .unwrap_err();
+        check(&unresolvable_tip(&repo, &missing, &error), "missing object");
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_configured_upstream_never_falls_back_to_origin() {
@@ -6244,6 +6340,15 @@ mod tests {
                 .step_by(2)
                 .filter(|span| span.starts_with("git ") && !span.contains('<'))
                 .collect();
+            // Review round 7: a name that is not plain is withheld, and the
+            // only pasted step names no remote.
+            if !crate::security::git::remote_name_shown(root, remote) {
+                assert!(!message.contains(remote), "{message}");
+                assert!(message.contains("<remote 1, name withheld>"), "{message}");
+                assert_eq!(commands, ["git fetch --all"], "{message}");
+                assert!(!message.contains("/nowhere"), "{message}");
+                continue;
+            }
             for command in &commands {
                 let out = std::process::Command::new("sh")
                     .arg("-c")
@@ -6281,11 +6386,13 @@ mod tests {
     /// TSK-416 review: for a remote named like an option, git runs each
     /// command the remedy prints as written, and following them in order
     /// repairs the fetched ref: the deletion removes the ref whose object
-    /// is missing and the fetch recreates it from the remote.
+    /// is missing and the fetch recreates it from the remote. Since review
+    /// round 7 only a plain name is pasted, so `--upload-pack=touch_pwned`
+    /// is covered by the withheld case of the test above.
     #[test]
     #[cfg(unix)]
     fn a_dashed_remote_remedy_runs_with_git_as_printed() {
-        for remote in ["-x", "--upload-pack=touch_pwned"] {
+        for remote in ["-x"] {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path();
             let source = root.to_str().unwrap();

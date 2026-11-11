@@ -188,9 +188,18 @@ impl Replaced {
         let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
         let mut matching: Vec<String> = Vec::new();
         for name in crate::git::name::remote_names(&repo).map_err(|error| error.to_string())? {
-            let name = std::str::from_utf8(name.bytes())
-                .map_err(|_| format!("remote {} is not UTF-8", name.display()))?;
-            let remote = repo.find_remote(name).map_err(|error| error.to_string())?;
+            // The name is configuration text, withheld from messages unless
+            // plain, as is libgit2's error, which can quote it (TSK-416
+            // review round 7).
+            let name = std::str::from_utf8(name.bytes()).map_err(|_| {
+                format!(
+                    "a remote name is not UTF-8; {}",
+                    crate::security::git::WITHHELD_REMOTE_STEP
+                )
+            })?;
+            let remote = repo.find_remote(name).map_err(|error| {
+                crate::security::git::without_remote_name(repo_root, name, &error.to_string())
+            })?;
             if remote.url_bytes() == url.as_bytes() {
                 matching.push(name.to_string());
             }
