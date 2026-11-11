@@ -491,7 +491,7 @@ fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
                 Alternative {
                     target: Target::Seat("cinder-seat".into()),
                     harness: None,
-                    effort: Effort::High,
+                    effort: None,
                 },
             );
         }),

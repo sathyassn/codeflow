@@ -232,7 +232,11 @@ pub struct Alternative {
     pub target: Target,
     /// None uses the host harness when supported, else the family's first one.
     pub harness: Option<String>,
-    pub effort: Effort,
+    /// A line route's effort. A duty's seat route names none: it runs at its
+    /// seat's `effort`, so that one field sets every ordinary seat route.
+    /// An `OPERATOR_OVERRIDE` route always names its exact effort.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

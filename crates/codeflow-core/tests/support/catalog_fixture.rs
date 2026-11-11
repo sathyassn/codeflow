@@ -15,6 +15,11 @@ fn alt(kind: &str, id: &str, effort: &str, harness: Option<&str>) -> Value {
     json!({"target":{"kind":kind,"id":id},"harness":harness,"effort":effort})
 }
 
+/// A seat route names no effort: it runs at its seat's `effort` field.
+fn seat_alt(id: &str, harness: Option<&str>) -> Value {
+    json!({"target":{"kind":"seat","id":id},"harness":harness})
+}
+
 fn participant(id: &str, alternatives: Vec<Value>, relation: &str) -> Value {
     json!({"id":id,"alternatives":Value::Array(alternatives),"relation":relation,"label":"required"})
 }
@@ -24,7 +29,7 @@ fn duty(participants: Vec<Value>) -> Value {
 }
 
 pub fn fixture() -> Value {
-    let seat = |id| alt("seat", id, "high", None);
+    let seat = |id| seat_alt(id, None);
     let worker = |id| alt("line", id, "medium", None);
     let independent = || {
         participant(
@@ -60,7 +65,7 @@ pub fn fixture() -> Value {
         ],
         "standing_seats":["orchid-seat","quartz-seat"],"design_owner":"orchid-seat",
         "duties":{
-            "orchestrate":duty(vec![participant("host",vec![json!({"target":{"kind":"host-seat"},"harness":null,"effort":"high"})],"any")]),
+            "orchestrate":duty(vec![participant("host",vec![json!({"target":{"kind":"host-seat"},"harness":null})],"any")]),
             "independent-plan":duty(vec![participant("design-primary",vec![seat("orchid-seat")],"any"),participant("engineering-primary",vec![seat("quartz-seat")],"any")]),
             "body-review":duty(vec![participant("engineering-primary",vec![seat("quartz-seat")],"any"),participant("design-primary",vec![seat("orchid-seat")],"any")]),
             "design":duty(vec![participant("designer",vec![seat("orchid-seat")],"any")]),
@@ -74,7 +79,7 @@ pub fn fixture() -> Value {
             "general-review":duty(vec![participant("independent",vec![seat("cinder-seat"),seat("orchid-seat")],"opposite-author"),second]),
             "design-and-editorial-review":duty(vec![participant("advisory",vec![alt("line","orchid-support","high",None)],"any"),participant("executability",vec![seat("quartz-seat")],"any")]),
             "consultation":duty(vec![participant("consultant",vec![alt("line","orchid-support","high",None),seat("quartz-seat"),seat("cinder-seat")],"any")]),
-            "computer-use-qa":duty(vec![participant("qa",vec![alt("seat","quartz-seat","high",Some("codex-app")),alt("seat","orchid-seat","high",Some("claude-code"))],"opposite-author")])
+            "computer-use-qa":duty(vec![participant("qa",vec![seat_alt("quartz-seat",Some("codex-app")),seat_alt("orchid-seat",Some("claude-code"))],"opposite-author")])
         },
         "effort_floors":{"default":"high","bounded-execution":"medium","light-execution":"medium","evidence-collection":"medium","engineering-implementation":"medium","design-implementation":"medium","xhigh-reasoning":"xhigh"},
         "high_triggers":["material"],"xhigh_triggers":["deep"],"named_policies":{"extra-review":["material"]},"rules":["Launch the resolved pinned identity."],"bindings":[]

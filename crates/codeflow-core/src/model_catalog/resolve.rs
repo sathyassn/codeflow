@@ -315,7 +315,16 @@ impl Catalog {
         }) {
             return Ok(Eligibility::ScopedQualified);
         }
-        if candidate_duty(request.duty) {
+        if candidate_duty(request.duty)
+            // A committed co-owner or consultant on a subagent-only line
+            // approves as a subagent consult; a personal candidate never does.
+            || (request.duty == DESIGN_APPROVAL
+                && line.launch == Launch::SubagentOnly
+                && !version.personal_candidate
+                && self
+                    .authority_role(&line.id)
+                    .is_some_and(|role| role != AuthorityRole::Owner))
+        {
             Ok(Eligibility::Candidate)
         } else {
             Err("worker duty requires scoped evidence for the exact tuple".into())
@@ -527,13 +536,16 @@ impl Catalog {
             } else {
                 &family.harnesses[0]
             };
+            // A subagent-only line approves or advises as a subagent consult
+            // of the seat, at the seat's effort; it never fills the seat.
+            let consult = line.launch == Launch::SubagentOnly;
             let mut candidates = Candidates::default();
             for version in line.versions.iter().rev() {
                 let eligibility_request = EligibilityRequest {
                     duty: DESIGN_APPROVAL,
                     line: &line.id,
                     version: &version.id,
-                    seat: Some(&seat.id),
+                    seat: (!consult).then_some(seat.id.as_str()),
                     harness,
                     effort: seat.effort,
                     exclusions: request.exclusions,
@@ -551,6 +563,15 @@ impl Catalog {
             if let Some(mut chosen) = eligible.next() {
                 chosen.remaining_alternatives = eligible.map(ResolvedAlternative::from).collect();
                 chosen.limitations.push(not_review.into());
+                if consult {
+                    chosen.approval_owner = Some(seat.id.clone());
+                    chosen.limitations.push(format!(
+                        "subagent consult of seat {}: line {} is launch: {}",
+                        seat.id,
+                        line.id,
+                        line.launch.as_str()
+                    ));
+                }
                 for (name, values) in [
                     ("approves at", &entry.approves),
                     ("consulted before", &entry.consulted_before),
@@ -731,10 +752,18 @@ impl Catalog {
                     .iter()
                     .any(|t| request.trigger_facts.contains(t)),
             };
-            let effort = if raised && alternative.effort < Effort::High {
+            // A seat route runs at its seat's `effort`; a line route names
+            // its own (validation requires it).
+            let Some(base) = alternative.effort.or(seat.map(|s| s.effort)) else {
+                candidates
+                    .reasons
+                    .push(format!("route to {} names no effort", line.id));
+                continue;
+            };
+            let effort = if raised && base < Effort::High {
                 Effort::High
             } else {
-                alternative.effort
+                base
             };
             for version in line.versions.iter().rev() {
                 if seat.is_none()
@@ -813,6 +842,8 @@ impl Catalog {
         };
         request.seat.is_none()
             && candidate_duty(request.duty)
+            // Drift never admits a line its `launch` field keeps from workers.
+            && check_launch(line, false).is_ok()
             && version.lifecycle == Lifecycle::Active
             && observed != &version.pinned_id
             && !observed.trim().is_empty()
@@ -833,7 +864,7 @@ impl Catalog {
             alternatives: vec![Alternative {
                 target: Target::Seat(seat.id.clone()),
                 harness: None,
-                effort: seat.effort,
+                effort: None,
             }],
             relation: LineageRelation::Any,
             label: ParticipantLabel::Required,
@@ -869,8 +900,10 @@ impl Catalog {
         }
         // A line the project designated for design authority is not a
         // fallback on a design-authority duty; everywhere else it still is.
+        // A subagent consult on design approval is designated the same way.
         let designated = matches!(request.duty, "design" | DESIGN_APPROVAL)
-            && request.seat == Some(self.design_owner.as_str())
+            && (request.seat == Some(self.design_owner.as_str())
+                || (request.seat.is_none() && request.duty == DESIGN_APPROVAL))
             && self.authority.as_ref().is_some_and(|anchored| {
                 anchored
                     .authority
@@ -940,6 +973,9 @@ impl Catalog {
         if route.effort != record.route.effort {
             return Err("OPERATOR_OVERRIDE effort mismatch".into());
         }
+        let effort = route
+            .effort
+            .ok_or("OPERATOR_OVERRIDE needs an exact effort")?;
         let harness = route
             .harness
             .as_deref()
@@ -965,7 +1001,7 @@ impl Catalog {
             }
             Target::HostSeat => return Err("OPERATOR_OVERRIDE needs an exact seat or line".into()),
         };
-        if route.effort < self.floor("design", Some(seat)) {
+        if effort < self.floor("design", Some(seat)) {
             return Err("OPERATOR_OVERRIDE effort below design duty floor".into());
         }
         let mut reasons = Vec::new();
@@ -979,7 +1015,7 @@ impl Catalog {
                     version: &version.id,
                     seat: Some(&seat.id),
                     harness,
-                    effort: route.effort,
+                    effort,
                     exclusions: request.exclusions,
                     observed_ids: request.observed_ids,
                 };
@@ -1049,7 +1085,7 @@ impl Catalog {
                     .map(|line| Alternative {
                         target: Target::Line(line.id.clone()),
                         harness: None,
-                        effort: self.floor("xhigh-reasoning", None),
+                        effort: Some(self.floor("xhigh-reasoning", None)),
                     })
                     .collect(),
                 relation: LineageRelation::Any,

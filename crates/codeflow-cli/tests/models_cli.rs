@@ -509,7 +509,8 @@ fn models_project_binding_selects_exact_tuple_without_bypassing_exclusions() {
         false,
     );
     let mut catalog = fixture_data::fixture();
-    catalog["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("xhigh");
+    // The host seat runs at its seat `effort` (TSK-1292): move it past the binding.
+    catalog["seats"][0]["effort"] = json!("xhigh");
     fixture.catalog(&catalog);
     fixture.resolved("orchestrate", "none", &[], false);
 }

@@ -28,6 +28,9 @@ fn unique<'a>(values: impl Iterator<Item = &'a str>, label: &str) -> Result<(), 
 /// The catalog key whose floor covers every duty `effort_floors` does not name.
 pub(super) const DEFAULT_FLOOR: &str = "default";
 
+/// The generated worker duty an xhigh trigger requires.
+pub(super) const XHIGH_REASONING: &str = "xhigh-reasoning";
+
 impl Catalog {
     /// The lowest effort a route may request for `duty`: the seat's own
     /// `effort` for a seat route, else the duty's `effort_floors` entry or
@@ -294,9 +297,17 @@ impl Catalog {
         if !self.effort_floors.contains_key(DEFAULT_FLOOR) {
             return Err(format!("effort_floors needs a {DEFAULT_FLOOR} floor"));
         }
+        // An xhigh trigger is met only by a worker at xhigh: a missing or
+        // lower floor would let a lower worker count as meeting it.
+        if self.effort_floors.get(XHIGH_REASONING) != Some(&Effort::Xhigh) {
+            return Err(format!(
+                "effort_floors needs {XHIGH_REASONING}: xhigh; a lower worker never meets an \
+                 xhigh trigger"
+            ));
+        }
         for duty in self.effort_floors.keys() {
             if duty != DEFAULT_FLOOR
-                && duty != "xhigh-reasoning"
+                && duty != XHIGH_REASONING
                 && duty != super::DESIGN_APPROVAL
                 && !self.duties.contains_key(duty)
             {
@@ -372,20 +383,22 @@ impl Catalog {
                     return Err(format!("unsupported alternative harness {harness}"));
                 }
             }
-            let floor = match &alternative.target {
-                Target::Seat(id) => self.floor(duty, self.seat(id)),
-                Target::Line(_) => self.floor(duty, None),
-                // Any seat may be the host: the lowest seat floor applies here,
-                // and the host's own floor applies when it resolves.
-                Target::HostSeat => self
-                    .seats
-                    .iter()
-                    .map(|seat| seat.effort)
-                    .min()
-                    .unwrap_or_else(|| self.floor(duty, None)),
-            };
-            if alternative.effort < floor {
-                return Err(format!("duty {duty} default below its effort floor"));
+            // A seat route runs at its seat's `effort`; only a line route
+            // names its own, at or above the duty's floor.
+            match (&alternative.target, alternative.effort) {
+                (Target::Seat(_) | Target::HostSeat, Some(_)) => {
+                    return Err(format!(
+                        "duty {duty} names an effort on a seat route; a seat route runs at its \
+                         seat's effort field"
+                    ));
+                }
+                (Target::Line(id), None) => {
+                    return Err(format!("duty {duty} routes line {id} without an effort"));
+                }
+                (Target::Line(_), Some(effort)) if effort < self.floor(duty, None) => {
+                    return Err(format!("duty {duty} default below its effort floor"));
+                }
+                _ => {}
             }
             if let Target::Line(id) = &alternative.target {
                 if self

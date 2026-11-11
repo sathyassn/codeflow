@@ -409,12 +409,11 @@ fn design_override_fills_the_seat_second_line_only_from_the_anchored_block() {
     );
 }
 
-/// A newer designated version for `seat_id`'s first line, and that duty's seat
-/// alternative moved to `effort`: catalog data only.
+/// A newer designated version for `seat_id`'s first line, and that seat's
+/// `effort` moved to `effort`: catalog data only.
 fn with_newer_first_line_version(
     catalog: &mut Value,
     seat_id: &str,
-    duty: &str,
     effort: &str,
 ) -> String {
     let first = seat(catalog, seat_id)["lines"][0]
@@ -436,11 +435,10 @@ fn with_newer_first_line_version(
         .find(|l| l["id"] == first.as_str())
         .unwrap();
     target["versions"].as_array_mut().unwrap().push(next);
-    for participant in catalog["duties"][duty]["required"].as_array_mut().unwrap() {
-        for alternative in participant["alternatives"].as_array_mut().unwrap() {
-            if alternative["target"]["id"] == seat_id {
-                alternative["effort"] = json!(effort);
-            }
+    // A seat route runs at its seat's `effort` field (TSK-1292).
+    for entry in catalog["seats"].as_array_mut().unwrap() {
+        if entry["id"] == seat_id {
+            entry["effort"] = json!(effort);
         }
     }
     pinned
@@ -468,8 +466,8 @@ fn catalog_data_alone_moves_resolution_fallback_and_open_duties() {
 
     // A catalog-only change moves the requested selector and effort.
     let mut changed = catalog.clone();
-    let review_pin = with_newer_first_line_version(&mut changed, codex_id, "unit-review", "xhigh");
-    let design_pin = with_newer_first_line_version(&mut changed, &owner, "design", "xhigh");
+    let review_pin = with_newer_first_line_version(&mut changed, codex_id, "xhigh");
+    let design_pin = with_newer_first_line_version(&mut changed, &owner, "xhigh");
     for version in changed["lines"]
         .as_array_mut()
         .unwrap()

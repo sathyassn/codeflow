@@ -382,8 +382,7 @@
               "target": {
                 "kind": "host-seat"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -402,8 +401,7 @@
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -417,8 +415,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -437,8 +434,7 @@
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -457,8 +453,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             },
             {
               "target": {
@@ -645,16 +640,14 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "opposite-author",
@@ -673,8 +666,7 @@
                   "kind": "seat",
                   "id": "grok-primary"
                 },
-                "harness": null,
-                "effort": "medium"
+                "harness": null
               }
             ],
             "relation": "opposite-author",
@@ -693,8 +685,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -708,8 +699,7 @@
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -728,8 +718,7 @@
                   "kind": "seat",
                   "id": "grok-primary"
                 },
-                "harness": null,
-                "effort": "medium"
+                "harness": null
               }
             ],
             "relation": "opposite-author",
@@ -748,24 +737,21 @@
                 "kind": "seat",
                 "id": "grok-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "opposite-author",
@@ -814,8 +800,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -842,16 +827,14 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "grok-primary"
               },
-              "harness": null,
-              "effort": "medium"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -870,16 +853,14 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": "codex-app",
-              "effort": "medium"
+              "harness": "codex-app"
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": "claude-code",
-              "effort": "high"
+              "harness": "claude-code"
             }
           ],
           "relation": "opposite-author",
@@ -938,7 +919,7 @@
     "The design owner seat's first line owns design direction, real design and fidelity approval. A later line of that seat designs as a committed project co-owner or by a task-specific OPERATOR_OVERRIDE, and otherwise orchestrates, plans and reviews as a reduced-assurance fallback.",
     "A seat's effort field is its default and floor, not a ceiling; its high_when policies raise it to high. Worker floors are effort_floors. Complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task; design follows the design owner rule.",
     "A line's launch field decides how it runs: subagent-only lines resolve only for worker duties and never fill a seat; seat lines never run as workers; either lines do both.",
-    "The user's harness choice of model and effort applies over the resolved suggestion. Record the effective model and effort with codeflow models resolve --effective; never re-launch a session to change them.",
+    "The user's harness choice of model and effort applies over the resolved suggestion. Record the effective model and effort with codeflow models resolve --effective and --session, the session id the harness gives its hooks; never re-launch a session to change them.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
     "A designation is not qualification: report it as designated, full suite not run, until an exact full-suite binding record exists.",
     "An observed id that differs from the pinned id inherits no designation and no evidence.",

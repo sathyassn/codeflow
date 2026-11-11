@@ -109,8 +109,9 @@ asks for just that.
   verdict. Codex supplies independent review for a unit authored by that
   primary: record it so, and do not label the integrated judgment an
   independent unit review.
-- **Accountable route use.** The active primary coordinates at its recorded
-  default effort, stays the orchestrator, invokes the other-lineage primary
+- **Accountable route use.** The active primary coordinates at its seat's
+  `effort`, the default every ordinary route to that seat runs at, stays the
+  orchestrator, invokes the other-lineage primary
   directly, and uses only the bounded internal routes its own seat exposes. A
   caller never selects a foreign worker or passes worker escalation effort on
   the foreign primary's entry command; it sends complexity and the required
@@ -130,7 +131,8 @@ asks for just that.
 - **The harness choice applies.** The model and effort the user chose in
   their own harness apply over CodeFlow's suggestion. Record the effective
   model and effort with `codeflow models resolve --effective
-  <model>@<effort>`; never re-launch a session to change them.
+  <model>@<effort> --session <id>`, the id the harness gives its hooks;
+  never re-launch a session to change them.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -204,7 +206,9 @@ model identity.
 
 The table names seats, never models. Each seat's model, effort and
 fallbacks are the values `codeflow models resolve` returns for the duty, and
-`codeflow doctor --check model-bindings` shows them for every host.
+`codeflow doctor --check model-bindings` shows them for every host. Every
+ordinary route to a seat runs at that seat's `effort`; only the seat's
+`high_when` policies raise it.
 Every peer seat, its fallbacks and its launch posture follow
 [cross-family transport](resources/routing/transport.md), never a simulated
 seat; `cf-herdr` hosts the tab with the project being worked as the cwd, and
@@ -326,8 +330,8 @@ still make the live observations the steps below require.
    raw tokens never enter prompts, logs, repository files, or arbitrary
    commands.
 6. Record the models, effort and effective sandbox once per session, the
-   model and effort through `codeflow models resolve --effective`. Record
-   usage evidence only when an explicit hard limit depends on it, with its
+   model and effort through `codeflow models resolve --effective --session`.
+   Record usage evidence only when an explicit hard limit depends on it, with its
    source, time and scope; unknown usage stays unknown and advisory. Never
    infer quota, availability, applied selection, or savings.
 

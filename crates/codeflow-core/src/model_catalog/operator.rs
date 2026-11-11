@@ -42,7 +42,7 @@ pub fn parse_override_route(
     Ok(Alternative {
         target,
         harness: Some(harness.into()),
-        effort,
+        effort: Some(effort),
     })
 }
 

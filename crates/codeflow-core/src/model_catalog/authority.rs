@@ -159,25 +159,36 @@ impl DesignAuthority {
                     seat.id
                 ));
             }
-            if line.launch == Launch::SubagentOnly {
+            // A subagent-only line never fills the seat, so it never owns
+            // design; as a co-owner or consultant it approves or advises as
+            // a subagent consult of the seat, at the seat's effort.
+            let subagent = line.launch == Launch::SubagentOnly;
+            if subagent && entry.role == AuthorityRole::Owner {
                 return Err(format!(
-                    "design authority line {id} is launch: {}; it never fills seat {}",
+                    "design authority owner line {id} is launch: {}; it never fills seat {}",
                     line.launch.as_str(),
                     seat.id
                 ));
             }
+            // A seat line needs seat authority; a subagent consult needs only
+            // an active version at the seat's effort.
             if !line.versions.iter().any(|v| {
                 !v.personal_candidate
                     && v.lifecycle == Lifecycle::Active
                     && v.efforts.contains(&seat.effort)
-                    && (v.designations.iter().any(|d| d.seat == seat.id)
+                    && (subagent
+                        || v.designations.iter().any(|d| d.seat == seat.id)
                         || v.selectors.iter().any(|(h, s)| {
                             catalog.full_binding(seat, v, h, s, seat.effort).is_some()
                         }))
             }) {
+                let needs = if subagent {
+                    "at the effort of"
+                } else {
+                    "designated or fully qualified for"
+                };
                 return Err(format!(
-                    "design authority line {id} has no active version designated or fully \
-                     qualified for seat {}",
+                    "design authority line {id} has no active version {needs} seat {}",
                     seat.id
                 ));
             }
