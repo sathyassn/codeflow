@@ -298,10 +298,10 @@ impl Catalog {
             return Err(format!("effort_floors needs a {DEFAULT_FLOOR} floor"));
         }
         // An xhigh trigger is met only by a worker at xhigh: a missing or
-        // lower floor would let a lower worker count as meeting it.
+        // lower floor would let a lower worker count as satisfying it.
         if self.effort_floors.get(XHIGH_REASONING) != Some(&Effort::Xhigh) {
             return Err(format!(
-                "effort_floors needs {XHIGH_REASONING}: xhigh; a lower worker never meets an \
+                "effort_floors needs {XHIGH_REASONING}: xhigh; a lower worker cannot satisfy an \
                  xhigh trigger"
             ));
         }

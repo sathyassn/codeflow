@@ -66,7 +66,7 @@ pub fn verify_fragment(
 ) -> Result<Option<String>, LedgerError> {
     let refused = |reason: String| {
         LedgerError::Corrupt(format!(
-            "{}: session fragment refused, {reason}",
+            "{}: session fragment refused, {reason}; the file is kept and nothing is merged",
             path.display()
         ))
     };

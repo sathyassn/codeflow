@@ -370,12 +370,17 @@ stated as prose are now catalog fields:
 - `effort` on each seat: its default and its floor. Every ordinary route to
   a seat runs at it: a duty's seat route names no effort of its own, and
   validation refuses one that does. A line route still names its effort.
-  `high_when` on each seat: the named policies or trigger facts that raise
+- `high_when` on each seat: the named policies or trigger facts that raise
   it to high.
 - `effort_floors`: the floor for each worker duty, with a required
   `default`. It replaces the floors the engine held as constants. Its
-  `xhigh-reasoning` entry must be `xhigh`, so a lower worker never meets
+  `xhigh-reasoning` entry must be `xhigh`, so a lower worker cannot satisfy
   an xhigh trigger.
+
+With seat `effort`, the earlier statements in this record that seats enter
+at high and that a seat stays at high on an xhigh trigger now read: a seat
+enters at its own `effort`, and on an xhigh trigger it stays at that effort
+and keeps approval.
 
 This narrows the 2026-10-04 note for a design co-owner or consultant on a
 `subagent-only` line, as Fable is in the managed catalog. Such a block stays

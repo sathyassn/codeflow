@@ -726,7 +726,9 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
         "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
-        "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
+        "A primary retains orchestration at its seat's effort; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
+        "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at its own effort and keeps approval.",
+        "A session that cannot read that id records nothing, never guesses one, and reports the effective model and effort as unrecorded.",
         "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(

@@ -110,7 +110,7 @@ asks for just that.
   primary: record it so, and do not label the integrated judgment an
   independent unit review.
 - **Accountable route use.** The active primary coordinates at its seat's
-  `effort`, the default every ordinary route to that seat runs at, stays the
+  `effort` (the default for every ordinary route to that seat), stays the
   orchestrator, invokes the other-lineage primary
   directly, and uses only the bounded internal routes its own seat exposes. A
   caller never selects a foreign worker or passes worker escalation effort on
@@ -129,10 +129,12 @@ asks for just that.
   capable permitted reasoning route, escalate on the catalog's
   `high_triggers` and `xhigh_triggers`, and select effort per unit.
 - **The harness choice applies.** The model and effort the user chose in
-  their own harness apply over CodeFlow's suggestion. Record the effective
-  model and effort with `codeflow models resolve --effective
-  <model>@<effort> --session <id>`, the id the harness gives its hooks;
-  never re-launch a session to change them.
+  their own harness apply over CodeFlow's suggestion. A session that knows
+  the id its harness gives its hooks records the effective model and effort
+  with `codeflow models resolve --effective <model>@<effort> --session
+  <id>`. A session that cannot read that id records nothing, never guesses
+  one, and reports the effective model and effort as unrecorded. Never
+  re-launch a session to change them.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -330,7 +332,9 @@ still make the live observations the steps below require.
    raw tokens never enter prompts, logs, repository files, or arbitrary
    commands.
 6. Record the models, effort and effective sandbox once per session, the
-   model and effort through `codeflow models resolve --effective --session`.
+   model and effort through `codeflow models resolve --effective
+   <model>@<effort> --session <id>` when the session knows its id, else as
+   unrecorded.
    Record usage evidence only when an explicit hard limit depends on it, with its
    source, time and scope; unknown usage stays unknown and advisory. Never
    infer quota, availability, applied selection, or savings.
