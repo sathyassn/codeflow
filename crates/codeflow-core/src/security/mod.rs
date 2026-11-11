@@ -46,6 +46,7 @@ pub mod pattern;
 pub mod policy;
 pub mod privilege;
 pub mod prose;
+pub(crate) mod release_routes;
 pub(crate) mod search_pattern;
 pub(crate) mod sed_script;
 pub(crate) mod shell_lex;

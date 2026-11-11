@@ -38,6 +38,9 @@ GITHUB_EVENT_PATH = { value = "", force = true }
 GITHUB_ACTOR = { value = "", force = true }
 GITHUB_BASE_REF = { value = "", force = true }
 GITHUB_HEAD_REF = { value = "", force = true }
+# The guard names this secret without reading it; blanking it also keeps a
+# real token out of every codeflow the tests start.
+GITHUB_TOKEN = { value = "", force = true }
 CI_PIPELINE_SOURCE = { value = "", force = true }
 CI_MERGE_REQUEST_IID = { value = "", force = true }
 CI_MERGE_REQUEST_DIFF_BASE_SHA = { value = "", force = true }
