@@ -189,14 +189,27 @@ fn a_body_that_would_hide_later_text_is_refused() {
         Ok(()),
         "a thematic break"
     );
-    for html in ["<!-- hidden\n", "<pre>\nx\n", "<script>\n", "<?php\n"] {
+    for html in ["<pre>\nx\n", "<textarea>\nx\n"] {
         assert_eq!(
             sections::check_body(html, 2),
             Err(BodyProblem::OpenHtmlBlock),
             "{html:?}"
         );
     }
-    assert_eq!(sections::check_body("<!-- note -->\ntext\n", 2), Ok(()));
+    // A comment, or a block that renders nothing, hides text from a reader
+    // of the rendered page: refused whether it is open or closed.
+    for html in [
+        "<!-- hidden\n",
+        "<script>\n",
+        "<?php\n",
+        "<!-- note -->\ntext\n",
+    ] {
+        assert_eq!(
+            sections::check_body(html, 2),
+            Err(BodyProblem::Concealed),
+            "{html:?}"
+        );
+    }
     assert_eq!(sections::check_body("<pre>\nx\n</pre>\n", 2), Ok(()));
 }
 
@@ -247,7 +260,8 @@ fn the_oracle_sees_a_body_that_hides_the_protected_section() {
         check_body("  ```\nx\n```\n", 2),
         Err(BodyProblem::NestedBlock)
     );
-    assert_eq!(check_body("- <!-- x\n", 2), Err(BodyProblem::NestedBlock));
+    assert_eq!(check_body("- <!-- x\n", 2), Err(BodyProblem::Concealed));
+    assert_eq!(check_body("- <pre>\n", 2), Err(BodyProblem::NestedBlock));
     assert_eq!(
         check_body("text\n\n    indented code\n", 2),
         Err(BodyProblem::IndentedCode)
