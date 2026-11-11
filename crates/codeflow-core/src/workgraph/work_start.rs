@@ -147,31 +147,37 @@ pub enum WorkStartError {
     },
     #[error("target '{0}' is not a stable local or remote-tracking non-task branch")]
     UnstableTarget(String),
-    #[error(
-        "local branch '{}' and '{}' have diverged ('{}' at {local_tip} \
-         with {ahead} commit(s) only there, '{}' at {remote_tip} with {behind} only \
-         there), so the work target is ambiguous; {}, or {}; a plain fetch of the remote \
-         refreshes '{}' without moving '{}'",
-        crate::git::display_text(.local),
-        crate::git::display_text(.remote),
-        crate::git::display_text(.local),
-        crate::git::display_text(.remote),
-        into_fetched(.remote),
-        fresh_clone_retry(.line_remote),
-        crate::git::display_text(.remote),
-        crate::git::display_text(.local)
-    )]
-    DivergedTarget {
-        local: String,
-        /// The fetched ref the local branch diverged from.
-        remote: String,
-        /// The configured remote that ref belongs to.
-        line_remote: String,
-        local_tip: String,
-        remote_tip: String,
-        ahead: usize,
-        behind: usize,
-    },
+    /// Boxed so every `Result` carrying this error stays small.
+    #[error("{0}")]
+    DivergedTarget(Box<DivergedTarget>),
+}
+
+/// A local branch and its fetched upstream that have diverged.
+#[derive(Debug, Error)]
+#[error(
+    "local branch '{}' and '{}' have diverged ('{}' at {local_tip} \
+     with {ahead} commit(s) only there, '{}' at {remote_tip} with {behind} only \
+     there), so the work target is ambiguous; {}, or {}; a plain fetch of the remote \
+     refreshes '{}' without moving '{}'",
+    crate::git::display_text(.local),
+    crate::git::display_text(.remote),
+    crate::git::display_text(.local),
+    crate::git::display_text(.remote),
+    into_fetched(.remote),
+    fresh_clone_retry(.line_remote),
+    crate::git::display_text(.remote),
+    crate::git::display_text(.local)
+)]
+pub struct DivergedTarget {
+    pub local: String,
+    /// The fetched ref the local branch diverged from.
+    pub remote: String,
+    /// The configured remote that ref belongs to.
+    pub line_remote: String,
+    pub local_tip: String,
+    pub remote_tip: String,
+    pub ahead: usize,
+    pub behind: usize,
 }
 
 /// A work target resolved to a ref. A local branch strictly behind its
@@ -526,8 +532,8 @@ pub fn resolve_work_target(
         Ok(resolved) => Ok(resolved.map(|resolved| resolved.target)),
         // The local branch, by its exact ref: a bare name now reads the
         // fetched ref first, so it would not name the branch kept here.
-        Err(WorkStartError::DivergedTarget { local, .. }) => {
-            Ok(Some(format!("refs/heads/{local}")))
+        Err(WorkStartError::DivergedTarget(diverged)) => {
+            Ok(Some(format!("refs/heads/{}", diverged.local)))
         }
         Err(error) => Err(error),
     }
@@ -653,7 +659,7 @@ fn local_or_upstream(
     match (ahead, behind) {
         (_, 0) => keep(),
         (0, _) => Ok(Some(ResolvedWorkTarget { target: upstream })),
-        (ahead, behind) => Err(WorkStartError::DivergedTarget {
+        (ahead, behind) => Err(WorkStartError::DivergedTarget(Box::new(DivergedTarget {
             local: local.to_string(),
             line_remote: remote_of(repo, &upstream),
             remote: upstream,
@@ -661,7 +667,7 @@ fn local_or_upstream(
             remote_tip: upstream_id.to_string(),
             ahead,
             behind,
-        }),
+        }))),
     }
 }
 
@@ -6084,11 +6090,8 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                WorkStartError::DivergedTarget {
-                    ahead: 1,
-                    behind: 1,
-                    ..
-                }
+                WorkStartError::DivergedTarget(diverged)
+                    if diverged.ahead == 1 && diverged.behind == 1
             ),
             "{error:?}"
         );

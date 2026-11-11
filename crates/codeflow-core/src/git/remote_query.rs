@@ -346,10 +346,10 @@ fn configured_credentials(root: &Path) -> Option<(Vec<String>, Vec<String>)> {
         let entry = entry.ok()?;
         let name = String::from_utf8_lossy(entry.name_bytes()).into_owned();
         let lower = name.to_ascii_lowercase();
-        let remote_url = lower.starts_with("remote.")
-            && (lower.ends_with(".url") || lower.ends_with(".pushurl"));
-        let rewrite = lower.starts_with("url.")
-            && (lower.ends_with(".insteadof") || lower.ends_with(".pushinsteadof"));
+        let variable = lower.rsplit('.').next().unwrap_or_default();
+        let remote_url = lower.starts_with("remote.") && matches!(variable, "url" | "pushurl");
+        let rewrite =
+            lower.starts_with("url.") && matches!(variable, "insteadof" | "pushinsteadof");
         if !remote_url && !rewrite {
             continue;
         }

@@ -109,7 +109,7 @@ impl<'a> Pasted<'a> {
     pub fn render(&self) -> Option<String> {
         let mut words = vec![self.head.to_string()];
         for (flag, value) in &self.options {
-            words.push(option(*flag, (*value)?)?);
+            words.push(option(flag, (*value)?)?);
         }
         let mut operands = Vec::with_capacity(self.operands.len());
         let mut dashed = false;

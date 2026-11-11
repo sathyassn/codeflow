@@ -1180,6 +1180,25 @@ fn canonical(path: &Path) -> PathBuf {
     crate::portable_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// The step that moves a linked worktree into `.worktrees/`. The path is
+/// rendered from its exact text, so a space or `$(…)` in it stays one
+/// argument (TSK-416 review round 2).
+fn worktree_move_step(path: &Path) -> String {
+    path.to_str()
+        .and_then(|path| {
+            crate::git::Pasted::new("git worktree move")
+                .value(path)
+                .placeholder(".worktrees/<slug>")
+                .without_end_of_options()
+                .render()
+        })
+        .unwrap_or_else(|| {
+            "git worktree move to .worktrees/<slug>, run from a git client since its path \
+             holds a character a terminal does not show as itself"
+                .to_string()
+        })
+}
+
 /// Doctor's findings for linked worktrees: one outside every location, and
 /// one inside the working tree that nothing ignores.
 #[must_use]
@@ -1240,25 +1259,10 @@ pub fn worktree_findings(
                     "linked worktree {} of {repo_label} is outside every {LOCATIONS_KEY} entry",
                     path.display()
                 ),
-                // The path is rendered from its exact text, so a space or
-                // `$(…)` in it stays one argument (TSK-416 review round 2).
                 next_step: format!(
                     "move it with {}, or add its folder to {LOCATIONS_KEY} in \
                      .codeflow/policy.json",
-                    path.to_str()
-                        .and_then(|path| {
-                            crate::git::Pasted::new("git worktree move")
-                                .value(path)
-                                .placeholder(".worktrees/<slug>")
-                                .without_end_of_options()
-                                .render()
-                        })
-                        .unwrap_or_else(|| {
-                            "git worktree move to .worktrees/<slug>, run from a git client \
-                             since its path holds a character a terminal does not show as \
-                             itself"
-                                .to_string()
-                        })
+                    worktree_move_step(&path)
                 ),
             });
             continue;
@@ -1468,6 +1472,43 @@ fn missing_branch_finding(
     })
 }
 
+/// The step that continues branch `b` in a worktree, with a stash pop when
+/// the work may have been stashed.
+///
+/// `git worktree add` reads a branch that starts with `-` as an option, and
+/// after `--` it adds a detached worktree at that commit instead of the
+/// branch, so the step renames the branch first (TSK-416 review). Each
+/// command is rendered from the branch's exact bytes, never its display form
+/// (review round 2).
+fn continue_in_worktree(b: &GitName, saved: bool) -> String {
+    let pop = if saved {
+        ", and git stash pop inside it if you stashed"
+    } else {
+        ""
+    };
+    let add = crate::git::Pasted::new("git worktree add .worktrees/<slug>")
+        .name(b)
+        .without_end_of_options()
+        .render();
+    let rename = crate::git::Pasted::new("git branch -m")
+        .name(b)
+        .placeholder("<new-name>")
+        .render();
+    match (add, rename) {
+        (Some(add), _) => format!(", then {add} to continue it in a worktree{pop}"),
+        (None, Some(rename)) => format!(
+            ", then rename the branch with {rename}, since git worktree add does not take a \
+             branch whose name starts with -, and run git worktree add .worktrees/<slug> \
+             <new-name> to continue it in a worktree{pop}"
+        ),
+        (None, None) => format!(
+            ", then rename the branch with a git client, since its name holds a character a \
+             terminal does not show as itself and no command is printed to paste, and run git \
+             worktree add .worktrees/<slug> <new-name> to continue it in a worktree{pop}"
+        ),
+    }
+}
+
 /// The finding for the root checkout's HEAD: off its root branch or
 /// detached, or on a protected root branch while holding task edits.
 fn head_finding(
@@ -1522,42 +1563,7 @@ fn head_finding(
                 )
             };
             let continue_step = match &found {
-                Head::Branch(b) => {
-                    let pop = if save_step.is_empty() {
-                        ""
-                    } else {
-                        ", and git stash pop inside it if you stashed"
-                    };
-                    // `git worktree add` reads a branch that starts with
-                    // `-` as an option, and after `--` it adds a detached
-                    // worktree at that commit instead of the branch, so
-                    // the step renames the branch first (TSK-416 review).
-                    // Each command is rendered from the branch's exact
-                    // bytes, never its display form (review round 2).
-                    let add = crate::git::Pasted::new("git worktree add .worktrees/<slug>")
-                        .name(b)
-                        .without_end_of_options()
-                        .render();
-                    let rename = crate::git::Pasted::new("git branch -m")
-                        .name(b)
-                        .placeholder("<new-name>")
-                        .render();
-                    match (add, rename) {
-                        (Some(add), _) => format!(", then {add} to continue it in a worktree{pop}"),
-                        (None, Some(rename)) => format!(
-                            ", then rename the branch with {rename}, since git worktree add \
-                             does not take a branch whose name starts with -, and run git \
-                             worktree add .worktrees/<slug> <new-name> to continue it in a \
-                             worktree{pop}"
-                        ),
-                        (None, None) => format!(
-                            ", then rename the branch with a git client, since its name \
-                             holds a character a terminal does not show as itself and no \
-                             command is printed to paste, and run git worktree add \
-                             .worktrees/<slug> <new-name> to continue it in a worktree{pop}"
-                        ),
-                    }
-                }
+                Head::Branch(b) => continue_in_worktree(b, !save_step.is_empty()),
                 Head::Detached(_) => String::new(),
             };
             let switch = crate::git::Pasted::new("git switch")

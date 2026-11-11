@@ -424,7 +424,7 @@ fn fetch_from_repository(
         .and_then(|config| config.get_string(&format!("remote.{name}.url")))
     {
         Ok(raw) => raw,
-        Err(error) => return Some(raw_url_unread(name, &error.message())),
+        Err(error) => return Some(raw_url_unread(name, error.message())),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
     let effective = match crate::git::command()

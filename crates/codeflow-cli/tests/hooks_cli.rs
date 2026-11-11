@@ -2839,7 +2839,9 @@ fn doctor_includes_with(value: &str, present: Option<&str>) -> String {
     let git_dir = dir.path().join(".git");
     let config = git_dir.join("config");
     let mut text = std::fs::read_to_string(&config).unwrap();
-    text.push_str(&format!("[include]\n\tpath = {value}\n"));
+    text.push_str("[include]\n\tpath = ");
+    text.push_str(value);
+    text.push('\n');
     std::fs::write(&config, text).unwrap();
     if let Some(resolved) = present {
         let file = git_dir.join(resolved);
