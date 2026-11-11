@@ -1138,6 +1138,8 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
             "\"high_when\"",
+            "\"effort\": \"medium\", \"high_when\": []",
+            "\"effort\": \"medium\", \"high_when\": [ \"important-work\"",
             "\"xhigh_triggers\"",
             "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at its own effort and keeps approval",
             "Claude-side internal routing belongs to the Claude primary",

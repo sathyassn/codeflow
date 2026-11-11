@@ -599,7 +599,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "def797448a3d9d7b9ffcd2e313331106e7d8b7052a494fb282696cd416a627d3",
+      "sha256": "2dc2a9d7c9856f32a238fcb94647b4fda5b954c81cbd892046b30b2c9fff14b3",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1961,7 +1961,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "def797448a3d9d7b9ffcd2e313331106e7d8b7052a494fb282696cd416a627d3",
+      "sha256": "2dc2a9d7c9856f32a238fcb94647b4fda5b954c81cbd892046b30b2c9fff14b3",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
