@@ -952,7 +952,14 @@ pub const SCHEMA: [KeySpec; 86] = [
                 push, naming the deadline and these keys. Before it, the hook \
                 fetches the objects the id registry lacks in a partial clone \
                 in one bounded request, and the check reads the registry with \
-                lazy fetching off. Other local-config tampering is outside \
+                lazy fetching off. The check runs in a process group of its \
+                own, away from the terminal, so in a partial clone a fetch of \
+                a missing object that needs a password or passphrase prompt \
+                stops and is refused at the deadline; the refusal then names \
+                `git diff --stat <base> <head>` for the pushed range, which \
+                fetches those objects in the terminal, before pushing again \
+                (a plain `git fetch` keeps the clone's filter and fetches \
+                none of them). Other local-config tampering is outside \
                 the hook threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {

@@ -578,7 +578,8 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 | Order | The hook's own ref rules run before any `codeflow ci`. Each `codeflow ci` runs every check, so the hook reports the same findings CI reports for the range. |
 | After a refusal | The later branches' checks and the release preflight do not run. The id sync still runs, so a pending reservation is published. The printed rerun repeats the refused step. |
 | A passing push | Every check runs, as before. |
-| Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget only reports; it never refuses a push. `codeflow ci --timings` prints the time of every check. |
+| Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget alone only reports. `codeflow ci --timings` prints the time of every check. |
+| Deadline | Each `codeflow ci` must finish within the lookup wait times its attempts, plus the fetch wait, plus the push budget (270 s by default), or it is ended and the push refused under `git.test_gate_on_push`. The check runs away from the terminal, so in a partial clone a fetch of a missing object that needs a password or passphrase cannot ask for it and is refused this way. The refusal then names the fix: run `git diff --stat <base> <head>` for the pushed range in your terminal, which fetches those objects and can prompt there, then push again. A plain `git fetch` keeps the clone's filter and fetches none of them. |
 
 `codeflow integrate` is the local landing path for protected branches. It
 rebases the branch onto the target by default, runs every full-gate target, then

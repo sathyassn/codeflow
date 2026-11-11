@@ -2128,6 +2128,7 @@ fn run_captured_with(
     }
     let stdout = receive_probe_reader(stdout, started, timeout).map_err(|error| {
         terminate_process_tree(&mut owner, &mut child);
+        let _ = child.wait();
         if error == "timed out" {
             probe_timeout_message(timeout)
         } else {
@@ -2136,6 +2137,7 @@ fn run_captured_with(
     })?;
     let stderr = receive_probe_reader(stderr, started, timeout).map_err(|error| {
         terminate_process_tree(&mut owner, &mut child);
+        let _ = child.wait();
         if error == "timed out" {
             probe_timeout_message(timeout)
         } else {
@@ -2146,6 +2148,7 @@ fn run_captured_with(
         while !writer.is_finished() {
             if started.elapsed() >= timeout {
                 terminate_process_tree(&mut owner, &mut child);
+                let _ = child.wait();
                 return Err(probe_timeout_message(timeout));
             }
             std::thread::sleep(VERSION_PROBE_POLL);
@@ -8182,6 +8185,44 @@ mod tests {
             .expect("run_captured returned instead of waiting on the blocked write");
         assert!(run.unwrap_err().contains("timed out"));
         assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    /// TSK-327: a run that times out on its blocked write reaps the child
+    /// it killed. The child records its pid, exits, and leaves a descendant
+    /// holding stdin unread; once the run returns, the child is no longer
+    /// waitable. Before, this return killed the group but never reaped the
+    /// child, so it stayed a zombie of this process. The reader-error
+    /// returns take the same reap; no child can make a pipe read fail, so
+    /// they have no test of their own.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_timeout_reaps_the_child_it_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("child");
+        let script = format!(
+            "echo $$ > '{}'; exec 3<&0; sleep 30 >/dev/null 2>&1 & exit 0",
+            pidfile.display()
+        );
+        let input = "x".repeat(4 * 1024 * 1024);
+        let run = run_captured(
+            "sh",
+            &["-c", &script],
+            Duration::from_millis(500),
+            Some(&input),
+            None,
+        );
+        assert!(run.unwrap_err().contains("timed out"));
+        let child: libc::pid_t = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: `WNOHANG` never blocks; a reaped child is not ours to wait
+        // for, so the call fails with ECHILD, while a zombie returns its pid.
+        let waited = unsafe { libc::waitpid(child, std::ptr::null_mut(), libc::WNOHANG) };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(waited, -1, "the child {child} was left unreaped");
+        assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
     }
 
     #[cfg(unix)]

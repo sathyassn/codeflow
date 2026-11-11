@@ -986,19 +986,71 @@ fn run_check_with(
         }
         // A check with no verdict never passes: whatever the gate's level,
         // the push stops.
-        Err(why) if why.timed_out => report.violations.push(Violation::always_blocking(
-            "git.test_gate_on_push",
-            format!(
-                "push set check gave no verdict within its deadline and was ended: `{shown}`; the deadline is {deadline}"
-            ),
-            "find what the check waits on (a slow destination, or a partial clone fetching a missing object) and push again; a project that needs longer raises git.remote_query_timeout_seconds, git.remote_query_attempts, git.remote_fetch_timeout_seconds or git.push_budget_seconds on its default branch",
-        )),
+        Err(why) if why.timed_out => {
+            report
+                .violations
+                .push(deadline_refusal(root, args, &shown, &deadline));
+        }
         Err(why) => report.violations.push(violation(
             policy,
             format!("push set check could not run: `{shown}`: {}", why.reason),
             codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }
+}
+
+/// The refusal for a check ended at its deadline (TSK-327). In a clone that
+/// fetches missing objects on demand, the check's own reads may have been
+/// waiting on such a fetch, and one that needs a password or passphrase
+/// cannot ask for it inside the check: the remedy then leads with a diff of
+/// the pushed range in the operator's terminal, which fetches the objects
+/// the check reads where a prompt can be answered. A plain `git fetch`
+/// keeps the clone's filter and fetches none of them.
+fn deadline_refusal(
+    root: &Path,
+    args: &[&str],
+    shown: &str,
+    deadline: &CheckDeadline,
+) -> Violation {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|arg| *arg == flag)
+            .and_then(|at| args.get(at + 1))
+    };
+    let prefetch = match (value("--base"), value("--head")) {
+        (Some(base), Some(head)) if fetches_on_demand(root) => format!(
+            "this clone fetches missing objects on demand, and a fetch inside the check cannot ask \
+             for a password or passphrase: run `git diff --stat {base} {head}` in your terminal \
+             first, which fetches the objects the check reads, then push again; otherwise "
+        ),
+        _ => String::new(),
+    };
+    Violation::always_blocking(
+        "git.test_gate_on_push",
+        format!(
+            "push set check gave no verdict within its deadline and was ended: `{shown}`; the deadline is {deadline}"
+        ),
+        &format!(
+            "{prefetch}find what the check waits on (a slow destination, or a partial clone fetching a missing object) and push again; a project that needs longer raises git.remote_query_timeout_seconds, git.remote_query_attempts, git.remote_fetch_timeout_seconds or git.push_budget_seconds on its default branch"
+        ),
+    )
+}
+
+/// Whether this clone names a promisor remote (`extensions.partialClone` or
+/// a `remote.<name>.promisor`), so a missing object is fetched on demand.
+/// A read that fails or stalls answers no: it only chooses a hint.
+fn fetches_on_demand(root: &Path) -> bool {
+    let mut command = codeflow_core::git::judging_command();
+    command.arg("-C").arg(root).args([
+        "config",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.promisor)$",
+    ]);
+    let limits = remote_query::QueryLimits::from_authority_or_default(root);
+    matches!(
+        remote_query::bounded_local(command, limits.timeout()),
+        Ok(remote_query::LocalAnswer::Answer(listed)) if !listed.is_empty()
+    )
 }
 
 /// A check's printed output as the hook shows it: URL credentials hidden,

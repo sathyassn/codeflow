@@ -1009,6 +1009,7 @@ fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
     ]);
     let tree = indexed(&["write-tree"]);
     let changed = indexed(&["commit-tree", &tree, "-p", &base, "-m", "feat: change f"]);
+    let base_commit = indexed(&["rev-parse", &base]);
     git(&clone, &["branch", "feat/y", &changed]);
     let stall = dir.path().join("stall-upload-pack");
     let chain = dir.path().join("stall-chain");
@@ -1044,6 +1045,14 @@ fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
         out.contains("gave no verdict within its deadline")
             && out.contains("6s: the destination lookup wait 2s × 1 attempts")
             && out.contains("git.remote_fetch_timeout_seconds"),
+        "{took:?}: {out}"
+    );
+    // A partial clone's refusal leads with the foreground prefetch: a diff
+    // of the pushed range, in the terminal, fetches what the check reads.
+    assert!(
+        out.contains(&format!(
+            "run `git diff --stat {base_commit} {changed}` in your terminal first"
+        )) && out.contains("cannot ask for a password or passphrase"),
         "{took:?}: {out}"
     );
     assert!(took < std::time::Duration::from_secs(40), "{took:?}: {out}");
@@ -1138,6 +1147,8 @@ fn a_late_nested_read_ends_with_the_pre_push_check() {
         out.contains("gave no verdict within its deadline"),
         "{took:?}: {out}"
     );
+    // A full clone fetches nothing on demand, so no prefetch is suggested.
+    assert!(!out.contains("git diff --stat"), "{took:?}: {out}");
     assert_all_ended(&chain);
 }
 
