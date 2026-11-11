@@ -1670,7 +1670,10 @@ fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut Stage
             return;
         }
     }
-    let git = crate::ids::Git::new(root);
+    // Within the lookup limits, and reading local objects only (TSK-327):
+    // a stalled or oversized read, or a promised object the clone lacks,
+    // blocks below instead of holding the push or starting a fetch.
+    let git = crate::ids::Git::for_pre_push(root);
     let exclude =
         (!is_zero_sha(&r.remote_sha) && !r.remote_sha.is_empty()).then_some(r.remote_sha.as_str());
     let findings = crate::ids::Ledger::read(&git, &r.local_sha)

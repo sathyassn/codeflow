@@ -413,6 +413,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // git fetch stderr in an error message shown to a person, never compared
+    (
+        "codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/ids/issue.rs",
@@ -3462,6 +3470,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "split_terminator",
         1,
         "framing:ids-git-git-branch-refs-records",
+    ),
+    // Explicit LF records of Git-generated ASCII object ids from `rev-list --no-object-names`; no name is printed or read.
+    (
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
+        "split_terminator",
+        1,
+        "framing:ids-git-git-fetch-missing-records",
+    ),
+    // Trims only Git fetch stderr in an error value after nonzero exit; the exit status decides failure.
+    (
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
+        "trim",
+        1,
+        "display",
     ),
     // Trims only Git stderr in an error value after nonzero exit; successful decision answers decode strictly.
     (
@@ -6633,6 +6657,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "ids-git-git-branch-refs-records",
         "crates/codeflow-core/src/ids/git.rs",
         "Git::branch_refs",
+    ),
+    (
+        "ids-git-git-fetch-missing-records",
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
     ),
     (
         "ids-inventory-lifetime-start-records",

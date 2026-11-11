@@ -660,21 +660,56 @@ type Ran = (std::process::ExitStatus, Vec<u8>, Option<Vec<u8>>);
 /// answer, and up to 64 KiB of its diagnostics when they could be read
 /// before the stderr grace ended. Only a timeout, an oversized answer or a
 /// failure to run or read is an error.
-fn bounded_run(mut command: std::process::Command, deadline: Duration) -> Result<Ran, Failure> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+fn bounded_run(command: std::process::Command, deadline: Duration) -> Result<Ran, Failure> {
+    bounded_run_input(command, None, deadline)
+}
+
+/// [`bounded_run`], with `input` written to git's stdin from its own thread
+/// when given ([`crate::git::spawn_with_input_stopping`]), so a stdin-fed
+/// read such as `cat-file --batch` has the same deadline and answer cap. A
+/// write that has not ended by then ends with git's group.
+fn bounded_run_input(
+    mut command: std::process::Command,
+    input: Option<&[u8]>,
+    deadline: Duration,
+) -> Result<Ran, Failure> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
+    let started = match input {
+        Some(input) => {
+            crate::git::spawn_with_input_stopping(&mut command, input.to_vec(), |child| {
+                kill_group(child);
+            })
+            .map(|(child, writer)| (child, Some(writer)))
+        }
+        None => command
+            .stdin(Stdio::null())
+            .spawn()
+            .map(|child| (child, None)),
+    };
+    let (mut child, writer) =
+        started.map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
+    let ran = bounded_wait(&mut child, deadline);
+    if let Some(writer) = writer {
+        // The group is ended on every failure above, which closes the pipe,
+        // so the writer has finished or is about to.
+        let written = writer.finish();
+        if ran.is_ok() {
+            written
+                .map_err(|error| Failure::Other(format!("writing its input failed: {error}")))?;
+        }
+    }
+    ran
+}
+
+/// Collect a started git's answer within `deadline`; see [`bounded_run`].
+fn bounded_wait(child: &mut std::process::Child, deadline: Duration) -> Result<Ran, Failure> {
     let Some(stdout) = child.stdout.take() else {
-        kill_group(&mut child);
+        kill_group(child);
         return Err(Failure::Other("could not read its answer".to_string()));
     };
     // The destination query reads diagnostics only to classify
@@ -708,20 +743,20 @@ fn bounded_run(mut command: std::process::Command, deadline: Duration) -> Result
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(bytes)) => break bytes,
             Ok(Err(error)) => {
-                kill_group(&mut child);
+                kill_group(child);
                 return Err(Failure::Other(format!(
                     "reading its answer failed: {error}"
                 )));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !expired() => {}
             Err(_) => {
-                kill_group(&mut child);
+                kill_group(child);
                 return Err(timed_out());
             }
         }
     };
     if bytes.len() > MAX_ANSWER_BYTES {
-        kill_group(&mut child);
+        kill_group(child);
         return Err(Failure::Other(format!(
             "its answer is over {} MiB",
             MAX_ANSWER_BYTES >> 20
@@ -731,11 +766,11 @@ fn bounded_run(mut command: std::process::Command, deadline: Duration) -> Result
     // its process group ID reserved, so ending the group below can reach
     // only git's descendants.
     loop {
-        match has_exited(&mut child) {
+        match has_exited(child) {
             Ok(true) => break,
             Ok(false) if !expired() => std::thread::sleep(Duration::from_millis(20)),
             _ => {
-                kill_group(&mut child);
+                kill_group(child);
                 return Err(timed_out());
             }
         }
@@ -756,7 +791,7 @@ fn bounded_run(mut command: std::process::Command, deadline: Duration) -> Result
             Ok(Err(_)) | Err(_) => None,
         }
     } else {
-        signal_group(&child);
+        signal_group(child);
         None
     };
     let status = match child.wait() {
@@ -795,7 +830,27 @@ pub fn bounded_output(
     command: std::process::Command,
     deadline: Duration,
 ) -> Result<std::process::Output, Unanswered> {
-    match bounded_run(command, deadline) {
+    output_of(bounded_run(command, deadline))
+}
+
+/// [`bounded_output`] for a stdin-fed git command, such as `cat-file
+/// --batch` or `hash-object --stdin`: `input` is written from its own
+/// thread, and the deadline and [`MAX_ANSWER_BYTES`] bound the whole
+/// exchange (TSK-327 pre-push id sync).
+///
+/// # Errors
+///
+/// Why git gave no output within `deadline`.
+pub fn bounded_output_with_input(
+    command: std::process::Command,
+    input: &[u8],
+    deadline: Duration,
+) -> Result<std::process::Output, Unanswered> {
+    output_of(bounded_run_input(command, Some(input), deadline))
+}
+
+fn output_of(ran: Result<Ran, Failure>) -> Result<std::process::Output, Unanswered> {
+    match ran {
         Ok((status, stdout, stderr)) => Ok(std::process::Output {
             status,
             stdout,
@@ -1101,6 +1156,41 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-327: a stdin-fed read has the same deadline and answer cap as
+    /// every other bounded read. A child that never reads its input (1 MiB,
+    /// more than a pipe holds, so the writer blocks) and never answers is
+    /// ended at the deadline with its group, and the blocked writer ends
+    /// with it. A child that answers more than the cap is refused. A child
+    /// that reads its input and answers is returned whole.
+    #[cfg(unix)]
+    #[test]
+    fn a_stdin_fed_read_ends_at_its_deadline_and_cap() {
+        let shell = |script: &str| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script]);
+            command
+        };
+        let input = vec![b'x'; 1 << 20];
+        let started = Instant::now();
+        let stalled = bounded_output_with_input(shell("sleep 30"), &input, Duration::from_secs(1));
+        let took = started.elapsed();
+        let why = stalled.unwrap_err();
+        assert!(why.timed_out, "{why:?}");
+        assert!(why.reason.contains("within 1s"), "{why:?}");
+        assert!(took < Duration::from_secs(10), "took {took:?}");
+        let oversized = bounded_output_with_input(
+            shell("cat >/dev/null; head -c 17000000 /dev/zero"),
+            &input,
+            Duration::from_secs(30),
+        )
+        .unwrap_err();
+        assert!(!oversized.timed_out && oversized.reason.contains("over 16 MiB"));
+        let answered =
+            bounded_output_with_input(shell("wc -c"), &input, Duration::from_secs(30)).unwrap();
+        assert!(answered.status.success());
+        assert_eq!(String::from_utf8_lossy(&answered.stdout).trim(), "1048576");
+    }
 
     #[test]
     fn diagnostics_redact_every_url_without_changing_other_text() {

@@ -29,9 +29,14 @@ impl Git {
 
     /// Git in the repository at `root` whose captured commands each run
     /// within `limits`: `fetch`, `push` and `ls-remote` within the fetch
-    /// wait, any other within the query wait. A network command that runs
-    /// out of time is [`IdsError::Offline`], as an unreachable authority
-    /// is; any other read that cannot answer is an error.
+    /// wait, any other within the query wait, and every answer within
+    /// [`MAX_ANSWER_BYTES`](crate::git::remote_query::MAX_ANSWER_BYTES).
+    /// A `fetch` or `ls-remote` that runs out of time writes nothing, so it
+    /// is [`IdsError::Offline`], as an unreachable authority is. A push that
+    /// gives no answer has an unknown outcome and is never offline
+    /// ([`Git::push_output`]). Any other read that cannot answer is an
+    /// error. Local reads also run with lazy fetching off, so a missing
+    /// promised object fails at once and starts no transport.
     #[must_use]
     pub fn bounded(root: &Path, limits: crate::git::remote_query::QueryLimits) -> Git {
         Git {
@@ -40,27 +45,142 @@ impl Git {
         }
     }
 
-    /// Capture `command`'s output, within the limits when they are set.
-    fn capture(&self, mut command: Command, args: &[&str]) -> Result<Output, IdsError> {
-        let shown = || crate::git::remote_query::display_urls(&args.join(" "));
-        let Some(limits) = self.limits else {
-            return command
-                .output()
-                .map_err(|error| IdsError::Git(format!("git {}: {error}", shown())));
-        };
-        let network = matches!(args.first(), Some(&"fetch" | &"push" | &"ls-remote"));
-        let deadline = if network {
-            limits.fetch_timeout()
-        } else {
-            limits.timeout()
-        };
-        crate::git::remote_query::bounded_output(command, deadline).map_err(|why| {
-            if network && why.timed_out {
-                IdsError::Offline(format!("git {}: {}", shown(), why.reason))
+    /// [`Git::bounded`] within the lookup limits the authority's
+    /// configuration sets, as the pre-push hook's registry reads run. No
+    /// guard runs them: a guard builds only `QueryLimits::guard`.
+    #[must_use]
+    pub fn for_pre_push(root: &Path) -> Git {
+        Git::bounded(
+            root,
+            crate::git::remote_query::QueryLimits::from_authority_or_default(root),
+        )
+    }
+
+    /// The deadline for `args` when limits are set: the fetch wait for a
+    /// network command, the query wait for any other.
+    fn deadline(&self, args: &[&str]) -> Option<std::time::Duration> {
+        let limits = self.limits?;
+        Some(
+            if matches!(args.first(), Some(&"fetch" | &"push" | &"ls-remote")) {
+                limits.fetch_timeout()
             } else {
-                IdsError::Git(format!("git {}: {}", shown(), why.reason))
+                limits.timeout()
+            },
+        )
+    }
+
+    /// Capture `command`'s output, within the limits when they are set,
+    /// feeding `input` on stdin when given. `Err` holds whether the
+    /// deadline ran out and why there is no output.
+    fn capture_raw(
+        &self,
+        mut command: Command,
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<Output, (bool, String)> {
+        let shown = || crate::git::remote_query::display_urls(&args.join(" "));
+        let Some(deadline) = self.deadline(args) else {
+            let output = match input {
+                Some(input) => crate::git::output_with_input(&mut command, input),
+                None => command.output(),
+            };
+            return output.map_err(|error| (false, format!("git {}: {error}", shown())));
+        };
+        let output = match input {
+            Some(input) => {
+                crate::git::remote_query::bounded_output_with_input(command, input, deadline)
             }
-        })
+            None => crate::git::remote_query::bounded_output(command, deadline),
+        };
+        output.map_err(|why| (why.timed_out, format!("git {}: {}", shown(), why.reason)))
+    }
+
+    /// [`Git::capture_raw`] as the registry's error: only a `fetch` or
+    /// `ls-remote` that ran out of time is offline.
+    fn capture(
+        &self,
+        command: Command,
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<Output, IdsError> {
+        self.capture_raw(command, args, input)
+            .map_err(|(timed_out, reason)| {
+                if timed_out && matches!(args.first(), Some(&"fetch" | &"ls-remote")) {
+                    IdsError::Offline(reason)
+                } else {
+                    IdsError::Git(reason)
+                }
+            })
+    }
+
+    /// Run `git push` and return its raw output, whatever the exit status.
+    /// A push that gives no full answer, whether it ran out of time, its
+    /// answer was too large or git could not be started, is `Err` with the
+    /// reason: the caller cannot tell whether the authority took the
+    /// write, so it reads the registry back and never treats the authority
+    /// as offline (R-13, TSK-327).
+    ///
+    /// # Errors
+    ///
+    /// Why the push gave no answer.
+    pub fn push_output(&self, args: &[&str]) -> Result<Output, String> {
+        self.capture_raw(self.command(args), args, None)
+            .map_err(|(_, reason)| reason)
+    }
+
+    /// Fetch from `remote`, in one request, every object reachable from
+    /// `refs` that this clone holds only as a promise (a partial clone
+    /// fetches commits and trees but not blobs). The bounded registry's
+    /// local reads never fetch a missing object themselves, so the sync
+    /// fills its registry here, within the fetch wait (TSK-327). A clone
+    /// with nothing missing starts no fetch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the objects cannot be listed or the fetch
+    /// fails. A fetch that runs out of time is [`IdsError::Offline`].
+    pub fn fetch_missing(&self, remote: &str, refs: &[&str]) -> Result<(), IdsError> {
+        if refs.is_empty() {
+            return Ok(());
+        }
+        // One object id per LF record, a missing one led by `?`; no path is
+        // printed, so a registry file name cannot forge a record.
+        let mut listing = vec![
+            "rev-list",
+            "--objects",
+            "--no-object-names",
+            "--missing=print",
+        ];
+        listing.extend_from_slice(refs);
+        let missing = self
+            .run(&listing)?
+            .split_terminator('\n')
+            .filter_map(|line| line.strip_prefix('?'))
+            .fold(String::new(), |mut acc, id| {
+                acc.push_str(id);
+                acc.push('\n');
+                acc
+            });
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let args = [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--recurse-submodules=no",
+            "--filter=blob:none",
+            "--stdin",
+            remote,
+        ];
+        let output = self.capture(self.command(&args), &args, Some(missing.as_bytes()))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(IdsError::Git(format!(
+            "fetching the registry's missing objects from {remote} failed: {}",
+            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
+        )))
     }
 
     /// The repository root.
@@ -69,6 +189,14 @@ impl Git {
         &self.root
     }
 
+    /// Git for `args`. A bounded registry's local commands read this
+    /// repository's objects only ([`crate::git::local_objects_only`]): in a
+    /// partial clone a missing promised object would otherwise start a
+    /// fetch from the promisor remote, a transport outside every deadline
+    /// here. The registry fetch fills what a partial clone leaves out
+    /// ([`Git::fetch_missing`]), so a missing object after it fails at once.
+    /// The pre-push sync first refuses a git too old to honour the setting
+    /// in a repository with a promisor remote ([`super::issue::sync`]).
     fn command(&self, args: &[&str]) -> Command {
         let mut command = crate::workgraph::history::command();
         command
@@ -78,6 +206,10 @@ impl Git {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
             .stdin(Stdio::null());
+        if self.limits.is_some() && !matches!(args.first(), Some(&"fetch" | &"push" | &"ls-remote"))
+        {
+            crate::git::local_objects_only(&mut command);
+        }
         command
     }
 
@@ -99,7 +231,7 @@ impl Git {
     /// Returns an error when git cannot be started.
     pub fn output(&self, args: &[&str]) -> Result<Output, IdsError> {
         self.check_history(args)?;
-        self.capture(self.command(args), args)
+        self.capture(self.command(args), args, None)
     }
 
     /// Run git with extra environment and return its raw output.
@@ -113,7 +245,7 @@ impl Git {
         for (key, value) in env {
             command.env(key, value);
         }
-        self.capture(command, args)
+        self.capture(command, args, None)
     }
 
     /// Run git and return stdout, failing on a nonzero exit.
@@ -148,20 +280,15 @@ impl Git {
         checked(args, &output)
     }
 
-    /// Run git feeding `input` on stdin, failing on a nonzero exit.
+    /// Run git feeding `input` on stdin, failing on a nonzero exit, within
+    /// the limits when they are set.
     ///
     /// # Errors
     ///
     /// Returns an error naming the command and git's stderr.
     pub fn run_input(&self, args: &[&str], input: &[u8]) -> Result<String, IdsError> {
         self.check_history(args)?;
-        let output =
-            crate::git::output_with_input(&mut self.command(args), input).map_err(|error| {
-                IdsError::Git(format!(
-                    "git {}: {error}",
-                    crate::git::remote_query::display_urls(&args.join(" "))
-                ))
-            })?;
+        let output = self.capture(self.command(args), args, Some(input))?;
         checked(args, &output)
     }
 
@@ -278,7 +405,8 @@ impl Git {
         })
     }
 
-    /// Read many blobs in one `cat-file --batch` process.
+    /// Read many blobs in one `cat-file --batch` process, within the limits
+    /// when they are set.
     ///
     /// # Errors
     ///
@@ -293,11 +421,8 @@ impl Git {
             acc.push('\n');
             acc
         });
-        let output = crate::git::output_with_input(
-            &mut self.command(&["cat-file", "--batch"]),
-            request.as_bytes(),
-        )
-        .map_err(|error| IdsError::Git(format!("git cat-file: {error}")))?;
+        let args = ["cat-file", "--batch"];
+        let output = self.capture(self.command(&args), &args, Some(request.as_bytes()))?;
         if !output.status.success() {
             return Err(IdsError::Git("git cat-file --batch failed".to_string()));
         }
@@ -637,6 +762,185 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             assert!(Git::new(root.path()).common_dir().is_err());
         }
+    }
+
+    /// TSK-327: a bounded registry's stdin-fed read has the query wait. A
+    /// command that takes its input and answers nothing for 30 s (an alias
+    /// that sleeps) refuses at the 1 s wait, naming it. Before, the read had
+    /// no deadline and waited out the stall.
+    #[cfg(unix)]
+    #[test]
+    fn a_stalled_stdin_fed_registry_read_refuses_within_the_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        Git::new(dir.path()).run(&["init", "-q"]).unwrap();
+        let git = Git::bounded(
+            dir.path(),
+            crate::git::remote_query::QueryLimits::scaled(std::time::Duration::from_secs(1), 1),
+        );
+        let started = std::time::Instant::now();
+        let error = git
+            .run_input(
+                &["-c", "alias.stall=!sleep 30", "stall"],
+                &vec![b'x'; 1 << 20],
+            )
+            .unwrap_err()
+            .to_string();
+        let took = started.elapsed();
+        assert!(error.contains("no answer within 1s"), "{error}");
+        assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+    }
+
+    /// TSK-327: a bounded registry's local reads run with lazy fetching off.
+    /// In a partial clone whose registry blob is promised and absent,
+    /// `blobs` fails at once as missing, and the promisor's upload-pack (a
+    /// wrapper that leaves a marker) never starts. The unbounded runner,
+    /// which keeps git's default, fetches the same blob through the wrapper:
+    /// that shows the fixture would start a transport and that this git
+    /// honours `GIT_NO_LAZY_FETCH`.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_promised_registry_blob_starts_no_transport() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let upstream = dir.path().join("upstream");
+        let work = dir.path().join("work");
+        let run = |at: &Path, args: &[&str]| Git::new(at).run(args).unwrap();
+        std::fs::create_dir_all(&upstream).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        run(&upstream, &["init", "-q", "-b", "main"]);
+        std::fs::write(upstream.join("001.toml"), "id = \"TSK-001\"\n").unwrap();
+        run(&upstream, &["add", "."]);
+        run(
+            &upstream,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "chore: one entry",
+            ],
+        );
+        run(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+        run(
+            &upstream,
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        );
+        let blob = run(&upstream, &["rev-parse", "HEAD:001.toml"])
+            .trim()
+            .to_string();
+        run(&work, &["init", "-q", "-b", "main"]);
+        let url = format!("file://{}", upstream.display());
+        run(&work, &["remote", "add", "origin", &url]);
+        run(&work, &["config", "remote.origin.promisor", "true"]);
+        run(&work, &["config", "extensions.partialClone", "origin"]);
+        run(
+            &work,
+            &["fetch", "-q", "--filter=blob:none", "origin", "main"],
+        );
+        let marker = dir.path().join("fetched");
+        let wrapper = dir.path().join("upload-pack");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nexec git upload-pack \"$@\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        run(
+            &work,
+            &[
+                "config",
+                "remote.origin.uploadpack",
+                wrapper.to_str().unwrap(),
+            ],
+        );
+        let bounded = Git::bounded(&work, crate::git::remote_query::QueryLimits::default());
+        let error = bounded
+            .blobs(std::slice::from_ref(&blob))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing"), "{error}");
+        assert!(!marker.exists(), "a lazy fetch started a transport");
+        let fetched = Git::new(&work).blobs(std::slice::from_ref(&blob)).unwrap();
+        assert_eq!(fetched[&blob], b"id = \"TSK-001\"\n");
+        assert!(marker.exists(), "the fixture's lazy fetch did not run");
+    }
+
+    /// In a partial clone, the registry fetch brings the blobs the clone
+    /// filter left out, so the bounded sync's ledger reads, which never
+    /// fetch lazily, still read every entry, an earlier entry included.
+    #[test]
+    fn the_registry_fetch_fills_a_partial_clone() {
+        let dir = tempfile::tempdir().unwrap();
+        let upstream = dir.path().join("upstream");
+        let work = dir.path().join("work");
+        let run = |at: &Path, args: &[&str]| Git::new(at).run(args).unwrap();
+        let commit = |at: &Path, name: &str| {
+            std::fs::create_dir_all(at.join("ids/TSK")).unwrap();
+            std::fs::write(at.join(format!("ids/TSK/{name}.toml")), name).unwrap();
+            run(at, &["add", "."]);
+            run(
+                at,
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "chore: one entry",
+                ],
+            );
+            run(at, &["rev-parse", &format!("HEAD:ids/TSK/{name}.toml")])
+                .trim()
+                .to_string()
+        };
+        std::fs::create_dir_all(&upstream).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        run(
+            &upstream,
+            &["init", "-q", "-b", super::super::REGISTRY_BRANCH],
+        );
+        run(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+        run(
+            &upstream,
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        );
+        let first = commit(&upstream, "001");
+        run(&work, &["init", "-q", "-b", "main"]);
+        let url = format!("file://{}", upstream.display());
+        run(&work, &["remote", "add", "origin", &url]);
+        run(&work, &["config", "remote.origin.promisor", "true"]);
+        run(
+            &work,
+            &["config", "remote.origin.partialCloneFilter", "blob:none"],
+        );
+        run(&work, &["config", "extensions.partialClone", "origin"]);
+        let tracking = super::super::tracking_ref("origin");
+        let refspec = format!("refs/heads/{}:{tracking}", super::super::REGISTRY_BRANCH);
+        run(
+            &work,
+            &["fetch", "-q", "--filter=blob:none", "origin", &refspec],
+        );
+        let second = commit(&upstream, "002");
+        let bounded = Git::bounded(&work, crate::git::remote_query::QueryLimits::default());
+        assert!(
+            bounded.blobs(std::slice::from_ref(&first)).is_err(),
+            "the fixture's clone filter left nothing out"
+        );
+        assert!(matches!(
+            super::super::issue::fetch(&bounded, "origin").unwrap(),
+            super::super::issue::Fetched::Ok
+        ));
+        let read = bounded.blobs(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(read[&first], b"001");
+        assert_eq!(read[&second], b"002");
     }
 
     #[test]

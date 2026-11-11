@@ -656,6 +656,93 @@ fn clears_ids_sync_failed() {
     assert_published(&dest);
 }
 
+/// TSK-327: a registry push that gives no answer has an unknown outcome,
+/// so it is read back and never taken for an offline authority. The
+/// pre-push hook entry point runs with a `git` first on `PATH` (git itself
+/// would put its own folder first for a hook) that stalls only the
+/// registry push (`push --porcelain`). The authority answers the sync's
+/// fetch; the push runs out of the landed fetch wait (5 s); the sync reads
+/// the registry back, finds the reservation unpublished and blocks under
+/// `registry.sync`, naming the unknown outcome. Before, the timeout read as
+/// offline: a nonblocking "ids sync skipped" note.
+#[cfg(unix)]
+#[test]
+fn a_stalled_registry_push_after_a_good_fetch_blocks_the_push() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let (dest, rewrite) = pending_reservation(&root);
+    git(&root, &["config", "--unset", &rewrite]);
+    land_on_default(&root, &dest, |root| {
+        set_policy(root, &[("remote_fetch_timeout_seconds", 5.into())]);
+    });
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    let bin = dir.path().join("stall-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *push\\ --porcelain*) sleep 60;;\nesac\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let head = text(&run("git", &root, &["rev-parse", "HEAD"]));
+    let url = text(&run(
+        "git",
+        &root,
+        &["remote", "get-url", "--push", "origin"],
+    ));
+    let mut cmd = command(exe().to_str().unwrap(), &root);
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value)
+        .unwrap()
+        .to_owned();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path)))
+            .unwrap();
+    let started = std::time::Instant::now();
+    let mut child = cmd
+        .env("PATH", path)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/plan/work {} refs/heads/plan/work {}",
+        head.trim(),
+        "0".repeat(40)
+    )
+    .unwrap();
+    let ran = child.wait_with_output().unwrap();
+    let took = started.elapsed();
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(!out.contains("ids sync skipped"), "{took:?}: {out}");
+    assert!(
+        out.contains("registry.sync") && out.contains("outcome is unknown"),
+        "{took:?}: {out}"
+    );
+    let listed = text(&run(
+        "git",
+        &dest,
+        &["ls-tree", "-r", "--name-only", "codeflow/registry"],
+    ));
+    assert!(!listed.contains("ids/TSK/001.toml"), "{listed}");
+    assert!(took < std::time::Duration::from_secs(50), "{took:?}: {out}");
+}
+
 #[test]
 fn clears_doctor_id_registry() {
     // The full tier keeps an id registry; with no remote it is local.

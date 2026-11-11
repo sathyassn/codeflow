@@ -123,7 +123,7 @@ fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError>
         );
         let commit = commit_entries(git, base.as_deref(), &[&entry], request.verb)?;
         remember(git, &entry, request)?;
-        match push(git, AUTHORITY, &commit)? {
+        match push(git, AUTHORITY, &commit) {
             Pushed::Accepted => {
                 adopt(git, AUTHORITY, &commit)?;
                 return Ok(Reservation {
@@ -438,6 +438,11 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     let refspec = format!("refs/heads/{}:{tracking}", super::REGISTRY_BRANCH);
     let output = git.output(&["fetch", "--no-tags", remote, &refspec])?;
     if output.status.success() {
+        let mut refs = vec![tracking.as_str()];
+        if git.rev(REGISTRY_REF)?.is_some() {
+            refs.push(REGISTRY_REF);
+        }
+        git.fetch_missing(remote, &refs)?;
         return Ok(Fetched::Ok);
     }
     let raw_stderr = String::from_utf8_lossy(&output.stderr);
@@ -521,18 +526,28 @@ fn checkpoint(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> {
     })
 }
 
-pub(super) fn push(git: &Git, remote: &str, commit: &str) -> Result<Pushed, IdsError> {
+pub(super) fn push(git: &Git, remote: &str, commit: &str) -> Pushed {
     let refspec = format!("{commit}:{REGISTRY_REF}");
-    let output = git.output(&["push", "--porcelain", remote, &refspec])?;
+    // A push with no answer may have been applied: its outcome is unknown,
+    // so it is read back like any unclear push, never taken as an offline
+    // authority (R-13, TSK-327).
+    let output = match git.push_output(&["push", "--porcelain", remote, &refspec]) {
+        Ok(output) => output,
+        Err(reason) => {
+            return Pushed::Unclear(format!(
+                "the push gave no answer, so its outcome is unknown: {reason}"
+            ))
+        }
+    };
     if output.status.success() {
-        return Ok(Pushed::Accepted);
+        return Pushed::Accepted;
     }
     let text = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(classify_push(&text))
+    classify_push(&text)
 }
 
 /// Classify a failed push (R-13). A refusal that names permission, an
@@ -653,12 +668,16 @@ pub struct SyncReport {
 /// Returns a clash naming `ids retarget` (or the authority migration for a
 /// landed record), or the classified push failure. Offline is
 /// [`IdsError::Offline`]. The pre-push hook runs it, so every git command it
-/// captures runs within the lookup limits ([`Git::bounded`], TSK-327).
+/// captures runs within the lookup limits ([`Git::bounded`], TSK-327), and
+/// its local reads never fetch a missing object: a repository with a
+/// promisor remote on a git too old to honour that is refused first, as the
+/// commit-time scan refuses it.
 pub fn sync(root: &Path) -> Result<SyncReport, IdsError> {
     let git = Git::bounded(
         root,
         crate::git::remote_query::QueryLimits::from_authority_or_default(root),
     );
+    crate::hooks::gitleaks::require_offline_objects(root).map_err(IdsError::Git)?;
     let _lock = state::lock(&git)?;
     if !git.has_remote(AUTHORITY)? {
         return Ok(SyncReport {
@@ -762,7 +781,7 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
         let Some(tip) = tip else {
             // The authority has no registry: publish the local history as
             // it is; its root commit is judged by the same rule (R-109).
-            match push(git, remote, &local)? {
+            match push(git, remote, &local) {
                 Pushed::Accepted => {
                     adopt(git, remote, &local)?;
                     report.published = pending.into_iter().map(|entry| entry.id).collect();
@@ -773,7 +792,19 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
                     continue;
                 }
                 Pushed::Failed(error) => return Err(error),
-                Pushed::Unclear(why) => return Err(IdsError::Transport(why)),
+                Pushed::Unclear(why) => {
+                    // Read back: published only when the authority's
+                    // registry is now exactly the local history.
+                    read_back_fetch(git, remote, &why)?;
+                    if git.rev(&tracking)?.as_deref() == Some(local.as_str()) {
+                        adopt(git, remote, &local)?;
+                        report.published = pending.into_iter().map(|entry| entry.id).collect();
+                        return Ok(report);
+                    }
+                    return Err(IdsError::Transport(format!(
+                        "{why}; read back: the authority does not hold this registry"
+                    )));
+                }
             }
         };
         let authority = Ledger::read(git, &tracking)?;
@@ -799,7 +830,7 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
         }
         let refs: Vec<&Entry> = remaining.iter().collect();
         let commit = commit_entries(git, Some(&tip), &refs, "sync")?;
-        match push(git, remote, &commit)? {
+        match push(git, remote, &commit) {
             Pushed::Accepted => {
                 adopt(git, remote, &commit)?;
                 report.published = remaining.into_iter().map(|entry| entry.id).collect();
@@ -808,11 +839,7 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
             Pushed::Moved(why) => reason = why,
             Pushed::Failed(error) => return Err(error),
             Pushed::Unclear(why) => {
-                if let Fetched::Offline(reason) = fetch(git, remote)? {
-                    return Err(IdsError::Transport(format!(
-                        "{why}; read-back failed: {reason}"
-                    )));
-                }
+                read_back_fetch(git, remote, &why)?;
                 let authority = Ledger::read(git, &tracking)?;
                 if remaining.iter().all(|entry| {
                     authority
@@ -824,11 +851,31 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
                     report.published = remaining.into_iter().map(|entry| entry.id).collect();
                     return Ok(report);
                 }
-                return Err(IdsError::Transport(why));
+                return Err(IdsError::Transport(format!(
+                    "{why}; read back: the authority does not bind every pending reservation"
+                )));
             }
         }
     }
     Err(IdsError::Contended(PUSH_ATTEMPTS, reason))
+}
+
+/// The bounded read-back fetch after a sync push with an unclear outcome
+/// (R-13). A write may have landed, so a fetch that cannot answer, by its
+/// own report or by running out of time, is never [`IdsError::Offline`]:
+/// the outcome stays unknown and the sync blocks with a transport failure
+/// that says so (TSK-327).
+fn read_back_fetch(git: &Git, remote: &str, why: &str) -> Result<(), IdsError> {
+    let unknown = |reason: &str| {
+        IdsError::Transport(format!(
+            "{why}; the read-back could not settle it ({reason}), so whether the authority took the registry push is unknown"
+        ))
+    };
+    match fetch(git, remote) {
+        Ok(Fetched::Ok | Fetched::Absent) => Ok(()),
+        Ok(Fetched::Offline(reason)) | Err(IdsError::Offline(reason)) => Err(unknown(&reason)),
+        Err(error) => Err(unknown(&error.to_string())),
+    }
 }
 
 fn clash_message(git: &Git, clashes: &[Entry]) -> Result<String, IdsError> {
@@ -1035,7 +1082,7 @@ pub fn restore(root: &Path, ids: &[RegId]) -> Result<Vec<RegId>, IdsError> {
             set_ref(&git, REGISTRY_REF, &commit, Some(&tip))?;
             return Ok(restored);
         }
-        match push(&git, AUTHORITY, &commit)? {
+        match push(&git, AUTHORITY, &commit) {
             Pushed::Accepted => {
                 adopt(&git, AUTHORITY, &commit)?;
                 return Ok(restored);
