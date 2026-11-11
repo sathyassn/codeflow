@@ -1102,7 +1102,7 @@ mod tests {
         let unread = raw_url_unread("x$(id)\u{1b}", "entry is not unique");
         for why in [&differs, &unread] {
             assert!(!why.contains('\u{1b}'), "{why}");
-            assert!(why.contains(r"$(id)\u{1b}"), "{why}");
+            assert!(why.contains(r"$(id)\x1b"), "{why}");
             assert!(!why.contains('`'), "no command: {why}");
             assert!(why.contains("with an editor"), "{why}");
         }
