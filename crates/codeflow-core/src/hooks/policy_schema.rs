@@ -413,6 +413,7 @@ pub const SCHEMA: [KeySpec; 86] = [
         valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
         purpose: "How long the pre-push set may take before the hook reports the overrun, naming the slowest step and the slowest checks inside a `codeflow ci` step.",
         notes: "Default 60. It only reports: a push over the budget still lands when its checks pass, and no check is skipped or shortened to meet it. \
+                It is also one term of the deadline each pre-push `codeflow ci` check runs within (see git.test_gate_on_push). \
                 The pre-push hook reads it from the default branch's committed policy as last fetched, never from a pushed head; with no such branch it uses the default. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
@@ -942,8 +943,17 @@ pub const SCHEMA: [KeySpec; 86] = [
                 branches is not taken as initialization when the push \
                 connected with a `git -c` http, protocol, remote, ssh or \
                 transfer setting, or `core.gitProxy`, that the lookup does \
-                not apply. Other local-config tampering is outside the hook \
-                threat model; hosted CI checks the pushed commit.",
+                not apply. Each pushed range's `codeflow ci` runs within one \
+                deadline, git.remote_query_timeout_seconds times \
+                git.remote_query_attempts, plus \
+                git.remote_fetch_timeout_seconds, plus \
+                git.push_budget_seconds (270 s by default); a check still \
+                running then is ended with its process group and refuses the \
+                push, naming the deadline and these keys. Before it, the hook \
+                fetches the objects the id registry lacks in a partial clone \
+                in one bounded request, and the check reads the registry with \
+                lazy fetching off. Other local-config tampering is outside \
+                the hook threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",
