@@ -533,7 +533,14 @@ impl Kernel {
     /// pointer when that is the tier's shared home ([`Self::rule_home`]).
     #[must_use]
     pub fn render_rule_at(&self, tier: Tier, rule: &Rule) -> String {
-        let shared = matches!((self.rule_home(tier), rule.see.as_slice()), (Some(home), [only]) if only == home);
+        Self::render_rule_with_home(self.rule_home(tier), rule)
+    }
+
+    /// One always rule as the line a map whose shared home is `home`
+    /// carries ([`Self::render_rule_at`] for a known home).
+    #[must_use]
+    pub fn render_rule_with_home(home: Option<&str>, rule: &Rule) -> String {
+        let shared = matches!((home, rule.see.as_slice()), (Some(home), [only]) if only == home);
         if shared {
             format!("- **{}** {}", rule.title, rule.text)
         } else {

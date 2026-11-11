@@ -235,9 +235,9 @@ pub fn decide(
         // recorded overrides, rebuilt and checked as update does.
         let (recorded, base) = match overrides::Record::read(root, dest)? {
             Some(record) => {
-                let rebuilt = base
-                    .as_deref()
-                    .and_then(|base| overrides::rebuild(&record, base, recorded));
+                let rebuilt = base.as_deref().and_then(|base| {
+                    overrides::rebuild(&overridden.authority, &record, base, recorded)
+                });
                 let Some(rebuilt) = rebuilt else {
                     return Ok(Some(Decision::Unproven(Shown::fixed(
                         "the override record does not match the installed baseline and manifest",

@@ -34,6 +34,8 @@
 //! and the heading stay shipped. After applying, the result is checked unit
 //! by unit against the shipped text: only the targeted units may differ.
 
+pub mod authority;
+mod oracle;
 pub mod record;
 pub mod sections;
 
@@ -780,6 +782,9 @@ pub struct DestPlan {
     pub effective: String,
     /// The block format of a managed-region file; `None` for a managed file.
     pub region: Option<RegionFormat>,
+    /// What the binary's shipped text says each unit of this file is: what
+    /// a persisted record of the file is checked against.
+    pub authority: authority::Authority,
     /// The record update left last time, with its effective baseline
     /// rebuilt from the pristine baseline: the merge base.
     pub old: Option<(Record, String)>,
@@ -883,7 +888,13 @@ pub fn prepare(
         let effective = apply_units(&rendered, &applied)
             .filter(|effective| only_units_changed(&rendered, effective, &applied))
             .filter(|effective| same_sections(&rendered, effective))
+            .filter(|effective| oracle::same_structure(&rendered, effective, &applied))
             .ok_or_else(more_than_targeted)?;
+        let authority = match (agents_tier(&file.src), skill_of(&file.src)) {
+            (Some(tier), _) => authority::Authority::for_agents(&shipped.kernel, tier),
+            (None, Some(skill)) => authority::Authority::for_skill(skill, &rendered),
+            (None, None) => authority::Authority::default(),
+        };
         let (pristine, region) = if file.ownership == Ownership::ManagedRegion {
             let format = file.region.unwrap_or(RegionFormat::Markdown);
             let both = region::extract_block(&rendered, format)
@@ -906,6 +917,7 @@ pub fn prepare(
                 pristine,
                 effective,
                 region,
+                authority,
                 old: None,
             },
         );
@@ -923,16 +935,30 @@ fn record_unreadable(dest: &str) -> ScaffoldError {
 /// Rebuild the effective baseline a record claims: the pristine baseline
 /// with the record's applied set and nothing else. `None` unless the
 /// baseline hashes to the record's pristine hash and to `installed`, the
-/// installed manifest's hash, every unit is where the record says, and the
-/// result hashes to the record's effective hash.
+/// installed manifest's hash; every unit is one `authority`, the binary's
+/// shipped text for the file, lets a project override, at the place the
+/// binary finds that unit in the baseline, with a replacement of its shape;
+/// the result changes only those units and reads as the same Markdown blocks
+/// outside them; and it hashes to the record's effective hash. A record
+/// that is consistent with itself but names a unit it may not, or a range
+/// that is not that unit's, is refused.
 #[must_use]
-pub fn rebuild(record: &Record, baseline: &str, installed: Option<&str>) -> Option<String> {
+pub fn rebuild(
+    authority: &authority::Authority,
+    record: &Record,
+    baseline: &str,
+    installed: Option<&str>,
+) -> Option<String> {
     let pristine_hash = hash::sha256_hex(baseline.as_bytes());
     if record.pristine_sha256 != pristine_hash || installed != Some(pristine_hash.as_str()) {
         return None;
     }
+    if !authority.allows(baseline, &record.applied) {
+        return None;
+    }
     apply_units(baseline, &record.applied)
         .filter(|effective| only_units_changed(baseline, effective, &record.applied))
+        .filter(|effective| oracle::same_structure(baseline, effective, &record.applied))
         .filter(|effective| hash::sha256_hex(effective.as_bytes()) == record.effective_sha256)
 }
 
@@ -969,7 +995,8 @@ impl Plan {
                 None => Baseline::read(root, dest)?.unwrap_or_default(),
             };
             let installed_hash = installed.files.get(dest).map(|file| file.sha256.as_str());
-            let Some(effective) = rebuild(&record, &baseline, installed_hash) else {
+            let Some(effective) = rebuild(&plan.authority, &record, &baseline, installed_hash)
+            else {
                 return Err(ScaffoldError::invalid(
                     shown!("override state of {}", dest_shown(dest)),
                     Shown::fixed(
@@ -1019,8 +1046,13 @@ fn payload_is_this_update(journal: &record::Journal, plan: Option<&DestPlan>) ->
         Some(record) => {
             record.applied == plan.applied
                 && Some(&record.written_sha256) == journal.new.file.as_ref()
-                && rebuild(record, &journal.baseline_text, Some(&pristine_hash))
-                    .is_some_and(|effective| plan.effective_unit().as_ref() == Some(&effective))
+                && rebuild(
+                    &plan.authority,
+                    record,
+                    &journal.baseline_text,
+                    Some(&pristine_hash),
+                )
+                .is_some_and(|effective| plan.effective_unit().as_ref() == Some(&effective))
         }
     }
 }

@@ -457,6 +457,15 @@ pub enum BodyProblem {
     /// A raw HTML block (a comment, `<pre>`, `<script>` and the like) left
     /// open, which would hide the text after it in the same way.
     OpenHtmlBlock,
+    /// A carriage return, which Markdown reads as a line break.
+    CarriageReturn,
+    /// A code fence or raw HTML block that starts inside a list item or a
+    /// block quote, or under indentation.
+    NestedBlock,
+    /// An indented code block.
+    IndentedCode,
+    /// A list item or block quote still open at the end of the body.
+    OpenContainer,
 }
 
 impl BodyProblem {
@@ -477,8 +486,53 @@ impl BodyProblem {
             Self::OpenHtmlBlock => {
                 "the replacement leaves a raw HTML block open, which would hide the headings and markers after it"
             }
+            Self::CarriageReturn => {
+                "the replacement holds a carriage return, which Markdown reads as a line break; use plain line feeds"
+            }
+            Self::NestedBlock => {
+                "the replacement starts a code fence or raw HTML block inside a list item or block quote, or under indentation; \
+                 start it at the left margin, outside any list or quote"
+            }
+            Self::IndentedCode => {
+                "the replacement holds an indented code block; use a fenced code block at the left margin"
+            }
+            Self::OpenContainer => {
+                "the replacement ends inside a list item or block quote; end it with a blank line"
+            }
         }
     }
+}
+
+/// `line` without the list markers, block quote markers and indentation it
+/// starts with, and whether it had any.
+fn container_prefix(line: &str) -> (bool, &str) {
+    let mut rest = line;
+    loop {
+        let trimmed = rest.trim_start_matches([' ', '\t']);
+        let trimmed = if let Some(after) = trimmed.strip_prefix('>') {
+            after
+        } else if let Some(after) = trimmed
+            .strip_prefix(['-', '+', '*'])
+            .filter(|after| after.starts_with([' ', '\t']))
+        {
+            after
+        } else {
+            let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+            match trimmed[digits..].strip_prefix(['.', ')']) {
+                Some(after) if (1..=9).contains(&digits) && after.starts_with([' ', '\t']) => after,
+                _ => trimmed,
+            }
+        };
+        if trimmed.len() == rest.len() {
+            return (rest.len() != line.len(), rest);
+        }
+        rest = trimmed;
+    }
+}
+
+/// Whether `line` is blank: nothing but spaces, tabs and its line break.
+fn is_blank(line: &str) -> bool {
+    line.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\n'))
 }
 
 /// Check a replacement body for a section whose heading has `level`.
@@ -490,20 +544,35 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
     if body.trim().is_empty() {
         return Err(BodyProblem::Empty);
     }
+    if body.contains('\r') {
+        return Err(BodyProblem::CarriageReturn);
+    }
     let mut fence: Option<Fence> = None;
     let mut html: Option<&str> = None;
     // The line before may be paragraph text; the shipped heading line before
     // the body never is.
     let mut paragraph = false;
+    // The line before is blank (the heading line before the body counts).
+    let mut after_blank = true;
+    // A list item or block quote is open.
+    let mut container = false;
     for line in body.split_inclusive('\n') {
         if line.to_ascii_lowercase().contains("codeflow:") {
             return Err(BodyProblem::StructuralMarker);
+        }
+        // Ambiguous forms are refused wherever they stand, so that only
+        // top-level fences and HTML blocks at the left margin remain, which
+        // every Markdown reader agrees on.
+        let (nested, rest) = container_prefix(line);
+        if nested && fence_run(rest).is_some() {
+            return Err(BodyProblem::NestedBlock);
         }
         if let Some(end) = html {
             if line.to_ascii_lowercase().contains(end) {
                 html = None;
             }
             paragraph = false;
+            after_blank = is_blank(line);
             continue;
         }
         let was_open = fence.is_some();
@@ -511,8 +580,32 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
         fence = after;
         if was_open || delimiter {
             paragraph = false;
+            // A fence at the left margin ends any open list or quote.
+            container = false;
+            after_blank = false;
             continue;
         }
+        if is_blank(line) {
+            paragraph = false;
+            after_blank = true;
+            container = false;
+            continue;
+        }
+        if nested && html_block_end(rest).is_some() {
+            return Err(BodyProblem::NestedBlock);
+        }
+        if after_blank && (line.starts_with('\t') || line.starts_with("    ")) && !container {
+            return Err(BodyProblem::IndentedCode);
+        }
+        if nested && rest.len() != line.trim_start_matches([' ', '\t']).len() {
+            // A list or quote marker, not only indentation.
+            container = true;
+        } else if !nested && (heading_level(line).is_some() || html_block_end(line).is_some()) {
+            // A heading or HTML block at the left margin ends any open list
+            // or quote.
+            container = false;
+        }
+        after_blank = false;
         if heading_level(line).is_some_and(|l| l <= level)
             || (paragraph && setext_level(line).is_some_and(|l| l <= level))
         {
@@ -536,6 +629,9 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
     }
     if html.is_some() {
         return Err(BodyProblem::OpenHtmlBlock);
+    }
+    if container {
+        return Err(BodyProblem::OpenContainer);
     }
     Ok(())
 }
