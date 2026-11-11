@@ -331,6 +331,18 @@ fn withheld(text: &str) -> String {
     )
 }
 
+/// Whether `text` is or holds a URL or credential part the configuration
+/// of the repository at `root` carries, as [`relay_diagnostic`] finds them:
+/// equal to one, or holding one long enough to replace safely. `None` when
+/// that inventory cannot be read, which a caller treats as flagged.
+pub(crate) fn holds_configured_credential(root: &Path, text: &str) -> Option<bool> {
+    let (urls, parts) = configured_credentials(root)?;
+    Some(urls.iter().chain(&parts).any(|item| {
+        text == item.as_str()
+            || (item.chars().count() >= SHORTEST_REPLACED && text.contains(item.as_str()))
+    }))
+}
+
 /// The URLs this repository's configuration names for its remotes, longest
 /// first, and the credential parts they carry, longest first; `None` when
 /// the configuration cannot be read or a relevant entry is not UTF-8.
