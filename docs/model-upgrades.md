@@ -283,8 +283,10 @@ The paired governance cases separate persistence from assumption:
 
 A project can replace a managed always rule, a row of the "When you are
 about to" table, or a declared skill section, and keep the replacement
-through every `codeflow update`. Declare it in `.codeflow/overrides.toml`,
-which update never writes:
+through later `codeflow update` runs. One case needs your action: when a new
+version renames an overridden rule's title or a moment's "About to" cell,
+update refuses the old override until you recover it (see the rename row
+below). Declare it in `.codeflow/overrides.toml`, which update never writes:
 
 ```toml
 schema_version = 1
@@ -318,7 +320,7 @@ Update applies the file as follows:
 
 | Case | What update does |
 |---|---|
-| Any problem in the file | Refuses the whole update with nothing applied, naming the entry: a floor or fixed unit, a name this version does not declare (removed, renamed or never shipped), the same unit twice, a row value of more than one line or holding marker text, a section body that would end the section early (an ATX or setext heading at its level or higher), hold a codeflow marker, leave a code fence, raw HTML block, list item or block quote open, or use a form Markdown readers disagree on (a carriage return, a fence or HTML block inside a list or quote or under indentation, indented code), an unknown field, an unreadable file, or a result that would change any byte outside the targeted units or read as different Markdown blocks there. Retarget or remove the entry and rerun |
+| Any problem in the file | Refuses the whole update with nothing applied, naming the entry: a floor or fixed unit, a name this version does not declare (removed, renamed or never shipped), the same unit twice, a row value of more than one line or holding marker text, an override of any kind holding text a reviewer of the rendered page would not see (an HTML comment, a script, style or declaration block, or a control, bidirectional, zero-width or other invisible character), an overridden `AGENTS.md` whose managed block would end past Codex's instruction limit (`project_doc_max_bytes` in `.codex/config.toml` when set, else 32 KiB, counting the instruction files of the directories above it), or a limit update cannot determine (a config that does not parse, is not a regular file or sets a value that is not a positive integer), a section body that would end the section early (an ATX or setext heading at its level or higher), hold a codeflow marker, leave a code fence, raw HTML block, list item or block quote open, or use a form Markdown readers disagree on (a carriage return, a fence or HTML block inside a list or quote or under indentation, indented code), an unknown field, an unreadable file, or a result that would change any byte outside the targeted units or read as different Markdown blocks there. Retarget or remove the entry and rerun |
 | Hand edits | Merged against the shipped text with your overrides applied, so an override is never read as a hand edit and a hand edit is never folded into the overrides. What each override replaced is recorded at `.codeflow/.baseline/<file>.overrides.json` |
 | An interrupted update | Each overridden write is journaled in `.codeflow/.pending-update/` first. The next update checks every journal and record before it writes anything: it finishes a write that landed only when the journaled baseline and record match their digests and are exactly what this update writes, drops a write that did not land, and refuses any other state without writing |
 | An entry removed | The shipped text returns on the next update |
