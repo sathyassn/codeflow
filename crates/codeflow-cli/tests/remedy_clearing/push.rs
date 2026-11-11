@@ -818,6 +818,203 @@ fn a_registry_push_refuses_a_promisor_on_a_git_too_old_to_read_locally() {
     );
 }
 
+/// Run the pre-push hook entry point in `root` for a push of `line` (one
+/// line of git's pre-push input) to `origin`, and how long it took.
+fn pre_push_origin(root: &Path, line: &str) -> (Output, std::time::Duration) {
+    use std::io::Write as _;
+    let url = text(&run(
+        "git",
+        root,
+        &["remote", "get-url", "--push", "origin"],
+    ));
+    let started = std::time::Instant::now();
+    let mut child = command(exe().to_str().unwrap(), root)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.take().unwrap(), "{line}").unwrap();
+    let ran = child.wait_with_output().unwrap();
+    (ran, started.elapsed())
+}
+
+/// A copy of `dest` that leaves out every blob (`--filter=blob:none`),
+/// with its worktree left empty when `checkout` is false.
+fn blobless_clone(dir: &Path, dest: &Path, checkout: bool) -> PathBuf {
+    git(dest, &["config", "uploadpack.allowFilter", "true"]);
+    git(dest, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    let partial = dir.join("partial");
+    let copy = codeflow_fixture::clone(dir, dest, &partial).filter("blob:none");
+    if checkout {
+        copy.run();
+    } else {
+        copy.no_checkout().run();
+    }
+    partial
+}
+
+/// TSK-327: a plain push from a `blob:none` partial clone, with nothing
+/// pending, still passes. The clone fetched no registry blob; the hook
+/// fetches what the registry lacks in one bounded request before
+/// `codeflow ci`, whose registry reads then never fetch lazily. The pushed
+/// range adds a record, so the check reads the registry to bind it.
+#[test]
+fn a_plain_push_from_a_partial_clone_reads_the_filled_registry() {
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    git(&root, &["switch", "-q", "-c", "plan/work"]);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    commit_all(&root, "chore: add a quick target");
+    let seeded = codeflow(&root, &["ids", "seed"]);
+    assert!(!seeded.contains("error"), "{seeded}");
+    let out = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "a fixture",
+            "the work",
+        ],
+    );
+    assert!(out.contains("TSK-001") && !out.contains("pending"), "{out}");
+    commit_all(&root, "docs: plan the work");
+    assert_published(&dest);
+    let clone = blobless_clone(dir.path(), &dest, true);
+    git(
+        &clone,
+        &["fetch", "-q", root.to_str().unwrap(), "plan/work:plan/work"],
+    );
+    git(&clone, &["switch", "-q", "plan/work"]);
+    let listed = text(&run(
+        "git",
+        &clone,
+        &[
+            "rev-list",
+            "--objects",
+            "--no-object-names",
+            "--missing=print",
+            "refs/remotes/origin/codeflow/registry",
+        ],
+    ));
+    assert!(
+        listed.lines().any(|line| line.starts_with('?')),
+        "the clone holds every registry object: {listed}"
+    );
+    let head = text(&run("git", &clone, &["rev-parse", "HEAD"]));
+    let (ran, took) = pre_push_origin(
+        &clone,
+        &format!(
+            "refs/heads/plan/work {} refs/heads/plan/work {}",
+            head.trim(),
+            "0".repeat(40)
+        ),
+    );
+    let out = text(&ran);
+    assert!(ran.status.success(), "{took:?}: {out}");
+    assert!(out.contains("push not stopped"), "{took:?}: {out}");
+}
+
+/// TSK-327: the pre-push `codeflow ci` runs within one deadline, the sum
+/// of the waits the landed policy sets (here 2 s × 1 + 2 s + 2 s = 6 s).
+/// A `blob:none` clone, whose sparse checkout left `sub/f.txt` unfetched,
+/// pushes a commit that changes that file; the check's diff fetches the
+/// earlier blob lazily from the promisor, whose upload-pack stalls for
+/// 60 s. The hook ends the check with its process group at the deadline
+/// and refuses, naming the deadline and the settings that raise it.
+#[cfg(unix)]
+#[test]
+fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("remote_query_timeout_seconds", 2.into()),
+                ("remote_query_attempts", 1.into()),
+                ("remote_fetch_timeout_seconds", 2.into()),
+                ("push_budget_seconds", 2.into()),
+            ],
+        );
+        write(root, "sub/f.txt", "one\n");
+    });
+    let target = default_branch(&dest);
+    let clone = blobless_clone(dir.path(), &dest, false);
+    git(
+        &clone,
+        &["sparse-checkout", "set", "--no-cone", "/*", "!/sub/"],
+    );
+    git(&clone, &["read-tree", "-mu", "HEAD"]);
+    // A commit that changes sub/f.txt, made without reading its earlier blob.
+    let index = dir.path().join("index");
+    let indexed = |args: &[&str]| {
+        let out = command("git", &clone)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", text(&out));
+        text(&out).trim().to_string()
+    };
+    let base = format!("origin/{target}");
+    let held = command("git", &clone)
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .args(["cat-file", "-e", &format!("{base}:sub/f.txt")])
+        .output()
+        .unwrap();
+    assert!(!held.status.success(), "the clone holds sub/f.txt's blob");
+    indexed(&["read-tree", &base]);
+    std::fs::write(dir.path().join("two.txt"), "two\n").unwrap();
+    let blob = indexed(&[
+        "hash-object",
+        "-w",
+        dir.path().join("two.txt").to_str().unwrap(),
+    ]);
+    indexed(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("100644,{blob},sub/f.txt"),
+    ]);
+    let tree = indexed(&["write-tree"]);
+    let changed = indexed(&["commit-tree", &tree, "-p", &base, "-m", "feat: change f"]);
+    git(&clone, &["branch", "feat/y", &changed]);
+    let stall = dir.path().join("stall-upload-pack");
+    std::fs::write(&stall, "#!/bin/sh\nsleep 60\nexit 1\n").unwrap();
+    std::fs::set_permissions(&stall, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &clone,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            stall.to_str().unwrap(),
+        ],
+    );
+    let (ran, took) = pre_push_origin(
+        &clone,
+        &format!(
+            "refs/heads/feat/y {changed} refs/heads/feat/y {}",
+            "0".repeat(40)
+        ),
+    );
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(
+        out.contains("gave no verdict within its deadline")
+            && out.contains("6s: the destination lookup wait 2s × 1 attempts")
+            && out.contains("git.remote_fetch_timeout_seconds"),
+        "{took:?}: {out}"
+    );
+    assert!(took < std::time::Duration::from_secs(40), "{took:?}: {out}");
+}
+
 #[test]
 fn clears_doctor_id_registry() {
     // The full tier keeps an id registry; with no remote it is local.

@@ -661,7 +661,19 @@ type Ran = (std::process::ExitStatus, Vec<u8>, Option<Vec<u8>>);
 /// before the stderr grace ended. Only a timeout, an oversized answer or a
 /// failure to run or read is an error.
 fn bounded_run(command: std::process::Command, deadline: Duration) -> Result<Ran, Failure> {
-    bounded_run_input(command, None, deadline)
+    bounded_run_input(command, None, deadline, Diagnostics::Brief)
+}
+
+/// How much of a bounded child's stderr is kept, and how long it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Diagnostics {
+    /// Up to 64 KiB, read for [`STDERR_GRACE`] after git exits: a helper
+    /// git started can hold stderr open, and git's own stderr only
+    /// classifies a failure.
+    Brief,
+    /// All of it, up to [`MAX_ANSWER_BYTES`], read within the deadline: a
+    /// codeflow child prints its findings there.
+    Full,
 }
 
 /// [`bounded_run`], with `input` written to git's stdin from its own thread
@@ -675,6 +687,7 @@ fn bounded_run_input(
     mut command: std::process::Command,
     input: Option<&[u8]>,
     deadline: Duration,
+    diagnostics: Diagnostics,
 ) -> Result<Ran, Failure> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
@@ -696,7 +709,7 @@ fn bounded_run_input(
     };
     let (mut child, writer) =
         started.map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
-    let ran = bounded_wait(&mut child, writer.as_ref(), deadline);
+    let ran = bounded_wait(&mut child, writer.as_ref(), deadline, diagnostics);
     if let Some(writer) = writer {
         // An answer means the write already ended. Every failure above
         // ended git's group, which closes the pipe, so the write ends at
@@ -712,11 +725,12 @@ fn bounded_run_input(
 
 /// Collect a started git's answer within `deadline`; see [`bounded_run`].
 /// When `writer` feeds git's stdin, git is reaped only after the write
-/// ends, within the same deadline.
+/// ends, within the same deadline. `mode` says how much of stderr is kept.
 fn bounded_wait(
     child: &mut std::process::Child,
     writer: Option<&crate::git::InputWriter>,
     deadline: Duration,
+    mode: Diagnostics,
 ) -> Result<Ran, Failure> {
     let Some(stdout) = child.stdout.take() else {
         kill_group(child);
@@ -727,10 +741,14 @@ fn bounded_wait(
     // include credential material. Only `bounded_output` returns them, to a
     // caller that redacts URLs before showing any (the id sync).
     let stderr = child.stderr.take();
+    let kept = match mode {
+        Diagnostics::Brief => 64 << 10,
+        Diagnostics::Full => MAX_ANSWER_BYTES as u64 + 1,
+    };
     let diagnostics = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let read = match stderr {
-            Some(stderr) => stderr.take(64 << 10).read_to_end(&mut bytes),
+            Some(stderr) => stderr.take(kept).read_to_end(&mut bytes),
             None => Ok(0),
         };
         read.map(|_| bytes)
@@ -797,12 +815,59 @@ fn bounded_wait(
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    collect_diagnostics(child, diagnostics, bytes, until, deadline, mode)
+}
+
+/// The stderr reader of a bounded child.
+type DiagnosticsReader = std::thread::JoinHandle<std::io::Result<Vec<u8>>>;
+
+/// After git exited and its answer was read: read its stderr as `mode`
+/// says, reap it and return the run; see [`bounded_wait`].
+fn collect_diagnostics(
+    child: &mut std::process::Child,
+    diagnostics: DiagnosticsReader,
+    bytes: Vec<u8>,
+    until: Option<Instant>,
+    deadline: Duration,
+    mode: Diagnostics,
+) -> Result<Ran, Failure> {
     // Git's stderr closes when it exits unless a descendant it started, such
     // as an SSH or credential helper, still holds it (TSK-389). Such a
     // helper gets a short grace and is then ended with git's group, so the
     // lookup costs one wait and leaves no process behind, never a timeout
     // and a retry. Its diagnostics are then not read, so a failed exit is
-    // reported as a plain one, which still refuses.
+    // reported as a plain one, which still refuses. A codeflow child's
+    // stderr holds its findings, so it is read to the end within the
+    // deadline instead.
+    if mode == Diagnostics::Full {
+        while !diagnostics.is_finished() {
+            if until.is_some_and(|until| Instant::now() >= until) {
+                kill_group(child);
+                return Err(Failure::Timeout(deadline));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let read = diagnostics.join();
+        let status = child.wait();
+        return match (read, status) {
+            (Ok(Ok(stderr)), Ok(status)) if stderr.len() <= MAX_ANSWER_BYTES => {
+                Ok((status, bytes, Some(stderr)))
+            }
+            (_, Err(error)) => Err(Failure::Other(format!(
+                "could not read how it exited: {error}"
+            ))),
+            (Ok(Ok(_)), Ok(_)) => Err(Failure::Other(format!(
+                "its error output is over {} MiB",
+                MAX_ANSWER_BYTES >> 20
+            ))),
+            (Ok(Err(error)), _) => Err(Failure::Other(format!(
+                "reading its error output failed: {error}"
+            ))),
+            (Err(_), _) => Err(Failure::Other(
+                "reading its error output failed".to_string(),
+            )),
+        };
+    }
     let grace = Instant::now() + STDERR_GRACE;
     while !diagnostics.is_finished() && Instant::now() < grace {
         std::thread::sleep(Duration::from_millis(10));
@@ -868,7 +933,37 @@ pub fn bounded_output_with_input(
     input: &[u8],
     deadline: Duration,
 ) -> Result<std::process::Output, Unanswered> {
-    output_of(bounded_run_input(command, Some(input), deadline))
+    output_of(bounded_run_input(
+        command,
+        Some(input),
+        deadline,
+        Diagnostics::Brief,
+    ))
+}
+
+/// Run a codeflow child process with `input` on its stdin, as the pre-push
+/// hook runs `codeflow ci` (TSK-327), within `deadline`: the child leads
+/// its own process group, and at the deadline the whole group is ended, so
+/// every git command it started inside the group ends with it, a lazy
+/// fetch from a stalled promisor included. Its stdout and its full stderr
+/// (where it prints its findings) are returned, each up to
+/// [`MAX_ANSWER_BYTES`], whatever the exit status.
+///
+/// # Errors
+///
+/// Why the child gave no output within `deadline`.
+pub fn bounded_process_output(
+    command: std::process::Command,
+    input: &[u8],
+    deadline: Duration,
+) -> Result<std::process::Output, Unanswered> {
+    match bounded_run_input(command, Some(input), deadline, Diagnostics::Full) {
+        Err(Failure::Timeout(deadline)) => Err(Unanswered {
+            timed_out: true,
+            reason: format!("it gave no verdict within {}", seconds(deadline)),
+        }),
+        ran => output_of(ran),
+    }
 }
 
 fn output_of(ran: Result<Ran, Failure>) -> Result<std::process::Output, Unanswered> {

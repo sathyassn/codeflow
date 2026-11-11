@@ -182,6 +182,9 @@ fn run_checked_with_binary(
     };
     let mut steps: Vec<PushStep> = Vec::new();
 
+    if policy.test_gate_on_push.is_active() {
+        fill_registry(root, report);
+    }
     run_ci_ranges(&exe, root, &pushed, &destination, report, &mut steps)?;
 
     let active = policy.test_gate_on_push.is_active();
@@ -227,6 +230,89 @@ fn push_budget(root: &Path) -> std::time::Duration {
             |landed| landed.policy.git.push_budget_seconds,
         );
     std::time::Duration::from_secs(seconds)
+}
+
+/// How long one pre-push `codeflow ci` run may take before the hook ends it
+/// and refuses the push (TSK-327), and the waits it is the sum of.
+#[derive(Debug, Clone, Copy)]
+struct CheckDeadline {
+    total: std::time::Duration,
+    lookup: std::time::Duration,
+    attempts: u64,
+    fetch: std::time::Duration,
+    budget: std::time::Duration,
+}
+
+impl std::fmt::Display for CheckDeadline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}s: the destination lookup wait {}s × {} attempts, plus the fetch wait {}s, plus the push budget {}s",
+            self.total.as_secs(),
+            self.lookup.as_secs(),
+            self.attempts,
+            self.fetch.as_secs(),
+            self.budget.as_secs()
+        )
+    }
+}
+
+/// The deadline for one pre-push `codeflow ci` run (TSK-327):
+///
+/// `git.remote_query_timeout_seconds` × `git.remote_query_attempts`
+/// + `git.remote_fetch_timeout_seconds` + `git.push_budget_seconds`
+///
+/// which is 30 s × 3 + 120 s + 60 s = 270 s with the shipped values. The
+/// check asks the destination at most as the lookup does, retries
+/// included, fetches the objects it judges within the fetch wait, and its
+/// local checks are expected to fit the push budget, so a run past the sum
+/// has stalled rather than run slow. It is the sum of the waits a project
+/// already sets, read from the same local policy authority, so a project
+/// that raises any of them raises this deadline too and no new setting is
+/// needed. The push budget's own meaning is unchanged: over it, the hook
+/// still only reports ([`push_budget`]); only this sum refuses.
+fn ci_check_deadline(root: &Path) -> CheckDeadline {
+    let limits = remote_query::QueryLimits::from_authority_or_default(root);
+    let budget = push_budget(root);
+    let attempts = limits.attempts();
+    let total = limits
+        .timeout()
+        .saturating_mul(u32::try_from(attempts).unwrap_or(u32::MAX))
+        .saturating_add(limits.fetch_timeout())
+        .saturating_add(budget);
+    CheckDeadline {
+        total,
+        lookup: limits.timeout(),
+        attempts,
+        fetch: limits.fetch_timeout(),
+        budget,
+    }
+}
+
+/// Fetch, in one bounded request, the registry objects a partial clone
+/// left out (TSK-327), before any `codeflow ci` runs: the check then reads
+/// the registry with lazy fetching off (`--registry-objects-local`), so a
+/// missing registry object refuses instead of starting a fetch outside
+/// every deadline. A clone with nothing missing fetches nothing. When the
+/// objects cannot be fetched, the check still runs and refuses only if it
+/// needs one of them; the reason is noted.
+fn fill_registry(root: &Path, report: &mut StageReport) {
+    use codeflow_core::ids::{tracking_ref, Git, AUTHORITY, REGISTRY_REF};
+    let filled = Git::for_pre_push(root).and_then(|git| {
+        let tracking = tracking_ref(AUTHORITY);
+        let mut refs = Vec::new();
+        for name in [tracking.as_str(), REGISTRY_REF] {
+            if git.rev(name)?.is_some() {
+                refs.push(name);
+            }
+        }
+        git.fetch_missing(AUTHORITY, &refs)
+    });
+    if let Err(why) = filled {
+        report.status.push(format!(
+            "note: the registry's missing objects were not fetched, so a check that needs one refuses: {why}"
+        ));
+    }
 }
 
 /// The destination lookup's timeout and attempts (TSK-1301): read from the
@@ -765,6 +851,27 @@ fn release_preflight(
     }
 }
 
+/// The arguments of the command a person reruns: the check at its own
+/// levels, as CI runs it, without the push gate's level, and asking the
+/// destination itself instead of reading the hook's hand-off. A destination
+/// URL is shown without its credentials; the check itself receives the real
+/// one.
+fn rerun_args<'a>(args: &[&'a str]) -> Vec<std::borrow::Cow<'a, str>> {
+    let run_level = args.iter().position(|arg| *arg == "--run-level");
+    args.iter()
+        .enumerate()
+        .filter(|(at, arg)| {
+            **arg != "--advertisement-stdin"
+                && run_level.is_none_or(|level| *at != level && *at != level + 1)
+        })
+        .map(|(_, arg)| match arg.strip_prefix("--into=") {
+            // The destination's default branch, which it names itself.
+            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
+            None => remote_query::display_url(arg),
+        })
+        .collect()
+}
+
 /// Run one built-in check through this binary, with `input` on its stdin,
 /// and time it.
 fn run_check_with(
@@ -776,24 +883,8 @@ fn run_check_with(
     report: &mut StageReport,
     steps: &mut Vec<PushStep>,
 ) {
-    // The command a person reruns: the check at its own levels, as CI runs
-    // it, without the push gate's level, and asking the destination itself
-    // instead of reading the hook's hand-off. A destination URL is shown
-    // without its credentials; the check itself receives the real one.
     let run_level = args.iter().position(|arg| *arg == "--run-level");
-    let displayed: Vec<std::borrow::Cow<'_, str>> = args
-        .iter()
-        .enumerate()
-        .filter(|(at, arg)| {
-            **arg != "--advertisement-stdin"
-                && run_level.is_none_or(|level| *at != level && *at != level + 1)
-        })
-        .map(|(_, arg)| match arg.strip_prefix("--into=") {
-            // The destination's default branch, which it names itself.
-            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
-            None => remote_query::display_url(arg),
-        })
-        .collect();
+    let displayed = rerun_args(args);
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
     let shown = format!("codeflow {}", rerun.join(" "));
     // `codeflow ci` names its blocking rules in a file of its own, for the
@@ -812,10 +903,19 @@ fn run_check_with(
     if let Some(out) = &timings_out {
         command.arg("--timings-out").arg(&out.0);
     }
+    if is_ci {
+        // `fill_registry` fetched what a partial clone left out.
+        command.arg("--registry-objects-local");
+    }
+    command.current_dir(root).env_remove("CODEFLOW_PR_BODY");
+    // The whole check, every git command it starts included, runs within
+    // one deadline and is ended with its process group past it (TSK-327).
+    let deadline = ci_check_deadline(root);
     let started = Instant::now();
-    let output = codeflow_core::git::output_with_input(
-        command.current_dir(root).env_remove("CODEFLOW_PR_BODY"),
+    let output = remote_query::bounded_process_output(
+        command,
         input.unwrap_or_default().as_bytes(),
+        deadline.total,
     );
     steps.push(PushStep {
         name: shown.clone(),
@@ -880,9 +980,18 @@ fn run_check_with(
             }
             report.violations.push(failed);
         }
-        Err(error) => report.violations.push(violation(
+        // A check with no verdict never passes: whatever the gate's level,
+        // the push stops.
+        Err(why) if why.timed_out => report.violations.push(Violation::always_blocking(
+            "git.test_gate_on_push",
+            format!(
+                "push set check gave no verdict within its deadline and was ended: `{shown}`; the deadline is {deadline}"
+            ),
+            "find what the check waits on (a slow destination, or a partial clone fetching a missing object) and push again; a project that needs longer raises git.remote_query_timeout_seconds, git.remote_query_attempts, git.remote_fetch_timeout_seconds or git.push_budget_seconds on its default branch",
+        )),
+        Err(why) => report.violations.push(violation(
             policy,
-            format!("push set check could not run: `{shown}`: {error}"),
+            format!("push set check could not run: `{shown}`: {}", why.reason),
             codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }

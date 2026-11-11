@@ -75,6 +75,10 @@ impl Ledger {
     ///
     /// Returns an error when git fails on an existing history.
     pub fn read(git: &Git, rev: &str) -> Result<Ledger, IdsError> {
+        // The registry's own objects: local only when the caller knows they
+        // are here (`Git::with_local_registry`, TSK-327).
+        let reader = git.registry_reader();
+        let git: &Git = &reader;
         let Some(tip) = git.rev(rev)? else {
             return Ok(Ledger::default());
         };

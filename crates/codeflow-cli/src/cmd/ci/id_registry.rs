@@ -18,6 +18,7 @@ pub(super) fn dispatch(
     root: &Path,
     base_candidates: &[String],
     head: &str,
+    registry_local: bool,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -52,7 +53,15 @@ pub(super) fn dispatch(
         return;
     };
     ran.push("id-registry");
-    match check::merge_rule(&Git::new(root), &base, head) {
+    // From the pre-push hook, which fetched the registry's missing objects
+    // first, the registry is read locally only; hosted CI keeps git's
+    // default (TSK-327).
+    let git = if registry_local {
+        Git::new(root).with_local_registry()
+    } else {
+        Git::new(root)
+    };
+    match check::merge_rule(&git, &base, head) {
         Ok(report) => {
             for line in &report.info {
                 println!("codeflow ci: {line}");

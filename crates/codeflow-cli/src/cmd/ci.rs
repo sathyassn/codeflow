@@ -194,6 +194,13 @@ pub struct CiArgs {
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
 
+    /// The registry's objects are here: the pre-push hook fetched what a
+    /// partial clone left out before it ran this check, so the registry
+    /// reads never fetch lazily and a missing registry object refuses
+    /// (TSK-327). Hosted CI never passes it.
+    #[arg(long, hide = true)]
+    pub registry_objects_local: bool,
+
     /// Print how long each check took, on stderr after the verdict, one
     /// line per check and then the total. The times only report; they
     /// change no verdict.
@@ -746,6 +753,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             &names,
             &line_target,
             &target_tip,
+            args.registry_objects_local,
             &mut tagged,
             &mut ran,
             timings,
@@ -1358,6 +1366,7 @@ fn record_checks(
     names: &Names<'_>,
     line_target: &str,
     target_tip: &Result<String, NoTarget>,
+    registry_local: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
     timings: &mut timing::Timings,
@@ -1422,7 +1431,7 @@ fn record_checks(
         ran,
     );
     timings.lap("work-records");
-    id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    id_registry::dispatch(root, base_candidates, head, registry_local, tagged, ran);
     timings.lap("id-registry");
 }
 

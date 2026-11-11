@@ -15,6 +15,11 @@ pub struct Git {
     /// When set, every command that captures output runs within these
     /// limits (TSK-327, the pre-push id sync).
     limits: Option<crate::git::remote_query::QueryLimits>,
+    /// Whether the registry's objects are known to be here, so registry
+    /// reads ([`Git::registry_reader`]) never fetch a missing one.
+    local_registry: bool,
+    /// Whether every local read runs with lazy fetching off.
+    local_reads: bool,
 }
 
 impl Git {
@@ -24,6 +29,32 @@ impl Git {
         Git {
             root: root.to_path_buf(),
             limits: None,
+            local_registry: false,
+            local_reads: false,
+        }
+    }
+
+    /// This git, with the registry's objects known to be local: the
+    /// pre-push hook fetched what a partial clone left out
+    /// ([`Git::fetch_missing`]) before it ran `codeflow ci`. Registry reads
+    /// then never fetch lazily, so a missing registry object refuses
+    /// (TSK-327). Other reads keep git's default.
+    #[must_use]
+    pub fn with_local_registry(mut self) -> Git {
+        self.local_registry = true;
+        self
+    }
+
+    /// The git the registry's own history and blobs are read with: this
+    /// one, with lazy fetching off when [`Git::with_local_registry`] says
+    /// the objects are here.
+    pub(crate) fn registry_reader(&self) -> std::borrow::Cow<'_, Git> {
+        if self.local_registry && !self.local_reads {
+            let mut reader = self.clone();
+            reader.local_reads = true;
+            std::borrow::Cow::Owned(reader)
+        } else {
+            std::borrow::Cow::Borrowed(self)
         }
     }
 
@@ -42,6 +73,8 @@ impl Git {
         Git {
             root: root.to_path_buf(),
             limits: Some(limits),
+            local_registry: false,
+            local_reads: true,
         }
     }
 
@@ -213,8 +246,7 @@ impl Git {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
             .stdin(Stdio::null());
-        if self.limits.is_some() && !matches!(args.first(), Some(&"fetch" | &"push" | &"ls-remote"))
-        {
+        if self.local_reads && !matches!(args.first(), Some(&"fetch" | &"push" | &"ls-remote")) {
             crate::git::local_objects_only(&mut command);
         }
         command
