@@ -293,6 +293,18 @@ fn every_hc_run_refuses_in_both_guards() {
         "find . -maxdepth 0 -exec hc run peer \\;",
         "echo x | xargs hc run peer",
         "nice -n 5 hc run peer",
+        // A carrier named by the words the shell reads.
+        "h''c run peer",
+        "\"h\"c run peer",
+        "env h''c run peer",
+        // Wrappers that run a command string, a shell or a launcher.
+        "pkexec /bin/sh -c 'hc run peer'",
+        "gsudo 'hc run peer'",
+        "sudo sh -c 'hc run peer'",
+        "doas sh -c 'hc run peer'",
+        "busybox sh -c 'hc run peer'",
+        "busybox env hc run peer",
+        "busybox nohup hc run peer",
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);
@@ -317,6 +329,8 @@ fn every_hc_run_refuses_in_both_guards() {
         "hc exec --cwd . ls",
         "hc file read README.md",
         "hc send t1 hello",
+        "busybox grep 'hc run' notes.txt",
+        "busybox echo 'hc run peer'",
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);

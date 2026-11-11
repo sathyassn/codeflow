@@ -124,16 +124,6 @@ impl Carried {
     }
 }
 
-/// Whether the line names a terminal carrier at all, a cheap test before
-/// the full read, matching names the way the host finds programs.
-fn mentions_carrier(command: &str) -> bool {
-    let command = command.to_ascii_lowercase();
-    HC_PROGRAMS
-        .iter()
-        .chain(HERDR_PROGRAMS)
-        .any(|name| command.contains(name))
-}
-
 /// The name a program word runs as, matched the way the host finds the
 /// program.
 fn carrier_name(program: &str) -> String {
@@ -155,9 +145,8 @@ pub(crate) fn is_carrier_program(program: &str) -> bool {
 /// guard cannot read. `cwd` is where the line runs.
 pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
     let mut out = Carried::default();
-    if !mentions_carrier(command) {
-        return out;
-    }
+    // Carriers are identified from the parsed program words, after the
+    // shell has read its words; no test on the raw text comes first.
     let homes = std::iter::once(crate::portable_path::user_home())
         .chain(crate::hooks::git_guard::line_home::assigned().map(Some));
     for home in homes {
@@ -1345,7 +1334,9 @@ mod tests {
             "doas -u root hc run peer",
             "gsudo hc run peer",
             "pkexec hc run peer",
-            "busybox hc run peer",
+            "busybox sh -c 'hc run peer'",
+            "busybox env hc run peer",
+            "busybox nohup hc run peer",
             "nice hc run peer",
             "nice -n 5 hc run peer",
             "nohup hc run peer",
@@ -1383,6 +1374,127 @@ mod tests {
         }
         // A wrapper around a command that is not a carrier is unaffected.
         for command in ["sudo ls", "taskset 1 ls", "chrt 1 ls", "doas ls"] {
+            assert_eq!(read(command), Carried::default(), "{command}");
+        }
+    }
+
+    /// A carrier is identified from the program words the shell reads, so a
+    /// program word spelled with extra shell syntax that reads back as a
+    /// carrier name is still one (PR 706 review, round 9).
+    #[test]
+    fn carriers_are_identified_from_parsed_program_words() {
+        let mut missed = Vec::new();
+        for command in [
+            "h''c run peer",
+            "h\"\"c run peer",
+            "\"h\"c run peer",
+            "h\\c run peer",
+            "'h'c run peer",
+            "her''dr-core run peer",
+            "env h''c run peer",
+            "sh -c 'h\"\"c run peer'",
+            "echo $(h''c run peer)",
+            "flock /tmp/l h''c run peer",
+        ] {
+            if !hc_run_refused(command) {
+                missed.push(command);
+            }
+        }
+        assert!(missed.is_empty(), "not refused: {missed:#?}");
+        // Another carrier reads the same way.
+        assert!(!read("h''c exec --on vps ls").unread.is_empty());
+        assert!(!read("he''rdr pane run p1 ls").runs.is_empty());
+        // Words that only look like a carrier name stay unaffected.
+        for command in ["h''c-extra run peer", "echo h''c run peer", "git status"] {
+            assert!(!hc_run_refused(command), "refused: {command}");
+        }
+    }
+
+    /// A wrapper that runs a command string, or a shell, launcher or other
+    /// wrapper with its own options, keeps the carrier it reaches in view
+    /// (PR 706 review, round 9): the carrier is judged and refused as when
+    /// the wrapper is not there.
+    #[test]
+    fn wrappers_keep_the_carrier_inside_their_command_strings() {
+        let mut missed = Vec::new();
+        for command in [
+            "pkexec /bin/sh -c 'hc run peer'",
+            "pkexec sh -c 'hc run peer'",
+            "pkexec --user root /bin/sh -c 'hc run peer'",
+            "pkexec env hc run peer",
+            "gsudo 'hc run peer'",
+            "gsudo -u root 'hc run peer'",
+            "gsudo sh -c 'hc run peer'",
+            "gsudo \"hc run peer\"",
+            "sudo sh -c 'hc run peer'",
+            "sudo -u root sh -c 'hc run peer'",
+            "sudo -u root 'hc run peer'",
+            "doas sh -c 'hc run peer'",
+            "doas -u root bash -c 'hc run peer'",
+            "chrt 1 sh -c 'hc run peer'",
+            "taskset -c 0 sh -c 'hc run peer'",
+            "arch -arm64 sh -c 'hc run peer'",
+            "busybox sh -c 'hc run peer'",
+            "busybox ash -c 'hc run peer'",
+            "busybox env hc run peer",
+            "busybox nohup hc run peer",
+            "busybox setsid hc run peer",
+            "busybox nice -n 5 hc run peer",
+            "sudo gsudo 'hc run peer'",
+            "sudo pkexec sh -c 'hc run peer'",
+            "sudo nice -n 5 hc run peer",
+            "sudo env A=B hc run peer",
+            "gsudo sh -c \"sh -c 'hc run peer'\"",
+            "gsudo 'sudo sh -c \"hc run peer\"'",
+            "sh -c 'pkexec sh -c \"hc run peer\"'",
+            "sudo sh -c 'hc run -- git status'",
+            "gsudo 'herdr pane run p1 ls'",
+        ] {
+            if !hc_run_refused(command) && read(command).unread.is_empty() {
+                missed.push(command);
+            }
+        }
+        assert!(missed.is_empty(), "not read: {missed:#?}");
+        // `hc run` is the refusal named, whichever wrapper carries it.
+        for command in [
+            "pkexec /bin/sh -c 'hc run peer'",
+            "gsudo 'hc run peer'",
+            "busybox sh -c 'hc run peer'",
+            "busybox env hc run peer",
+            "busybox nohup hc run peer",
+        ] {
+            assert!(hc_run_refused(command), "not refused as hc run: {command}");
+        }
+        // The command it carries is judged, with no directory known.
+        let found = read("gsudo 'hc exec ls'");
+        assert!(
+            found
+                .unread
+                .iter()
+                .any(|u| u.contains("cannot be established")),
+            "{found:?}"
+        );
+        let found = read("pkexec /bin/sh -c 'hc run -- git status'");
+        assert_eq!(found.runs.len(), 1, "{found:?}");
+        assert_eq!(found.runs[0].line, "\"git\" \"status\"");
+        // Data the wrappers print or search stays unaffected, as does a
+        // string with no carrier in it.
+        for command in [
+            "sudo grep \"hc run\" notes.txt",
+            "sudo grep -e 'hc run' notes.txt",
+            "sudo -u root grep 'hc run' notes.txt",
+            "gsudo echo 'hc run peer'",
+            "pkexec echo \"hc run peer\"",
+            "busybox grep 'hc run' notes.txt",
+            "busybox echo 'hc run peer'",
+            "sudo sh -c 'echo hc run peer'",
+            "gsudo 'echo hc run peer'",
+            "gsudo 'ls -l'",
+            "pkexec /bin/sh -c 'ls'",
+            "busybox sh -c 'ls'",
+            "sudo gh pr create --title t --body \"run hc run peer first\"",
+            "gsudo gh pr create --body 'hc run peer'",
+        ] {
             assert_eq!(read(command), Carried::default(), "{command}");
         }
     }
