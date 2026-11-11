@@ -162,15 +162,19 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
 fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool, String> {
     let config = repo.config().map_err(|e| e.to_string())?;
     let key = format!("remote.{remote}.url");
+    // Messages show the key with its subsection withheld, as every guard
+    // message does, and not libgit2's error, which can quote the key
+    // (TSK-416 review round 6).
+    let shown = crate::security::git::shown_config_key(&key);
     let mut urls = Vec::new();
     let mut entries = config
         .multivar(&key, None)
-        .map_err(|e| format!("cannot read {key}: {e}"))?;
+        .map_err(|_| format!("cannot read {shown}"))?;
     while let Some(entry) = entries.next() {
-        let entry = entry.map_err(|e| format!("cannot read {key}: {e}"))?;
+        let entry = entry.map_err(|_| format!("cannot read {shown}"))?;
         let url = entry
             .value()
-            .map_err(|_| format!("{key} is not valid UTF-8"))?;
+            .map_err(|_| format!("{shown} is not valid UTF-8"))?;
         urls.push(url.to_string());
     }
     match urls.as_slice() {
@@ -179,8 +183,8 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
             url,
             crate::git::remote_query::QueryLimits::guard(),
         ),
-        [] => Err(format!("{key} is not set")),
-        _ => Err(format!("{key} has several values")),
+        [] => Err(format!("{shown} is not set")),
+        _ => Err(format!("{shown} has several values")),
     }
 }
 
@@ -877,6 +881,28 @@ mod tests {
         let error = advertises_refs(&repo, dir.path(), "origin").unwrap_err();
         assert!(error.contains("starts with '-'"), "{error}");
         assert!(!dir.path().join("owned").exists());
+    }
+
+    /// TSK-416 review round 6: a remote with no URL or several is refused
+    /// with the key's subsection, the remote's name, withheld. The
+    /// credential is synthetic.
+    #[test]
+    fn a_remote_url_refusal_holds_no_remote_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let remote = "https://u:OPAQUECANARY@h.invalid";
+        let key = format!("remote.{remote}.url");
+        let unset = advertises_refs(&repo, dir.path(), remote).unwrap_err();
+        let mut config = repo.config().unwrap();
+        config.set_multivar(&key, "^$", "/one").unwrap();
+        config.set_multivar(&key, "^$", "/two").unwrap();
+        let several = advertises_refs(&repo, dir.path(), remote).unwrap_err();
+        assert!(several.contains("has several values"), "{several}");
+        for error in [unset, several] {
+            assert!(error.contains("remote.<name>.url"), "{error}");
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+            assert!(!error.contains("h.invalid"), "{error}");
+        }
     }
 
     /// The arguments `sh` hands `git` for the printed `command`.

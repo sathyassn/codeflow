@@ -318,6 +318,54 @@ pub(crate) fn config_kind(key: &str, value: &str) -> ConfigKind {
     }
 }
 
+/// A Git configuration key as a message shows it: the section and the
+/// variable lowercased, as Git folds them, and any subsection withheld as
+/// `<name>`, so `filter.<name>.smudge`. A subsection is free text from a
+/// configuration file or a command and can hold a credential, as in
+/// `url.<base>.insteadof` or `credential.<url>.helper`, so it is never
+/// shown in any form (TSK-416 review round 6). Git splits a key at its
+/// first and last dot, so a subsection with dots is withheld whole. A
+/// section or variable outside Git's own name characters is withheld too.
+pub(crate) fn shown_config_key(key: &str) -> String {
+    match (key.find('.'), key.rfind('.')) {
+        (Some(first), Some(last)) if first < last => format!(
+            "{}.<name>.{}",
+            shown_config_part(&key[..first]),
+            shown_config_part(&key[last + 1..])
+        ),
+        (Some(dot), _) => format!(
+            "{}.{}",
+            shown_config_part(&key[..dot]),
+            shown_config_part(&key[dot + 1..])
+        ),
+        (None, _) => shown_config_part(key),
+    }
+}
+
+/// A configuration section name, as `git config --rename-section` takes
+/// it, shown as [`shown_config_key`] shows a key: `filter.<name>` for a
+/// section with a subsection.
+pub(crate) fn shown_config_section(section: &str) -> String {
+    match section.split_once('.') {
+        Some((name, _)) => format!("{}.<name>", shown_config_part(name)),
+        None => shown_config_part(section),
+    }
+}
+
+/// A section or variable name lowercased when it holds only Git's name
+/// characters (ASCII letters, digits and `-`), else `<invalid>`.
+fn shown_config_part(part: &str) -> String {
+    if !part.is_empty()
+        && part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        part.to_ascii_lowercase()
+    } else {
+        "<invalid>".into()
+    }
+}
+
 /// Whether every setting a section can hold is safe, so renaming another
 /// section into it cannot make a setting run code (`user.x` is; `alias`
 /// and `core` are not).
@@ -521,5 +569,45 @@ mod tests {
         assert!(is_on_protected_branch("release/v1.0", &policy));
         assert!(!is_on_protected_branch("release", &policy));
         assert!(!is_on_protected_branch("feat/release", &policy));
+    }
+
+    /// TSK-416 review round 6: a key is shown with its subsection withheld
+    /// in every form, its section and variable lowercased. The credentials
+    /// are synthetic.
+    #[test]
+    fn a_configuration_key_is_shown_without_its_subsection() {
+        for (key, shown) in [
+            (
+                "filter.https://user:OPAQUECANARY@host.invalid/x.smudge",
+                "filter.<name>.smudge",
+            ),
+            (
+                "url.https://user:OPAQUECANARY@host.invalid/.insteadOf",
+                "url.<name>.insteadof",
+            ),
+            // A quoted subsection with dots is withheld whole.
+            (
+                "credential.\"a.b.OPAQUECANARY.host.invalid\".Helper",
+                "credential.<name>.helper",
+            ),
+            ("Core.HooksPath", "core.hookspath"),
+            ("credential.helper", "credential.helper"),
+            ("Diff.Tool.Command", "diff.<name>.command"),
+            // A dotless or malformed part is never shown as written.
+            ("https://OPAQUECANARY@host", "<invalid>"),
+            (
+                "https://user:OPAQUECANARY@host.invalid",
+                "<invalid>.invalid",
+            ),
+            ("$KEY", "<invalid>"),
+        ] {
+            assert_eq!(shown_config_key(key), shown, "{key}");
+        }
+        assert_eq!(
+            shown_config_section("Filter.https://OPAQUECANARY@host.invalid"),
+            "filter.<name>"
+        );
+        assert_eq!(shown_config_section("Alias"), "alias");
+        assert_eq!(shown_config_section("$S"), "<invalid>");
     }
 }

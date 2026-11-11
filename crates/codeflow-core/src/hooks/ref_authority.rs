@@ -226,8 +226,12 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 || (key.starts_with("remote.")
                     && (key.ends_with(".skipdefaultupdate") || key.ends_with(".skipfetchall"))))
         {
+            // The key's subsection is a remote or group name from
+            // configuration, which can hold a credential (TSK-416 review
+            // round 6).
             return Err(format!(
-                "cannot read remote update configuration value for {key} as UTF-8"
+                "cannot read remote update configuration value for {} as UTF-8",
+                crate::security::git::shown_config_key(key)
             ));
         }
     }
@@ -275,9 +279,14 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 .rev()
                 .find(|(key, _)| *key == skip_key || *key == alias_key);
             let skip = skip
-                .map(|(_, value)| {
-                    git2::Config::parse_bool(value).map_err(|error| {
-                        format!("cannot read remote update skip setting for {name}: {error}")
+                .map(|(key, value)| {
+                    // Neither the remote's name nor libgit2's error, which
+                    // quotes the value, is shown (TSK-416 review round 6).
+                    git2::Config::parse_bool(value).map_err(|_| {
+                        format!(
+                            "cannot read remote update skip setting {}: not a boolean",
+                            crate::security::git::shown_config_key(key)
+                        )
                     })
                 })
                 .transpose()?
@@ -1126,6 +1135,31 @@ mod tests {
             assert!(!why.contains("git config"), "{why}");
             assert!(!why.contains('`'), "no command: {why}");
             assert!(why.contains("with an editor"), "{why}");
+        }
+    }
+
+    /// TSK-416 review round 6: a remote update setting the guard cannot
+    /// read is refused with its key's subsection withheld, the remote's
+    /// name, and never the value. The credentials are synthetic.
+    #[test]
+    fn a_remote_update_setting_refusal_holds_no_remote_name() {
+        for (text, shown) in [
+            (
+                b"[remote \"https://user:OPAQUECANARY@host.invalid\"]\n\turl = /x\n\tskipDefaultUpdate = \xff\n"
+                    .as_slice(),
+                "remote.<name>.skipdefaultupdate",
+            ),
+            (
+                b"[remote \"OPAQUECANARY\"]\n\turl = /x\n\tskipDefaultUpdate = OPAQUECANARY\n"
+                    .as_slice(),
+                "remote.<name>.skipdefaultupdate",
+            ),
+        ] {
+            let dir = repository_with_config(text);
+            let why = update_remotes(dir.path(), &[]).unwrap_err();
+            assert!(why.contains(shown), "{why}");
+            assert!(!why.contains("OPAQUECANARY"), "{why}");
+            assert!(!why.contains("host.invalid"), "{why}");
         }
     }
 

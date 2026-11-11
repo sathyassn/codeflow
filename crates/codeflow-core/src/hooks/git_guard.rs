@@ -11081,17 +11081,21 @@ pub(crate) fn checkout_config_write(rest: &[String], level: PolicyLevel) -> Opti
     let key = parsed
         .operands
         .get(usize::from(matches!(mode, "set" | "unset")))?;
+    // A key is shown with its subsection withheld, which can hold a
+    // credential (TSK-416 review round 6).
     if expands(key) {
-        return Some(hook_integrity_violation(level, format!(
-            "cannot inspect persistent config key `{key}`; it may change repository or worktree discovery"
-        )));
+        return Some(hook_integrity_violation(level,
+            "cannot inspect the persistent config key `git config` writes, which expands at run time; it may change repository or worktree discovery".into()));
     }
     if !git::relocates_checkout(key) {
         return None;
     }
     Some(hook_integrity_violation(
         level,
-        format!("`git config` would write `{key}`, which changes repository or worktree discovery"),
+        format!(
+            "`git config` would write `{}`, which changes repository or worktree discovery",
+            git::shown_config_key(key)
+        ),
     ))
 }
 
@@ -11566,24 +11570,29 @@ fn config_write_message(write: &ConfigWrite) -> String {
     let ConfigWrite {
         found, value, kind, ..
     } = write;
+    // The key or section is shown with its subsection withheld, and an
+    // include's value not at all: either can hold a credential (TSK-416
+    // review rounds 5 and 6).
+    let section = git::shown_config_section(found);
+    let shown = git::shown_config_key(found);
     let why = match kind {
         None if found == "--edit" => format!(
             "`git config --edit` would open {place}, where a setting can make a later git command run a program the guards never see"
         ),
         None => format!(
-            "`git config` would rename a section to `{found}` in {place}, and settings in that section can make a later git command run a program the guards never see"
+            "`git config` would rename a section to `{section}` in {place}, and settings in that section can make a later git command run a program the guards never see"
         ),
         Some(ConfigKind::Command) if found.to_lowercase().starts_with("include") => format!(
-            "`git config` would set `{found}` in {place}; that pulls the settings of `{value}` into later git commands, out of the guards' sight"
+            "`git config` would set `{shown}` in {place}; that pulls the settings of the file it names into later git commands, out of the guards' sight"
         ),
         Some(ConfigKind::Command) if found.to_lowercase().starts_with("alias.") => format!(
-            "`git config` would set `{found}` in {place}; that defines a git command for later sessions, and a `!` value makes it run a program the guards never see"
+            "`git config` would set `{shown}` in {place}; that defines a git command for later sessions, and a `!` value makes it run a program the guards never see"
         ),
         Some(ConfigKind::Command) => format!(
-            "`git config` would set `{found}` to `{value}` in {place}; a later git command runs that value as a program the guards never see"
+            "`git config` would set `{shown}` to `{value}` in {place}; a later git command runs that value as a program the guards never see"
         ),
         Some(_) => format!(
-            "`git config` would set `{found}` to `{value}` in {place}; the guard does not know that setting to run nothing, and such a setting can make a later git command run a program the guards never see"
+            "`git config` would set `{shown}` to `{value}` in {place}; the guard does not know that setting to run nothing, and such a setting can make a later git command run a program the guards never see"
         ),
     };
     format!("{why}. {remedy}")
@@ -17084,6 +17093,36 @@ mod tests {
         // another program's arguments come from input the guard cannot see.
         assert_eq!(expand_commands("printf x | xargs rm").len(), 2);
         assert_eq!(expand_commands("find . -exec rm {} +").len(), 1);
+    }
+
+    #[test]
+    fn a_config_write_refusal_holds_no_key_subsection_or_include_value() {
+        // TSK-416 review round 6: the refusal shows the key or section with
+        // its subsection withheld, and an include's value not at all. The
+        // credentials are synthetic.
+        let p = default_policy();
+        for (cmd, shown) in [
+            (
+                "git config --global 'filter.https://u:OPAQUECANARY@h.invalid/x.smudge' ./s",
+                "`filter.<name>.smudge`",
+            ),
+            (
+                "git config --global --rename-section harmless 'credential.https://u:OPAQUECANARY@h.invalid'",
+                "`credential.<name>`",
+            ),
+            (
+                "git config --global include.path https://u:OPAQUECANARY@h.invalid/c",
+                "`include.path`",
+            ),
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+            assert!(v.iter().any(|v| v.message.contains(shown)), "{cmd}: {v:?}");
+            for v in &v {
+                assert!(!v.message.contains("OPAQUECANARY"), "{cmd}: {}", v.message);
+                assert!(!v.message.contains("h.invalid"), "{cmd}: {}", v.message);
+            }
+        }
     }
 
     #[test]

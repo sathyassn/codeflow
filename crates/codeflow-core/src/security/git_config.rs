@@ -17,6 +17,10 @@ struct Entry {
     origin: String,
     key: Vec<u8>,
     value: Option<Vec<u8>>,
+    /// Where the setting stands, for a reader to find it with an editor:
+    /// `setting 3 of <file>`, counting every setting Git read from that
+    /// file in order, the file named as [`Include::entry`] names one.
+    place: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -81,14 +85,18 @@ impl EffectiveConfig {
         self.get_all(key)
             .last()
             .map(|(_, _, value)| {
-                std::str::from_utf8(value)
-                    .map_err(|_| format!("cannot verify Git configuration: {key} is not UTF-8"))
+                std::str::from_utf8(value).map_err(|_| {
+                    format!(
+                        "cannot verify Git configuration: {} is not UTF-8",
+                        super::git::shown_config_key(key)
+                    )
+                })
             })
             .transpose()
     }
 
-    /// All raw values in Git's precedence order, with their scope and origin.
-    pub(crate) fn get_all(&self, key: &str) -> Vec<ConfigValue<'_>> {
+    /// The entries Git read for `key`, in its precedence order.
+    fn matching<'a>(&'a self, key: &str) -> impl Iterator<Item = &'a Entry> {
         // Git folds section and variable names, but preserves subsection case.
         let mut key = key.as_bytes().to_vec();
         if let Some(first) = key.iter().position(|byte| *byte == b'.') {
@@ -96,9 +104,12 @@ impl EffectiveConfig {
             key[..first].make_ascii_lowercase();
             key[last + 1..].make_ascii_lowercase();
         }
-        self.entries
-            .iter()
-            .filter(|entry| entry.key == key)
+        self.entries.iter().filter(move |entry| entry.key == key)
+    }
+
+    /// All raw values in Git's precedence order, with their scope and origin.
+    pub(crate) fn get_all(&self, key: &str) -> Vec<ConfigValue<'_>> {
+        self.matching(key)
             .map(|entry| {
                 (
                     entry.scope.as_str(),
@@ -109,11 +120,29 @@ impl EffectiveConfig {
             .collect()
     }
 
+    /// All raw values in Git's precedence order, each with where it stands
+    /// (`setting 3 of <file>`), for a message that must not show the key's
+    /// subsection or the file's path.
+    pub(crate) fn get_all_placed(&self, key: &str) -> Vec<(&str, &[u8])> {
+        self.matching(key)
+            .map(|entry| {
+                (
+                    entry.place.as_str(),
+                    entry.value.as_deref().unwrap_or(b"true"),
+                )
+            })
+            .collect()
+    }
+
     pub(crate) fn boolean(&self, key: &str) -> Result<bool, String> {
         match self.get(key)? {
             None => Ok(false),
-            Some(value) => super::git::config_boolean(value)
-                .ok_or_else(|| format!("cannot verify Git configuration: {key} is not a boolean")),
+            Some(value) => super::git::config_boolean(value).ok_or_else(|| {
+                format!(
+                    "cannot verify Git configuration: {} is not a boolean",
+                    super::git::shown_config_key(key)
+                )
+            }),
         }
     }
 }
@@ -217,9 +246,11 @@ fn parse_from(
     // Each include's description, by the path Git reads its file by, so an
     // include inside that file is named by the entry that names the file;
     // and the include entries counted so far in each origin, per entry that
-    // names it, so a file Git reads twice is counted from 1 each time.
+    // names it, so a file Git reads twice is counted from 1 each time; and
+    // every setting counted the same way.
     let mut named: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut counted: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut settings: BTreeMap<(String, String), usize> = BTreeMap::new();
     if !bytes.is_empty() && !bytes.ends_with(&[0]) {
         return Err("cannot verify Git configuration: incomplete output".into());
     }
@@ -253,16 +284,22 @@ fn parse_from(
             .next()
             .ok_or("cannot verify Git configuration: missing key")?;
         let value = parts.next();
+        // An entry is named by where it stands, never by its value, its
+        // key's subsection or a path resolved from an include (TSK-416
+        // review rounds 5 and 6).
+        let holder = origin
+            .strip_prefix("file:")
+            .and_then(|file| named.get(&directory.join(file)))
+            .map_or_else(
+                || root.map_or_else(|| scope_file(scope), str::to_string),
+                |entry| format!("the file that {entry} names"),
+            );
+        let setting = settings
+            .entry((origin.to_string(), holder.clone()))
+            .or_insert(0);
+        *setting += 1;
+        let place = format!("setting {setting} of {holder}");
         if super::git::is_include_key(key) {
-            // The entry is named by where it stands, never by its value or
-            // a path resolved from it (TSK-416 review round 5).
-            let holder = origin
-                .strip_prefix("file:")
-                .and_then(|file| named.get(&directory.join(file)))
-                .map_or_else(
-                    || root.map_or_else(|| scope_file(scope), str::to_string),
-                    |entry| format!("the file that {entry} names"),
-                );
             let position = counted
                 .entry((origin.to_string(), holder.clone()))
                 .or_insert(0);
@@ -286,6 +323,7 @@ fn parse_from(
             origin: origin.into(),
             key: key.to_vec(),
             value: value.map(<[u8]>::to_vec),
+            place,
         });
     }
     includes.sort();
@@ -996,6 +1034,39 @@ mod tests {
         );
         for include in &config.includes {
             assert!(!include.entry.contains("OPAQUECANARY"), "{include:?}");
+        }
+    }
+
+    /// TSK-416 review round 6: a value the reader cannot decode is refused
+    /// with its key's subsection withheld, and each setting is placed by
+    /// its position in the file that holds it. The credential is synthetic.
+    #[test]
+    fn settings_are_placed_by_position_and_refused_without_their_subsection() {
+        let key = "credential.https://user:OPAQUECANARY@host.invalid.helper";
+        let flag = "core.https://user:OPAQUECANARY@host.invalid.flag";
+        let bytes = [
+            "local\0file:.git/config\0user.name\nfixture\0".as_bytes(),
+            format!("local\0file:.git/config\0{key}\n").as_bytes(),
+            b"\xff\0".as_slice(),
+            format!("local\0file:.git/config\0{flag}\nmaybe\0").as_bytes(),
+        ]
+        .concat();
+        let config = parse(&bytes, Path::new("/unused"), &Environment::new()).unwrap();
+        let repository = "the repository configuration (.git/config)";
+        assert_eq!(
+            config.get_all_placed(key),
+            [(
+                format!("setting 2 of {repository}").as_str(),
+                b"\xff".as_slice()
+            )]
+        );
+        for (error, shown) in [
+            (config.get(key).unwrap_err(), "credential.<name>.helper"),
+            (config.boolean(flag).unwrap_err(), "core.<name>.flag"),
+        ] {
+            assert!(error.contains(shown), "{error}");
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+            assert!(!error.contains("host.invalid"), "{error}");
         }
     }
 

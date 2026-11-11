@@ -97,7 +97,9 @@ pub(crate) fn commands(call: &Unwrapped) -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     };
     if crate::hooks::git_guard::unresolved_word(key) {
-        return Err(format!("cannot read the key `git config` writes: `{key}`"));
+        // Not shown: a key's subsection can hold a credential (TSK-416
+        // review round 6), and this one is filled in only at run time.
+        return Err("cannot read the key `git config` writes: it is filled in at run time".into());
     }
     Ok(command_key(key, value)
         // Only the shell's own separators make a command empty.
@@ -160,8 +162,16 @@ mod tests {
         }
     }
 
+    /// The refusal holds no part of the key it cannot read (TSK-416 review
+    /// round 6). The credential is synthetic.
     #[test]
     fn an_unread_written_key_refuses() {
+        let error = commands(&call(
+            "git config \"url.https://u:OPAQUECANARY@h.invalid/$K.insteadOf\" 'cat a'",
+        ))
+        .unwrap_err();
+        assert!(error.contains("filled in at run time"), "{error}");
+        assert!(!error.contains("OPAQUECANARY"), "{error}");
         assert!(commands(&call("git config \"$K\" 'cat a'")).is_err());
     }
 }

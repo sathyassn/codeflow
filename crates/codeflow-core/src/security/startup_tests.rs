@@ -2520,3 +2520,33 @@ fn a_long_chain_reads_the_ripgrep_config_name_once() {
     assert!(short >= 1, "the search path was not reached");
     assert_eq!(long, short, "reads grew with the segment count");
 }
+
+/// TSK-416 review round 6: a git setting on a line that produces text is
+/// refused with its key's subsection withheld, for each way the line can
+/// set it. The credential is synthetic.
+#[test]
+fn a_git_setting_refusal_holds_no_key_subsection() {
+    let f = Fixture::new();
+    let key = "mystery.https://u:OPAQUECANARY@h.invalid/x.key";
+    for command in [
+        format!("git -c '{key}=1' log -p -- .envrc | head"),
+        format!("C=1 git --config-env '{key}=C' log -p -- .envrc | head"),
+        format!("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='{key}' GIT_CONFIG_VALUE_0=1 git log -p -- .envrc | head"),
+    ] {
+        let found = f.judge(&command);
+        assert!(refused(&found), "{command}: {found:?}");
+        for violation in &found {
+            assert!(
+                !violation.message.contains("OPAQUECANARY"),
+                "{command}: {}",
+                violation.message
+            );
+        }
+        assert!(
+            found
+                .iter()
+                .any(|violation| violation.message.contains("mystery.<name>.key")),
+            "{command}: {found:?}"
+        );
+    }
+}
