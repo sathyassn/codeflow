@@ -134,8 +134,7 @@ not a promoted qualified binding.
 
 ## Note (2026-09-25)
 
-Item 2 is restated by ADR-0069. The managed catalog is ADR-0069's (schema 6
-since TSK-1292); the standing
+Item 2 is restated by ADR-0069. The managed catalog is schema 5; the standing
 seats are `claude-primary` and `codex-primary`; seat `grok-primary` serves its
 product line, whose current version is in ADR-0069's roster. The version named
 in item 2 is retired. Grok joins a review as a triggered participant on the
@@ -148,3 +147,9 @@ degrades to solo and does not open a Claude to Codex Herdr CLI lane. Every
 host, a Claude Code host included, reaches Codex through the interactive
 Codex CLI in a Herdr tab; the Claude Code plugin is an optional fallback
 and still not a Grok-host lane; tmux is the last fallback.
+
+## Note (2026-11-10)
+
+The catalog the 2026-09-25 note names as schema 5 is schema 6 since
+TSK-1292. ADR-0069's note of 2026-11-10 lists the fields schema 6 adds and
+the upgrade step.

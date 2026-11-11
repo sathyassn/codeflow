@@ -27,8 +27,8 @@ to schema 5 with the roster below, accepted 2026-09-25.
 
 ## Decision
 
-Keep the managed file name `current-ensemble.json`. Schema 5 (schema 6
-since TSK-1292; see the note of 2026-11-10) describes families, ordered product versions, seats and duties. The engine returns data
+Keep the managed file name `current-ensemble.json`. Schema 5 describes
+families, ordered product versions, seats and duties. The engine returns data
 and gaps; it never launches a model, probes availability or reads a clock.
 
 ```text
@@ -367,13 +367,29 @@ stated as prose are now catalog fields:
 
 - `launch` on each product line: `seat`, `subagent-only` or `either`. A
   `subagent-only` line never fills a seat, and the refusal names the field.
-- `effort` on each seat: its default and its floor. `high_when` on each
-  seat: the named policies or trigger facts that raise it to high.
+- `effort` on each seat: its default and its floor. Every ordinary route to
+  a seat runs at it: a duty's seat route names no effort of its own, and
+  validation refuses one that does. A line route still names its effort.
+  `high_when` on each seat: the named policies or trigger facts that raise
+  it to high.
 - `effort_floors`: the floor for each worker duty, with a required
-  `default`. It replaces the floors the engine held as constants.
+  `default`. It replaces the floors the engine held as constants. Its
+  `xhigh-reasoning` entry must be `xhigh`, so a lower worker never meets
+  an xhigh trigger.
+
+This narrows the 2026-10-04 note for a design co-owner or consultant on a
+`subagent-only` line, as Fable is in the managed catalog. Such a block stays
+valid when the line has an active version at the seat's effort. The line
+approves (co-owner) or advises (consultant) on `design-approval` as a
+subagent consult of the design owner seat, which keeps approval; it never
+fills the `design` duty, because that is a seat role; only a line whose
+`launch` allows a seat fills it. The owner line must be able to fill the
+seat.
 
 A binary at schema 6 refuses a schema 5 file with a message that names
-both schemas and `codeflow update`; the update installs the current
-catalog. The user's harness choice of model and effort applies over the
-resolved suggestion; `codeflow models resolve --effective` records it in
-the sessions ledger and never re-launches a session.
+both schemas and `codeflow update`, in `models resolve`, `doctor` and
+`doctor --preflight`; the update installs the current catalog. The user's
+harness choice of model and effort applies over the resolved suggestion;
+`codeflow models resolve --effective <model>@<effort> --session <id>`
+records it in that harness session's sessions-ledger file and never
+re-launches a session.

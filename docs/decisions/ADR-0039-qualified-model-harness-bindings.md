@@ -90,7 +90,7 @@ binding. Promotion still requires the complete full suite.
 
 ## Note (2026-09-25)
 
-Layer 4 is now the model catalog (ADR-0069; schema 6 since TSK-1292): families, product lines
+Layer 4 is now the schema 5 model catalog (ADR-0069): families, product lines
 with ordered versions, seats and duties, still one fully managed
 `current-ensemble.json`. It owns pinned ids, efforts and triggers in place of
 primary selectors and internal worker classes. A designation is not a
@@ -99,3 +99,9 @@ promoted binding: a seat served by designation alone is reported as
 suite and an approved binding record under this decision. `doctor --check
 model-bindings` adds illustrative catalog resolutions and keeps the
 harness-version and settings drift checks for binding records.
+
+## Note (2026-11-10)
+
+The catalog the 2026-09-25 note names as schema 5 is schema 6 since
+TSK-1292. ADR-0069's note of 2026-11-10 lists the fields schema 6 adds and
+the upgrade step.
