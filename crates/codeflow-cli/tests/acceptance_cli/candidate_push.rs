@@ -464,6 +464,47 @@ struct Claims<'a> {
     into: Claim<'a>,
     /// Leave out `--destination` and `--advertisement-stdin`.
     no_advertisement: bool,
+    /// This advertisement on stdin in place of the destination's current
+    /// one, which the hook would read.
+    listed: Option<&'a str>,
+    /// `--destination` in place of `origin`'s push URL.
+    destination: Option<&'a str>,
+}
+
+/// The destination's advertisement now, as the pre-push hook reads it.
+fn advertised(root: &Path) -> String {
+    git_out(
+        root,
+        &[
+            "ls-remote",
+            "--symref",
+            "origin",
+            "HEAD",
+            "refs/heads/*",
+            "refs/tags/*",
+        ],
+    )
+}
+
+/// Another landing moves the line on the destination past the tip the
+/// candidate is cut from, while this clone's tracking ref keeps the old
+/// tip; returns the line's new tip there.
+fn move_line_on_destination(fixture: &Fixture) -> String {
+    let root = fixture.root();
+    git(root, &["switch", "-q", "-C", "moved", &fixture.line_tip]);
+    write(root, "notes/moved.txt", "landed elsewhere\n");
+    let moved = commit(root, "docs(notes): land elsewhere");
+    seed_push(root, &[&format!("moved:refs/heads/{LINE}")]);
+    git(
+        root,
+        &[
+            "update-ref",
+            &format!("refs/remotes/origin/{LINE}"),
+            &fixture.line_tip,
+        ],
+    );
+    assert_eq!(remote_tip(root, LINE), Some(moved.clone()));
+    moved
 }
 
 /// [`hand_off`] with `claims` in place of the hook's own.
@@ -475,19 +516,11 @@ fn hand_off_with(
     claims: &Claims<'_>,
 ) -> (i32, String) {
     let root = fixture.root();
-    let url = ORIGIN;
+    let url = claims.destination.unwrap_or(ORIGIN);
     let main = git_out(root, &["rev-parse", "main"]);
-    let listed = git_out(
-        root,
-        &[
-            "ls-remote",
-            "--symref",
-            "origin",
-            "HEAD",
-            "refs/heads/*",
-            "refs/tags/*",
-        ],
-    );
+    let listed = claims
+        .listed
+        .map_or_else(|| advertised(root), str::to_string);
     let pushed_ref = format!("refs/heads/{name}");
     let mut args: Vec<String> = [
         "ci",
@@ -545,6 +578,115 @@ fn hand_off_with(
             String::from_utf8_lossy(&out.stderr)
         ),
     )
+}
+
+/// The cause `codeflow ci` names when the hand-off's advertisement and its
+/// own read of the destination differ.
+const READS_DIFFER: &str = "differs from this run's own read of the destination at 1 ref(s)";
+/// The remedy that cause names.
+const FETCH_AGAIN: &str = "so the candidate is bound to neither read; fetch, rebuild the candidate on its line's current tip if the line moved, and push again";
+
+/// AC-3: the line moves on the destination after the hook read its
+/// advertisement. The stale advertisement, this clone's tracking ref, the
+/// base and the candidate all still agree on the old tip, so the hand-off
+/// is consistent with itself; `codeflow ci` reads the destination again,
+/// sees the line moved, and refuses rather than binding to either read.
+#[test]
+fn a_line_that_moves_after_the_hook_read_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    let captured = advertised(root);
+    move_line_on_destination(&fixture);
+    git(root, &["switch", "-q", CANDIDATE]);
+    let judged = hand_off_with(
+        &fixture,
+        CANDIDATE,
+        &candidate,
+        &fixture.line_tip,
+        &Claims {
+            listed: Some(&captured),
+            ..Claims::default()
+        },
+    );
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "a hand-off whose line moved after the hook's read",
+        &[
+            "work.landing_candidate",
+            READS_DIFFER,
+            &format!("({LINE})"),
+            "the destination moved after the hook read it",
+            FETCH_AGAIN,
+        ],
+    );
+}
+
+/// AC-3: a forged advertisement. The line already moved on the
+/// destination; the hand-off names its old tip, with the tracking ref, base
+/// and policy authority all set to match. `codeflow ci` refuses it from its
+/// own read of the destination.
+#[test]
+fn a_forged_advertisement_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    let moved = move_line_on_destination(&fixture);
+    git(root, &["switch", "-q", CANDIDATE]);
+    let forged = advertised(root).replace(&moved, &fixture.line_tip);
+    assert!(forged.contains(&format!("{}\trefs/heads/{LINE}", fixture.line_tip)));
+    let judged = hand_off_with(
+        &fixture,
+        CANDIDATE,
+        &candidate,
+        &fixture.line_tip,
+        &Claims {
+            listed: Some(&forged),
+            ..Claims::default()
+        },
+    );
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "a forged advertisement",
+        &[
+            "work.landing_candidate",
+            READS_DIFFER,
+            &format!("({LINE})"),
+            "or the hand-off is not the destination's",
+            FETCH_AGAIN,
+        ],
+    );
+}
+
+/// AC-3: a destination that is not `origin`'s push URL is refused, even one
+/// naming the same forge repository, so the run never reads a repository
+/// the caller chose in `origin`'s place.
+#[test]
+fn a_destination_other_than_origin_is_refused() {
+    let fixture = fixture();
+    let candidate = fixture.candidate(CANDIDATE);
+    let other = "ssh://localhost/acme/widgets";
+    let judged = hand_off_with(
+        &fixture,
+        CANDIDATE,
+        &candidate,
+        &fixture.line_tip,
+        &Claims {
+            destination: Some(other),
+            ..Claims::default()
+        },
+    );
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "a destination other than origin",
+        &[
+            "work.landing_candidate",
+            &format!("the destination {other} is not `origin`'s push URL"),
+        ],
+    );
 }
 
 /// A criteria change to TSK-001 that no member's reviewed head made.

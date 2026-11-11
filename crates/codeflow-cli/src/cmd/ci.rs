@@ -173,7 +173,8 @@ pub struct CiArgs {
     /// its HEAD, branches and tags) from stdin instead of asking it again.
     /// The pre-push hook passes what it already asked. It is the hook's
     /// hand-off, not an authority: a run given it is advisory only, and
-    /// hosted CI never passes it.
+    /// hosted CI never passes it. A landing candidate's run reads the
+    /// destination again itself and refuses when the two reads differ.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
 

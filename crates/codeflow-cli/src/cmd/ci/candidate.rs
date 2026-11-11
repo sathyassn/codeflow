@@ -4,11 +4,14 @@
 //! its line and hands `codeflow ci` the line's tip as `--base` and the line
 //! as `--into`. This check never trusts that hand-off: it binds the pushed
 //! branch again from its own reads, the fetched line tip, the records at
-//! the default branch's tip and at that line tip, and the destination's
-//! advertisement, which it requires. It refuses with the cause when the
-//! binding does not hold, when the advertisement is missing, or when a
-//! claim of the hand-off (the policy authority, `--into`, the base) is
-//! missing or differs from what it established. A bound candidate is then judged as
+//! the default branch's tip and at that line tip, and its own read of the
+//! destination, which must be `origin`'s push URL. The advertisement the
+//! hand-off carries is required and is a claim: it must match that read
+//! ref for ref. It refuses with the cause when the binding does not hold,
+//! when the destination cannot be read or is not `origin`, when the two
+//! reads differ (the destination moved, or the hand-off is not its), or
+//! when a claim of the hand-off (the policy authority, `--into`, the base)
+//! is missing or differs from what it established. A bound candidate is then judged as
 //! a push of its line would be: the line's records into the line's own
 //! target, the line's direct-commit rule, and each member merge as a
 //! landing on the line.
@@ -121,10 +124,12 @@ pub(super) fn unnamed_line(
 }
 
 /// Bind `branch` from this run's own reads; the cause when it does not
-/// hold or cannot be read. Every destination tip comes from the
-/// destination's own advertisement; each claim the hand-off makes (the
-/// policy authority, `--into`, the base) must match what this run
-/// establishes, and a missing claim is refused, never filled in.
+/// hold or cannot be read. Every destination tip comes from this run's own
+/// read of the destination, which must be `origin`'s push URL; the
+/// advertisement the hand-off carries is a claim that read must match ref
+/// for ref. Each other claim the hand-off makes (the policy authority,
+/// `--into`, the base) must match what this run establishes, and a missing
+/// claim is refused, never filled in.
 fn bind(
     root: &Path,
     branch: &str,
@@ -136,8 +141,7 @@ fn bind(
     let (Some(url), Some(listed)) = (destination, advertisement) else {
         return Err("the run holds no destination advertisement (`--destination` with `--advertisement-stdin`, as the pre-push hook hands over), so the line's tip and the default branch's tip cannot be established independently".to_string());
     };
-    let asked = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
-        .map_err(|error| format!("the destination's advertisement cannot be read: {error}"))?;
+    let asked = destination_read(root, git, url, listed)?;
     // The default branch and its tip, as the destination advertises them:
     // the line's own target, and the records that must bind the line.
     let (target, default_tip) = asked
@@ -204,4 +208,74 @@ fn bind(
         ));
     }
     Ok(Bound { line, target })
+}
+
+/// The destination `url` as this run reads it, once `url` is shown to be
+/// `origin`'s push URL and the hand-off's advertisement `listed` is shown
+/// to match the read ref for ref. The read uses the timeout and attempts
+/// of the policy that judges the push, as the hook's own read does.
+///
+/// # Errors
+///
+/// Returns why `url` is not `origin`'s push URL, why the destination or
+/// the hand-off's advertisement cannot be read, or which refs differ.
+fn destination_read(
+    root: &Path,
+    git: &GitPolicy,
+    url: &str,
+    listed: &str,
+) -> Result<codeflow_core::workgraph::release_line::Destination, String> {
+    use codeflow_core::git::remote_query::{display_urls, QueryLimits};
+    use codeflow_core::workgraph::release_line;
+    let shown = display_urls(url);
+    let limits = QueryLimits::from_git(git);
+    let pushes = codeflow_core::git::remote_identity::effective_urls(root, "origin", true, limits)
+        .map_err(|why| {
+            format!(
+                "`origin`'s push URL cannot be read ({}), so the destination {shown} cannot be shown to be the repository this run reads",
+                display_urls(&why)
+            )
+        })?;
+    if !pushes.iter().any(|push| push == url) {
+        return Err(format!(
+            "the destination {shown} is not `origin`'s push URL, so this run cannot read it as the destination; push to `origin`"
+        ));
+    }
+    let claimed = release_line::from_advertisement(url, listed).map_err(|error| {
+        format!("the hand-off's advertisement of the destination cannot be read: {error}")
+    })?;
+    let read = release_line::advertisement(root, url, limits)
+        .and_then(|text| release_line::from_advertisement(url, &text))
+        .map_err(|error| {
+            format!("this run cannot read the destination itself, so the hand-off's advertisement cannot be checked: {error}")
+        })?;
+    let mut moved: Vec<String> = Vec::new();
+    if claimed.default.as_ref().map(|(name, _)| name) != read.default.as_ref().map(|(name, _)| name)
+    {
+        moved.push("HEAD".to_string());
+    }
+    let tips = |destination: &release_line::Destination| -> BTreeMap<String, String> {
+        destination
+            .heads
+            .iter()
+            .map(|(name, tip)| (name.clone(), tip.to_string()))
+            .collect()
+    };
+    let (claimed_tips, read_tips) = (tips(&claimed), tips(&read));
+    for name in claimed_tips.keys().chain(read_tips.keys()) {
+        let shown_name = codeflow_core::git::display_text(name);
+        if claimed_tips.get(name) != read_tips.get(name) && !moved.contains(&shown_name) {
+            moved.push(shown_name);
+        }
+    }
+    if !moved.is_empty() {
+        let count = moved.len();
+        moved.truncate(5);
+        return Err(format!(
+            "the advertisement the hand-off carries differs from this run's own read of the destination at {count} ref(s) ({}{}): the destination moved after the hook read it, or the hand-off is not the destination's, so the candidate is bound to neither read; fetch, rebuild the candidate on its line's current tip if the line moved, and push again",
+            moved.join(", "),
+            if count > 5 { ", ..." } else { "" }
+        ));
+    }
+    Ok(read)
 }
