@@ -468,6 +468,15 @@ mod tests {
         assert!(!marker.exists(), "{remedy}");
         let (_, dashed) = direct_commit_refusal("x", &["a".repeat(40)], "-x");
         assert!(!dashed.contains("git reset"), "{dashed}");
-        assert!(dashed.contains(crate::git::pasted::NOT_PRINTED), "{dashed}");
+        // Round 3: the reason names the dash, not a hidden character.
+        assert!(
+            dashed.contains(crate::git::pasted::NOT_PRINTED_DASHED),
+            "{dashed}"
+        );
+        assert!(!dashed.contains("does not show as itself"), "{dashed}");
+        let (_, hidden) = direct_commit_refusal("x", &["a".repeat(40)], "x\u{200b}$(id)");
+        assert!(!hidden.contains("git reset"), "{hidden}");
+        assert!(!hidden.contains("$(id)"), "{hidden}");
+        assert!(hidden.contains(crate::git::pasted::NOT_PRINTED), "{hidden}");
     }
 }

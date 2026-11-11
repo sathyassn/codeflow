@@ -187,17 +187,53 @@ pub fn argv(program: &'static str, args: &[&str]) -> Option<String> {
     Some(words.join(" "))
 }
 
-/// What a step says in place of a command with no printed form: the reader
+/// What a step says in place of a command with no printed form because a
+/// value holds a character a terminal does not show as itself: the reader
 /// runs it with a tool that takes the name as it is, never a pasted line.
 pub const NOT_PRINTED: &str = "with a git client: a name it needs holds a character a terminal does not show as itself, so no command is printed to paste";
 
-/// `command` rendered in backticks, or [`NOT_PRINTED`] when it has no
-/// printed form that pastes back as the values it names.
+/// What a step says in place of a command with no printed form because an
+/// operand starts with `-` and the verb reads its operands differently
+/// after `--` (TSK-416 review round 3).
+pub const NOT_PRINTED_DASHED: &str = "with a git client: a name it needs starts with `-`, which this command reads as an option, and after `--` as something other than that name, so no command is printed to paste";
+
+impl Pasted<'_> {
+    /// Why [`Pasted::render`] gives `None`, as the text a step prints in
+    /// the command's place: [`NOT_PRINTED`] for a value with a hidden
+    /// character or invalid UTF-8, which comes first since such a value has
+    /// no printed form under any verb, else [`NOT_PRINTED_DASHED`] for a
+    /// dashed operand the verb cannot take after `--`. `None` when the
+    /// command renders.
+    #[must_use]
+    pub fn unprinted(&self) -> Option<&'static str> {
+        let values = self
+            .options
+            .iter()
+            .map(|(_, value)| *value)
+            .chain(self.operands.iter().filter_map(|operand| match operand {
+                Operand::Value(value) => Some(*value),
+                Operand::Placeholder(_) => None,
+            }));
+        for value in values {
+            if value.is_none_or(|value| value.chars().any(hidden)) {
+                return Some(NOT_PRINTED);
+            }
+        }
+        let dashed = self.operands.iter().any(
+            |operand| matches!(operand, Operand::Value(Some(value)) if value.starts_with('-')),
+        );
+        (dashed && self.dashed == Dashed::Refuse).then_some(NOT_PRINTED_DASHED)
+    }
+}
+
+/// `command` rendered in backticks, or the reason it has no printed form
+/// that pastes back as the values it names ([`Pasted::unprinted`]).
 #[must_use]
 pub fn step(command: &Pasted<'_>) -> String {
-    command
-        .render()
-        .map_or_else(|| NOT_PRINTED.to_string(), |line| format!("`{line}`"))
+    command.render().map_or_else(
+        || command.unprinted().unwrap_or(NOT_PRINTED).to_string(),
+        |line| format!("`{line}`"),
+    )
 }
 
 #[cfg(test)]
@@ -352,5 +388,36 @@ mod tests {
             shell_argv(&format!("codeflow ci {}", option("--into", "o$(id)").unwrap())),
             ["ci", "--into", "o$(id)"]
         );
+    }
+
+    /// TSK-416 review round 3, minor finding: a step with no printed form
+    /// says why. A dashed operand the verb cannot take after `--` names the
+    /// dash; a hidden character names that, and wins when both hold, since
+    /// such a value has no printed form under any verb.
+    #[test]
+    fn a_step_with_no_printed_form_names_its_own_cause() {
+        fn reset(value: &str) -> Pasted<'_> {
+            Pasted::new("git reset --keep")
+                .value(value)
+                .without_end_of_options()
+        }
+        assert_eq!(step(&reset("-x")), NOT_PRINTED_DASHED);
+        assert_eq!(reset("-x").unprinted(), Some(NOT_PRINTED_DASHED));
+        assert_eq!(step(&reset("x\u{200b}y")), NOT_PRINTED);
+        assert_eq!(step(&reset("-x\u{200b}$(id)")), NOT_PRINTED);
+        assert_eq!(reset("x").unprinted(), None);
+        // A verb that ends its options at `--` renders a dashed operand.
+        let fetch = Pasted::new("git fetch").value("-x");
+        assert_eq!(fetch.unprinted(), None);
+        assert_eq!(step(&fetch), "`git fetch -- -x`");
+        // A hidden character in an option value, and invalid UTF-8.
+        let into = Pasted::new("codeflow ci").option("--into", "o\u{202e}$(id)");
+        assert_eq!(into.render(), None);
+        assert_eq!(step(&into), NOT_PRINTED);
+        let invalid = GitName::from_bytes(b"a\xffb");
+        assert_eq!(step(&Pasted::new("git switch").name(&invalid)), NOT_PRINTED);
+        // Neither reason claims the other cause.
+        assert!(!NOT_PRINTED_DASHED.contains("does not show"));
+        assert!(!NOT_PRINTED.contains("starts with"));
     }
 }
