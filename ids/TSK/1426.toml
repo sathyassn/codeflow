@@ -1,0 +1,11 @@
+id = "TSK-1426"
+uid = "553417e7-d479-4077-a3ab-f920779f56f3"
+kind = "TSK"
+title = "The edit guard maps drive-relative and NT namespace paths, and the line's Windows tests pass"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T04:31:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
