@@ -1655,7 +1655,11 @@ fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(crate::git::remote_query::display_urls(
+        // Git's message can quote a credential outside any URL, so the
+        // configured URLs are redacted first, or the text is withheld
+        // (TSK-416 review round 2).
+        Err(crate::git::remote_query::relay_diagnostic(
+            repo_root,
             String::from_utf8_lossy(&out.stderr).trim(),
         ))
     }
@@ -1672,7 +1676,8 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
         Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
-        Err(crate::git::remote_query::display_urls(
+        Err(crate::git::remote_query::relay_diagnostic(
+            repo_root,
             String::from_utf8_lossy(&out.stderr).trim(),
         ))
     }
