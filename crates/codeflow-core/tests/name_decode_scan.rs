@@ -5213,6 +5213,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // TSK-1351: parses GitHub's workflow-runs JSON answer for a check suite; it reads no shell or git name.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "producer",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
     // TSK-1351: shortens a failed `gh` read to its first line for the refusal a person reads; any failure refuses.
     (
         "crates/codeflow-core/src/workgraph/candidate_admission.rs",

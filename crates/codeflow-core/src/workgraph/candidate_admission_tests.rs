@@ -1,7 +1,8 @@
 //! TSK-1351 AC-1: a member is admitted only at the exact head of an open
 //! pull request into the line, with every declared `trusted:` check green
-//! there and produced by GitHub Actions. The forge is a recorded host: a
-//! `gh` stand-in answering each API path from a table.
+//! there, written by the policy workflow's own run for that pull request
+//! at that head. The forge is a recorded host: a `gh` stand-in answering
+//! each API path from a table.
 
 use std::collections::BTreeMap;
 
@@ -27,11 +28,26 @@ const POLICY: &str = "on: pull_request_target\njobs:\n  commit-lint:\n    name: 
 struct Forge {
     answers: BTreeMap<String, String>,
     failing: Vec<String>,
+    /// The recorded pull requests' numbers and heads.
+    heads: Vec<(u64, String)>,
+}
+
+/// A workflow run as the forge records it: `(path, event, head, pulls)`,
+/// each pull `(number, head, base)`.
+type WorkflowRun<'a> = (&'a str, &'a str, &'a str, &'a [(u64, &'a str, &'a str)]);
+
+/// A check run id, and its check suite's id, distinct per commit.
+fn run_id(sha: &str) -> u64 {
+    u64::from_str_radix(&sha[..8], 16).unwrap()
 }
 
 impl Forge {
     /// Open pull requests into the line: `(number, head, state, base)`.
     fn pulls(mut self, pulls: &[(u64, &str, &str, &str)]) -> Self {
+        self.heads = pulls
+            .iter()
+            .map(|(number, head, _, _)| (*number, (*head).to_string()))
+            .collect();
         let list: Vec<Value> = pulls
             .iter()
             .map(|(number, head, state, base)| {
@@ -50,7 +66,8 @@ impl Forge {
         self
     }
 
-    /// The check runs at `sha`: `(id, name, status, conclusion, app)`.
+    /// The check runs at `sha`: `(id, name, status, conclusion, app)`. Each
+    /// run's check suite has the run's id.
     fn runs(mut self, sha: &str, runs: &[(u64, &str, &str, Option<&str>, u64)]) -> Self {
         let list: Vec<Value> = runs
             .iter()
@@ -61,6 +78,7 @@ impl Forge {
                     "status": status,
                     "conclusion": conclusion,
                     "app": {"id": app},
+                    "check_suite": {"id": id},
                 })
             })
             .collect();
@@ -71,15 +89,68 @@ impl Forge {
         self
     }
 
+    /// The workflow runs of check suite `suite`, as the forge answers
+    /// `actions/runs?check_suite_id=`.
+    fn suite(mut self, suite: u64, runs: &[WorkflowRun<'_>]) -> Self {
+        let list: Vec<Value> = runs
+            .iter()
+            .map(|(path, event, head, pulls)| {
+                let pulls: Vec<Value> = pulls
+                    .iter()
+                    .map(|(number, head, base)| {
+                        serde_json::json!({
+                            "number": number,
+                            "head": {"sha": head},
+                            "base": {"ref": base},
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "check_suite_id": suite,
+                    "path": path,
+                    "event": event,
+                    "head_sha": head,
+                    "pull_requests": pulls,
+                })
+            })
+            .collect();
+        self.answers.insert(
+            format!("repos/{NWO}/actions/runs?check_suite_id={suite}"),
+            serde_json::json!({"total_count": list.len(), "workflow_runs": list}).to_string(),
+        );
+        self
+    }
+
+    /// The pull request recorded with head `sha`, else 7.
+    fn pull_at(&self, sha: &str) -> u64 {
+        self.heads
+            .iter()
+            .find(|(_, head)| head == sha)
+            .map_or(7, |(number, _)| *number)
+    }
+
+    /// The admission check green at `sha`, written by the policy workflow
+    /// on `pull_request_target` for the pull request whose head it is.
     fn green(self, sha: &str) -> Self {
+        let id = run_id(sha);
+        let pull = self.pull_at(sha);
         self.runs(
             sha,
             &[(
-                10,
+                id,
                 CHECK,
                 "completed",
                 Some("success"),
                 GITHUB_ACTIONS_APP_ID,
+            )],
+        )
+        .suite(
+            id,
+            &[(
+                POLICY_WORKFLOW,
+                "pull_request_target",
+                sha,
+                &[(pull, sha, LINE)],
             )],
         )
     }
@@ -249,6 +320,168 @@ fn an_admission_check_green_only_on_an_older_head_is_refused() {
         .pulls(&pulls)
         .runs(COMPLETED, &[(13, CHECK, "completed", Some("success"), 99)]);
     refused(foreign.admit(&[COMPLETED]), "has no run");
+}
+
+/// One green admission check at `COMPLETED`, pull request 7's head, from
+/// GitHub Actions in check suite 20, whose workflow runs are `runs`.
+fn green_from(runs: &[WorkflowRun<'_>]) -> Forge {
+    Forge::default()
+        .pulls(&[(7, COMPLETED, "open", LINE)])
+        .runs(
+            COMPLETED,
+            &[(
+                20,
+                CHECK,
+                "completed",
+                Some("success"),
+                GITHUB_ACTIONS_APP_ID,
+            )],
+        )
+        .suite(20, runs)
+}
+
+/// Refused (CWE-345): a green check of the trusted name from GitHub Actions
+/// that another workflow wrote. A workflow the pull request adds runs as
+/// GitHub Actions and can name its job `trusted: ...`; its newer green run
+/// does not outrank the policy workflow's failed one.
+#[test]
+fn a_same_app_check_from_another_workflow_is_refused() {
+    let lookalike = Forge::default()
+        .pulls(&[(7, COMPLETED, "open", LINE)])
+        .runs(
+            COMPLETED,
+            &[
+                (
+                    20,
+                    CHECK,
+                    "completed",
+                    Some("failure"),
+                    GITHUB_ACTIONS_APP_ID,
+                ),
+                (
+                    21,
+                    CHECK,
+                    "completed",
+                    Some("success"),
+                    GITHUB_ACTIONS_APP_ID,
+                ),
+            ],
+        )
+        .suite(
+            20,
+            &[(
+                POLICY_WORKFLOW,
+                "pull_request_target",
+                COMPLETED,
+                &[(7, COMPLETED, LINE)],
+            )],
+        )
+        .suite(
+            21,
+            &[(
+                ".github/workflows/lookalike.yml",
+                "pull_request_target",
+                COMPLETED,
+                &[(7, COMPLETED, LINE)],
+            )],
+        );
+    refused(
+        lookalike.admit(&[COMPLETED]),
+        &format!("its trusted admission check '{CHECK}' comes from .github/workflows/lookalike.yml on pull_request_target, not from {POLICY_WORKFLOW} on pull_request_target"),
+    );
+    // The policy file's own path on `pull_request` runs the pull request's
+    // copy of it, which the pull request can rewrite.
+    let head_copy = green_from(&[(
+        POLICY_WORKFLOW,
+        "pull_request",
+        COMPLETED,
+        &[(7, COMPLETED, LINE)],
+    )]);
+    refused(
+        head_copy.admit(&[COMPLETED]),
+        &format!("comes from {POLICY_WORKFLOW} on pull_request, not from"),
+    );
+}
+
+/// Refused: the policy workflow's green run judged another pull request,
+/// or this one into another base.
+#[test]
+fn a_policy_check_for_another_pull_request_is_refused() {
+    let other_pull = green_from(&[(
+        POLICY_WORKFLOW,
+        "pull_request_target",
+        COMPLETED,
+        &[(9, COMPLETED, LINE)],
+    )]);
+    refused(
+        other_pull.admit(&[COMPLETED]),
+        &format!("the forge does not show judging pull request #7 at this head into '{LINE}'"),
+    );
+    let other_base = green_from(&[(
+        POLICY_WORKFLOW,
+        "pull_request_target",
+        COMPLETED,
+        &[(7, COMPLETED, "main")],
+    )]);
+    refused(
+        other_base.admit(&[COMPLETED]),
+        "does not show judging pull request #7",
+    );
+    let no_pull = green_from(&[(POLICY_WORKFLOW, "pull_request_target", COMPLETED, &[])]);
+    refused(
+        no_pull.admit(&[COMPLETED]),
+        "does not show judging pull request #7",
+    );
+}
+
+/// Refused: the policy workflow's run behind the check ran at another
+/// commit, or names the member's pull request with another head.
+#[test]
+fn a_policy_check_for_another_head_is_refused() {
+    let other_commit = green_from(&[(
+        POLICY_WORKFLOW,
+        "pull_request_target",
+        REVIEWED,
+        &[(7, REVIEWED, LINE)],
+    )]);
+    refused(
+        other_commit.admit(&[COMPLETED]),
+        &format!("comes from a {POLICY_WORKFLOW} run at 111111111, another commit"),
+    );
+    let other_pull_head = green_from(&[(
+        POLICY_WORKFLOW,
+        "pull_request_target",
+        COMPLETED,
+        &[(7, REVIEWED, LINE)],
+    )]);
+    refused(
+        other_pull_head.admit(&[COMPLETED]),
+        "does not show judging pull request #7 at this head",
+    );
+}
+
+/// Refused: a check suite whose workflow run the forge does not show, shows
+/// twice, or cannot answer.
+#[test]
+fn an_unshown_policy_run_is_refused() {
+    let none = green_from(&[]);
+    refused(none.admit(&[COMPLETED]), "with 0 workflow runs");
+    let run = (
+        POLICY_WORKFLOW,
+        "pull_request_target",
+        COMPLETED,
+        &[(7, COMPLETED, LINE)][..],
+    );
+    let two = green_from(&[run, run]);
+    refused(two.admit(&[COMPLETED]), "with 2 workflow runs");
+    let mut silent = green_from(&[run]);
+    silent
+        .failing
+        .push(format!("repos/{NWO}/actions/runs?check_suite_id=20"));
+    refused(
+        silent.admit(&[COMPLETED]),
+        "the forge cannot be read (the workflow run of check run 20",
+    );
 }
 
 /// Refused: a forge that cannot be read, for the pull requests or for the

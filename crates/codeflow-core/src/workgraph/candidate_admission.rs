@@ -4,11 +4,23 @@
 //! A member merge's second parent must be the exact head commit of an open
 //! pull request into the candidate's line, and every `trusted:` check the
 //! policy workflow declares at the default branch's tip must be green at
-//! that commit, produced by GitHub Actions. Both facts are read from the
-//! forge at pre-push. The pusher writes neither: the pull request's head
-//! and base are the forge's record, the check runs at a commit are written
-//! by the workflow the default branch holds, and the names they must carry
-//! come from the default branch's tip, never from the candidate.
+//! that commit by a run of the policy workflow itself. Both facts are read
+//! from the forge at pre-push. The pull request's head and base are the
+//! forge's record, and the names the checks must carry come from the
+//! default branch's tip, never from the candidate.
+//!
+//! A check run's name and app do not say which workflow wrote it: any
+//! workflow a pull request adds runs as GitHub Actions and can name its job
+//! `trusted: ...`. So the newest run of each name must belong to a check
+//! suite whose one workflow run is [`POLICY_WORKFLOW`] on
+//! `pull_request_target`, the event GitHub runs from the default branch's
+//! own copy of that file, at the member's head, for the member's pull
+//! request into the line. A newer green run from any other workflow or
+//! event refuses rather than outranking the policy run, and so does a
+//! suite or workflow run the forge does not show. This binds the verdict
+//! to the workflow's path and event as the forge records them; which
+//! revision of the file ran rests on what `pull_request_target` itself
+//! guarantees, the default branch's copy.
 //!
 //! This proves admission at the head, the hosted verdicts and record checks
 //! the trusted workflow ran there. It does not prove that a person reviewed
@@ -116,7 +128,9 @@ pub fn admit(
         let runs = check_runs(gh, nwo, head)?;
         for name in checks {
             // The newest run of the name that GitHub Actions produced
-            // decides; a run any other app reported proves nothing.
+            // decides; a run any other app reported proves nothing. A green
+            // one counts only when the policy workflow wrote it for this
+            // pull request at this head.
             let newest = runs
                 .iter()
                 .filter(|run| run.name == *name && run.app == Some(GITHUB_ACTIONS_APP_ID))
@@ -128,7 +142,7 @@ pub fn admit(
                     "concluded {}",
                     run.conclusion.as_deref().unwrap_or("with no conclusion")
                 )),
-                Some(_) => None,
+                Some(run) => producer(gh, nwo, line, pull, head, run)?,
             };
             if let Some(verdict) = verdict {
                 return Err(format!(
@@ -235,6 +249,91 @@ struct Run {
     status: String,
     conclusion: Option<String>,
     app: Option<u64>,
+    /// The check suite the run belongs to, which names its workflow run.
+    suite: Option<u64>,
+}
+
+/// The event GitHub runs from the default branch's own copy of the
+/// workflow file, whatever the pull request changes.
+const TRUSTED_EVENT: &str = "pull_request_target";
+
+/// Why the green `run` at `head` does not come from the policy workflow
+/// judging pull request `pull` into `line`, or `None` when it does: its
+/// check suite's one workflow run must be [`POLICY_WORKFLOW`] on
+/// [`TRUSTED_EVENT`] at `head`, for `pull` with that head and base `line`.
+///
+/// # Errors
+///
+/// Returns why the check suite's workflow run cannot be read.
+fn producer(
+    gh: Gh<'_>,
+    nwo: &str,
+    line: &str,
+    pull: u64,
+    head: &str,
+    run: &Run,
+) -> Result<Option<String>, String> {
+    let what = format!("the workflow run of check run {}", run.id);
+    let Some(suite) = run.suite else {
+        return Err(unreadable(&what, "the check run names no check suite"));
+    };
+    let answer = gh(&[
+        "api",
+        &format!("repos/{nwo}/actions/runs?check_suite_id={suite}"),
+    ])
+    .map_err(|error| unreadable(&what, &error))?;
+    let workflow_runs = serde_json::from_str::<Value>(&answer)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("workflow_runs")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .ok_or_else(|| unreadable(&what, "the answer holds no workflow_runs list"))?;
+    let [workflow_run] = workflow_runs.as_slice() else {
+        return Ok(Some(format!(
+            "comes from check suite {suite}, which the forge shows with {} workflow runs, not one {POLICY_WORKFLOW} run",
+            workflow_runs.len()
+        )));
+    };
+    let field = |name: &str| workflow_run.get(name).and_then(Value::as_str);
+    let path = field("path").unwrap_or("(no path)");
+    let event = field("event").unwrap_or("(no event)");
+    if path != POLICY_WORKFLOW || event != TRUSTED_EVENT {
+        return Ok(Some(format!(
+            "comes from {} on {}, not from {POLICY_WORKFLOW} on {TRUSTED_EVENT}; a check of the same name from another workflow or event proves nothing",
+            crate::git::display_text(path),
+            crate::git::display_text(event)
+        )));
+    }
+    let ran_at = field("head_sha").unwrap_or("(no commit)");
+    if !ran_at.eq_ignore_ascii_case(head) {
+        return Ok(Some(format!(
+            "comes from a {POLICY_WORKFLOW} run at {}, another commit",
+            crate::git::display_text(ran_at.get(..9).unwrap_or(ran_at))
+        )));
+    }
+    let judged = workflow_run
+        .get("pull_requests")
+        .and_then(Value::as_array)
+        .is_some_and(|pulls| {
+            pulls.iter().any(|entry| {
+                entry.get("number").and_then(Value::as_u64) == Some(pull)
+                    && entry
+                        .pointer("/head/sha")
+                        .and_then(Value::as_str)
+                        .is_some_and(|sha| sha.eq_ignore_ascii_case(head))
+                    && entry.pointer("/base/ref").and_then(Value::as_str) == Some(line)
+            })
+        });
+    if !judged {
+        return Ok(Some(format!(
+            "comes from a {POLICY_WORKFLOW} run the forge does not show judging pull request #{pull} at this head into '{}'",
+            crate::git::display_text(line)
+        )));
+    }
+    Ok(None)
 }
 
 /// Every check run at `sha`.
@@ -269,6 +368,7 @@ fn check_runs(gh: Gh<'_>, nwo: &str, sha: &str) -> Result<Vec<Run>, String> {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 app: run.pointer("/app/id").and_then(Value::as_u64),
+                suite: run.pointer("/check_suite/id").and_then(Value::as_u64),
             });
         }
         if short {

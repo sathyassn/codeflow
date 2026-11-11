@@ -4,8 +4,9 @@
 //! `git.candidate_prefix`, cut from an epic line's tip, with the reviewed
 //! pull request heads of one batch merged onto it by `--no-ff` merges. The
 //! pre-push hook and `codeflow ci` judge it as the line's next tip, and the
-//! line push that lands it, only when [`bind`] holds. Every input is one the
-//! pusher cannot forge:
+//! line push that lands it, only when [`bind`] holds. Its inputs come from
+//! the default branch, the destination and the forge, never from the
+//! candidate's own claims:
 //!
 //! - the name carries the prefix read from the default branch's policy;
 //! - the candidate's first-parent chain, `git.candidate_search_depth`
@@ -19,11 +20,11 @@
 //!   `integration/<x>` alone;
 //! - every commit after the line's tip on the first-parent chain is a
 //!   two-parent merge whose tree is the clean merge of its parents: no
-//!   direct commit, no octopus merge and no evil merge.
-//!
+//!   direct commit, no octopus merge and no evil merge;
 //! - every member merge's second parent is the exact head of an open pull
 //!   request into the line, with the default branch's trusted admission
-//!   checks green there, read from the forge
+//!   checks green there, each written by the policy workflow's own
+//!   `pull_request_target` run for that pull request, read from the forge
 //!   ([`crate::workgraph::candidate_admission`]).
 //!
 //! Any condition that does not hold, or cannot be read, is the cause the

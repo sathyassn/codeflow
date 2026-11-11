@@ -161,8 +161,15 @@ fn answer(root: &Path, path: &str, body: &str) {
 }
 
 /// The forge holds one open pull request into the line per head, numbered
-/// from 1, each with the admission check green at its head.
+/// from 1, each with the admission check green at its head, written in
+/// check suite `number` by the policy workflow on `pull_request_target`
+/// for that pull request.
 fn admit(root: &Path, heads: &[&str]) {
+    admit_from(root, heads, POLICY_WORKFLOW);
+}
+
+/// [`admit`], with each green admission check written by `workflow`.
+fn admit_from(root: &Path, heads: &[&str], workflow: &str) {
     let pulls: Vec<String> = heads
         .iter()
         .zip(1..)
@@ -177,12 +184,19 @@ fn admit(root: &Path, heads: &[&str]) {
         &format!("repos/{NWO}/pulls?state=open&base={LINE}&per_page=100&page=1"),
         &format!("[{}]", pulls.join(",")),
     );
-    for head in heads {
+    for (head, number) in heads.iter().zip(1..) {
         answer(
             root,
             &format!("repos/{NWO}/commits/{head}/check-runs?per_page=100&page=1"),
             &format!(
-                "{{\"total_count\":1,\"check_runs\":[{{\"id\":1,\"name\":\"{ADMISSION}\",\"status\":\"completed\",\"conclusion\":\"success\",\"app\":{{\"id\":{ACTIONS_APP}}}}}]}}"
+                "{{\"total_count\":1,\"check_runs\":[{{\"id\":{number},\"name\":\"{ADMISSION}\",\"status\":\"completed\",\"conclusion\":\"success\",\"app\":{{\"id\":{ACTIONS_APP}}},\"check_suite\":{{\"id\":{number}}}}}]}}"
+            ),
+        );
+        answer(
+            root,
+            &format!("repos/{NWO}/actions/runs?check_suite_id={number}"),
+            &format!(
+                "{{\"total_count\":1,\"workflow_runs\":[{{\"path\":\"{workflow}\",\"event\":\"pull_request_target\",\"head_sha\":\"{head}\",\"pull_requests\":[{{\"number\":{number},\"head\":{{\"sha\":\"{head}\"}},\"base\":{{\"ref\":\"{LINE}\"}}}}]}}]}}"
             ),
         );
     }
@@ -802,6 +816,33 @@ fn a_candidate_with_an_unadmitted_member_is_refused() {
     println!("{}", landed.1);
     refused_by_binding(&landed, "the line push of an unadmitted member", &cause);
     assert_eq!(remote_tip(root, LINE), Some(fixture.line_tip.clone()));
+}
+
+/// AC-1 (CWE-345): every member's admission check is green, from GitHub
+/// Actions, for its own pull request at its head, but written by another
+/// workflow than the policy workflow. The push is refused with that cause
+/// and the destination keeps no candidate.
+#[test]
+fn a_member_green_only_from_another_workflow_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let heads: Vec<String> = MEMBERS
+        .iter()
+        .map(|member| git_out(root, &["rev-parse", member]))
+        .collect();
+    let admitted: Vec<&str> = heads.iter().map(String::as_str).collect();
+    admit_from(root, &admitted, ".github/workflows/lookalike.yml");
+    fixture.candidate(CANDIDATE);
+    let pushed = push(root, CANDIDATE);
+    println!("{}", pushed.1);
+    refused_by_binding(
+        &pushed,
+        "a member green only from another workflow",
+        &format!(
+            "of pull request #1 is not admitted: its trusted admission check '{ADMISSION}' comes from .github/workflows/lookalike.yml on pull_request_target, not from {POLICY_WORKFLOW} on pull_request_target"
+        ),
+    );
+    assert_eq!(remote_tip(root, CANDIDATE), None);
 }
 
 /// AC-3: a name without the prefix is judged exactly as before: a `feat/`
