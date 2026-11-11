@@ -1048,12 +1048,22 @@ fn the_destination_default_branch_is_named_escaped() {
             assert!(!printed.iter().any(|text| controls(text)), "{printed:#?}");
             // A name with ESC is no branch name, so no check runs for it.
             if policy == Some(valid) && !name.contains('\u{1b}') {
-                assert!(
-                    printed
-                        .iter()
-                        .any(|text| text.contains(&format!("--into={shown}"))),
-                    "{printed:#?}"
-                );
+                // A name a terminal shows as itself is printed in the rerun
+                // command; any other name prints no command built from it
+                // (TSK-416 review round 3, finding 1).
+                if name == shown {
+                    assert!(
+                        printed
+                            .iter()
+                            .any(|text| text.contains(&format!("--into={shown}"))),
+                        "{printed:#?}"
+                    );
+                } else {
+                    assert!(
+                        !printed.iter().any(|text| text.contains("--into=")),
+                        "{printed:#?}"
+                    );
+                }
                 let handed = std::fs::read_to_string(h.local.path().join("arguments.txt")).unwrap();
                 assert!(
                     handed.lines().any(|line| line == format!("--into={name}")),
@@ -1243,18 +1253,24 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
 }
 
 /// TSK-416 review round 2, finding 1: the prune step the push refusals
-/// print hands git the remote as one argument, whatever it holds: pasting
-/// runs no substitution, and a name starting with `-` follows `--`. A name
-/// a terminal cannot show as itself gets no command.
+/// print hands git the remote as one argument: pasting runs no
+/// substitution, and a name starting with `-` follows `--`. Since review
+/// round 7 only a plain name is pasted; any other name, one a terminal
+/// cannot show as itself included, gets `git fetch --prune --all`, which
+/// names no remote.
 #[cfg(unix)]
 #[test]
 fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    git2::Repository::init(dir.path()).unwrap();
+    let root = dir.path();
     for (remote, expected) in [
         ("origin", vec!["fetch", "--prune", "origin"]),
-        ("o$(id)", vec!["fetch", "--prune", "o$(id)"]),
+        ("o$(id)", vec!["fetch", "--prune", "--all"]),
         ("-x", vec!["fetch", "--prune", "--", "-x"]),
     ] {
-        let step = prune_step(remote);
+        let step = prune_step(root, remote);
+        let step = step.split(", which").next().unwrap_or(&step).to_string();
         let command = step
             .strip_prefix("run ")
             .unwrap_or_else(|| panic!("{step}"));
@@ -1268,9 +1284,14 @@ fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
         let arguments: Vec<&str> = printed.split_terminator('\0').collect();
         assert_eq!(arguments, expected, "{step}");
     }
-    let hidden = prune_step("o\u{200b}x");
-    assert!(!hidden.contains("git fetch"), "{hidden}");
-    assert!(hidden.contains(r"o\u{200b}x"), "{hidden}");
+    // A name that is a URL with a credential (synthetic) is never pasted.
+    let url = prune_step(root, "https://user:OPAQUECANARY@host.invalid");
+    assert!(!url.contains("OPAQUECANARY"), "{url}");
+    assert!(!url.contains("host.invalid"), "{url}");
+    let hidden = prune_step(root, "o\u{200b}x");
+    assert!(hidden.contains("git fetch --prune --all"), "{hidden}");
+    assert!(!hidden.contains("o\u{200b}x"), "{hidden}");
+    assert!(!hidden.contains(r"o\u{200b}x"), "{hidden}");
 }
 
 /// TSK-416 review round 2, finding 1: the release preflight remedies print

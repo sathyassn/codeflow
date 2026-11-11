@@ -207,7 +207,12 @@ fn sync_pending_ids(
         report.notes.push(codeflow_core::remedy::Finding::new(
             format!(
                 "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
-                codeflow_core::git::remote_query::display_url(remote.unwrap_or("an unnamed remote"))
+                // A configured remote's name is withheld unless plain
+                // (TSK-416 review round 7); a URL is shown redacted.
+                remote.map_or_else(
+                    || "an unnamed remote".to_string(),
+                    |remote| codeflow_core::security::git::shown_remote_or_url(root, remote)
+                )
             ),
             codeflow_core::remedy::IDS_PENDING_LOCAL.remedy(),
         ));

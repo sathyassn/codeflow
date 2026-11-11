@@ -929,21 +929,18 @@ fn branch_option(branch: &str) -> String {
 
 /// "run `git fetch --prune <remote>`", rendered from the raw remote name: a
 /// name holding `$(…)` stays one argument and one starting with `-`
-/// follows `--`; a name with no printed form gets a step that needs no
-/// pasted command (TSK-416 review round 2).
-fn prune_step(remote: &str) -> String {
+/// follows `--` (TSK-416 review round 2). A remote whose name messages
+/// withhold, since configuration text can be a URL with a credential, gets
+/// `git fetch --prune --all`, which names no remote (review round 7).
+fn prune_step(root: &Path, remote: &str) -> String {
+    let unnamed = || "run git fetch --prune --all, which prunes that remote without naming it";
+    if !codeflow_core::security::git::remote_name_shown(root, remote) {
+        return unnamed().into();
+    }
     codeflow_core::git::Pasted::new("git fetch --prune")
         .value(remote)
         .render()
-        .map_or_else(
-            || {
-                format!(
-                    "fetch {} with pruning from a git client, since its name holds a character a terminal does not show as itself",
-                    display_text(remote)
-                )
-            },
-            |command| format!("run {command}"),
-        )
+        .map_or_else(|| unnamed().into(), |command| format!("run {command}"))
 }
 
 /// The first tracking ref this clone holds for `remote`, under
@@ -973,11 +970,17 @@ fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String
                 None => dst,
             };
             if !pattern.starts_with("refs/") {
+                // The key and the destination hold the remote's name, shown
+                // only when plain (TSK-416 review round 7).
                 return Err(format!(
-                    "{} stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; {}",
-                    display_text(&key),
-                    display_text(dst),
-                    prune_step(remote)
+                    "remote.{}.fetch stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; {}",
+                    codeflow_core::security::git::shown_remote(root, remote),
+                    codeflow_core::security::git::without_remote_name(
+                        root,
+                        remote,
+                        &display_text(dst)
+                    ),
+                    prune_step(root, remote)
                 ));
             }
             patterns.push(pattern.to_string());
@@ -1117,8 +1120,8 @@ fn judged_by(
         };
         return Err(format!(
             "the destination advertises no branches while this clone still holds its tracking ref {}, so no default branch can judge the push; {}",
-            display_text(&held),
-            prune_step(remote)
+            codeflow_core::security::git::shown_ref(root, &held),
+            prune_step(root, remote)
         ));
     }
     let anchor = match destination.anchor(root, steps) {
