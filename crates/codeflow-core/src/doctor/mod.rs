@@ -4361,12 +4361,23 @@ fn check_test_config(opts: &Options) -> CheckResult {
         };
     }
 
+    // A missing coverage producer is named with its install command in the
+    // summary itself, so the one doctor line says what to install (TSK-1014).
+    let producers: String = checks
+        .iter()
+        .filter(|c| {
+            c.status == crate::testing::doctor::CheckStatus::Warn
+                && c.name.ends_with(".coverage-producer")
+        })
+        .flat_map(|c| ["; ", c.message.as_str()])
+        .collect();
+
     if failures.is_empty() {
         return CheckResult {
             name: "test-config".into(),
             status: Status::Warn(remedy::DOCTOR_TEST_CONFIG.remedy()),
             message: format!(
-                "{} test-config warning(s): {} — run `codeflow doctor --check test-config` for the aggregate result and inspect the config",
+                "{} test-config warning(s): {}{producers} — run `codeflow doctor --check test-config` for the aggregate result and inspect the config",
                 warnings.len(),
                 warnings.join(", ")
             ),
@@ -4378,7 +4389,7 @@ fn check_test_config(opts: &Options) -> CheckResult {
         name: "test-config".into(),
         status: Status::Warn(remedy::DOCTOR_TEST_CONFIG.remedy()),
         message: format!(
-            "{} test-config health check(s) failed: {} — run `codeflow doctor --check test-config` for detail",
+            "{} test-config health check(s) failed: {}{producers} — run `codeflow doctor --check test-config` for detail",
             failures.len(),
             failures.join(", ")
         ),
@@ -8102,6 +8113,44 @@ mod tests {
             r.message.contains("codeflow doctor --check test-config"),
             "points to detail: {}",
             r.message
+        );
+    }
+
+    /// TSK-1014 AC-5: a full command that runs a coverage producer the host
+    /// lacks gets one doctor line naming the tool and how to install it. The
+    /// `custom` runner emits no probe and the package is absent from the
+    /// fresh folder, so the check stays hermetic.
+    #[test]
+    fn test_check_test_config_names_a_missing_coverage_producer() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_config(
+            dir.path(),
+            r#"{"schema_version":"1.0","targets":[{"name":"web","runner":"custom","cwd":".",
+                "modes":{"full":{"command":"./node_modules/.bin/vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=lcov"}},
+                "coverage":{"format":"lcov","path":"coverage/lcov.info"}}]}"#,
+        );
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let result = check_test_config(&opts);
+        assert!(result.status.is_warn(), "got: {}", result.message);
+        assert!(
+            !result.message.contains('\n'),
+            "one line: {}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("web needs coverage producer @vitest/coverage-v8"),
+            "got: {}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("npm install --save-dev @vitest/coverage-v8"),
+            "got: {}",
+            result.message
         );
     }
 

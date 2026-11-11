@@ -1,2 +1,4 @@
 # Synthetic credential-shaped fixture in a deleted historical review report.
 2e3dabc1b57f34fd0513309deb7362ba796592e2:codex-review-round2.md:generic-api-key:50
+# Synthetic credential-shaped test fixture in a superseded test-file revision (TSK-1103).
+e0d69f19948a03458ca456e0a06c4eba0c86dcf7:crates/codeflow-cli/tests/ci_cli/base_checks.rs:generic-api-key:391
