@@ -211,7 +211,11 @@ fn a_closed_or_retargeted_member_pull_request_is_refused() {
 #[test]
 fn an_admission_check_green_only_on_an_older_head_is_refused() {
     let pulls = [(7, COMPLETED, "open", LINE)];
-    let older = Forge::default().pulls(&pulls).green(REVIEWED);
+    // The forge answers a commit with no check runs with an empty list.
+    let older = Forge::default()
+        .pulls(&pulls)
+        .green(REVIEWED)
+        .runs(COMPLETED, &[]);
     refused(
         older.admit(&[COMPLETED]),
         &format!("its trusted admission check '{CHECK}' has no run at that exact commit"),

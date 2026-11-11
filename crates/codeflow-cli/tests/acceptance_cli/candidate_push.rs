@@ -957,15 +957,42 @@ fn a_line_update_is_checked_against_candidate_refs_in_the_same_push() {
 /// AC-5: a line push whose new tip is a bound candidate is refused when it
 /// is not a fast-forward of the line to that candidate: here the push
 /// claims the line is at an older commit than the tip the candidate is cut
-/// from. Git itself withholds a non-fast-forward update from the hook and
-/// a forced one meets the force-push rule first, so the hook is driven
-/// directly with the update it would be handed.
+/// from. The line first takes TSK-001 by an ordinary merge, so the range
+/// from that older commit holds merges alone and the line's direct-commit
+/// rule passes it: the fast-forward check is what refuses. Git itself
+/// withholds a non-fast-forward update from the hook and a forced one meets
+/// the force-push rule first, so the hook is driven directly with the
+/// update it would be handed.
 #[test]
 fn a_non_fast_forward_line_push_to_a_candidate_is_refused() {
     let fixture = fixture();
     let root = fixture.root();
-    let candidate = fixture.candidate(CANDIDATE);
-    let older = git_out(root, &["rev-parse", &format!("{}^", fixture.line_tip)]);
+    let older = fixture.line_tip.clone();
+    git(root, &["switch", "-q", "-C", "feat/land-one", &older]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore(merge): land",
+            MEMBERS[0],
+        ],
+    );
+    let tip = head(root);
+    assert_passes(
+        &push(root, &format!("feat/land-one:refs/heads/{LINE}")),
+        "the ordinary line push of TSK-001",
+    );
+    git(root, &["switch", "-q", "-C", CANDIDATE, &tip]);
+    for member in &MEMBERS[1..] {
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "chore(merge): land", member],
+        );
+    }
+    let candidate = head(root);
     let mut child = codeflow()
         .args(["git-hook", "pre-push", "origin", ORIGIN])
         .env("PATH", forge_path(root))
@@ -995,9 +1022,10 @@ fn a_non_fast_forward_line_push_to_a_candidate_is_refused() {
         "a non-fast-forward line push",
         &format!(
             "the push is not a fast-forward of the line to the candidate: the candidate is cut from {}, and the destination's line is at {}",
-            &fixture.line_tip[..9],
+            &tip[..9],
             &older[..9]
         ),
     );
-    assert_eq!(remote_tip(root, LINE), Some(fixture.line_tip.clone()));
+    assert!(!refused.1.contains("work.epic_line"), "{}", refused.1);
+    assert_eq!(remote_tip(root, LINE), Some(tip));
 }
