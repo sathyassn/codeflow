@@ -959,14 +959,11 @@ fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>,
     for segment in crate::hooks::git_guard::expand_commands(command) {
         let mut words = crate::hooks::git_guard::command_argv(&segment);
         crate::hooks::git_guard::strip_reserved_words(&mut words);
-        for word in template_assignments(&words)? {
+        for word in template_assignments(&segment, &words)? {
             let Some((name, value)) = word.split_once('=') else {
                 continue;
             };
-            let Some(variable) = TEMPLATE_VARIABLES
-                .iter()
-                .find(|variable| variable.eq_ignore_ascii_case(name))
-            else {
+            let Some(variable) = template_variable(name) else {
                 continue;
             };
             let unread = || {
@@ -975,6 +972,10 @@ fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>,
                      folder, so it cannot tell which templates `hc` reads"
                 )
             };
+            // An appended or indexed value joins text the guard cannot see.
+            if destination_base(name) != name {
+                return Err(unread());
+            }
             if value.is_empty() {
                 continue;
             }
@@ -987,22 +988,131 @@ fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>,
     Ok(roots)
 }
 
+/// The variable an assignment destination sets: `NAME`, `NAME+` (append)
+/// and `NAME[index]` (an element, which for index 0 is the variable's own
+/// value) all set `NAME`.
+fn destination_base(name: &str) -> &str {
+    let name = name.strip_suffix('+').unwrap_or(name);
+    name.split_once('[').map_or(name, |(base, _)| base)
+}
+
+/// Whether `name` names one of [`TEMPLATE_VARIABLES`], read as the host
+/// reads variable names.
+fn template_variable(name: &str) -> Option<&'static str> {
+    let base = destination_base(name);
+    TEMPLATE_VARIABLES
+        .iter()
+        .copied()
+        .find(|variable| variable.eq_ignore_ascii_case(base))
+}
+
+/// Whether a destination is one the guard cannot read: its name holds an
+/// expansion, so it may be any variable.
+fn unread_destination(name: &str) -> bool {
+    name.contains(['$', '`'])
+}
+
+/// The options and operands of a builtin's words: each option letter that
+/// takes a value (from `valued`), with its value attached or in the next
+/// word, and the operands after the options or `--`.
+fn builtin_words<'w>(rest: &'w [String], valued: &str) -> (Vec<(char, &'w str)>, Vec<&'w str>) {
+    let mut taken = Vec::new();
+    let mut operands = Vec::new();
+    let mut options = true;
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if options && word == "--" {
+            options = false;
+            continue;
+        }
+        if options && word.len() > 1 && word.starts_with('-') {
+            for (offset, letter) in word[1..].char_indices() {
+                if valued.contains(letter) {
+                    let attached = &word[1 + offset + letter.len_utf8()..];
+                    let value = if attached.is_empty() {
+                        at += 1;
+                        rest.get(at - 1).map_or("", String::as_str)
+                    } else {
+                        attached
+                    };
+                    taken.push((letter, value));
+                    break;
+                }
+            }
+            continue;
+        }
+        options = false;
+        operands.push(word.as_str());
+    }
+    (taken, operands)
+}
+
+/// Whether the shell, running `segment` as written, expands text that may
+/// assign one of [`TEMPLATE_VARIABLES`]: a `${NAME=...}` or `${NAME:=...}`
+/// default, an indexed expansion of the name, or arithmetic that names it.
+/// Text in single quotes, ANSI-C quotes or after a backslash is literal
+/// and sets nothing; double-quoted text still expands.
+fn assigns_by_expansion(segment: &str) -> bool {
+    let chars: Vec<char> = segment.chars().collect();
+    let mut live = String::with_capacity(segment.len());
+    let (mut single, mut ansi, mut double) = (false, false, false);
+    let mut at = 0;
+    while let Some(&c) = chars.get(at) {
+        at += 1;
+        if single {
+            if c == '\'' {
+                single = false;
+                live.push(' ');
+            }
+            continue;
+        }
+        if ansi {
+            match c {
+                '\\' => at += 1,
+                '\'' => {
+                    ansi = false;
+                    live.push(' ');
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '\\' => {
+                at += 1;
+                live.push(' ');
+            }
+            '\'' if !double => single = true,
+            '$' if !double && chars.get(at) == Some(&'\'') => {
+                ansi = true;
+                at += 1;
+            }
+            '"' => double = !double,
+            c => live.push(c.to_ascii_lowercase()),
+        }
+    }
+    let arithmetic = live.contains("((") || live.contains("$[");
+    TEMPLATE_VARIABLES.iter().any(|variable| {
+        let variable = variable.to_ascii_lowercase();
+        ["=", ":=", "["]
+            .iter()
+            .any(|after| live.contains(&format!("${{{variable}{after}")))
+            || (arithmetic && live.contains(&variable))
+    })
+}
+
 /// The words of one simple command that assign a variable for the program
 /// it runs or for the commands after it: each `=` word before the program
 /// its launchers run ([`crate::hooks::git_guard::strip_launchers`]), each
 /// one an export builtin receives, and every word of a command that is only
 /// assignments. The program's other operands are data and are not read.
-/// A form that may set one of [`TEMPLATE_VARIABLES`] in a way the guard
-/// cannot read (an assignment word holding an expansion, `read`, a
-/// `${NAME:=...}` default, an `env` whose words its grammar does not read)
-/// is an error.
-fn template_assignments(words: &[String]) -> Result<Vec<&String>, String> {
-    let names = |word: &str| {
-        let lower = word.to_ascii_lowercase();
-        TEMPLATE_VARIABLES
-            .iter()
-            .any(|variable| lower.contains(&variable.to_ascii_lowercase()))
-    };
+/// A form that sets one of [`TEMPLATE_VARIABLES`] in a way the guard
+/// cannot read is an error: an assignment whose destination holds an
+/// expansion, a builtin whose destination operand names one (`read`,
+/// `printf -v`, `mapfile`, `getopts`, `for`, `let`, a name reference), or
+/// a default the shell expands in `segment`.
+fn template_assignments<'w>(segment: &str, words: &'w [String]) -> Result<Vec<&'w String>, String> {
     let unread = || {
         Err(
             "a command on the line can set a template folder variable in a form the guard \
@@ -1010,53 +1120,81 @@ fn template_assignments(words: &[String]) -> Result<Vec<&String>, String> {
                 .to_string(),
         )
     };
-    let defaults = words.iter().any(|word| {
-        let lower = word.to_ascii_lowercase();
-        TEMPLATE_VARIABLES.iter().any(|variable| {
-            let variable = variable.to_ascii_lowercase();
-            lower.contains(&format!("${{{variable}="))
-                || lower.contains(&format!("${{{variable}:="))
-        })
-    });
-    if defaults {
+    if assigns_by_expansion(segment) {
         return unread();
     }
     let at = match crate::hooks::git_guard::strip_launchers(words) {
         Some((_, args)) => words.len() - args.len() - 1,
         None => words.len(),
     };
-    let before = &words[..at];
     let program = words.get(at);
-    if before
-        .iter()
-        .chain(program)
-        .any(|word| word.contains('=') && word.contains(['$', '`']))
-    {
-        return unread();
+    let mut found = Vec::new();
+    // The program word itself holds `=` when the launcher reading did not
+    // take it as an assignment (an indexed or appending one).
+    for word in words[..at].iter().chain(program) {
+        let Some((name, _)) = word.split_once('=') else {
+            continue;
+        };
+        if unread_destination(name) {
+            return unread();
+        }
+        found.push(word);
     }
-    let mut found: Vec<&String> = before.iter().filter(|word| word.contains('=')).collect();
-    let Some(program) = program else {
+    let Some(program) = program.filter(|program| !program.contains('=')) else {
         return Ok(found);
     };
     let rest = &words[at + 1..];
-    match crate::hooks::git_guard::launcher_name(program) {
+    let destinations: Vec<&str> = match crate::hooks::git_guard::launcher_name(program) {
         "export" | "declare" | "typeset" | "local" | "readonly" => {
-            if rest
+            let flags: Vec<&String> = rest
                 .iter()
-                .any(|word| names(word) && word.contains(['$', '`']))
-            {
-                return unread();
+                .take_while(|word| word.starts_with(['-', '+']) && *word != "--")
+                .collect();
+            let reference = flags.iter().any(|flag| flag.contains('n'));
+            for word in &rest[flags.len()..] {
+                let name = word.split_once('=').map_or(word.as_str(), |(name, _)| name);
+                if unread_destination(name) || (reference && template_variable(name).is_some()) {
+                    return unread();
+                }
+                if word.contains('=') {
+                    found.push(word);
+                }
             }
-            found.extend(rest.iter().filter(|word| word.contains('=')));
+            Vec::new()
         }
-        // An env its launcher reading did not pass, or a builtin that sets
-        // a variable from input.
-        "env" | "read" | "readarray" | "mapfile" | "printf" | "getopts" | "for" | "select"
-            if rest.iter().any(|word| names(word)) =>
-        {
-            return unread();
+        "read" => {
+            let (values, operands) = builtin_words(rest, "adinNptu");
+            values
+                .iter()
+                .filter(|(letter, _)| *letter == 'a')
+                .map(|(_, value)| *value)
+                .chain(operands)
+                .collect()
         }
-        _ => {}
+        "mapfile" | "readarray" => builtin_words(rest, "dnOsuCc").1,
+        "printf" => builtin_words(rest, "v")
+            .0
+            .iter()
+            .map(|(_, value)| *value)
+            .collect(),
+        "getopts" => rest.iter().skip(1).take(1).map(String::as_str).collect(),
+        "for" | "select" => rest.iter().take(1).map(String::as_str).collect(),
+        // Each `let` operand is an arithmetic expression, which may assign;
+        // an env's words are ones the launcher reading did not pass.
+        "let" | "env" => rest.iter().map(String::as_str).collect(),
+        _ => Vec::new(),
+    };
+    let named = |text: &str| {
+        let lower = text.to_ascii_lowercase();
+        TEMPLATE_VARIABLES
+            .iter()
+            .any(|variable| lower.contains(&variable.to_ascii_lowercase()))
+    };
+    if destinations
+        .iter()
+        .any(|destination| unread_destination(destination) || named(destination))
+    {
+        return unread();
     }
     Ok(found)
 }
@@ -1630,45 +1768,66 @@ mod tests {
         let outer = read(&format!("hc exec --env 'AppData={root}' -- hc run peer"));
         assert!(outer.unread.is_empty(), "{:?}", outer.unread);
         assert_eq!(template(&outer.runs[0].line), vec!["claude -p"]);
-        for command in [
+        let refusing = [
             "APPDATA=$X hc run peer",
             "APPDATA=relative/dir hc run peer",
             "AppData=~/x hc run peer",
             "hc exec --env 'AppData=$X' -- hc run peer",
             "hc exec --env AppData=rel -- hc run peer",
             "read APPDATA; hc run peer",
+            "read -r -p prompt AppData; hc run peer",
             ": ${APPDATA:=rel}; hc run peer",
-        ] {
-            let found = read(command);
-            let inner = found
-                .runs
-                .first()
-                .map(|run| read(&run.line))
-                .unwrap_or_default();
-            assert!(
-                found
+            ": \"${APPDATA:=rel}\"; hc run peer",
+            ": ${APPDATA=rel}; hc run peer",
+            "printf -v APPDATA %s rel; hc run peer",
+            "mapfile -t APPDATA < list; hc run peer",
+            "getopts ab APPDATA; hc run peer",
+            "APPDATA+=/x; hc run peer",
+            "APPDATA[0]=/x; hc run peer",
+            "export \"$N\"=/x; hc run peer",
+            "declare -n APPDATA=other; hc run peer",
+            "let APPDATA=1; hc run peer",
+        ];
+        let passed: Vec<_> = refusing
+            .into_iter()
+            .filter(|command| {
+                let found = read(command);
+                let inner = found
+                    .runs
+                    .first()
+                    .map(|run| read(&run.line))
+                    .unwrap_or_default();
+                !found
                     .unread
                     .iter()
                     .chain(&inner.unread)
-                    .any(|u| u.contains("<template>")),
-                "{command}: {found:?} {inner:?}"
-            );
-        }
+                    .any(|u| u.contains("<template>"))
+            })
+            .collect();
+        assert!(passed.is_empty(), "not refused: {passed:?}");
     }
 
     /// A word that only looks like an assignment, as data a carried
     /// command receives, sets no template folder and refuses nothing.
     #[test]
     fn assignment_shaped_data_is_not_an_assignment() {
-        for command in [
+        let commands = [
             "hc run -- echo APPDATA=relative",
             "hc run echo XDG_CONFIG_HOME=relative",
             "hc exec -- printf %s APPDATA=relative",
             "echo APPDATA=relative && hc run -- ls",
-        ] {
-            let found = read(command);
-            assert!(found.unread.is_empty(), "{command}: {:?}", found.unread);
-        }
+            // An expansion in an assignment to another variable, a
+            // variable's name as data, and default syntax in single quotes
+            // set no template folder.
+            "FOO=$BAR hc run -- ls",
+            "printf '%s' APPDATA; hc run -- ls",
+            "echo '${APPDATA:=relative}'; hc run -- ls",
+        ];
+        let refused: Vec<_> = commands
+            .into_iter()
+            .filter(|command| !read(command).unread.is_empty())
+            .collect();
+        assert!(refused.is_empty(), "refused: {refused:?}");
     }
 
     /// `--cwd` is read as the host reads it, and one the guard cannot
