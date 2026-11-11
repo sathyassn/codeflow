@@ -62,9 +62,14 @@ pub fn admission_checks(policy: Option<&str>) -> Result<Vec<String>, String> {
             "the project has no forge admission check: {why}, so no member head can be shown admitted; land the pull requests one at a time"
         )
     };
-    let text = policy.ok_or_else(|| none(&format!("{POLICY_WORKFLOW} is not on the default branch")))?;
+    let text =
+        policy.ok_or_else(|| none(&format!("{POLICY_WORKFLOW} is not on the default branch")))?;
     let names: Vec<String> = crate::remote::workflow_job_names(text)
-        .map_err(|why| none(&format!("{POLICY_WORKFLOW} at the default branch cannot be read ({why})")))?
+        .map_err(|why| {
+            none(&format!(
+                "{POLICY_WORKFLOW} at the default branch cannot be read ({why})"
+            ))
+        })?
         .into_iter()
         .filter(|name| name.starts_with(TRUSTED_PREFIX))
         .collect();

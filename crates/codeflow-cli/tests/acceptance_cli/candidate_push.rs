@@ -923,9 +923,9 @@ fn a_line_update_is_checked_against_candidate_refs_in_the_same_push() {
     println!("{}", landed.1);
     assert_passes(&landed, "a push to a new candidate and its line");
     assert!(
-        landed
-            .1
-            .contains(&format!("the push of '{LINE}' lands the landing candidate 'candidate/new'")),
+        landed.1.contains(&format!(
+            "the push of '{LINE}' lands the landing candidate 'candidate/new'"
+        )),
         "{}",
         landed.1
     );

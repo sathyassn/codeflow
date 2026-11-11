@@ -326,9 +326,9 @@ fn line_on_chain(
         };
         found.entry(name.clone()).or_default().1 = Some(at);
     }
-    let mut lines = found.into_iter().filter_map(|(name, (advertised, fetched))| {
-        advertised.or(fetched).map(|at| (name, at))
-    });
+    let mut lines = found
+        .into_iter()
+        .filter_map(|(name, (advertised, fetched))| advertised.or(fetched).map(|at| (name, at)));
     match (lines.next(), lines.next()) {
         (None, _) => Err(format!(
             "its first-parent chain reaches no epic line tip ('integration/EPC-*') the destination advertises or this clone fetched, within {depth} commits (git.candidate_search_depth): cut it from a line's fetched tip, or fetch the line it was cut from"

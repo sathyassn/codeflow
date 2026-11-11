@@ -371,7 +371,14 @@ fn landing(
     if codeflow_core::workgraph::line_adoption::epic_id(branch).is_err() {
         return Ok(Some(Landing::Ordinary));
     }
-    line_landing(root, (r, pushed), branch, (tip, policy), destination, report)
+    line_landing(
+        root,
+        (r, pushed),
+        branch,
+        (tip, policy),
+        destination,
+        report,
+    )
 }
 
 /// The branches the destination advertises in this push, or why they
@@ -396,7 +403,10 @@ fn forge_admission<'a>(
     root: &'a Path,
     destination: &'a Destination<'_>,
     tip: &'a str,
-) -> impl Fn(&str, &[candidate_admission::Member]) -> Result<Vec<candidate_admission::Admitted>, String>
+) -> impl Fn(
+    &str,
+    &[candidate_admission::Member],
+) -> Result<Vec<candidate_admission::Admitted>, String>
        + 'a {
     move |line, members| {
         let url = destination

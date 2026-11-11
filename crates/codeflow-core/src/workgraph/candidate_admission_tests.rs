@@ -44,9 +44,7 @@ impl Forge {
             })
             .collect();
         self.answers.insert(
-            format!(
-                "repos/{NWO}/pulls?state=open&base={LINE}&per_page=100&page=1"
-            ),
+            format!("repos/{NWO}/pulls?state=open&base={LINE}&per_page=100&page=1"),
             Value::Array(list).to_string(),
         );
         self
@@ -76,7 +74,13 @@ impl Forge {
     fn green(self, sha: &str) -> Self {
         self.runs(
             sha,
-            &[(10, CHECK, "completed", Some("success"), GITHUB_ACTIONS_APP_ID)],
+            &[(
+                10,
+                CHECK,
+                "completed",
+                Some("success"),
+                GITHUB_ACTIONS_APP_ID,
+            )],
         )
     }
 
@@ -215,8 +219,20 @@ fn an_admission_check_green_only_on_an_older_head_is_refused() {
     let failed = Forge::default().pulls(&pulls).runs(
         COMPLETED,
         &[
-            (10, CHECK, "completed", Some("success"), GITHUB_ACTIONS_APP_ID),
-            (11, CHECK, "completed", Some("failure"), GITHUB_ACTIONS_APP_ID),
+            (
+                10,
+                CHECK,
+                "completed",
+                Some("success"),
+                GITHUB_ACTIONS_APP_ID,
+            ),
+            (
+                11,
+                CHECK,
+                "completed",
+                Some("failure"),
+                GITHUB_ACTIONS_APP_ID,
+            ),
         ],
     );
     refused(failed.admit(&[COMPLETED]), "concluded failure");
@@ -225,10 +241,9 @@ fn an_admission_check_green_only_on_an_older_head_is_refused() {
         &[(12, CHECK, "in_progress", None, GITHUB_ACTIONS_APP_ID)],
     );
     refused(pending.admit(&[COMPLETED]), "is in_progress");
-    let foreign = Forge::default().pulls(&pulls).runs(
-        COMPLETED,
-        &[(13, CHECK, "completed", Some("success"), 99)],
-    );
+    let foreign = Forge::default()
+        .pulls(&pulls)
+        .runs(COMPLETED, &[(13, CHECK, "completed", Some("success"), 99)]);
     refused(foreign.admit(&[COMPLETED]), "has no run");
 }
 
@@ -252,12 +267,21 @@ fn an_unreadable_forge_is_refused() {
 #[test]
 fn a_project_with_no_forge_admission_check_is_refused() {
     let none = admission_checks(None).unwrap_err();
-    assert!(none.contains("the project has no forge admission check"), "{none}");
+    assert!(
+        none.contains("the project has no forge admission check"),
+        "{none}"
+    );
     assert!(none.contains("one at a time"), "{none}");
     let untrusted = admission_checks(Some(
         "on: pull_request\njobs:\n  build:\n    name: codeflow gates\n    runs-on: x\n    steps: []\n",
     ))
     .unwrap_err();
-    assert!(untrusted.contains("declares no `trusted: ` check"), "{untrusted}");
-    assert_eq!(admission_checks(Some(POLICY)).unwrap(), vec![CHECK.to_string()]);
+    assert!(
+        untrusted.contains("declares no `trusted: ` check"),
+        "{untrusted}"
+    );
+    assert_eq!(
+        admission_checks(Some(POLICY)).unwrap(),
+        vec![CHECK.to_string()]
+    );
 }
