@@ -150,12 +150,17 @@ authorize the binding.
 
 A landing candidate is a branch named with `git.candidate_prefix`
 (`candidate/` by default), cut from the line's fetched tip with each
-reviewed member head merged onto it by `git merge --no-ff` and no other
-commit. Push it to have it judged as the line's next tip: the hook and
-`codeflow ci` bind it to the line only when its first-parent chain reaches
-the fetched tip of exactly one epic line, the remote advertises that tip,
-the records bind the line, and every commit after the tip is a clean merge.
-Anything else, an evil merge included, is refused as
+member's pull request head merged onto it by `git merge --no-ff` and no
+other commit. Push it to have it judged as the line's next tip: the hook
+and `codeflow ci` bind it to the line only when its first-parent chain
+reaches the fetched tip of exactly one epic line, the remote advertises
+that tip, the records bind the line, every commit after the tip is a clean
+merge, and each merged head is the current head of an open pull request
+into the line with every `trusted:` check of the default branch's policy
+workflow green at that exact commit, read from the forge. This proves
+admission at the head, not that a person reviewed it. An unreadable forge,
+or a project with no such check, refuses. Anything else, an evil merge
+included, is refused as
 `work.landing_candidate` with its cause. Once its gate is green, land the
 batch with one push of the line to the candidate commit, a fast-forward.
 
