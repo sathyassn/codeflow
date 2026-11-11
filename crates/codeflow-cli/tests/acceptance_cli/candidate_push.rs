@@ -678,6 +678,42 @@ fn codeflow_ci_refuses_missing_or_conflicting_hand_off_claims() {
     }
 }
 
+/// AC-3: a candidate hand-off without `--into` is refused with that cause
+/// before the run resolves its target, even when `main` and the line are
+/// at one commit, so the base alone names two branches and target
+/// resolution would otherwise stop the run first with another message.
+#[test]
+fn a_missing_into_is_named_first_when_main_and_the_line_share_the_commit() {
+    let fixture = fixture();
+    let root = fixture.root();
+    assert_eq!(
+        git_out(root, &["rev-parse", "main"]),
+        git_out(root, &["rev-parse", &format!("origin/{LINE}")]),
+        "the fixture's main and line share the commit"
+    );
+    let candidate = fixture.candidate(CANDIDATE);
+    let judged = hand_off_with(
+        &fixture,
+        CANDIDATE,
+        &candidate,
+        &fixture.line_tip,
+        &Claims {
+            into: Claim::LeftOut,
+            ..Claims::default()
+        },
+    );
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "no --into with main and the line at one commit",
+        &[
+            "work.landing_candidate",
+            "the hand-off names no line (`--into`)",
+        ],
+    );
+    assert!(!judged.1.contains("names several branches"), "{}", judged.1);
+}
+
 /// AC-1 (negative), AC-4 (second output): a foreign criteria change that
 /// enters by a direct commit on the candidate is refused, by the hook and by
 /// `codeflow ci`, naming the commit.

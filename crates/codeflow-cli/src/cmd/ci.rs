@@ -433,6 +433,20 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         }
     };
 
+    // A landing candidate's hand-off without `--into` is refused before the
+    // target is resolved, so its cause is named first (TSK-1351 AC-3).
+    if let Some(refusal) = candidate::unnamed_line(
+        args.pushed_ref.as_deref(),
+        &working.git,
+        args.into.as_deref(),
+    ) {
+        let tagged = vec![refusal];
+        if let Some(out) = &args.blocking_rules_out {
+            write_blocking_rules(out, &tagged);
+        }
+        return report(&tagged, &["landing-candidate"], &[]);
+    }
+
     // Resolve names and pin revisions once before any range rule runs.
     // The working copy's policy finds the range, its work prefixes as its
     // protected branches (see `judging_policy`): the judging policy is read at

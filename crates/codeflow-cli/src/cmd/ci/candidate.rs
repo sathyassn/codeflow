@@ -91,6 +91,35 @@ pub(super) fn check(
     }
 }
 
+/// The refusal of a hand-off that names a landing candidate with
+/// `--pushed-ref` but no line with `--into`, made before the run resolves
+/// its target, so the cause is named however the base resolves (a base
+/// that several branches name would otherwise stop the run first). The
+/// candidate name is read under the working copy's policy: this only
+/// refuses sooner and never admits anything; [`check`] still binds under
+/// the default branch's policy and refuses a missing `--into` there too.
+pub(super) fn unnamed_line(
+    pushed_ref: Option<&str>,
+    git: &GitPolicy,
+    into: Option<&str>,
+) -> Option<super::TaggedViolation> {
+    let branch = pushed_ref?.strip_prefix("refs/heads/")?;
+    if into.is_some() || !git.is_candidate_branch(branch) {
+        return None;
+    }
+    let shown = codeflow_core::git::display_text(branch);
+    Some(super::TaggedViolation {
+        sha: None,
+        violation: Violation::always_blocking(
+            landing_candidate::RULE,
+            format!(
+                "'{shown}' is not judged as a landing candidate of a line: the hand-off names no line (`--into`), so the line it lands on cannot be compared with the line the candidate binds to"
+            ),
+            landing_candidate::REMEDY,
+        ),
+    })
+}
+
 /// Bind `branch` from this run's own reads; the cause when it does not
 /// hold or cannot be read. Every destination tip comes from the
 /// destination's own advertisement; each claim the hand-off makes (the
