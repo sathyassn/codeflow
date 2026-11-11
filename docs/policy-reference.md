@@ -812,18 +812,22 @@ bare (TSK-1344). The code holds the program names in
 
 - Programs: `hc`, `herdr-core`, `herdr`.
 - Names: each program name matches the way the host finds the program.
-- Carried commands: `hc run [options] [--] <program> <args>...`, a single
-  shell line, or a template's `command` when the first word names a file in
-  `herdr-core/templates` (the folders from the guard's environment and
-  from each `XDG_CONFIG_HOME` or `APPDATA` the line assigns, `hc exec
-  --env` included; an assigned value that is not one readable absolute
-  folder refuses, and so does a line where a builtin writes a variable or
-  a shell assignment gives any variable a value other than a literal
-  number or an absolute path, which clears when the variable is set on
-  another line); `hc exec [options] <program> <args>...` with each
+- Carried commands: `hc exec [options] <program> <args>...` with each
   `--env K=V` as an assignment; `hc machine add --via <command>`; `herdr
   pane run <pane> <command>`; `herdr agent start <name> --kind <kind>
   [options] -- <args>...`, judged as `<kind> <args>...`.
+- `hc run` always refuses, whatever its options and operands, and the
+  command it carries is still judged, so a rule it breaks is named too.
+  `hc run` can start a template, a file whose command runs instead of the
+  words given, and which template it starts depends on state the guard
+  cannot establish from the command. No form of `hc run` is known to skip
+  that dispatch, and the option grammar is not known well enough to tell a
+  help flag from an operand, so a help word refuses too. `hc run` is read
+  after the wrappers the guards unwrap, including `flock`, `script`,
+  `watch`, `parallel`, `arch`, `sudo`, `doas`, `chrt` and `taskset`. To
+  start a program in a Herdr terminal, start it outside a guarded session,
+  or through the host's own terminal. A guarded form returns when the Herdr
+  app's dispatch contract is known.
 - Directory: `--cwd` from where the line runs, else that directory, so a
   Git command is judged against the repository it targets. Where the
   directory is unknown, the form refuses whatever it carries, because a
@@ -842,9 +846,9 @@ bare (TSK-1344). The code holds the program names in
   reads in full to it, so a carried program's options are not read again as
   the carrier's own. A form it cannot read keeps every other reader.
 - Refused and named: an unknown `hc` subcommand or option, an option
-  without its value, a template the guard cannot read or whose `command` is
-  not a one-line scalar, a word holding a substitution, words supplied by
-  `xargs` or `find -exec`, and carriers nested more than six deep.
+  without its value, every `hc run`, a word holding a substitution, words
+  supplied by `xargs` or `find -exec`, and carriers nested more than six
+  deep.
 - Read and passed: `hc ls`, `get`, `read`, `wait`, `kill`, `rm`, `attach`,
   `interrupt`, `label`, `keep`, `templates`, `events`, `schema`, `server`,
   `connect`, the other `machine` commands, `--skill`, `--help` and
@@ -852,9 +856,7 @@ bare (TSK-1344). The code holds the program names in
 
 Text typed into a terminal is not judged: `hc send`, `hc keys`, `herdr
 pane send-text`, `herdr pane send-keys`, `herdr agent send-keys`, `herdr
-agent prompt`, and the body and task of an `hc run` template, which the
-Herdr app sends as the first message once the agent is ready (the
-template's `command` is judged). The guard
+agent prompt`. The guard
 cannot know whether the program in that terminal reads the text as a
 prompt or runs it as a command, and `hc keys` can spell any line one key at
 a time, so a filter would stop only some spellings and is not offered as
@@ -869,7 +871,8 @@ An `hc` terminal runs outside the harness's Bash sandbox. A command it
 starts can write wherever the user can, read files the sandbox denies and
 reach any host, and the harness's per-command permission prompts do not
 apply to it. The guards' text rules are the only in-session check on such
-a command, which is why every form above is judged as if typed bare.
+a command, which is why every carried form above is judged as if typed
+bare, and why `hc run` refuses.
 
 ### Program variables the guards judge
 

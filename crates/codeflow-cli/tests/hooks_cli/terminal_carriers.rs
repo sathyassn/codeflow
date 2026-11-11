@@ -17,6 +17,9 @@ fn judge(hook: &str, command: &str, cwd: &Path, config: Option<&Path>) -> Output
     run_with_stdin(&mut cmd, &guard_payload(command, cwd))
 }
 
+/// The reason every `hc run` refuses, as the guards print it.
+const HC_RUN_REFUSAL: &str = "can start a template";
+
 fn refused(out: &Output, rule: &str) -> bool {
     out.status.code() == Some(2) && String::from_utf8_lossy(&out.stderr).contains(rule)
 }
@@ -46,20 +49,10 @@ impl Fixture {
         let other = base.join("other");
         std::fs::create_dir(&other).unwrap();
         enforced_repo(&other);
+        // An empty configuration folder: no template is read from it, and
+        // every `hc run` refuses whether or not one exists.
         let config = base.join("config");
-        let templates = config.join("herdr-core/templates");
-        std::fs::create_dir_all(&templates).unwrap();
-        std::fs::write(
-            templates.join("peer.md"),
-            "---\nname: peer\ncommand: claude -p\n---\nReview.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            templates.join("seat.md"),
-            "---\nname: seat\ncommand: codex --no-daemon\n---\nReview.\n",
-        )
-        .unwrap();
-        std::fs::write(templates.join("odd.md"), "---\ncommand: |\n  claude\n---\n").unwrap();
+        std::fs::create_dir_all(&config).unwrap();
         Self {
             _temp: temp,
             session,
@@ -160,10 +153,6 @@ fn carried_commands_are_judged_as_typed_bare() {
     if !refused(&agent, "security.headless_peer_runs") {
         wrong.push("herdr agent start headless".to_string());
     }
-    let template = fixture.judge("exec-guard", "hc run --bg peer 'review x.rs'");
-    if !refused(&template, "security.headless_peer_runs") {
-        wrong.push("hc run template headless".to_string());
-    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -194,9 +183,11 @@ fn a_carried_git_command_is_judged_in_its_directory() {
     assert!(refused(&out, "git.hook_integrity"), "{out:?}");
 }
 
-/// AC-2: the interactive seat launch lines still pass both guards.
+/// AC-2 (amended 2026-11-11, pending the operator): the interactive seat
+/// launch lines refuse in both guards, because `hc`'s dispatch contract
+/// cannot be verified from the command.
 #[test]
-fn the_seat_launch_lines_pass() {
+fn the_seat_launch_lines_refuse() {
     let fixture = Fixture::new();
     let dir = shell_path(&fixture.session);
     let codex = "codex --no-daemon --model gpt-6.1-sol -c 'model_reasoning_effort=\"medium\"' --ask-for-approval never";
@@ -209,7 +200,7 @@ fn the_seat_launch_lines_pass() {
             );
             for hook in ["exec-guard", "git-guard"] {
                 let out = fixture.judge(hook, &command);
-                if !passed(&out) {
+                if !refused(&out, HC_RUN_REFUSAL) {
                     wrong.push(format!(
                         "{hook}: {command}: {}",
                         String::from_utf8_lossy(&out.stderr)
@@ -219,7 +210,7 @@ fn the_seat_launch_lines_pass() {
         }
     }
     let out = fixture.judge("exec-guard", "hc run --bg --name s seat 'review x.rs'");
-    if !passed(&out) {
+    if !refused(&out, HC_RUN_REFUSAL) {
         wrong.push(format!(
             "seat template: {}",
             String::from_utf8_lossy(&out.stderr)
@@ -228,12 +219,12 @@ fn the_seat_launch_lines_pass() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// AC-2: the Codex launch line passes with `--cwd` at a large worktree, inside
-/// the guard's deadline. The outer words are read once, by the carrier
-/// reader; the secret-read walk no longer reads Codex's `-c` as archive
-/// syntax over the whole `--cwd` tree.
+/// AC-2: the Codex launch line refuses with `--cwd` at a large worktree,
+/// inside the guard's deadline. The outer words are read once, by the
+/// carrier reader; the secret-read walk does not read Codex's `-c` as
+/// archive syntax over the whole `--cwd` tree.
 #[test]
-fn the_codex_launch_line_passes_at_a_large_worktree() {
+fn the_codex_launch_line_refuses_at_a_large_worktree() {
     let fixture = Fixture::new();
     let large = fixture.session.join("target/debug/deps");
     std::fs::create_dir_all(&large).unwrap();
@@ -246,8 +237,98 @@ fn the_codex_launch_line_passes_at_a_large_worktree() {
     );
     let started = std::time::Instant::now();
     let out = fixture.judge("exec-guard", &command);
-    assert!(passed(&out), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        refused(&out, HC_RUN_REFUSAL),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+/// Every `hc run` the guards judge refuses, whatever its options and
+/// operands, and the refusal says what works instead. The lines cover the
+/// plain forms, the seat lines and the payloads earlier readings of the
+/// template folder were attacked with (PR 706 round 9).
+#[test]
+fn every_hc_run_refuses_in_both_guards() {
+    let fixture = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        // Plain forms, with no template folder at all.
+        "hc run",
+        "hc run --bg",
+        "hc run -- git status",
+        "hc run 'git status'",
+        "hc run peer",
+        "hc run --bg peer 'review x.rs'",
+        "herdr-core run -- ls",
+        "/opt/herdr/bin/hc run -- ls",
+        "env A=B hc run -- ls",
+        "sh -c 'hc run -- ls'",
+        "echo $(hc run -- ls)",
+        // Lines that name or change a template folder, or a variable.
+        "APPDATA=relative/dir hc run peer",
+        "X=/opt/x hc run peer",
+        "export APPDATA=/x\nhc run peer",
+        "read APPDATA; hc run peer",
+        "hc exec --env AppData=rel -- hc run peer",
+        "i=0; (( i++ )); hc run peer",
+        "FOO=$BAR hc run -- ls",
+        // Help words refuse too: the option grammar is not known.
+        "hc run --help",
+        "hc run -h",
+        "hc run -- peer --help",
+        // Wrappers that run the command after their own words.
+        "flock /tmp/review.lock hc run peer",
+        "flock /tmp/review.lock -c 'hc run peer'",
+        "script -c 'hc run peer' /dev/null",
+        "script -q /dev/null hc run peer",
+        "watch -n 5 hc run peer",
+        "parallel hc run ::: peer",
+        "arch -arm64 hc run peer",
+        "sudo hc run peer",
+        "doas hc run peer",
+        "chrt 1 hc run peer",
+        "taskset -c 0 hc run peer",
+        "find . -maxdepth 0 -exec hc run peer \\;",
+        "echo x | xargs hc run peer",
+        "nice -n 5 hc run peer",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, command);
+            if !refused(&out, HC_RUN_REFUSAL) {
+                wrong.push(format!(
+                    "{hook} should refuse: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    let exec = fixture.judge("exec-guard", "hc run peer");
+    let said = String::from_utf8_lossy(&exec.stderr);
+    if !said.contains("outside a guarded session") || !said.contains("host's own terminal") {
+        wrong.push(format!("the refusal does not say what works: {said}"));
+    }
+    // Unaffected: a line without `hc run`, and the other `hc` forms.
+    for command in [
+        "git status",
+        "echo hc run",
+        "hc ls",
+        "hc exec --cwd . ls",
+        "hc file read README.md",
+        "hc send t1 hello",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = fixture.judge(hook, command);
+            if !passed(&out) {
+                wrong.push(format!(
+                    "{hook} should allow: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// The secret-read rules still judge what a carrier reads: a carried

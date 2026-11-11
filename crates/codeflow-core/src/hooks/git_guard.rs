@@ -935,8 +935,8 @@ fn evaluate_report_with_runners(
             crate::remedy::HOOK_INTEGRITY.remedy(),
         )),
     }
-    // A command run through the Herdr app (`hc run`, `hc exec`) or the
-    // older `herdr` CLI is judged as the same command typed bare, in the
+    // A command run through the Herdr app (`hc exec`) or the older `herdr`
+    // CLI is judged as the same command typed bare, in the
     // directory it runs in, so `--cwd` names the repository it targets; a
     // form the guard cannot read refuses (TSK-1344).
     carried_commands_judged(command, ctx, cwd, read_runners, &mut report);
@@ -1238,7 +1238,7 @@ fn carried_commands_judged(
         Violation::always_blocking(
             "git.hook_integrity",
             why.to_string(),
-            "run the command bare, or in a form the guard reads (`hc run [options] -- <program> <args>`), so it is judged",
+            "run the command bare, so it is judged; start a program in a Herdr terminal outside a guarded session, or through the host's own terminal",
         )
     };
     let Some(_nested) = Nested::enter() else {
@@ -4285,7 +4285,7 @@ fn decode_dollar_quotes(text: &str) -> String {
 
 /// `text` with each backslash-newline outside single quotes removed, as the
 /// shell removes line continuations before it reads a command.
-pub(crate) fn join_continuations(text: &str) -> String {
+fn join_continuations(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let (mut single, mut double) = (false, false);
     let mut chars = text.chars();
@@ -13783,32 +13783,6 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
             (word.text, literal)
         })
         .unzip()
-}
-
-/// The same argument vector with, for each word, whether the shell fills in
-/// part of it when the command runs: a `$` or backtick outside single
-/// quotes ([`ShellWord::expands`]), or a substitution the segmenter lifted
-/// out.
-pub(crate) fn command_argv_expanding(segment: &str) -> (Vec<String>, Vec<bool>) {
-    argv_words(segment)
-        .into_iter()
-        .map(|word| {
-            let fills = word.expands || has_substitution(&word.text);
-            (word.text, fills)
-        })
-        .unzip()
-}
-
-/// Every word of [`shell_tokens`], redirections included, with the same
-/// mark as [`command_argv_expanding`].
-pub(crate) fn shell_tokens_expanding(segment: &str) -> Vec<(String, bool)> {
-    shell_words(segment)
-        .into_iter()
-        .map(|word| {
-            let fills = word.expands || has_substitution(&word.text);
-            (word.text, fills)
-        })
-        .collect()
 }
 
 /// The words of [`command_argv`] with their parse.

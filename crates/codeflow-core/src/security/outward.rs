@@ -1899,6 +1899,13 @@ fn argv(
         }
         _ => {
             unmodeled_launch(name, rest, pattern_tail(patterns, rest.len()), depth, out);
+            // The wrappers git-guard reads a carried command from keep it
+            // here too, in the directory the wrapper runs in (TSK-1344).
+            if crate::hooks::git_guard::COMMAND_CARRIERS.contains(&name) {
+                for command in crate::hooks::git_guard::launcher_commands(name, rest) {
+                    visit(&command, cwd, depth + 1, out);
+                }
+            }
             None
         }
     };
@@ -2115,10 +2122,48 @@ fn unmodeled_launch(
             inner.calls.extend(reader.calls);
         }
     }
+    // A terminal carrier (`hc`, `herdr`) a wrapper that runs the command
+    // after its own options starts is kept as a command of its own: these
+    // wrappers' option grammars are not read, so the first later word that
+    // names a carrier starts its call. The directory the wrapper runs in is
+    // unknown, so the carried command refuses where it needs one
+    // (TSK-1344).
+    if CARRIER_WRAPPERS.contains(&name) {
+        if let Some(at) = rest.iter().position(|word| {
+            crate::security::terminal_carriers::is_carrier_program(
+                crate::hooks::git_guard::launcher_name(word),
+            )
+        }) {
+            let mut carrier = Parsed {
+                supplier: out.supplier.clone(),
+                resolve_shell: out.resolve_shell,
+                shell_home: out.shell_home.clone(),
+                home: out.home.clone(),
+                ..Parsed::default()
+            };
+            argv(
+                &rest[at..],
+                pattern_tail(patterns, rest.len() - at),
+                None,
+                depth + 1,
+                &mut carrier,
+            );
+            out.commands.extend(carrier.commands);
+            inner.calls.extend(carrier.calls);
+        }
+    }
     out.calls.extend(inner.calls);
     out.opaque |= inner.opaque;
     out.runs |= inner.runs;
 }
+
+/// The wrappers whose command starts after options the traversal does not
+/// read, so a later terminal carrier word is read as the command they run:
+/// the launchers of the closed list that [`argv`] has no branch for, and
+/// `arch`, which git-guard reads as a prefix launcher (TSK-1344).
+const CARRIER_WRAPPERS: &[&str] = &[
+    "sudo", "doas", "chrt", "taskset", "arch", "gsudo", "pkexec", "busybox",
+];
 
 /// Whether one word holds more than a bare name: a shell blank (space,
 /// tab, newline) or a shell operator, which the shell only leaves in a word

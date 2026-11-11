@@ -231,9 +231,9 @@ pub fn evaluate_ruled(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
-    // A command run through the Herdr app (`hc run`, `hc exec`) or the
-    // older `herdr` CLI is judged as the same command typed bare, where it
-    // runs; a form the guard cannot read refuses (TSK-1344).
+    // A command run through the Herdr app (`hc exec`) or the older `herdr`
+    // CLI is judged as the same command typed bare, where it runs; a form
+    // the guard cannot read refuses, and so does every `hc run` (TSK-1344).
     violations.extend(carrier_violations(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
@@ -422,7 +422,7 @@ fn carrier_unread(why: &str) -> Violation {
     Violation::always_blocking(
         "security.dangerous_commands",
         why.to_string(),
-        "run the command bare, or in a form the guard reads (`hc run [options] -- <program> <args>`), so it is judged",
+        "run the command bare, so it is judged; start a program in a Herdr terminal outside a guarded session, or through the host's own terminal",
     )
 }
 

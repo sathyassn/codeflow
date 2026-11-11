@@ -280,9 +280,12 @@ at a time and verify it.
 
 A command started in a Herdr app terminal (`hc run`, `hc exec`) runs
 outside the harness's Bash sandbox and its permission prompts, with the
-user's full rights. The guards judge it as if typed bare and refuse a form
-they cannot read; text sent with `hc send` or `hc keys` is not judged, so
-type into a terminal only what its program may run. See
+user's full rights. The guards judge `hc exec` as if typed bare and refuse a
+form they cannot read. Every `hc run` refuses, because `hc run` can start a
+template and the guard cannot verify from the command which one; start the
+program outside a guarded session, or through the host's own terminal. Text
+sent with `hc send` or `hc keys` is not judged, so type into a terminal only
+what its program may run. See
 `docs/policy-reference.md` "Terminal carriers the guards model".
 
 ## Act within authority
