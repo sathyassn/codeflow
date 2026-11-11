@@ -42,6 +42,11 @@ version calculator, changelog and publication approval; installing CodeFlow
 does not install its repository release pipeline or make scaffold metadata
 the project's version. Discover that policy before release work; propose
 missing automation for adoption rather than silently enabling publication.
+Agents never publish, dispatch a release workflow, approve a release
+deployment or create or push a release tag. `exec-guard` refuses those
+routes; a remote setting, such as a tag `creation` rule or a required
+reviewer, is the floor for a route it cannot judge, such as a script that
+calls the API.
 
 ## The rules
 
