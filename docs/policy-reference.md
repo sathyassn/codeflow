@@ -824,8 +824,11 @@ bare (TSK-1344). The code holds the program names in
   that dispatch, and the option grammar is not known well enough to tell a
   help flag from an operand, so a help word refuses too. `hc run` is read
   after the wrappers the guards unwrap, including `flock`, `script`,
-  `watch`, `parallel`, `arch`, `sudo`, `doas`, `chrt` and `taskset`. To
-  start a program in a Herdr terminal, start it outside a guarded session,
+  `watch`, `parallel`, `arch`, `sudo`, `doas`, `gsudo`, `pkexec`, `busybox`,
+  `chrt` and `taskset`, and inside the shell command string or command line
+  a wrapper runs (`pkexec sh -c '...'`, `busybox sh -c '...'`, `gsudo '...'`).
+  Quoted arguments of a program the wrapper runs, such as a search pattern,
+  stay data. To start a program in a Herdr terminal, start it outside a guarded session,
   or through the host's own terminal. A guarded form returns when the Herdr
   app's dispatch contract is known.
 - Directory: `--cwd` from where the line runs, else that directory, so a
