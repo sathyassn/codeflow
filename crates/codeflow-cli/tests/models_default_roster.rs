@@ -99,8 +99,14 @@ fn the_seats_resolve_the_operator_defaults() {
     );
     // Every host's orchestrate route runs at that seat's own effort.
     for (host, expected) in [
-        ("codex-app", triple("codex-primary", "gpt-6.1-sol", "medium")),
-        ("codex-cli", triple("codex-primary", "gpt-6.1-sol", "medium")),
+        (
+            "codex-app",
+            triple("codex-primary", "gpt-6.1-sol", "medium"),
+        ),
+        (
+            "codex-cli",
+            triple("codex-primary", "gpt-6.1-sol", "medium"),
+        ),
         ("grok-cli", triple("grok-primary", "grok-4.7", "medium")),
     ] {
         let result = project.resolve(&["--duty", "orchestrate", "--host", host]);
@@ -320,7 +326,7 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
         path.ends_with("sessions-ses-4f1c-session-one.jsonl"),
         "{path}"
     );
-    let ledger = session_events(project.root(), "4f1c-session-one");
+    let ledger = session_events(project.root(), "ses-4f1c-session-one");
     assert_eq!(ledger.len(), 1, "{ledger:?}");
     assert_eq!(ledger[0]["event"], "effective_model");
     assert_eq!(ledger[0]["session_id"], "ses-4f1c-session-one");
@@ -329,6 +335,7 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
     assert_eq!(ledger[0]["source"], "harness choice");
     // Malformed values are input errors, and nothing resolves; so is a
     // session id that is not one word of ASCII letters, digits, - or _.
+    let too_long = "a".repeat(101);
     for (effective, session) in [
         ("no-at-sign", "s1"),
         ("@high", "s1"),
@@ -339,6 +346,8 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
         ("model@high", ""),
         ("model@high", "../escape"),
         ("model@high", "a b"),
+        // One over the 100-character bound that keeps the file name short.
+        ("model@high", too_long.as_str()),
     ] {
         let mut args = args.to_vec();
         args.extend(["--effective", effective, "--session", session]);
@@ -385,7 +394,7 @@ fn harness_choices_correlate_with_their_own_session() {
         ("session-a", "claude-opus-5-5"),
         ("session-b", "claude-sonnet-5-5"),
     ] {
-        let events = session_events(project.root(), session);
+        let events = session_events(project.root(), &format!("ses-{session}"));
         let kinds: Vec<&str> = events
             .iter()
             .map(|e| e["event"].as_str().unwrap())
@@ -402,39 +411,47 @@ fn harness_choices_correlate_with_their_own_session() {
     }
 }
 
-/// AC-9: a harness id that already starts with `ses-` keeps its own file;
-/// before, `alpha` and `ses-alpha` both wrote `sessions-ses-alpha.jsonl`.
+/// AC-9: harness ids that differ only by case, by `_` or by a `ses-`
+/// prefix each keep their own file, through `--effective` and the real
+/// `SessionEnd` hook, on a case-insensitive volume too. Before, `alpha`
+/// and `ses-alpha` both wrote `sessions-ses-alpha.jsonl`, and `Alpha`
+/// opened that same file where case folds.
 #[test]
-fn a_prefixed_session_id_never_shares_the_bare_ids_file() {
+fn session_ids_that_differ_by_case_prefix_or_underscore_never_share_a_file() {
     let project = Project::new();
-    for (session, effective) in [
-        ("alpha", "claude-opus-5-5@high"),
-        ("ses-alpha", "claude-sonnet-5-5@medium"),
-    ] {
+    let cases = [
+        ("alpha", "ses-alpha", "claude-opus-5-5"),
+        ("Alpha", "ses-_alpha", "claude-sonnet-5-5"),
+        ("ALPHA", "ses-_a_l_p_h_a", "claude-opus-5-5"),
+        ("_alpha", "ses-__alpha", "claude-sonnet-5-5"),
+        ("ses-alpha", "ses-ses-alpha", "claude-opus-5-5"),
+        ("a_b", "ses-a__b", "claude-sonnet-5-5"),
+        ("a__b", "ses-a____b", "claude-opus-5-5"),
+    ];
+    for (session, _, model) in cases {
+        let effective = format!("{model}@high");
         let output = project.run(&[
             "--duty",
             "orchestrate",
             "--host",
             "claude-code",
             "--effective",
-            effective,
+            effective.as_str(),
             "--session",
             session,
         ]);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         session_end(project.root(), session);
     }
-    for (session, model) in [
-        ("alpha", "claude-opus-5-5"),
-        ("ses-alpha", "claude-sonnet-5-5"),
-    ] {
-        let events = session_events(project.root(), session);
+    for (session, identity, model) in cases {
+        // A shared file would hold another id's records, so four or more.
+        let events = session_events(project.root(), identity);
         assert_eq!(events.len(), 2, "{session}: {events:?}");
         assert_eq!(events[0]["event"], "effective_model", "{session}");
         assert_eq!(events[0]["model"], model, "{session}");
         assert_eq!(events[1]["event"], "session_end", "{session}");
         for event in &events {
-            assert_eq!(event["session_id"], format!("ses-{session}").as_str());
+            assert_eq!(event["session_id"], identity, "{session}");
         }
     }
 }
@@ -464,10 +481,12 @@ fn session_end(root: &Path, session: &str) {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 }
 
-/// Every event in `session`'s sessions-ledger file under the project's
-/// state directory, in file order.
-fn session_events(root: &Path, session: &str) -> Vec<Value> {
-    let name = format!("sessions-ses-{session}.jsonl");
+/// Every event in the sessions-ledger file of ledger identity `identity`
+/// (`ses-` and the encoded harness id) under the project's state
+/// directory, in file order. The name compares byte for byte, so a file
+/// that differs only by case is not this one.
+fn session_events(root: &Path, identity: &str) -> Vec<Value> {
+    let name = format!("sessions-{identity}.jsonl");
     let mut stack = vec![root.join(".git")];
     let mut found = Vec::new();
     while let Some(dir) = stack.pop() {
