@@ -12,19 +12,23 @@
 # a job's condition differs from its row, so a placement change is a visible
 # edit to that table.
 #
-# A ready pull request into an integration line runs only the short checks:
-# the Linux build and the `codeflow gates` parts here, the commit standards
-# and release impact in codeflow-policy.yml and codeflow-release.yml, and the
-# secret scan and security review here. Linux coverage and every Windows job
-# leave it; the `windows-tier` job decides from the event and base alone, and
-# an unreadable or unexpected value runs everything. Line pushes (the batch's
-# hosted proof), ready pull requests into main or master, the weekly
-# schedule and manual runs keep the full Linux and Windows gates. Both
-# verdicts still report, and pass when their suites were not selected. A
-# draft keeps the security jobs and skips the gates and both verdicts, so its verdicts
-# end neutral; merge admission is `commit standards` in codeflow-policy.yml,
-# which passes only on a successful ready run at the exact head (TSK-449).
-# Marking a pull request ready starts the gates without a push.
+# A pull request into an integration line never starts this workflow: the
+# trigger below ignores integration/**, and codeflow-line-pr.yml runs its short
+# checks instead. GitHub counts a skipped required check as a success, and a
+# job whose `if:` is false still leaves a skipped row under its name, so the
+# required names `codeflow gates` and `windows` must not be in a workflow such
+# a pull request starts. Any other base, an unexpected one included, runs this
+# workflow. A push to a line does not start it either: a job here whose `if:`
+# is false would leave a `windows` row at the line's tip, which is also the
+# head of the pull request into main, so codeflow-line-push.yml runs the full
+# Linux suites for a line push instead. Ready pull requests into main or
+# master, pushes to them, the weekly schedule and manual runs keep the full
+# Linux and Windows gates; both verdicts need their suites to have run, or a
+# reuse that names a run. A draft keeps the security jobs and skips the gates and both
+# verdicts, so its verdicts end neutral; merge admission is `commit standards`
+# in codeflow-policy.yml, which passes only on a successful ready run at the
+# exact head (TSK-449). Marking a pull request ready starts the gates without
+# a push.
 #
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
@@ -33,8 +37,9 @@ name: codeflow-ci
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    branches-ignore: ["integration/**"]
   push:
-    branches: [main, master, "integration/**"]
+    branches: [main, master]
   # The weekly and manual runs scan the full history of the default branch
   # for secrets and audit dependencies, and run the full Linux and Windows
   # gates. The weekly run tests main's tip. Every event receives both
@@ -43,6 +48,8 @@ on:
     - cron: "37 5 * * 1"
   workflow_dispatch:
 
+# Line pushes run in codeflow-line-push.yml, which keeps this same block; a
+# dispatch on a line still runs here.
 # A newer push to an integration line cancels the older push run of that
 # line, running or pending (TSK-1313). Only the current tip's verdicts count
 # for the next landing, so an older tip's run is never that evidence. The
@@ -114,7 +121,8 @@ jobs:
   # Pull request runs skip this job and are never affected. Its token reads
   # runs, caches and pull requests and writes nothing.
   #
-  # TSK-359: the same reuse covers pushes to integration/** lines, and every
+  # TSK-359: a line push starts codeflow-line-push.yml, which reuses nothing.
+  # Every
   # pull request run records what it tested (the `provenance` job below, one
   # record from an Ubuntu runner and one from a Windows runner). The push
   # reuses a run only when its pull request number, base line, head, merge
@@ -180,7 +188,7 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
           WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
-          DECIDER_SHA256: 4d3b132da04ce6cbb3bc3a0ffd2e1978603f52a4462b93064889fffc44059d24
+          DECIDER_SHA256: b7257030aa0768f5b2af1f4dfbafbcb092616007066ac9fa803958a699507439
         run: |
           actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
           if [ "$actual" != "$DECIDER_SHA256" ]; then
@@ -263,7 +271,7 @@ jobs:
   # once here and shared as an artifact, never rebuilt per part (TSK-449).
   # It keeps for a day, long enough for a re-run of a failed part.
   gates-build:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow build
     needs: reuse
     runs-on: ubuntu-24.04
@@ -286,7 +294,7 @@ jobs:
           if-no-files-found: error
 
   gates:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (${{ matrix.part }})
     needs: [reuse, gates-build]
     runs-on: ubuntu-24.04
@@ -597,12 +605,13 @@ jobs:
   # build and setup of about 4 to 6 minutes, and get the Windows partitions'
   # 30; the report job only reads files, and fails a shard whose test
   # minutes plus 6 of setup pass the 24 minute margin (TSK-1063).
-  # A pull request into an integration line does not run them (the
-  # `windows-tier` job below); the push to the line does.
+  # A pull request into an integration line does not start this workflow, so
+  # it does not run them; the Linux coverage shards run on the line push, and
+  # the Windows jobs on the pull request into main and the daily run.
   gates-coverage:
-    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 3)
-    needs: [reuse, windows-tier]
+    needs: reuse
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -683,7 +692,7 @@ jobs:
   # It runs when a shard fails, so the journeys and the partition check
   # still report; it only reads the shards' files.
   gates-coverage-report:
-    if: always() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: ${{ !cancelled() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage report)
     needs: gates-coverage
     runs-on: ubuntu-24.04
@@ -733,16 +742,13 @@ jobs:
         run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count 3 --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json target/coverage/results/coverage-shard-3/tests.json --results target/coverage/results
 
   # The required check runs on every event, even when a part
-  # fails, is cancelled or did not run. Draft integration pull requests and
-  # unsupported bases fail. It passes only when every part, coverage shard
-  # and report passed, or reuse named a run and all were skipped, or, on a
-  # pull request into an integration line, which runs only the short checks
-  # (tier `reduced`), every part passed and coverage and the release parts
-  # were not selected.
+  # fails, is cancelled or did not run. A draft's verdict is skipped, and
+  # unsupported bases fail. It passes only when every part, coverage shard and
+  # report passed, or reuse named a run and all were skipped.
   gates-verdict:
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: codeflow gates
-    needs: [reuse, windows-tier, gates, gates-release, gates-coverage, gates-coverage-report]
+    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -755,97 +761,24 @@ jobs:
           REPORT: ${{ needs.gates-coverage-report.result }}
           REUSE: ${{ needs.reuse.result }}
           REUSED: ${{ needs.reuse.outputs.run }}
-          TIER: ${{ needs.windows-tier.outputs.tier }}
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
           fi
           if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
-            echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
+            echo "::error::the Linux gates did not run; bases outside main or master cannot supply a passing verdict"
             exit 1
-          fi
-          if [ "$TIER" = reduced ]; then
-            case "$EVENT $BASE" in
-              "pull_request integration/"?*) ;;
-              *)
-                echo "::error::the reduced tier is only for a pull request into an integration line; event ${EVENT:-none}, base ${BASE:-none}"
-                exit 1
-                ;;
-            esac
-            if [ "$PARTS" != success ] || [ "$SHARDS $REPORT $RELEASE" != "skipped skipped skipped" ]; then
-              echo "::error::the short checks concluded parts=${PARTS}; the reduced tier runs no coverage shards (${SHARDS}), coverage report (${REPORT}) or release parts (${RELEASE}); see the codeflow gates jobs"
-              exit 1
-            fi
-            line="the short checks passed at ${GITHUB_SHA}; Linux coverage was not selected for a pull request into an integration line. This is not full gate evidence; the push to the line runs it."
-            echo "$line"
-            echo "$line" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
             exit 1
           fi
-          # The release parts run only on the release path; elsewhere their
-          # job is skipped by its own condition, never by a failure.
           if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
             echo "::error::the release parts concluded ${RELEASE}; see the codeflow gates (release) jobs"
             exit 1
           fi
           echo "every part of the full gate passed"
-
-  # Placement by event (ADR-0097; the operator's decision of 2026-11-05, "A
-  # plus Linux off line PRs"): a pull request into an integration line runs
-  # only the short checks, so it skips the Linux coverage shards and every
-  # Windows job, whatever it changes. This job decides that from the event
-  # name and the base branch alone, never from a label, title or file the
-  # head controls. Pull requests into main, pushes, and scheduled and manual
-  # runs keep every job, and an empty or unexpected event or base runs
-  # everything (tier=full). The output value `reduced` means "short checks
-  # only"; it, the REDUCED_TIER switch (operator decision, 2026-11-03, on
-  # since run 41741936765, PR 558) and the job's Windows name are kept from
-  # TSK-1242 so earlier runs and records still read them. Both verdicts
-  # accept exactly these skips and say the suites were not selected. Such a
-  # run is never full evidence: the push to the line runs every job, and
-  # TSK-1026 AC-7 owns whether that push may reuse the run's other jobs
-  # (scripts/ci-reuse.py refuses the run until then).
-  # scripts/gate-parity.py pins this job and accepts the switch only off or
-  # on; scripts/test_windows_tier.py runs this step.
-  windows-tier:
-    if: github.event_name == 'pull_request'
-    name: windows tier
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      tier: ${{ steps.tier.outputs.tier }}
-    steps:
-      - name: Choose the Windows tier
-        id: tier
-        shell: bash
-        env:
-          REDUCED_TIER: "on"
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.ref }}
-        run: |
-          tier=full
-          if [ "$REDUCED_TIER" != on ]; then
-            reason="the reduced tier switch is $REDUCED_TIER"
-          elif [ "$EVENT" != pull_request ]; then
-            reason="the event '$EVENT' is not a pull request"
-          else
-            case "$BASE" in
-              integration/?*)
-                tier=reduced
-                reason="it is a pull request into the integration line $BASE"
-                ;;
-              *) reason="the base '$BASE' is not an integration line" ;;
-            esac
-          fi
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "Windows tier: $tier, because $reason"
-          echo "Windows tier: $tier, because $reason" >> "$GITHUB_STEP_SUMMARY"
 
   # Native Windows is a release target again (TSK-197). The raw referee is
   # split up so the longest path is short (TSK-265): one job builds the test
@@ -871,9 +804,9 @@ jobs:
   # finished, and fails a partition whose test minutes plus 2 of setup pass
   # the 24 minute margin.
   windows-build:
-    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
-    needs: [reuse, windows-tier]
+    needs: reuse
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -929,7 +862,7 @@ jobs:
           retention-days: 7
 
   windows-tests:
-    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows tests (${{ matrix.partition }} of 16)
     needs: windows-build
     runs-on: windows-latest
@@ -998,9 +931,9 @@ jobs:
           retention-days: 7
 
   windows:
-    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows checks (doc, clippy, Node)
-    needs: [reuse, windows-tier]
+    needs: reuse
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -1045,9 +978,9 @@ jobs:
   # here from the start (TSK-265); the journeys job runs the rest. Together
   # the two parts run every journey once.
   windows-release-journey:
-    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows release journey
-    needs: [reuse, windows-tier]
+    needs: reuse
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -1062,7 +995,7 @@ jobs:
   # Windows. It runs when a partition fails, so the journeys still report;
   # it only reads results.
   windows-journeys:
-    if: always() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: ${{ !cancelled() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows journeys
     needs: windows-tests
     runs-on: windows-latest
@@ -1115,63 +1048,45 @@ jobs:
         run: python scripts/test_partition_check.py && python scripts/partition-check.py check --count 16 --prefix windows-junit --margin-minutes 24 --setup-minutes 2 --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
   # The required Windows check runs on every event, even when a job fails, is
-  # cancelled or did not run. Draft integration pull requests and unsupported
-  # bases fail. The verdict is computed from the result of every job it
-  # needs (TSK-1321): each tier declares which jobs it skips, every other job
-  # must succeed, and a failure names each job that is not green with its
-  # result. It passes when every job the tier runs succeeded and every
-  # skipped job is one the tier declares skipped: the full tier skips none;
-  # the reduced tier, only on a pull request into an integration line,
-  # skips every Windows job, so Windows is not selected; a push that reuses
-  # a named pull request run skips them all.
+  # cancelled or did not run. A draft's verdict is skipped, and unsupported
+  # bases fail. The verdict is computed from the result of every job it needs
+  # (TSK-1321): it passes when every job succeeded, or when a push reuses a
+  # named pull request run and every job was skipped, and a failure names each
+  # job that is not green with its result.
   # scripts/gate-parity.py pins this job and scripts/test_windows_tier.py
   # runs its step.
   windows-verdict:
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
-    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every Windows job the tier runs passed
+      - name: Every Windows job passed
         shell: python3 -I {0}
         env:
           NEEDS: ${{ toJSON(needs) }}
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           import json, os, re, sys
           needs = json.loads(os.environ["NEEDS"])
-          event, base, sha = os.environ["EVENT"], os.environ.get("BASE", ""), os.environ["GITHUB_SHA"]
+          sha = os.environ["GITHUB_SHA"]
           names = {"windows": "windows checks", "windows-build": "windows test build",
                    "windows-tests": "windows tests", "windows-journeys": "windows journeys",
-                   "windows-release-journey": "windows release journey", "windows-tier": "windows tier"}
+                   "windows-release-journey": "windows release journey"}
           def result(job): return needs.get(job, {}).get("result", "missing")
           def output(job, key): return (needs.get(job, {}).get("outputs") or {}).get(key, "")
-          tier, reused = output("windows-tier", "tier"), output("reuse", "run")
+          reused = output("reuse", "run")
           jobs = sorted(job for job in needs if job != "reuse")
-          gates = [job for job in jobs if job != "windows-tier"]
           errors = []
-          if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused):
-              mode, skips = "reuse", set(jobs)
-          elif tier == "reduced":
-              mode, skips = "reduced", {"windows", "windows-build", "windows-tests", "windows-journeys",
-                                        "windows-release-journey"}
-              if event != "pull_request" or not base.startswith("integration/"):
-                  errors.append(f"the reduced tier is only for a pull request into an integration line; "
-                                f"event {event}, base {base or 'none'}")
+          mode = "reuse" if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused) else "full"
+          if mode == "full" and all(result(job) == "skipped" for job in jobs):
+              errors.append("the Windows gates did not run; bases outside main or master cannot supply a "
+                            "passing verdict")
           else:
-              mode, skips = "full", set()
-          if event != "pull_request":
-              skips.add("windows-tier")
-          if mode == "full" and all(result(job) == "skipped" for job in gates):
-              errors.append("the Windows gates did not run; bases outside main, master or integration/** "
-                            "cannot supply a passing verdict")
-          else:
+              want = "skipped" if mode == "reuse" else "success"
               for job in jobs:
-                  want = "skipped" if job in skips else "success"
                   if result(job) != want:
-                      declared = "the tier declares it skipped" if want == "skipped" else f"the {mode} tier runs it"
+                      declared = "a reused run skips it" if mode == "reuse" else "a full run needs it"
                       errors.append(f"{names.get(job, job)} concluded {result(job)}; {declared}")
           missing = output("windows-journeys", "missing")
           if missing:
@@ -1183,9 +1098,6 @@ jobs:
               sys.exit(1)
           url = f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{reused}"
           line = {"reuse": f"Windows passed on pull request run {url}, which tested this exact tree",
-                  "reduced": f"Windows was not selected at {sha}: a pull request into an integration line runs "
-                             "only the short checks. This is not Windows evidence; the push to the line runs "
-                             "every Windows job.",
                   "full": f"every Windows job passed at {sha}"}[mode]
           print(line)
           with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as summary:

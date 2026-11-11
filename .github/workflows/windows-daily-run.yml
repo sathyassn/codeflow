@@ -43,8 +43,8 @@ jobs:
         run: python -I -B scripts/windows-daily.py identity --ref "$GITHUB_REF" --sha "$TESTED_SHA"
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Restore only. The line's push runs keep this cache current, and the daily
-      # run adds nothing worth saving.
+      # Restore only. Runs on main keep this cache current, and the daily run adds
+      # nothing worth saving.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-tests

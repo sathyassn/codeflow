@@ -1,0 +1,1177 @@
+# codeflow-line-push: the full Linux suites of a push to an integration line
+# (TSK-1321; ADR-0097, "CI suite placement by event"; docs/releasing.md, "Where
+# CI suites run"). Changing where a suite runs is an operator decision.
+#
+# codeflow-ci.yml does not start for a line push, so no `windows` row, skipped
+# or otherwise, stands at a line's tip. GitHub counts a skipped required check
+# as a success, and that tip is also the head of the pull request into main.
+# Every job here runs on every push: there is no reuse decision and no job whose
+# `if:` can be false, and `codeflow gates` passes only when every Linux job
+# passed. The Windows jobs run on the pull request into main and the daily run.
+# The release gates run on neither a line push nor here.
+#
+# scripts/gate-parity.py holds these jobs equal to codeflow-ci.yml's, so an edit
+# there is made here too. scripts/test_ci_placement.py holds where each job runs.
+name: codeflow-line-push
+
+on:
+  push:
+    branches: ["integration/**"]
+
+# A newer push to a line cancels the older push run of that line (TSK-1313);
+# the comment in codeflow-ci.yml states the limits. gate-parity.py holds this
+# block equal to that one.
+concurrency:
+  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}
+
+permissions:
+  contents: read
+
+jobs:
+  gates-build:
+    if: ${{ !cancelled() }}
+    name: codeflow build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: build-v1
+      - name: Build codeflow from source
+        run: cargo build --release -p codeflow-cli
+      - name: Keep the build for the gate parts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-release
+          path: target/release/codeflow
+          retention-days: 1
+          if-no-files-found: error
+
+  gates:
+    if: ${{ !cancelled() }}
+    name: codeflow gates (${{ matrix.part }})
+    needs: gates-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The hosted landing gate (TSK-449). The four release-tier
+          # targets run in the gates-release job below.
+          - part: present
+            only: present-supply-chain,cf-present-qualification
+          # The journey gate's Python journeys need no test results, so they
+          # run here; the coverage report job reads the Rust journeys from
+          # the shards' results (TSK-270). Both portal targets and
+          # visual-eval-controls require docs-portal-deps, the one target
+          # that runs `npm ci` for docs-portal, so this part installs it once.
+          - part: checks
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,docs-portal-windows,journey-python,visual-eval-controls
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # This repo IS codeflow, so it builds the binary from source rather than
+      # using the release installer a consumer project would. These gates block.
+      # The toolchain is pinned in rust-toolchain.toml (the single source of
+      # truth rustup honors locally and here); installing from it means a
+      # floating stable clippy cannot break CI out from under a green local run.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      # Each part builds different things (debug, test and benchmark
+      # builds), so each keeps its own cache. A cache is saved only under a
+      # new key, so the key changes
+      # when what a part keeps in target/ changes: v1 holds the binary-delta
+      # check's build, now named by the locked dependencies (TSK-270).
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.part }}-v1
+      # Each Node target pins its version in a version file, and the full
+      # gate runs it through scripts/with-node.py, which finds that version
+      # here in the tool cache (TSK-142). gate-parity holds these pins to
+      # the version files. The later setup is first on PATH.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: docs-portal/package-lock.json
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+
+      # Line pushes skip gates-release. Prepare its apt cache here so a
+      # later push can reuse a verdict. No browser binaries are installed.
+      - name: Read the locked Playwright version
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright apt archives on the integration line
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+        id: line-apt
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+      - name: Prepare Playwright apt archives for line verdict reuse
+        if: matrix.part == 'present' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/') && steps.line-apt.outputs.cache-hit != 'true'
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
+
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{ runner.temp }}/codeflow-bin
+      - name: Put the codeflow build on PATH
+        run: |
+          chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
+          echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
+
+      # What adopters get passes their secret scan (TSK-206): fresh scaffolds
+      # of every tier from the binary just built, and the adopter CI
+      # template's own gitleaks step, with the pinned gitleaks.
+      - name: Scaffold secret scan
+        if: matrix.part == 'checks'
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
+
+      # The Linux candidate has one full gate, split into the parts above and
+      # the coverage jobs below. Windows independently runs raw Rust checks;
+      # Unix-only journeys and the read benchmark remain Linux-only. No part
+      # runs the instrumented suite now; the profile name would keep its
+      # profiles small if one did (see the coverage shards).
+      - name: codeflow test --mode full --strict
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+
+  gates-coverage:
+    if: ${{ !cancelled() }}
+    name: codeflow gates (coverage ${{ matrix.shard }} of 3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        run: sudo apt-get update && sudo apt-get install -y bash zsh dash
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      # The key the single coverage part saved under, so the shards restore
+      # main's instrumented dependencies instead of building them cold.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: coverage-gates
+          save-if: ${{ matrix.shard == 1 }}
+      # The rust-coverage target requires present-web-build, which runs on
+      # this Node pin, as in the gate parts.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
+      - name: present-web-build
+        shell: bash
+        run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
+      # A --no-report run adds to the profiles already in the target
+      # directory, so any the cache restored are removed first.
+      - name: Remove old coverage profiles
+        run: cargo llvm-cov clean --workspace
+      # The rust-coverage command with --no-report, on this shard's tests.
+      # The run starts about 31,000 instrumented processes. One profile per
+      # process filled 27.5 GB, more than the runner's free disk; a merge
+      # pool of four per binary keeps under 100 MB with the same counters.
+      # cargo-llvm-cov reads this name.
+      - name: cargo llvm-cov nextest (one shard)
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow --partition hash:${{ matrix.shard }}/3
+      # The full report keeps each function's counters, which the report job
+      # adds up. The test list for the partition check comes from these same
+      # binaries: under the llvm-cov environment and in the llvm-cov target
+      # directory the run built, listing builds nothing.
+      - name: Export this shard's coverage and list its tests
+        shell: bash
+        run: |
+          mkdir -p target/coverage-data
+          cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
+          eval "$(cargo llvm-cov show-env --sh)"
+          CARGO_TARGET_DIR=target/llvm-cov-target cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
+      - name: Keep this shard's coverage for the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.shard }}
+          path: target/coverage-data/coverage.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Keep this shard's results for the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            target/nextest/codeflow/junit.xml
+            target/nextest/codeflow/tests.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gates-coverage-report:
+    if: ${{ !cancelled() && needs.gates-coverage.result != 'skipped' }}
+    name: codeflow gates (coverage report)
+    needs: gates-coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/coverage
+          echo "CODEFLOW_GATE_STARTED_AT=$(python3 -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+
+      - name: Fetch every shard's coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*
+          path: target/coverage/data
+
+      - name: Fetch every shard's results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-shard-*
+          path: target/coverage/results
+
+      # Counts lines as llvm-cov does and fails under the floor of the
+      # rust-coverage target's --fail-under-lines.
+      - name: Line coverage of the whole suite
+        shell: bash
+        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 3 target/coverage/data
+
+      # The journey-gate target's command, on the shards' results.
+      - name: journey gate
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CODEFLOW_GATE_RESULTS: target/coverage/results
+        run: python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --part results --results "$CODEFLOW_GATE_RESULTS"
+
+      # Fails when a listed test ran in no shard, in two, outside the shard
+      # its hash gives it, or without being listed, or when a shard's test
+      # minutes plus 6 of setup pass the 24 minute margin (TSK-1063), and
+      # prints each shard's test minutes and the slowest test.
+      - name: Every test ran in exactly one shard
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count 3 --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json target/coverage/results/coverage-shard-3/tests.json --results target/coverage/results
+
+  # The Linux verdict of a line push. scripts/gate-parity.py pins this job.
+  gates-verdict:
+    if: ${{ !cancelled() }}
+    name: codeflow gates
+    needs: [gates-build, gates, gates-coverage, gates-coverage-report]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every Linux job passed
+        shell: bash
+        env:
+          BUILD: ${{ needs.gates-build.result }}
+          PARTS: ${{ needs.gates.result }}
+          SHARDS: ${{ needs.gates-coverage.result }}
+          REPORT: ${{ needs.gates-coverage-report.result }}
+        run: |
+          if [ "$BUILD $PARTS $SHARDS $REPORT" != "success success success success" ]; then
+            echo "::error::the Linux gate concluded build=${BUILD} parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
+            exit 1
+          fi
+          line="the full Linux gate passed at ${GITHUB_SHA}. Windows runs on the pull request into main and on the daily run."
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # The gitleaks step is the adopter template's (TSK-210);
+      # scripts/check-scaffold-gitleaks.sh keeps the two the same.
+      # Run the gitleaks binary directly (pinned) rather than the
+      # gitleaks-action wrapper, which requires a GitHub token/license. The
+      # archive is downloaded and unpacked under the runner's temp directory,
+      # never in the checkout, so a file or link a pull request commits at
+      # that name is not written through.
+      #
+      # Every exemption comes from the trusted commit: the pull request's
+      # base, or the pushed commit on a push. A pull request cannot exempt
+      # the leak it adds; a new exemption takes effect once its own pull
+      # request merges. The step fails before it scans when that commit is
+      # not in the checkout. It deletes the checkout's .gitleaksignore,
+      # .gitleaks.toml and .gitleaks.json (a link is removed, never
+      # followed) and gives gitleaks the trusted commit's copies, choosing
+      # the configuration as gitleaks does: GITLEAKS_CONFIG, then
+      # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
+      # .gitleaks.toml, else the default rules. An inline gitleaks:allow
+      # comment counts only on a commit the trusted commit already holds, unless
+      # its git.secret_scan_inline_allow policy is never, which ignores all of them.
+      #
+      # gitleaks resolves an [extend] path, and a relative GITLEAKS_CONFIG,
+      # against its working directory. It runs from a directory that holds
+      # the trusted commit's copy of each file the configuration extends and
+      # nothing else, so the pull request's copy is never read and a file the
+      # trusted commit lacks fails the step. Copying the chain keeps an
+      # existing extended configuration working, which refusing every
+      # [extend] path would break. An absolute path into the checkout is
+      # refused; name the file relative to the repository root instead. A
+      # file outside the checkout is read where it is, and
+      # [extend] useDefault = true needs no file.
+      #
+      # Nothing from the checkout runs or steers the scan. The Python
+      # helpers run isolated (python3 -I), so a module the pull request
+      # commits beside them is never imported; they need Python 3.11 or
+      # later, for tomllib. git reads .gitattributes from the trusted commit
+      # (GIT_ATTR_SOURCE, git 2.41 or later), so a pull request cannot mark
+      # its own files -diff to hide their changes.
+      # No step before this one runs code from the checkout: a step that
+      # did could write GITHUB_ENV or GITHUB_PATH for this one, so
+      # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
+      # this workflow's own env. Keep it that way when you add steps. A
+      # workflow you customised before this protection may already run such
+      # a step; codeflow update keeps it and warns until you move it after
+      # this step or into another job.
+      #
+      # gitleaks' default git log leaves out what a merge itself adds, any
+      # file whose type changes and any file git judges binary, so a secret
+      # added in a merge resolution, in a file that replaces a link, or
+      # after a NUL byte would go unread. The scan names its own log
+      # options: --remerge-diff shows only what each merge adds beyond its
+      # automatic result, so a branch's commits are not reported twice; the
+      # diff filter keeps type changes; --text shows every file as text; and
+      # no external diff or textconv filter rewrites what git shows.
+      # gitleaks runs git from PATH, and the git it finds there drops the
+      # "remerge" notes that --remerge-diff writes into a conflicted file's
+      # header. gitleaks' patch parser does not know them and would name the
+      # file b/<path>, so an exemption for a real b/ path could apply to it.
+      # That git also pins the patch format whatever the runner's git
+      # configuration says: the a/ and b/ prefixes, quoted names, no colour,
+      # the medium format with full hashes and the root commit's diff. With
+      # diff.noprefix, for one, gitleaks would drop each path's first
+      # directory, and an exemption for leak.txt would cover dir/leak.txt.
+      #
+      # gitleaks reads only the commits the event brings (SCAN_FROM..HEAD):
+      # on a pull request, what the pull request merged into its base holds
+      # and the base does not; on a push, what the pushed commit holds and
+      # the previous tip did not. A finding already in the base, or on a
+      # branch the pull request does not bring, is not this change's to fix
+      # and does not fail it. The weekly and manual runs, a push that
+      # creates the branch and a push whose previous tip is not in the
+      # checkout (a force push) read the whole history of HEAD instead, so
+      # every commit on the default branch is scanned once as it arrives
+      # and again each week. No run reads a branch or tag that HEAD does
+      # not reach, so an unrelated ref can neither fail this scan nor hide a
+      # leak from it. The step prints which history it read. A range that
+      # changes no file has nothing to scan and passes. Before gitleaks
+      # runs, the step checks only the
+      # history the pull request brings, the commits HEAD holds and the
+      # trusted commit does not, for what gitleaks cannot read reliably, and
+      # names the commit and the refs that hold it. On a push that range is
+      # empty, since the pushed commit is the trusted commit, so a push scan
+      # reads its history without these refusals. git cannot show what an octopus merge (three or more
+      # parents) adds, so one in that range is refused; merge the branches one
+      # at a time. gitleaks' patch parser misreads some names that git
+      # quotes: it skips one that ends in a backslash without an error, and a
+      # newline in a name splits a conflicted merge's header into lines the
+      # wrapper cannot tell apart. So the step refuses a path with a
+      # backslash, a double quote or a control character that a commit in the
+      # range adds, changes, renames or copies, or that a merge in it changes
+      # beyond its automatic result. A conflicted merge's header can also name
+      # a file either side renamed or deleted, the trusted side included, so
+      # each merge's own sides count too: every path that differs between a
+      # merge base and either parent. Renaming the file in a later commit
+      # leaves the name in the earlier one, so the fix is to rewrite the pull
+      # request's commits, or, for a change on the trusted side, to rebase
+      # onto the base instead of merging it in. Names with spaces or
+      # non-ASCII letters are read correctly and pass, and gitleaks is not
+      # shown deleted files, so a pull request that merges nothing may delete
+      # such a file. History the trusted commit holds is not checked: it met
+      # these checks, or predates them, when it merged.
+      #
+      # The step then drops one known false positive from the report: the
+      # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
+      # pipeline workflow ("vulnerable/malicious deps"), which the
+      # generic-api-key rule mistakes for a key. Only a generic-api-key
+      # finding whose value and matched text are exactly that prose, in one
+      # of those two paths exactly, is dropped; anything else, on the same
+      # line included, fails the job. So does a scan that logs an error or
+      # reads no commit.
+      - name: gitleaks
+        env:
+          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+        run: |
+          case ${TRUSTED_SHA:-} in
+            '' | *[!0-9a-f]*)
+              echo "::error::no trusted commit to read exemptions from; refusing to scan"; exit 1 ;;
+          esac
+          if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
+          fi
+          TRUSTED_SHA=$(git rev-parse --verify "${TRUSTED_SHA}^{commit}")
+          # The history the scan reads: the event's own commits when it
+          # names a start the checkout holds, else all of HEAD's.
+          head=$(git rev-parse --verify 'HEAD^{commit}')
+          scan=$head
+          case ${SCAN_FROM:-} in
+            '') scope="the full history of HEAD (a scheduled or manual run)" ;;
+            *[!0-9a-f]*)
+              echo "::error::scan start ${SCAN_FROM} is not a commit id; refusing to scan"; exit 1 ;;
+            *[!0]*)
+              if git cat-file -e "${SCAN_FROM}^{commit}" 2>/dev/null; then
+                start=$(git rev-parse --verify "${SCAN_FROM}^{commit}")
+                scan="${start}..${head}"
+                scope="the $(git rev-list --count "$head" --not "$start" --) commit(s) HEAD holds and ${start} does not"
+              else
+                scope="the full history of HEAD (the previous tip ${SCAN_FROM} is not in the checkout)"
+              fi ;;
+            *) scope="the full history of HEAD (the push created the branch)" ;;
+          esac
+          echo "Secret scan reads ${scope}."
+          if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 41)) }'; then
+            echo "::error::$(git version) cannot read .gitattributes from the trusted commit; upgrade git to 2.41 or later; refusing to scan"; exit 1
+          fi
+          export GIT_ATTR_SOURCE="$TRUSTED_SHA"
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          # The exit traps remove the folders the step makes in the runner's
+          # temp directory; the report and log below stay there.
+          tool=$(mktemp -d "$RUNNER_TEMP/gitleaks-tool.XXXXXX")
+          trap 'rm -rf "$tool" || true' EXIT
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$tool/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$tool/$archive" | sha256sum -c -
+          tar -xzf "$tool/$archive" -C "$tool" gitleaks
+          workspace=$(pwd -P)
+          trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
+          trap 'rm -rf "$tool" "$trusted" || true' EXIT
+          mkdir "$trusted/tree"
+          real_git=$(command -v git)
+          mkdir "$trusted/bin"
+          cat >"$trusted/bin/git" <<GIT
+          #!/bin/bash
+          set -o pipefail
+          pin=(-c core.quotePath=true -c diff.noprefix=false -c diff.mnemonicPrefix=false
+            -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false -c color.ui=false
+            -c color.diff=false -c format.pretty=medium -c log.date=default -c log.decorate=false
+            -c log.abbrevCommit=false -c log.showSignature=false -c log.showRoot=true)
+          if [ "\$1" = -C ] && [ "\$3" = log ]; then
+            "$real_git" "\${pin[@]}" "\$@" | sed '/^remerge /d'
+            exit
+          fi
+          exec "$real_git" "\${pin[@]}" "\$@"
+          GIT
+          chmod +x "$trusted/bin/git"
+          export PATH="$trusted/bin:$PATH"
+          # Refuses what gitleaks cannot read reliably in the history the pull
+          # request brings: what HEAD holds and the trusted commit does not.
+          python3 -I - "$TRUSTED_SHA" "$head" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          sha, head = sys.argv[1:]
+          unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
+          rewrite = ("rewrite the pull request's commits so that none uses the name; "
+                     "renaming it in a later commit leaves it in this one")
+
+
+          def refuse(message):
+              print(f"::error::{message}; refusing to scan")
+              sys.exit(1)
+
+
+          def git(*args, codes=(0,)):
+              run = subprocess.run(["git", *args], capture_output=True, check=False)
+              if run.returncode not in codes:
+                  error = run.stderr.decode("utf-8", "replace").strip()
+                  refuse(f"git {args[0]} failed ({error}), so the step cannot check the history the pull request brings")
+              return run
+
+
+          def where(commit):
+              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)", "--").stdout.decode("utf-8", "replace").split()
+              more = f" and {len(refs) - 5} more" if len(refs) > 5 else ""
+              return f"{commit} (in {', '.join(['HEAD', *refs[:5]])}{more})"
+
+
+          def odd(name):
+              return any(c < 32 or c == 127 or c in b'"\\' for c in name)
+
+
+          def named(name):
+              return ascii(name.decode("utf-8", "replace"))[1:-1]
+
+
+          commits = [line.split() for line in git("rev-list", "--parents", head, "--not", sha, "--").stdout.decode().splitlines()]
+          for commit, *parents in commits:
+              if len(parents) > 2:
+                  refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
+                         "rewrite the pull request's history to merge its branches one at a time")
+          # Each path a commit adds, changes, renames or copies, and each path
+          # a merge changes beyond its automatic result.
+          listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
+                        "--no-ext-diff", head, "--not", sha, "--").stdout.split(b"\0")
+          commit, names = None, 0
+          for token in listing:
+              if names:
+                  names -= 1
+                  if odd(token):
+                      refuse(f"commit {where(commit)} adds, changes or renames the path \"{named(token)}\"; {unreadable}; {rewrite}")
+                  continue
+              token = token.lstrip(b"\n")
+              if token.startswith(b"\x01"):
+                  commit = token[1:].decode()
+              elif re.fullmatch(rb"[RC][0-9]*", token):
+                  names = 2
+              elif re.fullmatch(rb"[A-Z][0-9]*", token):
+                  names = 1
+              elif token:
+                  refuse(f"cannot read git's list of the paths that commit {commit} changes")
+          # A conflicted merge's header can also name a path that either side
+          # changed since a merge base, the trusted side included.
+          empty = git("hash-object", "-t", "tree", "/dev/null").stdout.decode().strip()
+          for commit, *parents in commits:
+              if len(parents) != 2:
+                  continue
+              bases = git("merge-base", "--all", *parents, "--", codes=(0, 1)).stdout.decode().split() or [empty]
+              for base in bases:
+                  for parent in parents:
+                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent, "--").stdout.split(b"\0"):
+                          if odd(name):
+                              held = git("merge-base", "--is-ancestor", parent, sha, "--", codes=(0, 1)).returncode == 0
+                              fix = "rebase the pull request onto the trusted commit instead of merging it in" if held else rewrite
+                              refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
+                                     f"parent {parent}; {unreadable}; {fix}")
+          PY
+          rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
+          # Writes the trusted ignore file, the configuration when gitleaks
+          # needs one named, and each file that configuration extends.
+          python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
+          import json
+          import os
+          import re
+          import signal
+          import subprocess
+          import sys
+          import time
+          import tomllib
+
+          sha, workspace, trusted = sys.argv[1:]
+          os.environ["GIT_LITERAL_PATHSPECS"] = "1"
+
+
+          def refuse(message):
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          def in_checkout(path):
+              return any(p == workspace or p.startswith(workspace + os.sep)
+                         for p in (os.path.normpath(path), os.path.realpath(path)))
+
+
+          def blob(path):
+              """The trusted commit's regular file at a repository path, or None."""
+              listing = subprocess.run(["git", "ls-tree", "-z", sha, "--", path],
+                                       capture_output=True, check=True).stdout
+              entry = listing.split(b"\0")[0]
+              if not entry:
+                  return None
+              mode, kind, oid = entry.split(b"\t")[0].decode().split(" ")
+              if kind != "blob" or mode not in ("100644", "100755"):
+                  refuse(f"{path} on trusted commit {sha} is not a regular file; commit the file itself")
+              return subprocess.run(["git", "cat-file", "blob", oid],
+                                    capture_output=True, check=True).stdout
+
+
+          # Missing policy/key keeps the older workflow's trusted behavior.
+          # A malformed trusted value fails closed, never defaults to an allow.
+          class PolicyObject(dict):
+              def __init__(self, pairs):
+                  super().__init__(pairs)
+                  self.has_duplicates = len(pairs) != len(self)
+
+
+          policy = blob(".codeflow/policy.json")
+          try:
+              data = json.loads(policy, object_pairs_hook=PolicyObject) if policy is not None else PolicyObject([])
+              git = data.get("git", PolicyObject([]))
+              # The typed loader rejects duplicate root and Git fields too.
+              if data.has_duplicates or git.has_duplicates:
+                  raise ValueError("duplicate policy key")
+              inline_allow = git.get("secret_scan_inline_allow", "trusted")
+          except (ValueError, AttributeError):
+              refuse("cannot read git.secret_scan_inline_allow from the trusted policy; commit a JSON object with trusted or never")
+          if inline_allow not in ("trusted", "never"):
+              refuse("git.secret_scan_inline_allow on the trusted commit must be trusted or never")
+          with open(os.path.join(trusted, "inline-allow"), "w", encoding="utf-8") as handle:
+              handle.write(inline_allow)
+
+
+          def in_repository(path, owner):
+              rel = os.path.normpath(path)
+              if rel == ".." or rel.startswith("../"):
+                  refuse(f"{owner} names {path}, outside the repository; use an absolute path")
+              data = blob(rel)
+              if data is None:
+                  refuse(f"{owner} names {rel}, which trusted commit {sha} does not hold; commit it there first")
+              return rel, data
+
+
+          def extended(text):
+              # Keys match without case, as gitleaks reads them. A file that
+              # does not parse is left to gitleaks, which fails to load it.
+              for parse in (tomllib.loads, json.loads):
+                  try:
+                      data = parse(text)
+                      break
+                  except ValueError:
+                      continue
+              else:
+                  return None
+              if not isinstance(data, dict):
+                  return None
+              extend = next((v for k, v in data.items() if k.lower() == "extend"), None)
+              if not isinstance(extend, dict):
+                  return None
+              path = next((v for k, v in extend.items() if k.lower() == "path"), None)
+              return path if isinstance(path, str) and path else None
+
+
+          def walk(text, owner):
+              seen = set()
+              while (path := extended(text)) is not None:
+                  if os.path.isabs(path):
+                      if in_checkout(path):
+                          refuse(f"{owner} extends {path}, a file in the checkout that the pull request can change; "
+                                 "name it relative to the repository root")
+                      if path in seen or not os.path.isfile(path):
+                          return
+                      seen.add(path)
+                      with open(path, encoding="utf-8", errors="replace") as handle:
+                          owner, text = path, handle.read()
+                      continue
+                  rel, data = in_repository(path, owner)
+                  if rel in seen:
+                      return
+                  seen.add(rel)
+                  target = os.path.join(trusted, "tree", rel)
+                  os.makedirs(os.path.dirname(target), exist_ok=True)
+                  with open(target, "wb") as handle:
+                      handle.write(data)
+                  owner, text = rel, data.decode("utf-8", "replace")
+
+
+          def use(data, owner):
+              with open(os.path.join(trusted, "config.toml"), "wb") as handle:
+                  handle.write(data)
+              walk(data.decode("utf-8", "replace"), owner)
+
+
+          def diagnose_fingerprints(ignore):
+              # Advisory only: never rewrite or alias an exemption. Bound the
+              # input, candidates and total Git time independently of the scan.
+              deadline = time.monotonic() + 5
+              cache = {}
+              candidates = 0
+              clipped = len(ignore) > 65536
+              lines = ignore[:65536].splitlines(keepends=True)
+              if clipped and lines and not lines[-1].endswith(b"\n"):
+                  lines.pop()
+
+              def warning(message):
+                  message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::warning::{message}")
+
+              def query(*args):
+                  if args not in cache:
+                      remaining = deadline - time.monotonic()
+                      if remaining <= 0:
+                          raise TimeoutError
+                      with subprocess.Popen(["git", *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                            start_new_session=True) as child:
+                          try:
+                              output, _ = child.communicate(timeout=remaining)
+                          except subprocess.TimeoutExpired:
+                              # A helper's descendants must not keep a pipe or
+                              # the diagnostic alive after its time budget.
+                              try:
+                                  os.killpg(child.pid, signal.SIGKILL)
+                              except ProcessLookupError:
+                                  pass
+                              child.stdout.close()
+                              child.wait()
+                              raise
+                      cache[args] = subprocess.CompletedProcess(args, child.returncode, output)
+                  return cache[args]
+
+              def exists(commit, path):
+                  result = query("ls-tree", "-z", "--full-tree", commit, "--", path)
+                  if result.returncode:
+                      raise ValueError
+                  if not result.stdout:
+                      return False
+                  if result.stdout.split(b"\t", 1)[-1] != path.encode("utf-8") + b"\0":
+                      raise ValueError
+                  return True
+
+              try:
+                  for number, raw in enumerate(lines, 1):
+                      if time.monotonic() >= deadline:
+                          raise TimeoutError
+                      try:
+                          fingerprint = raw.decode("utf-8").strip()
+                      except UnicodeDecodeError:
+                          warning(f".gitleaksignore line {number} is not UTF-8; review it manually")
+                          continue
+                      parts = fingerprint.split(":", 1)
+                      if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", parts[0]):
+                          continue
+                      commit, rest = parts
+                      fields = rest.rsplit(":", 2)
+                      if len(fields) != 3:
+                          continue
+                      path, rule, line = fields
+                      if not path.startswith("b/") or path.endswith("/") or not rule or not re.fullmatch(r"[1-9][0-9]*", line):
+                          continue
+                      if candidates == 50:
+                          clipped = True
+                          break
+                      candidates += 1
+                      result = query("cat-file", "-t", commit)
+                      if result.returncode or result.stdout.strip() != b"commit":
+                          warning(f".gitleaksignore line {number}: unreadable commit {commit}; fetch or investigate it before migration")
+                          continue
+                      try:
+                          if exists(commit, path):
+                              warning(f".gitleaksignore line {number}: existing b/ path for {fingerprint}; keep this fingerprint unchanged")
+                          elif exists(commit, path[2:]):
+                              result = query("rev-list", "--parents", "-n", "1", commit, "--")
+                              parents = result.stdout.split()
+                              if result.returncode or not parents or parents[0] != commit.encode("ascii"):
+                                  raise ValueError
+                              count = len(parents) - 1
+                              if count != 2:
+                                  kind = "one-parent commit" if count == 1 else f"commit with {count} parents"
+                                  warning(f".gitleaksignore line {number}: {kind} {commit}; no replacement inferred for {fingerprint}")
+                                  continue
+                              replacement = f"{commit}:{path[2:]}:{rule}:{line}"
+                              warning(f".gitleaksignore line {number}: legacy remerge fingerprint {fingerprint}; review and replace with {replacement}")
+                          else:
+                              warning(f".gitleaksignore line {number}: neither path exists for {fingerprint}; no replacement inferred")
+                      except ValueError:
+                          warning(f".gitleaksignore line {number}: cannot inspect commit or paths for {fingerprint}; no replacement inferred")
+              except (TimeoutError, subprocess.TimeoutExpired):
+                  clipped = True
+              if clipped:
+                  warning("legacy fingerprint diagnostics stopped at the review limit; review remaining entries manually")
+
+
+          ignore = blob(".gitleaksignore")
+          if ignore is not None:
+              with open(os.path.join(trusted, "ignore"), "wb") as handle:
+                  handle.write(ignore)
+              diagnose_fingerprints(ignore)
+          named = os.environ.get("GITLEAKS_CONFIG", "")
+          if named and os.path.isabs(named) and not in_checkout(named):
+              if os.path.isfile(named):
+                  with open(named, encoding="utf-8", errors="replace") as handle:
+                      walk(handle.read(), named)
+          elif named:
+              rel, data = in_repository(os.path.relpath(os.path.join(workspace, named), workspace), "GITLEAKS_CONFIG")
+              use(data, rel)
+          elif os.environ.get("GITLEAKS_CONFIG_TOML", ""):
+              walk(os.environ["GITLEAKS_CONFIG_TOML"], "GITLEAKS_CONFIG_TOML")
+          elif (toml := blob(".gitleaks.toml")) is not None:
+              beside = blob(".gitleaks.json")
+              if beside is None:
+                  use(toml, ".gitleaks.toml")
+              else:
+                  use(beside, ".gitleaks.json")
+          PY
+          set --
+          if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
+          inline_allow=$(cat "$trusted/inline-allow")
+          if [ "$scan" != "$head" ]; then
+            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan" --); then
+              echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
+            fi
+            changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
+            if [ "$changed" -eq 0 ]; then
+              echo "No file changes in ${scope}; nothing to scan."
+              exit 0
+            fi
+          fi
+          # The report stays in the runner's temp directory; the log names
+          # each finding's rule, file, line and commit, never its value.
+          report="$RUNNER_TEMP/gitleaks-report.json"
+          log="$RUNNER_TEMP/gitleaks.log"
+          rc=0
+          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
+            --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
+            --no-banner --log-level debug --exit-code 0 \
+            --report-format json --report-path "$report") 2>"$log" || rc=$?
+          # gitleaks exits 0 when git fails, even part way through, and logs
+          # git's failure only at debug level. Debug lines can quote decoded
+          # file content, so they stay in the temp file; the job log gets
+          # info and above. Each check reads only gitleaks' own message,
+          # which follows the time and level, so scanned text never matches.
+          plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
+          printf '%s\n' "$plain" | grep -E '^[^ ]+ (INF|WRN|ERR|FTL) ' >&2 || true
+          scanned=$(printf '%s\n' "$plain" | sed -n 's/^[^ ]* INF \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
+          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' \
+            || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
+            echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
+            exit 1
+          fi
+          # The report holds no line text, so an inline gitleaks:allow is read
+          # from the commit that holds the finding, and only a commit the
+          # trusted commit already holds counts, when its policy permits it.
+          held='[]'
+          if [ "$inline_allow" = trusted ]; then
+          held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          report, sha = sys.argv[1:]
+          held = []
+          with open(report, encoding="utf-8") as handle:
+              findings = json.load(handle)
+          for finding in findings:
+              commit = finding.get("Commit") or ""
+              if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
+                  continue
+              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha, "--"],
+                                        capture_output=True)
+              if ancestor.returncode:
+                  continue
+              shown = subprocess.run(["git", "cat-file", "blob", f"{commit}:{finding['File']}"],
+                                     capture_output=True)
+              start = max(finding["StartLine"], 1)
+              lines = shown.stdout.split(b"\n")[start - 1:max(finding["EndLine"], start)]
+              if shown.returncode == 0 and any(b"gitleaks:allow" in line for line in lines):
+                  held.append(finding["Fingerprint"])
+          print(json.dumps(held))
+          PY
+          )
+          fi
+          if [ "$held" != "[]" ]; then
+            echo "Allowed $(printf '%s' "$held" | jq length) finding(s) marked gitleaks:allow on commits the trusted commit holds."
+          fi
+          findings="$RUNNER_TEMP/gitleaks-findings.json"
+          jq --argjson held "$held" '[.[] | select(.Fingerprint as $f | any($held[]; . == $f) | not)]' "$report" >"$findings"
+          # The text is split so this file does not hold the text it allows.
+          known='select(.RuleID == "generic-api-key" and .Secret == ("vulnerable/" + "malicious") and .Match == ("authz gaps, vulnerable/" + "malicious ") and (.File == ".claude/workflows/pipeline.workflow.js" or .File == ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js"))'
+          allowed=$(jq "[.[] | $known] | length" "$findings")
+          if [ "$allowed" -gt 0 ]; then
+            echo "Allowed ${allowed} finding(s) of the CodeFlow 3.0.0 pipeline prose \"vulnerable/malicious\"."
+          fi
+          leaks=$(jq "[.[] | select(([.] | map($known) | length) == 0)]" "$findings")
+          count=$(printf '%s' "$leaks" | jq length)
+          if [ "$count" -gt 0 ]; then
+            # Workflow-command properties escape %, CR, LF, : and , in names.
+            printf '%s' "$leaks" | jq -r '.[] | "::error file=\(.File | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A") | gsub(":"; "%3A") | gsub(","; "%2C")),line=\(.StartLine)::gitleaks \(.RuleID) in commit \(.Commit[0:12])"'
+            echo "gitleaks found ${count} leak(s)."
+            exit 1
+          fi
+          echo "No leaks found."
+
+  gitleaks-canary:
+    name: gitleaks allowlist canary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: gitleaks allowlist canary
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          sh scripts/check-gitleaks-allowlist.sh "$RUNNER_TEMP/gitleaks"
+
+  security-review:
+    name: security review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # Dependency / supply-chain audit — the deterministic floor the
+      # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
+      # A03:2025). Pinned
+      # osv-scanner reads every lockfile ecosystem (here Cargo.lock), so it is the
+      # stack-agnostic floor. Enforcement reads two .codeflow/policy.json keys:
+      # `git.security_review` (umbrella gate for the whole security-review job) and
+      # `git.dep_audit` (SCA-specific sub-gate). The advisory blocks when EITHER is
+      # `block`, reports when either is `warn` (the default), and is skipped only
+      # when BOTH are `off`. Record justified suppressions in an osv-scanner.toml
+      # beside the lockfile they cover (with no --config, as here, osv-scanner
+      # reads no other name and no parent directory) so a transitive advisory
+      # in unchanged code cannot block a PR.
+      # Both keys are read from the trusted commit: the pull request's base,
+      # or the pushed commit on a push, so a pull request cannot lower the
+      # level that judges it. A missing policy file, a missing or unreadable
+      # key, or a value other than block, warn or off fails the job;
+      # add a missing key by hand: `codeflow update` keeps a deletion.
+      # Suppressions also come from the trusted commit: the step replaces every
+      # osv-scanner.toml in the checkout with the trusted commit's copies, so a
+      # new suppression takes effect once its own pull request lands.
+      # osv-scanner runs with --no-ignore, so a .gitignore the change edits
+      # cannot hide a lockfile from the audit.
+      #
+      # A project that records audit exceptions in its own reviewed register
+      # commits .codeflow/audit-exceptions.sh. When the trusted commit holds
+      # it, the scan reports JSON and, if it finds advisories, the step lists
+      # them in a file, exports the trusted commit's files to a folder outside
+      # the checkout and runs the hook there with bash. The hook prints the
+      # findings it accepts, one per line, unchanged; the step passes only when
+      # every finding is accepted, and a hook that fails or prints nothing
+      # accepts nothing. The hook and the files it reads are the trusted
+      # commit's, so a pull request cannot accept its own findings.
+      - name: dependency audit (osv-scanner)
+        env:
+          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -u
+          case ${TRUSTED_SHA:-} in
+            '') echo "::error::no trusted commit to read the security policy from; failing closed"; exit 1 ;;
+          esac
+          if ! policy=$(git show "${TRUSTED_SHA}:.codeflow/policy.json" 2>/dev/null); then
+            echo "::error::cannot read .codeflow/policy.json at the trusted commit ${TRUSTED_SHA}; the security review fails closed until it is committed there"
+            exit 1
+          fi
+          sr=$(printf '%s' "$policy" | jq -er '.git.security_review' 2>/dev/null) || sr=
+          da=$(printf '%s' "$policy" | jq -er '.git.dep_audit' 2>/dev/null) || da=
+          for key in security_review dep_audit; do
+            if [ "$key" = security_review ]; then value=$sr; else value=$da; fi
+            case $value in
+              block|warn|off) ;;
+              *) echo "::error::git.${key} in .codeflow/policy.json at the trusted commit ${TRUSTED_SHA} is missing or not block, warn or off; the security review fails closed. Set it to block, warn or off and land that before this workflow; \`codeflow update\` does not restore a deleted key."
+                 exit 1 ;;
+            esac
+          done
+          echo "Security policy from trusted commit ${TRUSTED_SHA}: security_review=${sr}, dep_audit=${da}."
+          python3 -I -c '
+          import os, subprocess, sys
+          sha = sys.argv[1]
+          name = b"osv-scanner.toml"
+          def refuse(message):
+              print(f"::error::{message}; failing closed")
+              sys.exit(1)
+          # Remove every suppression file the checkout holds, links included.
+          for top, dirs, files in os.walk(b".", followlinks=False):
+              dirs[:] = [d for d in dirs if d != b".git"]
+              for entry in files:
+                  if entry == name:
+                      os.unlink(os.path.join(top, entry))
+          listing = subprocess.run(["git", "ls-tree", "-r", "-z", "--full-tree", sha],
+                                   check=True, capture_output=True).stdout
+          for record in filter(None, listing.split(b"\0")):
+              meta, path = record.split(b"\t", 1)
+              mode, _, blob = meta.split()
+              if os.path.basename(path) != name:
+                  continue
+              shown = path.decode("utf-8", "replace")
+              if mode not in (b"100644", b"100755"):
+                  refuse(f"{shown} on trusted commit {sha} is not a regular file")
+              where = b"."
+              for part in path.split(b"/")[:-1]:
+                  where = os.path.join(where, part)
+                  if os.path.islink(where) or (os.path.lexists(where) and not os.path.isdir(where)):
+                      refuse(f"the change replaces a folder holding {shown} with a link or a file")
+                  os.makedirs(where, exist_ok=True)
+              data = subprocess.run(["git", "cat-file", "blob", blob.decode()],
+                                    check=True, capture_output=True).stdout
+              fd = os.open(os.path.join(b".", path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+              with os.fdopen(fd, "wb") as out:
+                  out.write(data)
+              print(f"osv-scanner suppressions from trusted commit: {shown}")
+          ' "$TRUSTED_SHA"
+          # The project exception hook counts only when the trusted commit
+          # holds it as a regular file.
+          hook=.codeflow/audit-exceptions.sh
+          if ! entry=$(git ls-tree "$TRUSTED_SHA" -- "$hook"); then
+            echo "::error::cannot read the tree of the trusted commit ${TRUSTED_SHA}; failing closed"
+            exit 1
+          fi
+          hook_mode=${entry%% *}
+          case $hook_mode in
+            '') ;;
+            100644|100755) ;;
+            *) echo "::error::${hook} on trusted commit ${TRUSTED_SHA} is not a regular file; failing closed"
+               exit 1 ;;
+          esac
+          if [ -z "$hook_mode" ] && { [ -e "$hook" ] || [ -L "$hook" ]; }; then
+            echo "::notice::this change holds ${hook}, but the trusted commit does not; it takes effect once the change lands."
+          fi
+          if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
+            level=block
+          elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then
+            echo "security_review=off and dep_audit=off — skipping."; exit 0
+          else
+            level=warn
+          fi
+
+          OSV_VERSION=2.4.0
+          OSV_SHA256=15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0
+          # Download outside the checkout, so a link the change commits at the
+          # download path cannot redirect the write.
+          tool=$(mktemp -d "${RUNNER_TEMP:?}/osv-tool.XXXXXX")
+          trap 'rm -rf "$tool" || true' EXIT
+          curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o "$tool/osv-scanner"
+          printf '%s  %s\n' "$OSV_SHA256" "$tool/osv-scanner" | sha256sum -c -
+          chmod +x "$tool/osv-scanner"
+
+          # With the project exception hook the scan reports JSON on stdout and
+          # its log on stderr; without it the run is unchanged. osv-scanner
+          # exits 1 for advisories even when it logged an error, such as a
+          # lockfile it could not read, and it sends every log level to stderr
+          # when the format is JSON. --verbosity error keeps only the errors,
+          # so any text on stderr means the scan may be incomplete and the hook
+          # is not run.
+          set +e
+          if [ -n "$hook_mode" ]; then
+            out=$("$tool/osv-scanner" scan -r --no-ignore --verbosity error --format json . 2>"$tool/scan.err"); rc=$?
+            diag=$(cat "$tool/scan.err")
+          else
+            out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
+            diag=$out
+          fi
+          set -e
+          printf '%s\n' "$diag"
+
+          # The project exception hook judges the findings of a scan that
+          # found advisories (exit 1) and nothing else. It runs from the
+          # trusted commit's files, outside the checkout.
+          accepted_all=
+          if [ "$rc" -eq 1 ] && [ -n "$hook_mode" ]; then
+            findings="$tool/findings.tsv"
+            accepted="$tool/accepted.tsv"
+            valid="$tool/valid.tsv"
+            tree="$tool/trusted-tree"
+            : >"$findings"; : >"$accepted"; : >"$valid"
+            # One line per finding: id, package, version, ecosystem, lockfile
+            # and the advisory's aliases, tab separated. @tsv escapes tabs and
+            # line breaks, so a name the change chooses stays on its line.
+            if printf '%s' "$out" | jq -r --arg here "$PWD/" '.results[]? | .source.path as $s | .packages[]? | .package as $p | .vulnerabilities[]? | [.id, $p.name, $p.version, $p.ecosystem, ($s | ltrimstr($here)), ((.aliases // []) | join(","))] | @tsv' >"$tool/findings.raw"; then
+              LC_ALL=C sort -u "$tool/findings.raw" >"$findings"
+            fi
+            if [ -s "$tool/scan.err" ]; then
+              echo "::error::osv-scanner logged errors, so its scan may be incomplete; no project exception applies"
+            elif [ ! -s "$findings" ]; then
+              echo "::error::osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies"
+            elif ! { mkdir "$tree" && git archive -o "$tool/trusted.tar" "$TRUSTED_SHA" && tar -xf "$tool/trusted.tar" -C "$tree" && [ -f "$tree/$hook" ]; }; then
+              echo "::error::cannot export ${hook} and the project files from the trusted commit ${TRUSTED_SHA}; no project exception applies"
+            else
+              hook_rc=0
+              (cd "$tree" && CODEFLOW_AUDIT_FINDINGS="$findings" CODEFLOW_TRUSTED_SHA="$TRUSTED_SHA" CODEFLOW_TRUSTED_ROOT="$tree" bash "$hook" </dev/null) >"$accepted" || hook_rc=$?
+              if [ "$hook_rc" -ne 0 ]; then
+                echo "::error::the project exception hook ${hook} failed (exit ${hook_rc}); it accepts nothing"
+                : >"$accepted"
+              fi
+              grep -Fxf "$findings" "$accepted" >"$valid" || true
+              sed 's/^/accepted by the project exception hook: /' "$valid"
+              grep -vFxf "$valid" "$findings" >"$tool/remaining.tsv" || true
+              sed 's/^/not accepted: /' "$tool/remaining.tsv"
+              if [ ! -s "$tool/remaining.tsv" ]; then
+                accepted_all=1
+              fi
+            fi
+          fi
+
+          # The verdict comes from osv-scanner's exit status (0 no advisories,
+          # 1 advisories, 127 error, 128 no package sources), never from its
+          # output, which repeats file paths the change chooses. A 128 that
+          # also reports a file it could not extract is a scan error.
+          if [ "$rc" -eq 0 ]; then
+            echo "No known advisories."
+          elif [ "$rc" -eq 128 ] && ! printf '%s\n%s' "$diag" "$out" | grep -qi 'error during extraction'; then
+            echo "No scannable manifests found — nothing to audit."
+          elif [ -n "$accepted_all" ]; then
+            echo "Every dependency advisory is accepted by the project exception hook ${hook}."
+          elif [ "$level" = "block" ]; then
+            if [ -n "$hook_mode" ]; then
+              advice="accept a justified finding through the project exception hook ${hook}"
+            else
+              advice="record a justified suppression in an osv-scanner.toml beside the lockfile"
+            fi
+            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or ${advice}."
+            exit 1
+          else
+            echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
+          fi
