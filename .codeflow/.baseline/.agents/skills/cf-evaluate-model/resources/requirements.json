@@ -1139,9 +1139,9 @@
           "markers": [
             "\"effort\": \"high\"",
             "\"xhigh_triggers\"",
-            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval",
+            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at its own effort and keeps approval",
             "Claude-side internal routing belongs to the Claude primary",
-            "A high primary retains orchestration",
+            "A primary retains orchestration at its seat's effort",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
           ]
         }
