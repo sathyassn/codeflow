@@ -373,23 +373,75 @@ pub fn remote_name_shown(root: &Path, name: &str) -> bool {
 /// [`remote_name_shown`] allows it, else `<remote N, name withheld>`, N
 /// being its place among the configured remotes in name order, the order
 /// `git remote` lists them. A recovery step for a withheld remote never
-/// pastes its name: the operator renames that remote with an editor.
+/// pastes its name ([`withheld_remote_steps`]).
 #[must_use]
 pub fn shown_remote(root: &Path, name: &str) -> String {
     if remote_name_shown(root, name) {
         return name.to_string();
     }
-    let place = git2::Repository::discover(root)
-        .ok()
-        .and_then(|repo| {
-            let remotes = repo.remotes().ok()?;
-            let mut names: Vec<&[u8]> = remotes.iter_bytes().collect();
-            names.sort_unstable();
-            names.dedup();
-            names.iter().position(|each| *each == name.as_bytes())
-        })
-        .map_or_else(String::new, |at| format!(" {}", at + 1));
+    let place = remote_place(root, name).map_or_else(String::new, |at| format!(" {at}"));
     format!("<remote{place}, name withheld>")
+}
+
+/// The names of the configured remotes of the repository at `root`, in
+/// byte order without repeats, as `git remote` lists them: the subsection
+/// of every `remote.<name>.<variable>` setting, so a remote with no URL
+/// counts too. `None` when the configuration cannot be read.
+fn configured_remote_names(root: &Path) -> Option<Vec<Vec<u8>>> {
+    let repo = git2::Repository::discover(root).ok()?;
+    let config = repo.config().ok()?;
+    let mut entries = config.entries(Some("^remote\\.")).ok()?;
+    let mut names = Vec::new();
+    while let Some(entry) = entries.next() {
+        let entry = entry.ok()?;
+        let Some(rest) = entry.name_bytes().strip_prefix(b"remote.") else {
+            continue;
+        };
+        if let Some(last) = rest.iter().rposition(|byte| *byte == b'.') {
+            if last > 0 {
+                names.push(rest[..last].to_vec());
+            }
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    Some(names)
+}
+
+/// The 1-based line of `git remote` that names the remote `name`, as of
+/// this read; `None` when it is not configured or the configuration cannot
+/// be read.
+fn remote_place(root: &Path, name: &str) -> Option<usize> {
+    configured_remote_names(root)?
+        .iter()
+        .position(|each| each == name.as_bytes())
+        .map(|at| at + 1)
+}
+
+/// The steps for a remote [`shown_remote`] withholds (TSK-416 review round
+/// 8): each of `commands`, which hold `<that name>` where the operator
+/// types the remote's name, found by its line in `git remote`. Naming the
+/// remote reaches it even when `remote.<name>.skipFetchAll` keeps it out
+/// of `git fetch --all`. The line is a place as of this run, so the step
+/// says to recheck it.
+#[must_use]
+pub fn withheld_remote_steps(root: &Path, name: &str, commands: &[&str]) -> String {
+    let runs = commands
+        .iter()
+        .map(|command| format!("`{command}`"))
+        .collect::<Vec<_>>()
+        .join(" then ");
+    let find = remote_place(root, name).map_or_else(
+        || "that remote's name as `git remote` lists it".to_string(),
+        |at| {
+            format!(
+                "the name on line {at} of `git remote`, which lists one remote name per line in name order; line {at} is its place as of this run, so recheck it, since adding or removing a remote moves it"
+            )
+        },
+    );
+    format!(
+        "the operator runs {runs}, typing for <that name> {find}; or {WITHHELD_REMOTE_STEP}, then runs the same with the new name"
+    )
 }
 
 /// A ref name as a message shows it, with the name of any configured remote
@@ -418,24 +470,19 @@ fn remote_ref(root: &Path, reference: &str, escape: fn(&str) -> String) -> Strin
     let Some(rest) = reference.strip_prefix("refs/remotes/") else {
         return escape(reference);
     };
-    let Some(remotes) = git2::Repository::discover(root)
-        .ok()
-        .and_then(|repo| repo.remotes().ok())
-    else {
+    let Some(remotes) = configured_remote_names(root) else {
         return "refs/remotes/<remote, name withheld>/<ref>".into();
     };
     // Compared as bytes: the prefix ends at `/` or at the end of `rest`,
     // so it is text whenever it matches.
     let configured = remotes
-        .iter_bytes()
+        .iter()
         .filter(|name| {
-            !name.is_empty()
-                && rest
-                    .as_bytes()
-                    .strip_prefix(*name)
-                    .is_some_and(|tail| tail.is_empty() || tail.starts_with(b"/"))
+            rest.as_bytes()
+                .strip_prefix(name.as_slice())
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with(b"/"))
         })
-        .map(<[u8]>::len)
+        .map(Vec::len)
         .max();
     let name = configured.map_or_else(
         || rest.split('/').next().unwrap_or(rest),
@@ -467,9 +514,19 @@ pub fn without_remote_names(root: &Path, text: &str) -> String {
 
 /// The configured remotes of one repository whose names messages withhold,
 /// read once for a report that shows many names: each raw name, its
-/// escaped form, and the form [`shown_remote`] gives it.
-#[derive(Debug, Default)]
-pub struct WithheldRemotes(Vec<(String, String, String)>);
+/// escaped form, and the form [`shown_remote`] gives it. When the remotes
+/// cannot be read the state is unavailable, and every text is withheld,
+/// since any remote name could be in it (TSK-416 review round 8). Text
+/// read while the remotes were readable is scrubbed with the names read
+/// then, so a configuration that turns unreadable later withholds nothing
+/// less.
+#[derive(Debug)]
+pub struct WithheldRemotes(Option<Vec<(String, String, String)>>);
+
+/// What [`WithheldRemotes::scrub`] gives for any text when the configured
+/// remotes could not be read.
+pub const UNREAD_REMOTES_TEXT: &str =
+    "<withheld, since the configured remote names could not be read>";
 
 impl WithheldRemotes {
     /// Read the remotes of the repository at `root`. A name that is not
@@ -477,18 +534,14 @@ impl WithheldRemotes {
     /// form is replaced.
     #[must_use]
     pub fn read(root: &Path) -> Self {
-        let Some(remotes) = git2::Repository::discover(root)
-            .ok()
-            .and_then(|repo| repo.remotes().ok())
-        else {
-            return Self::default();
+        let Some(remotes) = configured_remote_names(root) else {
+            return Self(None);
         };
         let mut names: Vec<(String, String, String)> = remotes
-            .iter_bytes()
+            .iter()
             .filter_map(|bytes| {
                 let escaped = crate::git::GitName::from_bytes(bytes).display().to_string();
                 match std::str::from_utf8(bytes) {
-                    Ok("") => None,
                     Ok(name) if remote_name_shown(root, name) => None,
                     Ok(name) => Some((name.to_string(), escaped, shown_remote(root, name))),
                     Err(_) => Some((escaped.clone(), escaped, "<remote, name withheld>".into())),
@@ -497,13 +550,17 @@ impl WithheldRemotes {
             .collect();
         // The longest first, so a name that holds another is replaced whole.
         names.sort_by_key(|(name, _, _)| std::cmp::Reverse(name.len()));
-        Self(names)
+        Self(Some(names))
     }
 
-    /// `text` with each withheld name, raw or escaped, replaced.
+    /// `text` with each withheld name, raw or escaped, replaced; when the
+    /// remotes could not be read, [`UNREAD_REMOTES_TEXT`].
     #[must_use]
     pub fn scrub(&self, text: &str) -> String {
-        self.0
+        let Some(names) = &self.0 else {
+            return UNREAD_REMOTES_TEXT.to_string();
+        };
+        names
             .iter()
             .fold(text.to_string(), |text, (raw, escaped, shown)| {
                 text.replace(raw.as_str(), shown)
@@ -524,10 +581,8 @@ impl WithheldRemotes {
 /// credential parts redacted ([`crate::git::remote_query::display_url`]).
 #[must_use]
 pub fn shown_remote_or_url(root: &Path, remote: &str) -> String {
-    let configured = git2::Repository::discover(root)
-        .ok()
-        .and_then(|repo| repo.remotes().ok())
-        .is_none_or(|names| names.iter_bytes().any(|name| name == remote.as_bytes()));
+    let configured = configured_remote_names(root)
+        .is_none_or(|names| names.iter().any(|name| name == remote.as_bytes()));
     if configured {
         shown_remote(root, remote)
     } else {
@@ -925,5 +980,76 @@ mod tests {
             shown_ref(outside.path(), "refs/remotes/origin/main"),
             "refs/remotes/<remote, name withheld>/<ref>"
         );
+    }
+
+    /// A repository whose configuration ends with `extra`.
+    fn configured(extra: &str) -> tempfile::TempDir {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap()
+            .write_all(extra.as_bytes())
+            .unwrap();
+        dir
+    }
+
+    /// TSK-416 review round 8, finding 1: a credential part shorter than
+    /// the six characters a diagnostic redacts still withholds a plain
+    /// remote name that holds it. The password is synthetic.
+    #[test]
+    fn a_remote_name_holding_a_short_credential_is_withheld() {
+        let dir = configured(
+            "[remote \"fork\"]\n\turl = https://user:abc12@host.invalid/x.git\n\
+             [remote \"fork-abc12\"]\n\turl = file:///nonexistent/f.git\n\
+             [remote \"origin\"]\n\turl = file:///nonexistent/o.git\n",
+        );
+        let root = dir.path();
+        assert!(plain_remote_name("fork-abc12"));
+        assert!(!remote_name_shown(root, "fork-abc12"));
+        assert!(remote_name_shown(root, "fork"));
+        assert!(remote_name_shown(root, "origin"));
+        // Name order, as `git remote` lists them: fork, fork-abc12, origin.
+        assert_eq!(
+            shown_remote(root, "fork-abc12"),
+            "<remote 2, name withheld>"
+        );
+        for text in [
+            shown_ref(root, "refs/remotes/fork-abc12/main"),
+            shown_tracking(root, "fork-abc12/main"),
+            without_remote_names(root, "fetch fork-abc12 failed"),
+        ] {
+            assert!(!text.contains("abc12"), "{text}");
+        }
+    }
+
+    /// TSK-416 review round 8, finding 3: remote names read before the
+    /// configuration turns unreadable still withhold a name in text read
+    /// with them, and a read that fails withholds every name instead of
+    /// replacing none. The credential is synthetic.
+    #[test]
+    fn withheld_remotes_stay_closed_when_the_configuration_turns_unreadable() {
+        let name = "user-OPAQUECANARY@host.invalid";
+        let dir = configured(&format!(
+            "[remote \"{name}\"]\n\turl = file:///nonexistent/u.git\n"
+        ));
+        let root = dir.path();
+        let acquired = WithheldRemotes::read(root);
+        let text = format!("cannot read refs/remotes/{name}/main from {name}");
+        std::fs::write(root.join(".git").join("config"), "[remote \"broken\n").unwrap();
+        let later = WithheldRemotes::read(root);
+        for scrubbed in [
+            acquired.scrub(&text),
+            later.scrub(&text),
+            without_remote_names(root, &text),
+            shown_ref(root, &format!("refs/remotes/{name}/main")),
+        ] {
+            assert!(!scrubbed.contains("OPAQUECANARY"), "{scrubbed}");
+            assert!(!scrubbed.contains("host.invalid"), "{scrubbed}");
+        }
+        assert!(acquired.scrub(&text).contains("<remote 1, name withheld>"));
+        assert!(!remote_name_shown(root, "origin"));
     }
 }

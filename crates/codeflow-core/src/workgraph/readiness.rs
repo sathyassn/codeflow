@@ -935,6 +935,7 @@ fn read_tips(
     targets: &mut Targets<'_>,
     declared: BTreeSet<String>,
     snapshots: &mut Vec<Snapshot>,
+    withheld: &crate::security::git::WithheldRemotes,
 ) -> Result<Vec<Tip>, String> {
     let mut tips: Vec<Tip> = Vec::new();
     let mut parsed: BTreeMap<git2::Oid, Rc<BTreeMap<String, Record>>> = BTreeMap::new();
@@ -966,8 +967,8 @@ fn read_tips(
             tips.push((target.clone(), reference.clone(), oid, records));
         }
         // A snapshot's ref and problem can name a fork's tracking ref, its
-        // remote's name shown only when plain (TSK-416 review round 7).
-        let withheld = crate::security::git::WithheldRemotes::read(repo.commondir());
+        // remote's name shown only when plain (TSK-416 review round 7),
+        // with the names the backlog read before any ref (round 8).
         snapshots.push(Snapshot {
             target,
             reference: reference
@@ -1058,6 +1059,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
         &mut resolved,
         declared_targets(repo_root)?,
         &mut out.snapshots,
+        &withheld,
     )?;
     let mut resolve = |declared: &str| resolved.resolve(declared);
 

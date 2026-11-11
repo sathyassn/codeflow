@@ -331,16 +331,21 @@ fn withheld(text: &str) -> String {
     )
 }
 
-/// Whether `text` is or holds a URL or credential part the configuration
-/// of the repository at `root` carries, as [`relay_diagnostic`] finds them:
-/// equal to one, or holding one long enough to replace safely. `None` when
-/// that inventory cannot be read, which a caller treats as flagged.
+/// Whether `text` holds a URL or credential part the configuration of the
+/// repository at `root` carries, as [`relay_diagnostic`] finds them, of any
+/// length. `None` when that inventory cannot be read, which a caller treats
+/// as flagged. Only a remote name is judged here, and a name is withheld
+/// rather than redacted, so a short part flags it too (TSK-416 review
+/// round 8): an ordinary name that holds it is withheld, which costs a less
+/// helpful message, never a leak. [`relay_diagnostic`] keeps its own
+/// [`SHORTEST_REPLACED`] rule.
 pub(crate) fn holds_configured_credential(root: &Path, text: &str) -> Option<bool> {
     let (urls, parts) = configured_credentials(root)?;
-    Some(urls.iter().chain(&parts).any(|item| {
-        text == item.as_str()
-            || (item.chars().count() >= SHORTEST_REPLACED && text.contains(item.as_str()))
-    }))
+    Some(
+        urls.iter()
+            .chain(&parts)
+            .any(|item| text.contains(item.as_str())),
+    )
 }
 
 /// The URLs this repository's configuration names for its remotes, longest

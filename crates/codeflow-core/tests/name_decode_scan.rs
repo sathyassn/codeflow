@@ -2889,14 +2889,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "display",
     ),
     // TSK-416 review round 7: a remote name is shown only when it is plain.
-    // A repository that cannot be read leaves no remote list, so a name and
-    // a tracking ref are withheld (`shown_remote`, `remote_ref`) or the
-    // text keeps no configured name to replace (`WithheldRemotes::read`,
-    // `shown_remote_or_url`); a name that is not UTF-8 is withheld whole.
-    // Each result is only the text a message shows.
+    // A repository that cannot be read leaves no remote list
+    // (`configured_remote_names`, review round 8), and every caller then
+    // withholds: a name and a tracking ref are withheld, and
+    // `WithheldRemotes` withholds every text; a name that is not UTF-8 is
+    // withheld whole. Each result is only the text a message shows.
     (
         "crates/codeflow-core/src/security/git.rs",
-        "WithheldRemotes::read",
+        "configured_remote_names",
         "obtain-absent:Repository::discover",
         1,
         "display",
@@ -2905,13 +2905,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/security/git.rs",
         "WithheldRemotes::read",
         "obtain-absent:from_utf8",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-core/src/security/git.rs",
-        "remote_ref",
-        "obtain-absent:Repository::discover",
         1,
         "display",
     ),
@@ -2919,20 +2912,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/security/git.rs",
         "shown_git_remote",
         "obtain-absent:from_utf8",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-core/src/security/git.rs",
-        "shown_remote",
-        "obtain-absent:Repository::discover",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-core/src/security/git.rs",
-        "shown_remote_or_url",
-        "obtain-absent:Repository::discover",
         1,
         "display",
     ),
