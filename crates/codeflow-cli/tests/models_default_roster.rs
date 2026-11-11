@@ -402,6 +402,43 @@ fn harness_choices_correlate_with_their_own_session() {
     }
 }
 
+/// AC-9: a harness id that already starts with `ses-` keeps its own file;
+/// before, `alpha` and `ses-alpha` both wrote `sessions-ses-alpha.jsonl`.
+#[test]
+fn a_prefixed_session_id_never_shares_the_bare_ids_file() {
+    let project = Project::new();
+    for (session, effective) in [
+        ("alpha", "claude-opus-5-5@high"),
+        ("ses-alpha", "claude-sonnet-5-5@medium"),
+    ] {
+        let output = project.run(&[
+            "--duty",
+            "orchestrate",
+            "--host",
+            "claude-code",
+            "--effective",
+            effective,
+            "--session",
+            session,
+        ]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        session_end(project.root(), session);
+    }
+    for (session, model) in [
+        ("alpha", "claude-opus-5-5"),
+        ("ses-alpha", "claude-sonnet-5-5"),
+    ] {
+        let events = session_events(project.root(), session);
+        assert_eq!(events.len(), 2, "{session}: {events:?}");
+        assert_eq!(events[0]["event"], "effective_model", "{session}");
+        assert_eq!(events[0]["model"], model, "{session}");
+        assert_eq!(events[1]["event"], "session_end", "{session}");
+        for event in &events {
+            assert_eq!(event["session_id"], format!("ses-{session}").as_str());
+        }
+    }
+}
+
 // The upgrade from a schema 5 catalog (refused, then `codeflow update`) is
 // `init_e2e.rs` `an_upgrade_refuses_a_schema_5_catalog_until_codeflow_update`.
 

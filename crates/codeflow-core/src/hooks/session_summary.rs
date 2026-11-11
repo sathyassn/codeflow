@@ -395,13 +395,11 @@ pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
 }
 
 /// Session fragment files follow the `…-ses-{id}.jsonl` convention the
-/// ledger compactor expects.
+/// ledger compactor expects. The prefix is always added and never
+/// stripped, so two distinct harness ids never share a file: `alpha` is
+/// `ses-alpha` and `ses-alpha` is `ses-ses-alpha`.
 fn normalize_session_id(id: &str) -> String {
-    if id.starts_with("ses-") {
-        id.to_string()
-    } else {
-        format!("ses-{id}")
-    }
+    format!("ses-{id}")
 }
 
 #[cfg(test)]
@@ -633,6 +631,37 @@ mod tests {
     #[test]
     fn test_normalize_session_id() {
         assert_eq!(normalize_session_id("abc"), "ses-abc");
-        assert_eq!(normalize_session_id("ses-abc"), "ses-abc");
+        assert_eq!(normalize_session_id("ses-abc"), "ses-ses-abc");
+    }
+
+    #[test]
+    fn an_id_that_carries_the_prefix_never_shares_a_file_with_the_bare_id() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_branch_work(dir.path());
+        let mut seen = Vec::new();
+        for id in ["alpha", "ses-alpha"] {
+            let end = record(dir.path(), &format!(r#"{{"session_id":"{id}"}}"#))
+                .unwrap()
+                .unwrap();
+            let effective = record_effective(
+                dir.path(),
+                &EffectiveSession::parse("gpt-6.1-sol@medium", "codex-cli", id).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(end, effective, "{id}: both records share its file");
+            let lines = std::fs::read_to_string(&end).unwrap();
+            let events: Vec<serde_json::Value> = lines
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(events.len(), 2, "{id}: only its own records: {events:?}");
+            for event in &events {
+                assert_eq!(event["session_id"], format!("ses-{id}").as_str());
+            }
+            seen.push(end);
+        }
+        assert!(seen[0].ends_with("sessions/sessions-ses-alpha.jsonl"));
+        assert!(seen[1].ends_with("sessions/sessions-ses-ses-alpha.jsonl"));
     }
 }
