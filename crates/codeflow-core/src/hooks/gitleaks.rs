@@ -886,6 +886,119 @@ fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, 
     .map_err(|why| why.reason)
 }
 
+/// The `git config` arguments that list every setting that can make a
+/// repository fetch missing objects on demand, each entry ended by a NUL
+/// and its value after a line break; read with [`promisor_listed`].
+pub const PROMISOR_CONFIG: [&str; 4] = [
+    "config",
+    "--get-regexp",
+    "-z",
+    r"^(extensions\.partialclone|remote\..*\.promisor)$",
+];
+
+/// Whether the entries [`PROMISOR_CONFIG`] listed make git fetch missing
+/// objects on demand, read as git reads them: `extensions.partialClone`
+/// set to anything, or a `remote.<name>.promisor` that git's boolean rules
+/// take as true (no value, `true`, `yes`, `on` or a nonzero number). A
+/// `promisor = false` remote fetches nothing on demand (TSK-327).
+///
+/// # Errors
+///
+/// A value git itself would refuse as a boolean, so whether git fetches on
+/// demand cannot be told.
+pub fn promisor_listed(listed: &[u8]) -> Result<bool, String> {
+    let mut fetches = false;
+    for entry in listed.split(|byte| *byte == 0).filter(|e| !e.is_empty()) {
+        let (key, value) = match entry.iter().position(|byte| *byte == b'\n') {
+            Some(at) => (&entry[..at], Some(&entry[at + 1..])),
+            None => (entry, None),
+        };
+        let on = key.starts_with(b"extensions.")
+            || config_bool(value).ok_or_else(|| {
+                format!(
+                    "cannot tell whether this repository fetches missing objects on demand: \
+                     `{}` is not a boolean git accepts",
+                    crate::git::GitName::from_bytes(key).display()
+                )
+            })?;
+        fetches |= on;
+    }
+    Ok(fetches)
+}
+
+/// A config value read by git's boolean rules (`git_config_bool`): no value
+/// is true; an empty one is false; `true`, `yes`, `on` and `false`, `no`,
+/// `off` in any case; else an integer as `strtoimax` reads it with base
+/// prefixes, scaled by an optional `k`, `m` or `g`, true when nonzero and
+/// within git's `int` range. `None` is a value git refuses. The value is
+/// read as bytes, as git reads it.
+fn config_bool(value: Option<&[u8]>) -> Option<bool> {
+    let Some(value) = value else {
+        return Some(true);
+    };
+    if value.is_empty() {
+        return Some(false);
+    }
+    for (word, meaning) in [
+        (&b"true"[..], true),
+        (b"yes", true),
+        (b"on", true),
+        (b"false", false),
+        (b"no", false),
+        (b"off", false),
+    ] {
+        if value.eq_ignore_ascii_case(word) {
+            return Some(meaning);
+        }
+    }
+    // `strtoimax` skips C `isspace` bytes before the number.
+    let start = value
+        .iter()
+        .position(|byte| !b" \t\n\x0b\x0c\r".contains(byte))
+        .unwrap_or(value.len());
+    let mut rest = &value[start..];
+    let negative = rest.first() == Some(&b'-');
+    if matches!(rest.first(), Some(b'-' | b'+')) {
+        rest = &rest[1..];
+    }
+    let hex = rest.len() > 2
+        && rest[0] == b'0'
+        && matches!(rest[1], b'x' | b'X')
+        && rest[2].is_ascii_hexdigit();
+    let radix: u32 = if hex {
+        rest = &rest[2..];
+        16
+    } else if rest.first() == Some(&b'0') {
+        8
+    } else {
+        10
+    };
+    let end = rest
+        .iter()
+        .position(|byte| !char::from(*byte).is_digit(radix))
+        .unwrap_or(rest.len());
+    let mut number: i128 = 0;
+    for byte in &rest[..end] {
+        number = number * i128::from(radix) + i128::from(char::from(*byte).to_digit(radix)?);
+        if number > i128::from(i64::MAX) {
+            return None;
+        }
+    }
+    // No digits: `strtoimax` converts nothing, and the whole value is then
+    // read as the unit.
+    let unit = if end == 0 { value } else { &rest[end..] };
+    let factor: i128 = match unit.to_ascii_lowercase().as_slice() {
+        b"" => 1,
+        b"k" => 1 << 10,
+        b"m" => 1 << 20,
+        b"g" => 1 << 30,
+        _ => return None,
+    };
+    let scaled = if negative { -number } else { number } * factor;
+    // `git_parse_int` refuses a value beyond `int`, as `-INT_MAX..=INT_MAX`.
+    (scaled.abs() <= i128::from(i32::MAX)).then_some(scaled != 0)
+}
+
 /// The git version text, and whether the repository has a promisor remote
 /// (`extensions.partialClone` or a `remote.<name>.promisor`). Git's exit 1
 /// from `git config` means no match; any other failure is an error, so an
@@ -899,16 +1012,9 @@ fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
         .map_err(|_| "`git version` printed text that is not UTF-8".to_string())?;
     let version = version.strip_suffix('\n').unwrap_or(version);
     let version = version.strip_suffix('\r').unwrap_or(version).to_string();
-    let config = capability_query(
-        root,
-        &[
-            "config",
-            "--get-regexp",
-            r"^(extensions\.partialclone|remote\..*\.promisor)$",
-        ],
-    )?;
+    let config = capability_query(root, &PROMISOR_CONFIG)?;
     match config.status.code() {
-        Some(0) => Ok((version, !config.stdout.is_empty())),
+        Some(0) => Ok((version, promisor_listed(&config.stdout)?)),
         Some(1) => Ok((version, false)),
         _ => Err(format!(
             "cannot tell whether this repository fetches missing objects on \
@@ -1211,6 +1317,35 @@ mod tests {
             first_line(b"\nERR [git] fatal: bad\x1b[31m\nnext").as_deref(),
             Some("ERR [git] fatal: bad\\u{1b}[31m")
         );
+    }
+
+    /// TSK-327: a promisor setting is read by git's boolean rules, so a
+    /// remote marked `promisor = false` fetches nothing on demand, while a
+    /// partial-clone extension of any value does.
+    #[test]
+    fn a_promisor_setting_is_read_as_git_reads_a_boolean() {
+        let read = |listed: &[u8]| promisor_listed(listed);
+        assert_eq!(read(b""), Ok(false));
+        assert_eq!(read(b"remote.origin.promisor\nfalse\0"), Ok(false));
+        for no in ["false", "No", "OFF", "", "0", "0x0", "00", "0k"] {
+            let entry = format!("remote.origin.promisor\n{no}\0");
+            assert_eq!(read(entry.as_bytes()), Ok(false), "{no:?}");
+        }
+        for yes in ["true", "YES", "on", "1", "-1", "0x10", "2k", " 7", "1G"] {
+            let entry = format!("remote.origin.promisor\n{yes}\0");
+            assert_eq!(read(entry.as_bytes()), Ok(true), "{yes:?}");
+        }
+        // A key with no `=` is true to git.
+        assert_eq!(read(b"remote.origin.promisor\0"), Ok(true));
+        assert_eq!(read(b"extensions.partialclone\norigin\0"), Ok(true));
+        assert_eq!(
+            read(b"remote.a.promisor\nfalse\0remote.b.promisor\ntrue\0"),
+            Ok(true)
+        );
+        for bad in ["maybe", "1x", "0x", "2g", "99999999999"] {
+            let entry = format!("remote.origin.promisor\n{bad}\0");
+            assert!(read(entry.as_bytes()).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

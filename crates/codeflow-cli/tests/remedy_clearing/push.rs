@@ -1047,11 +1047,12 @@ fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
             && out.contains("git.remote_fetch_timeout_seconds"),
         "{took:?}: {out}"
     );
-    // A partial clone's refusal leads with the foreground prefetch: a diff
-    // of the pushed range, in the terminal, fetches what the check reads.
+    // A partial clone's refusal leads with the foreground prefetch over the
+    // range the check reads, here from the target's tip.
     assert!(
         out.contains(&format!(
-            "run `git diff --stat {base_commit} {changed}` in your terminal first"
+            "run `git log --diff-merges=separate --stat --format= {base_commit}..{changed}` and \
+             `git diff --stat {base_commit}...{changed}`, then push again"
         )) && out.contains("cannot ask for a password or passphrase"),
         "{took:?}: {out}"
     );
@@ -1059,6 +1060,138 @@ fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
     let chain = std::fs::read_to_string(&chain).unwrap();
     eprintln!("stall chain:\n{chain}");
     assert_all_ended(&chain);
+}
+
+/// TSK-327: the prefetch a deadline refusal prints covers what the check
+/// reads, and following it lets the push through. `feat/y` already holds a
+/// change to `sub/f.txt`, which a `blob:none` clone's sparse checkout left
+/// unfetched, before the pushed range's base; the new commit changes
+/// another file. The commit checks still read the earlier change, from the
+/// target's tip (`--commits-from`). The promisor's upload-pack answers only
+/// a terminal (here, a process carrying `CODEFLOW_TEST_TERMINAL`) and
+/// stalls inside the check, as a fetch that needs a passphrase does. The
+/// first push is refused at its deadline; the test runs each command the
+/// refusal prints, then the same push passes.
+#[cfg(unix)]
+#[test]
+fn a_partial_clone_push_passes_after_the_printed_prefetch() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("remote_query_timeout_seconds", 2.into()),
+                ("remote_query_attempts", 1.into()),
+                ("remote_fetch_timeout_seconds", 2.into()),
+                ("push_budget_seconds", 2.into()),
+            ],
+        );
+        write(root, "sub/f.txt", "one\n");
+    });
+    let target = default_branch(&dest);
+    // The earlier push: feat/y changes sub/f.txt on the destination.
+    git(
+        &root,
+        &["switch", "-q", "-c", "feat/y", &format!("origin/{target}")],
+    );
+    write(&root, "sub/f.txt", "two\n");
+    commit_all(&root, "feat: change f");
+    git(
+        &dest,
+        &["fetch", "-q", root.to_str().unwrap(), "feat/y:feat/y"],
+    );
+    let clone = blobless_clone(dir.path(), &dest, false);
+    git(
+        &clone,
+        &["sparse-checkout", "set", "--no-cone", "/*", "!/sub/"],
+    );
+    git(&clone, &["read-tree", "-mu", "HEAD"]);
+    let offline = |args: &[&str]| {
+        let out = command("git", &clone)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", text(&out));
+        text(&out).trim().to_string()
+    };
+    offline(&["switch", "-q", "feat/y"]);
+    for rev in [format!("origin/{target}"), "feat/y".to_string()] {
+        let held = command("git", &clone)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .args(["cat-file", "-e", &format!("{rev}:sub/f.txt")])
+            .output()
+            .unwrap();
+        assert!(!held.status.success(), "the clone holds {rev}:sub/f.txt");
+    }
+    // The new commit adds a file and reads no sub/f.txt blob.
+    let earlier = offline(&["rev-parse", "feat/y"]);
+    write(&clone, "three.txt", "three\n");
+    offline(&["add", "three.txt"]);
+    let tree = offline(&["write-tree"]);
+    let pushed = offline(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &earlier,
+        "-m",
+        "feat: add three",
+    ]);
+    offline(&["update-ref", "refs/heads/feat/y", &pushed]);
+    let stall = dir.path().join("terminal-only-upload-pack");
+    std::fs::write(
+        &stall,
+        "#!/bin/sh\nif [ -n \"$CODEFLOW_TEST_TERMINAL\" ]; then exec git upload-pack \"$@\"; fi\nexec sleep 60\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stall, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &clone,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            stall.to_str().unwrap(),
+        ],
+    );
+    let line = format!("refs/heads/feat/y {pushed} refs/heads/feat/y {earlier}");
+    let (ran, took) = pre_push_origin(&clone, &line);
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(
+        out.contains("gave no verdict within its deadline"),
+        "{took:?}: {out}"
+    );
+    // Each command the prefetch sentence names, run as printed.
+    let hint = out
+        .lines()
+        .find(|line| line.contains("cannot ask for a password or passphrase"))
+        .unwrap_or_else(|| panic!("no prefetch hint: {out}"));
+    let hint = hint.split("If the check still").next().unwrap_or(hint);
+    let printed: Vec<&str> = hint
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| span.starts_with("git "))
+        .collect();
+    assert!(!printed.is_empty(), "no command in the hint: {hint}");
+    for step in &printed {
+        let words: Vec<&str> = step.split_whitespace().skip(1).collect();
+        let fetched = command("git", &clone)
+            .env("CODEFLOW_TEST_TERMINAL", "1")
+            .args(&words)
+            .output()
+            .unwrap();
+        assert!(fetched.status.success(), "{step}: {}", text(&fetched));
+    }
+    let (ran, took) = pre_push_origin(&clone, &line);
+    let again = text(&ran);
+    assert!(
+        ran.status.success() && !again.contains("gave no verdict"),
+        "the retry still refuses after {printed:?} ({took:?}):\n{again}"
+    );
 }
 
 /// TSK-327: a bounded read that `codeflow ci` starts late, as the leader
@@ -1090,6 +1223,7 @@ fn a_late_nested_read_ends_with_the_pre_push_check() {
     git(&root, &["switch", "-q", "-c", "feat/y"]);
     write(&root, "y.txt", "y\n");
     commit_all(&root, "feat: add y");
+    git(&root, &["config", "remote.origin.promisor", "false"]);
     let head = text(&run("git", &root, &["rev-parse", "HEAD"]));
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|folder| folder.join("git"))
@@ -1147,8 +1281,12 @@ fn a_late_nested_read_ends_with_the_pre_push_check() {
         out.contains("gave no verdict within its deadline"),
         "{took:?}: {out}"
     );
-    // A full clone fetches nothing on demand, so no prefetch is suggested.
-    assert!(!out.contains("git diff --stat"), "{took:?}: {out}");
+    // A full clone fetches nothing on demand, so no prefetch is suggested,
+    // even with a remote marked `promisor = false` (git reads it as off).
+    assert!(
+        !out.contains("cannot ask for a password") && !out.contains("git diff --stat"),
+        "{took:?}: {out}"
+    );
     assert_all_ended(&chain);
 }
 

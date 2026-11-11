@@ -1242,3 +1242,118 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
         );
     }
 }
+
+/// Each `.output()`, `.status()` or `.spawn()` call in production code, as
+/// `<enclosing fn> .<method>()`. Items under a `#[cfg(test)]`-style
+/// attribute are skipped. A git2 `delta.status()` reads the same as a
+/// process call here, so the table lists those too, with that reason.
+fn bare_spawn_spans(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut spans = Vec::new();
+    let mut function = String::from("<file>");
+    let mut index = 0;
+    while index < toks.len() {
+        if toks[index].punct('#') && toks.get(index + 1).is_some_and(|t| t.punct('[')) {
+            let end = group_end(&toks, index + 1);
+            let attribute = &toks[index + 2..end];
+            let testing = attribute.first().is_some_and(|t| t.is("cfg"))
+                && attribute.iter().any(|t| t.is("test"))
+                && !attribute.iter().any(|t| t.is("not"));
+            index = end + 1;
+            if testing {
+                // Skip the item: to its `;` or past its body.
+                while index < toks.len() && !toks[index].punct(';') && !toks[index].punct('{') {
+                    if toks[index].punct('(') || toks[index].punct('[') {
+                        index = group_end(&toks, index);
+                    }
+                    index += 1;
+                }
+                if index < toks.len() && toks[index].punct('{') {
+                    index = group_end(&toks, index);
+                }
+                index += 1;
+            }
+            continue;
+        }
+        if toks[index].is("fn") {
+            if let Some(Token::Ident(name)) = toks.get(index + 1) {
+                function.clone_from(name);
+            }
+        }
+        if toks[index].punct('.') {
+            if let Some(Token::Ident(method)) = toks.get(index + 1) {
+                if matches!(method.as_str(), "output" | "status" | "spawn")
+                    && toks.get(index + 2).is_some_and(|t| t.punct('('))
+                    && toks.get(index + 3).is_some_and(|t| t.punct(')'))
+                {
+                    spans.push(format!("{function} .{method}()"));
+                }
+            }
+        }
+        index += 1;
+    }
+    spans
+}
+
+const UNOWNED_SPAWNS: &str = include_str!("fixtures/unowned_spawn_allowlist.tsv");
+
+/// TSK-327: every process the production crates start outside the owned
+/// and bounded helpers is listed with who ends it. A process on a hook,
+/// guard, CI or doctor path either runs through an owned group
+/// (`git::owned`, `remote_query`, `git_config::bounded_output`) or names
+/// its row of the PR 699 spawn table; any other names why it is off those
+/// paths. A new bare `.output()`, `.status()` or `.spawn()` fails here
+/// until it is routed through a helper or listed with its reason.
+#[test]
+fn every_bare_spawn_is_listed_with_its_owner() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = crates.parent().unwrap();
+    let allowed = allowances(UNOWNED_SPAWNS);
+    let mut files = Vec::new();
+    for krate in ["codeflow-core", "codeflow-cli"] {
+        rust_files(&crates.join(krate).join("src"), &mut files);
+    }
+    let mut findings = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for file in files {
+        let name = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let stem = file.file_stem().unwrap().to_string_lossy();
+        // Test-only sources, included under `#[cfg(test)]`.
+        if stem == "tests" || stem.ends_with("_tests") {
+            continue;
+        }
+        let spans = bare_spawn_spans(&std::fs::read_to_string(&file).unwrap());
+        findings.extend(unlisted_spans(&name, &spans, &allowed));
+        seen.insert(name);
+    }
+    for entry in &allowed {
+        assert!(
+            seen.contains(entry.file),
+            "the unowned spawn table names missing file {}",
+            entry.file
+        );
+    }
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn the_bare_spawn_scan_reads_calls_and_skips_test_items() {
+    let source = "fn run(c: &mut Command) { c.output(); c.status().unwrap(); }\n\
+                  fn later() { x.spawn ( ); y.output_with(1); z.status; }\n\
+                  #[cfg(test)] mod tests { fn t() { c.output(); } }\n\
+                  #[cfg(all(test, unix))] fn helper() { c.spawn(); }\n\
+                  #[cfg(not(test))] fn real() { c.output(); }";
+    assert_eq!(
+        bare_spawn_spans(source),
+        [
+            "run .output()",
+            "run .status()",
+            "later .spawn()",
+            "real .output()"
+        ]
+    );
+}

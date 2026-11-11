@@ -701,13 +701,17 @@ fn commits_from(
     if base == tip {
         return Ok(keep);
     }
-    let related = codeflow_core::git::judging_command()
-        .args(["-c", "core.commitGraph=false"])
-        .arg("-C")
-        .arg(root)
-        .args(["merge-base", tip, &r.local_sha])
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .output();
+    // An owned group (TSK-327), as every other push set history read: the
+    // exit code is read here, since 1 means no shared history.
+    let related = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::judging_command()
+            .args(["-c", "core.commitGraph=false"])
+            .arg("-C")
+            .arg(root)
+            .args(["merge-base", tip, &r.local_sha])
+            .env("GIT_NO_LAZY_FETCH", "1"),
+        None,
+    );
     let unknown = |why: &str, report: &mut StageReport| {
         report.status.push(format!(
             "note: whether '{shown_branch}' shares history with {target} {} cannot be read ({why}), so push checks refuse",
@@ -1002,54 +1006,74 @@ fn run_check_with(
 /// The refusal for a check ended at its deadline (TSK-327). In a clone that
 /// fetches missing objects on demand, the check's own reads may have been
 /// waiting on such a fetch, and one that needs a password or passphrase
-/// cannot ask for it inside the check: the remedy then leads with a diff of
-/// the pushed range in the operator's terminal, which fetches the objects
-/// the check reads where a prompt can be answered. A plain `git fetch`
-/// keeps the clone's filter and fetches none of them.
+/// cannot ask for it inside the check: the remedy then leads with
+/// [`prefetch_commands`] for the operator's terminal, where a prompt can be
+/// answered. A plain `git fetch` keeps the clone's filter and fetches none
+/// of those objects.
 fn deadline_refusal(
     root: &Path,
     args: &[&str],
     shown: &str,
     deadline: &CheckDeadline,
 ) -> Violation {
-    let value = |flag: &str| {
-        args.iter()
-            .position(|arg| *arg == flag)
-            .and_then(|at| args.get(at + 1))
-    };
-    let prefetch = match (value("--base"), value("--head")) {
-        (Some(base), Some(head)) if fetches_on_demand(root) => format!(
+    let wait = "find what the check waits on (a slow destination, or a partial clone fetching a missing object) and push again; a project that needs longer raises git.remote_query_timeout_seconds, git.remote_query_attempts, git.remote_fetch_timeout_seconds or git.push_budget_seconds on its default branch";
+    let remedy = match prefetch_commands(args) {
+        Some([log, diff]) if fetches_on_demand(root) => format!(
             "this clone fetches missing objects on demand, and a fetch inside the check cannot ask \
-             for a password or passphrase: run `git diff --stat {base} {head}` in your terminal \
-             first, which fetches the objects the check reads, then push again; otherwise "
+             for a password or passphrase. In your terminal, run `{log}` and `{diff}`, then push \
+             again: they read both sides of every change in each commit the check reads and in \
+             the range it diffs, so they fetch each file version the added-lines, \
+             conflict-marker and size-and-ignore checks read. They fetch no file the check reads \
+             whole at one commit when neither command shows it changed, such as the policy at \
+             the target's tip, a workflow at the base, or a file your sparse checkout leaves \
+             out. If the check still gives no verdict, {wait}"
         ),
-        _ => String::new(),
+        _ => wait.to_string(),
     };
     Violation::always_blocking(
         "git.test_gate_on_push",
         format!(
             "push set check gave no verdict within its deadline and was ended: `{shown}`; the deadline is {deadline}"
         ),
-        &format!(
-            "{prefetch}find what the check waits on (a slow destination, or a partial clone fetching a missing object) and push again; a project that needs longer raises git.remote_query_timeout_seconds, git.remote_query_attempts, git.remote_fetch_timeout_seconds or git.push_budget_seconds on its default branch"
-        ),
+        &remedy,
     )
 }
 
-/// Whether this clone names a promisor remote (`extensions.partialClone` or
-/// a `remote.<name>.promisor`), so a missing object is fetched on demand.
-/// A read that fails or stalls answers no: it only chooses a hint.
+/// The terminal commands that read what the check's range reads, built from
+/// the operands the hook passed it, so they cannot drift from what CI
+/// reads. The commit checks run over `--commits-from`, or `--base` when it
+/// is absent, to `--head` (`ci.rs` `evaluate_commit_range`): size-and-ignore
+/// reads the new side of each commit's changes, which a per-commit log
+/// with each merge diffed against every parent reads; the added-lines and
+/// conflict-marker checks diff that range's merge base against the head,
+/// which `git diff from...head` reads with both sides.
+fn prefetch_commands(args: &[&str]) -> Option<[String; 2]> {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|arg| *arg == flag)
+            .and_then(|at| args.get(at + 1))
+    };
+    let head = value("--head")?;
+    let from = value("--commits-from").or_else(|| value("--base"))?;
+    Some([
+        format!("git log --diff-merges=separate --stat --format= {from}..{head}"),
+        format!("git diff --stat {from}...{head}"),
+    ])
+}
+
+/// Whether this clone fetches a missing object on demand: it names a
+/// partial-clone remote, or a `remote.<name>.promisor` that git reads as
+/// true ([`codeflow_core::hooks::gitleaks::promisor_listed`]). A read that
+/// fails or stalls, or a value git would refuse, answers no: it only
+/// chooses a hint.
 fn fetches_on_demand(root: &Path) -> bool {
+    use codeflow_core::hooks::gitleaks;
     let mut command = codeflow_core::git::judging_command();
-    command.arg("-C").arg(root).args([
-        "config",
-        "--get-regexp",
-        r"^(extensions\.partialclone|remote\..*\.promisor)$",
-    ]);
+    command.arg("-C").arg(root).args(gitleaks::PROMISOR_CONFIG);
     let limits = remote_query::QueryLimits::from_authority_or_default(root);
     matches!(
         remote_query::bounded_local(command, limits.timeout()),
-        Ok(remote_query::LocalAnswer::Answer(listed)) if !listed.is_empty()
+        Ok(remote_query::LocalAnswer::Answer(listed)) if gitleaks::promisor_listed(&listed) == Ok(true)
     )
 }
 

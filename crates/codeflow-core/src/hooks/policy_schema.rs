@@ -955,11 +955,21 @@ pub const SCHEMA: [KeySpec; 86] = [
                 lazy fetching off. The check runs in a process group of its \
                 own, away from the terminal, so in a partial clone a fetch of \
                 a missing object that needs a password or passphrase prompt \
-                stops and is refused at the deadline; the refusal then names \
-                `git diff --stat <base> <head>` for the pushed range, which \
-                fetches those objects in the terminal, before pushing again \
-                (a plain `git fetch` keeps the clone's filter and fetches \
-                none of them). Other local-config tampering is outside \
+                stops and is refused at the deadline. The refusal then names \
+                two commands to run in the terminal before pushing again, \
+                built from the range the check read: `git log \
+                --diff-merges=separate --stat --format= <from>..<head>` and \
+                `git diff --stat <from>...<head>`, where `<from>` is the \
+                check's `--commits-from`, else its base. They read both sides \
+                of each commit's changes and of the range's diff, so they \
+                fetch every file version the added-lines, conflict-marker \
+                and size-and-ignore checks read. They fetch no file the check \
+                reads whole at one commit that neither shows changed, such \
+                as the policy at the target's tip, and the refusal says so; \
+                a plain `git fetch` keeps the clone's filter and fetches none \
+                of them. A remote counts as a promisor as git reads it, so \
+                `remote.<name>.promisor = false` does not. Other local-config \
+                tampering is outside \
                 the hook threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {

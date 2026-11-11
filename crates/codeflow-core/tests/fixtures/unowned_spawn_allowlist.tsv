@@ -1,0 +1,70 @@
+# file	enclosing fn and call	count	who ends it: an owned helper, a PR 699 spawn table row, or why it is off the hook, guard, CI and doctor paths
+crates/codeflow-core/src/git/owned.rs	owned_output .spawn()	1	The owned-group helper itself: `GroupOwner::prepare` runs first, and every path signals the group before it reaps the leader.
+crates/codeflow-core/src/git/remote_query.rs	bounded_run_input .spawn()	1	The bounded reader `rq` itself: an owned group with a deadline capped at the outer one (spawn table rows 1 to 22a, 24 to 33, 42, 43).
+crates/codeflow-core/src/security/git_config.rs	bounded_output .spawn()	1	The guard config reader `gc` itself: an owned group with a 3 s deadline (spawn table rows 27 to 29).
+crates/codeflow-core/src/git/stdin.rs	spawn_with_input_stopping .spawn()	1	The stdin-feeding spawn helper; its caller owns the child: `owned_output`, `rq` and doctor's `run_captured_with` prepare an owned group first, and ci's `git_with_stdin` runs in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-core/src/doctor/mod.rs	run_captured_with .spawn()	1	Doctor's bounded runner, after `GroupOwner::prepare` (spawn table row 41, O).
+crates/codeflow-core/src/doctor/mod.rs	terminate_process_tree .spawn()	1	Windows only: `taskkill /T /F` on a timed-out doctor child, started without waiting so it cannot extend the deadline (spawn table row 41; Windows has no group design).
+crates/codeflow-core/src/doctor/mod.rs	do_exec .output()	1	Doctor's foreground probes, kept in the operator's job on purpose because they may prompt on the terminal (spawn table row 40, G(op)).
+crates/codeflow-core/src/testing/doctor/mod.rs	run_with_timeout .spawn()	1	The doctor runner probe, after `GroupOwner::prepare`, stdin null (spawn table row 47, O).
+crates/codeflow-core/src/scaffold/gitutil.rs	git_env .output()	1	Doctor's `config --get core.hooksPath`, which reads no objects (spawn table row 44, G(op)).
+crates/codeflow-core/src/ids/git.rs	capture_raw .output()	1	`ids::Git::new` without limits: ci's id registry merge rule runs in ci's group (spawn table row 37, G(ci)); doctor's `ids::check` in the operator's job (row 46, G(op)). With limits it runs on `rq`.
+crates/codeflow-core/src/release_local.rs	preflight_with_draft .output()	1	The adopter's release script from the pre-push hook, in the hook's own group because it may prompt on the terminal (spawn table row 23, X).
+crates/codeflow-core/src/release_local.rs	structural .output()	1	Off the paths: the release script's structural check, called only by `codeflow integrate`.
+crates/codeflow-cli/src/cmd/work.rs	pr_review .spawn()	1	`gh pr view` for ci's review evidence, after `GroupOwner::prepare` (spawn table row 38, O).
+crates/codeflow-cli/src/cmd/work.rs	open_pull_requests .output()	1	Off the paths: `gh pr list` for `codeflow work remove-candidate`.
+crates/codeflow-cli/src/cmd/ci.rs	base_refusal .output()	1	`codeflow ci` local reads, bounded by the pre-push deadline D, in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-cli/src/cmd/ci.rs	enumerate_commits .output()	1	`codeflow ci` local reads, bounded by D, in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-cli/src/cmd/ci.rs	exact_ref_exists .output()	1	`codeflow ci` local reads, bounded by D, in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-cli/src/cmd/ci.rs	git_bytes .output()	1	`codeflow ci` local reads, bounded by D, in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-cli/src/cmd/ci.rs	protected_base .output()	1	`codeflow ci` local reads, bounded by D, in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-cli/src/cmd/ci.rs	rev_parse .output()	1	`codeflow ci` local reads, bounded by D, in ci's group (spawn table row 34, G(ci)).
+crates/codeflow-cli/src/cmd/ci/workflow_change.rs	bytes_at .output()	1	`codeflow ci` workflow reads, bounded by D, in ci's group (spawn table row 35, G(ci)).
+crates/codeflow-cli/src/cmd/ci/classification.rs	name_status .output()	1	`codeflow ci` classification reads, bounded by D, in ci's group (spawn table row 35, G(ci)).
+crates/codeflow-cli/src/cmd/ci/change_class.rs	range_inventory .output()	1	`codeflow ci` change-class reads, bounded by D, in ci's group (spawn table row 35, G(ci)).
+crates/codeflow-core/src/validate/mod.rs	merge_sources .output()	1	`codeflow ci`'s validate history reads, bounded by D, in ci's group (spawn table row 39, G(ci)).
+crates/codeflow-core/src/workgraph/lifecycle.rs	shipped_in_history .output()	1	`codeflow ci`'s lifecycle history reads, bounded by D, in ci's group (spawn table row 39, G(ci)).
+crates/codeflow-core/src/workgraph/readiness.rs	first_parent_record_changes .output()	1	Readiness history reads: from `codeflow ci` bounded by D in ci's group (spawn table row 39, G(ci)); also `work claim` and `work start`.
+crates/codeflow-core/src/workgraph/readiness.rs	git .output()	1	Readiness history reads: from `codeflow ci` bounded by D in ci's group (spawn table row 39, G(ci)); also `work claim` and `work start`.
+crates/codeflow-core/src/workgraph/readiness.rs	git_bytes .output()	1	Readiness history reads: from `codeflow ci` bounded by D in ci's group (spawn table row 39, G(ci)); also `work claim` and `work start`.
+crates/codeflow-core/src/git/mod.rs	commit_reachable_from .output()	1	Readiness's completion bound, from `codeflow ci` bounded by D in ci's group (spawn table row 39, G(ci)); also the coordination due check.
+crates/codeflow-core/src/hooks/orient.rs	generate .output()	1	The orient session hook's `codeflow git-hook capabilities`, which starts no child; it runs in the hook's group, which the harness's hook runner owns.
+crates/codeflow-core/src/hooks/delegate_turn.rs	signal_tmux .output()	1	A Claude Stop hook for a delegated turn: `tmux wait-for -S` signals and returns; not git, in the harness hook's group.
+crates/codeflow-core/src/hooks/source_identity.rs	git .output()	1	Off the paths: `revision` runs only in the build script (`codeflow-cli/build.rs`); hooks use this file's digests, which start no process.
+crates/codeflow-core/src/hooks/path_policy.rs	check_diff .status()	1	Not a process: git2 `Delta::status`.
+crates/codeflow-core/src/hooks/path_policy.rs	merge_introduced .status()	1	Not a process: git2 `Delta::status`.
+crates/codeflow-core/src/hooks/git_hook.rs	scan_staged .status()	1	Not a process: git2 `Delta::status`.
+crates/codeflow-core/src/hooks/git_discard.rs	status_paths .status()	2	Not a process: git2 `StatusEntry::status`.
+crates/codeflow-core/src/hooks/git_discard.rs	untracked_paths .status()	1	Not a process: git2 `StatusEntry::status`.
+crates/codeflow-core/src/workgraph/acceptance/imports.rs	admissible_planning_landing .status()	1	Not a process: git2 `Delta::status`.
+crates/codeflow-core/src/root_checkout.rs	tracked_changes .status()	2	Not a process: git2 `StatusEntry::status`.
+crates/codeflow-core/src/root_checkout.rs	git_run .output()	1	Off the paths: `switch` for `codeflow init --workspace`.
+crates/codeflow-core/src/testing/gate.rs	run_configured .status()	4	Not a process: a target run's result and git2 `StatusEntry::status`.
+crates/codeflow-core/src/testing/runner/mod.rs	run_owed_target .status()	1	Not a process: a target result's status.
+crates/codeflow-core/src/testing/runner/mod.rs	spawn_inheriting_fences .spawn()	3	Off the paths: `codeflow test` target processes, which no hook, guard, ci or doctor path starts.
+crates/codeflow-core/src/testing/delivery.rs	git_output .output()	1	Off the paths: `codeflow test` delivery checks.
+crates/codeflow-core/src/testing/delivery.rs	preflight .output()	3	Off the paths: `codeflow test` delivery preflight.
+crates/codeflow-core/src/testing/evidence.rs	probe .output()	1	Off the paths: `codeflow test` evidence probes.
+crates/codeflow-core/src/testing/validation.rs	default_base_ref .output()	1	Off the paths: `codeflow test` change detection.
+crates/codeflow-core/src/testing/validation.rs	detect_changed_files .output()	1	Off the paths: `codeflow test` change detection.
+crates/codeflow-core/src/integrate.rs	current_checkout .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	dirty_files .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	integrate_with_mode .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	prepare_merge .output()	2	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	refresh_target_worktrees .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	restore_checkout .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	run_checkout .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/integrate.rs	worktree_clean_at .output()	1	Off the paths: `codeflow integrate`.
+crates/codeflow-core/src/git/conflict.rs	attempt_rebase .output()	3	Off the paths: the rebase `codeflow integrate` attempts.
+crates/codeflow-core/src/git/conflict.rs	has_git_identity .output()	1	Off the paths: the rebase `codeflow integrate` attempts.
+crates/codeflow-core/src/git/ci.rs	fetch_pr_checks .output()	1	Off the paths: `wait_for_ci_green`, the integrate CI wait.
+crates/codeflow-core/src/git/ci.rs	fetch_required_contexts .output()	1	Off the paths: `wait_for_ci_green`, the integrate CI wait.
+crates/codeflow-core/src/validate/portal.rs	git_output_bounded .spawn()	1	Off the paths: the docs portal build, size-capped and timed.
+crates/codeflow-core/src/remote.rs	run_gh .spawn()	1	Off the paths: operator `gh` write commands (`codeflow remote`).
+crates/codeflow-core/src/worktree_inventory.rs	git .output()	1	Off the paths: `codeflow work` worktree inventory.
+crates/codeflow-core/src/workgraph/candidate_removal.rs	git .output()	1	Off the paths: `codeflow work remove-candidate`.
+crates/codeflow-core/src/workgraph/light_paths.rs	git .output()	1	Off the paths: branch creation and push for `codeflow new` and integration lines.
+crates/codeflow-core/src/coord/observe.rs	command .spawn()	1	Off the paths: coordination liveness probes, each in a group of its own killed at its deadline.
+crates/codeflow-core/src/ceremony/host.rs	gh .spawn()	1	Off the paths: ceremony `gh` calls.
+crates/codeflow-core/src/scaffold/release_pin.rs	fetch_with_curl .output()	1	Off the paths: the release pin download; doctor's pin check (`doctor/ci_pin.rs`) uses only this file's parsers.
+crates/codeflow-cli/src/cmd/present.rs	start_service .spawn()	1	Off the paths: the `codeflow present` service, detached on purpose.
