@@ -5205,6 +5205,29 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1351: parses GitHub's check-runs JSON answer; it reads no shell or git name.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "check_runs",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
+    // TSK-1351: shortens a failed `gh` read to its first line for the refusal a person reads; any failure refuses.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "unreadable",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "unreadable",
+        "trim",
+        1,
+        "display",
+    ),
     // TSK-1308: trims a failed `gh pr list` stderr for the refusal a person reads; it decides nothing beyond refusing.
     (
         "crates/codeflow-cli/src/cmd/work.rs",
