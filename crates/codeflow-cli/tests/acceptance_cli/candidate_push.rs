@@ -731,6 +731,54 @@ fn a_hand_off_under_another_candidate_prefix_is_refused() {
     );
 }
 
+/// AC-3: the hook captured `main` while its policy named candidates
+/// `candidate/`; before `codeflow ci` reads the destination, `main` moves
+/// to a commit whose policy names them `land/`. The read no longer calls
+/// the pushed ref a candidate, but it is compared with the hand-off first,
+/// so the hand-off is refused for the moved destination, never judged as
+/// an ordinary branch.
+#[test]
+fn a_main_that_moves_to_another_candidate_prefix_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    let captured = advertised(root);
+    let main = git_out(root, &["rev-parse", "main"]);
+    git(root, &["switch", "-q", "-c", "renamed", "main"]);
+    let path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    policy["git"]["candidate_prefix"] = serde_json::Value::from("land/");
+    std::fs::write(&path, format!("{policy:#}\n")).unwrap();
+    let renamed = commit(root, "chore(policy): name candidates land/");
+    seed_push(root, &["renamed:refs/heads/main"]);
+    git(root, &["update-ref", "refs/remotes/origin/main", &main]);
+    assert_eq!(remote_tip(root, "main"), Some(renamed));
+    git(root, &["switch", "-q", CANDIDATE]);
+    let judged = hand_off_with(
+        &fixture,
+        CANDIDATE,
+        &candidate,
+        &fixture.line_tip,
+        &Claims {
+            listed: Some(&captured),
+            ..Claims::default()
+        },
+    );
+    println!("{}", judged.1);
+    assert_blocks(
+        &judged,
+        "a hand-off after main moved to another candidate prefix",
+        &[
+            "work.landing_candidate",
+            READS_DIFFER,
+            "(main)",
+            "the destination moved after the hook read it",
+            FETCH_AGAIN,
+        ],
+    );
+}
+
 /// AC-3: the destination's default branch moved to a commit this clone has
 /// never held. Its policy cannot be read here, so the hand-off is refused
 /// with the remedy to fetch, never judged under the caller's policy.

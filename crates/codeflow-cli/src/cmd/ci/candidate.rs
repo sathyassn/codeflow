@@ -83,16 +83,35 @@ pub(super) fn check(
                     &tip.to_string(),
                 )
             });
-        let maybe = git.is_candidate_branch(branch)
-            || match claimed {
-                Some(Ok(policy)) => policy.git.is_candidate_branch(branch),
-                Some(Err(_)) | None => true,
-            };
-        if !maybe {
+        let claimed_candidate = match claimed {
+            Some(Ok(policy)) => Some(policy.git.is_candidate_branch(branch)),
+            Some(Err(_)) | None => None,
+        };
+        if !git.is_candidate_branch(branch) && claimed_candidate == Some(false) {
             return None;
         }
         match destination_policy(root, git, url) {
             Ok((read, policy)) => {
+                // Once read, the destination is compared with the hand-off
+                // before any return, whatever its policy says about this
+                // ref: a destination that moved after the hook's read, even
+                // to a policy that no longer names candidates this way, is
+                // refused, never judged as an ordinary hand-off.
+                let compared = matching_claim(root, &policy.git, url, listed, &read)
+                    .and_then(|()| authority_is_tip(root, claims.0, &read))
+                    .and_then(|()| {
+                        if claimed_candidate == Some(true) && !policy.git.is_candidate_branch(branch)
+                        {
+                            Err("the policy at the destination's default branch tip no longer names it a candidate, as the policy the hand-off was judged under does: the designation changed after the hook's read; fetch and push again".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    });
+                if let Err(cause) = compared {
+                    ran.push("landing-candidate");
+                    refuse(tagged, cause);
+                    return None;
+                }
                 at_destination = policy;
                 (&at_destination.git, Some(read))
             }
@@ -304,6 +323,34 @@ fn destination_policy(
     let shown = format!("'{}'", codeflow_core::git::display_text(&name));
     let policy = policy_at(root, &shown, &tip.to_string())?;
     Ok((read, policy))
+}
+
+/// Whether the policy authority the hand-off names, when it names one, is
+/// the default branch tip of the destination `read`; a hand-off with none
+/// is refused later only when the ref binds as a candidate.
+///
+/// # Errors
+///
+/// Returns the mismatch, with the moved-destination remedy.
+fn authority_is_tip(
+    root: &Path,
+    authority: Option<&str>,
+    read: &codeflow_core::workgraph::release_line::Destination,
+) -> Result<(), String> {
+    let (Some(authority), Some((target, tip))) = (authority, read.default.as_ref()) else {
+        return Ok(());
+    };
+    let tip = tip.to_string();
+    let named = super::rev_parse(root, authority)?.unwrap_or_else(|| authority.to_string());
+    if named.eq_ignore_ascii_case(&tip) {
+        return Ok(());
+    }
+    Err(format!(
+        "the hand-off's policy authority {} is not the tip of '{}' the destination advertises, {}: the destination moved after the hook's read, or the hand-off is not the destination's; fetch and push again",
+        &named[..named.len().min(9)],
+        codeflow_core::git::display_text(target),
+        &tip[..tip.len().min(9)]
+    ))
 }
 
 /// The policy at `tip`, the tip of the branch `what` names, read from this
