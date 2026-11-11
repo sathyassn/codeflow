@@ -230,6 +230,11 @@ fn seat_lines(
             CATALOG_PATHS[0]
         )];
     };
+    // The strict loader the resolver uses: an older schema or an invalid
+    // catalog is reported, never rendered as the configured roster.
+    if let Err(error) = codeflow_core::model_catalog::load_catalog(root) {
+        return vec![format!("seats: unavailable: {error}")];
+    }
     let Ok(catalog) = serde_json::from_str::<serde_json::Value>(&text) else {
         return vec![format!("seats: unavailable: {path} is not valid JSON")];
     };
