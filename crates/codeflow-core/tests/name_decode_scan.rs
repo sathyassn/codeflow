@@ -536,6 +536,29 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // TSK-416: a configuration key is decoded only to pick remote URL and
+    // url rewrite entries for redaction. A key that is not UTF-8 still
+    // matches as written, so its URL stays among the redacted values; a
+    // rewrite base that is not UTF-8 makes the read give up, and the caller
+    // then withholds git's whole message.
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "configured_credentials",
+        "from_utf8_lossy",
+        1,
+        "unproven",
+    ),
+    // TSK-416: the percent-decoded form of a credential part, matched
+    // against git's diagnostic as a person would read it. A decoded value
+    // that is not UTF-8 is matched in the same replaced form the shown text
+    // holds; the raw form is matched too.
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "percent_decoded",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
         "codeflow-core/src/root_checkout.rs",
@@ -2839,6 +2862,32 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-416: a repository or configuration that cannot be read, or a URL
+    // or rewrite base that is not UTF-8, gives no credential list, and the
+    // caller then withholds git's whole message instead of relaying it.
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "configured_credentials",
+        "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "configured_credentials",
+        "obtain-absent:from_utf8",
+        2,
+        "unproven",
+    ),
+    // TSK-416: a percent-decoded credential part that is not UTF-8 is
+    // matched in its replaced form, as the decoded diagnostic shows it.
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "percent_decoded",
+        "obtain-absent:from_utf8",
+        1,
+        "display",
+    ),
     // Decodes two ASCII hex digits from the internal storage_key encoding, not arbitrary OS bytes; storage_key emits a complete hex suffix after NUL.
     (
         "crates/codeflow-core/src/git/name.rs",
@@ -3554,7 +3603,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Builds the human-readable reason separately from diagnostics() used to classify the failed push.
     (
         "crates/codeflow-core/src/ids/issue.rs",
-        "classify_push",
+        "classify_push_shown",
         "lines",
         1,
         "display",
@@ -3562,7 +3611,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Builds the human-readable reason separately from diagnostics() used to classify the failed push.
     (
         "crates/codeflow-core/src/ids/issue.rs",
-        "classify_push",
+        "classify_push_shown",
         "trim",
         1,
         "display",
@@ -4079,6 +4128,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/root_checkout.rs",
         "workspace_hint_shown",
         "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // A path with no text form gets a step that pastes no command; the worktree is still reported.
+    (
+        "crates/codeflow-core/src/root_checkout.rs",
+        "worktree_move_step",
+        "obtain-absent:to_str",
         1,
         "unproven",
     ),
@@ -7137,8 +7194,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/ci.rs", "run_checks", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
-    ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
-    ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
+    ("crates/codeflow-core/src/security/git_config.rs", "read_include", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
+    ("crates/codeflow-core/src/security/git_config.rs", "read_include", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
     ("crates/codeflow-core/src/hooks/ref_authority.rs", "no_index_change_hook", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata of the hook file lets an unresolved-authority read-only call pass; a present file, a dangling link and every other error refuse, and the hooks directory comes from the configuration Git lists (TSK-1104)."),
     ("crates/codeflow-core/src/workgraph/history.rs", "check_command", "ErrorKind::NotFound", 1, "Git treats an absent GIT_SHALLOW_FILE as no boundary, including a dangling path; other read errors refuse. The installed CLI test compares relative, missing and empty overrides with native Git."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
