@@ -444,15 +444,9 @@ fn doctor_and_the_update_preview_read_the_effective_text() {
     update_v1(root);
     let decision = update_mod::decide(&v1(), root, PRESENT[0], "3.0.0").unwrap();
     assert_eq!(decision, Some(Decision::Current));
-    let drift = doctor::run_check(
-        "managed-drift",
-        &Options {
-            project_dir: root.to_string_lossy().into_owned(),
-            ..Options::default()
-        },
-    )
-    .unwrap();
+    let drift = managed_drift(root);
     assert_eq!(drift.status, Status::Pass, "{drift:?}");
+    assert_eq!(doctor_overrides(root, plan_v1).status, Status::Pass);
 }
 
 // ---------------------------------------------------------------------------
@@ -796,4 +790,208 @@ fn a_record_that_does_not_match_the_baseline_is_refused() {
         "{error}"
     );
     assert_eq!(snapshot(root), before);
+}
+
+// ---------------------------------------------------------------------------
+// Security review of the unit (Codex, CHANGES at c31e131be): forged state is
+// never health evidence, recovery checks everything before it writes, and
+// structural checks read Markdown as CommonMark does.
+// ---------------------------------------------------------------------------
+
+fn managed_drift(root: &Path) -> doctor::CheckResult {
+    doctor::run_check(
+        "managed-drift",
+        &Options {
+            project_dir: root.to_string_lossy().into_owned(),
+            override_plan: Some(plan_v1),
+            ..Options::default()
+        },
+    )
+    .unwrap()
+}
+
+/// A floor edited inside the managed block, with the record's effective
+/// digest changed to the edited block's hash, is drift, fails the overrides
+/// check and is refused by update; nothing reads the project's digest as
+/// proof.
+#[test]
+fn a_forged_record_digest_is_not_health_evidence() {
+    let dir = scaffold();
+    let root = dir.path();
+    write(root, ".codeflow/overrides.toml", OVERRIDES);
+    update_v1(root);
+    assert_eq!(managed_drift(root).status, Status::Pass);
+    let agents = read(root, AGENTS);
+    let floor = agents
+        .lines()
+        .find(|line| line.starts_with("- **Git floor [enforced].**"))
+        .expect("the git floor row")
+        .to_string();
+    let tampered = agents.replacen(&floor, "- **Git floor.** Commit anywhere.", 1);
+    write(root, AGENTS, &tampered);
+    let block = scaffold::region::extract_block(&tampered, scaffold::RegionFormat::Markdown)
+        .expect("the managed block");
+    let mut record = Record::read(root, AGENTS).unwrap().unwrap();
+    record.effective_sha256 = scaffold::sha256_hex(block.as_bytes());
+    record.write(root, AGENTS).unwrap();
+
+    let drift = managed_drift(root);
+    assert!(drift.status.is_warn(), "{drift:?}");
+    assert!(drift.message.contains(AGENTS), "{}", drift.message);
+    let overrides = doctor_overrides(root, plan_v1);
+    assert_eq!(overrides.status, Status::Fail, "{overrides:?}");
+    let before = snapshot(root);
+    let error = run(&v1(), root, "3.0.0").expect_err("update refuses the record");
+    assert!(
+        error.contains("does not match the installed baseline"),
+        "{error}"
+    );
+    assert_eq!(snapshot(root), before);
+}
+
+/// An edit no override declares, with the record untouched, fails the
+/// overrides check instead of reading as applied.
+#[test]
+fn an_undeclared_edit_fails_the_overrides_check() {
+    let dir = scaffold();
+    let root = dir.path();
+    write(root, ".codeflow/overrides.toml", OVERRIDES);
+    update_v1(root);
+    let dest = PRESENT[0];
+    write(
+        root,
+        dest,
+        &read(root, dest).replacen(COMPLETION_OURS, "Skip the handoff.\n", 1),
+    );
+    let overrides = doctor_overrides(root, plan_v1);
+    assert_eq!(overrides.status, Status::Fail, "{overrides:?}");
+    assert!(overrides.message.contains(dest), "{}", overrides.message);
+}
+
+/// A journal left behind fails the overrides check, as update finishes or
+/// refuses it first.
+#[test]
+fn a_pending_journal_fails_the_overrides_check() {
+    let (dir, done) = interrupted();
+    let (root, done) = (dir.path(), done.path());
+    journal_v2_write(root, done, PRESENT[0]);
+    let overrides = doctor_overrides(root, plan_v2);
+    assert_eq!(overrides.status, Status::Fail, "{overrides:?}");
+    assert!(
+        overrides
+            .message
+            .contains("interrupted update left a journal"),
+        "{}",
+        overrides.message
+    );
+}
+
+/// A journal whose digests match the state on disk but whose payload is not
+/// what update writes (a record whose applied set differs from the declared
+/// overrides, coherent with its own digests) is refused, and nothing is
+/// written.
+#[test]
+fn a_forged_coherent_journal_payload_is_refused() {
+    let (dir, done) = interrupted();
+    let (root, done) = (dir.path(), done.path());
+    let dest = PRESENT[0];
+    let mut forged = Record::read(done, dest).unwrap().unwrap();
+    forged.applied[0].replacement = "Skip the handoff.\n".into();
+    let pristine = baseline(done, dest);
+    let effective = scaffold::overrides::apply_units(&pristine, &forged.applied).unwrap();
+    forged.effective_sha256 = scaffold::sha256_hex(effective.as_bytes());
+    let old = Journal::observe(root, dest, Some(&installed_sha(root, dest))).unwrap();
+    let journal = Journal::new(
+        old,
+        &read(done, dest),
+        &pristine,
+        Some(forged),
+        &installed_sha(done, dest),
+    );
+    journal.write(root, dest).unwrap();
+    write(root, dest, &read(done, dest));
+    let before = snapshot(root);
+    let error = run(&v2(), root, "3.0.1").expect_err("refused");
+    assert!(
+        error.contains("declared overrides this update applies"),
+        "{error}"
+    );
+    assert_eq!(snapshot(root), before, "a refusal writes nothing");
+}
+
+/// A journal whose record is not the bytes its new state names is refused.
+#[test]
+fn a_journal_payload_off_its_digests_is_refused() {
+    let (dir, done) = interrupted();
+    let (root, done) = (dir.path(), done.path());
+    let dest = PRESENT[0];
+    journal_v2_write(root, done, dest);
+    write(root, dest, &read(done, dest));
+    let path = root.join(record::journal_path(dest));
+    let mut journal: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    journal["record"]["applied"][0]["replacement"] = "Skip the handoff.\n".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&journal).unwrap()).unwrap();
+    let before = snapshot(root);
+    let error = run(&v2(), root, "3.0.1").expect_err("refused");
+    assert!(error.contains("does not match the digests"), "{error}");
+    assert_eq!(snapshot(root), before);
+}
+
+/// A recoverable journal for one file and a bad record for another: the
+/// whole update refuses before recovery writes, so the first file and all
+/// its metadata stay byte-identical.
+#[test]
+fn recovery_writes_nothing_when_another_record_refuses() {
+    let (dir, done) = interrupted();
+    let (root, done) = (dir.path(), done.path());
+    let a = PRESENT[0];
+    journal_v2_write(root, done, a);
+    write(root, a, &read(done, a));
+    let mut bad = Record::read(root, AGENTS).unwrap().unwrap();
+    bad.applied[0].replacement = "- **Work to the outcome.** Something else.".into();
+    bad.write(root, AGENTS).unwrap();
+    let before = snapshot(root);
+    let error = run(&v2(), root, "3.0.1").expect_err("refused");
+    assert!(
+        error.contains("does not match the installed baseline"),
+        "{error}"
+    );
+    assert_eq!(
+        snapshot(root),
+        before,
+        "file A and its metadata are untouched"
+    );
+    assert!(root.join(record::journal_path(a)).exists());
+}
+
+#[test]
+fn markdown_that_would_hide_later_text_is_refused() {
+    let body = |text: &str| one("cf-present#completion", &format!("body = '''\n{text}'''"));
+    let open_fence = "leaves a code fence open";
+    assert_refused(&body("````\nfour then three\n```\n"), open_fence);
+    assert_refused(&body("~~~\ntilde then backticks\n```\n"), open_fence);
+    assert_refused(&body("```\nbackticks then tilde\n~~~\n"), open_fence);
+    let ends = "would end the section early";
+    assert_refused(&body("Smuggled\n===\n"), ends);
+    assert_refused(&body("Smuggled\n---\n"), ends);
+    let html = "leaves a raw HTML block open";
+    assert_refused(&body("<!-- hide the rest\n"), html);
+    assert_refused(&body("<pre>\nhide the rest\n"), html);
+}
+
+#[test]
+fn closed_fences_and_thematic_breaks_are_accepted() {
+    let dir = scaffold();
+    let root = dir.path();
+    let body = "````\n```\nnested\n```\n````\n\n---\n\n<!-- a note -->\nend\n";
+    write(
+        root,
+        ".codeflow/overrides.toml",
+        &one("cf-present#completion", &format!("body = '''\n{body}'''")),
+    );
+    update_v1(root);
+    for dest in PRESENT {
+        assert!(read(root, dest).contains(body), "{dest}");
+    }
 }
