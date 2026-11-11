@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crate::git::owned::GroupOwner;
 use crate::hooks::limits::{self, Limit};
 
 const fn key_of(limit: Limit) -> &'static str {
@@ -683,22 +684,28 @@ enum Diagnostics {
 /// ends, so a descendant that keeps stdin open and never reads is ended
 /// with git's group at the deadline. The writer is then joined for at most
 /// [`STDERR_GRACE`] and otherwise left to its closed pipe, never waited on.
+///
+/// Git leads its own process group, owned by a [`GroupOwner`]: every
+/// completion path ends the whole group before git is reaped, and if this
+/// process itself is killed first (an outer deadline, such as the pre-push
+/// hook's on `codeflow ci`), the group's watcher ends it. The deadline is
+/// capped at the time left on an outer deadline ([`bound_reads_by`]).
 fn bounded_run_input(
     mut command: std::process::Command,
     input: Option<&[u8]>,
     deadline: Duration,
     diagnostics: Diagnostics,
 ) -> Result<Ran, Failure> {
+    let deadline = capped(deadline);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
+    let mut owner = GroupOwner::prepare(&mut command)
+        .map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
     let started = match input {
         Some(input) => {
             crate::git::spawn_with_input_stopping(&mut command, input.to_vec(), |child| {
-                kill_group(child);
+                owner.spawned(child);
+                owner.signal();
+                let _ = child.kill();
             })
             .map(|(child, writer)| (child, Some(writer)))
         }
@@ -709,7 +716,14 @@ fn bounded_run_input(
     };
     let (mut child, writer) =
         started.map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
-    let ran = bounded_wait(&mut child, writer.as_ref(), deadline, diagnostics);
+    owner.spawned(&child);
+    let ran = bounded_wait(
+        &mut child,
+        &mut owner,
+        writer.as_ref(),
+        deadline,
+        diagnostics,
+    );
     if let Some(writer) = writer {
         // An answer means the write already ended. Every failure above
         // ended git's group, which closes the pipe, so the write ends at
@@ -728,12 +742,13 @@ fn bounded_run_input(
 /// ends, within the same deadline. `mode` says how much of stderr is kept.
 fn bounded_wait(
     child: &mut std::process::Child,
+    owner: &mut GroupOwner,
     writer: Option<&crate::git::InputWriter>,
     deadline: Duration,
     mode: Diagnostics,
 ) -> Result<Ran, Failure> {
     let Some(stdout) = child.stdout.take() else {
-        kill_group(child);
+        owner.end(child);
         return Err(Failure::Other("could not read its answer".to_string()));
     };
     // The destination query reads diagnostics only to classify
@@ -771,20 +786,20 @@ fn bounded_wait(
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(bytes)) => break bytes,
             Ok(Err(error)) => {
-                kill_group(child);
+                owner.end(child);
                 return Err(Failure::Other(format!(
                     "reading its answer failed: {error}"
                 )));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !expired() => {}
             Err(_) => {
-                kill_group(child);
+                owner.end(child);
                 return Err(timed_out());
             }
         }
     };
     if bytes.len() > MAX_ANSWER_BYTES {
-        kill_group(child);
+        owner.end(child);
         return Err(Failure::Other(format!(
             "its answer is over {} MiB",
             MAX_ANSWER_BYTES >> 20
@@ -798,7 +813,7 @@ fn bounded_wait(
             Ok(true) => break,
             Ok(false) if !expired() => std::thread::sleep(Duration::from_millis(20)),
             _ => {
-                kill_group(child);
+                owner.end(child);
                 return Err(timed_out());
             }
         }
@@ -809,22 +824,25 @@ fn bounded_wait(
     if let Some(writer) = writer {
         while !writer.is_finished() {
             if expired() {
-                kill_group(child);
+                owner.end(child);
                 return Err(timed_out());
             }
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    collect_diagnostics(child, diagnostics, bytes, until, deadline, mode)
+    collect_diagnostics(child, owner, diagnostics, bytes, until, deadline, mode)
 }
 
 /// The stderr reader of a bounded child.
 type DiagnosticsReader = std::thread::JoinHandle<std::io::Result<Vec<u8>>>;
 
 /// After git exited and its answer was read: read its stderr as `mode`
-/// says, reap it and return the run; see [`bounded_wait`].
+/// says, end what is left of its group, reap it and return the run; see
+/// [`bounded_wait`]. A descendant that redirected all its streams and
+/// outlived git is ended here, on success too.
 fn collect_diagnostics(
     child: &mut std::process::Child,
+    owner: &mut GroupOwner,
     diagnostics: DiagnosticsReader,
     bytes: Vec<u8>,
     until: Option<Instant>,
@@ -842,12 +860,13 @@ fn collect_diagnostics(
     if mode == Diagnostics::Full {
         while !diagnostics.is_finished() {
             if until.is_some_and(|until| Instant::now() >= until) {
-                kill_group(child);
+                owner.end(child);
                 return Err(Failure::Timeout(deadline));
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         let read = diagnostics.join();
+        owner.signal();
         let status = child.wait();
         return match (read, status) {
             (Ok(Ok(stderr)), Ok(status)) if stderr.len() <= MAX_ANSWER_BYTES => {
@@ -878,9 +897,11 @@ fn collect_diagnostics(
             Ok(Err(_)) | Err(_) => None,
         }
     } else {
-        signal_group(child);
         None
     };
+    // Whatever is left of git's group, a helper holding stderr or one that
+    // redirected every stream, ends before git is reaped.
+    owner.signal();
     let status = match child.wait() {
         Ok(status) => status,
         Err(error) => {
@@ -1218,7 +1239,11 @@ const STDERR_GRACE: Duration = Duration::from_millis(250);
 
 /// Whether the child has exited, without reaping it on Unix, so its process
 /// group ID cannot be reused while the group may still be signalled.
-fn has_exited(child: &mut std::process::Child) -> std::io::Result<bool> {
+///
+/// # Errors
+///
+/// The wait itself failed.
+pub fn has_exited(child: &mut std::process::Child) -> std::io::Result<bool> {
     #[cfg(unix)]
     {
         let pid: libc::id_t = child.id();
@@ -1246,28 +1271,30 @@ fn has_exited(child: &mut std::process::Child) -> std::io::Result<bool> {
     }
 }
 
-/// On Unix, SIGKILL to the process group the child leads (an SSH or
-/// credential helper it started); best-effort, and the child is not reaped.
-fn signal_group(child: &std::process::Child) {
-    #[cfg(unix)]
-    if let Ok(group) = i32::try_from(child.id()) {
-        // SAFETY: the child leads its own process group (`process_group(0)`),
-        // whose id is its pid, and it is not reaped yet, so the id is still
-        // its group's; SIGKILL to it is best-effort.
-        unsafe {
-            libc::killpg(group, libc::SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = child;
+/// An outer deadline every bounded read in this process is capped at, set
+/// once by a caller that is itself bounded: `codeflow ci` run by the
+/// pre-push hook, or a session guard (TSK-327).
+static OUTER_DEADLINE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Cap every later bounded read in this process at `deadline`, so a read
+/// started late ends by itself before the caller's own deadline ends the
+/// process. The first call wins.
+pub fn bound_reads_by(deadline: Instant) {
+    let _ = OUTER_DEADLINE.set(deadline);
 }
 
-/// Kill a child and, on Unix, the process group it leads (an SSH or
-/// credential helper it started), then reap it.
-fn kill_group(child: &mut std::process::Child) {
-    signal_group(child);
-    let _ = child.kill();
-    let _ = child.wait();
+/// The outer deadline [`bound_reads_by`] set, if any.
+#[must_use]
+pub fn outer_deadline() -> Option<Instant> {
+    OUTER_DEADLINE.get().copied()
+}
+
+/// `deadline`, or the time left on the outer deadline when that is less.
+fn capped(deadline: Duration) -> Duration {
+    match outer_deadline() {
+        Some(outer) => deadline.min(outer.saturating_duration_since(Instant::now())),
+        None => deadline,
+    }
 }
 
 #[cfg(test)]
@@ -1374,6 +1401,110 @@ mod tests {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// TSK-327: a read that succeeds ends what its child left behind. The
+    /// child starts a sleeper with every stream redirected, so no pipe
+    /// waits for it, and exits 0. Once the read returns, in the brief mode
+    /// of a git read and the full mode of a codeflow child, the sleeper has
+    /// ended. Before, only the failure paths ended the group.
+    #[cfg(unix)]
+    #[test]
+    fn a_successful_read_ends_a_detached_sleeper() {
+        let dir = tempfile::tempdir().unwrap();
+        for full in [false, true] {
+            let pidfile = dir.path().join(format!("sleeper-{full}"));
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args([
+                "-c",
+                &format!(
+                    "/bin/sleep 60 </dev/null >/dev/null 2>&1 & echo $! > '{}'; echo done",
+                    pidfile.display()
+                ),
+            ]);
+            let out = if full {
+                bounded_process_output(command, b"", Duration::from_secs(10))
+            } else {
+                bounded_output(command, Duration::from_secs(10))
+            }
+            .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            assert_eq!(out.stdout, b"done\n");
+            let sleeper: i32 = std::fs::read_to_string(&pidfile)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            // Its new parent reaps it shortly; until then `kill` still
+            // finds the zombie, so the check waits for it to go.
+            let gone = Instant::now() + Duration::from_secs(5);
+            // SAFETY: signal 0 only asks whether the process exists.
+            while unsafe { libc::kill(sleeper, 0) } == 0 {
+                assert!(
+                    Instant::now() < gone,
+                    "the sleeper {sleeper} still runs (full: {full})"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
+    /// TSK-327: a group whose owner dies without ending it is ended by its
+    /// watcher. A child process owns a group whose leader sleeps, and is
+    /// killed with SIGKILL, so nothing in it runs again; the sleeper ends
+    /// all the same.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_ends_when_its_owner_is_killed() {
+        const CHILD: &str = "CODEFLOW_GROUP_OWNER_CHILD";
+        if let Some(pidfile) = std::env::var_os(CHILD) {
+            let mut command = std::process::Command::new("/bin/sleep");
+            command.arg("60");
+            let mut owner = crate::git::owned::GroupOwner::prepare(&mut command).unwrap();
+            let mut child = command.spawn().unwrap();
+            owner.spawned(&child);
+            std::fs::write(&pidfile, child.id().to_string()).unwrap();
+            // The parent kills this process long before the sleep ends.
+            let _ = child.wait();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("sleeper");
+        let mut owner = crate::git::process(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::a_group_ends_when_its_owner_is_killed",
+                "--nocapture",
+            ])
+            .env(CHILD, &pidfile)
+            .spawn()
+            .unwrap();
+        let started = Instant::now() + Duration::from_secs(30);
+        let sleeper: i32 = loop {
+            if let Ok(pid) = std::fs::read_to_string(&pidfile) {
+                if let Ok(pid) = pid.trim().parse() {
+                    break pid;
+                }
+            }
+            assert!(
+                Instant::now() < started,
+                "the owner never started its child"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: signal 0 only asks whether the process exists.
+        assert_eq!(unsafe { libc::kill(sleeper, 0) }, 0);
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let gone = Instant::now() + Duration::from_secs(5);
+        // SAFETY: as above.
+        while unsafe { libc::kill(sleeper, 0) } == 0 {
+            assert!(
+                Instant::now() < gone,
+                "the sleeper {sleeper} outlived its owner"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// TSK-389 (TSK-327 AC-7 and AC-8): a helper that keeps git's stderr

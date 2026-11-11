@@ -296,13 +296,14 @@ impl Engine {
                 found: sha256,
             });
         }
-        let version = match Command::new(&path).arg("version").output() {
-            Ok(out) if out.status.success() => {
-                String::from_utf8_lossy(&out.stdout).trim().to_string()
-            }
-            Ok(out) => format!("none (it exited with {})", out.status),
-            Err(error) => format!("none (it did not run: {error})"),
-        };
+        let version =
+            match crate::git::owned::owned_output(Command::new(&path).arg("version"), None) {
+                Ok(out) if out.status.success() => {
+                    String::from_utf8_lossy(&out.stdout).trim().to_string()
+                }
+                Ok(out) => format!("none (it exited with {})", out.status),
+                Err(error) => format!("none (it did not run: {error})"),
+            };
         if version != self.expected.version {
             return Err(Unusable::Version {
                 path,
@@ -352,8 +353,8 @@ impl Engine {
         attributes.apply(&mut command);
         pin_git_output(&mut command, &folder.attributes_config());
         folder.apply(&mut command);
-        let out = command
-            .output()
+        // An owned group (TSK-327): the git gitleaks starts ends with it.
+        let out = crate::git::owned::owned_output(&mut command, None)
             .map_err(|error| format!("gitleaks did not run: {error}"))?;
         let code = out.status.code();
         if code != Some(0) && code != Some(FINDINGS_EXIT) {
@@ -602,13 +603,14 @@ mod private {
 /// without that line break, an empty path, or on Windows a path that is not
 /// UTF-8, is refused.
 fn git_dir(root: &Path) -> Result<std::path::PathBuf, String> {
-    let out = crate::git::command()
-        .args(["rev-parse", "--absolute-git-dir"])
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| format!("git did not run: {error}"))?;
+    let out = crate::git::owned::owned_output(
+        crate::git::command()
+            .args(["rev-parse", "--absolute-git-dir"])
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .current_dir(root),
+        None,
+    )
+    .map_err(|error| format!("git did not run: {error}"))?;
     if !out.status.success() {
         return Err(format!(
             "`git rev-parse --absolute-git-dir` exited with {}",
@@ -787,19 +789,20 @@ fn unreadable_staged_path(root: &Path) -> Result<Option<String>, String> {
     let mut command = crate::git::command();
     // The same configuration as the gitleaks child, so both read one diff.
     pin_git_output(&mut command, &[]);
-    let out = command
-        .args([
-            "diff",
-            "--cached",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            "--diff-filter=d",
-        ])
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| format!("git did not run: {error}"))?;
+    let out = crate::git::owned::owned_output(
+        command
+            .args([
+                "diff",
+                "--cached",
+                "--name-only",
+                "-z",
+                "--no-renames",
+                "--diff-filter=d",
+            ])
+            .current_dir(root),
+        None,
+    )
+    .map_err(|error| format!("git did not run: {error}"))?;
     if !out.status.success() {
         return Err(format!(
             "cannot list the staged paths: `git diff --cached` exited with {}",

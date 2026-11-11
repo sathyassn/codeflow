@@ -135,7 +135,9 @@ pub fn read_branch_name(
         None => {}
     }
     cmd.args(["check-ref-format", "--branch", name]);
-    match cmd.output() {
+    // An owned group: the guard's deadline exit must not leave it running
+    // (TSK-327).
+    match crate::git::owned::owned_output(&mut cmd, None) {
         // OS text rule (issue 79): the name is judged against protected
         // branch globs. One that is not valid UTF-8 reads as the sentinel
         // every branch rule treats as protected, as the hook plane does.

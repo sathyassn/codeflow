@@ -821,14 +821,38 @@ fn a_registry_push_refuses_a_promisor_on_a_git_too_old_to_read_locally() {
 /// Run the pre-push hook entry point in `root` for a push of `line` (one
 /// line of git's pre-push input) to `origin`, and how long it took.
 fn pre_push_origin(root: &Path, line: &str) -> (Output, std::time::Duration) {
+    pre_push_origin_with(root, line, None)
+}
+
+/// [`pre_push_origin`], with `first` ahead of everything else on `PATH`
+/// when given.
+fn pre_push_origin_with(
+    root: &Path,
+    line: &str,
+    first: Option<&Path>,
+) -> (Output, std::time::Duration) {
     use std::io::Write as _;
     let url = text(&run(
         "git",
         root,
         &["remote", "get-url", "--push", "origin"],
     ));
+    let mut cmd = command(exe().to_str().unwrap(), root);
+    if let Some(first) = first {
+        let path = cmd
+            .get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .and_then(|(_, value)| value)
+            .unwrap()
+            .to_owned();
+        let path = std::env::join_paths(
+            std::iter::once(first.to_path_buf()).chain(std::env::split_paths(&path)),
+        )
+        .unwrap();
+        cmd.env("PATH", path);
+    }
     let started = std::time::Instant::now();
-    let mut child = command(exe().to_str().unwrap(), root)
+    let mut child = cmd
         .env_remove("CODEFLOW_HOOK_BINARY")
         .args(["git-hook", "pre-push", "origin", url.trim()])
         .stdin(std::process::Stdio::piped())
@@ -987,7 +1011,17 @@ fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
     let changed = indexed(&["commit-tree", &tree, "-p", &base, "-m", "feat: change f"]);
     git(&clone, &["branch", "feat/y", &changed]);
     let stall = dir.path().join("stall-upload-pack");
-    std::fs::write(&stall, "#!/bin/sh\nsleep 60\nexit 1\n").unwrap();
+    let chain = dir.path().join("stall-chain");
+    // The stalled upload-pack records itself and the processes above it up
+    // to `codeflow ci`: the lazy fetch's git and the read that started it.
+    std::fs::write(
+        &stall,
+        format!(
+            "#!/bin/sh\npid=$$\nwhile [ \"$pid\" -gt 1 ]; do\n  echo \"$pid $(ps -o command= -p \"$pid\")\" >> '{chain}'\n  case \"$(ps -o command= -p \"$pid\")\" in *' ci '*) break;; esac\n  pid=$(ps -o ppid= -p \"$pid\" | tr -d ' ')\ndone\nexec sleep 60\n",
+            chain = chain.display()
+        ),
+    )
+    .unwrap();
     std::fs::set_permissions(&stall, std::fs::Permissions::from_mode(0o755)).unwrap();
     git(
         &clone,
@@ -1013,6 +1047,116 @@ fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
         "{took:?}: {out}"
     );
     assert!(took < std::time::Duration::from_secs(40), "{took:?}: {out}");
+    let chain = std::fs::read_to_string(&chain).unwrap();
+    eprintln!("stall chain:\n{chain}");
+    assert_all_ended(&chain);
+}
+
+/// TSK-327: a bounded read that `codeflow ci` starts late, as the leader
+/// of its own process group, ends when the pre-push hook ends the check at
+/// its deadline (here 5 s × 1 + 1 s + 5 s = 11 s). A `git` first on `PATH`
+/// delays the check's first read 2 s, then stalls the next read that leads
+/// its own group (the secret scan's `git version`, whose guard wait of
+/// 10 s would outlast the hook's). Every process of the stalled read has
+/// ended when the hook returns. Before, the read's deadline lived in
+/// `codeflow ci`, which the hook killed, so the stalled git ran on.
+#[cfg(unix)]
+#[test]
+fn a_late_nested_read_ends_with_the_pre_push_check() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("remote_query_timeout_seconds", 5.into()),
+                ("remote_query_attempts", 1.into()),
+                ("remote_fetch_timeout_seconds", 1.into()),
+                ("push_budget_seconds", 5.into()),
+            ],
+        );
+    });
+    git(&root, &["switch", "-q", "-c", "feat/y"]);
+    write(&root, "y.txt", "y\n");
+    commit_all(&root, "feat: add y");
+    let head = text(&run("git", &root, &["rev-parse", "HEAD"]));
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    let bin = dir.path().join("late-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.path().join("ci-reads");
+    let late = dir.path().join("late");
+    let chain = dir.path().join("stall-chain");
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\n\
+             case \"$(ps -o command= -p $PPID)\" in *' ci '*)\n\
+             \x20 group=$(ps -o pgid= -p $$ | tr -d ' ')\n\
+             \x20 echo \"$$ $group $*\" >> '{log}'\n\
+             \x20 if [ \"$group\" = \"$$\" ] && [ -e '{late}' ]; then\n\
+             \x20   echo \"$$ git $*\" >> '{chain}'\n\
+             \x20   exec sleep 60\n\
+             \x20 fi\n\
+             \x20 if [ \"$group\" != \"$$\" ] && [ ! -e '{late}' ]; then\n\
+             \x20   : > '{late}'\n\
+             \x20   sleep 2\n\
+             \x20 fi;;\n\
+             esac\n\
+             exec '{real}' \"$@\"\n",
+            log = log.display(),
+            late = late.display(),
+            chain = chain.display(),
+            real = real.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (ran, took) = pre_push_origin_with(
+        &root,
+        &format!(
+            "refs/heads/feat/y {} refs/heads/feat/y {}",
+            head.trim(),
+            "0".repeat(40)
+        ),
+        Some(&bin),
+    );
+    let out = text(&ran);
+    let reads = std::fs::read_to_string(&log).unwrap_or_default();
+    eprintln!("{took:?}\n{out}\nci reads:\n{reads}");
+    let chain = std::fs::read_to_string(&chain).unwrap_or_default();
+    assert!(
+        !chain.is_empty(),
+        "no late nested read stalled:\n{reads}\n{out}"
+    );
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(
+        out.contains("gave no verdict within its deadline"),
+        "{took:?}: {out}"
+    );
+    assert_all_ended(&chain);
+}
+
+/// Every process named on a line of `chain` (`<pid> <command>`) has
+/// ended, allowing a few seconds for an orphan's new parent to reap it.
+#[cfg(unix)]
+fn assert_all_ended(chain: &str) {
+    let gone = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    for line in chain.lines() {
+        let pid: i32 = line.split_whitespace().next().unwrap().parse().unwrap();
+        // SAFETY: signal 0 only asks whether the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < gone,
+                "{line} still runs after the hook returned:\n{chain}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 #[test]

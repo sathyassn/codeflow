@@ -338,34 +338,48 @@ enum ProbeResult {
 }
 
 fn run_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> ProbeResult {
-    let mut child = match Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .args(args)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+        .stderr(std::process::Stdio::null());
+    // The probe leads its own group, owned here: every path ends the group
+    // before the probe is reaped, and the group's watcher ends it if doctor
+    // is killed first (TSK-327). It reads no input: a probe in its own
+    // group must not wait on the terminal.
+    let mut owner = match crate::git::owned::GroupOwner::prepare(&mut command) {
+        Ok(owner) => owner,
+        Err(e) => return ProbeResult::SpawnError(e.to_string()),
+    };
+    let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => return ProbeResult::SpawnError(e.to_string()),
     };
+    owner.spawned(&child);
 
     let start = std::time::Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if status.success() {
-                    return ProbeResult::Success;
-                }
-                return ProbeResult::NonZeroExit(status.code().unwrap_or(-1));
+        match crate::git::remote_query::has_exited(&mut child) {
+            Ok(true) => {
+                owner.signal();
+                return match child.wait() {
+                    Ok(status) if status.success() => ProbeResult::Success,
+                    Ok(status) => ProbeResult::NonZeroExit(status.code().unwrap_or(-1)),
+                    Err(e) => ProbeResult::SpawnError(e.to_string()),
+                };
             }
-            Ok(None) => {
+            Ok(false) => {
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    owner.end(&mut child);
                     return ProbeResult::Timeout;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return ProbeResult::SpawnError(e.to_string()),
+            Err(e) => {
+                owner.end(&mut child);
+                return ProbeResult::SpawnError(e.to_string());
+            }
         }
     }
 }

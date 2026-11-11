@@ -903,14 +903,18 @@ fn run_check_with(
     if let Some(out) = &timings_out {
         command.arg("--timings-out").arg(&out.0);
     }
+    // The whole check runs within one deadline (TSK-327): its group ends
+    // with it, and a read it started in a group of its own is capped at that
+    // deadline and ended by the group's watcher when the check ends.
+    let deadline = ci_check_deadline(root);
     if is_ci {
         // `fill_registry` fetched what a partial clone left out.
-        command.arg("--registry-objects-local");
+        command.arg("--registry-objects-local").arg(format!(
+            "--deadline-ms={}",
+            deadline.total.as_millis().min(u128::from(u64::MAX))
+        ));
     }
     command.current_dir(root).env_remove("CODEFLOW_PR_BODY");
-    // The whole check, every git command it starts included, runs within
-    // one deadline and is ended with its process group past it (TSK-327).
-    let deadline = ci_check_deadline(root);
     let started = Instant::now();
     let output = remote_query::bounded_process_output(
         command,
@@ -2138,14 +2142,17 @@ fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
     if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
         codeflow_core::workgraph::history::check_command(root)?;
     }
-    let out = codeflow_core::git::judging_command()
-        .args(["-c", "core.commitGraph=false"])
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .output()
-        .map_err(|error| format!("cannot read Git answer: {error}"))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::judging_command()
+            .args(["-c", "core.commitGraph=false"])
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_NO_LAZY_FETCH", "1"),
+        None,
+    )
+    .map_err(|error| format!("cannot read Git answer: {error}"))?;
     git_answer(args, out)
 }
 
@@ -2154,14 +2161,14 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, 
     if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
         codeflow_core::workgraph::history::check_command(root)?;
     }
-    let out = codeflow_core::git::output_with_input(
+    let out = codeflow_core::git::owned::owned_output(
         codeflow_core::git::judging_command()
             .args(["-c", "core.commitGraph=false"])
             .arg("-C")
             .arg(root)
             .args(args)
             .env("GIT_NO_LAZY_FETCH", "1"),
-        input.as_bytes(),
+        Some(input.as_bytes()),
     )
     .map_err(|error| format!("cannot read Git answer: {error}"))?;
     git_answer(args, out)

@@ -452,18 +452,27 @@ pub(crate) fn bounded_output(
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
+    // A guard's own deadline caps this one (TSK-327).
+    let deadline =
+        crate::git::remote_query::outer_deadline().map_or(deadline, |outer| deadline.min(outer));
     if Instant::now() >= deadline {
         return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
     }
+    // Git leads its own group, owned here: every path below ends the group
+    // before git is reaped, and the watcher ends it if the guard exits
+    // first (TSK-327).
+    let mut owner = crate::git::owned::GroupOwner::prepare(command)
+        .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("cannot verify Git configuration: no output pipe")?;
+    owner.spawned(&child);
+    let Some(stdout) = child.stdout.take() else {
+        owner.end(&mut child);
+        return Err("cannot verify Git configuration: no output pipe".into());
+    };
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -477,6 +486,7 @@ pub(crate) fn bounded_output(
     let bytes = match result {
         Ok(Ok(bytes)) if bytes.len() as u64 <= LIMIT => bytes,
         _ => {
+            owner.signal();
             let _ = child.kill();
             std::thread::spawn(move || child.wait());
             return Err(
@@ -484,20 +494,28 @@ pub(crate) fn bounded_output(
             );
         }
     };
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("cannot verify Git configuration: {error}"))?
-        {
-            break status;
+    // Git's exit, observed without reaping it, so its group is ended first.
+    loop {
+        match crate::git::remote_query::has_exited(&mut child) {
+            Ok(true) => break,
+            Ok(false) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            outcome => {
+                owner.signal();
+                let _ = child.kill();
+                std::thread::spawn(move || child.wait());
+                return Err(match outcome {
+                    Err(error) => format!("cannot verify Git configuration: {error}"),
+                    Ok(_) => "cannot verify Git configuration: child exceeded 3 seconds".into(),
+                });
+            }
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            std::thread::spawn(move || child.wait());
-            return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    }
+    owner.signal();
+    let status = child
+        .wait()
+        .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
     if !status.success() {
         return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
     }

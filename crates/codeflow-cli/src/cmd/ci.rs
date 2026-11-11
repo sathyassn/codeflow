@@ -201,6 +201,12 @@ pub struct CiArgs {
     #[arg(long, hide = true)]
     pub registry_objects_local: bool,
 
+    /// Milliseconds left before the caller ends this run: every bounded
+    /// read is capped at that time. The pre-push hook passes its deadline
+    /// (TSK-327); it only shortens reads.
+    #[arg(long, value_name = "MS", hide = true)]
+    pub deadline_ms: Option<u64>,
+
     /// Print how long each check took, on stderr after the verdict, one
     /// line per check and then the total. The times only report; they
     /// change no verdict.
@@ -376,6 +382,13 @@ fn ci_environment(
 }
 
 pub fn run(args: &CiArgs) -> i32 {
+    if let Some(left) = args.deadline_ms {
+        // The pre-push hook ends this run at its deadline; every bounded
+        // read here ends by then by itself (TSK-327).
+        codeflow_core::git::remote_query::bound_reads_by(
+            std::time::Instant::now() + std::time::Duration::from_millis(left),
+        );
+    }
     let mut timings = timing::Timings::start();
     let code = run_timed(args, &mut timings);
     if args.timings {

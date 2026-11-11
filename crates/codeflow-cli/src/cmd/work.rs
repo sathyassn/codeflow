@@ -692,14 +692,15 @@ fn pr_review(
         .stdin(Stdio::null())
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
+    // `gh` leads its own group, owned here: the group ends before `gh` is
+    // reaped, and the watcher ends it if this process is killed first, as
+    // the pre-push hook does at its deadline (TSK-327).
+    let mut owner = codeflow_core::git::owned::GroupOwner::prepare(&mut command)
+        .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
     let mut child = command
         .spawn()
         .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
+    owner.spawned(&child);
     let start = Instant::now();
     let status = loop {
         if start.elapsed() >= REVIEW_LOOKUP_TIMEOUT {
@@ -721,9 +722,10 @@ fn pr_review(
                 ));
             }
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+        // Its exit, observed without reaping it, so its group ends first.
+        match codeflow_core::git::remote_query::has_exited(&mut child) {
+            Ok(true) => break Ok(()),
+            Ok(false) => std::thread::sleep(Duration::from_millis(20)),
             Err(error) => {
                 break Err(format!(
                     "cannot verify review for this pin: cannot wait for provider: {error}"
@@ -732,17 +734,14 @@ fn pr_review(
         }
     };
     // Terminate descendants too, including those holding the output file open.
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", child.id())])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+    owner.signal();
     let _ = child.kill();
-    let _ = child.wait();
-    if !status?.success() {
+    let exited = child.wait();
+    status?;
+    let status = exited.map_err(|error| {
+        format!("cannot verify review for this pin: cannot wait for provider: {error}")
+    })?;
+    if !status.success() {
         return Err("cannot verify review for this pin: provider failed".into());
     }
     output.rewind().map_err(|error| error.to_string())?;
