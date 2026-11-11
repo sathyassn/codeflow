@@ -332,14 +332,16 @@ pub fn agents_tier(src: &str) -> Option<Tier> {
 }
 
 /// What a value of a row field may hold: one non-empty line, no marker text,
-/// no HTML comment and no character a reader of the rendered text cannot see
-/// ([`sections::is_invisible`]).
+/// no HTML comment, no raw HTML as an independent Markdown parser reads it (a
+/// tag in a code span is text) and no character a reader of the rendered text
+/// cannot see ([`sections::is_invisible`]).
 fn row_value_ok(value: &str, table_cell: bool) -> bool {
     let refused = value.trim().is_empty()
         || value.contains(['\n', '\r'])
         || value.contains("<!--")
         || value.contains("-->")
         || value.chars().any(sections::is_invisible)
+        || oracle::has_raw_html(value)
         || value.to_ascii_lowercase().contains("codeflow:")
         || (table_cell && value.contains('|'));
     !refused
@@ -485,11 +487,11 @@ pub fn check(
                         index,
                         if is_rule {
                             Shown::fixed(
-                                "a rule override sets only `text` and `title`, each one line with no `<!--`, `-->`, `codeflow:` or invisible character",
+                                "a rule override sets only `text` and `title`, each one line with no `<!--`, `-->`, `codeflow:`, raw HTML (a tag in a code span is fine) or invisible character",
                             )
                         } else {
                             Shown::fixed(
-                                "a moment override sets only `action`, one line with no `|`, `<!--`, `-->`, `codeflow:` or invisible character",
+                                "a moment override sets only `action`, one line with no `|`, `<!--`, `-->`, `codeflow:`, raw HTML (a tag in a code span is fine) or invisible character",
                             )
                         },
                     ));

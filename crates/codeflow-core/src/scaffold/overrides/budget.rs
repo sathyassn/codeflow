@@ -8,17 +8,26 @@
 //! git rules included, toward that cut. Every protected instruction sits in
 //! the managed block, so the block's end must load whole: the bytes before
 //! the block in this file and in the directories above it, plus the block,
-//! must fit the limit the harness applies.
+//! must fit the budget.
 //!
-//! The check fails closed. When the limit cannot be determined, or the
-//! block's place in the file cannot be found, the override is refused.
+//! The budget is the 32 KiB default, lowered by a smaller
+//! `project_doc_max_bytes` in the project's `.codex/config.toml` or the
+//! user's Codex config, never raised by either: Codex ignores an untrusted
+//! project's config, and a command line flag, a profile, cloud-managed or
+//! system config, or a nested project config outranks both files, so a
+//! value above the default proves nothing about the limit a session runs
+//! under. Those sources are not read; that is the named limit of this check.
+//!
+//! The check fails closed. When a config that could lower the budget cannot
+//! be read, or the block's place in the file cannot be found, the override is
+//! refused.
 
 use std::path::Path;
 
 use super::{dest_shown, file_refused};
 use crate::scaffold::manifest::RegionFormat;
 use crate::scaffold::rule_map::{
-    ancestor_instruction_bytes, strict_instruction_limit, LimitSource,
+    ancestor_instruction_bytes, codex_home, instruction_budget, BudgetSource,
 };
 use crate::scaffold::state::read_beneath_root;
 use crate::scaffold::{region, ScaffoldError, Shown};
@@ -30,9 +39,20 @@ use crate::shown;
 ///
 /// # Errors
 ///
-/// The refusal naming the file, the end of the block and the limit.
+/// The refusal naming the file, the end of the block and the budget.
 pub(super) fn check(
     root: &Path,
+    dest: &str,
+    effective: &str,
+    format: RegionFormat,
+) -> Result<(), ScaffoldError> {
+    check_with(root, codex_home().as_deref(), dest, effective, format)
+}
+
+/// [`check`] with the Codex home whose user config applies given.
+fn check_with(
+    root: &Path,
+    home: Option<&Path>,
     dest: &str,
     effective: &str,
     format: RegionFormat,
@@ -45,7 +65,7 @@ pub(super) fn check(
         ))
     };
     let (limit, source) =
-        strict_instruction_limit(root).map_err(|reason| undetermined(Shown::fixed(reason)))?;
+        instruction_budget(root, home).map_err(|reason| undetermined(Shown::fixed(reason)))?;
     let current = read_beneath_root(root, dest)
         .map_err(|_| undetermined(Shown::fixed("the file cannot be read")))?;
     let block = region::extract_block(effective, format)
@@ -67,8 +87,9 @@ pub(super) fn check(
         return Ok(());
     }
     let source = Shown::fixed(match source {
-        LimitSource::Default => "Codex's default",
-        LimitSource::ProjectConfig => "project_doc_max_bytes in .codex/config.toml",
+        BudgetSource::Default => "Codex's default",
+        BudgetSource::ProjectConfig => "project_doc_max_bytes in .codex/config.toml",
+        BudgetSource::UserConfig => "project_doc_max_bytes in the Codex user config",
     });
     Err(file_refused(shown!(
         "the overrides would put the end of the managed instructions of {} at byte {}, past the {}-byte instruction limit ({}); Codex would cut the review and git rules that follow the overridden text, so shorten the replacements",
@@ -82,6 +103,7 @@ pub(super) fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scaffold::rule_map::codex_home_from;
 
     const BLOCK: &str =
         "<!-- codeflow:managed:begin scaffold=1 -->\nrules\n<!-- codeflow:managed:end -->";
@@ -93,7 +115,18 @@ mod tests {
     }
 
     fn checked(root: &Path, dest: &str) -> Result<(), String> {
-        check(root, dest, BLOCK, RegionFormat::Markdown).map_err(|error| error.to_string())
+        checked_in(root, None, dest)
+    }
+
+    /// `dest` checked with the user config of `home`, the Codex home.
+    fn checked_in(root: &Path, home: Option<&Path>, dest: &str) -> Result<(), String> {
+        check_with(root, home, dest, BLOCK, RegionFormat::Markdown)
+            .map_err(|error| error.to_string())
+    }
+
+    fn config(dir: &Path, rel: &str, text: &str) {
+        std::fs::create_dir_all(dir.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(rel), text).unwrap();
     }
 
     /// The instruction files of the directories above `dest` load before it,
@@ -148,9 +181,114 @@ mod tests {
         std::fs::write(root.join(".codex/config.toml"), "").unwrap();
         assert_eq!(checked(root, "AGENTS.md"), Ok(()));
         // No managed block in the rendering: its place cannot be found.
-        let error = check(root, "AGENTS.md", "no block\n", RegionFormat::Markdown)
-            .expect_err("no block")
-            .to_string();
+        let error = check_with(
+            root,
+            None,
+            "AGENTS.md",
+            "no block\n",
+            RegionFormat::Markdown,
+        )
+        .expect_err("no block")
+        .to_string();
         assert!(error.contains("its managed block is not found"), "{error}");
+    }
+
+    /// A configured value only lowers the budget: a project value above the
+    /// default, which a higher-priority setting or an untrusted project
+    /// would not honour, leaves the 32 KiB default in force.
+    #[test]
+    fn a_configured_limit_never_raises_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, home) = (dir.path().join("project"), dir.path().join("codex"));
+        write(&root, "AGENTS.md", 32 * 1024 - BLOCK.len() + 1);
+        for raised in [
+            "project_doc_max_bytes = 131072\n",
+            "project_doc_max_bytes = 32769\n",
+        ] {
+            config(&root, ".codex/config.toml", raised);
+            let error = checked(&root, "AGENTS.md").expect_err("the default still holds");
+            assert!(
+                error.contains("past the 32768-byte instruction limit (Codex's default)"),
+                "{error}"
+            );
+        }
+        config(&home, "config.toml", "project_doc_max_bytes = 999999\n");
+        let error = checked_in(&root, Some(&home), "AGENTS.md").expect_err("user raise ignored");
+        assert!(error.contains("32768-byte"), "{error}");
+        // A value equal to the default is no source of the budget.
+        config(
+            &root,
+            ".codex/config.toml",
+            "project_doc_max_bytes = 32768\n",
+        );
+        let error = checked(&root, "AGENTS.md").expect_err("over");
+        assert!(error.contains("(Codex's default)"), "{error}");
+    }
+
+    /// The user's Codex config lowers the budget, the lowest of the project
+    /// and user values wins, and an unusable user config refuses.
+    #[test]
+    fn the_user_config_lowers_the_budget_and_an_unusable_one_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, home) = (dir.path().join("project"), dir.path().join("codex"));
+        write(&root, "AGENTS.md", 1000);
+        assert_eq!(checked_in(&root, Some(&home), "AGENTS.md"), Ok(()));
+        config(&home, "config.toml", "project_doc_max_bytes = 500\n");
+        let error = checked_in(&root, Some(&home), "AGENTS.md").expect_err("user limit");
+        assert!(
+            error.contains(
+                "past the 500-byte instruction limit (project_doc_max_bytes in the Codex user config)"
+            ),
+            "{error}"
+        );
+        // Without the home the file is not read.
+        assert_eq!(checked_in(&root, None, "AGENTS.md"), Ok(()));
+        // The lower of the two applies, from either side.
+        config(&root, ".codex/config.toml", "project_doc_max_bytes = 300\n");
+        let error = checked_in(&root, Some(&home), "AGENTS.md").expect_err("project is lower");
+        assert!(
+            error.contains(
+                "300-byte instruction limit (project_doc_max_bytes in .codex/config.toml)"
+            ),
+            "{error}"
+        );
+        config(&root, ".codex/config.toml", "project_doc_max_bytes = 900\n");
+        let error = checked_in(&root, Some(&home), "AGENTS.md").expect_err("user is lower");
+        assert!(error.contains("500-byte"), "{error}");
+        // A user config that cannot be used refuses, even when the project
+        // config is fine.
+        for bad in [
+            "project_doc_max_bytes = \"big\"\n",
+            "project_doc_max_bytes = 0\n",
+            "= not toml\n",
+        ] {
+            config(&home, "config.toml", bad);
+            let error = checked_in(&root, Some(&home), "AGENTS.md").expect_err("unusable");
+            assert!(error.contains("the user's Codex config file"), "{error}");
+        }
+        std::fs::remove_file(home.join("config.toml")).unwrap();
+        std::fs::create_dir(home.join("config.toml")).unwrap();
+        let error = checked_in(&root, Some(&home), "AGENTS.md").expect_err("a directory");
+        assert!(error.contains("not a readable regular file"), "{error}");
+    }
+
+    /// `CODEX_HOME` names the Codex home when it is set and not empty, else
+    /// `.codex` under the user's home.
+    #[test]
+    fn the_codex_home_is_resolved_like_codex_does() {
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+        let user = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            codex_home_from(Some(OsString::from("/x/codex")), user.clone()),
+            Some(PathBuf::from("/x/codex"))
+        );
+        for unset in [None, Some(OsString::new())] {
+            assert_eq!(
+                codex_home_from(unset, user.clone()),
+                Some(PathBuf::from("/home/u/.codex"))
+            );
+        }
+        assert_eq!(codex_home_from(None, None), None);
     }
 }

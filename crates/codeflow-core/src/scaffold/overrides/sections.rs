@@ -470,6 +470,11 @@ pub enum BodyProblem {
     /// raw file: an HTML comment, a raw HTML block that renders nothing, or
     /// a control, bidirectional, zero-width or other invisible character.
     Concealed,
+    /// Raw HTML as `CommonMark` reads it: a tag with attributes such as
+    /// `hidden` or `style`, an element a reader does not see, or any other
+    /// inline or block HTML. A tag inside a code span or a code fence is
+    /// text and stays allowed.
+    RawHtml,
 }
 
 impl BodyProblem {
@@ -505,6 +510,9 @@ impl BodyProblem {
             }
             Self::Concealed => {
                 "the replacement holds text a reviewer would not see in rendered Markdown: an HTML comment, a script, style, declaration or processing-instruction block, or a control, bidirectional, zero-width or other invisible character; write visible text only"
+            }
+            Self::RawHtml => {
+                "the replacement holds raw HTML, whose hidden, style and similar attributes can keep text from a reviewer of the rendered page while an agent reads it; write Markdown only, and put any tag in a code span or code fence"
             }
         }
     }
@@ -651,6 +659,11 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
     }
     if container {
         return Err(BodyProblem::OpenContainer);
+    }
+    // The line checks above name the specific hazards; any raw HTML left,
+    // block or inline, is refused here, as an independent parser reads it.
+    if super::oracle::has_raw_html(body) {
+        return Err(BodyProblem::RawHtml);
     }
     Ok(())
 }
@@ -812,8 +825,58 @@ mod tests {
                 u32::from(hidden)
             );
         }
-        // Visible text stays accepted: tabs, accents, a code block, a pre block.
+        // Visible text stays accepted: tabs, accents, tags written as code.
         assert_eq!(check_body("a\tb caf\u{e9} \u{2192} done\n", 2), Ok(()));
-        assert_eq!(check_body("<pre>\nkept\n</pre>\n", 2), Ok(()));
+        assert_eq!(
+            check_body("Run `codeflow work claim <id>` first.\n", 2),
+            Ok(())
+        );
+        assert_eq!(
+            check_body("```html\n<span hidden>x</span>\n```\n", 2),
+            Ok(())
+        );
+        assert_eq!(check_body("See <https://example.com/a> now.\n", 2), Ok(()));
+    }
+
+    /// Raw HTML is refused whatever hides the text: an attribute, a style, an
+    /// element a reader does not see, or a tag with no attribute at all.
+    #[test]
+    fn raw_html_is_refused() {
+        let raw = Err(BodyProblem::RawHtml);
+        for html in [
+            "Post <span hidden>the secret</span> now.\n",
+            "Post <span style=\"display:none\">x</span> now.\n",
+            "Post <span style=\"visibility: hidden\">x</span> now.\n",
+            "Post <span style=\"opacity:0\">x</span> now.\n",
+            "Post <span style=\"font-size:0\">x</span> now.\n",
+            "Post <span style=\"color:#fff\">x</span> now.\n",
+            "Visible text.\n\n<div hidden>\nx\n</div>\n",
+            "Visible text <script>x</script> and more.\n",
+            "Visible text <style>p{display:none}</style> and more.\n",
+            "Visible text.\n\n<template>\nx\n</template>\n",
+            "Visible text <noscript>x</noscript> and more.\n",
+            "Visible text.\n\n<details>\n<summary></summary>\nx\n</details>\n",
+            "Visible text.\n\n<details>\nx\n</details>\n",
+            "Visible <b>bold</b> text.\n",
+            "<pre>\nx\n</pre>\n",
+            "Visible<br>text.\n",
+            "A bare <id> tag.\n",
+        ] {
+            let got = check_body(html, 2);
+            assert!(
+                got == raw || got == Err(BodyProblem::Concealed),
+                "{html:?}: {got:?}"
+            );
+        }
+        // The ones no line check names are refused by the parser.
+        for html in [
+            "Post <span hidden>the secret</span> now.\n",
+            "Visible text.\n\n<div hidden>\nx\n</div>\n",
+            "Visible <b>bold</b> text.\n",
+            "<pre>\nx\n</pre>\n",
+            "A bare <id> tag.\n",
+        ] {
+            assert_eq!(check_body(html, 2), raw, "{html:?}");
+        }
     }
 }

@@ -108,42 +108,123 @@ pub fn codex_instruction_limit(root: &std::path::Path) -> std::io::Result<(usize
     ))
 }
 
-/// The instruction limit Codex applies in the project under `root`, or the
-/// reason it cannot be determined. Stricter than [`codex_instruction_limit`],
-/// for a check that must fail closed: the config file must be absent or a
-/// regular, readable, parseable file, and a `project_doc_max_bytes` it sets
-/// must be a positive integer. The doctor measure treats such a file as
-/// holding no setting.
-///
-/// # Errors
-///
-/// A fixed reason, naming no path, when the limit cannot be determined.
-pub fn strict_instruction_limit(
-    root: &std::path::Path,
-) -> Result<(usize, LimitSource), &'static str> {
-    let path = root.join(".codex/config.toml");
-    if crate::absence::proven_absent(&path)
-        .map_err(|_| "the Codex config file's absence cannot be proven")?
-    {
-        return Ok((CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default));
+/// Which Codex config supplied the budget an override is held to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetSource {
+    /// Codex's default, [`CODEX_INSTRUCTION_LIMIT_BYTES`].
+    Default,
+    /// A lower `project_doc_max_bytes` in the project's `.codex/config.toml`.
+    ProjectConfig,
+    /// A lower `project_doc_max_bytes` in the user's Codex config.
+    UserConfig,
+}
+
+/// The Codex home a user config would load from: `CODEX_HOME` when it is
+/// set and not empty, else `.codex` under the user's home; `None` when
+/// neither can be determined.
+#[must_use]
+pub fn codex_home() -> Option<std::path::PathBuf> {
+    codex_home_from(
+        std::env::var_os("CODEX_HOME"),
+        crate::portable_path::user_home(),
+    )
+}
+
+/// [`codex_home`] from the values it reads.
+#[must_use]
+pub fn codex_home_from(
+    codex_home: Option<std::ffi::OsString>,
+    user_home: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    codex_home
+        .filter(|home| !home.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| user_home.map(|home| home.join(".codex")))
+}
+
+/// The Codex config a limit is read from.
+#[derive(Clone, Copy)]
+enum ConfigLayer {
+    Project,
+    User,
+}
+
+/// The `project_doc_max_bytes` the Codex config at `path` sets: `None` when
+/// the file or the key is absent, and a fixed reason when the file is not a
+/// regular, readable, parseable file or the key is not a positive integer.
+fn strict_config_limit(
+    path: &std::path::Path,
+    layer: ConfigLayer,
+) -> Result<Option<usize>, &'static str> {
+    let (absent, not_regular, unreadable, unparsed, not_positive) = match layer {
+        ConfigLayer::Project => (
+            "the project's Codex config file's absence cannot be proven",
+            "the project's Codex config file is not a readable regular file",
+            "the project's Codex config file cannot be read",
+            "the project's Codex config file does not parse",
+            "project_doc_max_bytes in the project's Codex config file is not a positive integer",
+        ),
+        ConfigLayer::User => (
+            "the user's Codex config file's absence cannot be proven",
+            "the user's Codex config file is not a readable regular file",
+            "the user's Codex config file cannot be read",
+            "the user's Codex config file does not parse",
+            "project_doc_max_bytes in the user's Codex config file is not a positive integer",
+        ),
+    };
+    if crate::absence::proven_absent(path).map_err(|_| absent)? {
+        return Ok(None);
     }
-    if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
-        return Err("the Codex config file is not a readable regular file");
+    if !std::fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return Err(not_regular);
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|_| "the Codex config file cannot be read")?;
-    let value: toml::Value = text
-        .parse()
-        .map_err(|_| "the Codex config file does not parse")?;
+    let text = std::fs::read_to_string(path).map_err(|_| unreadable)?;
+    let value: toml::Value = text.parse().map_err(|_| unparsed)?;
     let Some(setting) = value.get("project_doc_max_bytes") else {
-        return Ok((CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default));
+        return Ok(None);
     };
     setting
         .as_integer()
         .and_then(|bytes| usize::try_from(bytes).ok())
         .filter(|bytes| *bytes > 0)
-        .map(|bytes| (bytes, LimitSource::ProjectConfig))
-        .ok_or("project_doc_max_bytes in the Codex config file is not a positive integer")
+        .map(Some)
+        .ok_or(not_positive)
+}
+
+/// The most instruction bytes an override may leave Codex to load in the
+/// project under `root`: [`CODEX_INSTRUCTION_LIMIT_BYTES`], lowered by a
+/// smaller `project_doc_max_bytes` in the project's `.codex/config.toml` or
+/// in `codex_home`'s `config.toml`. A configured value never raises the
+/// budget: Codex ignores an untrusted project's config and lets a command
+/// line flag, a profile, cloud-managed or system config, or a nested
+/// project config beat these two files, and an override must hold under
+/// every one of them, not under the most generous. Those sources are not
+/// read, so a limit lower than the budget that only they set is not seen.
+///
+/// Fails closed: a config that is not a regular, readable, parseable file,
+/// or whose `project_doc_max_bytes` is not a positive integer, leaves the
+/// budget undetermined. A `codex_home` of `None` (no home can be found)
+/// means no user config.
+///
+/// # Errors
+///
+/// A fixed reason, naming no path, when the budget cannot be determined.
+pub fn instruction_budget(
+    root: &std::path::Path,
+    codex_home: Option<&std::path::Path>,
+) -> Result<(usize, BudgetSource), &'static str> {
+    let mut budget = (CODEX_INSTRUCTION_LIMIT_BYTES, BudgetSource::Default);
+    let project = strict_config_limit(&root.join(".codex/config.toml"), ConfigLayer::Project)?;
+    if let Some(bytes) = project.filter(|bytes| *bytes < budget.0) {
+        budget = (bytes, BudgetSource::ProjectConfig);
+    }
+    if let Some(home) = codex_home {
+        let user = strict_config_limit(&home.join("config.toml"), ConfigLayer::User)?;
+        if let Some(bytes) = user.filter(|bytes| *bytes < budget.0) {
+            budget = (bytes, BudgetSource::UserConfig);
+        }
+    }
+    Ok(budget)
 }
 
 /// The instruction file Codex loads from `dir` and its size: the override

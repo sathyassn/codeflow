@@ -10,6 +10,8 @@
 //! targeted units, headings and raw HTML blocks such as section markers
 //! included, to be the same block at the same place. Inside a targeted
 //! moment row it requires every cell but the action cell to read the same.
+//! It also requires that no raw HTML starts inside a replaced unit, since a
+//! hidden element or style would show a reviewer less than an agent reads.
 
 use std::ops::Range;
 
@@ -136,7 +138,36 @@ pub fn same_structure(pristine: &str, effective: &str, units: &[AppliedUnit]) ->
         !matches!(Target::parse(&unit.entry.target), Some(Target::Moment(_)))
             || kept_cells(&cells(pristine, &before[n]), &cells(effective, &after[n]))
     });
-    rows_kept && outside(pristine, &before, in_pristine) == outside(effective, &after, in_effective)
+    // No raw HTML starts inside a unit: the project's text is Markdown a
+    // reviewer sees as written.
+    let html_free = html_starts(effective)
+        .all(|at| !after.iter().any(|span| span.start <= at && at < span.end));
+    rows_kept
+        && html_free
+        && outside(pristine, &before, in_pristine) == outside(effective, &after, in_effective)
+}
+
+/// The byte offset of every raw HTML construct in `text` as `CommonMark`
+/// reads it: an HTML block or an inline tag, comment, declaration or
+/// processing instruction. A tag in a code span or a code block is text, not
+/// HTML.
+fn html_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
+    Parser::new_ext(text, Options::ENABLE_TABLES)
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(Tag::HtmlBlock) | Event::Html(_) | Event::InlineHtml(_) => {
+                Some(range.start)
+            }
+            _ => None,
+        })
+}
+
+/// Whether `text` holds raw HTML, which can hide text from a reviewer of the
+/// rendered page by attribute, style, element or comment while an agent
+/// reads it from the raw file. Override text may hold none (TSK-1302).
+#[must_use]
+pub(super) fn has_raw_html(text: &str) -> bool {
+    html_starts(text).next().is_some()
 }
 
 /// The bytes of every table cell that starts inside `span`, as Markdown
