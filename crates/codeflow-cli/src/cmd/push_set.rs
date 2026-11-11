@@ -930,17 +930,26 @@ fn branch_option(branch: &str) -> String {
 /// "run `git fetch --prune <remote>`", rendered from the raw remote name: a
 /// name holding `$(…)` stays one argument and one starting with `-`
 /// follows `--` (TSK-416 review round 2). A remote whose name messages
-/// withhold, since configuration text can be a URL with a credential, gets
-/// `git fetch --prune --all`, which names no remote (review round 7).
+/// withhold, since configuration text can be a URL with a credential
+/// (review round 7), gets `git fetch --prune -- <that name>`, the operator
+/// typing the name found by its line in `git remote`: naming the remote
+/// prunes it even when `skipFetchAll` keeps it out of `git fetch --all`
+/// (review round 8).
 fn prune_step(root: &Path, remote: &str) -> String {
-    let unnamed = || "run git fetch --prune --all, which prunes that remote without naming it";
+    let unnamed = || {
+        codeflow_core::security::git::withheld_remote_steps(
+            root,
+            remote,
+            &["git fetch --prune -- <that name>"],
+        )
+    };
     if !codeflow_core::security::git::remote_name_shown(root, remote) {
-        return unnamed().into();
+        return unnamed();
     }
     codeflow_core::git::Pasted::new("git fetch --prune")
         .value(remote)
         .render()
-        .map_or_else(|| unnamed().into(), |command| format!("run {command}"))
+        .map_or_else(unnamed, |command| format!("run {command}"))
 }
 
 /// The first tracking ref this clone holds for `remote`, under

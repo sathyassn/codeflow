@@ -1256,8 +1256,8 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
 /// print hands git the remote as one argument: pasting runs no
 /// substitution, and a name starting with `-` follows `--`. Since review
 /// round 7 only a plain name is pasted; any other name, one a terminal
-/// cannot show as itself included, gets `git fetch --prune --all`, which
-/// names no remote.
+/// cannot show as itself included, gets a step the operator types the
+/// name into (review round 8).
 #[cfg(unix)]
 #[test]
 fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
@@ -1266,7 +1266,6 @@ fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
     let root = dir.path();
     for (remote, expected) in [
         ("origin", vec!["fetch", "--prune", "origin"]),
-        ("o$(id)", vec!["fetch", "--prune", "--all"]),
         ("-x", vec!["fetch", "--prune", "--", "-x"]),
     ] {
         let step = prune_step(root, remote);
@@ -1284,14 +1283,91 @@ fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
         let arguments: Vec<&str> = printed.split_terminator('\0').collect();
         assert_eq!(arguments, expected, "{step}");
     }
-    // A name that is a URL with a credential (synthetic) is never pasted.
-    let url = prune_step(root, "https://user:OPAQUECANARY@host.invalid");
-    assert!(!url.contains("OPAQUECANARY"), "{url}");
-    assert!(!url.contains("host.invalid"), "{url}");
-    let hidden = prune_step(root, "o\u{200b}x");
-    assert!(hidden.contains("git fetch --prune --all"), "{hidden}");
-    assert!(!hidden.contains("o\u{200b}x"), "{hidden}");
-    assert!(!hidden.contains(r"o\u{200b}x"), "{hidden}");
+    // A name that is a URL with a credential (synthetic), holds shell
+    // syntax or a character a terminal hides is never pasted.
+    for hidden in [
+        "https://user:OPAQUECANARY@host.invalid",
+        "o$(id)",
+        "o\u{200b}x",
+    ] {
+        let step = prune_step(root, hidden);
+        assert!(
+            step.contains("`git fetch --prune -- <that name>`"),
+            "{step}"
+        );
+        assert!(!step.contains("--all"), "{step}");
+        for shown in [
+            hidden,
+            "OPAQUECANARY",
+            "host.invalid",
+            "$(id)",
+            r"o\u{200b}x",
+        ] {
+            assert!(!step.contains(shown), "{shown}: {step}");
+        }
+    }
+}
+
+/// TSK-416 review round 8, finding 2: a withheld remote that
+/// `remote.<name>.skipFetchAll` keeps out of `git fetch --all` is pruned
+/// by the step the refusal prints, the operator typing the name found on
+/// the stated line of `git remote`; `git fetch --prune --all`, the round 7
+/// step, leaves its stale tracking ref in place. The credential is
+/// synthetic, and the remote's URL is a local path.
+#[cfg(unix)]
+#[test]
+fn a_skip_fetch_all_remote_is_pruned_by_the_printed_step() {
+    let name = "user-OPAQUECANARY@host.invalid";
+    let h = History::new();
+    let root = h.local.path();
+    let source = h.local.path().to_str().unwrap();
+    h.git(&["config", &format!("remote.{name}.url"), source]);
+    h.git(&[
+        "config",
+        &format!("remote.{name}.fetch"),
+        &format!("+refs/heads/*:refs/remotes/{name}/*"),
+    ]);
+    h.git(&["config", &format!("remote.{name}.skipFetchAll"), "true"]);
+    let stale = format!("refs/remotes/{name}/gone");
+    h.git(&["update-ref", &stale, "HEAD"]);
+    let held = |reference: &str| {
+        git2::Repository::open(root)
+            .unwrap()
+            .find_reference(reference)
+            .is_ok()
+    };
+    let step = prune_step(root, name);
+    assert!(!step.contains("OPAQUECANARY"), "{step}");
+    assert!(!step.contains("host.invalid"), "{step}");
+    // The stated line of `git remote` names this remote.
+    let listed = h.git(&["remote"]);
+    let line = (1..=listed.lines().count())
+        .find(|at| step.contains(&format!("the name on line {at} of `git remote`")))
+        .unwrap_or_else(|| panic!("{step}"));
+    let typed = listed.lines().nth(line - 1).unwrap().to_string();
+    assert_eq!(typed, name, "{listed}");
+    // Round 7's step leaves the stale ref.
+    h.git(&["fetch", "--prune", "--all"]);
+    assert!(
+        held(&stale),
+        "git fetch --prune --all pruned a skipFetchAll remote"
+    );
+    // The printed step, with the name typed, prunes it.
+    let commands: Vec<&str> = step
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| span.contains("<that name>"))
+        .collect();
+    assert_eq!(commands, ["git fetch --prune -- <that name>"], "{step}");
+    let arguments: Vec<String> = commands[0]
+        .replace("<that name>", "THAT_NAME")
+        .split_whitespace()
+        .skip(1)
+        .map(|word| word.replace("THAT_NAME", &typed))
+        .collect();
+    h.git(&arguments.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(!held(&stale), "{step}");
 }
 
 /// TSK-416 review round 2, finding 1: the release preflight remedies print

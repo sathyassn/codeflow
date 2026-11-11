@@ -416,8 +416,16 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
             "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain fetch of the remote ({}), which rewrites {shown} from the remote and moves no local branch",
             step(&Pasted::new("git fetch").value(&remote))
         ),
-        Some(_) if present => format!(
-            "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with `git fetch --all`, which fetches its remote without naming it, rewrites {shown} from the remote and moves no local branch"
+        // A withheld name is typed by the operator, found by its line in
+        // `git remote`; naming the remote fetches it even when
+        // `skipFetchAll` keeps it out of `git fetch --all` (round 8).
+        Some((remote, _)) if present => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged; a plain fetch of its remote rewrites {shown} from the remote and moves no local branch: {}",
+            crate::security::git::withheld_remote_steps(
+                root,
+                &remote,
+                &["git fetch -- <that name>"]
+            )
         ),
         Some((remote, short)) if named => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it ({}, then {}), which the guard leaves to the operator",
@@ -426,9 +434,16 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
             step(&Pasted::new("git fetch").value(&remote))
         ),
         Some((remote, _)) => format!(
-            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it, which the guard leaves to the operator: {}, then deletes the ref under the new name (`git branch -d -r <new-name>/<branch>`) and runs `git fetch --all`",
+            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it, which the guard leaves to the operator (<branch> is the rest of the ref after the remote's name): {}",
             fresh_clone(&crate::security::git::shown_remote(root, &remote)),
-            crate::security::git::WITHHELD_REMOTE_STEP
+            crate::security::git::withheld_remote_steps(
+                root,
+                &remote,
+                &[
+                    "git branch -d -r -- <that name>/<branch>",
+                    "git fetch -- <that name>"
+                ],
+            )
         ),
         None => format!(
             "{shown} cannot be resolved, so the line it names cannot be judged; check this clone with `git fsck`, or {}",
@@ -6340,12 +6355,24 @@ mod tests {
                 .step_by(2)
                 .filter(|span| span.starts_with("git ") && !span.contains('<'))
                 .collect();
-            // Review round 7: a name that is not plain is withheld, and the
-            // only pasted step names no remote.
+            // Review round 7: a name that is not plain is withheld, and no
+            // step pastes it; round 8: the operator types it into each
+            // step, found on the stated line of `git remote`.
             if !crate::security::git::remote_name_shown(root, remote) {
                 assert!(!message.contains(remote), "{message}");
                 assert!(message.contains("<remote 1, name withheld>"), "{message}");
-                assert_eq!(commands, ["git fetch --all"], "{message}");
+                // Only the listing, which pastes no name, is whole.
+                assert!(
+                    commands.iter().all(|command| *command == "git remote"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains(
+                        "the operator runs `git branch -d -r -- <that name>/<branch>` then `git fetch -- <that name>`, typing for <that name> the name on line 1 of `git remote`"
+                    ),
+                    "{message}"
+                );
+                assert!(!message.contains("--all"), "{message}");
                 assert!(!message.contains("/nowhere"), "{message}");
                 continue;
             }
@@ -6460,6 +6487,142 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    /// TSK-416 review round 8, finding 2: a withheld remote that
+    /// `remote.<name>.skipFetchAll` keeps out of `git fetch --all` keeps its
+    /// unresolvable tip after that fetch, round 7's step. The printed
+    /// steps, the operator typing the name found on the stated line of `git
+    /// remote`, repair it, whether the tip names an object that is not a
+    /// commit or one that is missing. The credential is synthetic, and the
+    /// remote's URL is a local path.
+    #[test]
+    #[cfg(unix)]
+    fn a_skip_fetch_all_remote_tip_recovers_by_the_printed_steps() {
+        let name = "user-OPAQUECANARY@host.invalid";
+        for missing in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let source = root.to_str().unwrap();
+            git(root, &["init", "-q", "-b", "main"]);
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "chore: seed",
+                ],
+            );
+            git(root, &["config", &format!("remote.{name}.url"), source]);
+            git(
+                root,
+                &[
+                    "config",
+                    &format!("remote.{name}.fetch"),
+                    &format!("+refs/heads/*:refs/remotes/{name}/*"),
+                ],
+            );
+            git(
+                root,
+                &["config", &format!("remote.{name}.skipFetchAll"), "true"],
+            );
+            let fetched = format!("refs/remotes/{name}/main");
+            let refs = root.join(".git/refs/remotes").join(name);
+            fs::create_dir_all(&refs).unwrap();
+            let target = if missing {
+                "1".repeat(40)
+            } else {
+                Repository::open(root)
+                    .unwrap()
+                    .blob(b"x")
+                    .unwrap()
+                    .to_string()
+            };
+            fs::write(refs.join("main"), format!("{target}\n")).unwrap();
+            let message = unresolvable_reference(root, &fetched).unwrap();
+            assert!(!message.contains("OPAQUECANARY"), "{message}");
+            assert!(!message.contains("host.invalid"), "{message}");
+            assert!(!message.contains("--all"), "{message}");
+            // The stated line of `git remote` names this remote.
+            assert!(
+                message.contains("the name on line 1 of `git remote`"),
+                "{message}"
+            );
+            let listed = git_output(root, &["remote"]);
+            let typed = listed.lines().next().unwrap().to_string();
+            assert_eq!(typed, name, "{listed}");
+            // Round 7's step leaves the tip unresolvable. A missing object
+            // stops that fetch too.
+            let _ = crate::git::command()
+                .arg("-C")
+                .arg(root)
+                .args(["fetch", "--all"])
+                .output()
+                .unwrap();
+            assert!(
+                unresolvable_reference(root, &fetched).is_some(),
+                "{message}"
+            );
+            let commands: Vec<&str> = message
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.contains("<that name>"))
+                .collect();
+            let expected: &[&str] = if missing {
+                &[
+                    "git branch -d -r -- <that name>/<branch>",
+                    "git fetch -- <that name>",
+                ]
+            } else {
+                &["git fetch -- <that name>"]
+            };
+            assert_eq!(commands, expected, "{message}");
+            for command in commands {
+                let arguments: Vec<String> = command
+                    .replace("<that name>", "THAT_NAME")
+                    .split_whitespace()
+                    .skip(1)
+                    .map(|word| {
+                        word.replace("THAT_NAME", &typed)
+                            .replace("<branch>", "main")
+                    })
+                    .collect();
+                git(
+                    root,
+                    &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+                );
+            }
+            assert!(
+                unresolvable_reference(root, &fetched).is_none(),
+                "{message}"
+            );
+            let repo = Repository::open(root).unwrap();
+            let head = repo.head().unwrap().target().unwrap();
+            assert_eq!(
+                repo.find_reference(&fetched).unwrap().target(),
+                Some(head),
+                "{message}"
+            );
+        }
+    }
+
+    /// The standard output of a git command run in `root`.
+    fn git_output(root: &Path, args: &[&str]) -> String {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8(out.stdout).unwrap()
     }
 
     #[test]
