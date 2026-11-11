@@ -411,11 +411,7 @@ fn design_override_fills_the_seat_second_line_only_from_the_anchored_block() {
 
 /// A newer designated version for `seat_id`'s first line, and that seat's
 /// `effort` moved to `effort`: catalog data only.
-fn with_newer_first_line_version(
-    catalog: &mut Value,
-    seat_id: &str,
-    effort: &str,
-) -> String {
+fn with_newer_first_line_version(catalog: &mut Value, seat_id: &str, effort: &str) -> String {
     let first = seat(catalog, seat_id)["lines"][0]
         .as_str()
         .unwrap()

@@ -419,8 +419,8 @@ fn a_subagent_only_co_owner_approves_as_a_subagent_consult_and_never_designs() {
     let mut value = fixture();
     value["lines"][1]["launch"] = json!("subagent-only");
     let mut c = parse(&value).unwrap();
-    let selection = ProjectSelection::parse(&serde_json::to_vec(&authority_json()).unwrap())
-        .unwrap();
+    let selection =
+        ProjectSelection::parse(&serde_json::to_vec(&authority_json()).unwrap()).unwrap();
     selection.validate_blocks(&c).unwrap();
     c.authority = selection
         .design_authority

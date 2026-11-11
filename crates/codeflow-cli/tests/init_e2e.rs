@@ -1641,7 +1641,10 @@ fn an_upgrade_refuses_a_schema_5_catalog_until_codeflow_update() {
         preflight.contains("seats: unavailable: ") && preflight.contains(REFUSAL),
         "{preflight}"
     );
-    assert!(!preflight.contains("seat codex-primary: configured"), "{preflight}");
+    assert!(
+        !preflight.contains("seat codex-primary: configured"),
+        "{preflight}"
+    );
 
     let update = codeflow(&root, &["update"]);
     assert!(update.status.success(), "{}", output_text(&update));
@@ -1734,7 +1737,13 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|l| format!("{}={}", l["id"].as_str().unwrap(), l["launch"].as_str().unwrap()))
+        .map(|l| {
+            format!(
+                "{}={}",
+                l["id"].as_str().unwrap(),
+                l["launch"].as_str().unwrap()
+            )
+        })
         .collect();
     for expected in [
         "opus=either",
@@ -1745,13 +1754,22 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
         "luna=subagent-only",
         "grok=seat",
     ] {
-        assert!(launch.iter().any(|l| l == expected), "{expected}: {launch:?}");
+        assert!(
+            launch.iter().any(|l| l == expected),
+            "{expected}: {launch:?}"
+        );
     }
 
     let triple = |s: &str, p: &str, e: &str| (s.to_owned(), p.to_owned(), e.to_owned());
     for (host, expected) in [
-        ("claude-code", triple("claude-primary", "claude-opus-5-5", "high")),
-        ("codex-app", triple("codex-primary", "gpt-6.1-sol", "medium")),
+        (
+            "claude-code",
+            triple("claude-primary", "claude-opus-5-5", "high"),
+        ),
+        (
+            "codex-app",
+            triple("codex-primary", "gpt-6.1-sol", "medium"),
+        ),
         ("grok-cli", triple("grok-primary", "grok-4.7", "medium")),
     ] {
         let result = models_json(&root, &["--duty", "orchestrate", "--host", host]);
@@ -1759,7 +1777,14 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     }
     let review = models_json(
         &root,
-        &["--duty", "unit-review", "--host", "claude-code", "--author", "claude"],
+        &[
+            "--duty",
+            "unit-review",
+            "--host",
+            "claude-code",
+            "--author",
+            "claude",
+        ],
     );
     assert_eq!(
         seat_pin_effort(&review),
@@ -1772,7 +1797,14 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
         .map(|a| a["pinned_id"].as_str().unwrap())
         .collect();
     assert_eq!(fallbacks, ["gpt-6-sol", "gpt-5.6-sol"]);
-    let general = ["--duty", "general-review", "--host", "claude-code", "--author", "claude"];
+    let general = [
+        "--duty",
+        "general-review",
+        "--host",
+        "claude-code",
+        "--author",
+        "claude",
+    ];
     assert_eq!(
         seat_pin_effort(&models_json(&root, &general)),
         triple("grok-primary", "grok-4.7", "medium")
@@ -1788,7 +1820,14 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     // Fable runs as a worker; no seat anywhere resolves Fable or Astra.
     let reasoning = models_json(
         &root,
-        &["--duty", "reasoning-support", "--host", "claude-code", "--author", "codex"],
+        &[
+            "--duty",
+            "reasoning-support",
+            "--host",
+            "claude-code",
+            "--author",
+            "codex",
+        ],
     );
     assert!(
         reasoning["participants"]
@@ -1801,7 +1840,10 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     for host in ["claude-code", "codex-app", "grok-cli"] {
         let result = models_json(&root, &["--duty", "orchestrate", "--host", host]);
         let pin = &result["participants"][0]["pinned_id"];
-        assert!(pin != "claude-fable-5-1" && pin != "gpt-6-astra", "{host}: {result}");
+        assert!(
+            pin != "claude-fable-5-1" && pin != "gpt-6-astra",
+            "{host}: {result}"
+        );
     }
 
     // The harness choice is recorded in the session's own ledger file.
@@ -1821,7 +1863,11 @@ fn a_fresh_standard_install_resolves_the_shipped_defaults() {
     let effective = &recorded["effective_session"];
     assert_eq!(effective["session"], "fresh-install-session");
     let path = PathBuf::from(effective["recorded_to"].as_str().unwrap());
-    let path = if path.is_absolute() { path } else { root.join(path) };
+    let path = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
     assert!(
         path.ends_with("sessions/sessions-ses-fresh-install-session.jsonl"),
         "{}",

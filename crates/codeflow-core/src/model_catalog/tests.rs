@@ -183,15 +183,13 @@ fn seat_routes_take_the_seat_effort_and_line_routes_name_their_own() {
     // A seat route that names an effort would shadow its seat's field.
     assert_invalid(
         |v| {
-            v["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] =
-                json!("high");
+            v["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("high");
         },
         "names an effort on a seat route",
     );
     assert_invalid(
         |v| {
-            v["duties"]["unit-review"]["required"][0]["alternatives"][0]["effort"] =
-                json!("high");
+            v["duties"]["unit-review"]["required"][0]["alternatives"][0]["effort"] = json!("high");
         },
         "names an effort on a seat route",
     );
@@ -1396,14 +1394,29 @@ fn the_host_route_runs_at_each_host_seat_effort() {
         (chosen.seat.clone().unwrap(), chosen.effort)
     };
     let c = parse(&value).unwrap();
-    assert_eq!(host(&c, "claude-code"), (String::from("orchid-seat"), Effort::High));
-    assert_eq!(host(&c, "codex-cli"), (String::from("quartz-seat"), Effort::Medium));
-    assert_eq!(host(&c, "grok-cli"), (String::from("cinder-seat"), Effort::Medium));
+    assert_eq!(
+        host(&c, "claude-code"),
+        (String::from("orchid-seat"), Effort::High)
+    );
+    assert_eq!(
+        host(&c, "codex-cli"),
+        (String::from("quartz-seat"), Effort::Medium)
+    );
+    assert_eq!(
+        host(&c, "grok-cli"),
+        (String::from("cinder-seat"), Effort::Medium)
+    );
     // Changing one seat field alone moves only that host.
     value["seats"][2]["effort"] = json!("xhigh");
     let c = parse(&value).unwrap();
-    assert_eq!(host(&c, "grok-cli"), (String::from("cinder-seat"), Effort::Xhigh));
-    assert_eq!(host(&c, "codex-cli"), (String::from("quartz-seat"), Effort::Medium));
+    assert_eq!(
+        host(&c, "grok-cli"),
+        (String::from("cinder-seat"), Effort::Xhigh)
+    );
+    assert_eq!(
+        host(&c, "codex-cli"),
+        (String::from("quartz-seat"), Effort::Medium)
+    );
 }
 
 #[test]
