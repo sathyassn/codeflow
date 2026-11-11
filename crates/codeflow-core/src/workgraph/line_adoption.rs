@@ -89,8 +89,16 @@ pub fn direct_commit_refusal(line: &str, unadopted: &[String], reset: &str) -> (
             "{} would receive a commit made directly on the line ({ids})",
             crate::git::display_text(line)
         ),
+        // The ref is rendered from its raw value: a full ref can hold
+        // `$(…)`, and `git reset` reads paths after `--`, so a ref that
+        // starts with `-` is not printed (TSK-416 review round 2).
         format!(
-            "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
+            "land it by a pull request: save it on a task or planning branch, then {} and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")",
+            crate::git::pasted::step(
+                &crate::git::Pasted::new("git reset --keep")
+                    .value(reset)
+                    .without_end_of_options()
+            )
         ),
     )
 }
@@ -423,4 +431,43 @@ pub fn descends_from(root: &Path, tip: &str, head: &str) -> Result<bool, String>
     let tip = resolve(tip)?;
     let head = resolve(head)?;
     Ok(history::merge_base(&repo, tip, head).map_err(|e| e.to_string())? == tip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::direct_commit_refusal;
+
+    /// TSK-416 review round 2, finding 1: the `git reset --keep` step gives
+    /// a ref holding `$(…)` as one argument, and pasting it runs nothing
+    /// else; a ref that starts with `-` is not printed, since `--` would
+    /// make `git reset` read it as a path.
+    #[test]
+    #[cfg(unix)]
+    fn the_reset_step_keeps_a_hostile_ref_as_one_argument() {
+        let scratch = tempfile::tempdir().unwrap();
+        let marker = scratch.path().join("ran");
+        let reset = format!(
+            "refs/remotes/origin/integration/EPC-001-x$(touch {})",
+            marker.display()
+        );
+        let (_, remedy) =
+            direct_commit_refusal("integration/EPC-001-x", &["a".repeat(40)], &reset);
+        let command = remedy
+            .split('`')
+            .find(|span| span.starts_with("git reset "))
+            .unwrap_or_else(|| panic!("{remedy}"));
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, ["reset", "--keep", reset.as_str()], "{remedy}");
+        assert!(!marker.exists(), "{remedy}");
+        let (_, dashed) = direct_commit_refusal("x", &["a".repeat(40)], "-x");
+        assert!(!dashed.contains("git reset"), "{dashed}");
+        assert!(dashed.contains(crate::git::pasted::NOT_PRINTED), "{dashed}");
+    }
 }

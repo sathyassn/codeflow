@@ -1241,3 +1241,95 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
         "{report:?}"
     );
 }
+
+/// TSK-416 review round 2, finding 1: the prune step the push refusals
+/// print hands git the remote as one argument, whatever it holds: pasting
+/// runs no substitution, and a name starting with `-` follows `--`. A name
+/// a terminal cannot show as itself gets no command.
+#[cfg(unix)]
+#[test]
+fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
+    for (remote, expected) in [
+        ("origin", vec!["fetch", "--prune", "origin"]),
+        ("o$(id)", vec!["fetch", "--prune", "o$(id)"]),
+        ("-x", vec!["fetch", "--prune", "--", "-x"]),
+    ] {
+        let step = prune_step(remote);
+        let command = step
+            .strip_prefix("run ")
+            .unwrap_or_else(|| panic!("{step}"));
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, expected, "{step}");
+    }
+    let hidden = prune_step("o\u{200b}x");
+    assert!(!hidden.contains("git fetch"), "{hidden}");
+    assert!(hidden.contains(r"o\u{200b}x"), "{hidden}");
+}
+
+/// TSK-416 review round 2, finding 1: the release preflight remedies print
+/// `python3 <script> preflight <option>` with the pushed branch rendered
+/// from its raw name, so pasting hands the script the branch as one
+/// argument: no substitution runs, and a name starting with `-` is joined
+/// with `=` so it is never read as an option.
+#[cfg(unix)]
+#[test]
+fn the_preflight_branch_option_keeps_a_hostile_branch_as_one_argument() {
+    for (branch, expected) in [
+        ("main", vec!["preflight", "--branch", "main"]),
+        ("x$(id)", vec!["preflight", "--branch", "x$(id)"]),
+        ("a'b", vec!["preflight", "--branch", "a'b"]),
+        ("-x", vec!["preflight", "--branch=-x"]),
+    ] {
+        let remedy = codeflow_core::remedy::RELEASE_PREFLIGHT_UNRUN
+            .with(&[("branch_option", &branch_option(branch))])
+            .to_string();
+        let command = remedy
+            .split('`')
+            .nth(1)
+            .and_then(|step| step.strip_prefix("python3 scripts/release.py "))
+            .unwrap_or_else(|| panic!("{remedy}"));
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("p() {{ printf '%s\\0' \"$@\"; }}; p {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, expected, "{remedy}");
+    }
+    assert_eq!(branch_option("o\u{200b}x"), "--branch <branch>");
+}
+
+/// TSK-416 review round 2, finding 1: the push-set check remedy prints the
+/// rerun line from the raw arguments, one shell word each, so pasting it
+/// runs no substitution; an argument with no printed form leaves `<args>`.
+#[cfg(unix)]
+#[test]
+fn the_check_remedy_keeps_each_argument_as_one_word() {
+    let args = ["ci", "--range", "a$(id)..b", "--into", "o'x"];
+    let remedy = check_remedy(&args).to_string();
+    let command = remedy
+        .split('`')
+        .nth(1)
+        .and_then(|step| step.strip_prefix("codeflow "))
+        .unwrap_or_else(|| panic!("{remedy}"));
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!("p() {{ printf '%s\\0' \"$@\"; }}; p {command}"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{command}");
+    let printed = String::from_utf8(out.stdout).unwrap();
+    let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+    assert_eq!(arguments, args, "{remedy}");
+    let hidden = check_remedy(&["ci", "--into", "o\u{200b}x"]).to_string();
+    assert!(hidden.contains("`codeflow ci <args>`"), "{hidden}");
+}

@@ -1401,8 +1401,8 @@ fn target_tip(
     let shown = codeflow_core::git::display_text(&branch);
     let remedy = if origin_url(root).map_err(NoTarget::read)?.is_some() {
         format!(
-            "fetch it (`git fetch {}`), or name the branch this work lands on with `--into <branch>`",
-            codeflow_core::git::git_operands(&["origin", &branch])
+            "{}, or name the branch this work lands on with `--into <branch>`",
+            codeflow_core::workgraph::work_start::fetch_it("origin", &branch)
         )
     } else {
         format!(

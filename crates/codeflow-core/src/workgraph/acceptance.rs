@@ -2344,9 +2344,9 @@ fn judge_reopened(
         }
         if found.is_empty() {
             return TaskJudgement::unreadable(format!(
-                "the target `{}`, which this task's record names, does not resolve here; fetch it (`git fetch {}`)",
+                "the target `{}`, which this task's record names, does not resolve here; {}",
                 crate::git::display_text(name),
-                crate::git::git_operands(&["origin", name])
+                super::work_start::fetch_it("origin", name)
             ));
         }
         // The epic line's pull request into its target judges the line's
@@ -2365,7 +2365,7 @@ fn judge_reopened(
             };
             if found.is_empty() {
                 return TaskJudgement::unreadable(format!(
-                    "the default target `{}`{} does not resolve here; fetch it (`git fetch {}`)",
+                    "the default target `{}`{} does not resolve here; {}",
                     crate::git::display_text(&name.name),
                     // `origin/HEAD` names it, as the remote said (TSK-388).
                     if name.from_origin_head {
@@ -2373,7 +2373,7 @@ fn judge_reopened(
                     } else {
                         ""
                     },
-                    crate::git::git_operands(&["origin", &name.name])
+                    super::work_start::fetch_it("origin", &name.name)
                 ));
             }
             tips.extend(found);
@@ -2652,9 +2652,11 @@ pub(super) fn judged_target_tips(
     let descends = |of: Oid, ancestor: Oid, fetched_ref: &str, fetched_tip: Oid| {
         history::descendant_of(repo, of, ancestor).map_err(|error| {
             format!(
-                "cannot read the ancestry of {local_ref} at {local_tip} against {fetched_ref} at {fetched_tip}: {}; {}",
+                "cannot read the ancestry of {} at {local_tip} against {} at {fetched_tip}: {}; {}",
+                crate::git::display_text(local_ref),
+                crate::git::display_text(fetched_ref),
                 error.message(),
-                reopen_remedy(fetched_ref)
+                reopen_remedy(repo, fetched_ref)
             )
         })
     };
@@ -2668,8 +2670,10 @@ pub(super) fn judged_target_tips(
         }
         if !descends(*local_tip, *fetched_tip, fetched_ref, *fetched_tip)? {
             return Err(format!(
-                "the local branch {local_ref} at {local_tip} and {fetched_ref} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; {}",
-                reopen_remedy(fetched_ref)
+                "the local branch {} at {local_tip} and {} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; {}",
+                crate::git::display_text(local_ref),
+                crate::git::display_text(fetched_ref),
+                reopen_remedy(repo, fetched_ref)
             ));
         }
     }
@@ -2680,9 +2684,11 @@ pub(super) fn judged_target_tips(
 }
 
 /// The remedy for a reopen that cannot settle its target's local copy
-/// ([`super::work_start::fresh_clone_retry`]).
-fn reopen_remedy(fetched_ref: &str) -> String {
-    super::work_start::fresh_clone_retry(super::work_start::remote_of(fetched_ref))
+/// ([`super::work_start::fresh_clone_retry`]), naming the configured remote
+/// the diverged fetched ref came from, which need not be the remote the
+/// task branch is pushed to (TSK-416 review round 2).
+fn reopen_remedy(repo: &Repository, fetched_ref: &str) -> String {
+    super::work_start::fresh_clone_retry(&super::work_start::remote_of(repo, fetched_ref))
 }
 
 /// Every tip of the target `name` this clone knows, with the reference
@@ -6616,11 +6622,13 @@ mod judged_tip_tests {
             // TSK-416 review: a worktree shares the diverged branch, so the
             // remedy is a fresh clone, named by its remote, never its URL.
             "a worktree of this clone shares its branches",
-            "a fresh clone of the remote origin",
-            "`git remote get-url origin`",
+            "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
+            // Round 2: the task branch may live on another remote.
+            "`git remote add <name> <url>`, then `git fetch <name>`",
         ] {
             assert!(error.contains(part), "{part}: {error}");
         }
+        assert!(!error.contains("get-url"), "{error}");
         assert!(!error.contains("worktree add"), "{error}");
         assert!(!error.contains("/nowhere"), "{error}");
         assert!(!error.contains("update-ref"), "{error}");
@@ -6699,7 +6707,14 @@ mod judged_tip_tests {
                 } else {
                     "have diverged"
                 };
-                for part in [cause, other_ref, other.as_str(), local.as_str()] {
+                // Round 2: the fresh clone is of the remote the refusing
+                // fetched tip came from.
+                let clone = if other_ref.contains("/up/") {
+                    "a fresh clone of the remote up,"
+                } else {
+                    "a fresh clone of the remote origin,"
+                };
+                for part in [cause, other_ref, other.as_str(), local.as_str(), clone] {
                     assert!(error.contains(part), "{label}: {part}: {error}");
                 }
             }
@@ -6742,11 +6757,11 @@ mod judged_tip_tests {
         let blob = git(root, &["hash-object", "-w", "--stdin"]);
         std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
         let fresh_clone = [
-            "a fresh clone of the remote origin, made from outside this clone (`git clone <url> <path>`, where `git remote get-url origin` prints the url)",
+            "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
             "`git branch -d -r origin/main`, then `git fetch origin`",
             "which the guard leaves to the operator",
         ];
-        let fetch = ["plain `git fetch origin`, which rewrites refs/remotes/origin/main"];
+        let fetch = ["plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main"];
         for (points_at, remedy) in [("1".repeat(40), &fresh_clone[..]), (blob, &fetch[..])] {
             std::fs::write(
                 root.join(".git/refs/remotes/origin/main"),

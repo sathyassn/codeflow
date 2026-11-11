@@ -441,7 +441,7 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
         return Ok(Fetched::Ok);
     }
     let raw_stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr = crate::git::remote_query::display_urls(raw_stderr.trim());
+    let stderr = crate::git::remote_query::relay_diagnostic(git.root(), raw_stderr.trim());
     if stderr.is_empty() {
         return Err(IdsError::Git(format!(
             "fetching the registry from {remote} failed without a message"
@@ -488,9 +488,18 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
 pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
     let Some(tip) = git.rev(&tracking_ref(remote))? else {
         if let Some(last) = state::load(git)?.last_verified.get(remote) {
+            // The push is rendered from the raw remote name and the
+            // recorded tip (TSK-416 review round 2).
+            let refspec = format!("{last}:refs/heads/{}", super::REGISTRY_BRANCH);
             return Err(IdsError::Rewritten(format!(
-                "`{branch}` is absent from {remote} although this clone verified {} there; nothing was pushed. A maintainer republishes the verified history (`git push {remote} {last}:refs/heads/{branch}`), then repairs any file it lacks with `codeflow ids restore <id>`",
+                "`{branch}` is absent from {} although this clone verified {} there; nothing was pushed. A maintainer republishes the verified history ({}), then repairs any file it lacks with `codeflow ids restore <id>`",
+                crate::git::display_text(remote),
                 short(last),
+                crate::git::pasted::step(
+                    &crate::git::Pasted::new("git push")
+                        .value(remote)
+                        .value(&refspec)
+                ),
                 branch = super::REGISTRY_BRANCH,
             )));
         }
@@ -532,15 +541,21 @@ pub(super) fn push(git: &Git, remote: &str, commit: &str) -> Result<Pushed, IdsE
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(classify_push(&text))
+    Ok(classify_push_shown(&text, |reason| {
+        crate::git::remote_query::relay_diagnostic(git.root(), reason)
+    }))
 }
 
 /// Classify a failed push (R-13). A refusal that names permission, an
 /// unsupported operation or a transport failure is reported as such even
 /// when it also mentions a ref lock, so it is never retried as a race. Only
 /// the diagnostics of a lost compare-and-swap count as a moved tip; a hook
-/// refusal is reported; anything else is unclear and read back.
-fn classify_push(text: &str) -> Pushed {
+/// refusal is reported; anything else is unclear and read back. The raw
+/// text is judged; the reason reported is made showable by `shown`: the
+/// push relays it through [`crate::git::remote_query::relay_diagnostic`],
+/// which also redacts the credentials the repository's configuration
+/// holds (TSK-416 review round 2).
+fn classify_push_shown(text: &str, shown: impl Fn(&str) -> String) -> Pushed {
     let lower = diagnostics(text);
     let reason = text
         .lines()
@@ -548,7 +563,7 @@ fn classify_push(text: &str) -> Pushed {
         .filter(|line| !line.is_empty() && *line != "Done")
         .collect::<Vec<_>>()
         .join("; ");
-    let reason = crate::git::remote_query::display_urls(&reason);
+    let reason = shown(&reason);
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
     if has(&["codeflow pre-push"]) {
         return Pushed::Failed(IdsError::Refused(reason));
@@ -1086,6 +1101,13 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
     }
 }
 
+/// The push classification with the generic URL redaction, for the tests
+/// of the classification itself.
+#[cfg(test)]
+fn classify_push(text: &str) -> Pushed {
+    classify_push_shown(text, crate::git::remote_query::display_urls)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1118,6 +1140,53 @@ mod tests {
         };
         assert!(!reason.contains("FAKE_REGISTRY_TOKEN"));
         assert!(reason.contains("https://***@host.invalid/repo"));
+    }
+
+    /// TSK-416 review round 2, finding 1: the republish step a deleted
+    /// registry refusal prints hands git the remote and the recorded tip
+    /// as the arguments they are: pasting runs no substitution, and a
+    /// remote starting with `-` follows `--`.
+    #[cfg(unix)]
+    #[test]
+    fn the_republish_step_keeps_a_hostile_remote_as_one_argument() {
+        let last = "a".repeat(40);
+        for (remote, expected_remote) in [("o$(id)", vec!["o$(id)"]), ("-x", vec!["--", "-x"])] {
+            let root = tempfile::tempdir().unwrap();
+            let init = crate::git::command()
+                .arg("-C")
+                .arg(root.path())
+                .args(["init", "-q"])
+                .output()
+                .unwrap();
+            assert!(init.status.success());
+            let git = super::Git::new(root.path());
+            super::state::update(&git, |state| {
+                state
+                    .last_verified
+                    .insert(remote.to_string(), last.clone());
+            })
+            .unwrap();
+            let error = super::verify_descent(&git, remote)
+                .unwrap_err()
+                .to_string();
+            let command = error
+                .split('`')
+                .find(|span| span.starts_with("git push "))
+                .unwrap_or_else(|| panic!("{error}"));
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{command}");
+            let printed = String::from_utf8(out.stdout).unwrap();
+            let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+            let refspec = format!("{last}:refs/heads/{}", super::super::REGISTRY_BRANCH);
+            let mut expected = vec!["push"];
+            expected.extend(expected_remote);
+            expected.push(&refspec);
+            assert_eq!(arguments, expected, "{error}");
+        }
     }
 
     #[test]

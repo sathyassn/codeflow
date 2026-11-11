@@ -359,9 +359,17 @@ impl CommitFinding {
     pub fn next_step(&self) -> crate::remedy::Remedy {
         // A root branch read from `origin/HEAD` is the remote's name, which
         // policy validation never sees, so one that starts with `-` follows
-        // `--` (TSK-416 review).
-        let root = self.root_branch.name.to_string();
-        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &crate::git::git_operands(&[&root]))])
+        // `--` (TSK-416 review). The operand is rendered from the exact
+        // bytes; a name with no printed form leaves the placeholder, and the
+        // finding's message names the branch escaped (review round 2).
+        let root = crate::git::Pasted::new("git switch")
+            .name(&self.root_branch.name)
+            .render();
+        let operand = root
+            .as_deref()
+            .and_then(|command| command.strip_prefix("git switch "))
+            .unwrap_or("<root-branch>");
+        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", operand)])
     }
 }
 
@@ -1232,10 +1240,25 @@ pub fn worktree_findings(
                     "linked worktree {} of {repo_label} is outside every {LOCATIONS_KEY} entry",
                     path.display()
                 ),
+                // The path is rendered from its exact text, so a space or
+                // `$(…)` in it stays one argument (TSK-416 review round 2).
                 next_step: format!(
-                    "move it with git worktree move {} .worktrees/<slug>, or add its folder \
-                     to {LOCATIONS_KEY} in .codeflow/policy.json",
-                    path.display()
+                    "move it with {}, or add its folder to {LOCATIONS_KEY} in \
+                     .codeflow/policy.json",
+                    path.to_str()
+                        .and_then(|path| {
+                            crate::git::Pasted::new("git worktree move")
+                                .value(path)
+                                .placeholder(".worktrees/<slug>")
+                                .without_end_of_options()
+                                .render()
+                        })
+                        .unwrap_or_else(|| {
+                            "git worktree move to .worktrees/<slug>, run from a git client \
+                             since its path holds a character a terminal does not show as \
+                             itself"
+                                .to_string()
+                        })
                 ),
             });
             continue;
@@ -1509,29 +1532,48 @@ fn head_finding(
                     // `-` as an option, and after `--` it adds a detached
                     // worktree at that commit instead of the branch, so
                     // the step renames the branch first (TSK-416 review).
-                    let name = b.to_string();
-                    if crate::git::reads_as_option(&name) {
-                        format!(
-                            ", then rename the branch with git branch -m {} <new-name>, since git \
-                             worktree add does not take a branch whose name starts with -, and \
-                             run git worktree add .worktrees/<slug> <new-name> to continue it in \
-                             a worktree{pop}",
-                            crate::git::git_operands(&[&name])
-                        )
-                    } else {
-                        format!(
-                            ", then git worktree add .worktrees/<slug> {} to continue it in a \
-                             worktree{pop}",
-                            crate::git::shell_arg(&name)
-                        )
+                    // Each command is rendered from the branch's exact
+                    // bytes, never its display form (review round 2).
+                    let add = crate::git::Pasted::new("git worktree add .worktrees/<slug>")
+                        .name(b)
+                        .without_end_of_options()
+                        .render();
+                    let rename = crate::git::Pasted::new("git branch -m")
+                        .name(b)
+                        .placeholder("<new-name>")
+                        .render();
+                    match (add, rename) {
+                        (Some(add), _) => format!(
+                            ", then {add} to continue it in a worktree{pop}"
+                        ),
+                        (None, Some(rename)) => format!(
+                            ", then rename the branch with {rename}, since git worktree add \
+                             does not take a branch whose name starts with -, and run git \
+                             worktree add .worktrees/<slug> <new-name> to continue it in a \
+                             worktree{pop}"
+                        ),
+                        (None, None) => format!(
+                            ", then rename the branch with a git client, since its name \
+                             holds a character a terminal does not show as itself and no \
+                             command is printed to paste, and run git worktree add \
+                             .worktrees/<slug> <new-name> to continue it in a worktree{pop}"
+                        ),
                     }
                 }
                 Head::Detached(_) => String::new(),
             };
-            let switch = format!(
-                "run git switch {} at the root",
-                crate::git::git_operands(&[&root_branch.name.to_string()])
-            );
+            let switch = crate::git::Pasted::new("git switch")
+                .name(&root_branch.name)
+                .render()
+                .map_or_else(
+                    || {
+                        "switch the root to its root branch with a git client, since the \
+                         branch name holds a character a terminal does not show as itself \
+                         and no command is printed to paste"
+                            .to_string()
+                    },
+                    |switch| format!("run {switch} at the root"),
+                );
             Some(Finding {
                 severity: Severity::Warn,
                 rule: ROOT_BRANCH_KEY,
@@ -2128,11 +2170,22 @@ impl WorkspaceReport {
             "  - bind the nested repositories with the nested-repository inventory once the \
              harness permissions work ships it"
         )?;
+        // Rendered from the raw configured name, so a name holding `$(…)`
+        // pastes back as itself and one starting with `-` follows `--`
+        // (TSK-416 review round 2).
+        let integrate = crate::git::Pasted::new("codeflow integrate")
+            .value(self.branch.name())
+            .trailing_flag("--into main")
+            .render()
+            .unwrap_or_else(|| {
+                "codeflow integrate on the root branch, whose name holds a character a \
+                 terminal does not show as itself, so no command is printed to paste"
+                    .to_string()
+            });
         writeln!(
             f,
             "  - main is the milestone checkpoint: at a milestone the operator moves it \
-             forward with codeflow integrate {} --into main; agents never do",
-            self.branch.name()
+             forward with {integrate}; agents never do"
         )?;
         write!(
             f,

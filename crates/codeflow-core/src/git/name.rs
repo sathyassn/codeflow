@@ -69,7 +69,7 @@ impl std::error::Error for NotRepresentable {}
 /// tag block and the rest) and the other format characters (Cf). A name a
 /// remote supplies can hold any of them. Combining marks such as U+0301 are
 /// ordinary text in names and are shown as they are: that is the bound.
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(u32::from(c), 0x2028 | 0x2029)
         || IGNORABLE
@@ -418,54 +418,6 @@ pub fn display_text(text: &str) -> String {
     GitName::from_text(text).display().to_string()
 }
 
-/// `text` as one argument of a command a reader may paste into a POSIX
-/// shell: its [`display_text`] form, unchanged when every character is one
-/// a shell reads literally (letters, digits and `_-./:@%+=,`), else in
-/// single quotes, each `'` written `'\''`. A ref, remote or path can hold
-/// `$(…)`, `;`, a backtick or a space, and quoting keeps each of them inside
-/// the one argument instead of running it (TSK-416 review).
-#[must_use]
-pub fn shell_arg(text: &str) -> String {
-    let shown = display_text(text);
-    let literal = !shown.is_empty()
-        && shown.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',')
-        });
-    if literal {
-        shown
-    } else {
-        format!("'{}'", shown.replace('\'', r"'\''"))
-    }
-}
-
-/// Whether git reads `name`, as printed, as an option: it starts with `-`.
-/// A remedy puts such a name after `--` or gives it as its full ref
-/// (TSK-416 review).
-#[must_use]
-pub fn reads_as_option(name: &str) -> bool {
-    display_text(name).starts_with('-')
-}
-
-/// `operands` as the operands of a git command a reader may paste: each
-/// one a [`shell_arg`], with `--` before them when one starts with `-`, so
-/// git reads none of them as an option. A remote or branch may be named
-/// `-x` or `--upload-pack=<command>`, and git reads such an operand as an
-/// option wherever it stands (TSK-416 review). Only verbs that end their
-/// options at `--` take these operands: `git fetch`, `git branch` and
-/// `git remote get-url` do.
-#[must_use]
-pub fn git_operands(operands: &[&str]) -> String {
-    let quoted: Vec<String> = operands.iter().map(|operand| shell_arg(operand)).collect();
-    let dashed = operands.iter().any(|operand| reads_as_option(operand));
-    let joined = quoted.join(" ");
-    if dashed {
-        format!("-- {joined}")
-    } else {
-        joined
-    }
-}
-
 /// Output text as a terminal may show it: each control, format and
 /// separator character other than a line break or tab escaped, as
 /// [`display_text`] escapes them; backslashes are kept. For text that
@@ -729,54 +681,6 @@ pub fn parse_nul_list(bytes: &[u8]) -> Vec<GitName> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// TSK-416 review: each value reaches a shell as one literal argument,
-    /// whatever it holds, and an ordinary name prints unchanged.
-    #[test]
-    #[cfg(unix)]
-    fn a_shell_arg_is_one_literal_argument() {
-        assert_eq!(
-            shell_arg("refs/remotes/origin/main"),
-            "refs/remotes/origin/main"
-        );
-        assert_eq!(shell_arg("origin"), "origin");
-        let scratch = tempfile::tempdir().unwrap();
-        let marker = scratch.path().join("ran");
-        let marker = marker.to_str().unwrap();
-        for value in [
-            format!("o$(touch {marker})"),
-            format!("main;touch {marker}"),
-            format!("x`touch {marker}`"),
-            "/srv/a repo/x.git".to_string(),
-            "it's".to_string(),
-            "~/x".to_string(),
-            String::new(),
-        ] {
-            let out = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(format!("printf %s {}", shell_arg(&value)))
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{value}");
-            assert_eq!(String::from_utf8_lossy(&out.stdout), value);
-            assert!(!std::path::Path::new(marker).exists(), "{value} ran");
-        }
-    }
-
-    /// TSK-416 review: an operand that starts with `-` follows `--`, and
-    /// ordinary operands print as they did.
-    #[test]
-    fn git_operands_end_the_options_before_a_leading_dash() {
-        assert_eq!(git_operands(&["origin"]), "origin");
-        assert_eq!(git_operands(&["origin/main"]), "origin/main");
-        assert_eq!(git_operands(&["-x"]), "-- -x");
-        assert_eq!(
-            git_operands(&["--upload-pack=touch_pwned/main"]),
-            "-- --upload-pack=touch_pwned/main"
-        );
-        assert_eq!(git_operands(&["origin", "-x/main"]), "-- origin -x/main");
-        assert_eq!(git_operands(&["-o$(id)"]), "-- '-o$(id)'");
-    }
 
     #[test]
     fn two_names_that_differ_only_in_an_invalid_byte_stay_two_names() {

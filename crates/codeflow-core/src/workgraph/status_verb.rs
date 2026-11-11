@@ -605,14 +605,24 @@ fn pinned_commit(
         };
         let fetched_tip =
             shown(&fetched).map_or_else(|| "absent here".to_string(), |tip| format!("at {tip}"));
-        // Each argument a reader may paste is quoted: a ref name can hold
-        // `$(…)`, `;` or a backtick, and the branch to rename follows `--`
-        // when it starts with `-` (TSK-416 review). `--base` takes the full
-        // `refs/remotes/…` name, which never starts with `-`.
+        // Each argument a reader may paste is rendered from its raw value:
+        // a ref name can hold `$(…)`, `;` or a backtick, and the branch to
+        // rename follows `--` when it starts with `-` (TSK-416 review). The
+        // names in prose are shown escaped (TSK-388).
+        let base = crate::git::pasted::option("--base", &fetched).map_or_else(
+            || "`--base` with the full ref, which is not printed to paste since it holds a character a terminal does not show as itself".to_string(),
+            |option| format!("`{option}`"),
+        );
         return Err(format!(
-            "`{value}` is ambiguous here: the local ref {shadow} at {shadow_tip} is spelled like the fetched {fetched} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full (`{fetched}`, as in `--base {}`), or rename the local ref (`git branch -m {} <new-name>` for a branch)",
-            crate::git::shell_arg(&fetched),
-            crate::git::git_operands(&[value])
+            "`{}` is ambiguous here: the local ref {} at {shadow_tip} is spelled like the fetched {} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full, as in {base}, or rename the local ref ({} for a branch)",
+            crate::git::display_text(value),
+            crate::git::display_text(&shadow),
+            crate::git::display_text(&fetched),
+            crate::git::pasted::step(
+                &crate::git::Pasted::new("git branch -m")
+                    .value(value)
+                    .placeholder("<new-name>")
+            )
         ));
     }
     Ok(read(&fetched))
@@ -689,8 +699,9 @@ fn qualify(
             own_target = true;
             let Some(tip) = receiving_tip(repo, name)? else {
                 return Err(format!(
-                    "the target `{name}` does not resolve here; fetch it (`git fetch {}`)",
-                    crate::git::git_operands(&["origin", name])
+                    "the target `{}` does not resolve here; {}",
+                    crate::git::display_text(name),
+                    super::work_start::fetch_it("origin", name)
                 ));
             };
             target = Some(tip);
@@ -759,8 +770,9 @@ fn default_target(
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
         let tip = pinned_commit(repo, base)?.map_err(|error| {
             format!(
-                "`--base {base}` does not name a commit here ({error}); fetch it (`git fetch {}`)",
-                crate::git::git_operands(&["origin", &name])
+                "`--base {}` does not name a commit here ({error}); {}",
+                crate::git::display_text(base),
+                super::work_start::fetch_it("origin", &name)
             )
         })?;
         return Ok(Some((name, tip)));
@@ -846,8 +858,9 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
             .any(|remote| matches!(remote, Ok(Some("origin"))));
         if !origin {
             return Err(format!(
-                "this clone has remotes but no `origin`, so the target `{name}` has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch {}`)",
-                crate::git::git_operands(&["origin", name])
+                "this clone has remotes but no `origin`, so the target `{}` has no receiving source; add the remote that carries it as `origin` and {}",
+                crate::git::display_text(name),
+                super::work_start::fetch_it("origin", name)
             ));
         }
         format!("refs/remotes/origin/{name}")
@@ -862,8 +875,10 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
                 Ok(None)
             } else {
                 Err(format!(
-                    "the target `{name}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch {}`) and run this again",
-                    crate::git::git_operands(&["origin", name])
+                    "the target `{}` has no remote-tracking ref {} here, and a local branch is never the target's authority; {} and run this again",
+                    crate::git::display_text(name),
+                    crate::git::display_text(&reference),
+                    super::work_start::fetch_it("origin", name)
                 ))
             }
         }
@@ -1283,8 +1298,8 @@ mod tests {
     /// and git reads a name that starts with `-` as the branch, never as
     /// an option. Each runs here under a shell whose `git` prints its
     /// arguments, and the rename then runs with git itself. (A backtick
-    /// would split the message's own code spans; `shell_arg`'s test covers
-    /// it.)
+    /// would split the message's own code spans; the renderer's own test
+    /// covers it.)
     #[test]
     #[cfg(unix)]
     fn the_ambiguity_remedy_quotes_a_name_holding_shell_syntax() {
@@ -1354,6 +1369,35 @@ mod tests {
                 "{rename}"
             );
         }
+    }
+
+    /// TSK-416 review round 2, finding 3: a branch name holding a character
+    /// a terminal does not show as itself (U+200B) is named escaped in the
+    /// prose, and no command is printed for it, since the escaped form
+    /// pasted back would name another branch (`\u{200b}` as literal text).
+    #[test]
+    fn the_ambiguity_remedy_prints_no_command_for_a_hidden_character() {
+        let value = "origin/ma\u{200b}in";
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let tip = repo
+            .commit(None, &signature, &signature, "tip", &tree, &[])
+            .unwrap();
+        repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+            .unwrap();
+        repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+            .unwrap();
+        let error = target_commit(&repo, Some(value)).unwrap_err();
+        assert!(error.contains(r"origin/ma\u{200b}in"), "{error}");
+        assert!(!error.contains('\u{200b}'), "{error}");
+        assert!(!error.contains("git branch -m"), "{error}");
+        assert!(!error.contains("`--base refs"), "{error}");
+        assert!(error.contains(crate::git::pasted::NOT_PRINTED), "{error}");
     }
 
     /// TSK-416 review: a target branch named like an option reaches git as

@@ -205,25 +205,36 @@ pub fn create_follow_up_with(
     // The start point of the printed `git switch -c`: a target named like
     // an option is given as its full ref, which git never reads as one
     // (`git switch` takes no `--` before it). The record's value is not
-    // checked before this point (TSK-416 review).
-    let start = if crate::git::reads_as_option(&target) {
-        crate::git::shell_arg(&format!("refs/heads/{target}"))
-    } else {
-        crate::git::shell_arg(&target)
+    // checked before this point (TSK-416 review). The command is rendered
+    // from the raw value, and names shown in prose are escaped (TSK-388).
+    let full = format!("refs/heads/{target}");
+    let start = if target.starts_with('-') { &full } else { &target };
+    let switch = |head: &'static str| {
+        crate::git::pasted::step(
+            &crate::git::Pasted::new(head)
+                .value(start)
+                .without_end_of_options(),
+        )
     };
+    let (shown_target, shown_branch) = (
+        crate::git::display_text(&target),
+        crate::git::display_text(&branch),
+    );
     if epic.is_some() && !planning {
         return Err(StoreError::Invalid(format!(
-            "a follow-up is written on a plan/ branch of '{target}' (current branch '{branch}'); \
-             run `git switch -c plan/<slug> {start}` first"
+            "a follow-up is written on a plan/ branch of '{shown_target}' (current branch \
+             '{shown_branch}'); run {} first",
+            switch("git switch -c plan/<slug>")
         )));
     }
     if epic.is_none() && planning {
         return Err(StoreError::Invalid(format!(
             "{source_id} is a standalone task, so its follow-up is a standalone task too: \
              its record lands with its work on its own task branch, since a planning pull \
-             request names an epic (current branch '{branch}'); run \
-             `git switch -c task/<slug> {start}`, file the follow-up there, fill in and \
-             commit its record, then run `codeflow work claim <TSK-NNN>`"
+             request names an epic (current branch '{shown_branch}'); run {}, file the \
+             follow-up there, fill in and commit its record, then run `codeflow work claim \
+             <TSK-NNN>`",
+            switch("git switch -c task/<slug>")
         )));
     }
     let reason = epic
@@ -296,7 +307,9 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
         Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
-        Err(crate::git::remote_query::display_urls(
+        // TSK-416 review round 2: configured credentials redacted first.
+        Err(crate::git::remote_query::relay_diagnostic(
+            repo_root,
             String::from_utf8_lossy(&out.stderr).trim(),
         ))
     }

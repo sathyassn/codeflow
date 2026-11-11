@@ -222,9 +222,18 @@ fn violation(
 }
 
 /// How to clear a push-set check: rerun it by hand after fixing its findings.
+/// Each argument is one shell word rendered from its raw value, so a ref
+/// holding `$(…)` or a quote pastes back as itself; when one has no printed
+/// form, the step names `<args>` and the failure line above labels them
+/// (TSK-416 review round 2).
 fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
     let rest = args.split_first().map_or(args, |(_, rest)| rest);
-    codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &rest.join(" "))])
+    let words: Option<Vec<String>> = rest
+        .iter()
+        .map(|arg| codeflow_core::git::pasted::word(arg))
+        .collect();
+    let shown = words.map_or_else(|| "<args>".to_string(), |words| words.join(" "));
+    codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &shown)])
 }
 
 /// What judges a push under [`Judged::Target`]: the policy at the
@@ -633,6 +642,7 @@ fn release_preflight(
 ) {
     let branch = pushed.remote_branch().unwrap_or_default();
     let shown_branch = display_text(branch);
+    let branch_option = branch_option(branch);
     let started = Instant::now();
     let result =
         codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote, exe);
@@ -652,7 +662,7 @@ fn release_preflight(
                         line,
                         remedy::RELEASE_PREFLIGHT_NOTE.with(&[
                             ("script", codeflow_core::release_local::SCRIPT),
-                            ("branch", branch),
+                            ("branch_option", &branch_option),
                         ]),
                     ));
                 }
@@ -663,7 +673,7 @@ fn release_preflight(
                     format!("release preflight ({shown_branch}): this push breaks the release tree"),
                     codeflow_core::remedy::RELEASE_PREFLIGHT.with(&[
                         ("script", codeflow_core::release_local::SCRIPT),
-                        ("branch", branch),
+                        ("branch_option", &branch_option),
                     ]),
                 ));
             }
@@ -672,7 +682,7 @@ fn release_preflight(
             format!(
                 "release preflight could not complete for '{shown_branch}': {error}; the pull request job checks it"
             ),
-            remedy::RELEASE_PREFLIGHT_UNRUN.with(&[("branch", branch)]),
+            remedy::RELEASE_PREFLIGHT_UNRUN.with(&[("branch_option", &branch_option)]),
         )),
     }
 }
@@ -700,14 +710,18 @@ fn run_check_with(
             **arg != "--advertisement-stdin"
                 && run_level.is_none_or(|level| *at != level && *at != level + 1)
         })
-        .map(|(_, arg)| match arg.strip_prefix("--into=") {
-            // The destination's default branch, which it names itself.
-            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
-            None => remote_query::display_url(arg),
-        })
+        .map(|(_, arg)| remote_query::display_url(arg))
         .collect();
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
-    let shown = format!("codeflow {}", rerun.join(" "));
+    // Each argument is one shell word, rendered from its raw value, so a
+    // branch or ref holding `$(…)` or a space pastes back as itself
+    // (TSK-416 review round 2). An argument a terminal cannot show as
+    // itself has no such form: the name is then each argument's display
+    // form, a label only.
+    let shown = codeflow_core::git::pasted::argv("codeflow", &rerun).unwrap_or_else(|| {
+        let labels: Vec<String> = rerun.iter().map(|arg| display_text(arg)).collect();
+        format!("codeflow {}", labels.join(" "))
+    });
     // `codeflow ci` names its blocking rules in a file of its own, for the
     // refusal record; its printed findings can quote operation content.
     let rules_out = (args.first() == Some(&"ci"))
@@ -886,6 +900,35 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
     }))
 }
 
+/// The release preflight's `--branch` option for a printed command,
+/// rendered from the raw pushed name: a name holding `$(…)` stays one
+/// argument and one starting with `-` is joined with `=`. A name with no
+/// printed form leaves a placeholder for the reader to fill, since the
+/// finding names the branch escaped (TSK-416 review round 2).
+fn branch_option(branch: &str) -> String {
+    codeflow_core::git::pasted::option("--branch", branch)
+        .unwrap_or_else(|| "--branch <branch>".to_string())
+}
+
+/// "run git fetch --prune <remote>", rendered from the raw remote name: a
+/// name holding `$(…)` stays one argument and one starting with `-`
+/// follows `--`; a name with no printed form gets a step that needs no
+/// pasted command (TSK-416 review round 2).
+fn prune_step(remote: &str) -> String {
+    codeflow_core::git::Pasted::new("git fetch --prune")
+        .value(remote)
+        .render()
+        .map_or_else(
+            || {
+                format!(
+                    "fetch {} with pruning from a git client, since its name holds a character a terminal does not show as itself",
+                    display_text(remote)
+                )
+            },
+            |command| format!("run {command}"),
+        )
+}
+
 /// The first tracking ref this clone holds for `remote`, under
 /// `refs/remotes/<remote>/` or any destination of its fetch refspecs,
 /// exact or glob (a glob is read up to its last `/` before the `*`, a
@@ -914,9 +957,10 @@ fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String
             };
             if !pattern.starts_with("refs/") {
                 return Err(format!(
-                    "{key} stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; run git fetch --prune {}",
+                    "{} stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; {}",
+                    display_text(&key),
                     display_text(dst),
-                    display_text(remote)
+                    prune_step(remote)
                 ));
             }
             patterns.push(pattern.to_string());
@@ -1055,9 +1099,9 @@ fn judged_by(
             return Ok(Judged::Initialization);
         };
         return Err(format!(
-            "the destination advertises no branches while this clone still holds its tracking ref {}, so no default branch can judge the push; run git fetch --prune {}",
+            "the destination advertises no branches while this clone still holds its tracking ref {}, so no default branch can judge the push; {}",
             display_text(&held),
-            display_text(remote)
+            prune_step(remote)
         ));
     }
     let anchor = match destination.anchor(root, steps) {

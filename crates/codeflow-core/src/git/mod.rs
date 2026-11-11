@@ -10,14 +10,15 @@ use std::sync::OnceLock;
 pub mod ci;
 pub mod conflict;
 pub mod name;
+pub mod pasted;
 pub mod remote_query;
 pub(crate) mod stdin;
 pub mod unreadable;
 
 pub use name::{
     diff_paths, display_json, display_key, display_line, display_message, display_output,
-    display_path, display_print, display_relay, display_text, git_operands, gitfile_dir,
-    key_is_text, reads_as_option, shell_arg, tracking_branch, walk_tree, DisplayName, GitName,
+    display_path, display_print, display_relay, display_text, gitfile_dir,
+    key_is_text, tracking_branch, walk_tree, DisplayName, GitName,
     NotRepresentable, NotUtf8, TextBlock, Walk,
 };
 
@@ -356,6 +357,7 @@ pub fn blob_id_at(
 
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
+pub use pasted::Pasted;
 pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
 
 /// Whether local commit objects prove that a tip contains `sha`.

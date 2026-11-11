@@ -111,7 +111,8 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
         .is_some();
     if !populated && !ask {
         return Err(format!(
-            "refs/remotes/{remote}/ holds no refs, and the remote was not asked"
+            "refs/remotes/{}/ holds no refs, and the remote was not asked",
+            crate::git::display_text(remote)
         ));
     }
     if !populated {
@@ -119,17 +120,19 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
         // or whose tracking refs were deleted, from one that holds nothing
         // yet, so the remote is asked. Only a remote that answers with no
         // refs is initialization; any other answer or a failure refuses.
+        let shown = crate::git::display_text(remote);
+        let fetch = fetch_step(remote);
         return match advertises_refs(&repo, root, remote) {
             Ok(false) => unestablished(
                 &repo,
                 root,
-                &format!("initialization: {remote} advertises no refs"),
+                &format!("initialization: {shown} advertises no refs"),
             ),
             Ok(true) => Err(format!(
-                "cannot read the policy authority: {remote} has refs but refs/remotes/{remote}/ holds none here; run git fetch {remote}"
+                "cannot read the policy authority: {shown} has refs but refs/remotes/{shown}/ holds none here; {fetch}"
             )),
             Err(why) => Err(format!(
-                "cannot read the policy authority: refs/remotes/{remote}/ holds no refs and {remote} could not be asked whether it has any ({why}); run git fetch {remote} (git waits on its own terms, outside the guard); once its refs are here the guards read the policy locally and ask {remote} nothing"
+                "cannot read the policy authority: refs/remotes/{shown}/ holds no refs and {shown} could not be asked whether it has any ({why}); {fetch} (git waits on its own terms, outside the guard); once its refs are here the guards read the policy locally and ask {shown} nothing"
             )),
         };
     }
@@ -181,28 +184,65 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
     }
 }
 
+/// "run git fetch <remote>", rendered from the raw remote name, so a name
+/// holding `$(…)` or starting with `-` reaches git as the remote; a name
+/// with no printed form gets a step that needs no pasted command (TSK-416
+/// review round 2).
+fn fetch_step(remote: &str) -> String {
+    crate::git::Pasted::new("git fetch")
+        .value(remote)
+        .render()
+        .map_or_else(
+            || {
+                format!(
+                    "fetch {} with a git client, since its name holds a character a terminal does not show as itself",
+                    crate::git::display_text(remote)
+                )
+            },
+            |command| format!("run {command}"),
+        )
+}
+
 /// `refs/remotes/<remote>/HEAD`, which must name a tracking branch of the
 /// remote, and the commit that branch names now.
 fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> {
     let head = format!("refs/remotes/{remote}/HEAD");
-    let set_head = format!(
-        "the operator runs git remote set-head {remote} -a (git fetch {remote} records it too, on git 2.48 or later); no other branch is taken as the default"
-    );
+    // Names in prose are shown escaped (TSK-388); each command is rendered
+    // from the raw remote name (TSK-416 review round 2).
+    let shown_remote = crate::git::display_text(remote);
+    let shown_head = crate::git::display_text(&head);
+    let fetch = fetch_step(remote);
+    let set_head = match (
+        crate::git::Pasted::new("git remote set-head")
+            .value(remote)
+            .trailing_flag("-a")
+            .render(),
+        crate::git::Pasted::new("git fetch").value(remote).render(),
+    ) {
+        (Some(set_head), Some(fetch)) => format!(
+            "the operator runs {set_head} ({fetch} records it too, on git 2.48 or later); no other branch is taken as the default"
+        ),
+        _ => format!(
+            "the operator records the default branch of {shown_remote} with git remote set-head -a from a git client, since the remote's name holds a character a terminal does not show as itself; no other branch is taken as the default"
+        ),
+    };
     let reference = match repo.find_reference(&head) {
         Ok(reference) => reference,
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             return Err(format!(
-                "the policy authority is unset: {head} does not exist, so the default branch of {remote} is unknown; {set_head}"
+                "the policy authority is unset: {shown_head} does not exist, so the default branch of {shown_remote} is unknown; {set_head}"
             ))
         }
         Err(error) => {
             return Err(format!(
-                "cannot read policy source {head}: {error}; run git fetch {remote}"
+                "cannot read policy source {shown_head}: {error}; {fetch}"
             ))
         }
     };
     let not_branch = |what: &str| {
-        format!("the policy authority {head} {what}, not a branch of {remote}; {set_head}")
+        format!(
+            "the policy authority {shown_head} {what}, not a branch of {shown_remote}; {set_head}"
+        )
     };
     let Some(target) = crate::git::name::symbolic_target(&reference) else {
         return Err(not_branch("names a commit directly"));
@@ -213,7 +253,7 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
     // never replaced by a lossy spelling.
     let target = target
         .rule_text()
-        .map_err(|e| format!("cannot read policy source {head}: {e}; {set_head}"))?
+        .map_err(|e| format!("cannot read policy source {shown_head}: {e}; {set_head}"))?
         .to_owned();
     let prefix = format!("refs/remotes/{remote}/");
     if !target
@@ -227,7 +267,7 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
     }
     let shown = crate::git::display_text(&target);
     let branch = repo.find_reference(&target).map_err(|error| {
-        format!("cannot read policy source {shown}: {error}; run git fetch {remote}")
+        format!("cannot read policy source {shown}: {error}; {fetch}")
     })?;
     let Some(oid) = branch.target() else {
         return Err(not_branch(&format!(
@@ -235,7 +275,7 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
         )));
     };
     let commit = repo.find_commit(oid).map_err(|error| {
-        format!("cannot read policy source {shown} at {oid}: {error}; run git fetch {remote}")
+        format!("cannot read policy source {shown} at {oid}: {error}; {fetch}")
     })?;
     Ok(Authority {
         reference: target,
@@ -837,5 +877,96 @@ mod tests {
         let error = advertises_refs(&repo, dir.path(), "origin").unwrap_err();
         assert!(error.contains("starts with '-'"), "{error}");
         assert!(!dir.path().join("owned").exists());
+    }
+
+    /// The arguments `sh` hands `git` for the printed `command`.
+    #[cfg(unix)]
+    fn shell_argv(command: &str) -> Vec<String> {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .split_terminator('\0')
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// TSK-416 review round 2, finding 1: the sole remote's name reaches
+    /// the printed `git fetch` and `git remote set-head` as one argument,
+    /// whatever it holds: pasting runs no substitution, and a name that
+    /// starts with `-` follows `--`, with `-a` before it. For `-x`, git
+    /// runs the printed steps in order and records the default branch.
+    #[test]
+    #[cfg(unix)]
+    fn the_policy_authority_steps_keep_a_hostile_remote_as_one_argument() {
+        // A remote name is one ref component, so it holds no space; the
+        // shell hands `o$(id)` over unchanged only when it ran nothing.
+        for (remote, fetch, set_head) in [
+            (
+                "o$(id)",
+                vec!["fetch", "o$(id)"],
+                vec!["remote", "set-head", "o$(id)", "-a"],
+            ),
+            (
+                "-x",
+                vec!["fetch", "--", "-x"],
+                vec!["remote", "set-head", "-a", "--", "-x"],
+            ),
+        ] {
+            let (dir, _) = repository(b"");
+            let root = dir.path();
+            let run = |args: &[&str]| {
+                let out = crate::git::command()
+                    .arg("-C")
+                    .arg(root)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{args:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            };
+            run(&["remote", "remove", "origin"]);
+            let source = root.to_str().unwrap();
+            run(&["config", &format!("remote.{remote}.url"), source]);
+            run(&[
+                "config",
+                &format!("remote.{remote}.fetch"),
+                &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+            ]);
+            let repo = Repository::open(root).unwrap();
+            let error = default_branch(&repo, remote).unwrap_err();
+            let set_head_line = error
+                .split("the operator runs ")
+                .nth(1)
+                .and_then(|rest| rest.split(" (").next())
+                .unwrap_or_else(|| panic!("{error}"));
+            let fetch_line = error
+                .split(" (")
+                .nth(1)
+                .and_then(|rest| rest.split(" records it too").next())
+                .unwrap_or_else(|| panic!("{error}"));
+            assert_eq!(shell_argv(fetch_line), fetch, "{error}");
+            assert_eq!(shell_argv(set_head_line), set_head, "{error}");
+            assert_eq!(
+                fetch_step(remote),
+                format!("run {fetch_line}"),
+                "the fetch step the other refusals print"
+            );
+            if remote == "-x" {
+                for line in [fetch_line, set_head_line] {
+                    let arguments = shell_argv(line);
+                    run(&arguments.iter().map(String::as_str).collect::<Vec<_>>());
+                }
+                let repo = Repository::open(root).unwrap();
+                assert!(default_branch(&repo, remote).is_ok(), "{error}");
+            }
+        }
     }
 }

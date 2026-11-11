@@ -3208,8 +3208,9 @@ fn guard_verdict(root: &Path, shell: &str) -> (Option<i32>, String) {
 /// - An object that is here and is not a commit: `work next` names a plain
 ///   fetch, which rewrites the ref, and `work next` then reads the line.
 ///
-/// The refusal names the remote, never its URL (TSK-416 review); the
-/// clone is made from the URL `git remote get-url` prints.
+/// The refusal names the remote, never its URL, and prints no step that
+/// shows the URL (TSK-416 review round 2); the clone is made from the URL
+/// the remote was added with.
 #[test]
 fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard() {
     let dir = fixture();
@@ -3236,7 +3237,7 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
     for part in [
         format!("refs/remotes/origin/main points at {missing}"),
         "not a commit this clone can read".to_string(),
-        "a fresh clone of the remote origin, made from outside this clone (`git clone <url> <path>`, where `git remote get-url origin` prints the url)".to_string(),
+        "a fresh clone of the remote origin, made from outside this clone with that remote's URL (`git clone <url> <path>`)".to_string(),
         "`git branch -d -r origin/main`, then `git fetch origin`".to_string(),
         "which the guard leaves to the operator".to_string(),
     ] {
@@ -3246,6 +3247,7 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
     // quote the URL, which display redaction covers.
     let remedy = &said[said.find("the fetched tip cannot be resolved").unwrap()..];
     assert!(!remedy.contains(&url), "{said}");
+    assert!(!said.contains("get-url"), "{said}");
     assert!(!said.contains("update-ref"), "{said}");
     assert!(claimed(root, "TSK-001").is_empty(), "{said}");
     assert_eq!(git(root, &["remote", "get-url", "origin"]), url);
@@ -3279,7 +3281,7 @@ fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard()
     let said = text(&out);
     for part in [
         format!("refs/remotes/origin/main points at {blob}"),
-        "plain `git fetch origin`, which rewrites refs/remotes/origin/main".to_string(),
+        "plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main".to_string(),
     ] {
         assert!(said.contains(&part), "{part}: {said}");
     }
