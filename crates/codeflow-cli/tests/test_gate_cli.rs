@@ -115,9 +115,10 @@ fn every_selection_control_names_why_every_target_runs() {
 }
 
 /// TSK-353 (AC-9, AC-10): with this repository's own mapping, `codeflow
-/// test guards` names the two tests PR 525's quick run missed for its
-/// managed skill assets and its record, prints an unmapped path as
-/// unguarded, and marks its declared selection as not applied.
+/// test guards` names the two tests PR 525's quick run missed for paths
+/// from its range (a managed skill asset and its record), prints an
+/// unmapped path as unguarded, counts both paths of a rename, and marks its
+/// declared selection as not applied.
 #[test]
 fn guards_name_the_tests_pr_525_missed_and_report_unguarded_paths() {
     let own = std::fs::read_to_string(
@@ -126,12 +127,18 @@ fn guards_name_the_tests_pr_525_missed_and_report_unguarded_paths() {
     .unwrap();
     let dir = repo(&own);
     let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("old-name.md"),
+        "the same text on both sides of the rename\n",
+    )
+    .unwrap();
     git(dir.path(), &["add", "."]);
     git(dir.path(), &["commit", "-qm", "test: own config"]);
+    git(dir.path(), &["mv", "old-name.md", "new-name.md"]);
     for (path, text) in [
         (
-            "assets/base/agents/skills/cf-present/resources/tokens.md",
-            "tokens\n",
+            "assets/base/agents/skills/cf-present/resources/figure-grammar.md",
+            "grammar\n",
         ),
         (
             "project-management/tasks/TSK-1162.md",
@@ -151,9 +158,11 @@ fn guards_name_the_tests_pr_525_missed_and_report_unguarded_paths() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{}", stderr(&output));
     for needle in [
-        "test guards: 3 changed path(s) against ",
+        "test guards: 5 changed path(s) against ",
         "(--since HEAD)",
-        "guarded: assets/base/agents/skills/cf-present/resources/tokens.md\n",
+        "guarded: assets/base/agents/skills/cf-present/resources/figure-grammar.md\n",
+        "guarded: old-name.md\n",
+        "guarded: new-name.md\n",
         "  cargo test -p codeflow-cli --test init_e2e\n",
         "guarded: project-management/tasks/TSK-1162.md\n",
         "  cargo test -p codeflow-cli --test release_contract\n",

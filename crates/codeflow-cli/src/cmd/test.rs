@@ -190,13 +190,14 @@ fn run_guards(args: &GuardsArgs) -> i32 {
             return 1;
         }
     };
+    let report = declared::guards(&config, &changes);
+    // Count the paths listed below: a rename lists both of its paths.
     println!(
         "test guards: {} changed path(s) against {} ({})",
-        changes.len(),
+        report.guarded.len() + report.unguarded.len(),
         display_text(&base),
         display_text(&source)
     );
-    let report = declared::guards(&config, &changes);
     for (path, tests) in &report.guarded {
         println!("guarded: {}", display_text(path));
         for test in tests {
