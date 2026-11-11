@@ -522,9 +522,16 @@ fn print_coverage_report(reports: &[CoverageReport]) {
     }
     println!("coverage:");
     for r in reports {
+        // Rules the target did not write itself are named as the project's
+        // defaults, so a verdict says which floor judged it (TSK-1014).
+        let source = if r.rules_from_defaults {
+            " (rules from defaults.coverage)"
+        } else {
+            ""
+        };
         if let Some(note) = &r.note {
             println!(
-                "  {}: {}",
+                "  {}: {}{source}",
                 codeflow_core::git::display_text(&r.target),
                 codeflow_core::git::display_line(note)
             );
@@ -539,7 +546,7 @@ fn print_coverage_report(reports: &[CoverageReport]) {
             String::new()
         };
         println!(
-            "  {}: {overall} overall — {} pass, {} fail{exceptions}",
+            "  {}: {overall} overall — {} pass, {} fail{exceptions}{source}",
             codeflow_core::git::display_text(&r.target),
             r.thresholds_passed,
             r.thresholds_failed,

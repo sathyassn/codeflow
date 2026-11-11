@@ -14,6 +14,8 @@ mod capacity;
 #[cfg(unix)]
 #[path = "test_gate_cli/containment.rs"]
 mod containment;
+#[path = "test_gate_cli/coverage_defaults.rs"]
+mod coverage_defaults;
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]

@@ -299,11 +299,11 @@ the version of each release unit.
 
 Tell `codeflow test` which commands to run for each part of the project.
 
-1. Run `codeflow test setup`. With no options it checks only root-level
+1. Run `codeflow test setup`. With no options it reads only root-level
    `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml` or `setup.py`
-   markers and writes the detected targets into an absent or empty
-   `.codeflow/test-config.json`. It does not inspect workspaces recursively or
-   guess package boundaries.
+   markers, never nested packages, and writes each detected target with its
+   [coverage producer](test-gate.md#coverage-rules-and-their-defaults) into
+   an absent or empty `.codeflow/test-config.json`.
 2. Or start from a template, or add targets one at a time:
 
    ```sh
