@@ -509,10 +509,18 @@ fn models_project_binding_selects_exact_tuple_without_bypassing_exclusions() {
         false,
     );
     let mut catalog = fixture_data::fixture();
-    // The host seat runs at its seat `effort` (TSK-1292): move it past the binding.
+    // The host seat runs at its seat `effort` (TSK-1292): moving it past the
+    // binding's effort makes the committed binding invalid input, refused
+    // before resolving (exit 2) rather than skipped.
     catalog["seats"][0]["effort"] = json!("xhigh");
     fixture.catalog(&catalog);
-    fixture.resolved("orchestrate", "none", &[], false);
+    let output = fixture.run("orchestrate", "none", &[]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("project binding effort mismatch or below seat floor"),
+        "{output:?}"
+    );
 }
 
 #[test]
