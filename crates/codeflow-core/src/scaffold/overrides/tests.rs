@@ -284,3 +284,20 @@ fn the_oracle_accepts_row_replacements() {
     let out = apply_units(text, &broken).unwrap();
     assert!(!oracle::same_structure(text, &out, &broken));
 }
+
+#[test]
+fn the_oracle_sees_a_moment_row_whose_other_cells_changed() {
+    let text = "| When | Do | Read |\n|---|---|---|\n| a | b | MUST OPEN `x` |\n";
+    let ours = [row(
+        "moment:a",
+        "| a | b | MUST OPEN `x` |",
+        "| a | ours | MUST OPEN `x` |",
+    )];
+    let out = apply_units(text, &ours).unwrap();
+    assert!(oracle::same_structure(text, &out, &ours));
+    for forged in ["| a | ours | `y` |", "| z | ours | MUST OPEN `x` |"] {
+        let units = [row("moment:a", "| a | b | MUST OPEN `x` |", forged)];
+        let out = apply_units(text, &units).unwrap();
+        assert!(!oracle::same_structure(text, &out, &units), "{forged}");
+    }
+}

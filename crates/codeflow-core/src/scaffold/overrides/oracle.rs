@@ -8,13 +8,14 @@
 //! and the result with `pulldown_cmark`, a `CommonMark` parser that shares
 //! no code with the section parser, and requires every block outside the
 //! targeted units, headings and raw HTML blocks such as section markers
-//! included, to be the same block at the same place.
+//! included, to be the same block at the same place. Inside a targeted
+//! moment row it requires every cell but the action cell to read the same.
 
 use std::ops::Range;
 
 use pulldown_cmark::{Event, Options, Parser, Tag};
 
-use super::{unit_ranges, AppliedUnit};
+use super::{unit_ranges, AppliedUnit, Target};
 
 /// Where a block boundary sits, in the shipped text's coordinates: at a
 /// byte outside every unit, or strictly inside unit `n`.
@@ -128,5 +129,36 @@ pub fn same_structure(pristine: &str, effective: &str, units: &[AppliedUnit]) ->
         }
         Place::At(at + removed - added)
     };
-    outside(pristine, &before, in_pristine) == outside(effective, &after, in_effective)
+    // Inside a moment row only the action cell is the project's: every other
+    // cell, the pointer cell with its `MUST OPEN` marks included, reads the
+    // same on both sides.
+    let rows_kept = ranges.iter().enumerate().all(|(n, (_, unit))| {
+        !matches!(Target::parse(&unit.entry.target), Some(Target::Moment(_)))
+            || kept_cells(&cells(pristine, &before[n]), &cells(effective, &after[n]))
+    });
+    rows_kept && outside(pristine, &before, in_pristine) == outside(effective, &after, in_effective)
+}
+
+/// The text of every table cell that starts inside `span`, as Markdown reads
+/// the cells.
+fn cells<'a>(text: &'a str, span: &Range<usize>) -> Vec<&'a str> {
+    Parser::new_ext(text, Options::ENABLE_TABLES)
+        .into_offset_iter()
+        .filter(|(event, range)| {
+            matches!(event, Event::Start(Tag::TableCell)) && span.contains(&range.start)
+        })
+        .map(|(_, range)| text[range].trim())
+        .collect()
+}
+
+/// Whether a row with `effective` cells keeps every cell of `pristine` but
+/// the action cell, the second.
+fn kept_cells(pristine: &[&str], effective: &[&str]) -> bool {
+    pristine.len() >= 2
+        && pristine.len() == effective.len()
+        && pristine
+            .iter()
+            .zip(effective)
+            .enumerate()
+            .all(|(n, (before, after))| n == 1 || before == after)
 }

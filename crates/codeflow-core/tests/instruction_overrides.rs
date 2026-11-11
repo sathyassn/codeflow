@@ -1151,3 +1151,195 @@ fn markdown_forms_parsers_disagree_on_are_refused() {
     );
     assert_refused(&body("- an item at the end\n"), "ends inside a list item");
 }
+
+// ---------------------------------------------------------------------------
+// Security delta 2 at f00f46165 (Codex, CHANGES): a record made from an older
+// shipped row may replace only the fields its entry declares; the row's
+// pointers, `MUST OPEN` marks included, stay as that baseline has them.
+// ---------------------------------------------------------------------------
+
+/// A fourth scaffold version that rewords the action of the landing moment
+/// and the text of the plain-writing rule, so records made from the first
+/// version hold rows with pointers that this binary no longer renders.
+struct V4(DirSource);
+
+const REWORDS_V4: [(&str, &str); 2] = [
+    ("one home per record", "one home for each record"),
+    (
+        "State the fact directly, and check",
+        "State each fact directly, and check",
+    ),
+];
+
+impl AssetSource for V4 {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let Some(bytes) = self.0.read(path)? else {
+            return Ok(None);
+        };
+        if !matches!(
+            path,
+            "base/rule-map.toml" | "base/AGENTS.md.tmpl" | "base/AGENTS.full.md.tmpl"
+        ) {
+            return Ok(Some(bytes));
+        }
+        let mut text = String::from_utf8(bytes).unwrap();
+        for (from, to) in REWORDS_V4 {
+            assert!(text.contains(from), "{path} no longer holds {from:?}");
+            text = text.replacen(from, to, 1);
+        }
+        Ok(Some(text.into_bytes()))
+    }
+}
+
+fn plan_v4(root: &Path) -> Result<scaffold::overrides::Plan, scaffold::ScaffoldError> {
+    update_mod::override_plan(&V4(v1()), root, "3.0.3")
+}
+
+const ROWS: &str = r#"schema_version = 1
+
+[[override]]
+target = "moment:land"
+action = "land as the team agrees"
+
+[[override]]
+target = "rule:plain"
+text = "Write short sentences."
+"#;
+
+const LAND_WHEN: &str = "| land a batch on the integration line | ";
+const LAND_OURS: &str = "| land a batch on the integration line | land as the team agrees | MUST OPEN `/cf-method` \"Managing a body of work\" (landing modes and drift control) |";
+const PLAIN_OURS: &str =
+    "- **Write plainly.** Write short sentences. See `.agents/skills/cf-editorial-review/references/editorial-smells.md`.";
+
+/// A project on the first version with the landing moment and the
+/// plain-writing rule overridden.
+fn rows_overridden() -> tempfile::TempDir {
+    let dir = scaffold();
+    write(dir.path(), ".codeflow/overrides.toml", ROWS);
+    update_v1(dir.path());
+    let agents = read(dir.path(), AGENTS);
+    assert!(agents.contains(LAND_OURS), "{agents}");
+    assert!(agents.contains(PLAIN_OURS), "{agents}");
+    dir
+}
+
+/// Forge the recorded replacement of `target` to `forged`, with every
+/// digest recomputed, and check that the fourth version refuses it.
+fn assert_older_forgery_refused(target: &str, forged: &str) {
+    let dir = rows_overridden();
+    let root = dir.path();
+    let mut record = Record::read(root, AGENTS).unwrap().unwrap();
+    record
+        .applied
+        .iter_mut()
+        .find(|unit| unit.entry.target == target)
+        .expect("the unit")
+        .replacement = forged.to_string();
+    forge_agents(root, record);
+    assert!(read(root, AGENTS).contains(forged));
+    let overrides = doctor_overrides(root, plan_v4);
+    assert_eq!(overrides.status, Status::Fail, "{forged}: {overrides:?}");
+    let before = snapshot(root);
+    let error = run(&V4(v1()), root, "3.0.3").expect_err("update refuses the record");
+    assert!(
+        error.contains("does not match the installed baseline"),
+        "{error}"
+    );
+    assert_eq!(snapshot(root), before, "a refusal writes nothing");
+}
+
+/// An older moment whose recorded replacement swaps the `MUST OPEN` pointer
+/// cell for another one, or keeps it but changes the action from the
+/// entry's: doctor fails and update refuses.
+#[test]
+fn a_forged_older_moment_cannot_change_its_pointer() {
+    assert_older_forgery_refused(
+        "moment:land",
+        &format!("{LAND_WHEN}land as the team agrees | read `docs/our-landing.md` first |"),
+    );
+    assert_older_forgery_refused(
+        "moment:land",
+        &LAND_OURS.replace("land as the team agrees", "land without review"),
+    );
+}
+
+/// An older rule whose recorded replacement drops its pointer, or keeps it
+/// with text other than the entry's: doctor fails and update refuses.
+#[test]
+fn a_forged_older_rule_cannot_change_its_pointer() {
+    assert_older_forgery_refused("rule:plain", "- **Write plainly.** Write short sentences.");
+    assert_older_forgery_refused(
+        "rule:plain",
+        &PLAIN_OURS.replace("Write short sentences.", "Write anything."),
+    );
+}
+
+/// A fifth scaffold version that renames the plain-writing rule's title.
+struct V5(DirSource);
+
+impl AssetSource for V5 {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let Some(bytes) = self.0.read(path)? else {
+            return Ok(None);
+        };
+        if !matches!(
+            path,
+            "base/rule-map.toml" | "base/AGENTS.md.tmpl" | "base/AGENTS.full.md.tmpl"
+        ) {
+            return Ok(Some(bytes));
+        }
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("Write plainly."), "{path}");
+        Ok(Some(
+            text.replacen("Write plainly.", "Write simply.", 1)
+                .into_bytes(),
+        ))
+    }
+}
+
+fn plan_v5(root: &Path) -> Result<scaffold::overrides::Plan, scaffold::ScaffoldError> {
+    update_mod::override_plan(&V5(v1()), root, "3.0.4")
+}
+
+/// An upstream rename of an overridden rule's title makes update refuse the
+/// old record, also once the entry is gone, since the record is still there.
+/// Removing the record recovers: update applies the current entries to the
+/// renamed rule, with its pointer.
+#[test]
+fn an_upstream_rename_recovers_once_its_record_is_removed() {
+    let dir = rows_overridden();
+    let root = dir.path();
+    let before = snapshot(root);
+    let error = run(&V5(v1()), root, "3.0.4").expect_err("update refuses the old record");
+    assert!(
+        error.contains("does not match the installed baseline"),
+        "{error}"
+    );
+    assert_eq!(snapshot(root), before, "a refusal writes nothing");
+    assert_eq!(doctor_overrides(root, plan_v5).status, Status::Fail);
+    std::fs::remove_file(root.join(".codeflow/.baseline/AGENTS.md.overrides.json")).unwrap();
+    run(&V5(v1()), root, "3.0.4").unwrap_or_else(|error| panic!("update fails: {error}"));
+    let agents = read(root, AGENTS);
+    assert!(
+        agents.contains(&PLAIN_OURS.replace("Write plainly.", "Write simply.")),
+        "{agents}"
+    );
+    assert!(agents.contains(LAND_OURS), "{agents}");
+    assert_eq!(doctor_overrides(root, plan_v5).status, Status::Pass);
+}
+
+/// Records made from the first version's rows still apply under the fourth,
+/// with the rows' pointers kept.
+#[test]
+fn older_legitimate_rows_with_pointers_still_pass() {
+    let dir = rows_overridden();
+    let root = dir.path();
+    let pending = doctor_overrides(root, plan_v4);
+    assert!(pending.status.is_warn(), "{pending:?}");
+    run(&V4(v1()), root, "3.0.3").unwrap_or_else(|error| panic!("update fails: {error}"));
+    let agents = read(root, AGENTS);
+    assert!(agents.contains(LAND_OURS), "{agents}");
+    assert!(agents.contains(PLAIN_OURS), "{agents}");
+    assert!(baseline(root, AGENTS).contains("one home for each record"));
+    assert_eq!(doctor_overrides(root, plan_v4).status, Status::Pass);
+}
