@@ -1,0 +1,11 @@
+id = "TSK-1428"
+uid = "9bea847e-fdd7-40ce-bcc6-5278b768382c"
+kind = "TSK"
+title = "The EPC-026 line runs main's line workflows and their scripts before its sync"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T04:32:26Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
