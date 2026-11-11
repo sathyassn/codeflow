@@ -1,0 +1,11 @@
+id = "TSK-1425"
+uid = "d898ff33-d622-492d-aae7-26ca7ff45158"
+kind = "TSK"
+title = "The unrecorded-task canary in the ci tests never matches a commit SHA"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T04:30:38Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
