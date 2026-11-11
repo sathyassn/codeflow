@@ -187,11 +187,28 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
             }
         }
     }
+    let members = member_merges(&repo, &chain, tip)?;
+    // Last, since it reads the forge: each member head is the exact head of
+    // an admitted pull request into the line (AC-1).
+    let members = (inputs.admission)(&line, &members)?;
+    Ok(BoundLine {
+        line,
+        tip: tip_text,
+        merges: chain.len(),
+        members,
+    })
+}
+
+/// The member merges on `chain`, the candidate's first-parent commits after
+/// the line's `tip`, oldest first: each must be a two-parent merge whose
+/// tree is the clean merge of its parents, and its second parent is the
+/// member head; the cause when one is not.
+fn member_merges(repo: &Repository, chain: &[Oid], tip: Oid) -> Result<Vec<Member>, String> {
     let mut members = Vec::new();
     // Oldest merge first, the order the members were merged in.
     for oid in chain.iter().rev() {
         let commit = repo.find_commit(*oid).map_err(|e| e.to_string())?;
-        let parents = history::parents(&repo, &commit).map_err(|e| e.to_string())?;
+        let parents = history::parents(repo, &commit).map_err(|e| e.to_string())?;
         if parents.len() < 2 {
             return Err(format!(
                 "{oid:.9} on its first-parent chain after the line's tip {tip:.9} is a direct commit, not a merge of a member head; a candidate holds only --no-ff merges of reviewed heads"
@@ -207,7 +224,7 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
             merge: oid.to_string(),
             head: parents[1].to_string(),
         });
-        match read_merge(&repo, &commit) {
+        match read_merge(repo, &commit) {
             MergeReading::Clean => {}
             MergeReading::Changed(paths) => {
                 let names = paths
@@ -223,15 +240,7 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
             MergeReading::Unknown(reason) => return Err(reason),
         }
     }
-    // Last, since it reads the forge: each member head is the exact head of
-    // an admitted pull request into the line (AC-1).
-    let members = (inputs.admission)(&line, &members)?;
-    Ok(BoundLine {
-        line,
-        tip: tip_text,
-        merges: chain.len(),
-        members,
-    })
+    Ok(members)
 }
 
 /// Every fetched epic line, `refs/remotes/origin/integration/EPC-*`, and its
