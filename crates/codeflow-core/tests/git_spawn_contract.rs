@@ -1243,9 +1243,44 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
     }
 }
 
+/// Whether a `cfg` predicate holds only in a test build: `test`, an
+/// `all(...)` with one such part, or an `any(...)` whose every part is one.
+/// `not(...)` and any other predicate can hold in a production build.
+fn requires_test(predicate: &[Token]) -> bool {
+    match predicate {
+        [word] => word.is("test"),
+        [head, open, ..] if open.punct('(') && (head.is("all") || head.is("any")) => {
+            let end = group_end(predicate, 1);
+            if end + 1 != predicate.len() {
+                return false;
+            }
+            let mut parts = Vec::new();
+            let mut start = 2;
+            let mut index = 2;
+            while index < end {
+                if predicate[index].punct('(') || predicate[index].punct('[') {
+                    index = group_end(predicate, index);
+                } else if predicate[index].punct(',') {
+                    parts.push(&predicate[start..index]);
+                    start = index + 1;
+                }
+                index += 1;
+            }
+            parts.push(&predicate[start..end]);
+            parts.retain(|part| !part.is_empty());
+            if head.is("all") {
+                parts.iter().any(|part| requires_test(part))
+            } else {
+                !parts.is_empty() && parts.iter().all(|part| requires_test(part))
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Each `.output()`, `.status()` or `.spawn()` call in production code, as
-/// `<enclosing fn> .<method>()`. Items under a `#[cfg(test)]`-style
-/// attribute are skipped. A git2 `delta.status()` reads the same as a
+/// `<enclosing fn> .<method>()`. Items under a `cfg` that holds only in a
+/// test build ([`requires_test`]) are skipped. A git2 `delta.status()` reads the same as a
 /// process call here, so the table lists those too, with that reason.
 fn bare_spawn_spans(source: &str) -> Vec<String> {
     let toks = tokens(source);
@@ -1256,9 +1291,10 @@ fn bare_spawn_spans(source: &str) -> Vec<String> {
         if toks[index].punct('#') && toks.get(index + 1).is_some_and(|t| t.punct('[')) {
             let end = group_end(&toks, index + 1);
             let attribute = &toks[index + 2..end];
-            let testing = attribute.first().is_some_and(|t| t.is("cfg"))
-                && attribute.iter().any(|t| t.is("test"))
-                && !attribute.iter().any(|t| t.is("not"));
+            let testing = attribute.len() > 3
+                && attribute[0].is("cfg")
+                && attribute[1].punct('(')
+                && requires_test(&attribute[2..attribute.len() - 1]);
             index = end + 1;
             if testing {
                 // Skip the item: to its `;` or past its body.
@@ -1346,14 +1382,21 @@ fn the_bare_spawn_scan_reads_calls_and_skips_test_items() {
                   fn later() { x.spawn ( ); y.output_with(1); z.status; }\n\
                   #[cfg(test)] mod tests { fn t() { c.output(); } }\n\
                   #[cfg(all(test, unix))] fn helper() { c.spawn(); }\n\
-                  #[cfg(not(test))] fn real() { c.output(); }";
+                  #[cfg(not(test))] fn real() { c.output(); }\n\
+                  #[cfg(any(test, unix))] fn either() { c.status(); }\n\
+                  #[cfg(all(unix, any(test, windows)))] fn mixed() { c.spawn(); }\n\
+                  #[cfg(any(test, all(test, unix)))] fn tested() { c.spawn(); }\n\
+                  #[cfg(all(not(test), unix))] fn built() { c.output(); }";
     assert_eq!(
         bare_spawn_spans(source),
         [
             "run .output()",
             "run .status()",
             "later .spawn()",
-            "real .output()"
+            "real .output()",
+            "either .status()",
+            "mixed .spawn()",
+            "built .output()"
         ]
     );
 }

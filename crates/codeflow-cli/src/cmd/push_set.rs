@@ -1062,8 +1062,9 @@ fn prefetch_commands(args: &[&str]) -> Option<[String; 2]> {
 }
 
 /// Whether this clone fetches a missing object on demand: it names a
-/// partial-clone remote, or a `remote.<name>.promisor` that git reads as
-/// true ([`codeflow_core::hooks::gitleaks::promisor_listed`]). A read that
+/// partial-clone remote or filter, or has a `remote.<name>.promisor` entry
+/// that git reads as true
+/// ([`codeflow_core::hooks::gitleaks::promisor_listed`]). A read that
 /// fails or stalls, or a value git would refuse, answers no: it only
 /// chooses a hint.
 fn fetches_on_demand(root: &Path) -> bool {

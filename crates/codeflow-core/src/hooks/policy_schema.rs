@@ -967,8 +967,10 @@ pub const SCHEMA: [KeySpec; 86] = [
                 reads whole at one commit that neither shows changed, such \
                 as the policy at the target's tip, and the refusal says so; \
                 a plain `git fetch` keeps the clone's filter and fetches none \
-                of them. A remote counts as a promisor as git reads it, so \
-                `remote.<name>.promisor = false` does not. Other local-config \
+                of them. A remote counts as a promisor as git reads it: any \
+                true `remote.<name>.promisor` entry or a \
+                `remote.<name>.partialCloneFilter` makes it one, and \
+                `promisor = false` alone does not. Other local-config \
                 tampering is outside \
                 the hook threat model; hosted CI checks the pushed commit.",
     },

@@ -12859,9 +12859,14 @@ fn inherited_promisor_settings_never_reach_the_attribute_reader() {
         ("numbered", &numbered[..]),
     ] {
         let (keep, work, fetched) = promisor_repository_missing_blobs();
-        // The repository's own configuration has no promisor designation.
+        // The repository's own configuration has no promisor designation;
+        // the filter the partial fetch recorded would be one (TSK-327).
         git(&work, &["config", "--unset", "remote.origin.promisor"]);
         git(&work, &["config", "--unset", "extensions.partialClone"]);
+        git(
+            &work,
+            &["config", "--unset", "remote.origin.partialCloneFilter"],
+        );
         let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
         let out = promisor_hook(&work, &wrapper, false, false, env);
         let stderr = String::from_utf8_lossy(&out.stderr);

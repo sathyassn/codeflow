@@ -893,19 +893,23 @@ pub const PROMISOR_CONFIG: [&str; 4] = [
     "config",
     "--get-regexp",
     "-z",
-    r"^(extensions\.partialclone|remote\..*\.promisor)$",
+    r"^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$",
 ];
 
 /// Whether the entries [`PROMISOR_CONFIG`] listed make git fetch missing
 /// objects on demand, read as git reads them: `extensions.partialClone`
-/// set to anything, or a `remote.<name>.promisor` that git's boolean rules
-/// take as true (no value, `true`, `yes`, `on` or a nonzero number). A
-/// `promisor = false` remote fetches nothing on demand (TSK-327).
+/// or a `remote.<name>.partialCloneFilter` set to anything, or any one
+/// `remote.<name>.promisor` entry that git's boolean rules take as true (no
+/// value, `true`, `yes`, `on` or a nonzero number). Git adds a promisor
+/// remote for each true entry and never removes it for a later false one,
+/// so `promisor = true` then `promisor = false` still fetches on demand
+/// (checked with git 2.53). Only a remote with every entry false and no
+/// filter fetches nothing on demand (TSK-327).
 ///
 /// # Errors
 ///
-/// A value git itself would refuse as a boolean, so whether git fetches on
-/// demand cannot be told.
+/// A `promisor` value git itself would refuse as a boolean, wherever it
+/// appears, so whether git fetches on demand cannot be told.
 pub fn promisor_listed(listed: &[u8]) -> Result<bool, String> {
     let mut fetches = false;
     for entry in listed.split(|byte| *byte == 0).filter(|e| !e.is_empty()) {
@@ -914,6 +918,7 @@ pub fn promisor_listed(listed: &[u8]) -> Result<bool, String> {
             None => (entry, None),
         };
         let on = key.starts_with(b"extensions.")
+            || key.ends_with(b".partialclonefilter")
             || config_bool(value).ok_or_else(|| {
                 format!(
                     "cannot tell whether this repository fetches missing objects on demand: \
@@ -1000,7 +1005,7 @@ fn config_bool(value: Option<&[u8]>) -> Option<bool> {
 }
 
 /// The git version text, and whether the repository has a promisor remote
-/// (`extensions.partialClone` or a `remote.<name>.promisor`). Git's exit 1
+/// ([`promisor_listed`] over [`PROMISOR_CONFIG`]). Git's exit 1
 /// from `git config` means no match; any other failure is an error, so an
 /// undecidable repository is never taken as a plain one.
 fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
@@ -1346,6 +1351,52 @@ mod tests {
             let entry = format!("remote.origin.promisor\n{bad}\0");
             assert!(read(entry.as_bytes()).is_err(), "{bad:?}");
         }
+        // Git keeps a remote a promisor once any entry says true; a later
+        // false does not remove it (git 2.53 fetched on demand).
+        assert_eq!(
+            read(b"remote.origin.promisor\ntrue\0remote.origin.promisor\nfalse\0"),
+            Ok(true)
+        );
+        // A filter makes the remote a promisor whatever `promisor` says.
+        assert_eq!(
+            read(b"remote.origin.promisor\nfalse\0remote.origin.partialclonefilter\nblob:none\0"),
+            Ok(true)
+        );
+        // A refused value anywhere leaves the answer unknown.
+        for listed in [
+            &b"remote.origin.promisor\ntrue\0remote.origin.promisor\nmaybe\0"[..],
+            b"remote.origin.promisor\nmaybe\0remote.origin.promisor\ntrue\0",
+        ] {
+            assert!(read(listed).is_err(), "{listed:?}");
+        }
+    }
+
+    /// TSK-327: the repository's own settings are listed and read as git
+    /// reads them, so a clone that fetches on demand is never taken as a
+    /// plain one.
+    #[test]
+    fn a_partial_clone_filter_or_any_true_promisor_entry_fetches_on_demand() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let ran = crate::git::command()
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(ran.status.success(), "git {args:?}: {ran:?}");
+        };
+        git(&["init", "-q"]);
+        assert!(!version_and_promisor(root).unwrap().1);
+        git(&["config", "--add", "remote.origin.promisor", "false"]);
+        assert!(!version_and_promisor(root).unwrap().1);
+        git(&["config", "remote.origin.partialCloneFilter", "blob:none"]);
+        assert!(version_and_promisor(root).unwrap().1, "a filter");
+        git(&["config", "--unset", "remote.origin.partialCloneFilter"]);
+        git(&["config", "--add", "remote.origin.promisor", "true"]);
+        git(&["config", "--add", "remote.origin.promisor", "false"]);
+        assert!(version_and_promisor(root).unwrap().1, "true then false");
     }
 
     #[test]
