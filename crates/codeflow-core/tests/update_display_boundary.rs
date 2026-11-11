@@ -202,7 +202,7 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
     ),
     (
         "crates/codeflow-core/src/scaffold/update/pending.rs",
-        "read",
+        "read_projected",
         "path",
         3,
         "a managed destination and its pending record",
