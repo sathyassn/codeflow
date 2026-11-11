@@ -1,0 +1,11 @@
+id = "TSK-1430"
+uid = "76488fe9-b142-4902-baeb-8a6d5181be53"
+kind = "TSK"
+title = "The EPC-026 line carries the SQLite advisory fix"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T05:01:47Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
