@@ -1,0 +1,11 @@
+id = "TSK-1427"
+uid = "2b802752-0c46-4f41-8468-fbc4280391b2"
+kind = "TSK"
+title = "The event policy is proved in the 2026-11-16 brownout and then narrowed to main's events"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T04:31:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
