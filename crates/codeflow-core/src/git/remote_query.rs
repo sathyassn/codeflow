@@ -388,24 +388,30 @@ fn configured_credentials(root: &Path) -> Option<(Vec<String>, Vec<String>)> {
 
 /// The credential parts of a `scheme://` URL, raw and percent-decoded: the
 /// password, the whole userinfo when it holds a password or the scheme is
-/// HTTP (a token is often given as the user there), and the query or
-/// fragment with each of its values.
+/// HTTP, the user name of an HTTP URL on its own, password or not (a
+/// token is often given as the user there, and a server can quote the user
+/// alone, as in `remote: <user> rejected`; TSK-416 review round 3), and
+/// the query or fragment with each of its values.
 fn credential_parts(url: &str, parts: &mut Vec<String>) {
     let Some(start) = url.find("://").map(|at| at + 3) else {
         return;
     };
     let scheme = url[..start - 3].to_ascii_lowercase();
+    let http = scheme.starts_with("http");
     let rest = &url[start..];
     let authority = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let mut found = Vec::new();
     if let Some(at) = rest[..authority].rfind('@') {
         let userinfo = &rest[..at];
         match userinfo.split_once(':') {
-            Some((_, password)) => {
+            Some((user, password)) => {
                 found.push(userinfo);
                 found.push(password);
+                if http {
+                    found.push(user);
+                }
             }
-            None if scheme.starts_with("http") => found.push(userinfo),
+            None if http => found.push(userinfo),
             None => {}
         }
     }
@@ -998,26 +1004,29 @@ mod tests {
         for (key, value) in [
             (
                 "remote.origin.url",
-                "https://user:opaque'canary@h.invalid/r.git?access_token=QUERY'SECRET",
+                "https://USERCANARY:opaque'canary@h.invalid/r.git?access_token=QUERY'SECRET",
             ),
             ("remote.mirror.url", "https://h.invalid/m.git"),
             (
-                "url.https://u:INSTEADSECRET@rewrite.invalid/.insteadOf",
+                "url.https://REWRITEUSER:INSTEADSECRET@rewrite.invalid/.insteadOf",
                 "https://h.invalid/",
             ),
-            ("remote.encoded.url", "https://u:pa%40ssword@h3.invalid/e.git"),
+            (
+                "remote.encoded.url",
+                "https://ENCODEDUSER:pa%40ssword@h3.invalid/e.git",
+            ),
         ] {
             config.set_str(key, value).unwrap();
         }
         for text in [
             // The userinfo with a quote, the URL split over two lines, and
             // the password quoted alone.
-            "fatal: Authentication failed for 'https://user:opaque'canary\n@h.invalid/r.git'\nremote: password opaque'canary rejected",
+            "fatal: Authentication failed for 'https://USERCANARY:opaque'canary\n@h.invalid/r.git'\nremote: password opaque'canary rejected",
             // A quote in the query, and its value quoted alone.
             "fatal: 'https://h.invalid/r.git?access_token=QUERY'SECRET': denied\nremote: QUERY'SECRET expired",
             // The URL an `insteadOf` rule rewrote the mirror to, and its
             // token alone.
-            "fatal: unable to access 'https://u:INSTEADSECRET@rewrite.invalid/m.git/'\nremote: INSTEADSECRET",
+            "fatal: unable to access 'https://REWRITEUSER:INSTEADSECRET@rewrite.invalid/m.git/'\nremote: INSTEADSECRET",
             // The decoded form of a percent-encoded password.
             "remote: pa@ssword is not valid",
         ] {
@@ -1029,6 +1038,9 @@ mod tests {
                 "SECRET",
                 "INSTEADSECRET",
                 "pa@ssword",
+                "USERCANARY",
+                "REWRITEUSER",
+                "ENCODEDUSER",
             ] {
                 assert!(!shown.contains(secret), "{secret}: {shown}");
             }
@@ -1037,7 +1049,7 @@ mod tests {
         // A short password could be part of ordinary words, so text that
         // still holds it is withheld; its class is relayed.
         config
-            .set_str("remote.short.url", "https://u:ab12@h4.invalid/s.git")
+            .set_str("remote.short.url", "https://SHORTPWUSER:ab12@h4.invalid/s.git")
             .unwrap();
         let shown = relay_diagnostic(
             dir.path(),
@@ -1054,6 +1066,55 @@ mod tests {
             shown.starts_with("the remote repository was not found"),
             "{shown}"
         );
+    }
+
+    /// TSK-416 review round 3, finding 2: the user name of an HTTP URL is
+    /// a credential part on its own, with a password or without, raw and
+    /// percent-decoded, so a server line that quotes the user alone is
+    /// redacted; a user name too short to replace safely withholds the
+    /// text. All credentials here are synthetic.
+    #[test]
+    fn a_relayed_diagnostic_redacts_an_http_user_name_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        for (key, value) in [
+            ("remote.origin.url", "https://OPAQUECANARY:z9@host.invalid/repo"),
+            ("remote.token.url", "https://TOKENUSERCANARY@t.invalid/repo"),
+            (
+                "remote.encoded.url",
+                "https://OPAQUE%2EENCODED:pw-123456@e.invalid/repo",
+            ),
+            (
+                "url.https://REWRITTENUSER:pw-654321@r.invalid/.insteadOf",
+                "https://h.invalid/",
+            ),
+        ] {
+            config.set_str(key, value).unwrap();
+        }
+        for (text, secret) in [
+            ("remote: OPAQUECANARY rejected", "OPAQUECANARY"),
+            ("remote: user TOKENUSERCANARY is suspended", "TOKENUSERCANARY"),
+            ("remote: OPAQUE.ENCODED rejected", "OPAQUE.ENCODED"),
+            ("remote: OPAQUE%2EENCODED rejected", "OPAQUE%2EENCODED"),
+            ("remote: REWRITTENUSER has no access", "REWRITTENUSER"),
+        ] {
+            let shown = relay_diagnostic(dir.path(), text);
+            assert!(!shown.contains(secret), "{shown}");
+            assert!(shown.contains("***"), "redacted, not withheld: {shown}");
+        }
+        // A short user name could be part of ordinary words, so text that
+        // still holds it is withheld, with its class only.
+        config
+            .set_str("remote.short.url", "https://bob:long-password-1@s.invalid/repo")
+            .unwrap();
+        let shown = relay_diagnostic(
+            dir.path(),
+            "fatal: Authentication failed\nremote: bob rejected",
+        );
+        assert!(!shown.contains("bob"), "{shown}");
+        assert!(shown.starts_with(AUTHENTICATION_FAILED), "{shown}");
+        assert!(shown.contains("not shown"), "{shown}");
     }
 
     #[test]

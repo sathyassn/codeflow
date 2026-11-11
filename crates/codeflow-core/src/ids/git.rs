@@ -548,7 +548,9 @@ mod tests {
     #[test]
     fn failed_git_commands_redact_url_arguments_and_stderr() {
         use std::os::unix::process::ExitStatusExt as _;
-        let url = "https://u:FAKE_REGISTRY_TOKEN@host.invalid/repo";
+        // The user name is a credential part of an HTTP URL too (TSK-416
+        // review round 3), so it is long enough to replace, not withhold.
+        let url = "https://FAKE_REGISTRY_USER:FAKE_REGISTRY_TOKEN@host.invalid/repo";
         let output = Output {
             status: std::process::ExitStatus::from_raw(128 << 8),
             stdout: Vec::new(),
