@@ -4285,7 +4285,7 @@ fn decode_dollar_quotes(text: &str) -> String {
 
 /// `text` with each backslash-newline outside single quotes removed, as the
 /// shell removes line continuations before it reads a command.
-fn join_continuations(text: &str) -> String {
+pub(crate) fn join_continuations(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let (mut single, mut double) = (false, false);
     let mut chars = text.chars();

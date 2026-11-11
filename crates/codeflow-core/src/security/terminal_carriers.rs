@@ -961,37 +961,52 @@ fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>,
     if command.contains("<<") && names_template_variable(command) {
         return Err(TEMPLATE_UNREAD.to_string());
     }
+    let line = crate::hooks::git_guard::join_continuations(command);
+    let mut arithmetic = Arithmetic::default();
+    if !arithmetic.scan(&line) {
+        return Err(TEMPLATE_UNREAD.to_string());
+    }
+    let mut assigned = Vec::new();
     for segment in crate::hooks::git_guard::expand_commands(command) {
         let (mut words, mut expanding) = crate::hooks::git_guard::command_argv_expanding(&segment);
         let all = words.len();
         crate::hooks::git_guard::strip_reserved_words(&mut words);
         expanding.drain(..all - words.len());
         let tokens = crate::hooks::git_guard::shell_tokens_expanding(&segment);
-        for word in template_assignments(&words, &expanding, &tokens)? {
-            let Some((name, value)) = word.split_once('=') else {
-                continue;
-            };
-            let Some(variable) = template_variable(name) else {
-                continue;
-            };
-            let unread = || {
-                format!(
-                    "`{variable}` is assigned a value the guard cannot read as one absolute \
-                     folder, so it cannot tell which templates `hc` reads"
-                )
-            };
-            // An appended or indexed value joins text the guard cannot see.
-            if destination_base(name) != name {
-                return Err(unread());
-            }
-            if value.is_empty() {
-                continue;
-            }
-            if value.contains(['$', '`']) || value.chars().any(char::is_control) {
-                return Err(unread());
-            }
-            roots.push(literal_root(value, windows).ok_or_else(unread)?);
+        // A decoded word can hold arithmetic the line's text does not show.
+        if !tokens.iter().all(|(text, _)| arithmetic.scan(text)) {
+            return Err(TEMPLATE_UNREAD.to_string());
         }
+        let found = template_assignments(&words, &expanding, &tokens, &mut arithmetic)?;
+        assigned.push(found.into_iter().cloned().collect::<Vec<String>>());
+    }
+    if !arithmetic.literal(&line) {
+        return Err(TEMPLATE_UNREAD.to_string());
+    }
+    for word in assigned.iter().flatten() {
+        let Some((name, value)) = word.split_once('=') else {
+            continue;
+        };
+        let Some(variable) = template_variable(name) else {
+            continue;
+        };
+        let unread = || {
+            format!(
+                "`{variable}` is assigned a value the guard cannot read as one absolute \
+                 folder, so it cannot tell which templates `hc` reads"
+            )
+        };
+        // An appended or indexed value joins text the guard cannot see.
+        if destination_base(name) != name {
+            return Err(unread());
+        }
+        if value.is_empty() {
+            continue;
+        }
+        if value.contains(['$', '`']) || value.chars().any(char::is_control) {
+            return Err(unread());
+        }
+        roots.push(literal_root(value, windows).ok_or_else(unread)?);
     }
     Ok(roots)
 }
@@ -1063,10 +1078,11 @@ const TEMPLATE_UNREAD: &str = "a command on the line can set a template folder v
 
 /// Programs that set no shell variable, so their operands are data: plain
 /// programs, test and no-op builtins, and the shells, launchers and
-/// carriers whose own commands the line reader unwraps and reads as
-/// commands of their own. Any other command whose words name a template
-/// folder variable, or hold an expansion, refuses a template lookup
-/// ([`template_assignments`]).
+/// carriers that run their commands in a process of their own. Any other
+/// command whose words name a template folder variable, or hold an
+/// expansion, refuses a template lookup ([`template_assignments`]). The
+/// test builtins evaluate the operands of their numeric comparisons, which
+/// [`Arithmetic`] judges.
 const NON_WRITERS: &[&str] = &[
     "echo",
     "test",
@@ -1115,7 +1131,6 @@ const NON_WRITERS: &[&str] = &[
     "zsh",
     "dash",
     "ksh",
-    "eval",
     "hc",
     "herdr-core",
     "herdr",
@@ -1199,6 +1214,7 @@ fn template_assignments<'w>(
     words: &'w [String],
     expanding: &[bool],
     tokens: &[(String, bool)],
+    arithmetic: &mut Arithmetic,
 ) -> Result<Vec<&'w String>, String> {
     let unread = || Err(TEMPLATE_UNREAD.to_string());
     if tokens
@@ -1219,6 +1235,7 @@ fn template_assignments<'w>(
         if unread_destination(name) {
             return unread();
         }
+        arithmetic.assignment(word);
         found.push(word);
     }
     let Some(program) = words.get(at) else {
@@ -1232,42 +1249,28 @@ fn template_assignments<'w>(
     } else {
         crate::hooks::git_guard::launcher_name(program)
     };
+    // Builtins that evaluate their operands as arithmetic.
+    if matches!(
+        name,
+        "let" | "repeat" | "shift" | "return" | "exit" | "break" | "continue"
+    ) {
+        arithmetic.expressions.extend(rest.iter().cloned());
+    }
+    if matches!(name, "[[" | "[" | "test") {
+        arithmetic.comparison(rest);
+    }
+    // A sourced file or a callback runs code the guard cannot see.
+    let callback = matches!(name, "mapfile" | "readarray")
+        && builtin_words(rest, "dnOsuCc")
+            .0
+            .iter()
+            .any(|(letter, _)| *letter == 'C');
+    if callback || matches!(name, "source" | ".") {
+        return unread();
+    }
     let destinations: Vec<&str> = match name {
-        "export" | "declare" | "typeset" | "local" | "readonly" => {
-            let flags: Vec<&String> = rest
-                .iter()
-                .take_while(|word| word.starts_with(['-', '+']) && *word != "--")
-                .collect();
-            // `export -n` removes the export mark; elsewhere `-n` makes a
-            // name reference.
-            let reference = name != "export"
-                && name != "readonly"
-                && flags
-                    .iter()
-                    .any(|flag| flag.starts_with('-') && flag.contains('n'));
-            for word in &rest[flags.len()..] {
-                let (destination, target) = match word.split_once('=') {
-                    Some((destination, target)) => (destination, Some(target)),
-                    None => (word.as_str(), None),
-                };
-                if unread_destination(destination) {
-                    return unread();
-                }
-                if reference {
-                    // A reference whose target is, or may be, a template
-                    // folder variable makes each later assignment to it one.
-                    let target_unread = target.is_none_or(|target| {
-                        unread_destination(target) || template_variable(target).is_some()
-                    });
-                    if target_unread || template_variable(destination).is_some() {
-                        return unread();
-                    }
-                    continue;
-                }
-                if target.is_some() {
-                    found.push(word);
-                }
-            }
+        "export" | "declare" | "typeset" | "local" | "readonly" | "integer" | "float" => {
+            found.extend(declared(name, rest, arithmetic)?);
             Vec::new()
         }
         "read" => {
@@ -1299,6 +1302,14 @@ fn template_assignments<'w>(
             if words_unread {
                 return unread();
             }
+            // It may write any word it receives as a variable, and the
+            // shell evaluates the subscript of a name it sets. A word
+            // holding `=` is read as an assignment, which an appending one
+            // in program position is.
+            arithmetic.writes.push(words[at..].to_vec());
+            for word in &words[at..] {
+                arithmetic.assignment(word);
+            }
             Vec::new()
         }
     };
@@ -1307,7 +1318,444 @@ fn template_assignments<'w>(
     }) {
         return unread();
     }
+    if !destinations.is_empty() {
+        arithmetic
+            .writes
+            .push(destinations.iter().map(ToString::to_string).collect());
+    }
+    for destination in destinations {
+        arithmetic.subscript(destination);
+    }
     Ok(found)
+}
+
+/// The assignments a declaration builtin (`name`) makes with its words
+/// (`rest`), for [`template_assignments`]. A name reference whose target
+/// is not a plain name, or is or may be a template folder variable,
+/// refuses, and so does a destination that holds an expansion.
+fn declared<'w>(
+    name: &str,
+    rest: &'w [String],
+    arithmetic: &mut Arithmetic,
+) -> Result<Vec<&'w String>, String> {
+    let unread = || Err(TEMPLATE_UNREAD.to_string());
+    let flags: Vec<&String> = rest
+        .iter()
+        .take_while(|word| word.starts_with(['-', '+']) && *word != "--")
+        .collect();
+    // `export -n` removes the export mark; elsewhere `-n` makes a name
+    // reference.
+    let reference = name != "export"
+        && name != "readonly"
+        && flags
+            .iter()
+            .any(|flag| flag.starts_with('-') && flag.contains('n'));
+    // A value given to an integer variable is evaluated as arithmetic, and
+    // so is each later value assigned to it.
+    let integer = matches!(name, "integer" | "float")
+        || flags
+            .iter()
+            .any(|flag| flag.starts_with('-') && flag.contains(['i', 'E', 'F']));
+    let mut found = Vec::new();
+    for word in &rest[flags.len()..] {
+        let (destination, target) = match word.split_once('=') {
+            Some((destination, target)) => (destination, Some(target)),
+            None => (word.as_str(), None),
+        };
+        if unread_destination(destination) {
+            return unread();
+        }
+        arithmetic.assignment(word);
+        if integer {
+            arithmetic
+                .integers
+                .push(destination_base(destination).to_string());
+        }
+        if reference {
+            // Only a reference to a plain name the guard can see is read:
+            // a template folder variable as its target, or a subscript the
+            // shell evaluates, refuses.
+            let target_unread = target
+                .is_none_or(|target| !plain_name(target) || template_variable(target).is_some());
+            if target_unread || template_variable(destination).is_some() {
+                return unread();
+            }
+            continue;
+        }
+        if target.is_some() {
+            found.push(word);
+        }
+    }
+    Ok(found)
+}
+
+/// Whether `text` is a plain variable name, with no subscript or expansion.
+fn plain_name(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The comparison operators of `[[`, `test` and `[` whose operands the
+/// shell evaluates as arithmetic.
+const ARITHMETIC_TESTS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
+
+/// What the shell evaluates as arithmetic on one line, where an assignment
+/// may hide: each expression it evaluates, read from the shared reader's
+/// words and from the line's text, and what decides whether its names
+/// hold literal numbers. Any name read in arithmetic is evaluated in turn
+/// when its value is an expression, an inherited value included, so the
+/// line is read only when every operand is a literal number or a name the
+/// line gave a literal number before anything else ran ([`Self::literal`]).
+#[derive(Default)]
+struct Arithmetic {
+    /// Each expression the shell evaluates.
+    expressions: Vec<String>,
+    /// The bodies of `((` commands, whose own segments name their operands
+    /// as words and are not writes.
+    bodies: Vec<String>,
+    /// Each assignment word, `NAME=value`, `NAME+=value` or `NAME[i]=value`.
+    assigned: Vec<String>,
+    /// The variables given an integer attribute.
+    integers: Vec<String>,
+    /// The words of each command that may write a variable it names.
+    writes: Vec<Vec<String>>,
+}
+
+impl Arithmetic {
+    /// Read the arithmetic contexts in `text`, a line or one decoded word:
+    /// `((`, `$((` and `$[` bodies, and the subscripts, offsets and
+    /// indirect names of parameter expansions. `false` when a context does
+    /// not close or names its target indirectly.
+    fn scan(&mut self, text: &str) -> bool {
+        let chars: Vec<char> = text.chars().collect();
+        let mut at = 0;
+        while at < chars.len() {
+            let next = chars.get(at + 1).copied();
+            match (chars[at], next) {
+                ('(', Some('(')) => {
+                    let Some((body, end)) = closing(&chars, at + 2, '(', ')', true) else {
+                        return false;
+                    };
+                    self.bodies.push(body.clone());
+                    self.expressions.push(body);
+                    at = end;
+                }
+                ('$', Some('[')) => {
+                    let Some((body, end)) = closing(&chars, at + 2, '[', ']', false) else {
+                        return false;
+                    };
+                    self.expressions.push(body);
+                    at = end;
+                }
+                ('$', Some('{')) => match self.parameter(&chars, at + 2) {
+                    Some(end) => at = end,
+                    None => return false,
+                },
+                // zsh reads `$name[i]` as an element.
+                ('$', Some(c)) if c.is_ascii_alphabetic() || c == '_' => {
+                    let end = name_end(&chars, at + 1);
+                    if chars.get(end) == Some(&'[') {
+                        let Some((body, after)) = closing(&chars, end + 1, '[', ']', false) else {
+                            return false;
+                        };
+                        self.expressions.push(body);
+                        at = after;
+                    } else {
+                        at = end;
+                    }
+                }
+                _ => at += 1,
+            }
+        }
+        true
+    }
+
+    /// Read the parameter expansion whose name starts at `at`, just after
+    /// `${`: the position to read on from, or `None` for an indirect name
+    /// or flags that can name another variable.
+    fn parameter(&mut self, chars: &[char], mut at: usize) -> Option<usize> {
+        match chars.get(at) {
+            Some('!') => {
+                // Only listing names or keys is read; an indirect value
+                // may name a subscript the shell evaluates.
+                let end = name_end(chars, at + 1);
+                let after: String = chars[end..].iter().take(4).collect();
+                let listing = end > at + 1
+                    && ["*}", "@}", "[@]}", "[*]}"]
+                        .iter()
+                        .any(|form| after.starts_with(form));
+                return listing.then_some(end);
+            }
+            Some('(') => return None,
+            Some('#') => at += 1,
+            _ => {}
+        }
+        let end = name_end(chars, at);
+        if end == at {
+            return Some(at);
+        }
+        at = end;
+        if chars.get(at) == Some(&'[') {
+            let (body, after) = closing(chars, at + 1, '[', ']', false)?;
+            if body != "@" && body != "*" {
+                self.expressions.push(body);
+            }
+            at = after;
+        }
+        let modifier = matches!(chars.get(at + 1), Some('-' | '=' | '?' | '+'));
+        if chars.get(at) == Some(&':') && !modifier {
+            let (body, after) = closing(chars, at + 1, '{', '}', false)?;
+            self.expressions
+                .extend(body.split(':').map(ToString::to_string));
+            return Some(after);
+        }
+        Some(at)
+    }
+
+    /// Record an assignment word, with the subscript of its destination
+    /// and of each element of a compound value.
+    fn assignment(&mut self, word: &str) {
+        let (destination, value) = word.split_once('=').unwrap_or((word, ""));
+        self.subscript(destination);
+        if let Some(elements) = value.strip_prefix('(') {
+            let chars: Vec<char> = elements.chars().collect();
+            let mut at = 0;
+            while let Some(open) = chars[at..].iter().position(|c| *c == '[') {
+                let Some((body, after)) = closing(&chars, at + open + 1, '[', ']', false) else {
+                    // An element that does not close is not read.
+                    self.expressions.push("$".to_string());
+                    break;
+                };
+                self.expressions.push(body);
+                at = after;
+            }
+        }
+        if word.contains('=') {
+            self.assigned.push(word.to_string());
+        }
+    }
+
+    /// Record the subscript of a variable name the shell sets or reads.
+    fn subscript(&mut self, name: &str) {
+        let Some(open) = name.find('[') else {
+            return;
+        };
+        if !plain_name(&name[..open]) {
+            return;
+        }
+        let chars: Vec<char> = name[open + 1..].chars().collect();
+        let body =
+            closing(&chars, 0, '[', ']', false).map_or_else(|| "$".to_string(), |(body, _)| body);
+        self.expressions.push(body);
+    }
+
+    /// Record the operands of a test's numeric comparisons, which the
+    /// shell evaluates even when quoted, and the subscript a `-v` names.
+    fn comparison(&mut self, rest: &[String]) {
+        for (at, word) in rest.iter().enumerate() {
+            if ARITHMETIC_TESTS.contains(&word.as_str()) {
+                let before = at.checked_sub(1).and_then(|before| rest.get(before));
+                self.expressions.extend(before.cloned());
+                self.expressions.extend(rest.get(at + 1).cloned());
+            }
+            if word == "-v" {
+                if let Some(name) = rest.get(at + 1) {
+                    self.subscript(name);
+                }
+            }
+        }
+    }
+
+    /// Whether every expression the line evaluates holds only literal
+    /// numbers and names given a literal number at the start of `line`
+    /// ([`leading_numbers`]) that nothing else on the line may set.
+    fn literal(&mut self, line: &str) -> bool {
+        for word in &self.assigned {
+            let (destination, value) = word.split_once('=').unwrap_or((word, ""));
+            let base = destination_base(destination);
+            if self.integers.iter().any(|name| name == base) {
+                self.expressions.push(value.to_string());
+            }
+        }
+        if self.expressions.is_empty() {
+            return true;
+        }
+        let mut names = leading_numbers(line);
+        names.retain(|name| {
+            let kept_value = self.assigned.iter().all(|word| {
+                let (destination, value) = word.split_once('=').unwrap_or((word, ""));
+                destination_base(destination) != name || (destination == name && is_number(value))
+            });
+            let written = self.writes.iter().any(|words| {
+                let body = words.len() == 1
+                    && self.bodies.iter().any(|body| {
+                        body.split([' ', '\t', '\n'])
+                            .filter(|part| !part.is_empty())
+                            .eq([words[0].as_str()])
+                    });
+                !body
+                    && words.iter().any(|word| {
+                        word == name || (word.starts_with('-') && word.ends_with(name.as_str()))
+                    })
+            });
+            kept_value && !written
+        });
+        self.expressions
+            .iter()
+            .all(|expression| literal_expression(expression, &names))
+    }
+}
+
+/// The position after the name that starts at `at`, or `at` when none does.
+fn name_end(chars: &[char], mut at: usize) -> usize {
+    if chars
+        .get(at)
+        .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+    {
+        while chars
+            .get(at)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+        {
+            at += 1;
+        }
+    }
+    at
+}
+
+/// The text from `at` to the `close` that balances it (a doubled one when
+/// `doubled`, as `))` closes `((`), and the position after that close;
+/// `None` when it does not close.
+fn closing(
+    chars: &[char],
+    mut at: usize,
+    open: char,
+    close: char,
+    doubled: bool,
+) -> Option<(String, usize)> {
+    let start = at;
+    let mut depth = 0usize;
+    while let Some(&c) = chars.get(at) {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            if depth > 0 {
+                depth -= 1;
+            } else if !doubled {
+                return Some((chars[start..at].iter().collect(), at + 1));
+            } else if chars.get(at + 1) == Some(&close) {
+                return Some((chars[start..at].iter().collect(), at + 2));
+            } else {
+                return None;
+            }
+        }
+        at += 1;
+    }
+    None
+}
+
+/// Whether `text` is a literal decimal number.
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The names `line` gives a literal number before anything else runs: the
+/// assignment statements it opens with, each followed by `;`, `&&` or a
+/// new line, so each runs in this shell before the next.
+fn leading_numbers(line: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = line;
+    loop {
+        // Only the shell's blanks separate statements.
+        while let Some(next) = rest.strip_prefix([' ', '\t', '\n']) {
+            rest = next;
+        }
+        let mut statement = Vec::new();
+        let mut cursor = rest;
+        loop {
+            let name_len = cursor
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(cursor.len());
+            let name = &cursor[..name_len];
+            let Some(value) = cursor[name_len..].strip_prefix('=') else {
+                break;
+            };
+            let digits = value
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(value.len());
+            let after = &value[digits..];
+            if !plain_name(name)
+                || digits == 0
+                || !after.is_empty() && !after.starts_with([' ', '\t', ';', '&', '\n'])
+            {
+                break;
+            }
+            statement.push(name.to_string());
+            cursor = after.trim_start_matches([' ', '\t']);
+        }
+        if statement.is_empty() {
+            return names;
+        }
+        let next = if cursor.is_empty() {
+            Some("")
+        } else if let Some(next) = cursor.strip_prefix("&&") {
+            Some(next)
+        } else if cursor.starts_with(";;") || cursor.starts_with(";&") {
+            None
+        } else {
+            cursor
+                .strip_prefix(';')
+                .or_else(|| cursor.strip_prefix('\n'))
+        };
+        let Some(next) = next else {
+            return names;
+        };
+        names.extend(statement);
+        rest = next;
+        if rest.is_empty() {
+            return names;
+        }
+    }
+}
+
+/// Whether an arithmetic expression holds only literal numbers, operators
+/// and `names`. Any other name, an expansion or a quote refuses: the shell
+/// evaluates a name's value in turn, and an expansion's text after it
+/// fills it in. The numeric special parameters `$?`, `$#`, `$$` and `$!`
+/// are numbers.
+fn literal_expression(expression: &str, names: &[String]) -> bool {
+    let chars: Vec<char> = expression.chars().collect();
+    let mut at = 0;
+    while let Some(&c) = chars.get(at) {
+        if c.is_ascii_digit() {
+            // A number, with its base or hex digits (`16#ff`, `0x1f`).
+            while chars
+                .get(at)
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '#' | '_' | '@'))
+            {
+                at += 1;
+            }
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let end = name_end(&chars, at);
+            let name: String = chars[at..end].iter().collect();
+            if !names.contains(&name) {
+                return false;
+            }
+            at = end;
+        } else if c == '$' {
+            if !matches!(chars.get(at + 1), Some('?' | '#' | '$' | '!')) {
+                return false;
+            }
+            at += 2;
+        } else if " \t\n+-*/%<>=!&|^~?:,;()[]".contains(c) {
+            at += 1;
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// `value` as the absolute folder a process on this host reads it as.
@@ -1871,6 +2319,10 @@ mod tests {
             format!("export APPDATA='{root}'; hc run peer"),
             format!("APPDATA='{root}'; hc run peer"),
             format!("sh -c \"APPDATA='{root}' hc run peer\""),
+            // Arithmetic over literal numbers, and quoted data a command
+            // does not evaluate, set nothing.
+            format!("i=0; (( i++ )); APPDATA='{root}' hc run peer"),
+            format!("printf '%s' 'APPDATA=1'; APPDATA='{root}' hc run peer"),
         ] {
             assert_eq!(template(&command), vec!["claude -p"], "{command}");
         }
@@ -1905,22 +2357,67 @@ mod tests {
             "vared APPDATA; hc run peer",
             "(( APPDATA = 1 )); hc run peer",
             "frob \"$N\"; hc run peer",
+            "eval \"$X\"; hc run peer",
+            "source ./env.sh; hc run peer",
         ];
         let passed: Vec<_> = refusing
             .into_iter()
-            .filter(|command| {
-                let found = read(command);
-                let inner = found
-                    .runs
-                    .first()
-                    .map(|run| read(&run.line))
-                    .unwrap_or_default();
-                !found
-                    .unread
-                    .iter()
-                    .chain(&inner.unread)
-                    .any(|u| u.contains("<template>"))
-            })
+            .filter(|command| !template_refused(command))
+            .collect();
+        assert!(passed.is_empty(), "not refused: {passed:?}");
+    }
+
+    /// Whether `command` refuses its template lookup, read bare or as the
+    /// line its first carrier runs.
+    fn template_refused(command: &str) -> bool {
+        let found = read(command);
+        let inner = found
+            .runs
+            .first()
+            .map(|run| read(&run.line))
+            .unwrap_or_default();
+        found
+            .unread
+            .iter()
+            .chain(&inner.unread)
+            .any(|u| u.contains("<template>"))
+    }
+
+    /// The shell evaluates arithmetic in many places, and a name read there
+    /// is evaluated in turn, so any operand that is not a literal number
+    /// refuses a template lookup.
+    #[test]
+    fn arithmetic_operands_are_read() {
+        let refusing = [
+            "export APPDATA; [[ 'APPDATA=1' -eq 1 ]]; hc run peer",
+            "export APPDATA; declare -n ref='arr[APPDATA=1]'; ref=x; hc run peer",
+            "(( v )); hc run peer",
+            "for (( ; v; )); do :; done; hc run peer",
+            "echo $(( v )); hc run peer",
+            "echo $[ v ]; hc run peer",
+            "let v; hc run peer",
+            "test v -eq 1; hc run peer",
+            "[ v -lt 1 ]; hc run peer",
+            "a[v]=1; hc run peer",
+            "echo ${a[v]}; hc run peer",
+            "unset 'a[v]'; hc run peer",
+            "r='a[v]'; echo ${!r}; hc run peer",
+            "printf -v 'a[v]' %s x; hc run peer",
+            "read 'a[v]' < list; hc run peer",
+            "declare -i n=v; hc run peer",
+            "declare -i n; n+=v; hc run peer",
+            "echo ${s:v}; hc run peer",
+            "echo ${s:0:v}; hc run peer",
+            "a=([v]=x); hc run peer",
+            // A name counts as a literal number only when the line gives
+            // it one first and nothing else on the line sets it.
+            "i=0; read i; (( i++ )); hc run peer",
+            "false && i=0; (( i++ )); hc run peer",
+            "i=0 & (( i++ )); hc run peer",
+        ];
+        let passed: Vec<_> = refusing
+            .into_iter()
+            .filter(|command| !template_refused(command))
             .collect();
         assert!(passed.is_empty(), "not refused: {passed:?}");
     }
