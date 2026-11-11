@@ -417,15 +417,37 @@ fn hand_off(fixture: &Fixture, name: &str, head: &str, base: &str) -> (i32, Stri
     hand_off_with(fixture, name, head, base, &Claims::default())
 }
 
+/// One claim of a hand-off.
+#[derive(Clone, Copy, Default)]
+enum Claim<'a> {
+    /// The value the pre-push hook passes.
+    #[default]
+    AsTheHook,
+    /// The flag is left out.
+    LeftOut,
+    /// This value in place of the hook's.
+    Named(&'a str),
+}
+
+impl<'a> Claim<'a> {
+    /// The value to pass, given the hook's own, or `None` to leave it out.
+    fn value(self, hook: &'a str) -> Option<&'a str> {
+        match self {
+            Claim::AsTheHook => Some(hook),
+            Claim::LeftOut => None,
+            Claim::Named(value) => Some(value),
+        }
+    }
+}
+
 /// The claims a hand-off makes, each as the pre-push hook makes it unless
-/// set: `None` in an outer `Option` keeps the hook's value, `Some(None)`
-/// leaves the claim out.
+/// set.
 #[derive(Default)]
 struct Claims<'a> {
     /// `--policy-from`; the hook passes `main`'s tip.
-    policy_from: Option<Option<&'a str>>,
+    policy_from: Claim<'a>,
     /// `--into`; the hook passes the line.
-    into: Option<Option<&'a str>>,
+    into: Claim<'a>,
     /// Leave out `--destination` and `--advertisement-stdin`.
     no_advertisement: bool,
 }
@@ -471,7 +493,7 @@ fn hand_off_with(
     .iter()
     .map(|arg| (*arg).to_string())
     .collect();
-    if let Some(policy_from) = claims.policy_from.unwrap_or(Some(&main)) {
+    if let Some(policy_from) = claims.policy_from.value(&main) {
         args.extend(["--policy-from".to_string(), policy_from.to_string()]);
     }
     if !claims.no_advertisement {
@@ -481,7 +503,7 @@ fn hand_off_with(
             "--advertisement-stdin".to_string(),
         ]);
     }
-    if let Some(into) = claims.into.unwrap_or(Some(LINE)) {
+    if let Some(into) = claims.into.value(LINE) {
         args.push(format!("--into={into}"));
     }
     let mut child = codeflow()
@@ -614,7 +636,7 @@ fn codeflow_ci_refuses_missing_or_conflicting_hand_off_claims() {
         (
             "no policy authority",
             Claims {
-                policy_from: Some(None),
+                policy_from: Claim::LeftOut,
                 ..Claims::default()
             },
             "the hand-off names no policy authority",
@@ -622,7 +644,7 @@ fn codeflow_ci_refuses_missing_or_conflicting_hand_off_claims() {
         (
             "an authority that is not the advertised default tip",
             Claims {
-                policy_from: Some(Some(&member)),
+                policy_from: Claim::Named(&member),
                 ..Claims::default()
             },
             &not_default,
@@ -630,7 +652,7 @@ fn codeflow_ci_refuses_missing_or_conflicting_hand_off_claims() {
         (
             "no --into",
             Claims {
-                into: Some(None),
+                into: Claim::LeftOut,
                 ..Claims::default()
             },
             "the hand-off names no line (`--into`)",
@@ -638,7 +660,7 @@ fn codeflow_ci_refuses_missing_or_conflicting_hand_off_claims() {
         (
             "an --into naming another line",
             Claims {
-                into: Some(Some("integration/EPC-002-other")),
+                into: Claim::Named("integration/EPC-002-other"),
                 ..Claims::default()
             },
             "the hand-off names 'integration/EPC-002-other' with `--into`, but the candidate is bound to",

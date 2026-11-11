@@ -7,7 +7,7 @@ use super::*;
 
 /// A recorded admission that admits every member, numbering the pull
 /// requests from 1 in merge order.
-fn admit_all(_line: &str, members: &[Member]) -> Result<Vec<Admitted>, String> {
+const ADMIT_ALL: Admission<'static> = &|_line, members| {
     Ok(members
         .iter()
         .zip(1..)
@@ -16,7 +16,7 @@ fn admit_all(_line: &str, members: &[Member]) -> Result<Vec<Admitted>, String> {
             pull,
         })
         .collect())
-}
+};
 
 const LINE: &str = "integration/EPC-001-line";
 const CANDIDATE: &str = "candidate/epc-001-c1";
@@ -120,7 +120,7 @@ impl Fixture {
                 default_tip: &self.main,
                 advertised,
                 line: None,
-                admission: &admit_all,
+                admission: ADMIT_ALL,
             },
         )
     }
@@ -393,7 +393,7 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
             default_tip: &f.main,
             advertised: &f.advertised(),
             line: Some("integration/EPC-002-other"),
-            admission: &admit_all,
+            admission: ADMIT_ALL,
         },
     );
     refused(elsewhere, "not of 'integration/EPC-002-other'");
@@ -406,7 +406,7 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
             default_tip: &f.main,
             advertised: &f.advertised(),
             line: None,
-            admission: &admit_all,
+            admission: ADMIT_ALL,
         },
     );
     refused(unnamed, "does not start with `candidate/`");
@@ -429,7 +429,7 @@ fn each_member_head_is_bound_to_its_admitted_pull_request() {
         seen.borrow_mut().push(line.to_string());
         seen.borrow_mut()
             .extend(members.iter().map(|member| member.head.clone()));
-        admit_all(line, members)
+        ADMIT_ALL(line, members)
     };
     let bound = bind(
         f.root(),
