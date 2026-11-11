@@ -2815,6 +2815,42 @@ fn doctor_reports_writable_global_and_system_include_files() {
     }
 }
 
+/// TSK-416 review round 4: an include value from an untrusted
+/// configuration can hold a credential. Doctor names the include with the
+/// credential redacted, and its remedy asks for no `git config` read that
+/// would print the value. The credential is synthetic.
+#[test]
+fn doctor_shows_an_include_path_without_its_credential() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let config = dir.path().join(".git").join("config");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("[include]\n\tpath = https://user:OPAQUECANARY@host.invalid/config\n");
+    std::fs::write(&config, text).unwrap();
+    let out = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!output.contains("OPAQUECANARY"), "{output}");
+    assert!(!output.contains("user:"), "{output}");
+    // Wherever the include is named, it is named redacted.
+    assert_eq!(
+        output.matches("host.invalid").count(),
+        output.matches("***@host.invalid").count(),
+        "{output}"
+    );
+    assert!(output.contains("git-config-includes"), "{output}");
+    for listing in ["--get-all", "--get-regexp", "--show-origin", "--list"] {
+        assert!(!output.contains(listing), "{listing}: {output}");
+    }
+}
+
 #[test]
 fn exec_guard_blocks_powershell_catastrophe_with_exit_2() {
     let dir = tempfile::tempdir().unwrap();

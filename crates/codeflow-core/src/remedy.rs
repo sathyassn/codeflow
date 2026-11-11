@@ -792,7 +792,7 @@ catalog! {
         "nothing is needed for the strict rule; to relax it, the operator sets `security.text_guard` to `relaxed` in .codeflow/policy.json and lands it on every protected ref the hook reads, accepting that no sandbox is verified";
     /// Git include paths that need operator inspection.
     DOCTOR_GIT_CONFIG_INCLUDES = Step::Git("git config"),
-        "The operator secures or removes each include file the finding names: `git config --show-origin --get-all include.path` shows which configuration file names each plain include, and conditional includes are found in those files with an editor, since printing the whole configuration shows remote URLs and url rewrite bases, which can hold a credential; rerun codeflow doctor --check git-config-includes after repair.";
+        "The operator secures or removes each include file the finding names, finding the include and includeIf entries that name them in the repository, global and system configuration files with an editor, since printing any configuration value shows text that can hold a credential; rerun codeflow doctor --check git-config-includes after repair.";
     /// Files the home's startup files source from outside the class.
     DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
         "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
