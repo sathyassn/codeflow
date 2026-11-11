@@ -1,0 +1,11 @@
+id = "TSK-1429"
+uid = "bca42c21-98d8-4772-89ec-075280fbac0a"
+kind = "TSK"
+title = "The EPC-026 line passes its daily Windows run and import probes after the main sync"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T04:33:10Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
