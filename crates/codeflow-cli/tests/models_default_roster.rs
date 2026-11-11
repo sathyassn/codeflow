@@ -323,10 +323,11 @@ fn a_harness_choice_is_recorded_and_changes_nothing() {
     // The record is stored, not only echoed, in the session's own file.
     let path = effective["recorded_to"].as_str().unwrap();
     assert!(
-        path.ends_with("sessions-ses-4f1c-session-one.jsonl"),
+        // `sid-` and the first 128 bits of SHA-256("ses-4f1c-session-one").
+        path.ends_with("sessions-sid-623cc6e1772f1ec1bdf4312bbcc686bf.jsonl"),
         "{path}"
     );
-    let ledger = session_events(project.root(), "ses-4f1c-session-one");
+    let ledger = session_events(project.root(), "4f1c-session-one");
     assert_eq!(ledger.len(), 1, "{ledger:?}");
     assert_eq!(ledger[0]["event"], "effective_model");
     assert_eq!(ledger[0]["session_id"], "ses-4f1c-session-one");
@@ -394,7 +395,7 @@ fn harness_choices_correlate_with_their_own_session() {
         ("session-a", "claude-opus-5-5"),
         ("session-b", "claude-sonnet-5-5"),
     ] {
-        let events = session_events(project.root(), &format!("ses-{session}"));
+        let events = session_events(project.root(), session);
         let kinds: Vec<&str> = events
             .iter()
             .map(|e| e["event"].as_str().unwrap())
@@ -413,22 +414,30 @@ fn harness_choices_correlate_with_their_own_session() {
 
 /// AC-9: harness ids that differ only by case, by `_` or by a `ses-`
 /// prefix each keep their own file, through `--effective` and the real
-/// `SessionEnd` hook, on a case-insensitive volume too. Before, `alpha`
-/// and `ses-alpha` both wrote `sessions-ses-alpha.jsonl`, and `Alpha`
-/// opened that same file where case folds.
+/// `SessionEnd` hook, on a case-insensitive volume too, and a file an
+/// earlier release wrote is never written again. Before, `alpha` and
+/// `ses-alpha` both wrote `sessions-ses-alpha.jsonl`, and `Alpha` opened
+/// that same file where case folds.
 #[test]
 fn session_ids_that_differ_by_case_prefix_or_underscore_never_share_a_file() {
     let project = Project::new();
+    // A file 3.1.x wrote for session `_alpha`.
+    let legacy_line =
+        r#"{"event":"session_end","timestamp":"2026-01-01T00:00:00Z","session_id":"ses-_alpha"}"#;
+    let sessions = ledger_sessions_dir(project.root());
+    std::fs::create_dir_all(&sessions).unwrap();
+    let legacy = sessions.join("sessions-ses-_alpha.jsonl");
+    std::fs::write(&legacy, format!("{legacy_line}\n")).unwrap();
     let cases = [
-        ("alpha", "ses-alpha", "claude-opus-5-5"),
-        ("Alpha", "ses-_alpha", "claude-sonnet-5-5"),
-        ("ALPHA", "ses-_a_l_p_h_a", "claude-opus-5-5"),
-        ("_alpha", "ses-__alpha", "claude-sonnet-5-5"),
-        ("ses-alpha", "ses-ses-alpha", "claude-opus-5-5"),
-        ("a_b", "ses-a__b", "claude-sonnet-5-5"),
-        ("a__b", "ses-a____b", "claude-opus-5-5"),
+        ("alpha", "claude-opus-5-5"),
+        ("Alpha", "claude-sonnet-5-5"),
+        ("ALPHA", "claude-opus-5-5"),
+        ("_alpha", "claude-sonnet-5-5"),
+        ("ses-alpha", "claude-opus-5-5"),
+        ("a_b", "claude-sonnet-5-5"),
+        ("a__b", "claude-opus-5-5"),
     ];
-    for (session, _, model) in cases {
+    for (session, model) in cases {
         let effective = format!("{model}@high");
         let output = project.run(&[
             "--duty",
@@ -443,17 +452,31 @@ fn session_ids_that_differ_by_case_prefix_or_underscore_never_share_a_file() {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         session_end(project.root(), session);
     }
-    for (session, identity, model) in cases {
+    for (session, model) in cases {
         // A shared file would hold another id's records, so four or more.
-        let events = session_events(project.root(), identity);
+        let events = session_events(project.root(), session);
         assert_eq!(events.len(), 2, "{session}: {events:?}");
         assert_eq!(events[0]["event"], "effective_model", "{session}");
         assert_eq!(events[0]["model"], model, "{session}");
         assert_eq!(events[1]["event"], "session_end", "{session}");
         for event in &events {
-            assert_eq!(event["session_id"], identity, "{session}");
+            assert_eq!(
+                event["session_id"],
+                format!("ses-{session}").as_str(),
+                "{session}"
+            );
         }
     }
+    assert_eq!(
+        std::fs::read_to_string(&legacy).unwrap(),
+        format!("{legacy_line}\n"),
+        "the legacy file is left as it was"
+    );
+}
+
+/// The sessions-ledger directory under the project's state directory.
+fn ledger_sessions_dir(root: &Path) -> std::path::PathBuf {
+    root.join(".git/codeflow/ledger/sessions")
 }
 
 // The upgrade from a schema 5 catalog (refused, then `codeflow update`) is
@@ -481,12 +504,14 @@ fn session_end(root: &Path, session: &str) {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 }
 
-/// Every event in the sessions-ledger file of ledger identity `identity`
-/// (`ses-` and the encoded harness id) under the project's state
-/// directory, in file order. The name compares byte for byte, so a file
-/// that differs only by case is not this one.
-fn session_events(root: &Path, identity: &str) -> Vec<Value> {
-    let name = format!("sessions-{identity}.jsonl");
+/// Every event in harness session `session`'s sessions-ledger file under
+/// the project's state directory, in file order. The name compares byte
+/// for byte, so a file that differs only by case is not this one.
+fn session_events(root: &Path, session: &str) -> Vec<Value> {
+    let key = codeflow_core::ledger::session_identity(session)
+        .unwrap()
+        .file_key;
+    let name = format!("sessions-{key}.jsonl");
     let mut stack = vec![root.join(".git")];
     let mut found = Vec::new();
     while let Some(dir) = stack.pop() {

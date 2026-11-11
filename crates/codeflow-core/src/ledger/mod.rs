@@ -7,7 +7,7 @@
 //! <state_dir>/ledger/
 //! ├── work-graph/
 //! │   ├── work-graph.jsonl              ← base (compacted history)
-//! │   └── work-graph-ses-{id}.jsonl     ← session fragment
+//! │   └── work-graph-{key}.jsonl        ← session fragment
 //! ├── sessions/
 //! ├── memory-events/
 //! ├── config/
@@ -80,7 +80,7 @@ pub enum LedgerError {
 /// Canonical JSONL ledger type names (directory names under `ledger/`).
 ///
 /// Within each subdirectory, the base file is `{type}.jsonl` and session
-/// fragments are `{type}-ses-{session_id}.jsonl`.
+/// fragments are `{type}-sid-{hash}.jsonl` (`{type}-ses-{id}.jsonl` before 4.0.0).
 pub mod files {
     pub const WORK_GRAPH: &str = "work-graph";
     pub const MEMORY_EVENTS: &str = "memory-events";
@@ -91,6 +91,56 @@ pub mod files {
 
     /// All canonical ledger type names.
     pub const ALL: &[&str] = &[WORK_GRAPH, MEMORY_EVENTS, SESSIONS, CONFIG, REFUSALS];
+}
+
+/// A harness session as the ledger records it: the `session_id` its events
+/// carry and the fragment key its file is named by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionIdentity {
+    /// `ses-` and the harness id exactly as given, written into each event.
+    pub record_id: String,
+    /// `sid-` and 32 lowercase hex digits: the file is
+    /// `{type}/{type}-{key}.jsonl`.
+    pub file_key: String,
+}
+
+/// The prefix of a fragment key derived by [`session_identity`]. Releases
+/// before 4.0.0 named fragments `ses-{id}` instead; the compactor still
+/// reads those, and nothing writes them.
+pub const SESSION_KEY_PREFIX: &str = "sid-";
+
+/// The ledger identity of harness session `id`, for every writer of a
+/// session fragment (the `SessionEnd` summary and `models resolve
+/// --effective`).
+///
+/// The file key is `sid-` and the first 128 bits of the SHA-256 of the
+/// record id, in lowercase hex. It has a fixed length, holds nothing a
+/// filesystem folds, and never meets a pre-4.0.0 `ses-` name; distinct ids
+/// get distinct keys unless SHA-256 collides on its first 128 bits.
+///
+/// # Errors
+///
+/// The id is empty. (A `&str` is valid UTF-8 by construction, so a harness
+/// id that is not reaches this function only after its caller refused it.)
+pub fn session_identity(id: &str) -> Result<SessionIdentity, String> {
+    if id.is_empty() {
+        return Err("the harness session id is empty".into());
+    }
+    let record_id = format!("ses-{id}");
+    let file_key = session_file_key(&record_id);
+    Ok(SessionIdentity {
+        record_id,
+        file_key,
+    })
+}
+
+/// The fragment key for an event's recorded `session_id`.
+#[must_use]
+pub fn session_file_key(record_id: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    let digest = Sha256::digest(record_id.as_bytes());
+    let hex = crate::hooks::source_identity::hex_digest(&digest[..16]);
+    format!("{SESSION_KEY_PREFIX}{hex}")
 }
 
 /// Resolve the canonical base file path for a ledger type under an explicit

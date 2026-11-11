@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 
 use super::files;
-use super::{CompactionResult, Event, LedgerError};
+use super::{session_file_key, CompactionResult, Event, LedgerError};
 
 /// Compact a single ledger type by merging completed session fragments into the base.
 ///
@@ -196,7 +196,17 @@ pub fn compact_all(
     Ok(results)
 }
 
-/// Find session IDs that have a `session_end` event in the sessions type.
+/// The fragment keys of sessions that have a `session_end` event in the
+/// sessions type. A fragment matches a completed session two ways:
+///
+/// - a pre-4.0.0 `ses-…` fragment by the old rule: its name suffix equals
+///   the recorded `session_id`;
+/// - a `sid-…` fragment when its name suffix equals [`session_file_key`] of
+///   the recorded `session_id`.
+///
+/// So both keys of each completed session are in the set. A recorded id
+/// always starts `ses-` and a derived key `sid-`, so neither rule can
+/// match a fragment named the other way.
 fn find_completed_sessions(
     ledger_dir: &Path,
 ) -> Result<std::collections::HashSet<String>, LedgerError> {
@@ -213,7 +223,8 @@ fn find_completed_sessions(
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
-        if name.as_encoded_bytes().starts_with(b"sessions-ses-")
+        let name = name.as_encoded_bytes();
+        if (name.starts_with(b"sessions-ses-") || name.starts_with(b"sessions-sid-"))
             && path
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
@@ -232,6 +243,7 @@ fn scan_for_session_ends(
     for event in events {
         if event.event_type == "session_end" {
             if let Some(sid) = event.session_id {
+                completed.insert(session_file_key(&sid));
                 completed.insert(sid);
             }
         }
@@ -276,11 +288,14 @@ fn compactable_fragments(
 ) -> Result<Vec<PathBuf>, LedgerError> {
     Ok(fragment_sessions(subdir, type_name)?
         .into_iter()
-        .filter(|(_, sid)| {
-            current_session_id != Some(sid.as_str()) && completed_sessions.contains(sid)
-        })
+        .filter(|(_, sid)| !is_current(current_session_id, sid) && completed_sessions.contains(sid))
         .map(|(path, _)| path)
         .collect())
+}
+/// Whether fragment key `key` belongs to the current session, recorded as
+/// `current`: by the old rule (`ses-…`) or by its derived `sid-…` key.
+fn is_current(current: Option<&str>, key: &str) -> bool {
+    current.is_some_and(|current| current == key || session_file_key(current) == key)
 }
 fn count_active_fragments(
     subdir: &Path,
@@ -290,9 +305,7 @@ fn count_active_fragments(
 ) -> Result<usize, LedgerError> {
     Ok(fragment_sessions(subdir, type_name)?
         .into_iter()
-        .filter(|(_, sid)| {
-            current_session_id == Some(sid.as_str()) || !completed_sessions.contains(sid)
-        })
+        .filter(|(_, sid)| is_current(current_session_id, sid) || !completed_sessions.contains(sid))
         .count())
 }
 

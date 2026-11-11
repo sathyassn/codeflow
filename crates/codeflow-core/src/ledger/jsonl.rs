@@ -20,10 +20,10 @@ use super::{Event, LedgerError, LedgerWriter};
 /// <ledger_dir>/
 /// ├── work-graph/
 /// │   ├── work-graph.jsonl                  ← base (compacted history)
-/// │   └── work-graph-ses-{id}.jsonl         ← session fragment
+/// │   └── work-graph-{key}.jsonl            ← session fragment
 /// ├── sessions/
 /// │   ├── sessions.jsonl
-/// │   └── sessions-ses-{id}.jsonl
+/// │   └── sessions-{key}.jsonl
 /// └── ...
 /// ```
 ///
@@ -53,7 +53,7 @@ impl JsonlWriter {
     /// Create a new `JsonlWriter` with an optional session ID.
     ///
     /// When `session_id` is `Some`, events are written to session-scoped
-    /// fragment files (`{type}/{type}-ses-{id}.jsonl`). When `None`, events
+    /// fragment files (`{type}/{type}-{key}.jsonl`). When `None`, events
     /// are written to the base file (`{type}/{type}.jsonl`).
     ///
     /// # Errors
@@ -116,7 +116,7 @@ impl JsonlWriter {
     ///
     /// In subdirectory layout:
     /// - Base: `{ledger_dir}/{type_name}/{type_name}.jsonl`
-    /// - Session: `{ledger_dir}/{type_name}/{type_name}-ses-{id}.jsonl`
+    /// - Session: `{ledger_dir}/{type_name}/{type_name}-{key}.jsonl`
     fn session_scoped_path(&self, type_name: &str) -> PathBuf {
         let subdir = self.ledger_dir.join(type_name);
         match &self.session_id {

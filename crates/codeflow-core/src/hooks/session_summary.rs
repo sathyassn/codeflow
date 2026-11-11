@@ -7,13 +7,14 @@
 //! callers map every error to a warning + exit 0.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
-use crate::ledger::{files, Event, JsonlWriter, LedgerError, LedgerWriter};
+use crate::ledger::{
+    files, session_identity, Event, JsonlWriter, LedgerError, LedgerWriter, SessionIdentity,
+};
 
 use super::policy::Policy;
 use super::repo::RepoInfo;
@@ -192,10 +193,9 @@ fn diff_stats(root: &Path, base: Option<&str>) -> (Option<String>, usize, usize)
 fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnwritten> {
     let ledger_dir = info.ledger_dir();
     let unwritten = |error: LedgerError| unwritten(&ledger_dir, error);
-    let session_id = summary
-        .session_id
-        .as_ref()
-        .map(|id| normalize_session_id(id));
+    let identity = identity_of(&ledger_dir, summary.session_id.as_deref())?;
+    let session_id = identity.as_ref().map(|i| i.record_id.clone());
+    let file_key = identity.map(|i| i.file_key);
 
     let mut data = HashMap::new();
     data.insert("branch".to_string(), serde_json::json!(summary.branch));
@@ -217,7 +217,7 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
     let event = Event {
         event_type: "session_end".to_string(),
         timestamp: summary.timestamp.clone(),
-        session_id: session_id.clone(),
+        session_id,
         // Shown in the ledger (OS text rule, issue 79).
         worktree: Some(
             crate::git::GitName::from_os_str(info.root.as_os_str())
@@ -227,12 +227,11 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
         data,
     };
 
-    let writer =
-        JsonlWriter::new_with_session(&ledger_dir, session_id.clone()).map_err(unwritten)?;
+    let writer = JsonlWriter::new_with_session(&ledger_dir, file_key.clone()).map_err(unwritten)?;
     writer.append_event(event).map_err(unwritten)?;
 
-    let file = match &session_id {
-        Some(sid) => format!("{t}/{t}-{sid}.jsonl", t = files::SESSIONS),
+    let file = match &file_key {
+        Some(key) => format!("{t}/{t}-{key}.jsonl", t = files::SESSIONS),
         None => format!("{t}/{t}.jsonl", t = files::SESSIONS),
     };
     Ok(ledger_dir.join(file))
@@ -265,7 +264,7 @@ impl EffectiveSession {
     /// (a space, a control or a non-ASCII character), or the `@` is missing
     /// or doubled; or the session id is empty, longer than
     /// [`MAX_SESSION_ID`] characters, or holds a character other than an
-    /// ASCII letter, digit, `-` or `_` (it names the session's ledger file).
+    /// ASCII letter, digit, `-` or `_`.
     pub fn parse(value: &str, host: &str, session: &str) -> Result<Self, String> {
         if session.is_empty()
             || session.len() > MAX_SESSION_ID
@@ -319,7 +318,9 @@ pub fn record_effective(
         return Ok(None);
     };
     let ledger_dir = info.ledger_dir();
-    let session_id = session.session_id.as_deref().map(normalize_session_id);
+    let identity = identity_of(&ledger_dir, session.session_id.as_deref())?;
+    let session_id = identity.as_ref().map(|i| i.record_id.clone());
+    let file_key = identity.map(|i| i.file_key);
     let mut data = HashMap::new();
     data.insert("model".to_string(), serde_json::json!(session.model));
     data.insert("effort".to_string(), serde_json::json!(session.effort));
@@ -328,7 +329,7 @@ pub fn record_effective(
     let event = Event {
         event_type: EFFECTIVE_MODEL.to_string(),
         timestamp: session.timestamp.clone(),
-        session_id: session_id.clone(),
+        session_id,
         worktree: Some(
             crate::git::GitName::from_os_str(info.root.as_os_str())
                 .display()
@@ -336,13 +337,13 @@ pub fn record_effective(
         ),
         data,
     };
-    let writer = JsonlWriter::new_with_session(&ledger_dir, session_id.clone())
+    let writer = JsonlWriter::new_with_session(&ledger_dir, file_key.clone())
         .map_err(|error| unwritten(&ledger_dir, error))?;
     writer
         .append_event(event)
         .map_err(|error| unwritten(&ledger_dir, error))?;
-    let file = match &session_id {
-        Some(sid) => format!("{t}/{t}-{sid}.jsonl", t = files::SESSIONS),
+    let file = match &file_key {
+        Some(key) => format!("{t}/{t}-{key}.jsonl", t = files::SESSIONS),
         None => format!("{t}/{t}.jsonl", t = files::SESSIONS),
     };
     Ok(Some(ledger_dir.join(file)))
@@ -394,55 +395,25 @@ pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
     }
 }
 
-/// The longest `--session` id accepted. Its worst encoding doubles every
-/// character (all `_` or uppercase), so the longest file the ledger opens
-/// for it, `sessions-ses-{200 bytes}.jsonl.lock`, is 224 bytes, under the
-/// 255-byte name limit of APFS, ext4 and NTFS.
+/// The longest `--session` id accepted. The id no longer reaches a file
+/// name (the file is named by a fixed-length hash), so this bounds only
+/// the value written into each record.
 pub const MAX_SESSION_ID: usize = 100;
 
-/// The ledger identity of harness session `id`: `ses-` and then `id`
-/// encoded so that distinct ids never name the same file, on a
-/// case-insensitive or normalizing filesystem too. Session fragment files
-/// follow the `…-ses-{id}.jsonl` convention the ledger compactor expects,
-/// and the event's `session_id` is this same string, so the compactor
-/// matches the file to its `session_end`.
-///
-/// The encoding maps each character on its own:
-///
-/// - `a`-`z`, `0`-`9` and `-` stay as they are, so a lowercase UUID keeps
-///   the name earlier releases gave it;
-/// - `_` becomes `__`;
-/// - `A`-`Z` becomes `_` and the lowercase letter (`Alpha` is `_alpha`);
-/// - any other character becomes `~` and two lowercase hex digits per
-///   UTF-8 byte (`/` is `~2f`).
-///
-/// It is injective: every output `_` opens a two-character escape whose
-/// second character (`_` or a letter) names its input, `~` always opens a
-/// three-character escape, and every other output character stands for
-/// itself, so the output decodes to exactly one input. The output holds
-/// only `a`-`z`, `0`-`9`, `-`, `_` and `~`: no uppercase or non-ASCII
-/// character a filesystem could fold, and no `/` or `.`.
-fn normalize_session_id(id: &str) -> String {
-    let mut out = String::with_capacity(id.len() + 4);
-    out.push_str("ses-");
-    for c in id.chars() {
-        match c {
-            'a'..='z' | '0'..='9' | '-' => out.push(c),
-            '_' => out.push_str("__"),
-            'A'..='Z' => {
-                out.push('_');
-                out.push(c.to_ascii_lowercase());
-            }
-            _ => {
-                let mut bytes = [0; 4];
-                for byte in c.encode_utf8(&mut bytes).bytes() {
-                    // Writing to a String never fails.
-                    let _ = write!(out, "~{byte:02x}");
-                }
-            }
-        }
-    }
-    out
+/// The ledger identity for an optional harness session id, from the one
+/// shared [`session_identity`]: `None` writes the base file. An empty id
+/// is refused before anything touches the filesystem.
+fn identity_of(
+    ledger_dir: &Path,
+    id: Option<&str>,
+) -> Result<Option<SessionIdentity>, LedgerUnwritten> {
+    id.map(session_identity)
+        .transpose()
+        .map_err(|cause| LedgerUnwritten {
+            path: ledger_dir.to_path_buf(),
+            cause,
+            repair: Repair::RestoreInputs,
+        })
 }
 
 #[cfg(test)]
@@ -493,7 +464,8 @@ mod tests {
 
         let path = record(dir.path(), payload).unwrap().unwrap();
         assert!(
-            path.ends_with("sessions/sessions-ses-abc123.jsonl"),
+            // `sid-` and the first 128 bits of SHA-256("ses-abc123").
+            path.ends_with("sessions/sessions-sid-63799fbfc9f9dab70ac4c347bb24a5a3.jsonl"),
             "{path:?}"
         );
         // Lands under the repo's shared state dir (canonicalize: macOS /var symlink).
@@ -566,7 +538,10 @@ mod tests {
     fn a_ledger_file_that_is_a_directory_names_that_directory() {
         for (payload, name) in [
             ("{}", "sessions.jsonl"),
-            (r#"{"session_id":"s1"}"#, "sessions-ses-s1.jsonl"),
+            (
+                r#"{"session_id":"s1"}"#,
+                "sessions-sid-67f0646baf898daa03f0c8d0bd47c2ec.jsonl",
+            ),
             ("{}", "sessions.jsonl.lock"),
         ] {
             let dir = tempfile::tempdir().unwrap();
@@ -671,93 +646,79 @@ mod tests {
         assert!(line.contains("feat/wt"));
     }
 
+    /// Distinct ids get distinct fixed-length keys of lowercase hex, which a
+    /// filesystem cannot fold, and no key is a name an earlier release
+    /// wrote (`ses-…`).
     #[test]
-    fn test_normalize_session_id() {
-        for (id, identity) in [
-            ("abc", "ses-abc"),
-            (
-                "4f1c9e2a-0b3d-4c5e-8f6a-7b8c9d0e1f2a",
-                "ses-4f1c9e2a-0b3d-4c5e-8f6a-7b8c9d0e1f2a",
-            ),
-            ("ses-abc", "ses-ses-abc"),
-            ("Alpha", "ses-_alpha"),
-            ("_alpha", "ses-__alpha"),
-            ("__alpha", "ses-____alpha"),
-            ("a_B", "ses-a___b"),
-            ("../x", "ses-~2e~2ex~2fx"),
-            ("é", "ses-~c3~a9"),
-        ] {
-            assert_eq!(normalize_session_id(id), identity, "{id}");
-        }
-    }
-
-    /// The inverse of the encoding, for the injectivity check: a string
-    /// that decodes to exactly one id came from only that id.
-    fn decode(identity: &str) -> Option<String> {
-        let mut bytes = Vec::new();
-        let mut rest = identity.strip_prefix("ses-")?.bytes();
-        while let Some(byte) = rest.next() {
-            match byte {
-                b'a'..=b'z' | b'0'..=b'9' | b'-' => bytes.push(byte),
-                b'_' => match rest.next()? {
-                    b'_' => bytes.push(b'_'),
-                    letter @ b'a'..=b'z' => bytes.push(letter.to_ascii_uppercase()),
-                    _ => return None,
-                },
-                b'~' => {
-                    let hex = [rest.next()?, rest.next()?];
-                    bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
-                }
-                _ => return None,
-            }
-        }
-        String::from_utf8(bytes).ok()
-    }
-
-    #[test]
-    fn the_session_encoding_decodes_back_and_never_folds_case() {
+    fn session_keys_are_fixed_length_lowercase_hex_distinct_and_never_legacy() {
+        let long = ["é".repeat(40), "x".repeat(4096)];
         let ids = [
             "alpha",
             "Alpha",
             "ALPHA",
-            "aLpHa",
             "_alpha",
             "__alpha",
+            "ses-alpha",
             "a_b",
             "a__b",
-            "A_b",
-            "ses-alpha",
-            "a-b",
-            "x~2f",
             "../x",
             "é",
             "É",
-            "a b",
+            long[0].as_str(),
+            long[1].as_str(),
         ];
         let mut folded = std::collections::HashSet::new();
         for id in ids {
-            let identity = normalize_session_id(id);
-            assert_eq!(decode(&identity).as_deref(), Some(id), "{identity}");
+            let identity = session_identity(id).unwrap();
+            assert_eq!(identity.record_id, format!("ses-{id}"));
+            let hex = identity.file_key.strip_prefix("sid-").unwrap();
+            assert_eq!(hex.len(), 32, "{id}");
             assert!(
-                identity
-                    .bytes()
-                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~')),
-                "{identity}"
+                hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{id}"
             );
-            // No two ids share a name even after a filesystem folds case.
-            assert!(folded.insert(identity.to_lowercase()), "{id}: {identity}");
+            assert!(folded.insert(identity.file_key.to_lowercase()), "{id}");
         }
+        // A legacy name and a new id that once shared a file: `_alpha` was
+        // `sessions-ses-_alpha`, the name the 71282a421 encoding gave
+        // `Alpha`; `Alpha` was `sessions-ses-Alpha`, which folds onto
+        // `alpha`'s legacy name.
+        for id in ["Alpha", "alpha", "_alpha"] {
+            let key = session_identity(id).unwrap().file_key;
+            for legacy in ["ses-_alpha", "ses-Alpha", "ses-alpha"] {
+                assert_ne!(key.to_lowercase(), legacy.to_lowercase(), "{id}");
+            }
+        }
+        assert!(session_identity("").is_err());
     }
 
     #[test]
-    fn the_longest_accepted_session_id_names_a_file_under_255_bytes() {
+    fn the_session_flag_is_bounded_and_the_key_length_is_not_the_ids() {
         for c in ["_", "Z", "a"] {
             let id = c.repeat(MAX_SESSION_ID);
             assert!(EffectiveSession::parse("m@high", "codex-cli", &id).is_ok());
             assert!(EffectiveSession::parse("m@high", "codex-cli", &format!("{id}a")).is_err());
-            let lock = format!("sessions-{}.jsonl.lock", normalize_session_id(&id));
-            assert!(lock.len() <= 224, "{c}: {}", lock.len());
         }
+    }
+
+    /// A long or non-ASCII id from the `SessionEnd` payload still writes:
+    /// the file name has a fixed length, and the record keeps the id.
+    #[test]
+    fn a_long_or_non_ascii_session_end_id_still_records() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_branch_work(dir.path());
+        for id in ["é".repeat(40), "Ω".repeat(300)] {
+            let path = record(dir.path(), &format!(r#"{{"session_id":"{id}"}}"#))
+                .unwrap()
+                .unwrap();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(name.len(), "sessions-sid-.jsonl".len() + 32, "{name}");
+            let line = std::fs::read_to_string(&path).unwrap();
+            let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(event["session_id"], format!("ses-{id}"));
+        }
+        let err = record(dir.path(), r#"{"session_id":""}"#).unwrap_err();
+        assert!(err.cause.contains("empty"), "{err:?}");
     }
 
     #[test]
@@ -786,8 +747,8 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(end, effective, "{id}: both records share its file");
-            let identity = normalize_session_id(id);
-            assert!(end.ends_with(format!("sessions/sessions-{identity}.jsonl")));
+            let key = session_identity(id).unwrap().file_key;
+            assert!(end.ends_with(format!("sessions/sessions-{key}.jsonl")));
             files.insert(end);
         }
         for path in &files {
@@ -804,7 +765,10 @@ mod tests {
             );
             let stored = events[0]["session_id"].as_str().unwrap();
             assert!(
-                path.ends_with(format!("sessions-{stored}.jsonl")),
+                path.ends_with(format!(
+                    "sessions-{}.jsonl",
+                    crate::ledger::session_file_key(stored)
+                )),
                 "{path:?}"
             );
             assert_eq!(events[1]["session_id"], stored);
@@ -812,13 +776,13 @@ mod tests {
         assert_eq!(files.len(), ids.len());
     }
 
-    /// Ledger files an earlier release wrote keep their names and compact
-    /// under the identity they recorded. A session that was running when
-    /// the binary was upgraded, with an id the encoding changes, is split:
-    /// its earlier fragment keeps the old identity, its `session_end` lands
-    /// under the new one, and that fragment stays active.
+    /// Ledger files an earlier release wrote keep their names and compact by
+    /// the old rule, `sid-` files by their key, side by side. A session
+    /// running across the upgrade has its records in two files: both
+    /// compact once it ends, unless its id started `ses-`, which earlier
+    /// releases recorded without the added prefix.
     #[test]
-    fn historical_fragments_compact_and_a_session_across_the_upgrade_splits() {
+    fn legacy_and_new_fragments_compact_together_across_the_upgrade() {
         use crate::ledger::compact::compact_ledger_type;
 
         let dir = tempfile::tempdir().unwrap();
@@ -845,22 +809,62 @@ mod tests {
         .unwrap();
         let historical = graph.join("work-graph-ses-Old_1.jsonl");
         std::fs::write(&historical, line("task_created", "ses-Old_1")).unwrap();
+        // Session `Run` is still running under the earlier release.
+        let running = graph.join("work-graph-ses-Run.jsonl");
+        std::fs::write(&running, line("task_created", "ses-Run")).unwrap();
         // Session `Split_A` began under that release and ends under this
-        // one, whose identity for it is `ses-_split___a`.
+        // one: its `session_end` goes to the `sid-` file, recorded as
+        // `ses-Split_A` as before.
         let split = graph.join("work-graph-ses-Split_A.jsonl");
         std::fs::write(&split, line("task_created", "ses-Split_A")).unwrap();
         let end = record(dir.path(), r#"{"session_id":"Split_A"}"#)
             .unwrap()
             .unwrap();
-        assert!(end.ends_with("sessions/sessions-ses-_split___a.jsonl"));
+        let key = crate::ledger::session_file_key("ses-Split_A");
+        assert!(end.ends_with(format!("sessions/sessions-{key}.jsonl")));
+        assert!(!sessions.join("sessions-ses-Split_A.jsonl").exists());
+        // Session `ses-Gamma` began under that release, which recorded it
+        // as `ses-Gamma`; this one records `ses-ses-Gamma`.
+        let gamma = graph.join("work-graph-ses-Gamma.jsonl");
+        std::fs::write(&gamma, line("task_created", "ses-Gamma")).unwrap();
+        record(dir.path(), r#"{"session_id":"ses-Gamma"}"#)
+            .unwrap()
+            .unwrap();
+        // A fragment under a new `sid-` key, for session `Delta`.
+        let delta_key = crate::ledger::session_file_key("ses-Delta");
+        let delta = graph.join(format!("work-graph-{delta_key}.jsonl"));
+        std::fs::write(&delta, line("task_created", "ses-Delta")).unwrap();
+        record(dir.path(), r#"{"session_id":"Delta"}"#)
+            .unwrap()
+            .unwrap();
+        // The current session's `sid-` fragment is never merged.
+        let current_key = crate::ledger::session_file_key("ses-Now");
+        let current = graph.join(format!("work-graph-{current_key}.jsonl"));
+        std::fs::write(&current, line("task_created", "ses-Now")).unwrap();
+        record(dir.path(), r#"{"session_id":"Now"}"#)
+            .unwrap()
+            .unwrap();
 
-        let result = compact_ledger_type(&ledger_dir, "work-graph", None).unwrap();
-        assert_eq!(result.merged_count, 1, "{result:?}");
+        let result = compact_ledger_type(&ledger_dir, "work-graph", Some("ses-Now")).unwrap();
+        assert!(!historical.exists(), "a completed legacy fragment merges");
         assert!(
-            !historical.exists(),
-            "the completed historical fragment merges"
+            !split.exists(),
+            "the split session's legacy fragment merges"
         );
-        assert!(split.exists(), "the split session's earlier fragment stays");
-        assert_eq!(result.skipped_active, 1, "{result:?}");
+        assert!(!delta.exists(), "a completed sid- fragment merges");
+        assert!(running.exists(), "a running legacy session stays");
+        assert!(gamma.exists(), "a ses- id recorded differently stays");
+        assert!(current.exists(), "the current session stays");
+        assert_eq!(result.merged_count, 3, "{result:?}");
+        assert_eq!(result.skipped_active, 3, "{result:?}");
+        let base = std::fs::read_to_string(graph.join("work-graph.jsonl")).unwrap();
+        for sid in ["ses-Old_1", "ses-Split_A", "ses-Delta"] {
+            assert!(base.contains(sid), "{sid}: {base}");
+        }
+        // The legacy files were never renamed or rewritten.
+        assert_eq!(
+            std::fs::read_to_string(sessions.join("sessions-ses-Old_1.jsonl")).unwrap(),
+            line("session_end", "ses-Old_1")
+        );
     }
 }

@@ -1882,7 +1882,8 @@ fn fresh_install_records_the_harness_choice(root: &Path) {
         root.join(path)
     };
     assert!(
-        path.ends_with("sessions/sessions-ses-fresh-install-session.jsonl"),
+        // `sid-` and the first 128 bits of SHA-256("ses-fresh-install-session").
+        path.ends_with("sessions/sessions-sid-d08f602b9e46619426248c62a9991060.jsonl"),
         "{}",
         path.display()
     );
