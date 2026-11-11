@@ -21,11 +21,15 @@
 //!   two-parent merge whose tree is the clean merge of its parents: no
 //!   direct commit, no octopus merge and no evil merge.
 //!
+//! - every member merge's second parent is the exact head of an open pull
+//!   request into the line, with the default branch's trusted admission
+//!   checks green there, read from the forge
+//!   ([`crate::workgraph::candidate_admission`]).
+//!
 //! Any condition that does not hold, or cannot be read, is the cause the
-//! caller names in its refusal. The hook cannot prove offline that a member
-//! head was reviewed: a clean merge of an unreviewed branch is admitted, the
-//! same trust as a push to the line itself. A change enters the candidate
-//! only through a member's head.
+//! caller names in its refusal. The member binding proves admission at each
+//! head, the hosted verdicts and record checks run there, not that a person
+//! reviewed it. A change enters the candidate only through a member's head.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,6 +37,7 @@ use std::path::Path;
 use git2::{Oid, Repository};
 
 use super::acceptance::{read_merge, MergeReading};
+use super::candidate_admission::{Admitted, Member};
 use super::history;
 use super::line_adoption;
 use super::work_start::{epic_line_bound_at, EpicLineBinding};
@@ -54,7 +59,15 @@ pub struct BoundLine {
     pub tip: String,
     /// How many member merges the candidate adds to the tip.
     pub merges: usize,
+    /// Each member head, oldest merge first, with the open pull request
+    /// into the line whose admitted head it is.
+    pub members: Vec<Admitted>,
 }
+
+/// Binds the member heads of a candidate on `line` to admitted pull
+/// request heads: [`crate::workgraph::candidate_admission::admit_at_forge`] in the hook and
+/// `codeflow ci`, a recorded forge in tests.
+pub type Admission<'a> = &'a dyn Fn(&str, &[Member]) -> Result<Vec<Admitted>, String>;
 
 /// What [`bind`] reads besides the repository.
 pub struct Inputs<'a> {
@@ -75,6 +88,8 @@ pub struct Inputs<'a> {
     /// The line the caller already knows the candidate must land on (the
     /// line a push updates); `None` to find it from the first-parent chain.
     pub line: Option<&'a str>,
+    /// Binds each member head to an admitted pull request head (AC-1).
+    pub admission: Admission<'a>,
 }
 
 /// Whether `branch` carries the landing candidate naming of `policy`. A
@@ -172,7 +187,9 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
             }
         }
     }
-    for oid in &chain {
+    let mut members = Vec::new();
+    // Oldest merge first, the order the members were merged in.
+    for oid in chain.iter().rev() {
         let commit = repo.find_commit(*oid).map_err(|e| e.to_string())?;
         let parents = history::parents(&repo, &commit).map_err(|e| e.to_string())?;
         if parents.len() < 2 {
@@ -180,6 +197,16 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
                 "{oid:.9} on its first-parent chain after the line's tip {tip:.9} is a direct commit, not a merge of a member head; a candidate holds only --no-ff merges of reviewed heads"
             ));
         }
+        if parents.len() > 2 {
+            return Err(format!(
+                "merge {oid:.9} has {} parents: a candidate merges one member head per merge",
+                parents.len()
+            ));
+        }
+        members.push(Member {
+            merge: oid.to_string(),
+            head: parents[1].to_string(),
+        });
         match read_merge(&repo, &commit) {
             MergeReading::Clean => {}
             MergeReading::Changed(paths) => {
@@ -196,10 +223,14 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
             MergeReading::Unknown(reason) => return Err(reason),
         }
     }
+    // Last, since it reads the forge: each member head is the exact head of
+    // an admitted pull request into the line (AC-1).
+    let members = (inputs.admission)(&line, &members)?;
     Ok(BoundLine {
         line,
         tip: tip_text,
         merges: chain.len(),
+        members,
     })
 }
 

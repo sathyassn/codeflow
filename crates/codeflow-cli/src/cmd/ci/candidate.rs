@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
+use codeflow_core::workgraph::candidate_admission::{self, Member};
 use codeflow_core::workgraph::landing_candidate::{self, BoundLine, Inputs};
 
 /// A pushed landing candidate bound to its line.
@@ -57,12 +58,22 @@ pub(super) fn check(
         (destination, advertisement),
     ) {
         Ok(bound) => {
+            let pulls = bound
+                .line
+                .members
+                .iter()
+                .map(|member| format!("#{}", member.pull))
+                .collect::<Vec<_>>()
+                .join(", ");
             println!(
                 "codeflow ci: landing candidate: '{shown}' is bound to '{}' at {}, {} member merge(s): judged as the line's next tip, as a push of the line into '{}' is",
                 codeflow_core::git::display_text(&bound.line.line),
                 &bound.line.tip[..bound.line.tip.len().min(9)],
                 bound.line.merges,
                 codeflow_core::git::display_text(&bound.target)
+            );
+            println!(
+                "codeflow ci: landing candidate: each member is the admitted head of its open pull request ({pulls}): admission at the head, not a person's review"
             );
             Some(bound)
         }
@@ -121,6 +132,11 @@ fn bind(
         .iter()
         .map(|(name, tip)| (name.clone(), tip.to_string()))
         .collect();
+    // Each member head is bound again to its admitted pull request, read
+    // from the forge by this run (AC-1).
+    let admission = |line: &str, members: &[Member]| {
+        candidate_admission::admit_at_forge(root, url, line, &default_tip, members)
+    };
     let line = landing_candidate::bind(
         root,
         &Inputs {
@@ -130,6 +146,7 @@ fn bind(
             default_tip: &default_tip,
             advertised: &advertised,
             line: None,
+            admission: &admission,
         },
     )?;
     // The line the hand-off names with `--into` must be the bound line.

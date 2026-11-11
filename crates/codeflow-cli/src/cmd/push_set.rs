@@ -53,7 +53,7 @@ use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
 use codeflow_core::remedy::{self, Finding};
 use codeflow_core::scaffold::too_old;
-use codeflow_core::workgraph::{landing_candidate, release_line};
+use codeflow_core::workgraph::{candidate_admission, landing_candidate, release_line};
 
 #[cfg(test)]
 mod tests;
@@ -388,6 +388,24 @@ fn advertised_branches<'a>(
     }
 }
 
+/// The member admission of a candidate pushed to `destination` under the
+/// default branch's tip `tip` (TSK-1351 AC-1): each member head must be the
+/// head of an admitted pull request read from the forge. A push with no
+/// destination URL has no forge to read, so it refuses.
+fn forge_admission<'a>(
+    root: &'a Path,
+    destination: &'a Destination<'_>,
+    tip: &'a str,
+) -> impl Fn(&str, &[candidate_admission::Member]) -> Result<Vec<candidate_admission::Admitted>, String>
+       + 'a {
+    move |line, members| {
+        let url = destination
+            .url
+            .ok_or("the push names no destination URL, so the forge cannot be read")?;
+        candidate_admission::admit_at_forge(root, url, line, tip, members)
+    }
+}
+
 /// Report a [`landing_candidate::RULE`] refusal: `what` was refused, and
 /// `cause` says why.
 fn refuse_landing(report: &mut StageReport, what: &str, cause: &str) {
@@ -410,6 +428,7 @@ fn pushed_candidate(
 ) -> Option<landing_candidate::BoundLine> {
     let shown = display_text(branch);
     let what = format!("'{shown}' is not judged as a landing candidate of a line");
+    let admission = forge_admission(root, destination, tip);
     let bound = advertised_branches(root, destination).and_then(|advertised| {
         landing_candidate::bind(
             root,
@@ -420,6 +439,7 @@ fn pushed_candidate(
                 default_tip: tip,
                 advertised,
                 line: None,
+                admission: &admission,
             },
         )
     });
@@ -462,6 +482,7 @@ fn line_landing(
         display_text(branch),
         display_text(&name)
     );
+    let admission = forge_admission(root, destination, tip);
     let bound = advertised.and_then(|advertised| {
         landing_candidate::bind(
             root,
@@ -472,6 +493,7 @@ fn line_landing(
                 default_tip: tip,
                 advertised,
                 line: Some(branch),
+                admission: &admission,
             },
         )
     });

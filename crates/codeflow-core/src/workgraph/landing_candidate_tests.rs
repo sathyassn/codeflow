@@ -5,6 +5,19 @@
 
 use super::*;
 
+/// A recorded admission that admits every member, numbering the pull
+/// requests from 1 in merge order.
+fn admit_all(_line: &str, members: &[Member]) -> Result<Vec<Admitted>, String> {
+    Ok(members
+        .iter()
+        .zip(1..)
+        .map(|(member, pull)| Admitted {
+            head: member.head.clone(),
+            pull,
+        })
+        .collect())
+}
+
 const LINE: &str = "integration/EPC-001-line";
 const CANDIDATE: &str = "candidate/epc-001-c1";
 
@@ -107,6 +120,7 @@ impl Fixture {
                 default_tip: &self.main,
                 advertised,
                 line: None,
+                admission: &admit_all,
             },
         )
     }
@@ -193,6 +207,14 @@ fn a_clean_stack_of_member_merges_binds_to_its_line() {
             line: LINE.to_string(),
             tip: f.tip.clone(),
             merges: 2,
+            members: ["task/TSK-001-one", "task/TSK-002-two"]
+                .iter()
+                .zip(1..)
+                .map(|(member, pull)| Admitted {
+                    head: git(f.root(), &["rev-parse", member]),
+                    pull,
+                })
+                .collect(),
         }
     );
 }
@@ -371,6 +393,7 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
             default_tip: &f.main,
             advertised: &f.advertised(),
             line: Some("integration/EPC-002-other"),
+            admission: &admit_all,
         },
     );
     refused(elsewhere, "not of 'integration/EPC-002-other'");
@@ -383,7 +406,71 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
             default_tip: &f.main,
             advertised: &f.advertised(),
             line: None,
+            admission: &admit_all,
         },
     );
     refused(unnamed, "does not start with `candidate/`");
+}
+
+/// AC-1: the binding hands the admission each member merge's exact second
+/// parent, oldest first, with the line, and a member the admission refuses
+/// refuses the candidate with that cause. The admission's own rules are
+/// fixtured in `candidate_admission_tests.rs`.
+#[test]
+fn each_member_head_is_bound_to_its_admitted_pull_request() {
+    let f = fixture();
+    let head = f.candidate(&["task/TSK-001-one", "task/TSK-002-two"]);
+    let heads: Vec<String> = ["task/TSK-001-one", "task/TSK-002-two"]
+        .iter()
+        .map(|member| git(f.root(), &["rev-parse", member]))
+        .collect();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let record = |line: &str, members: &[Member]| {
+        seen.borrow_mut().push(line.to_string());
+        seen.borrow_mut()
+            .extend(members.iter().map(|member| member.head.clone()));
+        admit_all(line, members)
+    };
+    let bound = bind(
+        f.root(),
+        &Inputs {
+            branch: CANDIDATE,
+            head: &head,
+            policy: &GitPolicy::default(),
+            default_tip: &f.main,
+            advertised: &f.advertised(),
+            line: None,
+            admission: &record,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        seen.into_inner(),
+        vec![LINE.to_string(), heads[0].clone(), heads[1].clone()]
+    );
+    assert_eq!(bound.members[1].head, heads[1]);
+    let refuse = |_: &str, members: &[Member]| -> Result<Vec<Admitted>, String> {
+        Err(format!(
+            "member head {} is not the head of an open pull request",
+            &members[0].head[..9]
+        ))
+    };
+    refused(
+        bind(
+            f.root(),
+            &Inputs {
+                branch: CANDIDATE,
+                head: &head,
+                policy: &GitPolicy::default(),
+                default_tip: &f.main,
+                advertised: &f.advertised(),
+                line: None,
+                admission: &refuse,
+            },
+        ),
+        &format!(
+            "member head {} is not the head of an open pull request",
+            &heads[0][..9]
+        ),
+    );
 }

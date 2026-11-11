@@ -17,11 +17,112 @@ const MEMBERS: [&str; 3] = [
 /// TSK-003's criteria after the planning branch's amendment.
 const AMENDED: &str = "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n- AC-3 When rerun, the system shall still work.\n";
 
+/// The forge repository `origin` names. Git reaches it through the
+/// fixture's `ssh` stand-in (`core.sshCommand`), which serves the local
+/// bare repository, so the hook reads a real forge identity from `origin`
+/// and pushes land locally.
+const ORIGIN: &str = "ssh://localhost/acme/widgets.git";
+/// The forge repository as `owner/name`.
+const NWO: &str = "acme/widgets";
+/// The policy workflow the default branch holds, declaring the trusted
+/// admission check.
+const POLICY_WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
+const POLICY_TEXT: &str = "name: codeflow-policy\non:\n  pull_request_target:\n    types: [opened, synchronize]\npermissions:\n  contents: read\njobs:\n  commit-lint:\n    name: \"trusted: commit standards\"\n    runs-on: ubuntu-24.04\n    steps:\n      - run: \"true\"\n";
+/// The trusted admission check the policy workflow declares.
+const ADMISSION: &str = "trusted: commit standards";
+/// GitHub Actions' app id, the producer the admission check must have.
+const ACTIONS_APP: u64 = 15368;
+
+/// Where the recorded forge keeps its answers, and its `gh` and `ssh`
+/// stand-ins.
+fn forge_dir(root: &Path) -> std::path::PathBuf {
+    root.join(".git/forge")
+}
+
+/// A `PATH` with the recorded forge's `gh` first.
+fn forge_path(root: &Path) -> std::ffi::OsString {
+    let mut paths = vec![forge_dir(root).join("bin")];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(paths).unwrap()
+}
+
+/// Install the recorded forge: an `ssh` stand-in that runs the git service
+/// asked for on `remote`, and a `gh` stand-in that answers `gh api <path>`
+/// from a file per path (a missing one answers 404).
+fn record_forge(root: &Path, remote: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let forge = forge_dir(root);
+    std::fs::create_dir_all(forge.join("bin")).unwrap();
+    std::fs::create_dir_all(forge.join("answers")).unwrap();
+    let ssh = forge.join("ssh");
+    std::fs::write(
+        &ssh,
+        format!(
+            "#!/bin/sh\n# Test stand-in for ssh: run the git service asked for on the fixture's bare repository.\nfor last; do :; done\ncase \"$last\" in\n  git-upload-pack*) exec git upload-pack '{0}' ;;\n  git-receive-pack*) exec git receive-pack '{0}' ;;\nesac\necho \"unexpected ssh command: $*\" >&2\nexit 1\n",
+            remote.display()
+        ),
+    )
+    .unwrap();
+    let gh = forge.join("bin/gh");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\n# Test stand-in for gh: answer `gh api <path>` from the recorded forge.\nfor last; do :; done\nkey=$(printf '%s' \"$last\" | tr -c 'A-Za-z0-9' '_')\nif [ -f '{0}'/\"$key\" ]; then cat '{0}'/\"$key\"; exit 0; fi\necho \"HTTP 404: Not Found ($last)\" >&2\nexit 1\n",
+            forge.join("answers").display()
+        ),
+    )
+    .unwrap();
+    for script in [&ssh, &gh] {
+        std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(root, &["config", "core.sshCommand", ssh.to_str().unwrap()]);
+}
+
+/// Record the forge's answer for the API `path`.
+fn answer(root: &Path, path: &str, body: &str) {
+    let key: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    std::fs::write(forge_dir(root).join("answers").join(key), body).unwrap();
+}
+
+/// The forge holds one open pull request into the line per head, numbered
+/// from 1, each with the admission check green at its head.
+fn admit(root: &Path, heads: &[&str]) {
+    let pulls: Vec<String> = heads
+        .iter()
+        .zip(1..)
+        .map(|(head, number)| {
+            format!(
+                "{{\"number\":{number},\"state\":\"open\",\"head\":{{\"sha\":\"{head}\"}},\"base\":{{\"ref\":\"{LINE}\"}}}}"
+            )
+        })
+        .collect();
+    answer(
+        root,
+        &format!("repos/{NWO}/pulls?state=open&base={LINE}&per_page=100&page=1"),
+        &format!("[{}]", pulls.join(",")),
+    );
+    for head in heads {
+        answer(
+            root,
+            &format!("repos/{NWO}/commits/{head}/check-runs?per_page=100&page=1"),
+            &format!(
+                "{{\"total_count\":1,\"check_runs\":[{{\"id\":1,\"name\":\"{ADMISSION}\",\"status\":\"completed\",\"conclusion\":\"success\",\"app\":{{\"id\":{ACTIONS_APP}}}}}]}}"
+            ),
+        );
+    }
+}
+
 /// `git` with the shipped pre-push shim installed and the built binary as
 /// its hook binary.
 fn hooked_git(root: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(root)
+        .env("PATH", forge_path(root))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
@@ -144,6 +245,7 @@ fn fixture() -> Fixture {
             &on_line(id, OWN_JOURNEY, "Pending.\n"),
         );
     }
+    write(root, POLICY_WORKFLOW, POLICY_TEXT);
     let line_tip = commit(root, "docs(records): target the line");
     git(root, &["branch", LINE]);
     let remote = root.join(".git/destination.git");
@@ -158,7 +260,8 @@ fn fixture() -> Fixture {
             remote.to_str().unwrap(),
         ],
     );
-    git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    record_forge(root, &remote);
+    git(root, &["remote", "add", "origin", ORIGIN]);
     seed_push(root, &["main", LINE]);
 
     for (id, branch, path) in [
@@ -182,6 +285,14 @@ fn fixture() -> Fixture {
     commit(root, "docs(records): amend TSK-003");
     seed_push(root, &MEMBERS);
     git(root, &["switch", "-q", "main"]);
+    // Each member is the head of an open pull request into the line with
+    // the trusted admission check green there.
+    let heads: Vec<String> = MEMBERS
+        .iter()
+        .map(|member| git_out(root, &["rev-parse", member]))
+        .collect();
+    let admitted: Vec<&str> = heads.iter().map(String::as_str).collect();
+    admit(root, &admitted);
 
     let seed = codeflow()
         .args(["ids", "seed"])
@@ -201,7 +312,6 @@ fn fixture() -> Fixture {
         include_str!("../../../../assets/base/git-hooks/pre-push"),
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -257,15 +367,14 @@ fn hand_off_with(
     claims: &Claims<'_>,
 ) -> (i32, String) {
     let root = fixture.root();
-    let remote = root.join(".git/destination.git");
-    let url = remote.to_str().unwrap();
+    let url = ORIGIN;
     let main = git_out(root, &["rev-parse", "main"]);
     let listed = git_out(
         root,
         &[
             "ls-remote",
             "--symref",
-            url,
+            "origin",
             "HEAD",
             "refs/heads/*",
             "refs/tags/*",
@@ -305,6 +414,7 @@ fn hand_off_with(
     }
     let mut child = codeflow()
         .args(&args)
+        .env("PATH", forge_path(root))
         .current_dir(root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -385,6 +495,7 @@ fn codeflow_ci_binds_the_candidate_again_and_never_trusts_the_hand_off() {
         format!("line tip: the head is judged as the next tip of '{LINE}' (a bound landing candidate's push)"),
         "line tip: no unadopted direct commit".to_string(),
         format!("acceptance binding: amendable (branch '{LINE}'"),
+        "each member is the admitted head of its open pull request (#1, #2, #3): admission at the head, not a person's review".to_string(),
     ] {
         assert!(judged.1.contains(&needle), "missing {needle:?}: {}", judged.1);
     }
@@ -527,6 +638,40 @@ fn a_foreign_criteria_change_by_an_evil_merge_is_refused() {
         ),
     );
     assert_eq!(remote_tip(root, CANDIDATE), None);
+}
+
+/// AC-1 (negative), through the real hook and `codeflow ci`: a member whose
+/// head is not the head of an admitted open pull request into the line is
+/// refused, the candidate push and the line push alike, and neither ref
+/// moves. Here the forge holds pull requests for the first two members only.
+#[test]
+fn a_candidate_with_an_unadmitted_member_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let heads: Vec<String> = MEMBERS[..2]
+        .iter()
+        .map(|member| git_out(root, &["rev-parse", member]))
+        .collect();
+    let admitted: Vec<&str> = heads.iter().map(String::as_str).collect();
+    admit(root, &admitted);
+    let candidate = fixture.candidate(CANDIDATE);
+    let planning = git_out(root, &["rev-parse", MEMBERS[2]]);
+    let cause = format!("member head {} (merged by", &planning[..9]);
+    let pushed = push(root, CANDIDATE);
+    println!("{}", pushed.1);
+    refused_by_binding(&pushed, "an unadmitted member", &cause);
+    let unadmitted = format!("is not the head of an open pull request into '{LINE}'");
+    assert!(pushed.1.contains(&unadmitted), "{}", pushed.1);
+    assert_eq!(remote_tip(root, CANDIDATE), None);
+    assert_blocks(
+        &hand_off(&fixture, CANDIDATE, &candidate, &fixture.line_tip),
+        "the hand-off of an unadmitted member",
+        &["work.landing_candidate", &cause],
+    );
+    let landed = push(root, &format!("{CANDIDATE}:refs/heads/{LINE}"));
+    println!("{}", landed.1);
+    refused_by_binding(&landed, "the line push of an unadmitted member", &cause);
+    assert_eq!(remote_tip(root, LINE), Some(fixture.line_tip.clone()));
 }
 
 /// AC-3: a name without the prefix is judged exactly as before: a `feat/`
@@ -727,9 +872,9 @@ fn a_non_fast_forward_line_push_to_a_candidate_is_refused() {
     let root = fixture.root();
     let candidate = fixture.candidate(CANDIDATE);
     let older = git_out(root, &["rev-parse", &format!("{}^", fixture.line_tip)]);
-    let remote = root.join(".git/destination.git");
     let mut child = codeflow()
-        .args(["git-hook", "pre-push", "origin", remote.to_str().unwrap()])
+        .args(["git-hook", "pre-push", "origin", ORIGIN])
+        .env("PATH", forge_path(root))
         .current_dir(root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

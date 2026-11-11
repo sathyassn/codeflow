@@ -10,6 +10,7 @@
 pub mod acceptance;
 pub mod allocate;
 pub mod amendment;
+pub mod candidate_admission;
 pub mod candidate_removal;
 pub mod claim_base;
 pub mod classify;
