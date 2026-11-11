@@ -1331,5 +1331,41 @@ fn the_check_remedy_keeps_each_argument_as_one_word() {
     let arguments: Vec<&str> = printed.split_terminator('\0').collect();
     assert_eq!(arguments, args, "{remedy}");
     let hidden = check_remedy(&["ci", "--into", "o\u{200b}x"]).to_string();
-    assert!(hidden.contains("`codeflow ci <args>`"), "{hidden}");
+    assert_eq!(
+        hidden,
+        codeflow_core::remedy::PUSH_SET_BY_HAND.remedy().to_string()
+    );
+}
+
+/// TSK-416 review round 3, finding 1: a check whose arguments hold a
+/// hidden character together with shell syntax prints no text built from
+/// them on any path: not the timing step's name, not the name its findings
+/// and failures carry, and not its remedy. Only the fixed program and verb
+/// remain, so nothing pasted from the output runs the substitution.
+#[test]
+fn a_hidden_character_beside_shell_syntax_prints_no_command_on_any_path() {
+    for hostile in [
+        "feat/a\u{200b}$(id)",
+        "feat/a\u{202e}`id`",
+        "feat/a\u{1b}; id",
+        "feat/a\u{200b}' ; id ; '",
+    ] {
+        let args = ["ci", "--base", "abc", "--branch", hostile, "--into", "main"];
+        let (step, named) = check_names(&args);
+        let remedy = check_remedy(&args).to_string();
+        for text in [&step, &named, &remedy] {
+            for syntax in ["$(", "`id`", "; id", "'"] {
+                assert!(!text.contains(syntax), "{text}");
+            }
+            assert!(!text.contains("--branch"), "{text}");
+            assert!(!text.contains("feat/a"), "{text}");
+        }
+        assert_eq!(step, "codeflow ci");
+        assert!(named.contains("its command is not printed"), "{named}");
+    }
+    // A printable hostile name keeps its one-word rendering on every path.
+    let args = ["ci", "--branch", "feat/a$(id)"];
+    let (step, named) = check_names(&args);
+    assert_eq!(step, "codeflow ci --branch 'feat/a$(id)'");
+    assert_eq!(named, "`codeflow ci --branch 'feat/a$(id)'`");
 }

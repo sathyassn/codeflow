@@ -223,17 +223,42 @@ fn violation(
 
 /// How to clear a push-set check: rerun it by hand after fixing its findings.
 /// Each argument is one shell word rendered from its raw value, so a ref
-/// holding `$(…)` or a quote pastes back as itself; when one has no printed
-/// form, the step names `<args>` and the failure line above labels them
-/// (TSK-416 review round 2).
+/// holding `$(…)` or a quote pastes back as itself (TSK-416 review round 2).
+/// When one has no printed form, no command is built from the arguments:
+/// the remedy is the plain `codeflow ci` by hand, which names no value
+/// (TSK-416 review round 3).
 fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
     let rest = args.split_first().map_or(args, |(_, rest)| rest);
     let words: Option<Vec<String>> = rest
         .iter()
         .map(|arg| codeflow_core::git::pasted::word(arg))
         .collect();
-    let shown = words.map_or_else(|| "<args>".to_string(), |words| words.join(" "));
-    codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &shown)])
+    match words {
+        Some(words) => codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &words.join(" "))]),
+        None => codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
+    }
+}
+
+/// What the push output calls a check it ran: the step name for the timing
+/// report, and the name its findings and failures carry. With a printed
+/// form, both are the rerun line, the name in backticks. Without one,
+/// because an argument holds a character a terminal does not show as
+/// itself, neither holds any argument: no text built from the arguments
+/// can paste back as them, and a display form joined into a line would
+/// still carry shell syntax such as `$(…)` (TSK-416 review round 3).
+fn check_names(rerun: &[&str]) -> (String, String) {
+    if let Some(line) = codeflow_core::git::pasted::argv("codeflow", rerun) {
+        let named = format!("`{line}`");
+        return (line, named);
+    }
+    let verb = rerun
+        .first()
+        .and_then(|verb| codeflow_core::git::pasted::word(verb))
+        .map_or_else(|| "codeflow".to_string(), |verb| format!("codeflow {verb}"));
+    let named = format!(
+        "the `{verb}` check of this push (an argument holds a character a terminal does not show as itself, so its command is not printed)"
+    );
+    (verb, named)
 }
 
 /// What judges a push under [`Judged::Target`]: the policy at the
@@ -713,15 +738,7 @@ fn run_check_with(
         .map(|(_, arg)| remote_query::display_url(arg))
         .collect();
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
-    // Each argument is one shell word, rendered from its raw value, so a
-    // branch or ref holding `$(…)` or a space pastes back as itself
-    // (TSK-416 review round 2). An argument a terminal cannot show as
-    // itself has no such form: the name is then each argument's display
-    // form, a label only.
-    let shown = codeflow_core::git::pasted::argv("codeflow", &rerun).unwrap_or_else(|| {
-        let labels: Vec<String> = rerun.iter().map(|arg| display_text(arg)).collect();
-        format!("codeflow {}", labels.join(" "))
-    });
+    let (step_name, shown) = check_names(&rerun);
     // `codeflow ci` names its blocking rules in a file of its own, for the
     // refusal record; its printed findings can quote operation content.
     let rules_out = (args.first() == Some(&"ci"))
@@ -738,7 +755,7 @@ fn run_check_with(
         input.unwrap_or_default().as_bytes(),
     );
     steps.push(PushStep {
-        name: shown.clone(),
+        name: step_name,
         duration: started.elapsed(),
     });
     match output {
@@ -754,7 +771,7 @@ fn run_check_with(
             report.relayed.extend(
                 relayed_findings(&relayed_text(&printed))
                     .into_iter()
-                    .map(|finding| format!("`{shown}`: {finding}")),
+                    .map(|finding| format!("{shown}: {finding}")),
             );
         }
         Ok(out) => {
@@ -772,7 +789,7 @@ fn run_check_with(
             let kept_block = run_level.is_some() && matches!(out.status.code(), Some(1 | 2));
             let mut failed = violation(
                 policy,
-                format!("push set check failed: `{shown}` (output above)"),
+                format!("push set check failed: {shown} (output above)"),
                 check_remedy(&rerun),
             );
             if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
@@ -793,7 +810,7 @@ fn run_check_with(
         }
         Err(error) => report.violations.push(violation(
             policy,
-            format!("push set check could not run: `{shown}`: {error}"),
+            format!("push set check could not run: {shown}: {error}"),
             codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }
