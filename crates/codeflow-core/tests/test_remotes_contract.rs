@@ -87,6 +87,81 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "text for a redaction test; it is never given to a transport",
     ),
     (
+        "codeflow-cli/tests/hooks_cli.rs",
+        "host.invalid",
+        "an include value doctor must not print (TSK-416 round 5); Git reads include.path as a file path, and doctor reads configuration only",
+    ),
+    (
+        "codeflow-core/src/hooks/landed_policy.rs",
+        "h.invalid",
+        "a synthetic remote name whose URL is unset or set to local paths; the refusal comes before any transport (TSK-416 round 6)",
+    ),
+    (
+        "codeflow-core/src/hooks/ref_authority.rs",
+        "host.invalid",
+        "a synthetic remote name, never a URL: the remote's URLs are file:// paths, so any question goes to a local path (TSK-416 round 7)",
+    ),
+    (
+        "codeflow-cli/src/cmd/push_set/tests.rs",
+        "host.invalid",
+        "a synthetic push URL that only carries a password into the credential inventory; the test fetches from a local path and never pushes (TSK-416 round 9)",
+    ),
+    (
+        "codeflow-core/src/hooks/landed_policy.rs",
+        "host.invalid",
+        "a synthetic push URL that only carries a password into the credential inventory; the test fetches from a local path and never pushes (TSK-416 round 9)",
+    ),
+    (
+        "codeflow-core/src/workgraph/work_start.rs",
+        "host.invalid",
+        "a synthetic push URL that only carries a password into the credential inventory; the test fetches from a local path and never pushes (TSK-416 round 9)",
+    ),
+    (
+        "codeflow-core/src/security/git.rs",
+        "host.invalid",
+        "a synthetic remote name, never a URL: the remotes' URLs are file:// paths or read from configuration only, and the test asks no remote (TSK-416 round 7)",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "USERCANARY",
+        "a credential in a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "e.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "h.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "h3.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "h4.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "host.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "s.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "t.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
         "codeflow-core/src/hooks/gitleaks.rs",
         "github.com",
         "production constant naming the gitleaks release page, not a test remote",

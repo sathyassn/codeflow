@@ -1401,7 +1401,8 @@ fn target_tip(
     let shown = codeflow_core::git::display_text(&branch);
     let remedy = if origin_url(root).map_err(NoTarget::read)?.is_some() {
         format!(
-            "fetch it (`git fetch origin {shown}`), or name the branch this work lands on with `--into <branch>`"
+            "{}, or name the branch this work lands on with `--into <branch>`",
+            codeflow_core::workgraph::work_start::fetch_it("origin", &branch)
         )
     } else {
         format!(
@@ -1764,7 +1765,9 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
     use codeflow_core::workgraph::work_start::WorkStartError;
     matches!(
         error,
-        WorkStartError::Repository(_) | WorkStartError::InvalidGraph(_)
+        WorkStartError::Repository(_)
+            | WorkStartError::UnresolvableTip(_)
+            | WorkStartError::InvalidGraph(_)
     )
 }
 
@@ -2919,6 +2922,15 @@ fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
 /// a local ref named `refs/remotes/origin/main` could stand in for an absent
 /// remote-tracking ref.
 fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    // A full ref that exists and names no readable commit refuses with its
+    // cause and remedy (TSK-416 AC-9), never git's bare refusal.
+    if is_full_ref(rev) {
+        if let Some(refusal) =
+            codeflow_core::workgraph::work_start::unresolvable_reference(root, rev)
+        {
+            return Err(refusal);
+        }
+    }
     if is_full_ref(rev) && !exact_ref_exists(root, rev)? {
         return Ok(None);
     }
@@ -3490,6 +3502,62 @@ mod tests {
         git(&["add", "-A"]);
         git(&["commit", "-q", "--allow-empty", "-m", "chore: head"]);
         dir
+    }
+
+    /// TSK-416 AC-10: the base `codeflow ci` reads for a bare branch is its
+    /// remote-tracking ref, so a stale local `main` beside a newer
+    /// `origin/main` never anchors the range; the local branch decides only
+    /// where nothing of that name is fetched.
+    #[test]
+    fn a_stale_local_base_never_anchors_the_range() {
+        let dir = r24_range(&[], &[]);
+        let root = dir.path();
+        let run = |args: &[&str]| {
+            let out = codeflow_core::git::command()
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        // The fetched refs belong to a configured remote: a ref of no
+        // configured remote has its remote withheld (TSK-416 review round
+        // 9). The URL is never asked here.
+        run(&["config", "remote.origin.url", "/nonexistent/origin.git"]);
+        let stale = run(&["rev-parse", "main"]);
+        let fetched = run(&["rev-parse", "feat/x"]);
+        run(&["update-ref", "refs/remotes/origin/main", &fetched]);
+        assert_eq!(
+            super::resolve_base(root, &super::branch_anchors("main")).unwrap(),
+            Some(fetched.clone())
+        );
+        assert_eq!(
+            super::resolve_base(root, &super::base_refs("main")).unwrap(),
+            Some(fetched)
+        );
+        run(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        assert_eq!(
+            super::resolve_base(root, &super::branch_anchors("main")).unwrap(),
+            Some(stale)
+        );
+        // TSK-416 AC-9: a fetched ref that names no readable commit refuses;
+        // it never falls through to the local branch.
+        let missing = "1".repeat(40);
+        std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
+        std::fs::write(
+            root.join(".git/refs/remotes/origin/main"),
+            format!("{missing}\n"),
+        )
+        .unwrap();
+        let error = super::resolve_base(root, &super::branch_anchors("main")).unwrap_err();
+        for part in [
+            "refs/remotes/origin/main",
+            missing.as_str(),
+            "a fresh clone of the remote",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
     }
 
     /// Delete the loose object `spec` names, as a damaged clone lacks it.

@@ -17,6 +17,10 @@ struct Entry {
     origin: String,
     key: Vec<u8>,
     value: Option<Vec<u8>>,
+    /// Where the setting stands, for a reader to find it with an editor:
+    /// `setting 3 of <file>`, counting every setting Git read from that
+    /// file in order, the file named as [`Include::entry`] names one.
+    place: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -30,6 +34,26 @@ pub(crate) struct Include {
     pub(crate) missing: bool,
     /// The `includeIf` condition, or `None` for a plain `include.path`.
     pub(crate) condition: Option<String>,
+    /// Where the entry stands, for a reader to find it with an editor: its
+    /// position among the include entries of the configuration that holds
+    /// it, named by scope (`include entry 2 of the global configuration`)
+    /// or by the include entry that names that file. It never holds the
+    /// include's value or a path resolved from one, which an untrusted
+    /// configuration can fill with a credential (TSK-416 review round 5).
+    pub(crate) entry: String,
+}
+
+/// The configuration file a scope reads, as a message names it: by its
+/// fixed, known location, never by a path read from configuration.
+fn scope_file(scope: &str) -> String {
+    match scope {
+        "local" => "the repository configuration (.git/config)".into(),
+        "worktree" => "the worktree configuration (config.worktree in the git directory)".into(),
+        "global" => "the global configuration (~/.gitconfig, $XDG_CONFIG_HOME/git/config, or the file GIT_CONFIG_GLOBAL names)".into(),
+        "system" => "the system configuration (etc/gitconfig under git's prefix, or the file GIT_CONFIG_SYSTEM names)".into(),
+        "command" => "the command line (-c, --config-env or GIT_CONFIG_PARAMETERS)".into(),
+        other => format!("the {} configuration", crate::git::display_text(other)),
+    }
 }
 
 #[derive(Debug)]
@@ -61,14 +85,18 @@ impl EffectiveConfig {
         self.get_all(key)
             .last()
             .map(|(_, _, value)| {
-                std::str::from_utf8(value)
-                    .map_err(|_| format!("cannot verify Git configuration: {key} is not UTF-8"))
+                std::str::from_utf8(value).map_err(|_| {
+                    format!(
+                        "cannot verify Git configuration: {} is not UTF-8",
+                        super::git::shown_config_key(key)
+                    )
+                })
             })
             .transpose()
     }
 
-    /// All raw values in Git's precedence order, with their scope and origin.
-    pub(crate) fn get_all(&self, key: &str) -> Vec<ConfigValue<'_>> {
+    /// The entries Git read for `key`, in its precedence order.
+    fn matching<'a>(&'a self, key: &str) -> impl Iterator<Item = &'a Entry> {
         // Git folds section and variable names, but preserves subsection case.
         let mut key = key.as_bytes().to_vec();
         if let Some(first) = key.iter().position(|byte| *byte == b'.') {
@@ -76,9 +104,12 @@ impl EffectiveConfig {
             key[..first].make_ascii_lowercase();
             key[last + 1..].make_ascii_lowercase();
         }
-        self.entries
-            .iter()
-            .filter(|entry| entry.key == key)
+        self.entries.iter().filter(move |entry| entry.key == key)
+    }
+
+    /// All raw values in Git's precedence order, with their scope and origin.
+    pub(crate) fn get_all(&self, key: &str) -> Vec<ConfigValue<'_>> {
+        self.matching(key)
             .map(|entry| {
                 (
                     entry.scope.as_str(),
@@ -89,11 +120,29 @@ impl EffectiveConfig {
             .collect()
     }
 
+    /// All raw values in Git's precedence order, each with where it stands
+    /// (`setting 3 of <file>`), for a message that must not show the key's
+    /// subsection or the file's path.
+    pub(crate) fn get_all_placed(&self, key: &str) -> Vec<(&str, &[u8])> {
+        self.matching(key)
+            .map(|entry| {
+                (
+                    entry.place.as_str(),
+                    entry.value.as_deref().unwrap_or(b"true"),
+                )
+            })
+            .collect()
+    }
+
     pub(crate) fn boolean(&self, key: &str) -> Result<bool, String> {
         match self.get(key)? {
             None => Ok(false),
-            Some(value) => super::git::config_boolean(value)
-                .ok_or_else(|| format!("cannot verify Git configuration: {key} is not a boolean")),
+            Some(value) => super::git::config_boolean(value).ok_or_else(|| {
+                format!(
+                    "cannot verify Git configuration: {} is not a boolean",
+                    super::git::shown_config_key(key)
+                )
+            }),
         }
     }
 }
@@ -183,6 +232,25 @@ fn parse(
     directory: &Path,
     environment: &Environment,
 ) -> Result<EffectiveConfig, String> {
+    parse_from(bytes, directory, environment, None)
+}
+
+/// [`parse`], with `root` naming the file read when it is not a scope's
+/// own (`git config --file`), for each include entry's [`Include::entry`].
+fn parse_from(
+    bytes: &[u8],
+    directory: &Path,
+    environment: &Environment,
+    root: Option<&str>,
+) -> Result<EffectiveConfig, String> {
+    // Each include's description, by the path Git reads its file by, so an
+    // include inside that file is named by the entry that names the file;
+    // and the include entries counted so far in each origin, per entry that
+    // names it, so a file Git reads twice is counted from 1 each time; and
+    // every setting counted the same way.
+    let mut named: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut counted: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut settings: BTreeMap<(String, String), usize> = BTreeMap::new();
     if !bytes.is_empty() && !bytes.ends_with(&[0]) {
         return Err("cannot verify Git configuration: incomplete output".into());
     }
@@ -216,50 +284,36 @@ fn parse(
             .next()
             .ok_or("cannot verify Git configuration: missing key")?;
         let value = parts.next();
+        // An entry is named by where it stands, never by its value, its
+        // key's subsection or a path resolved from an include (TSK-416
+        // review rounds 5 and 6).
+        let holder = origin
+            .strip_prefix("file:")
+            .and_then(|file| named.get(&directory.join(file)))
+            .map_or_else(
+                || root.map_or_else(|| scope_file(scope), str::to_string),
+                |entry| format!("the file that {entry} names"),
+            );
+        let setting = settings
+            .entry((origin.to_string(), holder.clone()))
+            .or_insert(0);
+        *setting += 1;
+        let place = format!("setting {setting} of {holder}");
         if super::git::is_include_key(key) {
-            let value = value.ok_or("cannot verify Git configuration: include has no path")?;
-            let value = std::str::from_utf8(value)
-                .map_err(|_| "cannot verify Git configuration: include path is not UTF-8")?;
-            let path = include_path(value, origin, directory, environment)?;
-            // Git silently skips missing includes. Keep absence explicit, even
-            // for an inactive condition: a later branch may activate it.
-            let missing = match std::fs::metadata(&path) {
-                Ok(metadata) if metadata.is_file() => false,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-                Ok(_) => {
-                    return Err(format!(
-                        "cannot verify Git configuration include {}: not a regular file",
-                        path.display()
-                    ))
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "cannot verify Git configuration include {}: {error}",
-                        path.display()
-                    ))
-                }
-            };
-            let logical = path.clone();
-            let path = path.canonicalize().unwrap_or(path);
-            let condition = match key
-                .strip_prefix(b"includeif.")
-                .and_then(|rest| rest.strip_suffix(b".path"))
-            {
-                Some(condition) => Some(
-                    std::str::from_utf8(condition)
-                        .map_err(|_| {
-                            "cannot verify Git configuration: an include condition is not UTF-8"
-                        })?
-                        .to_string(),
-                ),
-                None => None,
-            };
-            includes.push(Include {
-                path,
-                logical,
-                missing,
-                condition,
-            });
+            let position = counted
+                .entry((origin.to_string(), holder.clone()))
+                .or_insert(0);
+            *position += 1;
+            let include = read_include(
+                key,
+                value,
+                origin,
+                directory,
+                environment,
+                format!("include entry {position} of {holder}"),
+            )?;
+            named.insert(include.logical.clone(), include.entry.clone());
+            includes.push(include);
             if includes.len() > 128 {
                 return Err("cannot verify Git configuration: more than 128 includes".into());
             }
@@ -269,6 +323,7 @@ fn parse(
             origin: origin.into(),
             key: key.to_vec(),
             value: value.map(<[u8]>::to_vec),
+            place,
         });
     }
     includes.sort();
@@ -282,10 +337,70 @@ fn parse(
     })
 }
 
+/// The [`Include`] for the include entry `key` with `value` that Git read
+/// from `origin`, named `entry`. A refusal names the entry and at most the
+/// kind of an I/O error, never the value or a path resolved from it.
+fn read_include(
+    key: &[u8],
+    value: Option<&[u8]>,
+    origin: &str,
+    directory: &Path,
+    environment: &Environment,
+    entry: String,
+) -> Result<Include, String> {
+    let value =
+        value.ok_or_else(|| format!("cannot verify Git configuration: {entry} has no path"))?;
+    let value = std::str::from_utf8(value).map_err(|_| {
+        format!("cannot verify Git configuration: the path of {entry} is not UTF-8")
+    })?;
+    let path = include_path(value, origin, directory, environment, &entry)?;
+    // Git silently skips missing includes. Keep absence explicit, even
+    // for an inactive condition: a later branch may activate it.
+    let missing = match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        other => {
+            let named = match other {
+                Ok(_) => "something that is not a regular file".to_string(),
+                Err(error) => format!("a file that cannot be read ({})", error.kind()),
+            };
+            return Err(format!(
+                "cannot verify Git configuration: {entry} names {named}"
+            ));
+        }
+    };
+    let logical = path.clone();
+    let path = path.canonicalize().unwrap_or(path);
+    let condition = match key
+        .strip_prefix(b"includeif.")
+        .and_then(|rest| rest.strip_suffix(b".path"))
+    {
+        Some(condition) => Some(
+            std::str::from_utf8(condition)
+                .map_err(|_| "cannot verify Git configuration: an include condition is not UTF-8")?
+                .to_string(),
+        ),
+        None => None,
+    };
+    Ok(Include {
+        path,
+        logical,
+        missing,
+        condition,
+        entry,
+    })
+}
+
 /// Read one configuration file and the files it includes, as Git reads
 /// `git config --file`. Used for an include whose condition the caller
 /// cannot evaluate yet, such as one keyed on a worktree that does not exist.
-pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<EffectiveConfig, String> {
+/// `entry` is the [`Include::entry`] that names the file, so an include
+/// inside it is named through that entry, never by its path.
+pub(crate) fn read_file(
+    path: &Path,
+    environment: &Environment,
+    entry: &str,
+) -> Result<EffectiveConfig, String> {
     let deadline = Instant::now() + Duration::from_secs(3);
     validate_environment(environment)?;
     // Include paths are canonical; Git on Windows does not accept the
@@ -312,26 +427,34 @@ pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<Effect
             "--includes",
         ]);
     let bytes = bounded_output(&mut command, deadline)?;
-    parse(&bytes, directory, environment)
+    parse_from(
+        &bytes,
+        directory,
+        environment,
+        Some(&format!("the file that {entry} names")),
+    )
 }
 
+/// The file the include entry `entry` with value `value` names, resolved as
+/// Git resolves it. A refusal names the entry, never the value.
 fn include_path(
     value: &str,
     origin: &str,
     cwd: &Path,
     environment: &Environment,
+    entry: &str,
 ) -> Result<PathBuf, String> {
     if let Some(rest) = value.strip_prefix("~/") {
         let home = environment
             .get("HOME")
             .map(std::ffi::OsString::from)
             .or_else(|| std::env::var_os("HOME"))
-            .ok_or("cannot verify Git configuration: include needs HOME")?;
+            .ok_or_else(|| format!("cannot verify Git configuration: {entry} needs HOME"))?;
         return Ok(PathBuf::from(home).join(rest));
     }
     if value.starts_with('~') || value.starts_with("%(") {
         return Err(format!(
-            "cannot verify Git configuration: include path {value} uses unsupported interpolation"
+            "cannot verify Git configuration: the path of {entry} uses unsupported interpolation"
         ));
     }
     let path = Path::new(value);
@@ -846,6 +969,159 @@ mod tests {
             .unwrap_err()
             .contains("3 seconds"));
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The `--null --list --show-origin --show-scope` record Git prints for
+    /// one include entry.
+    fn include_record(scope: &str, origin: &str, key: &str, value: &Path) -> String {
+        format!(
+            "{scope}\0file:{origin}\0{key}\n{}\0",
+            value.to_str().unwrap()
+        )
+    }
+
+    /// TSK-416 review round 5: each include is named by its position among
+    /// the include entries of the file that holds it, and that file by its
+    /// scope or by the entry that names it, never by the include's value or
+    /// the path it resolves to. The credential-shaped names are synthetic.
+    #[test]
+    fn includes_are_named_by_position_per_origin_and_by_their_parent_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("OPAQUECANARY-present");
+        std::fs::write(&present, "").unwrap();
+        let conditional = dir.path().join("OPAQUECANARY-conditional");
+        let nested = dir.path().join("OPAQUECANARY-nested");
+        let global = dir.path().join("OPAQUECANARY-global");
+        let bytes = [
+            include_record("local", ".git/config", "include.path", &present),
+            include_record(
+                "local",
+                ".git/config",
+                "includeif.gitdir:/nowhere/.path",
+                &conditional,
+            ),
+            include_record("local", present.to_str().unwrap(), "include.path", &nested),
+            include_record("global", "/fixture-global", "include.path", &global),
+        ]
+        .concat();
+        let config = parse(bytes.as_bytes(), dir.path(), &Environment::new()).unwrap();
+        let entry = |path: &Path| {
+            config
+                .includes
+                .iter()
+                .find(|include| include.logical == path)
+                .unwrap()
+                .entry
+                .clone()
+        };
+        let repository = "the repository configuration (.git/config)";
+        assert_eq!(
+            entry(present.as_path()),
+            format!("include entry 1 of {repository}")
+        );
+        assert_eq!(
+            entry(conditional.as_path()),
+            format!("include entry 2 of {repository}")
+        );
+        assert_eq!(
+            entry(nested.as_path()),
+            format!("include entry 1 of the file that include entry 1 of {repository} names")
+        );
+        let global = entry(global.as_path());
+        assert!(
+            global.starts_with("include entry 1 of the global configuration"),
+            "{global}"
+        );
+        for include in &config.includes {
+            assert!(!include.entry.contains("OPAQUECANARY"), "{include:?}");
+        }
+    }
+
+    /// TSK-416 review round 6: a value the reader cannot decode is refused
+    /// with its key's subsection withheld, and each setting is placed by
+    /// its position in the file that holds it. The credential is synthetic.
+    #[test]
+    fn settings_are_placed_by_position_and_refused_without_their_subsection() {
+        let key = "credential.https://user:OPAQUECANARY@host.invalid.helper";
+        let flag = "core.https://user:OPAQUECANARY@host.invalid.flag";
+        let bytes = [
+            "local\0file:.git/config\0user.name\nfixture\0".as_bytes(),
+            format!("local\0file:.git/config\0{key}\n").as_bytes(),
+            b"\xff\0".as_slice(),
+            format!("local\0file:.git/config\0{flag}\nmaybe\0").as_bytes(),
+        ]
+        .concat();
+        let config = parse(&bytes, Path::new("/unused"), &Environment::new()).unwrap();
+        let repository = "the repository configuration (.git/config)";
+        assert_eq!(
+            config.get_all_placed(key),
+            [(
+                format!("setting 2 of {repository}").as_str(),
+                b"\xff".as_slice()
+            )]
+        );
+        for (error, shown) in [
+            (config.get(key).unwrap_err(), "credential.<name>.helper"),
+            (config.boolean(flag).unwrap_err(), "core.<name>.flag"),
+        ] {
+            assert!(error.contains(shown), "{error}");
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+            assert!(!error.contains("host.invalid"), "{error}");
+        }
+    }
+
+    /// A file read with `read_file` is named by the entry that names it, so
+    /// an include inside it is named through that entry (TSK-416 review
+    /// round 5).
+    #[test]
+    fn a_file_read_alone_names_its_includes_through_the_entry_that_names_it() {
+        let (dir, env) = fixture();
+        let file = dir.path().join("conditional.conf");
+        std::fs::write(
+            &file,
+            "[include]\n path = OPAQUECANARY-first\n path = OPAQUECANARY-second\n",
+        )
+        .unwrap();
+        let parent = "include entry 3 of the global configuration";
+        let config = read_file(&file, &env, parent).unwrap();
+        let mut entries = config
+            .includes
+            .iter()
+            .map(|include| include.entry.as_str())
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        assert_eq!(
+            entries,
+            [
+                format!("include entry 1 of the file that {parent} names"),
+                format!("include entry 2 of the file that {parent} names"),
+            ]
+        );
+    }
+
+    /// An include that cannot be verified refuses with its entry's name and
+    /// no part of its value (TSK-416 review round 5).
+    #[test]
+    fn an_include_refusal_names_the_entry_and_holds_no_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("OPAQUECANARY-directory");
+        std::fs::create_dir(&directory).unwrap();
+        let not_a_file = include_record("local", ".git/config", "include.path", &directory);
+        let interpolated = "local\0file:.git/config\0include.path\n%(prefix)/OPAQUECANARY\0";
+        let no_value = "local\0file:.git/config\0include.path\0";
+        for (bytes, reason) in [
+            (not_a_file.as_str(), "not a regular file"),
+            (interpolated, "unsupported interpolation"),
+            (no_value, "has no path"),
+        ] {
+            let error = parse(bytes.as_bytes(), dir.path(), &Environment::new()).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+            assert!(
+                error.contains("include entry 1 of the repository configuration"),
+                "{error}"
+            );
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+        }
     }
 
     #[test]

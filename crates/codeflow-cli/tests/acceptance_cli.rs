@@ -1839,6 +1839,67 @@ fn task_status_refuses_without_the_remote_tracking_target() {
     assert!(verb.1.contains("git fetch origin main"), "{}", verb.1);
 }
 
+/// TSK-416 (security review nit N2): `--base origin/main` reads the fetched
+/// `refs/remotes/origin/main`. A local branch literally named `origin/main`
+/// at another commit, which git's name lookup reads first, never anchors
+/// the completion: the verb refuses, naming both refs and commits, and the
+/// record is not written.
+#[test]
+fn task_status_never_anchors_on_a_local_branch_spelled_like_the_fetched_line() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let origin = root.parent().unwrap().join(format!(
+        "origin-{}.git",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["fetch", "-q", "origin"]);
+    let fetched = git_out(root, &["rev-parse", "refs/remotes/origin/main"]);
+    // The local branch spelled like the fetched line sits on the task's own
+    // reviewed commit, so reading it would bind the task against itself.
+    git(root, &["update-ref", "refs/heads/origin/main", &reviewed]);
+    let block = fix_block(&reviewed);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &block),
+    );
+    let verb = status_complete_args(
+        root,
+        "TSK-001",
+        &["--base", "origin/main", "--into", "main"],
+    );
+    assert_ne!(verb.0, 0, "{}", verb.1);
+    for part in [
+        "`origin/main` is ambiguous".to_string(),
+        format!("refs/heads/origin/main at {reviewed}"),
+        format!("refs/remotes/origin/main (at {fetched})"),
+        "`--base refs/remotes/origin/main`".to_string(),
+    ] {
+        assert!(verb.1.contains(&part), "{part}: {}", verb.1);
+    }
+    // The full ref names only the fetched line and is judged as usual.
+    let full = status_complete_args(
+        root,
+        "TSK-001",
+        &["--base", "refs/remotes/origin/main", "--into", "main"],
+    );
+    assert!(!full.1.contains("is ambiguous"), "{}", full.1);
+}
+
 /// A side branch from `main` with unreviewed product that merges a reviewed
 /// task head as its second parent; returns the reviewed commit and the
 /// merge.
@@ -7052,3 +7113,529 @@ mod line_sync_push;
 
 #[path = "acceptance_cli/own_line_criteria.rs"]
 mod own_line_criteria;
+
+/// A bare `origin` for `root`, holding `main`, which tracks it.
+fn tracked_origin(root: &Path) -> tempfile::TempDir {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["remote", "set-head", "origin", "main"]);
+    remote
+}
+
+/// `task status <id> complete` with the acceptance block `inner` (no
+/// fences), with the receiving target pinned as a clone with remotes needs
+/// for a waiver (TSK-340).
+fn complete_with_block(root: &Path, id: &str, inner: &str, pinned: bool) -> (i32, String) {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), inner).unwrap();
+    let pin: &[&str] = if pinned {
+        &["--base", "origin/main", "--into", "main"]
+    } else {
+        &[]
+    };
+    let out = codeflow()
+        .args([
+            "task",
+            "status",
+            id,
+            "complete",
+            "--acceptance",
+            file.path().to_str().unwrap(),
+        ])
+        .args(pin)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// The inside of [`block`]'s fence.
+fn inner(block: &str) -> String {
+    block
+        .trim_start_matches("```yaml\n")
+        .trim_end_matches("```\n")
+        .to_string()
+}
+
+/// TSK-416 AC-2 (the 2026-10-22 comment on issue 278): the local `main`
+/// is at a commit before the planning pull request merged, and
+/// `origin/main` holds it. `task status complete` accepts a waiver naming
+/// the planning commit, or the merge commit that landed it, without anyone
+/// moving the local branch.
+#[test]
+fn tsk416_completion_accepts_a_waiver_on_origin_main_beside_a_stale_local_main() {
+    for name_the_merge in [false, true] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _origin = tracked_origin(root);
+        let stale = head(root);
+        let amended = OWN_JOURNEY.replace("shall work.", "shall work on Linux.");
+        git(root, &["switch", "-q", "-c", "plan/narrow-ac-1"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", &amended, "Pending.\n"),
+        );
+        let amendment = commit(root, "docs(records): narrow TSK-001 AC-1");
+        git(root, &["switch", "-q", "main"]);
+        git(
+            root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "Merge plan",
+                "plan/narrow-ac-1",
+            ],
+        );
+        let merge = head(root);
+        git(root, &["push", "-q", "origin", "main"]);
+        git(root, &["switch", "-q", "-c", BRANCH, &merge]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        write(root, "src/lib.rs", "pub fn work() {}\n");
+        let reviewed = commit(root, "feat: change the code");
+        let by = if name_the_merge { &merge } else { &amendment };
+        let result = complete_with_block(
+            root,
+            "TSK-001",
+            &inner(&block(
+                &reviewed,
+                &[
+                    &format!("AC-1: waived | {by}"),
+                    "AC-2: verified | journey ran",
+                ],
+                "verified | tests/journey.rs",
+                "none: nothing deferred",
+            )),
+            true,
+        );
+        assert_eq!(result.0, 0, "merge named: {name_the_merge}: {}", result.1);
+        assert_eq!(git_out(root, &["rev-parse", "main"]), stale);
+    }
+}
+
+/// TSK-416 AC-5 and AC-7 (issue 573): this passes at the base too, where
+/// TSK-340's pin moved the reported path; it keeps the shape held.
+/// TSK-001 completed and landed on
+/// `origin/main`, then a branch reopens it correctly and completes it
+/// again. With the local `main` behind `origin/main` (before the landing)
+/// the completion passes; with the local `main` ahead of it (an unpushed
+/// commit) it passes too, the local tip honoured beside the fetched one.
+#[test]
+fn tsk416_a_reopen_completes_beside_a_local_main_behind_or_ahead() {
+    // The landed criteria differ from the stale copy's, as in the issue.
+    let landed_criteria = OWN_JOURNEY.replace("shall work.", "shall work well.");
+    for (ahead, pinned) in [(false, false), (false, true), (true, false)] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _origin = tracked_origin(root);
+        let stale = head(root);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", &landed_criteria, "Pending.\n"),
+        );
+        commit(root, "docs(records): amend the criteria");
+        git(root, &["push", "-q", "origin", "main"]);
+        let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+        let first = block(
+            &reviewed,
+            &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+            "verified | tests/journey.rs",
+            "none: nothing deferred",
+        );
+        complete(root, "TSK-001", &landed_criteria, &first);
+        git(root, &["switch", "-q", "main"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+        );
+        let landed = head(root);
+        git(root, &["push", "-q", "origin", "main"]);
+        git(root, &["switch", "-q", "-c", "fix/TSK-001-again", &landed]);
+        let reopen = codeflow()
+            .args([
+                "task",
+                "status",
+                "TSK-001",
+                "todo",
+                "--reason",
+                "fix: a regression: found # here",
+            ])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            reopen.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reopen.stderr)
+        );
+        commit(root, "docs(records): reopen TSK-001");
+        write(root, "src/lib.rs", "pub fn work_again() {}\n");
+        let again = commit(root, "fix: repair the regression");
+        if ahead {
+            git(root, &["switch", "-q", "--detach", &landed]);
+            write(root, "notes.txt", "unpushed\n");
+            let local = commit(root, "chore: an unpushed commit");
+            git(root, &["switch", "-q", "fix/TSK-001-again"]);
+            git(root, &["update-ref", "refs/heads/main", &local]);
+        } else {
+            git(root, &["update-ref", "refs/heads/main", &stale]);
+        }
+        let result = complete_with_block(
+            root,
+            "TSK-001",
+            &inner(&block(
+                &again,
+                &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+                "verified | tests/journey.rs",
+                "none: nothing deferred",
+            )),
+            pinned,
+        );
+        assert_eq!(
+            result.0, 0,
+            "ahead: {ahead}, pinned: {pinned}: {}",
+            result.1
+        );
+    }
+}
+
+/// TSK-416 review: a reopen's completion beside a local `main` that has
+/// diverged from `origin/main` refuses, naming both commits and a fresh
+/// clone. A worktree of the clone shares the diverged branch and refuses
+/// the same way. Following the instruction (push the task branch, clone
+/// the remote with its URL, switch to the task branch) the same completion
+/// passes. Round 2: no step prints the URL.
+#[test]
+fn tsk416_a_diverged_reopen_completes_from_the_fresh_clone_it_names() {
+    let landed_criteria = OWN_JOURNEY.replace("shall work.", "shall work well.");
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let _origin = tracked_origin(root);
+    let stale = head(root);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &landed_criteria, "Pending.\n"),
+    );
+    commit(root, "docs(records): amend the criteria");
+    git(root, &["push", "-q", "origin", "main"]);
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let first = block(
+        &reviewed,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    );
+    complete(root, "TSK-001", &landed_criteria, &first);
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+    );
+    let landed = head(root);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-q", "-c", "fix/TSK-001-again", &landed]);
+    let reopen = codeflow()
+        .args([
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "fix: a regression: found # here",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        reopen.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopen.stderr)
+    );
+    commit(root, "docs(records): reopen TSK-001");
+    write(root, "src/lib.rs", "pub fn work_again() {}\n");
+    let again = commit(root, "fix: repair the regression");
+    // The local `main` gains a commit `origin/main` lacks, off a point
+    // before the landing: the two have diverged.
+    git(root, &["switch", "-q", "--detach", &stale]);
+    write(root, "notes.txt", "unpushed\n");
+    let local = commit(root, "chore: an unpushed commit");
+    git(root, &["switch", "-q", "fix/TSK-001-again"]);
+    git(root, &["update-ref", "refs/heads/main", &local]);
+    let acceptance = inner(&block(
+        &again,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    ));
+
+    let refused = complete_with_block(root, "TSK-001", &acceptance, false);
+    assert_ne!(refused.0, 0, "{}", refused.1);
+    for part in [
+        "have diverged",
+        local.as_str(),
+        landed.as_str(),
+        "a worktree of this clone shares its branches",
+        "push the task branch",
+        "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
+        "switch to the task branch there",
+    ] {
+        assert!(refused.1.contains(part), "{part}: {}", refused.1);
+    }
+    assert!(!refused.1.contains("get-url"), "{}", refused.1);
+    assert!(!refused.1.contains("worktree add"), "{}", refused.1);
+
+    // A worktree of this clone shares the diverged `main`.
+    let scratch = tempfile::tempdir().unwrap();
+    let linked = scratch.path().join("linked");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            linked.to_str().unwrap(),
+            "fix/TSK-001-again",
+        ],
+    );
+    let shared = complete_with_block(&linked, "TSK-001", &acceptance, false);
+    assert_ne!(shared.0, 0, "{}", shared.1);
+    assert!(shared.1.contains("have diverged"), "{}", shared.1);
+
+    // The instruction, followed.
+    git(root, &["push", "-q", "origin", "fix/TSK-001-again"]);
+    let url = git_out(root, &["remote", "get-url", "origin"]);
+    let fresh = scratch.path().join("fresh");
+    codeflow_fixture::clone(scratch.path(), &url, &fresh).run();
+    git(&fresh, &["config", "user.name", "T"]);
+    git(&fresh, &["config", "user.email", "t@example.test"]);
+    git(&fresh, &["switch", "-q", "fix/TSK-001-again"]);
+    let completed = complete_with_block(&fresh, "TSK-001", &acceptance, false);
+    assert_eq!(completed.0, 0, "{}", completed.1);
+}
+
+/// TSK-416 review round 2, finding 4: the line lives on `upstream`, which
+/// the local `main` tracks, and the task branch is pushed to a fork,
+/// `origin`. The local `main` has diverged from `upstream/main`, so the
+/// reopen's completion refuses and names a fresh clone of `upstream`, the
+/// remote the diverged tip came from. A clone of `upstream` has no task
+/// branch, so the printed steps add the fork there under a name of its own,
+/// fetch it and switch to the task branch from it. Followed as printed,
+/// the same completion passes.
+#[test]
+fn tsk416_a_diverged_reopen_completes_from_a_fresh_clone_when_the_task_branch_is_on_a_fork() {
+    let landed_criteria = OWN_JOURNEY.replace("shall work.", "shall work well.");
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let line = tempfile::tempdir().unwrap();
+    git(line.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let fork = tempfile::tempdir().unwrap();
+    git(fork.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "upstream", line.path().to_str().unwrap()],
+    );
+    git(
+        root,
+        &["remote", "add", "origin", fork.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "-u", "upstream", "main"]);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["remote", "set-head", "upstream", "main"]);
+    git(root, &["remote", "set-head", "origin", "main"]);
+    let stale = head(root);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &landed_criteria, "Pending.\n"),
+    );
+    commit(root, "docs(records): amend the criteria");
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let first = block(
+        &reviewed,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    );
+    complete(root, "TSK-001", &landed_criteria, &first);
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+    );
+    let landed = head(root);
+    git(root, &["push", "-q", "upstream", "main"]);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-q", "-c", "fix/TSK-001-again", &landed]);
+    let reopen = codeflow()
+        .args([
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "fix: a regression: found # here",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        reopen.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopen.stderr)
+    );
+    commit(root, "docs(records): reopen TSK-001");
+    write(root, "src/lib.rs", "pub fn work_again() {}\n");
+    let again = commit(root, "fix: repair the regression");
+    // The local `main` gains a commit `upstream/main` lacks, off a point
+    // before the landing: the two have diverged.
+    git(root, &["switch", "-q", "--detach", &stale]);
+    write(root, "notes.txt", "unpushed\n");
+    let local = commit(root, "chore: an unpushed commit");
+    git(root, &["switch", "-q", "fix/TSK-001-again"]);
+    git(root, &["update-ref", "refs/heads/main", &local]);
+    let acceptance = inner(&block(
+        &again,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    ));
+
+    let refused = complete_with_block(root, "TSK-001", &acceptance, false);
+    assert_ne!(refused.0, 0, "{}", refused.1);
+    for part in [
+        "have diverged",
+        "refs/remotes/upstream/main",
+        local.as_str(),
+        landed.as_str(),
+        "push the task branch to its remote",
+        "a fresh clone of the remote upstream, made from outside this clone with that remote's URL",
+        "when the task branch was pushed to another remote, add that remote there under a name of its own and fetch it (`git remote add <name> <url>`, then `git fetch <name>`)",
+        "`git switch -c <task-branch> <name>/<task-branch>`",
+    ] {
+        assert!(refused.1.contains(part), "{part}: {}", refused.1);
+    }
+    assert!(!refused.1.contains("get-url"), "{}", refused.1);
+
+    // The printed steps, followed: push the task branch to its remote (the
+    // fork), clone the line's remote with its URL, add the fork there under
+    // a name of its own, fetch it and switch to the task branch from it.
+    git(root, &["push", "-q", "origin", "fix/TSK-001-again"]);
+    let scratch = tempfile::tempdir().unwrap();
+    let fresh = scratch.path().join("fresh");
+    codeflow_fixture::clone(scratch.path(), line.path().to_str().unwrap(), &fresh).run();
+    git(&fresh, &["config", "user.name", "T"]);
+    git(&fresh, &["config", "user.email", "t@example.test"]);
+    // A clone of the line's remote has no task branch of its own.
+    assert!(git_out(&fresh, &["branch", "-r", "--list", "origin/fix/*"]).is_empty());
+    git(
+        &fresh,
+        &["remote", "add", "fork", fork.path().to_str().unwrap()],
+    );
+    git(&fresh, &["fetch", "-q", "fork"]);
+    git(
+        &fresh,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "fix/TSK-001-again",
+            "fork/fix/TSK-001-again",
+        ],
+    );
+    assert_eq!(head(&fresh), again, "the exact task head pushed from here");
+    let completed = complete_with_block(&fresh, "TSK-001", &acceptance, false);
+    assert_eq!(completed.0, 0, "{}", completed.1);
+}
+
+/// TSK-416 AC-7 and AC-8 (issue 573): the local `main` holds the landed
+/// completion and is behind `origin/main`, where the reopen and an amended
+/// criterion landed. The stale copy is no outside completion: the branch
+/// off `origin/main` completes and its `ci` passes, and a person never moves
+/// the local branch. This passes at the base too (see the fixture above).
+#[test]
+fn tsk416_a_reopen_completes_beside_a_stale_local_holding_the_old_completion() {
+    let amended = OWN_JOURNEY.replace("shall work.", "shall work well.");
+    {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _origin = tracked_origin(root);
+        let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+        let first = block(
+            &reviewed,
+            &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+            "verified | tests/journey.rs",
+            "none: nothing deferred",
+        );
+        complete(root, "TSK-001", OWN_JOURNEY, &first);
+        git(root, &["switch", "-q", "main"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+        );
+        let landed = head(root);
+        git(root, &["push", "-q", "origin", "main"]);
+        let reopen = codeflow()
+            .args([
+                "task",
+                "status",
+                "TSK-001",
+                "todo",
+                "--reason",
+                "a regression",
+            ])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            reopen.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reopen.stderr)
+        );
+        let path = root.join(record_path("TSK-001"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("shall work.", "shall work well.")).unwrap();
+        commit(root, "docs(records): reopen TSK-001 and amend it");
+        git(root, &["push", "-q", "origin", "main"]);
+        git(root, &["switch", "-q", "-c", "fix/TSK-001-again"]);
+        git(root, &["update-ref", "refs/heads/main", &landed]);
+        write(root, "src/lib.rs", "pub fn work_again() {}\n");
+        let again = commit(root, "fix: repair the regression");
+        let result = complete_with_block(
+            root,
+            "TSK-001",
+            &inner(&block(
+                &again,
+                &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+                "verified | tests/journey.rs",
+                "none: nothing deferred",
+            )),
+            true,
+        );
+        assert_eq!(result.0, 0, "{}", result.1);
+        // The amended criterion, which the stale local copy lacks, stands.
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("the system shall work well."));
+        assert!(!amended.contains("shall work."));
+        commit(root, "docs(records): complete TSK-001 again");
+        let judged = ci_on(root, "origin/main", "fix/TSK-001-again", "Task: TSK-001");
+        assert_eq!(judged.0, 0, "{}", judged.1);
+    }
+}

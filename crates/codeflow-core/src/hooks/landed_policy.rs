@@ -109,9 +109,13 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
         .transpose()
         .map_err(|e| e.to_string())?
         .is_some();
+    // A remote name is configuration text and can be a URL with a
+    // credential, so messages show it only when it is a plain name, and a
+    // ref name only with the remote shown that way (TSK-416 review round 7).
+    let shown = crate::security::git::shown_remote(root, remote);
     if !populated && !ask {
         return Err(format!(
-            "refs/remotes/{remote}/ holds no refs, and the remote was not asked"
+            "refs/remotes/{shown}/ holds no refs, and the remote was not asked"
         ));
     }
     if !populated {
@@ -119,27 +123,29 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
         // or whose tracking refs were deleted, from one that holds nothing
         // yet, so the remote is asked. Only a remote that answers with no
         // refs is initialization; any other answer or a failure refuses.
+        let fetch = fetch_step(root, remote);
         return match advertises_refs(&repo, root, remote) {
             Ok(false) => unestablished(
                 &repo,
                 root,
-                &format!("initialization: {remote} advertises no refs"),
+                &format!("initialization: {shown} advertises no refs"),
             ),
             Ok(true) => Err(format!(
-                "cannot read the policy authority: {remote} has refs but refs/remotes/{remote}/ holds none here; run git fetch {remote}"
+                "cannot read the policy authority: {shown} has refs but refs/remotes/{shown}/ holds none here; {fetch}"
             )),
             Err(why) => Err(format!(
-                "cannot read the policy authority: refs/remotes/{remote}/ holds no refs and {remote} could not be asked whether it has any ({why}); run git fetch {remote} (git waits on its own terms, outside the guard); once its refs are here the guards read the policy locally and ask {remote} nothing"
+                "cannot read the policy authority: refs/remotes/{shown}/ holds no refs and {shown} could not be asked whether it has any ({why}); {fetch} (git waits on its own terms, outside the guard); once its refs are here the guards read the policy locally and ask {shown} nothing"
             )),
         };
     }
-    let authority = default_branch(&repo, remote)?;
+    let authority = default_branch(&repo, root, remote)?;
     let oid = git2::Oid::from_str(&authority.sha).map_err(|e| e.to_string())?;
-    // The remote names its default branch: the source is shown escaped.
-    let shown = crate::git::display_text(&authority.reference);
+    // The remote names its default branch: the source is shown escaped,
+    // with the remote's name withheld unless it is plain.
+    let shown = crate::security::git::shown_ref(root, &authority.reference);
     let (policy, project) = at_commit(&repo, oid, &shown)?;
     let mut landed = finish(root, policy, project, shown)?;
-    landed.tracking_doubt = ref_file_doubt(&repo, remote, &authority);
+    landed.tracking_doubt = ref_file_doubt(&repo, root, remote, &authority);
     landed.remote_tracked = landed.tracking_doubt.is_none();
     landed.authority = Some(authority);
     landed.commit = Some(oid);
@@ -159,15 +165,19 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
 fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool, String> {
     let config = repo.config().map_err(|e| e.to_string())?;
     let key = format!("remote.{remote}.url");
+    // Messages show the key with its subsection withheld, as every guard
+    // message does, and not libgit2's error, which can quote the key
+    // (TSK-416 review round 6).
+    let shown = crate::security::git::shown_config_key(&key);
     let mut urls = Vec::new();
     let mut entries = config
         .multivar(&key, None)
-        .map_err(|e| format!("cannot read {key}: {e}"))?;
+        .map_err(|_| format!("cannot read {shown}"))?;
     while let Some(entry) = entries.next() {
-        let entry = entry.map_err(|e| format!("cannot read {key}: {e}"))?;
+        let entry = entry.map_err(|_| format!("cannot read {shown}"))?;
         let url = entry
             .value()
-            .map_err(|_| format!("{key} is not valid UTF-8"))?;
+            .map_err(|_| format!("{shown} is not valid UTF-8"))?;
         urls.push(url.to_string());
     }
     match urls.as_slice() {
@@ -176,33 +186,82 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
             url,
             crate::git::remote_query::QueryLimits::guard(),
         ),
-        [] => Err(format!("{key} is not set")),
-        _ => Err(format!("{key} has several values")),
+        [] => Err(format!("{shown} is not set")),
+        _ => Err(format!("{shown} has several values")),
     }
+}
+
+/// The pasted command for `remote`, rendered from its raw name so a name
+/// holding `$(…)` or starting with `-` reaches git as the remote (TSK-416
+/// review round 2); `None` when messages withhold the name
+/// ([`crate::security::git::remote_name_shown`], review round 7).
+fn remote_command(
+    root: &Path,
+    command: &'static str,
+    remote: &str,
+    flag: Option<&'static str>,
+) -> Option<String> {
+    if !crate::security::git::remote_name_shown(root, remote) {
+        return None;
+    }
+    let pasted = crate::git::Pasted::new(command).value(remote);
+    match flag {
+        Some(flag) => pasted.trailing_flag(flag).render(),
+        None => pasted.render(),
+    }
+}
+
+/// "run git fetch <remote>"; a remote whose name messages withhold (TSK-416
+/// review round 7) gets no command, only a fresh clone or a rename through
+/// a Git client (review rounds 9 and 10).
+fn fetch_step(root: &Path, remote: &str) -> String {
+    remote_command(root, "git fetch", remote, None).map_or_else(
+        || crate::security::git::withheld_remote_step(root, remote),
+        |command| format!("run {command}"),
+    )
 }
 
 /// `refs/remotes/<remote>/HEAD`, which must name a tracking branch of the
 /// remote, and the commit that branch names now.
-fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> {
+fn default_branch(repo: &Repository, root: &Path, remote: &str) -> Result<Authority, String> {
     let head = format!("refs/remotes/{remote}/HEAD");
-    let set_head = format!(
-        "the operator runs git remote set-head {remote} -a (git fetch {remote} records it too, on git 2.48 or later); no other branch is taken as the default"
-    );
+    // Names in prose are shown escaped (TSK-388), with a remote name that is
+    // not plain withheld, and libgit2's errors, which quote the ref, are not
+    // shown (TSK-416 review round 7); each command is rendered from the raw
+    // remote name (review round 2).
+    let shown_remote = crate::security::git::shown_remote(root, remote);
+    let shown_head = crate::security::git::shown_ref(root, &head);
+    let fetch = fetch_step(root, remote);
+    let set_head = match (
+        remote_command(root, "git remote set-head", remote, Some("-a")),
+        remote_command(root, "git fetch", remote, None),
+    ) {
+        (Some(set_head), Some(fetch)) => format!(
+            "the operator runs {set_head} ({fetch} records it too, on git 2.48 or later); no other branch is taken as the default"
+        ),
+        _ => format!(
+            "{}; no other branch is taken as the default",
+            crate::security::git::withheld_remote_step(root, remote)
+        ),
+    };
     let reference = match repo.find_reference(&head) {
         Ok(reference) => reference,
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             return Err(format!(
-                "the policy authority is unset: {head} does not exist, so the default branch of {remote} is unknown; {set_head}"
+                "the policy authority is unset: {shown_head} does not exist, so the default branch of {shown_remote} is unknown; {set_head}"
             ))
         }
         Err(error) => {
             return Err(format!(
-                "cannot read policy source {head}: {error}; run git fetch {remote}"
+                "cannot read policy source {shown_head}{}; {fetch}",
+                git_error(root, remote, &error)
             ))
         }
     };
     let not_branch = |what: &str| {
-        format!("the policy authority {head} {what}, not a branch of {remote}; {set_head}")
+        format!(
+            "the policy authority {shown_head} {what}, not a branch of {shown_remote}; {set_head}"
+        )
     };
     let Some(target) = crate::git::name::symbolic_target(&reference) else {
         return Err(not_branch("names a commit directly"));
@@ -213,7 +272,11 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
     // never replaced by a lossy spelling.
     let target = target
         .rule_text()
-        .map_err(|e| format!("cannot read policy source {head}: {e}; {set_head}"))?
+        .map_err(|_| {
+            format!(
+                "cannot read policy source {shown_head}: it names a ref that is not valid UTF-8; {set_head}"
+            )
+        })?
         .to_owned();
     let prefix = format!("refs/remotes/{remote}/");
     if !target
@@ -222,12 +285,15 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
     {
         return Err(not_branch(&format!(
             "names {}",
-            crate::git::display_text(&target)
+            crate::security::git::shown_ref(root, &target)
         )));
     }
-    let shown = crate::git::display_text(&target);
+    let shown = crate::security::git::shown_ref(root, &target);
     let branch = repo.find_reference(&target).map_err(|error| {
-        format!("cannot read policy source {shown}: {error}; run git fetch {remote}")
+        format!(
+            "cannot read policy source {shown}{}; {fetch}",
+            git_error(root, remote, &error)
+        )
     })?;
     let Some(oid) = branch.target() else {
         return Err(not_branch(&format!(
@@ -235,7 +301,10 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
         )));
     };
     let commit = repo.find_commit(oid).map_err(|error| {
-        format!("cannot read policy source {shown} at {oid}: {error}; run git fetch {remote}")
+        format!(
+            "cannot read policy source {shown} at {oid}{}; {fetch}",
+            git_error(root, remote, &error)
+        )
     })?;
     Ok(Authority {
         reference: target,
@@ -251,46 +320,62 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
 /// The checks narrow what a local edit can pass off as the remote's state;
 /// they do not authenticate it: whoever can write `.git` can still forge a
 /// plain ref (TSK-1057).
-fn ref_file_doubt(repo: &Repository, remote: &str, authority: &Authority) -> Option<String> {
+fn ref_file_doubt(
+    repo: &Repository,
+    root: &Path,
+    remote: &str,
+    authority: &Authority,
+) -> Option<String> {
     let base = repo.commondir().to_path_buf();
-    linked_ref_file(&base, &format!("refs/remotes/{remote}/HEAD"))
-        .or_else(|| linked_ref_file(&base, &authority.reference))
+    linked_ref_file(root, &base, &format!("refs/remotes/{remote}/HEAD"))
+        .or_else(|| linked_ref_file(root, &base, &authority.reference))
 }
 
 /// A reason when the loose file for ref `name` under `base`, or a
 /// directory on its way, is a symbolic link, or the file is not a regular
-/// file. An absent path is a packed ref, which is not questioned.
-fn linked_ref_file(base: &Path, name: &str) -> Option<String> {
+/// file. An absent path is a packed ref, which is not questioned. The ref,
+/// and the path on its way, are shown as
+/// [`crate::security::git::shown_ref`] shows a ref, since both hold the
+/// remote's name (TSK-416 review round 7).
+fn linked_ref_file(root: &Path, base: &Path, name: &str) -> Option<String> {
     let mut path = base.to_path_buf();
     let parts: Vec<&str> = name.split('/').collect();
+    let shown = crate::security::git::shown_ref(root, name);
     for (index, part) in parts.iter().enumerate() {
         path.push(part);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 return Some(format!(
-                    "the ref file for {} passes through a symbolic link at {}",
-                    crate::git::display_text(name),
-                    path.display()
+                    "the ref file for {shown} passes through a symbolic link at {} in {}",
+                    crate::security::git::shown_ref(root, &parts[..=index].join("/")),
+                    base.display()
                 ))
             }
             Ok(meta) if index + 1 == parts.len() && !meta.is_file() => {
-                return Some(format!(
-                    "the ref file for {} is not a regular file",
-                    crate::git::display_text(name)
-                ))
+                return Some(format!("the ref file for {shown} is not a regular file"))
             }
             Ok(_) => {}
             // A loose ref file that does not exist is a packed ref.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
             Err(error) => {
                 return Some(format!(
-                    "the ref file for {} cannot be inspected: {error}",
-                    crate::git::display_text(name)
+                    "the ref file for {shown} cannot be inspected: {error}"
                 ))
             }
         }
     }
     None
+}
+
+/// libgit2's error as ": <message>" when messages show the name of
+/// `remote`; else nothing, since the message can quote a ref that holds
+/// the name (TSK-416 review round 7).
+fn git_error(root: &Path, remote: &str, error: &git2::Error) -> String {
+    if crate::security::git::remote_name_shown(root, remote) {
+        format!(": {}", crate::git::display_text(error.message()))
+    } else {
+        String::new()
+    }
 }
 
 /// A state with no remote default branch: `HEAD`'s policy, or the working
@@ -837,5 +922,274 @@ mod tests {
         let error = advertises_refs(&repo, dir.path(), "origin").unwrap_err();
         assert!(error.contains("starts with '-'"), "{error}");
         assert!(!dir.path().join("owned").exists());
+    }
+
+    /// TSK-416 review round 6: a remote with no URL or several is refused
+    /// with the key's subsection, the remote's name, withheld. The
+    /// credential is synthetic.
+    #[test]
+    fn a_remote_url_refusal_holds_no_remote_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let remote = "https://u:OPAQUECANARY@h.invalid";
+        let key = format!("remote.{remote}.url");
+        let unset = advertises_refs(&repo, dir.path(), remote).unwrap_err();
+        let mut config = repo.config().unwrap();
+        config.set_multivar(&key, "^$", "/one").unwrap();
+        config.set_multivar(&key, "^$", "/two").unwrap();
+        let several = advertises_refs(&repo, dir.path(), remote).unwrap_err();
+        assert!(several.contains("has several values"), "{several}");
+        for error in [unset, several] {
+            assert!(error.contains("remote.<name>.url"), "{error}");
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+            assert!(!error.contains("h.invalid"), "{error}");
+        }
+    }
+
+    /// TSK-416 review round 7: the sole remote's name is the subsection of
+    /// its url key and can be a URL with a credential. Reading the policy
+    /// authority shows that remote withheld, with no number or place, in
+    /// every message, its tracking refs and steps included,
+    /// whether its refs are missing, its default branch is unset or the
+    /// policy is read from it. The credentials are synthetic.
+    #[test]
+    fn the_policy_authority_never_prints_a_credential_remote_name() {
+        let check = |text: &str, case: &str| {
+            assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
+            assert!(!text.contains("host.invalid"), "{case}: {text}");
+            assert!(
+                text.contains(crate::security::git::WITHHELD_REMOTE),
+                "{case}: {text}"
+            );
+        };
+        for name in [
+            "https://user:OPAQUECANARY@host.invalid",
+            "user-OPAQUECANARY@host.invalid",
+        ] {
+            let (dir, commit) = repository(
+                format!("[remote \"{name}\"]\n\turl = file:///nonexistent/remote.git\n").as_bytes(),
+            );
+            let root = dir.path();
+            let repo = Repository::open(root).unwrap();
+            repo.remote_delete("origin").unwrap();
+            check(
+                &load_local(root).err().unwrap(),
+                &format!("{name}: no refs, not asked"),
+            );
+            check(
+                &load(root).err().unwrap(),
+                &format!("{name}: no refs, asked"),
+            );
+            if name.contains(':') {
+                // A ref name cannot hold `:`, so no tracking ref exists.
+                continue;
+            }
+            let branch = format!("refs/remotes/{name}/main");
+            repo.reference(&branch, commit, false, "fixture").unwrap();
+            check(
+                &load_local(root).err().unwrap(),
+                &format!("{name}: default branch unset"),
+            );
+            repo.reference_symbolic(
+                &format!("refs/remotes/{name}/HEAD"),
+                &branch,
+                false,
+                "fixture",
+            )
+            .unwrap();
+            let landed = load_local(root).unwrap();
+            check(&landed.source, &format!("{name}: policy source"));
+            assert_eq!(landed.source, "refs/remotes/<a remote, name withheld>/main");
+            // A symbolic link on the way to the ref file is a doubt that
+            // names the ref the same way.
+            #[cfg(unix)]
+            {
+                let common = repo.commondir().to_path_buf();
+                let remote_dir = common.join("refs").join("remotes").join(name);
+                let moved = common.join("moved-remote");
+                std::fs::rename(&remote_dir, &moved).unwrap();
+                std::os::unix::fs::symlink(&moved, &remote_dir).unwrap();
+                let doubted = load_local(root).unwrap();
+                let doubt = doubted.tracking_doubt.unwrap_or_default();
+                check(&doubt, &format!("{name}: tracking doubt"));
+            }
+        }
+    }
+
+    /// The arguments `sh` hands `git` for the printed `command`.
+    #[cfg(unix)]
+    fn shell_argv(command: &str) -> Vec<String> {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .split_terminator('\0')
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// TSK-416 review round 2, finding 1: the sole remote's name reaches
+    /// the printed `git fetch` and `git remote set-head` as one argument:
+    /// pasting runs no substitution, and a name that starts with `-`
+    /// follows `--`, with `-a` before it. For `-x`, git runs the printed
+    /// steps in order and records the default branch. Since review round 7
+    /// only a plain name is pasted: `o$(id)` is withheld, and its steps
+    /// name no remote.
+    #[test]
+    #[cfg(unix)]
+    fn the_policy_authority_steps_keep_a_hostile_remote_as_one_argument() {
+        for (remote, fetch, set_head) in [
+            ("o$(id)", vec![], vec![]),
+            (
+                "-x",
+                vec!["fetch", "--", "-x"],
+                vec!["remote", "set-head", "-a", "--", "-x"],
+            ),
+        ] {
+            let (dir, _) = repository(b"");
+            let root = dir.path();
+            let run = |args: &[&str]| {
+                let out = crate::git::command()
+                    .arg("-C")
+                    .arg(root)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{args:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            };
+            run(&["remote", "remove", "origin"]);
+            let source = root.to_str().unwrap();
+            run(&["config", &format!("remote.{remote}.url"), source]);
+            run(&[
+                "config",
+                &format!("remote.{remote}.fetch"),
+                &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+            ]);
+            let repo = Repository::open(root).unwrap();
+            let error = default_branch(&repo, root, remote).unwrap_err();
+            if set_head.is_empty() {
+                // Rounds 9 and 10: no command names a withheld remote; its
+                // steps are a fresh clone or a rename through a Git client.
+                let steps = crate::security::git::withheld_remote_step(root, remote);
+                for text in [&error, &fetch_step(root, remote)] {
+                    assert!(!text.contains("$("), "{text}");
+                    assert!(!text.contains("`git"), "{text}");
+                    assert!(text.contains(&steps), "{text}");
+                }
+                assert!(
+                    error.contains(crate::security::git::WITHHELD_REMOTE),
+                    "{error}"
+                );
+                continue;
+            }
+            let set_head_line = error
+                .split("the operator runs ")
+                .nth(1)
+                .and_then(|rest| rest.split(" (").next())
+                .unwrap_or_else(|| panic!("{error}"));
+            let fetch_line = error
+                .split(" (")
+                .nth(1)
+                .and_then(|rest| rest.split(" records it too").next())
+                .unwrap_or_else(|| panic!("{error}"));
+            assert_eq!(shell_argv(fetch_line), fetch, "{error}");
+            assert_eq!(shell_argv(set_head_line), set_head, "{error}");
+            assert_eq!(
+                fetch_step(root, remote),
+                format!("run {fetch_line}"),
+                "the fetch step the other refusals print"
+            );
+            for line in [fetch_line, set_head_line] {
+                let arguments = shell_argv(line);
+                run(&arguments.iter().map(String::as_str).collect::<Vec<_>>());
+            }
+            let repo = Repository::open(root).unwrap();
+            assert!(default_branch(&repo, root, remote).is_ok(), "{error}");
+        }
+    }
+
+    /// TSK-416 review rounds 9 and 10: the sole remote's name is withheld,
+    /// and `remote.<name>.skipFetchAll` keeps it out of `git fetch --all`.
+    /// The refusals hold no shell step that names it and no place in a
+    /// file, only a fresh clone or a rename through a Git client. A fresh
+    /// clone of the same source, whose remote has the plain name `origin`,
+    /// clears the refusal; the failing clone is left as it was. The
+    /// credentials are synthetic; the remote fetches from a local path, and
+    /// its push URL only carries the password `abc12` into the inventory.
+    #[test]
+    #[cfg(unix)]
+    fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
+        for name in ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"] {
+            let (dir, _) = repository(b"");
+            let root = dir.path();
+            let run = |args: &[&str]| {
+                let out = crate::git::command()
+                    .arg("-C")
+                    .arg(root)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{args:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            };
+            run(&["remote", "remove", "origin"]);
+            let source = root.to_str().unwrap().to_string();
+            for (key, value) in [
+                ("url", source),
+                (
+                    "pushurl",
+                    "https://user:abc12@host.invalid/x.git".to_string(),
+                ),
+                ("fetch", format!("+refs/heads/*:refs/remotes/{name}/*")),
+                ("skipFetchAll", "true".to_string()),
+            ] {
+                run(&["config", &format!("remote.{name}.{key}"), &value]);
+            }
+            let repo = Repository::open(root).unwrap();
+            let error = default_branch(&repo, root, name).unwrap_err();
+            let refused = load_local(root).err().unwrap();
+            for text in [&error, &refused, &fetch_step(root, name)] {
+                for hidden in [
+                    "$(",
+                    "OPAQUECANARY",
+                    "host.invalid",
+                    "abc12",
+                    "`git",
+                    "1st",
+                    "[remote]",
+                    "remote 1",
+                ] {
+                    assert!(!text.contains(hidden), "{name}: {hidden}: {text}");
+                }
+            }
+            assert!(refused.contains("holds no refs"), "{refused}");
+            assert!(
+                error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                "{error}"
+            );
+            // The failing clone is left as it was; a fresh clone of the same
+            // source, whose remote takes the plain name `origin`, reads the
+            // policy authority.
+            let fresh = tempfile::tempdir().unwrap();
+            codeflow_fixture::clone(fresh.path(), root, "copy").run();
+            assert!(load_local(root).is_err(), "{name}");
+            let landed = load_local(&fresh.path().join("copy")).unwrap();
+            assert!(
+                landed.source.starts_with("refs/remotes/origin/"),
+                "{name}: {}",
+                landed.source
+            );
+        }
     }
 }

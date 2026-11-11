@@ -122,6 +122,33 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-416 AC-9: names a ref in a refusal that is already certain (a
+    // fetch failed, or a ref names no readable commit). The text only reaches
+    // a person; a ref name git2 cannot give as text is skipped, and the fetch
+    // or read still refuses on its own.
+    (
+        "codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_remote_ref",
+        "name",
+        1,
+        "display",
+    ),
+    (
+        "codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_tip",
+        "symbolic_target",
+        1,
+        "display",
+    ),
+    // TSK-416 (issue 547): a failed review provider's stderr, shown to a
+    // person after redaction, never compared or used as a name
+    (
+        "codeflow-cli/src/cmd/work.rs",
+        "pr_review",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // Both startup_glob_paths callers construct pattern from Pattern.rest, a UTF-8
     // shell-word String. Only those pattern components are decoded to recognize
     // recursive stars; base and filesystem entry names are never decoded here.
@@ -507,6 +534,29 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "run_gh",
         "from_utf8_lossy",
         2,
+        "display",
+    ),
+    // TSK-416: a configuration key is decoded only to pick remote URL and
+    // url rewrite entries for redaction. A key that is not UTF-8 still
+    // matches as written, so its URL stays among the redacted values; a
+    // rewrite base that is not UTF-8 makes the read give up, and the caller
+    // then withholds git's whole message.
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "configured_credentials",
+        "from_utf8_lossy",
+        1,
+        "unproven",
+    ),
+    // TSK-416: the percent-decoded form of a credential part, matched
+    // against git's diagnostic as a person would read it. A decoded value
+    // that is not UTF-8 is matched in the same replaced form the shown text
+    // holds; the raw form is matched too.
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "percent_decoded",
+        "from_utf8_lossy",
+        1,
         "display",
     ),
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
@@ -1511,6 +1561,107 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-416 AC-9: `None` only drops the named-remedy refusal; `codeflow ci`
+    // then resolves the same ref with git, which still refuses a ref that
+    // names no readable commit. A readable commit is the success case.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_reference",
+        "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_reference",
+        "obtain-absent:find_reference",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_reference",
+        "obtain-absent:peel_to_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-416 AC-9: picks which ref a fetch that already failed names; a
+    // readable commit is skipped, and the fetch refuses either way.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_remote_ref",
+        "obtain-absent:peel_to_commit",
+        1,
+        "display",
+    ),
+    // TSK-416 AC-9: builds the text of a refusal already decided by the
+    // caller: what the ref points at and whether its object is here, which
+    // only chooses the remedy shown to a person.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_tip",
+        "obtain-absent:find_object",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "unresolvable_tip",
+        "obtain-absent:find_reference",
+        1,
+        "display",
+    ),
+    // TSK-416 AC-22: the commit is read only from the exact fetched ref;
+    // these reads only look for a local ref spelled the same, to refuse it,
+    // and show its commit in that refusal. A shadow ref git cannot read
+    // still never anchors the binding.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "pinned_commit",
+        "obtain-absent:find_reference",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "pinned_commit",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
+    // TSK-416 (issue 547): the review provider has already failed and the
+    // claim refuses either way; its stderr is read, bounded, only to name the
+    // cause and show its first line, redacted, to a person.
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "pr_review",
+        "obtain-absent:read_to_end",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "provider_failure",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/work.rs",
+        "provider_failure",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-416 AC-19: a reason written as a quoted scalar is decoded; a record
+    // written before that keeps its raw text, which was the reason as given.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "parse_acceptance_lines",
+        "obtain-absent:from_str",
+        1,
+        "prose",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -2711,6 +2862,59 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-416: a repository or configuration that cannot be read, or a URL
+    // or rewrite base that is not UTF-8, gives no credential list, and the
+    // caller then withholds git's whole message instead of relaying it.
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "configured_credentials",
+        "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "configured_credentials",
+        "obtain-absent:from_utf8",
+        2,
+        "unproven",
+    ),
+    // TSK-416: a percent-decoded credential part that is not UTF-8 is
+    // matched in its replaced form, as the decoded diagnostic shows it.
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "percent_decoded",
+        "obtain-absent:from_utf8",
+        1,
+        "display",
+    ),
+    // TSK-416 review round 7: a remote name is shown only when it is plain.
+    // A repository that cannot be read leaves no remote list
+    // (`configured_remote_names`, review round 8), and every caller then
+    // withholds: a name and a tracking ref are withheld, and
+    // `WithheldRemotes` withholds every text; a name that is not UTF-8 is
+    // withheld whole. Each result is only the text a message shows.
+    (
+        "crates/codeflow-core/src/security/git.rs",
+        "configured_remote_names",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/security/git.rs",
+        "WithheldRemotes::read",
+        "obtain-absent:from_utf8",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/security/git.rs",
+        "shown_git_remote",
+        "obtain-absent:from_utf8",
+        1,
+        "display",
+    ),
     // Decodes two ASCII hex digits from the internal storage_key encoding, not arbitrary OS bytes; storage_key emits a complete hex suffix after NUL.
     (
         "crates/codeflow-core/src/git/name.rs",
@@ -3426,7 +3630,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Builds the human-readable reason separately from diagnostics() used to classify the failed push.
     (
         "crates/codeflow-core/src/ids/issue.rs",
-        "classify_push",
+        "classify_push_shown",
         "lines",
         1,
         "display",
@@ -3434,7 +3638,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Builds the human-readable reason separately from diagnostics() used to classify the failed push.
     (
         "crates/codeflow-core/src/ids/issue.rs",
-        "classify_push",
+        "classify_push_shown",
         "trim",
         1,
         "display",
@@ -3951,6 +4155,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/root_checkout.rs",
         "workspace_hint_shown",
         "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // A path with no text form gets a step that pastes no command; the worktree is still reported.
+    (
+        "crates/codeflow-core/src/root_checkout.rs",
+        "worktree_move_step",
+        "obtain-absent:to_str",
         1,
         "unproven",
     ),
@@ -4997,27 +5209,11 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // Its only caller, stale_warnings, adds to Verdict.warnings, which validate keeps out of issues; is_clean and the ci and work checks read issues only.
-    (
-        "crates/codeflow-core/src/workgraph/lifecycle.rs",
-        "has_active_branch",
-        "obtain-absent:find_reference",
-        1,
-        "display",
-    ),
     // The result only selects the stale in_progress warning text in stale_warnings; validate warnings never block (is_clean reads issues only).
     (
         "crates/codeflow-core/src/workgraph/lifecycle.rs",
         "has_active_branch",
         "obtain-absent:descendant_of",
-        1,
-        "display",
-    ),
-    // The target tip only feeds the stale in_progress warning; report warnings are printed by validate and never fail ci or work.
-    (
-        "crates/codeflow-core/src/workgraph/lifecycle.rs",
-        "has_active_branch",
-        "obtain-absent:peel_to_commit",
         1,
         "display",
     ),
@@ -7025,8 +7221,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/ci.rs", "run_checks", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
-    ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
-    ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
+    ("crates/codeflow-core/src/security/git_config.rs", "read_include", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
+    ("crates/codeflow-core/src/security/git_config.rs", "read_include", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
     ("crates/codeflow-core/src/hooks/ref_authority.rs", "no_index_change_hook", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata of the hook file lets an unresolved-authority read-only call pass; a present file, a dangling link and every other error refuse, and the hooks directory comes from the configuration Git lists (TSK-1104)."),
     ("crates/codeflow-core/src/workgraph/history.rs", "check_command", "ErrorKind::NotFound", 1, "Git treats an absent GIT_SHALLOW_FILE as no boundary, including a dangling path; other read errors refuse. The installed CLI test compares relative, missing and empty overrides with native Git."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),

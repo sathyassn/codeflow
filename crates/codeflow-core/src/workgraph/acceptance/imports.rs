@@ -810,6 +810,7 @@ fn verify_record_home(
                 at: None,
                 own: &[],
                 replaced: None,
+                judged: &[],
             },
         );
         match judged.criteria {

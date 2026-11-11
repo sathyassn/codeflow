@@ -202,19 +202,43 @@ pub fn create_follow_up_with(
     let branch = current_branch(repo_root)?.unwrap_or_default();
     let epic = field(&map, "epic_id");
     let planning = branch.starts_with("plan/");
+    // The start point of the printed `git switch -c`: a target named like
+    // an option is given as its full ref, which git never reads as one
+    // (`git switch` takes no `--` before it). The record's value is not
+    // checked before this point (TSK-416 review). The command is rendered
+    // from the raw value, and names shown in prose are escaped (TSK-388).
+    let full = format!("refs/heads/{target}");
+    let start = if target.starts_with('-') {
+        &full
+    } else {
+        &target
+    };
+    let switch = |head: &'static str| {
+        crate::git::pasted::step(
+            &crate::git::Pasted::new(head)
+                .value(start)
+                .without_end_of_options(),
+        )
+    };
+    let (shown_target, shown_branch) = (
+        crate::git::display_text(&target),
+        crate::git::display_text(&branch),
+    );
     if epic.is_some() && !planning {
         return Err(StoreError::Invalid(format!(
-            "a follow-up is written on a plan/ branch of '{target}' (current branch '{branch}'); \
-             run `git switch -c plan/<slug> {target}` first"
+            "a follow-up is written on a plan/ branch of '{shown_target}' (current branch \
+             '{shown_branch}'); run {} first",
+            switch("git switch -c plan/<slug>")
         )));
     }
     if epic.is_none() && planning {
         return Err(StoreError::Invalid(format!(
             "{source_id} is a standalone task, so its follow-up is a standalone task too: \
              its record lands with its work on its own task branch, since a planning pull \
-             request names an epic (current branch '{branch}'); run \
-             `git switch -c task/<slug> {target}`, file the follow-up there, fill in and \
-             commit its record, then run `codeflow work claim <TSK-NNN>`"
+             request names an epic (current branch '{shown_branch}'); run {}, file the \
+             follow-up there, fill in and commit its record, then run `codeflow work claim \
+             <TSK-NNN>`",
+            switch("git switch -c task/<slug>")
         )));
     }
     let reason = epic
@@ -287,7 +311,9 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
         Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
-        Err(crate::git::remote_query::display_urls(
+        // TSK-416 review round 2: configured credentials redacted first.
+        Err(crate::git::remote_query::relay_diagnostic(
+            repo_root,
             String::from_utf8_lossy(&out.stderr).trim(),
         ))
     }
@@ -860,5 +886,93 @@ mod tests {
         assert!(check_adr(&generated("asked"), "ADR-0001", "asked").is_ok());
         let no_uid = "---\nid: ADR-0001\ntitle: asked\nstatus: proposed\n---\n";
         assert!(check_adr(no_uid, "ADR-0001", "asked").is_err(), "no uid");
+    }
+}
+
+/// TSK-416 review: a follow-up's printed `git switch -c` never puts an
+/// `integration_target` named like an option where git reads options.
+#[cfg(test)]
+mod dashed_target_tests {
+    use super::*;
+    use std::fs;
+
+    /// The record's target starts with `-`, so the start point prints as
+    /// its full ref; git runs the printed command as written and puts the
+    /// new branch at the target's commit. An ordinary target prints as it
+    /// did.
+    #[test]
+    fn a_follow_up_start_point_named_like_an_option_is_its_full_ref() {
+        let template = "---\nid: TSK-{{NNN}}\nepic_id: {{EPIC_ID}}\nstandalone_reason: {{STANDALONE_REASON}}\ntitle: {{TITLE_YAML}}\nintegration_target: {{TARGET_BRANCH}}\ncreated: {{DATE}}\n---\n";
+        for (epic, branch, prefix, target, start) in [
+            (
+                "EPC-001",
+                "main",
+                "plan/",
+                "--upload-pack=touch_pwned",
+                "refs/heads/--upload-pack=touch_pwned",
+            ),
+            (
+                "null",
+                "plan/x",
+                "task/",
+                "--upload-pack=touch_pwned",
+                "refs/heads/--upload-pack=touch_pwned",
+            ),
+            ("EPC-001", "main", "plan/", "-x", "refs/heads/-x"),
+            ("EPC-001", "main", "plan/", "main", "main"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let git = |args: &[&str]| {
+                let out = crate::git::command()
+                    .arg("-C")
+                    .arg(root)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "git {args:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            };
+            git(&["init", "-q", "-b", "main"]);
+            git(&["config", "user.email", "test@example.com"]);
+            git(&["config", "user.name", "Test"]);
+            git(&["commit", "-q", "--allow-empty", "-m", "fixture"]);
+            let tip = git(&["rev-parse", "HEAD"]);
+            git(&["update-ref", &format!("refs/heads/{target}"), "HEAD"]);
+            if branch != "main" {
+                git(&["switch", "-q", "-c", branch]);
+            }
+            let tasks = root.join("project-management/tasks");
+            fs::create_dir_all(&tasks).unwrap();
+            fs::write(
+                tasks.join("TSK-001.md"),
+                format!("---\nid: TSK-001\nepic_id: {epic}\nintegration_target: '{target}'\n---\n"),
+            )
+            .unwrap();
+            let error = create_follow_up(root, template, "TSK-001", "Tidy")
+                .unwrap_err()
+                .to_string();
+            let command = error
+                .split('`')
+                .find(|span| span.starts_with("git switch -c "))
+                .unwrap_or_else(|| panic!("{error}"));
+            assert_eq!(
+                command,
+                format!("git switch -c {prefix}<slug> {start}"),
+                "{error}"
+            );
+            let command = command.replace("<slug>", "s");
+            let arguments: Vec<&str> = command.split(' ').skip(1).collect();
+            git(&arguments);
+            assert_eq!(
+                git(&["symbolic-ref", "HEAD"]),
+                format!("refs/heads/{prefix}s")
+            );
+            assert_eq!(git(&["rev-parse", "HEAD"]), tip);
+        }
     }
 }

@@ -1048,12 +1048,22 @@ fn the_destination_default_branch_is_named_escaped() {
             assert!(!printed.iter().any(|text| controls(text)), "{printed:#?}");
             // A name with ESC is no branch name, so no check runs for it.
             if policy == Some(valid) && !name.contains('\u{1b}') {
-                assert!(
-                    printed
-                        .iter()
-                        .any(|text| text.contains(&format!("--into={shown}"))),
-                    "{printed:#?}"
-                );
+                // A name a terminal shows as itself is printed in the rerun
+                // command; any other name prints no command built from it
+                // (TSK-416 review round 3, finding 1).
+                if name == shown {
+                    assert!(
+                        printed
+                            .iter()
+                            .any(|text| text.contains(&format!("--into={shown}"))),
+                        "{printed:#?}"
+                    );
+                } else {
+                    assert!(
+                        !printed.iter().any(|text| text.contains("--into=")),
+                        "{printed:#?}"
+                    );
+                }
                 let handed = std::fs::read_to_string(h.local.path().join("arguments.txt")).unwrap();
                 assert!(
                     handed.lines().any(|line| line == format!("--into={name}")),
@@ -1133,6 +1143,13 @@ fn judged_by_an_empty_destination(h: &History, tracking: Option<&str>) -> (Vec<S
 fn stale_tracking_refs_for_an_empty_destination_refuse_with_the_fetch_route() {
     let h = History::new();
     let tip = h.git(&["rev-parse", "HEAD"]);
+    // The tracking ref belongs to a configured remote: a ref of no
+    // configured remote has its remote withheld (TSK-416 review round 9).
+    h.git(&[
+        "config",
+        "remote.origin.url",
+        h.remote.path().to_str().unwrap(),
+    ]);
     h.git(&["update-ref", "refs/remotes/origin/main", &tip]);
     let (printed, ran) = judged_by_an_empty_destination(&h, Some("origin"));
     assert!(!ran, "no codeflow ci runs: {printed:#?}");
@@ -1240,4 +1257,236 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
         ],
         "{report:?}"
     );
+}
+
+/// TSK-416 review round 2, finding 1: the prune step the push refusals
+/// print hands git the remote as one argument: pasting runs no
+/// substitution, and a name starting with `-` follows `--`. Since review
+/// round 7 only a plain name of a configured remote is pasted; any other
+/// name, one a terminal cannot show as itself included, gets no command,
+/// only a fresh clone or a rename through a Git client (review rounds 9
+/// and 10).
+#[cfg(unix)]
+#[test]
+fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    git2::Repository::init(dir.path()).unwrap();
+    let root = dir.path();
+    let hidden = [
+        "https://user:OPAQUECANARY@host.invalid",
+        "o$(id)",
+        "o\u{200b}x",
+    ];
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(root.join(".git").join("config"))
+        .unwrap();
+    for name in ["origin", "-x"].iter().chain(&hidden) {
+        writeln!(
+            config,
+            "[remote \"{name}\"]\n\turl = file:///nonexistent/r.git"
+        )
+        .unwrap();
+    }
+    drop(config);
+    for (remote, expected) in [
+        ("origin", vec!["fetch", "--prune", "origin"]),
+        ("-x", vec!["fetch", "--prune", "--", "-x"]),
+    ] {
+        let step = prune_step(root, remote);
+        let step = step.split(", which").next().unwrap_or(&step).to_string();
+        let command = step
+            .strip_prefix("run ")
+            .unwrap_or_else(|| panic!("{step}"));
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, expected, "{step}");
+    }
+    // A name that is a URL with a credential (synthetic), holds shell
+    // syntax or a character a terminal hides gets only the steps for a
+    // withheld remote, with no place in a file (review round 10).
+    for hidden in &hidden {
+        let step = prune_step(root, hidden);
+        assert_eq!(step, codeflow_core::security::git::WITHHELD_REMOTE_STEP);
+        for shown in [
+            hidden,
+            "OPAQUECANARY",
+            "host.invalid",
+            "$(",
+            r"o\u{200b}x",
+            "`git",
+            "[remote]",
+            "3rd",
+        ] {
+            assert!(!step.contains(shown), "{shown}: {step}");
+        }
+    }
+}
+
+/// TSK-416 review rounds 9 and 10: a withheld remote that
+/// `remote.<name>.skipFetchAll` keeps out of `git fetch --all`, whose
+/// destination now advertises no branches while this clone still holds
+/// the tracking ref it fetched, gets no shell step and no place in a file,
+/// only a fresh clone or a rename through a Git client. A fresh clone of
+/// the same destination, whose remote has the plain name `origin`, holds
+/// no tracking ref, so the push is judged as initialization there; the
+/// failing clone is left as it was, with no ref added. The credentials
+/// are synthetic; the remote fetches from a local path, and its push URL
+/// only carries the password `abc12` into the inventory.
+#[cfg(unix)]
+#[test]
+fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
+    for name in ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"] {
+        let h = History::new();
+        let root = h.local.path();
+        let source = h.remote.path().to_str().unwrap();
+        for (key, value) in [
+            ("url", source.to_string()),
+            (
+                "pushurl",
+                "https://user:abc12@host.invalid/x.git".to_string(),
+            ),
+            ("fetch", format!("+refs/heads/*:refs/remotes/{name}/*")),
+            ("skipFetchAll", "true".to_string()),
+        ] {
+            h.git(&["config", &format!("remote.{name}.{key}"), &value]);
+        }
+        // The clone fetched the destination's branch; the destination then
+        // lost every branch.
+        h.git(&["fetch", "-q", "--", name]);
+        command(h.remote.path(), &["update-ref", "-d", "refs/heads/main"]);
+        // The fetch stored `main`, and on newer git `HEAD` too.
+        let held = held_tracking_ref(root, name).unwrap();
+        assert!(
+            held.as_deref()
+                .is_some_and(|held| held.starts_with(&format!("refs/remotes/{name}/"))),
+            "{held:?}"
+        );
+        let step = prune_step(root, name);
+        assert_eq!(step, codeflow_core::security::git::WITHHELD_REMOTE_STEP);
+        for hidden in [
+            "$(",
+            "OPAQUECANARY",
+            "host.invalid",
+            "abc12",
+            "`git",
+            "1st",
+            "[remote]",
+            "remote 1",
+        ] {
+            assert!(!step.contains(hidden), "{name}: {hidden}: {step}");
+        }
+        assert!(step.contains("fresh clone"), "{step}");
+        // A fresh clone of the same destination holds no tracking ref for
+        // it; the failing clone is unchanged.
+        let fresh = tempfile::tempdir().unwrap();
+        codeflow_fixture::clone(fresh.path(), source, "copy").run();
+        let copy = fresh.path().join("copy");
+        assert_eq!(held_tracking_ref(&copy, "origin").unwrap(), None, "{name}");
+        assert_eq!(held_tracking_ref(root, name).unwrap(), held, "{name}");
+    }
+}
+
+/// TSK-416 review round 2, finding 1: the release preflight remedies print
+/// `python3 <script> preflight <option>` with the pushed branch rendered
+/// from its raw name, so pasting hands the script the branch as one
+/// argument: no substitution runs, and a name starting with `-` is joined
+/// with `=` so it is never read as an option.
+#[cfg(unix)]
+#[test]
+fn the_preflight_branch_option_keeps_a_hostile_branch_as_one_argument() {
+    for (branch, expected) in [
+        ("main", vec!["preflight", "--branch", "main"]),
+        ("x$(id)", vec!["preflight", "--branch", "x$(id)"]),
+        ("a'b", vec!["preflight", "--branch", "a'b"]),
+        ("-x", vec!["preflight", "--branch=-x"]),
+    ] {
+        let remedy = codeflow_core::remedy::RELEASE_PREFLIGHT_UNRUN
+            .with(&[("branch_option", &branch_option(branch))])
+            .to_string();
+        let command = remedy
+            .split('`')
+            .nth(1)
+            .and_then(|step| step.strip_prefix("python3 scripts/release.py "))
+            .unwrap_or_else(|| panic!("{remedy}"));
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("p() {{ printf '%s\\0' \"$@\"; }}; p {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, expected, "{remedy}");
+    }
+    assert_eq!(branch_option("o\u{200b}x"), "--branch <branch>");
+}
+
+/// TSK-416 review round 2, finding 1: the push-set check remedy prints the
+/// rerun line from the raw arguments, one shell word each, so pasting it
+/// runs no substitution; an argument with no printed form leaves `<args>`.
+#[cfg(unix)]
+#[test]
+fn the_check_remedy_keeps_each_argument_as_one_word() {
+    let args = ["ci", "--range", "a$(id)..b", "--into", "o'x"];
+    let remedy = check_remedy(&args).to_string();
+    let command = remedy
+        .split('`')
+        .nth(1)
+        .and_then(|step| step.strip_prefix("codeflow "))
+        .unwrap_or_else(|| panic!("{remedy}"));
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!("p() {{ printf '%s\\0' \"$@\"; }}; p {command}"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{command}");
+    let printed = String::from_utf8(out.stdout).unwrap();
+    let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+    assert_eq!(arguments, args, "{remedy}");
+    let hidden = check_remedy(&["ci", "--into", "o\u{200b}x"]).to_string();
+    assert_eq!(
+        hidden,
+        codeflow_core::remedy::PUSH_SET_BY_HAND.remedy().to_string()
+    );
+}
+
+/// TSK-416 review round 3, finding 1: a check whose arguments hold a
+/// hidden character together with shell syntax prints no text built from
+/// them on any path: not the timing step's name, not the name its findings
+/// and failures carry, and not its remedy. Only the fixed program and verb
+/// remain, so nothing pasted from the output runs the substitution.
+#[test]
+fn a_hidden_character_beside_shell_syntax_prints_no_command_on_any_path() {
+    for hostile in [
+        "feat/a\u{200b}$(id)",
+        "feat/a\u{202e}`id`",
+        "feat/a\u{1b}; id",
+        "feat/a\u{200b}' ; id ; '",
+    ] {
+        let args = ["ci", "--base", "abc", "--branch", hostile, "--into", "main"];
+        let (step, named) = check_names(&args);
+        let remedy = check_remedy(&args).to_string();
+        for text in [&step, &named, &remedy] {
+            for syntax in ["$(", "`id`", "; id", "'"] {
+                assert!(!text.contains(syntax), "{text}");
+            }
+            assert!(!text.contains("--branch"), "{text}");
+            assert!(!text.contains("feat/a"), "{text}");
+        }
+        assert_eq!(step, "codeflow ci");
+        assert!(named.contains("its command is not printed"), "{named}");
+    }
+    // A printable hostile name keeps its one-word rendering on every path.
+    let args = ["ci", "--branch", "feat/a$(id)"];
+    let (step, named) = check_names(&args);
+    assert_eq!(step, "codeflow ci --branch 'feat/a$(id)'");
+    assert_eq!(named, "`codeflow ci --branch 'feat/a$(id)'`");
 }

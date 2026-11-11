@@ -143,9 +143,18 @@ fn refs_with(repo: &git2::Repository, read: &dyn Fn(&Path) -> io::Result<()>) ->
     // A ref already named carries its reflog with it in the same report.
     reflogs.retain(|name| !refs.contains(name));
     reflogs.sort();
+    // A remote-tracking ref holds its remote's name, configuration text that
+    // can be a URL with a credential, shown only when plain (TSK-416 review
+    // round 7).
+    let shown = |names: Vec<String>| -> Vec<String> {
+        names
+            .iter()
+            .map(|name| crate::security::git::shown_escaped_ref(common, name))
+            .collect()
+    };
     Unreadable {
-        refs,
-        reflogs,
+        refs: shown(refs),
+        reflogs: shown(reflogs),
         tracked: Vec::new(),
     }
 }
@@ -277,6 +286,46 @@ mod tests {
         assert!(line.contains("not evidence of repository damage"), "{line}");
         assert!(line.contains("git branch -m"), "{line}");
         assert!(!line.contains("pack-refs"), "{line}");
+    }
+
+    /// TSK-416 review round 7: a refused remote-tracking ref and its reflog
+    /// hold the remote's name, configuration text that can carry a
+    /// credential, so the report shows that remote withheld. The credential
+    /// is synthetic.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_tracking_ref_withholds_a_credential_remote_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repository(dir.path(), "main-copy");
+        let name = "user-OPAQUECANARY@host.invalid";
+        repo.remote(name, "file:///nonexistent/r.git").unwrap();
+        let head = repo.head().unwrap().target().unwrap();
+        repo.reference(
+            &format!("refs/remotes/{name}/denied"),
+            head,
+            false,
+            "fixture",
+        )
+        .unwrap();
+        let found = scan_refs_with_refusal(&repo, "denied");
+        let line = found.report_lines().join("\n");
+        assert!(!line.contains("OPAQUECANARY"), "{line}");
+        assert!(!line.contains("host.invalid"), "{line}");
+        assert!(
+            line.contains("refs/remotes/<a remote, name withheld>/denied"),
+            "{line}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn scan_refs_with_refusal(repo: &git2::Repository, word: &str) -> Unreadable {
+        refs_with(repo, &|path| {
+            if file_name_holds(path, word) {
+                Err(io::Error::from_raw_os_error(1))
+            } else {
+                read_regular_file(path)
+            }
+        })
     }
 
     /// `git branch -m` renames only a local branch, so a refused

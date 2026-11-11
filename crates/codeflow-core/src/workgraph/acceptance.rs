@@ -457,6 +457,18 @@ mod authority {
                 .iter()
                 .any(|(line, judged)| line == name && *judged == tip)
         }
+
+        /// Every judged tip ([`Self::with_judged_tip`]) as its exact commit,
+        /// whatever line it was marked for.
+        pub(super) fn judged_commits(&self) -> Vec<Oid> {
+            let mut commits: Vec<Oid> = Vec::new();
+            for (_, tip) in &self.judged_tips {
+                if !commits.contains(tip) {
+                    commits.push(*tip);
+                }
+            }
+            commits
+        }
     }
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
@@ -2321,7 +2333,7 @@ fn judge_reopened(
     }
     let mut tips: Vec<(String, Oid)> = Vec::new();
     for name in &targets {
-        let mut found = match target_tips(repo, name) {
+        let mut found = match judged_target_tips(repo, name) {
             Ok(found) => found,
             Err(reason) => return TaskJudgement::unreadable(reason),
         };
@@ -2332,8 +2344,9 @@ fn judge_reopened(
         }
         if found.is_empty() {
             return TaskJudgement::unreadable(format!(
-                "the target `{0}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {0}`)",
-                crate::git::display_text(name)
+                "the target `{}`, which this task's record names, does not resolve here; {}",
+                crate::git::display_text(name),
+                super::work_start::fetch_it("origin", name)
             ));
         }
         // The epic line's pull request into its target judges the line's
@@ -2346,16 +2359,21 @@ fn judge_reopened(
     }
     match default_target_name(repo) {
         Ok(name) => {
-            let found = match target_tips(repo, &name.name) {
+            let found = match judged_target_tips(repo, &name.name) {
                 Ok(found) => found,
                 Err(reason) => return TaskJudgement::unreadable(reason),
             };
             if found.is_empty() {
                 return TaskJudgement::unreadable(format!(
-                    "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
-                    // `origin/HEAD` names it, as the remote said (TSK-388).
+                    "the default target `{}`{} does not resolve here; {}",
                     crate::git::display_text(&name.name),
-                    if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
+                    // `origin/HEAD` names it, as the remote said (TSK-388).
+                    if name.from_origin_head {
+                        ", which `origin/HEAD` names,"
+                    } else {
+                        ""
+                    },
+                    super::work_start::fetch_it("origin", &name.name)
                 ));
             }
             tips.extend(found);
@@ -2370,6 +2388,11 @@ fn judge_reopened(
     judged.retain(|point| seen.insert(*point));
     tips.retain(|(_, point)| seen.insert(*point));
     let own: Vec<Oid> = own_history.iter().map(|(_, point)| *point).collect();
+    // The proved tips the run head contains are the range under judgment
+    // (TSK-433): a merge inside the line that carries the recovered
+    // completion and rewrites the record is the range's own, no holder
+    // outside it (TSK-416 AC-20). Each is one exact commit, never a name.
+    let judged_tips = criteria.judged_commits();
     store.judge(
         &identity,
         &judged,
@@ -2379,6 +2402,7 @@ fn judge_reopened(
             at: Some(at),
             own: &own,
             replaced: None,
+            judged: &judged_tips,
         },
     )
 }
@@ -2440,6 +2464,7 @@ pub(super) fn judge_in_range(
             at: None,
             own: &own,
             replaced: scope.replaced,
+            judged: &[],
         },
     )
 }
@@ -2594,34 +2619,104 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
         })
 }
 
+/// The tips of the target `name` a reopen is judged against: every
+/// fetched tip [`target_tips`] lists, and the local branch only when it is
+/// not behind them. Ancestry decides, never a name or a date (TSK-416):
+/// - a local tip equal to, or a strict ancestor of, a fetched tip is a
+///   stale copy and is dropped, since the fetched tip holds all it holds;
+/// - a local tip that strictly descends from every fetched tip (unpushed
+///   commits) is kept beside them;
+/// - a local tip diverged from a fetched tip, or whose ancestry cannot be
+///   read, refuses, naming both refs and commits and a remedy that runs
+///   under the guard.
+///
+/// Every fetched tip is read before the local tip is dropped or kept, so
+/// the order the refs are listed in never decides (TSK-416 review): a
+/// fetched tip that holds the local one does not excuse another that has
+/// diverged from it or whose ancestry cannot be read.
+///
+/// # Errors
+/// Returns the reason when a ref or the ancestry cannot be read, or when
+/// the local branch and a fetched tip have diverged.
+pub(super) fn judged_target_tips(
+    repo: &Repository,
+    name: &str,
+) -> Result<Vec<(String, Oid)>, String> {
+    let tips = target_tips(repo, name)?;
+    let (local, fetched): (Vec<_>, Vec<_>) = tips
+        .into_iter()
+        .partition(|(reference, _)| reference.starts_with("refs/heads/"));
+    let [(local_ref, local_tip)] = local.as_slice() else {
+        return Ok(fetched.into_iter().chain(local).collect());
+    };
+    let descends = |of: Oid, ancestor: Oid, fetched_ref: &str, fetched_tip: Oid| {
+        history::descendant_of(repo, of, ancestor).map_err(|error| {
+            format!(
+                "cannot read the ancestry of {} at {local_tip} against {} at {fetched_tip}: {}; {}",
+                crate::git::display_text(local_ref),
+                // The fetched ref holds its remote's name, shown only when
+                // plain (TSK-416 review round 7).
+                crate::security::git::shown_ref(repo.commondir(), fetched_ref),
+                error.message(),
+                reopen_remedy(repo, fetched_ref)
+            )
+        })
+    };
+    let mut held = false;
+    for (fetched_ref, fetched_tip) in &fetched {
+        if fetched_tip == local_tip
+            || descends(*fetched_tip, *local_tip, fetched_ref, *fetched_tip)?
+        {
+            held = true;
+            continue;
+        }
+        if !descends(*local_tip, *fetched_tip, fetched_ref, *fetched_tip)? {
+            return Err(format!(
+                "the local branch {} at {local_tip} and {} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; {}",
+                crate::git::display_text(local_ref),
+                crate::security::git::shown_ref(repo.commondir(), fetched_ref),
+                reopen_remedy(repo, fetched_ref)
+            ));
+        }
+    }
+    if held {
+        return Ok(fetched);
+    }
+    Ok(fetched.into_iter().chain(local).collect())
+}
+
+/// The remedy for a reopen that cannot settle its target's local copy
+/// ([`super::work_start::fresh_clone_retry`]), naming the configured remote
+/// the diverged fetched ref came from, which need not be the remote the
+/// task branch is pushed to (TSK-416 review round 2).
+fn reopen_remedy(repo: &Repository, fetched_ref: &str) -> String {
+    super::work_start::fresh_clone_retry(&super::work_start::shown_remote_of(repo, fetched_ref))
+}
+
 /// Every tip of the target `name` this clone knows, with the reference
-/// that names it: the configured upstream of its local branch (on any
-/// remote), its `origin` tracking ref, and the local branch, in that
-/// order. Empty when none resolves.
+/// that names it: the configured upstream of its local branch when it is the
+/// same branch on a configured remote (an upstream naming another branch is
+/// never this target, TSK-416), its `origin` tracking ref, and the local
+/// branch, in that order. Empty when none resolves. A ref that exists and
+/// names no readable commit refuses, naming the ref, what it points at and
+/// a remedy that runs under the guard (TSK-416 AC-9).
 pub(super) fn target_tips(repo: &Repository, name: &str) -> Result<Vec<(String, Oid)>, String> {
     let mut names = Vec::new();
-    match repo.branch_upstream_name(&format!("refs/heads/{name}")) {
-        Ok(upstream) => names.push(
-            upstream
-                .as_str()
-                .map_err(|error| format!("cannot decode configured upstream: {error}"))?
-                .to_string(),
-        ),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-        Err(error) => return Err(error.to_string()),
+    if let Some(upstream) =
+        super::work_start::same_branch_upstream(repo, name).map_err(|error| error.to_string())?
+    {
+        names.push(upstream);
     }
-    let mut candidates = super::work_start::target_reference_names(name).unwrap_or_default();
-    candidates.reverse();
-    names.extend(candidates);
+    // The fetched `origin` ref, then the local branch: the order
+    // `target_reference_names` gives a bare name.
+    names.extend(super::work_start::target_reference_names(name).unwrap_or_default());
     let mut tips = Vec::new();
     for reference in names {
-        let found = match repo.find_reference(&reference) {
-            Ok(found) => found,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
-            Err(error) => return Err(error.to_string()),
-        };
-        let commit = found.peel_to_commit().map_err(|error| error.to_string())?;
-        tips.push((reference, commit.id()));
+        if let Some(tip) = super::work_start::reference_commit(repo, &reference)
+            .map_err(|error| error.to_string())?
+        {
+            tips.push((reference, tip));
+        }
     }
     Ok(tips)
 }
@@ -6412,6 +6507,282 @@ mod tests {
             assert!(landed_adoptions(&repo, &task, f.merge, tail, Some(f.base))
                 .unwrap_err()
                 .contains("cannot verify"));
+        }
+    }
+}
+
+/// TSK-416 AC-8 and AC-9: the tips a reopen is judged against drop a stale
+/// local copy by ancestry alone, and refuse a diverged or unreadable one.
+#[cfg(test)]
+mod judged_tip_tests {
+    use super::*;
+
+    fn git(root: &std::path::Path, args: &[&str]) -> String {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(root: &std::path::Path, message: &str) -> String {
+        git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        git(root, &["rev-parse", "HEAD"])
+    }
+
+    /// `main` at a base commit with an `origin` remote configured.
+    fn fixture() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.test"]);
+        git(root, &["config", "user.name", "T"]);
+        git(root, &["config", "remote.origin.url", "/nowhere"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        );
+        let base = commit(root, "base");
+        (dir, base)
+    }
+
+    fn tips(root: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+        let repo = Repository::open(root).unwrap();
+        judged_target_tips(&repo, "main").map(|tips| {
+            tips.into_iter()
+                .map(|(name, tip)| (name, tip.to_string()))
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_local_tip_behind_the_fetched_tip_is_dropped_whatever_its_date() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        // A forged committer date far in the future decides nothing.
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["commit", "-q", "--allow-empty", "-m", "stale"])
+            .env("GIT_COMMITTER_DATE", "2099-01-01T00:00:00Z")
+            .status()
+            .unwrap();
+        assert!(out.success());
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        // A local branch named like the fetched ref is not the line.
+        git(root, &["update-ref", "refs/heads/origin/main", &base]);
+        assert_eq!(
+            tips(root).unwrap(),
+            [("refs/remotes/origin/main".to_string(), fetched)]
+        );
+    }
+
+    #[test]
+    fn a_local_tip_ahead_of_the_fetched_tip_is_kept() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        let ahead = commit(root, "unpushed");
+        assert_eq!(
+            tips(root).unwrap(),
+            [
+                ("refs/remotes/origin/main".to_string(), base),
+                ("refs/heads/main".to_string(), ahead)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_diverged_local_tip_refuses_naming_both_refs_and_a_guarded_remedy() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        let local = commit(root, "local");
+        git(root, &["switch", "-q", "--detach", &base]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        let error = tips(root).unwrap_err();
+        for part in [
+            "refs/heads/main",
+            local.as_str(),
+            "refs/remotes/origin/main",
+            fetched.as_str(),
+            "have diverged",
+            // TSK-416 review: a worktree shares the diverged branch, so the
+            // remedy is a fresh clone, named by its remote, never its URL.
+            "a worktree of this clone shares its branches",
+            "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
+            // Round 2: the task branch may live on another remote.
+            "`git remote add <name> <url>`, then `git fetch <name>`",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+        assert!(!error.contains("get-url"), "{error}");
+        assert!(!error.contains("worktree add"), "{error}");
+        assert!(!error.contains("/nowhere"), "{error}");
+        assert!(!error.contains("update-ref"), "{error}");
+        assert!(!error.contains("stale"), "{error}");
+    }
+
+    /// A commit whose parent is missing: it resolves, and its ancestry
+    /// cannot be read.
+    fn broken_commit(root: &std::path::Path) -> String {
+        let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+        let path = root.join(".git/broken-commit");
+        std::fs::write(
+            &path,
+            format!(
+                "tree {tree}\nparent {}\nauthor T <t@example.test> 1700000000 +0000\ncommitter T <t@example.test> 1700000000 +0000\n\nbroken\n",
+                "1".repeat(40)
+            ),
+        )
+        .unwrap();
+        git(
+            root,
+            &[
+                "hash-object",
+                "-t",
+                "commit",
+                "-w",
+                "--literally",
+                path.to_str().unwrap(),
+            ],
+        )
+    }
+
+    /// TSK-416 review: every fetched tip is read before the local tip is
+    /// dropped. Two fetched tips name `main`: the upstream on `up`, listed
+    /// first, and `origin/main`. One equals the local tip; the other has
+    /// diverged from it or cannot have its ancestry read. Whichever is
+    /// listed first, the judgment refuses naming the other and both commits.
+    #[test]
+    fn every_fetched_tip_is_read_whatever_order_the_refs_are_listed_in() {
+        for redundant_first in [true, false] {
+            for unreadable in [false, true] {
+                let (dir, base) = fixture();
+                let root = dir.path();
+                git(root, &["config", "remote.up.url", "/nowhere"]);
+                git(
+                    root,
+                    &[
+                        "config",
+                        "remote.up.fetch",
+                        "+refs/heads/*:refs/remotes/up/*",
+                    ],
+                );
+                git(root, &["config", "branch.main.remote", "up"]);
+                git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+                let local = commit(root, "local");
+                let other = if unreadable {
+                    broken_commit(root)
+                } else {
+                    git(root, &["switch", "-q", "--detach", &base]);
+                    commit(root, "fetched")
+                };
+                let (redundant_ref, other_ref) = if redundant_first {
+                    ("refs/remotes/up/main", "refs/remotes/origin/main")
+                } else {
+                    ("refs/remotes/origin/main", "refs/remotes/up/main")
+                };
+                git(root, &["update-ref", redundant_ref, &local]);
+                git(root, &["update-ref", other_ref, &other]);
+                let label = format!("redundant first: {redundant_first}, unreadable: {unreadable}");
+                let error = match tips(root) {
+                    Ok(tips) => panic!("{label}: judged {tips:?}"),
+                    Err(error) => error,
+                };
+                let cause = if unreadable {
+                    "cannot read the ancestry of refs/heads/main"
+                } else {
+                    "have diverged"
+                };
+                // Round 2: the fresh clone is of the remote the refusing
+                // fetched tip came from.
+                let clone = if other_ref.contains("/up/") {
+                    "a fresh clone of the remote up,"
+                } else {
+                    "a fresh clone of the remote origin,"
+                };
+                for part in [cause, other_ref, other.as_str(), local.as_str(), clone] {
+                    assert!(error.contains(part), "{label}: {part}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_local_tip_whose_ancestry_cannot_be_read_refuses() {
+        let (dir, base) = fixture();
+        let root = dir.path();
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        let broken = broken_commit(root);
+        git(root, &["update-ref", "refs/heads/main", &broken]);
+        let error = tips(root).unwrap_err();
+        assert!(
+            error.contains("cannot read the ancestry of refs/heads/main"),
+            "{error}"
+        );
+        // TSK-416 review: both commits are named, the fetched one too, and
+        // the remedy is a fresh clone, whose refs and objects are its own.
+        for part in [
+            broken.as_str(),
+            &format!("against refs/remotes/origin/main at {base}"),
+            "a fresh clone of the remote origin",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+        assert!(!error.contains("worktree add"), "{error}");
+        assert!(!error.contains("update-ref"), "{error}");
+    }
+
+    /// TSK-416 AC-9: a fetched tip that names no readable commit refuses
+    /// naming the cause, the ref and the object it points at; the remedy is
+    /// a fresh clone for a missing object, which stops every fetch, and a
+    /// plain fetch of its remote for an object that is not a commit.
+    #[test]
+    fn a_fetched_tip_that_names_no_commit_refuses_naming_the_ref_and_a_guarded_remedy() {
+        let (dir, _) = fixture();
+        let root = dir.path();
+        let blob = git(root, &["hash-object", "-w", "--stdin"]);
+        std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
+        let fresh_clone = [
+            "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
+            "`git branch -d -r origin/main`, then `git fetch origin`",
+            "which the guard leaves to the operator",
+        ];
+        let fetch = ["plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main"];
+        for (points_at, remedy) in [("1".repeat(40), &fresh_clone[..]), (blob, &fetch[..])] {
+            std::fs::write(
+                root.join(".git/refs/remotes/origin/main"),
+                format!("{points_at}\n"),
+            )
+            .unwrap();
+            let error = tips(root).unwrap_err();
+            for part in [
+                "refs/remotes/origin/main points at",
+                points_at.as_str(),
+                "not a commit this clone can read",
+                "the fetched tip cannot be resolved",
+            ]
+            .iter()
+            .chain(remedy)
+            {
+                assert!(error.contains(part), "{part}: {error}");
+            }
+            assert!(!error.contains("update-ref"), "{error}");
         }
     }
 }

@@ -69,7 +69,7 @@ impl std::error::Error for NotRepresentable {}
 /// tag block and the rest) and the other format characters (Cf). A name a
 /// remote supplies can hold any of them. Combining marks such as U+0301 are
 /// ordinary text in names and are shown as they are: that is the bound.
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(u32::from(c), 0x2028 | 0x2029)
         || IGNORABLE

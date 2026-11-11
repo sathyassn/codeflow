@@ -611,7 +611,7 @@ fn configured_commands(
         .iter()
         .chain(config.includes.iter().map(|include| &include.path))
     {
-        unchanged(path, earlier)?;
+        configuration_unchanged(path, earlier)?;
     }
     let mut commands = Vec::new();
     let pagination = globals(args)?
@@ -742,21 +742,48 @@ fn config_values<'a>(
     config: &'a crate::security::git_config::EffectiveConfig,
     key: &str,
 ) -> Result<Vec<&'a str>, String> {
+    Ok(placed_values(config, key)?
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect())
+}
+
+/// [`config_values`], each with where it stands (`setting 3 of <file>`).
+/// A refusal shows the key with its subsection withheld, which can hold a
+/// credential (TSK-416 review round 6).
+fn placed_values<'a>(
+    config: &'a crate::security::git_config::EffectiveConfig,
+    key: &str,
+) -> Result<Vec<(&'a str, &'a str)>, String> {
     let list = catalog::SOURCES.iter().any(|source| {
         matches!(source, catalog::Source::ConfigList(pattern, _)
             if catalog::config_matches(key, pattern))
     });
+    let unreadable = || {
+        format!(
+            "cannot read Git command setting {}: not UTF-8",
+            crate::security::git::shown_config_key(key)
+        )
+    };
+    let placed = config.get_all_placed(key);
     if !list {
-        return Ok(config.get(key)?.into_iter().collect());
+        // Only the effective value is decoded, as `get` does.
+        return placed.last().map_or_else(
+            || Ok(Vec::new()),
+            |&(place, bytes)| {
+                std::str::from_utf8(bytes)
+                    .map(|value| vec![(place, value)])
+                    .map_err(|_| unreadable())
+            },
+        );
     }
     let mut values = Vec::new();
-    for (_, _, bytes) in config.get_all(key) {
-        let value = std::str::from_utf8(bytes)
-            .map_err(|_| format!("cannot read Git command setting {key}: not UTF-8"))?;
+    for (place, bytes) in placed {
+        let value = std::str::from_utf8(bytes).map_err(|_| unreadable())?;
         if value.is_empty() {
             values.clear();
         } else {
-            values.push(value);
+            values.push((place, value));
         }
     }
     Ok(values)
@@ -787,8 +814,12 @@ fn transport(
             // URL rewrites put the replacement URL in the subsection name.
             configured |= key.starts_with("url.ext::");
             for (_, _, bytes) in config.get_all(key) {
-                let value = std::str::from_utf8(bytes)
-                    .map_err(|_| format!("Git transport setting {key} is not UTF-8"))?;
+                let value = std::str::from_utf8(bytes).map_err(|_| {
+                    format!(
+                        "Git transport setting {} is not UTF-8",
+                        crate::security::git::shown_config_key(key)
+                    )
+                })?;
                 configured |= ext(value);
             }
         }
@@ -1291,19 +1322,47 @@ pub(super) fn read(command: &str, cwd: &Path) -> Result<Vec<Body>, String> {
 }
 
 fn unchanged(source: &Path, earlier: &[PathBuf]) -> Result<(), String> {
-    let source =
+    let normal =
         super::super::edit_guard::normalized(source, true).map_err(|error| error.to_string())?;
+    match rewriting(&normal, earlier)? {
+        Some(_) => Err(format!(
+            "an earlier command may rewrite runner source {}; run the commands separately",
+            crate::git::display_path(&normal)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// [`unchanged`] for a Git configuration file this command reads. The
+/// refusal names the earlier command's own target, never the file, and a
+/// file that cannot be resolved refuses without its path: an included
+/// file's path comes from an include value, which can hold a credential
+/// (TSK-416 review round 5).
+fn configuration_unchanged(file: &Path, earlier: &[PathBuf]) -> Result<(), String> {
+    let normal = super::super::edit_guard::normalized(file, true).map_err(|_| {
+        "cannot resolve a Git configuration file this command reads; run the commands separately"
+            .to_string()
+    })?;
+    match rewriting(&normal, earlier)? {
+        Some(target) => Err(format!(
+            "an earlier command writes {}, which holds a Git configuration file this command reads; run the commands separately",
+            crate::git::display_path(target)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The path in `earlier` that holds `source`, already normalized, if an
+/// earlier command on the line writes it.
+fn rewriting<'a>(source: &Path, earlier: &'a [PathBuf]) -> Result<Option<&'a PathBuf>, String> {
     for target in earlier {
-        let target = super::super::edit_guard::normalized(target, true)
+        let normal = super::super::edit_guard::normalized(target, true)
             .map_err(|error| error.to_string())?;
-        if source.starts_with(&target) {
-            return Err(format!(
-                "an earlier command may rewrite runner source {}; run the commands separately",
-                source.display()
-            ));
+        if source.starts_with(&normal) {
+            return Ok(Some(target));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// A path an earlier command on the line writes (TSK-379 security round 8).
@@ -1691,16 +1750,25 @@ fn future_worktree_configuration(
     // Each file is read by the spelling Git reads it by, so a relative
     // include inside a linked file resolves as Git resolves it (TSK-379
     // review round 12); the canonical path only identifies a file once.
-    let mut pending: Vec<(PathBuf, PathBuf)> = config
+    // A file is named in a message by the include entry that names it,
+    // never by its path, which an include value can fill with a credential
+    // (TSK-416 review round 5).
+    let mut pending: Vec<(PathBuf, PathBuf, String)> = config
         .includes
         .iter()
         .filter(|include| !include.missing)
         .filter(|include| include.condition.is_some())
-        .map(|include| (include.logical.clone(), include.path.clone()))
+        .map(|include| {
+            (
+                include.logical.clone(),
+                include.path.clone(),
+                include.entry.clone(),
+            )
+        })
         .collect();
     let mut seen = std::collections::BTreeSet::new();
     let mut read = 0;
-    while let Some((path, canonical)) = pending.pop() {
+    while let Some((path, canonical, entry)) = pending.pop() {
         if !seen.insert((path.clone(), canonical)) {
             continue;
         }
@@ -1708,7 +1776,7 @@ fn future_worktree_configuration(
         if read > 128 {
             return Err("more than 128 conditional configuration files to read".into());
         }
-        let file = crate::security::git_config::read_file(&path, &environment)?;
+        let file = crate::security::git_config::read_file(&path, &environment, &entry)?;
         for key in file.keys()? {
             let runs = key.eq_ignore_ascii_case("core.hookspath")
                 || catalog::SOURCES.iter().any(|source| {
@@ -1720,7 +1788,7 @@ fn future_worktree_configuration(
                 continue;
             }
             let hooks = key.eq_ignore_ascii_case("core.hookspath");
-            for value in config_values(&file, key)? {
+            for (place, value) in placed_values(&file, key)? {
                 // An empty command runs nothing, but an empty hooks path is
                 // still a hooks location Git uses (TSK-379 review round 13).
                 if !hooks
@@ -1730,9 +1798,17 @@ fn future_worktree_configuration(
                 {
                     continue;
                 }
+                // The setting is named by where it stands and its key with
+                // the subsection withheld, which can hold a credential
+                // (TSK-416 review round 6).
+                let category = if hooks {
+                    "a hooks location"
+                } else {
+                    "a command Git runs"
+                };
                 return Err(format!(
-                    "the conditional include {} can apply to the new worktree and sets `{key}`, which the guard cannot judge before the worktree exists; add the worktree without that configuration or ask the operator",
-                    path.display()
+                    "{place} sets `{}`, {category}; it can apply to the new worktree, and the guard cannot judge it before the worktree exists; add the worktree without that configuration or ask the operator",
+                    crate::security::git::shown_config_key(key)
                 ));
             }
         }
@@ -1740,7 +1816,13 @@ fn future_worktree_configuration(
             file.includes
                 .iter()
                 .filter(|include| !include.missing)
-                .map(|include| (include.logical.clone(), include.path.clone())),
+                .map(|include| {
+                    (
+                        include.logical.clone(),
+                        include.path.clone(),
+                        include.entry.clone(),
+                    )
+                }),
         );
     }
     Ok(())
@@ -2339,5 +2421,140 @@ mod tests {
         );
         assert_eq!(written("restore", "--source HEAD~1 a.txt"), vec!["a.txt"]);
         assert_eq!(written("restore", "--staged a.txt"), none);
+    }
+
+    /// A repository with no global or system configuration, and the
+    /// environment that reads only its own.
+    fn repository() -> (tempfile::TempDir, crate::security::git_config::Environment) {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let env = crate::security::git_config::Environment::from([
+            ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+            ("GIT_CONFIG_SYSTEM".into(), "/dev/null".into()),
+            ("GIT_CONFIG_COUNT".into(), "0".into()),
+            ("GIT_CONFIG_PARAMETERS".into(), String::new()),
+            (
+                "GIT_DIR".into(),
+                dir.path().join(".git").to_str().unwrap().into(),
+            ),
+            ("GIT_WORK_TREE".into(), dir.path().to_str().unwrap().into()),
+        ]);
+        (dir, env)
+    }
+
+    /// The refusal `git worktree add` gets when the repository's
+    /// configuration holds an inactive conditional include of `included`
+    /// whose file holds `text`.
+    fn conditional_refusal(name: &str, text: &str) -> String {
+        let (dir, env) = repository();
+        let included = dir.path().join(name);
+        std::fs::write(&included, text).unwrap();
+        git2::Repository::open(dir.path())
+            .unwrap()
+            .config()
+            .unwrap()
+            .set_str(
+                "includeIf.gitdir:/nowhere/.path",
+                included.to_str().unwrap(),
+            )
+            .unwrap();
+        let args = ["worktree", "add", "elsewhere"].map(String::from);
+        future_worktree_configuration(&args, dir.path(), &env, "worktree").unwrap_err()
+    }
+
+    /// TSK-416 review round 5: a conditional include that sets a callback
+    /// is refused by the include entry that names its file, never by the
+    /// file's path, which an include value can fill with a credential. The
+    /// credential-shaped name is synthetic.
+    #[test]
+    fn a_conditional_include_refusal_holds_no_include_path() {
+        let error = conditional_refusal("OPAQUECANARY.conf", "[core]\n\tfsmonitor = printf ran\n");
+        assert!(
+            error.contains(
+                "setting 1 of the file that include entry 1 of the repository configuration"
+            ),
+            "{error}"
+        );
+        assert!(
+            error.contains("`core.fsmonitor`, a command Git runs"),
+            "{error}"
+        );
+        assert!(!error.contains("OPAQUECANARY"), "{error}");
+    }
+
+    /// TSK-416 review round 6: a callback whose key has a URL-shaped
+    /// subsection is refused by its position and its key with the
+    /// subsection withheld. The credential is synthetic.
+    #[test]
+    fn a_conditional_include_refusal_holds_no_key_subsection() {
+        let error = conditional_refusal(
+            "filter.conf",
+            "[user]\n\tname = fixture\n[filter \"https://user:OPAQUECANARY@host.invalid/x\"]\n\tsmudge = cat\n",
+        );
+        assert!(
+            error.contains(
+                "setting 2 of the file that include entry 1 of the repository configuration"
+            ),
+            "{error}"
+        );
+        assert!(error.contains("`filter.<name>.smudge`"), "{error}");
+        assert!(!error.contains("OPAQUECANARY"), "{error}");
+        assert!(!error.contains("host.invalid"), "{error}");
+    }
+
+    /// TSK-416 review round 6: a command or transport setting that is not
+    /// UTF-8 is refused with its key's subsection withheld. The credentials
+    /// are synthetic.
+    #[test]
+    fn an_unreadable_setting_refusal_holds_no_key_subsection() {
+        let (dir, env) = repository();
+        let config = dir.path().join(".git").join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(
+            b"[credential \"https://user:OPAQUECANARY@host.invalid\"]\n\thelper = \xff\n\
+              [url \"https://user:OPAQUECANARY@host.invalid/\"]\n\tinsteadOf = \xff\n",
+        );
+        std::fs::write(&config, text).unwrap();
+        let read = crate::security::git_config::read(dir.path(), &[], &env).unwrap();
+        let errors = [
+            config_values(
+                &read,
+                "credential.https://user:OPAQUECANARY@host.invalid.helper",
+            )
+            .unwrap_err(),
+            transport(&["fetch".to_string()], &read).unwrap_err(),
+        ];
+        for (error, shown) in errors
+            .iter()
+            .zip(["credential.<name>.helper", "url.<name>.insteadof"])
+        {
+            assert!(error.contains(shown), "{error}");
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+            assert!(!error.contains("host.invalid"), "{error}");
+        }
+    }
+
+    /// TSK-416 review round 5: a Git configuration file an earlier command
+    /// writes is refused by that command's own target, and one the guard
+    /// cannot resolve by a fixed message; neither holds the file's path.
+    #[test]
+    fn a_configuration_rewrite_refusal_holds_no_configuration_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = dir.path().join("written");
+        let file = written.join("OPAQUECANARY.conf");
+        let error = configuration_unchanged(&file, std::slice::from_ref(&written)).unwrap_err();
+        assert!(error.contains("an earlier command writes"), "{error}");
+        assert!(!error.contains("OPAQUECANARY"), "{error}");
+        assert!(configuration_unchanged(&file, &[dir.path().join("other")]).is_ok());
+        let unresolved = written.join(format!(
+            "{}-OPAQUECANARY",
+            "x".repeat(crate::security::pattern::MAX_GLOB_PATH_BYTES)
+        ));
+        let error = configuration_unchanged(&unresolved, &[]).unwrap_err();
+        assert!(
+            error.contains("cannot resolve a Git configuration file"),
+            "{error}"
+        );
+        assert!(!error.contains("OPAQUECANARY"), "{error}");
     }
 }

@@ -152,6 +152,12 @@ pub(super) struct Outside<'a> {
     /// left out of the refs that make a landing unknown, and only while it
     /// is still at that tip. A commit another ref also reaches still counts.
     pub(super) replaced: Option<&'a Replaced>,
+    /// Exact tips the run judges as part of the range (TSK-433): proved
+    /// tips of the line the range head contains. A commit one of them holds
+    /// that descends from `head` carries `head`'s completion inside the
+    /// range, so it never counts as outside (TSK-416 AC-20). Only these
+    /// exact commits count, never a ref by its name.
+    pub(super) judged: &'a [Oid],
 }
 
 /// A remote-tracking ref a run replaces, by full name and exact tip.
@@ -182,9 +188,18 @@ impl Replaced {
         let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
         let mut matching: Vec<String> = Vec::new();
         for name in crate::git::name::remote_names(&repo).map_err(|error| error.to_string())? {
-            let name = std::str::from_utf8(name.bytes())
-                .map_err(|_| format!("remote {} is not UTF-8", name.display()))?;
-            let remote = repo.find_remote(name).map_err(|error| error.to_string())?;
+            // The name is configuration text, withheld from messages unless
+            // plain, as is libgit2's error, which can quote it (TSK-416
+            // review round 7).
+            let name = std::str::from_utf8(name.bytes()).map_err(|_| {
+                format!(
+                    "a remote name is not UTF-8; {}",
+                    crate::security::git::WITHHELD_REMOTE_STEP
+                )
+            })?;
+            let remote = repo.find_remote(name).map_err(|error| {
+                crate::security::git::without_remote_name(repo_root, name, &error.to_string())
+            })?;
             if remote.url_bytes() == url.as_bytes() {
                 matching.push(name.to_string());
             }
@@ -982,7 +997,7 @@ impl<'r> RecordStore<'r> {
                 return Landing::Unreadable(doubt);
             }
         }
-        match self.holder_outside(task, outside.head, outside.replaced) {
+        match self.holder_outside(task, outside.head, outside.judged, outside.replaced) {
             Ok(Some((holder, commit))) => Landing::Elsewhere { holder, commit },
             Ok(None) => Landing::Planned,
             Err(reason) => Landing::Unreadable(reason),
@@ -996,15 +1011,18 @@ impl<'r> RecordStore<'r> {
     /// record held elsewhere is no landing (issue #67), and a copy inherited
     /// from the range's own commits (a branch stacked on this one, or this
     /// branch's remote copy with unrelated commits on top) adds nothing.
+    /// A commit that carries `head`'s completion forward inside a `judged`
+    /// tip is the range's own ([`Self::carried_in_range`], TSK-416 AC-20).
     ///
     /// # Errors
     ///
-    /// Returns a message when the refs or their history cannot be read, so
-    /// the caller fails closed.
+    /// Returns a message when the refs or their history cannot be read, a
+    /// judged tip included, so the caller fails closed.
     fn holder_outside(
         &mut self,
         task: &Identity,
         head: Oid,
+        judged: &[Oid],
         replaced: Option<&Replaced>,
     ) -> Result<Option<(String, Oid)>, String> {
         let unreadable =
@@ -1064,7 +1082,7 @@ impl<'r> RecordStore<'r> {
             let adds = found.records.iter().any(|(blob, record)| {
                 !inherited.contains(blob) && super::acceptance::shows_completion(record)
             });
-            if !adds {
+            if !adds || self.carried_in_range(commit, head, judged)? {
                 continue;
             }
             let mut holder = commit.to_string();
@@ -1077,6 +1095,31 @@ impl<'r> RecordStore<'r> {
             return Ok(Some((holder, commit)));
         }
         Ok(None)
+    }
+
+    /// Whether `commit`, which adds a completing version outside `head`'s
+    /// history, is the range's own carrying of `head`'s completion (TSK-416
+    /// AC-20): it descends from `head`, and a `judged` tip, an exact proved
+    /// tip of the line the run head contains, holds it. A merge inside the
+    /// line that rewrites the record after the completion is such a commit.
+    /// A completion `head` does not reach (an earlier landing on the line,
+    /// TSK-220) and a commit only another ref holds are not, and nothing is
+    /// matched by a ref's name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the ancestry cannot be read, so the caller
+    /// fails closed.
+    fn carried_in_range(&self, commit: Oid, head: Oid, judged: &[Oid]) -> Result<bool, String> {
+        if judged.is_empty() || !super::acceptance::is_ancestor_or_same(self.repo, head, commit)? {
+            return Ok(false);
+        }
+        for tip in judged {
+            if super::acceptance::is_ancestor_or_same(self.repo, commit, *tip)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -1353,6 +1396,7 @@ mod tests {
                 at: None,
                 own: &[],
                 replaced: None,
+                judged: &[],
             },
         )
     }
@@ -1475,13 +1519,52 @@ mod tests {
         let blob = repo.blob(b"not a commit").unwrap();
         std::fs::write(repo.path().join("refs/heads/broken"), format!("{blob}\n")).unwrap();
         assert!(RecordStore::new(&repo)
-            .holder_outside(&task, head, None)
+            .holder_outside(&task, head, &[], None)
             .is_err());
         std::fs::remove_file(repo.path().join("refs/heads/broken")).unwrap();
         assert!(RecordStore::new(&repo)
-            .holder_outside(&task, head, None)
+            .holder_outside(&task, head, &[], None)
             .unwrap()
             .is_none());
+    }
+
+    /// TSK-416 AC-20: a completion a judged tip holds that descends from the
+    /// head is the range's own and no holder outside; the same commit with
+    /// no judged tip still is, and so is one that does not descend from the
+    /// head (TSK-220); a judged tip that cannot be read refuses.
+    #[test]
+    fn a_judged_tips_history_is_no_holder_and_an_unreadable_one_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[]);
+        let task = Identity::named("TSK-001", None, "TSK-001.md");
+        let tip = crate::git::add_commit(
+            &repo,
+            &[(
+                b"project-management/tasks/TSK-001.md".as_slice(),
+                b"---\nid: TSK-001\nstatus: complete\n---\n".as_slice(),
+            )],
+        );
+        let held = RecordStore::new(&repo)
+            .holder_outside(&task, base, &[], None)
+            .unwrap();
+        assert_eq!(held.map(|(_, commit)| commit), Some(tip));
+        assert!(RecordStore::new(&repo)
+            .holder_outside(&task, base, &[tip], None)
+            .unwrap()
+            .is_none());
+        let tree = repo.find_commit(base).unwrap().tree().unwrap();
+        let who = git2::Signature::now("T", "t@example.test").unwrap();
+        let unrelated = repo
+            .commit(None, &who, &who, "unrelated head", &tree, &[])
+            .unwrap();
+        let held = RecordStore::new(&repo)
+            .holder_outside(&task, unrelated, &[tip], None)
+            .unwrap();
+        assert_eq!(held.map(|(_, commit)| commit), Some(tip));
+        let missing = Oid::from_str(&"1".repeat(40)).unwrap();
+        assert!(RecordStore::new(&repo)
+            .holder_outside(&task, base, &[missing], None)
+            .is_err());
     }
 
     const UID: &str = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";
@@ -1645,6 +1728,7 @@ mod tests {
                 at: None,
                 own: &[],
                 replaced: None,
+                judged: &[],
             },
         )
     }
@@ -2159,6 +2243,7 @@ mod tests {
                 at: None,
                 own: &[],
                 replaced: None,
+                judged: &[],
             },
         )
     }

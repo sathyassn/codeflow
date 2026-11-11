@@ -2862,7 +2862,7 @@ fn config_setting_problem(label: &str, key: &str, value: &str, line: &Line<'_>) 
             .then(|| format!("{label} is a command that could run text this call produced")),
         ConfigKind::Unknown => Some(format!(
             "{label} sets `{}`, a setting the guard does not know, on a line that produces text",
-            key.to_lowercase()
+            git::shown_config_key(key)
         )),
     }
 }
@@ -2892,7 +2892,10 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
             let setting = globals.get(at).map(String::as_str).unwrap_or_default();
             at += 1;
             let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
-            config_setting_problem(&format!("`git -c {key}`"), key, value, line)
+            // Each label shows the key with its subsection withheld, which
+            // can hold a credential (TSK-416 review round 6).
+            let shown = git::shown_config_key(key);
+            config_setting_problem(&format!("`git -c {shown}`"), key, value, line)
         } else if arg == "--config-env" || arg.starts_with("--config-env=") {
             let setting = arg.strip_prefix("--config-env=").map_or_else(
                 || {
@@ -2902,12 +2905,16 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
                 str::to_string,
             );
             let (key, var) = setting.split_once('=').unwrap_or((setting.as_str(), ""));
+            let shown = git::shown_config_key(key);
             match line.assigned.get(var) {
-                Some(value) => {
-                    config_setting_problem(&format!("`git --config-env {key}`"), key, value, line)
-                }
+                Some(value) => config_setting_problem(
+                    &format!("`git --config-env {shown}`"),
+                    key,
+                    value,
+                    line,
+                ),
                 None => near_class.then(|| {
-                    format!("`git --config-env {key}` takes its value from `{var}`, which the guard cannot read")
+                    format!("`git --config-env {shown}` takes its value from `{var}`, which the guard cannot read")
                 }),
             }
         } else if let Some(value) = arg.strip_prefix("--exec-path=") {

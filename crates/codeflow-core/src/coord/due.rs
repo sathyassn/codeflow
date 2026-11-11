@@ -780,3 +780,34 @@ pub fn capped_next_check(item: &Item, requested: u64, now: u64) -> u64 {
         requested
     }
 }
+
+#[cfg(test)]
+mod stale_copy_tests {
+    /// TSK-416 AC-3: a commit landed on `origin/main` is on the target beside
+    /// a local `main` behind it; a local copy never decides the verdict.
+    #[test]
+    fn a_commit_on_the_fetched_line_is_on_target_beside_a_stale_local_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let stale = repo
+            .commit(None, &signature, &signature, "stale", &tree, &[])
+            .unwrap();
+        let parent = repo.find_commit(stale).unwrap();
+        let fetched = repo
+            .commit(None, &signature, &signature, "fetched", &tree, &[&parent])
+            .unwrap();
+        repo.reference("refs/heads/main", stale, true, "test")
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", fetched, true, "test")
+            .unwrap();
+        let (contained, target, tip) =
+            super::commit_on_target(dir.path(), &fetched.to_string()).unwrap();
+        assert!(contained);
+        assert_eq!(target, "origin/main");
+        assert_eq!(tip, fetched.to_string());
+    }
+}

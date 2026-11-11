@@ -646,15 +646,17 @@ catalog! {
     /// An id sync that could not run.
     IDS_SYNC_FAILED = Step::Codeflow("codeflow ids sync"),
         "rerun `codeflow ids sync` once the authority answers";
-    /// A release preflight finding short of a broken tree.
+    /// A release preflight finding short of a broken tree. `{branch_option}`
+    /// is the `--branch` option rendered for a shell from the raw pushed
+    /// name (TSK-416 review round 2).
     RELEASE_PREFLIGHT_NOTE = Step::Edit("changelog.d/"),
-        "resolve what the note names (most often the pending entry, a fragment under `changelog.d/`), then rerun `python3 {script} preflight --branch {branch}`";
+        "resolve what the note names (most often the pending entry, a fragment under `changelog.d/`), then rerun `python3 {script} preflight {branch_option}`";
     /// A release preflight that could not run.
     RELEASE_PREFLIGHT_UNRUN = Step::Edit("scripts/release.py"),
-        "make `python3 scripts/release.py preflight --branch {branch}` run (python3 on PATH, the script intact), then push again";
+        "make `python3 scripts/release.py preflight {branch_option}` run (python3 on PATH, the script intact), then push again";
     /// A push that breaks the release tree.
     RELEASE_PREFLIGHT = Step::Edit("changelog.d/"),
-        "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
+        "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight {branch_option}`";
 
     // Doctor.
 
@@ -756,7 +758,7 @@ catalog! {
         "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml (`codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch";
     /// A pinned release digest table the CI installers refuse.
     DOCTOR_CI_DIGEST = Step::Codeflow("codeflow update"),
-        "run `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
+        "run `codeflow update {pin_option}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
     /// A project state line the CI installers refuse to read.
     DOCTOR_CI_DIGEST_LINE = Step::Edit(".codeflow/project.toml"),
         "rewrite or remove line {line} of .codeflow/project.toml, which the CI installers refuse (a name outside printable ASCII, a control character, or a table written another way than `codeflow update --pin` writes it)";
@@ -789,8 +791,8 @@ catalog! {
     DOCTOR_TEXT_RULE_UNSEEN = Step::Edit(".codeflow/policy.json"),
         "nothing is needed for the strict rule; to relax it, the operator sets `security.text_guard` to `relaxed` in .codeflow/policy.json and lands it on every protected ref the hook reads, accepting that no sandbox is verified";
     /// Git include paths that need operator inspection.
-    DOCTOR_GIT_CONFIG_INCLUDES = Step::Git("git config"),
-        "The operator inspects git config --show-origin --includes --list and secures or removes its include paths; rerun codeflow doctor --check git-config-includes after repair.";
+    DOCTOR_GIT_CONFIG_INCLUDES = Step::Edit(".git/config"),
+        "The operator opens the configuration file each finding names (the repository's .git/config, the global or the system configuration) with an editor, finds the include or includeIf entry at the position it names, and secures or removes the file that entry names; printing any configuration value shows text that can hold a credential. Rerun codeflow doctor --check git-config-includes after repair.";
     /// Files the home's startup files source from outside the class.
     DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
         "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
@@ -830,8 +832,8 @@ catalog! {
     GUARD_ALIAS = Step::Git("git config"),
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
     /// Effective configuration cannot be reproduced for an outward action.
-    GUARD_GIT_CONFIGURATION = Step::Git("git config"),
-        "inspect the named input with git config --show-origin --includes --list, then run with readable configuration and without environment overrides; the operator repairs the named input";
+    GUARD_GIT_CONFIGURATION = Step::Edit(".git/config"),
+        "inspect the named input in the configuration file that holds it (the repository's .git/config, the global or the system configuration), with an editor, since printing the whole configuration shows remote URLs and url rewrite bases, which can hold a credential; then run with readable configuration and without environment overrides; the operator repairs the named input";
     /// A headless peer run.
     HEADLESS_PEER_RUN = Step::Codeflow("codeflow delegate"),
         "run the peer as an interactive seat instead: the other family's own CLI in a named Herdr tab, a Claude seat's turns tracked with `codeflow delegate` (cf-delegate; the rule is cf-model-orchestrator's resources/routing/transport.md). Text that only mentions a peer, such as a brief, a commit message or a pull request body, goes in a file written with the editor tool and passed by path (`git commit -F <file>`, `gh pr create --body-file <file>`, `gh api … -F body=@<file>`); a heredoc or inline string that names a peer with a headless flag is flagged by design whenever the line cannot be fully parsed, and the policy level decides whether it is refused; {enforcement} (policy security.headless_peer_runs)";
@@ -849,7 +851,7 @@ catalog! {
     /// A session guard that reached no decision before its own deadline,
     /// so it refused rather than let the harness time it out (TSK-1082).
     GUARD_DEADLINE = Step::Codeflow("codeflow doctor"),
-        "retry the command; if the guard stalls again, something it reads blocks, such as a FIFO or device a git configuration include names, or a hung filesystem: `codeflow doctor --check git-config-includes` names the include files, and the operator repairs or removes the one that blocks";
+        "retry the command; if the guard stalls again, something it reads blocks, such as a FIFO or device a git configuration include names, or a hung filesystem: `codeflow doctor --check git-config-includes` names each include entry, and the operator repairs or removes the file that blocks";
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";

@@ -188,26 +188,59 @@ impl QueryLimits {
 pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 
 /// `url` as it may be shown: the userinfo of a `scheme://` URL (a user, or
-/// `user:token`) becomes `***`, keeping the scheme, host and path. A URL may
-/// carry a credential, and every message and printed command can reach a
-/// log or a transcript. Only git itself receives the real URL. Other forms,
-/// such as a path or scp-style `host:path`, carry no userinfo and are
-/// returned unchanged.
+/// `user:token`) becomes `***`, and so does everything after its `?` or `#`
+/// (an `access_token=` query or a fragment), keeping the scheme, host and
+/// path. A URL may carry a credential in either place, and every message
+/// and printed command can reach a log or a transcript. Only git itself
+/// receives the real URL. Other forms, such as a path or scp-style
+/// `host:path`, are returned unchanged.
 #[must_use]
 pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
     let Some(start) = url.find("://").map(|at| at + 3) else {
         return std::borrow::Cow::Borrowed(url);
     };
-    let rest = &url[start..];
-    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
-    match authority.rfind('@') {
-        Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &rest[at..])),
+    match redacted_url(&url[start..]) {
+        Some(rest) => std::borrow::Cow::Owned(format!("{}{rest}", &url[..start])),
         None => std::borrow::Cow::Borrowed(url),
     }
 }
 
-/// Redact URL userinfo in a diagnostic that may quote several remote URLs.
-/// Keep the original text for protocol parsing; use this only for display.
+/// The part of a URL after its `://` with its userinfo and its query or
+/// fragment written `***`; `None` when it has neither.
+fn redacted_url(rest: &str) -> Option<String> {
+    let authority = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let userinfo = rest[..authority].rfind('@');
+    let query = rest[authority..].find(['?', '#']).map(|at| authority + at);
+    if userinfo.is_none() && query.is_none() {
+        return None;
+    }
+    let mut shown = String::with_capacity(rest.len());
+    let kept = userinfo.map_or(0, |at| {
+        shown.push_str("***");
+        at
+    });
+    match query {
+        // The `?` or `#` is ASCII, so `at + 1` is a boundary.
+        Some(at) => {
+            shown.push_str(&rest[kept..=at]);
+            shown.push_str("***");
+        }
+        None => shown.push_str(&rest[kept..]),
+    }
+    Some(shown)
+}
+
+/// Redact each URL's userinfo and query or fragment, as [`display_url`]
+/// does, in a diagnostic that may quote several remote URLs. A URL ends
+/// only at an ASCII separator (space, tab, CR or LF): a quote or bracket
+/// can stand inside a userinfo or a query (`user:opaque'canary@host`), so
+/// ending there would leave the rest of the credential shown (TSK-416
+/// review round 2). Any other character, Unicode whitespace included,
+/// stays in the URL and is redacted with it; a closing quote after a URL
+/// stays as path text, or goes with a redacted query. Keep the original
+/// text for protocol parsing; use this only for display. For a diagnostic
+/// of a git command run in a repository, [`relay_diagnostic`] also
+/// redacts the credentials its configuration holds.
 #[must_use]
 pub fn display_urls(text: &str) -> String {
     let mut shown = String::with_capacity(text.len());
@@ -218,17 +251,227 @@ pub fn display_urls(text: &str) -> String {
             continue;
         }
         let rest = &text[start..];
-        let end = rest
-            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '?' | '#'))
-            .unwrap_or(rest.len());
-        if let Some(userinfo) = rest[..end].rfind('@') {
+        let end = rest.find([' ', '\t', '\r', '\n']).unwrap_or(rest.len());
+        if let Some(redacted) = redacted_url(&rest[..end]) {
             shown.push_str(&text[copied..start]);
-            shown.push_str("***");
-            copied = start + userinfo;
+            shown.push_str(&redacted);
+            copied = start + end;
         }
     }
     shown.push_str(&text[copied..]);
     shown
+}
+
+/// The shortest credential part [`relay_diagnostic`] replaces wherever it
+/// stands. A shorter one can be part of ordinary words, so a diagnostic
+/// that still holds it is withheld instead.
+const SHORTEST_REPLACED: usize = 6;
+
+/// A diagnostic of a git command run in the repository at `root`, as it
+/// may be shown (TSK-416 review round 2). Git can print a credential
+/// outside any `scheme://` URL the text scan finds: a URL split over
+/// lines, a token quoted alone, or the URL an `insteadOf` rule rewrote a
+/// remote to. So the URLs this repository's configuration holds (each
+/// remote's `url` and `pushurl`, each `insteadOf` and `pushInsteadOf` base
+/// and each remote URL those rules rewrite) are redacted first, then every
+/// other URL ([`display_urls`]), then each credential part those URLs
+/// carry (userinfo, password, query or fragment, raw and percent-decoded)
+/// wherever it still stands. When the configuration cannot be read, or a
+/// credential part too short to replace safely is still in the text, the
+/// text is withheld and only its class is relayed.
+#[must_use]
+pub fn relay_diagnostic(root: &Path, text: &str) -> String {
+    let Some((urls, parts)) = configured_credentials(root) else {
+        return withheld(text);
+    };
+    let mut shown = text.to_string();
+    for url in &urls {
+        shown = shown.replace(url.as_str(), &display_url(url));
+    }
+    let mut shown = display_urls(&shown);
+    for part in &parts {
+        if !shown.contains(part.as_str()) {
+            continue;
+        }
+        if part.chars().count() < SHORTEST_REPLACED {
+            return withheld(text);
+        }
+        shown = shown.replace(part.as_str(), "***");
+    }
+    shown
+}
+
+/// The class of a diagnostic whose text is not shown.
+fn withheld(text: &str) -> String {
+    let class = if authentication_failed(text.as_bytes()) {
+        AUTHENTICATION_FAILED
+    } else {
+        let lower = text.to_ascii_lowercase();
+        if [
+            "could not resolve",
+            "unable to access",
+            "connection",
+            "timed out",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+        {
+            "the remote could not be reached"
+        } else if ["not found", "does not appear to be a git repository"]
+            .iter()
+            .any(|marker| lower.contains(marker))
+        {
+            "the remote repository was not found"
+        } else {
+            "git failed"
+        }
+    };
+    format!(
+        "{class}; git's message is not shown, since it may hold a credential that cannot be redacted safely"
+    )
+}
+
+/// Whether `text` holds a URL or credential part the configuration of the
+/// repository at `root` carries, as [`relay_diagnostic`] finds them, of any
+/// length. `None` when that inventory cannot be read, which a caller treats
+/// as flagged. Only a remote name is judged here, and a name is withheld
+/// rather than redacted, so a short part flags it too (TSK-416 review
+/// round 8): an ordinary name that holds it is withheld, which costs a less
+/// helpful message, never a leak. [`relay_diagnostic`] keeps its own
+/// [`SHORTEST_REPLACED`] rule.
+pub(crate) fn holds_configured_credential(root: &Path, text: &str) -> Option<bool> {
+    let (urls, parts) = configured_credentials(root)?;
+    Some(
+        urls.iter()
+            .chain(&parts)
+            .any(|item| text.contains(item.as_str())),
+    )
+}
+
+/// The URLs this repository's configuration names for its remotes, longest
+/// first, and the credential parts they carry, longest first; `None` when
+/// the configuration cannot be read or a relevant entry is not UTF-8.
+fn configured_credentials(root: &Path) -> Option<(Vec<String>, Vec<String>)> {
+    // Found as `git -C <root>` finds it, so the configuration read is the
+    // one the command ran with.
+    let repo = git2::Repository::discover(root).ok()?;
+    let config = repo.config().ok()?;
+    let mut urls = Vec::new();
+    let mut rewrites = Vec::new();
+    let mut entries = config.entries(None).ok()?;
+    while let Some(entry) = entries.next() {
+        let entry = entry.ok()?;
+        let name = String::from_utf8_lossy(entry.name_bytes()).into_owned();
+        let lower = name.to_ascii_lowercase();
+        let variable = lower.rsplit('.').next().unwrap_or_default();
+        let remote_url = lower.starts_with("remote.") && matches!(variable, "url" | "pushurl");
+        let rewrite =
+            lower.starts_with("url.") && matches!(variable, "insteadof" | "pushinsteadof");
+        if !remote_url && !rewrite {
+            continue;
+        }
+        let value = std::str::from_utf8(entry.value_bytes()).ok()?.to_string();
+        if remote_url {
+            urls.push(value);
+        } else {
+            let suffix = if lower.ends_with(".insteadof") {
+                ".insteadof".len()
+            } else {
+                ".pushinsteadof".len()
+            };
+            let base = std::str::from_utf8(entry.name_bytes())
+                .ok()?
+                .get("url.".len()..name.len() - suffix)?
+                .to_string();
+            rewrites.push((base, value));
+        }
+    }
+    let mut rewritten = Vec::new();
+    for (base, prefix) in &rewrites {
+        rewritten.push(base.clone());
+        for url in &urls {
+            if let Some(rest) = url.strip_prefix(prefix.as_str()) {
+                rewritten.push(format!("{base}{rest}"));
+            }
+        }
+    }
+    urls.extend(rewritten);
+    let mut parts = Vec::new();
+    for url in &urls {
+        credential_parts(url, &mut parts);
+    }
+    for list in [&mut urls, &mut parts] {
+        list.retain(|item| !item.is_empty());
+        list.sort_by_key(|item| std::cmp::Reverse(item.len()));
+        list.dedup();
+    }
+    Some((urls, parts))
+}
+
+/// The credential parts of a `scheme://` URL, raw and percent-decoded: the
+/// password, the whole userinfo when it holds a password or the scheme is
+/// HTTP, the user name of an HTTP URL on its own, password or not (a
+/// token is often given as the user there, and a server can quote the user
+/// alone, as in `remote: <user> rejected`; TSK-416 review round 3), and
+/// the query or fragment with each of its values.
+fn credential_parts(url: &str, parts: &mut Vec<String>) {
+    let Some(start) = url.find("://").map(|at| at + 3) else {
+        return;
+    };
+    let scheme = url[..start - 3].to_ascii_lowercase();
+    let http = scheme.starts_with("http");
+    let rest = &url[start..];
+    let authority = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let mut found = Vec::new();
+    if let Some(at) = rest[..authority].rfind('@') {
+        let userinfo = &rest[..at];
+        match userinfo.split_once(':') {
+            Some((user, password)) => {
+                found.push(userinfo);
+                found.push(password);
+                if http {
+                    found.push(user);
+                }
+            }
+            None if http => found.push(userinfo),
+            None => {}
+        }
+    }
+    if let Some(at) = rest[authority..].find(['?', '#']) {
+        let query = &rest[authority + at + 1..];
+        found.push(query);
+        for pair in query.split(['&', ';', '#']) {
+            found.push(pair.split_once('=').map_or(pair, |(_, value)| value));
+        }
+    }
+    for part in found {
+        parts.push(part.to_string());
+        parts.push(percent_decoded(part));
+    }
+}
+
+/// `text` with each `%XX` escape decoded, lossily as UTF-8.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|pair| std::str::from_utf8(pair).ok())
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
+        match (bytes[at], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                at += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The reason [`ls_remote`] and [`fetch_objects`] give when the remote
@@ -717,6 +960,195 @@ mod tests {
         let text = "fatal: 'https://u:FAKE@one.invalid/x'\nTo ssh://FAKE@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path";
         assert_eq!(display_urls(text), "fatal: 'https://***@one.invalid/x'\nTo ssh://***@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path");
         assert_eq!(display_urls("plain diagnostic"), "plain diagnostic");
+        // TSK-416 review: a query or fragment token is hidden too, up to
+        // the space that ends the URL; a closing quote goes with it.
+        let text = "fatal: 'https://h.invalid/x.git?access_token=FAKE_TOKEN_3b9' and https://u:FAKE@h.invalid/y#FAKE_TOKEN_3b9 done";
+        let shown = display_urls(text);
+        assert_eq!(
+            shown,
+            "fatal: 'https://h.invalid/x.git?*** and https://***@h.invalid/y#*** done"
+        );
+        assert!(!shown.contains("FAKE"), "{shown}");
+        // Round 2: a quote inside the userinfo or the query does not end
+        // the URL, so no part of the credential after it is shown.
+        for (text, shown) in [
+            (
+                "fatal: unable to access 'HTTPS://user:opaque'canary@h.invalid/repo/': denied",
+                "fatal: unable to access 'HTTPS://***@h.invalid/repo/': denied",
+            ),
+            (
+                "from https://h.invalid/x?token=FAKE'canary\"x`y<z>w end",
+                "from https://h.invalid/x?*** end",
+            ),
+            (
+                "<https://u:FAKE>canary@h.invalid/x> end",
+                "<https://***@h.invalid/x> end",
+            ),
+        ] {
+            let redacted = display_urls(text);
+            assert_eq!(redacted, shown, "{text}");
+            for secret in ["opaque", "canary", "FAKE"] {
+                assert!(!redacted.contains(secret), "{secret}: {redacted}");
+            }
+        }
+        // A URL ends at each ASCII separator, and the text after it is
+        // kept. Unicode whitespace is not a separator (the whitespace
+        // contract scan): it stays in the URL, so a token after it is
+        // hidden with the rest of the query.
+        for separator in [' ', '\t', '\r', '\n'] {
+            let text = format!("from https://h.invalid/x?FAKE_TOKEN{separator}kept");
+            assert_eq!(
+                display_urls(&text),
+                format!("from https://h.invalid/x?***{separator}kept"),
+                "{separator:?}"
+            );
+        }
+        for space in ['\u{a0}', '\u{2003}', '\u{3000}'] {
+            let text = format!("from https://h.invalid/x?a{space}FAKE_TOKEN end");
+            let shown = display_urls(&text);
+            assert_eq!(shown, "from https://h.invalid/x?*** end", "{space:?}");
+            assert!(!shown.contains("FAKE"), "{space:?}: {shown}");
+        }
+    }
+
+    /// TSK-416 review round 2, finding 2: a diagnostic of a git command is
+    /// relayed with every credential this repository's configuration holds
+    /// redacted, wherever it stands: inside a URL with a quote in its
+    /// userinfo or query, split from its URL, rewritten by `insteadOf`, or
+    /// percent-encoded in the configuration. A credential too short to
+    /// replace safely, or a configuration that cannot be read, withholds
+    /// the text and relays its class. All credentials here are synthetic.
+    #[test]
+    fn a_relayed_diagnostic_redacts_each_configured_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        for (key, value) in [
+            (
+                "remote.origin.url",
+                "https://USERCANARY:opaque'canary@h.invalid/r.git?access_token=QUERY'SECRET",
+            ),
+            ("remote.mirror.url", "https://h.invalid/m.git"),
+            (
+                "url.https://REWRITEUSER:INSTEADSECRET@rewrite.invalid/.insteadOf",
+                "https://h.invalid/",
+            ),
+            (
+                "remote.encoded.url",
+                "https://ENCODEDUSER:pa%40ssword@h3.invalid/e.git",
+            ),
+        ] {
+            config.set_str(key, value).unwrap();
+        }
+        for text in [
+            // The userinfo with a quote, the URL split over two lines, and
+            // the password quoted alone.
+            "fatal: Authentication failed for 'https://USERCANARY:opaque'canary\n@h.invalid/r.git'\nremote: password opaque'canary rejected",
+            // A quote in the query, and its value quoted alone.
+            "fatal: 'https://h.invalid/r.git?access_token=QUERY'SECRET': denied\nremote: QUERY'SECRET expired",
+            // The URL an `insteadOf` rule rewrote the mirror to, and its
+            // token alone.
+            "fatal: unable to access 'https://REWRITEUSER:INSTEADSECRET@rewrite.invalid/m.git/'\nremote: INSTEADSECRET",
+            // The decoded form of a percent-encoded password.
+            "remote: pa@ssword is not valid",
+        ] {
+            let shown = relay_diagnostic(dir.path(), text);
+            for secret in [
+                "opaque",
+                "canary",
+                "QUERY",
+                "SECRET",
+                "INSTEADSECRET",
+                "pa@ssword",
+                "USERCANARY",
+                "REWRITEUSER",
+                "ENCODEDUSER",
+            ] {
+                assert!(!shown.contains(secret), "{secret}: {shown}");
+            }
+            assert!(!shown.contains("not shown"), "redacted, not withheld: {shown}");
+        }
+        // A short password could be part of ordinary words, so text that
+        // still holds it is withheld; its class is relayed.
+        config
+            .set_str(
+                "remote.short.url",
+                "https://SHORTPWUSER:ab12@h4.invalid/s.git",
+            )
+            .unwrap();
+        let shown = relay_diagnostic(
+            dir.path(),
+            "fatal: Authentication failed\nremote: ab12 rejected",
+        );
+        assert!(!shown.contains("ab12"), "{shown}");
+        assert!(shown.starts_with(AUTHENTICATION_FAILED), "{shown}");
+        assert!(shown.contains("not shown"), "{shown}");
+        // No readable configuration: the text is withheld.
+        let none = tempfile::tempdir().unwrap();
+        let shown = relay_diagnostic(none.path(), "fatal: repository 'x' not found\nTOKEN");
+        assert!(!shown.contains("TOKEN"), "{shown}");
+        assert!(
+            shown.starts_with("the remote repository was not found"),
+            "{shown}"
+        );
+    }
+
+    /// TSK-416 review round 3, finding 2: the user name of an HTTP URL is
+    /// a credential part on its own, with a password or without, raw and
+    /// percent-decoded, so a server line that quotes the user alone is
+    /// redacted; a user name too short to replace safely withholds the
+    /// text. All credentials here are synthetic.
+    #[test]
+    fn a_relayed_diagnostic_redacts_an_http_user_name_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        for (key, value) in [
+            (
+                "remote.origin.url",
+                "https://OPAQUECANARY:z9@host.invalid/repo",
+            ),
+            ("remote.token.url", "https://TOKENUSERCANARY@t.invalid/repo"),
+            (
+                "remote.encoded.url",
+                "https://OPAQUE%2EENCODED:pw-123456@e.invalid/repo",
+            ),
+            (
+                "url.https://REWRITTENUSER:pw-654321@r.invalid/.insteadOf",
+                "https://h.invalid/",
+            ),
+        ] {
+            config.set_str(key, value).unwrap();
+        }
+        for (text, secret) in [
+            ("remote: OPAQUECANARY rejected", "OPAQUECANARY"),
+            (
+                "remote: user TOKENUSERCANARY is suspended",
+                "TOKENUSERCANARY",
+            ),
+            ("remote: OPAQUE.ENCODED rejected", "OPAQUE.ENCODED"),
+            ("remote: OPAQUE%2EENCODED rejected", "OPAQUE%2EENCODED"),
+            ("remote: REWRITTENUSER has no access", "REWRITTENUSER"),
+        ] {
+            let shown = relay_diagnostic(dir.path(), text);
+            assert!(!shown.contains(secret), "{shown}");
+            assert!(shown.contains("***"), "redacted, not withheld: {shown}");
+        }
+        // A short user name could be part of ordinary words, so text that
+        // still holds it is withheld, with its class only.
+        config
+            .set_str(
+                "remote.short.url",
+                "https://bob:long-password-1@s.invalid/repo",
+            )
+            .unwrap();
+        let shown = relay_diagnostic(
+            dir.path(),
+            "fatal: Authentication failed\nremote: bob rejected",
+        );
+        assert!(!shown.contains("bob"), "{shown}");
+        assert!(shown.starts_with(AUTHENTICATION_FAILED), "{shown}");
+        assert!(shown.contains("not shown"), "{shown}");
     }
 
     #[test]
@@ -816,8 +1248,19 @@ mod tests {
             ("https://FAKE_TOKEN_3b9@h.invalid", "https://***@h.invalid"),
             (
                 "ssh://git@h.invalid:22/x.git?q=a@b",
-                "ssh://***@h.invalid:22/x.git?q=a@b",
+                "ssh://***@h.invalid:22/x.git?***",
             ),
+            // TSK-416 review: a token in the query or fragment is a
+            // credential too.
+            (
+                "https://h.invalid/x.git?access_token=FAKE_TOKEN_3b9",
+                "https://h.invalid/x.git?***",
+            ),
+            (
+                "https://u:FAKE_TOKEN_3b9@h.invalid/x.git#FAKE_TOKEN_3b9",
+                "https://***@h.invalid/x.git#***",
+            ),
+            ("https://h.invalid?FAKE_TOKEN_3b9", "https://h.invalid?***"),
             ("https://a@b:FAKE@h.invalid/x", "https://***@h.invalid/x"),
             ("https://h.invalid/u@x.git", "https://h.invalid/u@x.git"),
             ("git@h.invalid:x.git", "git@h.invalid:x.git"),

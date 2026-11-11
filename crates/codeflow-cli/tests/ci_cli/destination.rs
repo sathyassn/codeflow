@@ -392,8 +392,10 @@ fn a_credential_in_the_destination_url_is_never_printed_in_a_judged_push() {
     let text = combined(&out);
     println!("refused push:\n{text}");
     assert!(!out.status.success(), "{text}");
+    // The rerun line renders each argument as one shell word (TSK-416
+    // review round 2), so the redacted URL, which holds `*`, is quoted.
     assert!(
-        text.contains("--destination https://***@h.invalid/x.git"),
+        text.contains("--destination 'https://***@h.invalid/x.git'"),
         "{text}"
     );
     assert_eq!(text.matches(TOKEN).count(), 0, "{text}");

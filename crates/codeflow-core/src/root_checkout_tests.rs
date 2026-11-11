@@ -2286,3 +2286,266 @@ fn r22_prepare_branch_uses_remote_when_default_is_absent() {
         BranchStep::Created { .. }
     ));
 }
+
+/// The words of `step` from `start` up to `end`, as the arguments after
+/// `git`.
+fn printed_git<'a>(step: &'a str, start: &str, end: &str) -> Vec<&'a str> {
+    let from = step
+        .find(start)
+        .unwrap_or_else(|| panic!("{start}: {step}"));
+    let rest = &step[from..];
+    let to = rest.find(end).unwrap_or_else(|| panic!("{end}: {step}"));
+    rest[..to]
+        .split_whitespace()
+        .skip_while(|word| *word != "git")
+        .skip(1)
+        .collect()
+}
+
+/// TSK-416 review: a root branch whose name starts with `-` follows `--`
+/// in the printed `git switch`, where git reads it as the branch. A
+/// current branch named so is renamed first (`git branch -m -- …`), since
+/// `git worktree add` takes no such branch: after `--` it adds a detached
+/// worktree, shown here. Git runs each printed step as written, and the
+/// new worktree is on the branch it continues. An ordinary name prints as
+/// it did.
+#[test]
+fn a_dashed_root_or_branch_is_never_printed_where_git_reads_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("repo"));
+    git(&root, &["update-ref", "refs/heads/-x", "HEAD"]);
+    git(&root, &["update-ref", "refs/heads/-y", "HEAD"]);
+    git(&root, &["symbolic-ref", "HEAD", "refs/heads/-y"]);
+    let repo = git2::Repository::open(&root).unwrap();
+    let dashed = RootBranch {
+        name: GitName::from_text("-x"),
+        source: RootBranchSource::OriginHead,
+    };
+    let step = head_finding(&repo, &GitPolicy::default(), &dashed, "repo")
+        .expect("the root is off its root branch")
+        .next_step;
+    assert!(
+        step.starts_with(
+            "run git switch -- -x at the root, then rename the branch with git branch -m -- -y \
+             <new-name>, since git worktree add does not take a branch whose name starts with -, \
+             and run git worktree add .worktrees/<slug> <new-name> to continue it in a worktree"
+        ),
+        "{step}"
+    );
+    let commit = CommitFinding {
+        repo: "repo".to_string(),
+        head: Head::Branch(GitName::from_text("-y")),
+        root_branch: dashed,
+    }
+    .next_step()
+    .to_string();
+    assert!(commit.contains("`git switch -- -x`"), "{commit}");
+    let plain = RootBranch {
+        name: GitName::from_text("main"),
+        source: RootBranchSource::Policy,
+    };
+    let step_plain = head_finding(&repo, &GitPolicy::default(), &plain, "repo")
+        .unwrap()
+        .next_step;
+    assert!(
+        step_plain.starts_with("run git switch main at the root"),
+        "{step_plain}"
+    );
+    // Git runs each printed step as written.
+    git(&root, &printed_git(&step, "git switch ", " at the root"));
+    assert_eq!(
+        git(&root, &["rev-parse", "--symbolic-full-name", "HEAD"]),
+        "refs/heads/-x",
+        "the switch"
+    );
+    let fill = |words: Vec<&str>| {
+        words
+            .into_iter()
+            .map(|word| word.replace("<new-name>", "renamed").replace("<slug>", "s"))
+            .collect::<Vec<_>>()
+    };
+    let rename = fill(printed_git(&step, "git branch -m ", ", since"));
+    git(
+        &root,
+        &rename.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let added = fill(printed_git(&step, "run git worktree add ", " to continue"));
+    git(&root, &added.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(
+        git(
+            &root.join(".worktrees/s"),
+            &["rev-parse", "--symbolic-full-name", "HEAD"]
+        ),
+        "refs/heads/renamed",
+        "the worktree"
+    );
+    // Why the rename: after `--`, `git worktree add` detaches.
+    git(&root, &["update-ref", "refs/heads/-z", "HEAD"]);
+    git(&root, &["worktree", "add", "--", ".worktrees/z", "-z"]);
+    assert_eq!(
+        git(
+            &root.join(".worktrees/z"),
+            &["rev-parse", "--symbolic-full-name", "HEAD"]
+        ),
+        "HEAD",
+        "git worktree add -- <path> -z"
+    );
+}
+
+/// TSK-416 review round 2, finding 3: a root or current branch whose name
+/// holds a character a terminal does not show as itself (U+200B) gets no
+/// printed command: its escaped form, pasted back, would name another
+/// branch. The step says to use a git client, and the catalogued remedy
+/// keeps its placeholder.
+#[test]
+fn a_hidden_character_in_a_branch_name_prints_no_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("repo"));
+    git(&root, &["update-ref", "refs/heads/fe\u{200b}at", "HEAD"]);
+    git(&root, &["symbolic-ref", "HEAD", "refs/heads/fe\u{200b}at"]);
+    let repo = git2::Repository::open(&root).unwrap();
+    let hidden_root = RootBranch {
+        name: GitName::from_text("ma\u{200b}in"),
+        source: RootBranchSource::OriginHead,
+    };
+    let finding = head_finding(&repo, &GitPolicy::default(), &hidden_root, "repo")
+        .expect("the root is off its root branch");
+    let step = finding.next_step;
+    assert!(!step.contains('\u{200b}'), "{step}");
+    assert!(!step.contains("200b"), "{step}");
+    assert!(!step.contains("git switch "), "{step}");
+    assert!(
+        step.starts_with("switch the root to its root branch with a git client"),
+        "{step}"
+    );
+    assert!(
+        step.contains(", then rename the branch with a git client"),
+        "{step}"
+    );
+    // The message names both branches escaped.
+    assert!(
+        finding.message.contains(r"ma\u{200b}in"),
+        "{}",
+        finding.message
+    );
+    let commit = CommitFinding {
+        repo: "repo".to_string(),
+        head: Head::Branch(GitName::from_text("fe\u{200b}at")),
+        root_branch: hidden_root,
+    }
+    .next_step()
+    .to_string();
+    assert!(commit.contains("`git switch <root-branch>`"), "{commit}");
+    assert!(!commit.contains("200b"), "{commit}");
+}
+
+/// TSK-416 review round 2, finding 1: a linked worktree outside every
+/// location, at a path holding a space, `$(…)` and a backslash, gets a
+/// `git worktree move` step that a shell reads as that exact path, and
+/// pasting it runs nothing else.
+#[test]
+#[cfg(unix)]
+fn a_worktree_move_step_keeps_a_hostile_path_as_one_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let marker = dir.path().join("ran");
+    let sibling = dir
+        .path()
+        .join(format!("r x $(touch {}) a\\b", marker.display()));
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            sibling.to_str().unwrap(),
+            "-b",
+            "feat/s",
+        ],
+    );
+    let repo = git2::Repository::open(&root).unwrap();
+    let env = env_of(&[("HOME", "/nonexistent-home")]);
+    let sibling = crate::portable_path::canonicalize(&sibling).unwrap();
+    let step = worktree_findings(&repo, &GitPolicy::default(), &env)
+        .into_iter()
+        .find(|finding| finding.message.contains("is outside every"))
+        .expect("the sibling is reported")
+        .next_step;
+    let command = step
+        .strip_prefix("move it with ")
+        .and_then(|rest| rest.split(", or add its folder").next())
+        .unwrap_or_else(|| panic!("{step}"))
+        .replace("<slug>", "s");
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{command}");
+    let printed = String::from_utf8(out.stdout).unwrap();
+    let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+    assert_eq!(
+        arguments,
+        [
+            "worktree",
+            "move",
+            sibling.to_str().unwrap(),
+            ".worktrees/s"
+        ],
+        "{step}"
+    );
+    assert!(!marker.exists(), "{step}");
+}
+
+/// TSK-416 review round 2, finding 1: the workspace report's checkpoint
+/// hint renders the configured root branch from its raw name, so the
+/// printed `codeflow integrate` line hands the branch over as one argument
+/// and a name starting with `-` follows `--`, after `--into main`.
+#[test]
+#[cfg(unix)]
+fn the_checkpoint_hint_keeps_a_hostile_root_branch_as_one_argument() {
+    for (branch, expected) in [
+        (
+            "integration/workspace",
+            vec!["integrate", "integration/workspace", "--into", "main"],
+        ),
+        ("w$(id)", vec!["integrate", "w$(id)", "--into", "main"]),
+        ("-x", vec!["integrate", "--into", "main", "--", "-x"]),
+    ] {
+        let report = WorkspaceReport {
+            branch: BranchStep::AlreadyOn(branch.into()),
+            policy_changed: false,
+            ignored: Vec::new(),
+            already_ignored: Vec::new(),
+        }
+        .to_string();
+        let command = report
+            .split("forward with ")
+            .nth(1)
+            .and_then(|rest| rest.split("; agents never do").next())
+            .unwrap_or_else(|| panic!("{report}"));
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "codeflow() {{ printf '%s\\0' \"$@\"; }}; {command}"
+            ))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, expected, "{report}");
+    }
+    let hidden = WorkspaceReport {
+        branch: BranchStep::AlreadyOn("w\u{200b}x".into()),
+        policy_changed: false,
+        ignored: Vec::new(),
+        already_ignored: Vec::new(),
+    }
+    .to_string();
+    assert!(!hidden.contains("codeflow integrate w"), "{hidden}");
+    assert!(
+        hidden.contains("no command is printed to paste"),
+        "{hidden}"
+    );
+}

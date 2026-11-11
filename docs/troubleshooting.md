@@ -39,10 +39,14 @@ The twenty-six checks fall into six groups by the surface each one reads.
   `project.toml`, whether it is writable, and which git ref the agent guards
   read policy from. `secret-engine` reports the gitleaks binary the
   commit-time secret scan runs when the policy chooses it.
-  `git-config-includes` names included Git configuration files that may be
-  writable and reports a configuration it cannot verify. The operator
-  inspects `git config --show-origin --includes --list` and repairs or
-  secures its include paths.
+  `git-config-includes` reports included Git configuration files that may
+  be writable and a configuration it cannot verify. It names each include
+  by where its entry stands, such as `include entry 2 of the repository
+  configuration (.git/config)`, and never prints an include value or the
+  path it resolves to, since that text can hold a credential. The operator
+  opens the named configuration file with an editor, finds the `include` or
+  `includeIf` entry at that position, and secures or removes the file it
+  names; printing configuration values with `git config` would show them.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.
@@ -315,6 +319,67 @@ uses the ordinary task status route. A push has no `Task:` line yet, so
 pre-push refuses only a new cancelled record without its reason or scope,
 or a path a planning amendment cannot carry; the pull request check judges
 the rest.
+
+## A local branch and its fetched line disagree
+
+A check that names a target or a predecessor by a bare branch name reads
+the fetched copy of that branch: the same branch on the remote the local
+branch tracks, else `origin/<name>`. An upstream naming another branch, as
+git sets when a line is cut from `origin/main`, is never read for the line.
+
+- A local branch behind the fetched line never decides, so no one has to
+  move it.
+- A local branch ahead of the fetched line is honoured by `work next`, `work
+  start` and a reopen's completion, and the output names it in full, for
+  example `refs/heads/main@1a2b3c4d5`. `work claim` refuses it, as below.
+- Where nothing of that name is fetched, the local branch decides, and the
+  output names it in full.
+
+- `work claim cuts a task branch from the fetched tip of '<line>', and the
+  local branch refs/heads/<line> at <sha> differs from
+  refs/remotes/origin/<line> at <sha>` means the local branch holds commits
+  the fetched line lacks. A claim is pushed for others to build on, so it is
+  never cut from unpushed commits. Land them through a pull request first,
+  or claim from a checkout whose local branch matches the fetched line.
+- `local branch '<name>' and '<ref>' have diverged`, from `work start` or
+  `task status complete`, and `the local branch ... and ... have diverged`,
+  from a reopen's completion, name both tips by commit. Judge against the
+  fetched line: name it with `--into <ref>` where the command takes it, or
+  push the task branch to its remote and work from a fresh clone of the
+  line's remote, made from outside this clone with that remote's URL (`git
+  clone <url> <path>`); its local branch is the fetched line. The message
+  names the line's remote, never its URL, which can hold a credential. When
+  the task branch was pushed to another remote, as with a fork, add that
+  remote in the fresh clone under a name of its own and fetch it (`git
+  remote add <name> <url>`, then `git fetch <name>`). Then switch to the
+  task branch at the head pushed from here (`git switch -c <task-branch>
+  <name>/<task-branch>`, or `git switch <task-branch>` when the clone's own
+  remote holds it) and run the command again. A worktree of this clone
+  shares its branches, so it refuses the same way. A plain fetch of the
+  line's remote refreshes the fetched ref without moving the local branch.
+- `cannot read the ancestry of refs/heads/<line> at <sha> against <ref> at
+  <sha>`, from a reopen's completion, names both commits. The object store
+  is missing part of the local branch's history, so work from a fresh clone
+  as above.
+- `predecessor branch <branch> has a copy at <sha> that is ahead of the pin`
+  or `has diverged from the pin` means a copy of the predecessor's branch
+  moved past the reviewed head. Rebase on its new reviewed head and pin that,
+  or delete or reset the stray copy. A copy behind the pin is accepted.
+- `refs/remotes/<remote>/<line> points at <sha>, which is not a commit this
+  clone can read` means the fetched ref names an object that is missing or
+  is not a commit, so the line cannot be judged. When the object is here
+  and is not a commit, a plain `git fetch <remote>` rewrites the ref. When
+  the object is missing, every fetch stops on it, so work from a fresh clone
+  made from outside this clone (`git clone <url> <path>`; the message names
+  the remote, never its url, which can hold a credential). Repairing this
+  clone deletes the ref so a fetch can recreate it (`git branch -d -r
+  <remote>/<line>`, then `git fetch <remote>`), which the guard leaves to
+  the operator.
+- `` `origin/<line>` is ambiguous here ``, from `task status complete
+  --base`, means a local ref spelled like the fetched one exists, such as a
+  local branch named `origin/<line>`, and git would read it first. Name the
+  fetched line in full (`--base refs/remotes/origin/<line>`), or rename the
+  local branch.
 
 ## A blocked task refuses its own pull request
 

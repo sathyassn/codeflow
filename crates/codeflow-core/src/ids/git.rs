@@ -93,7 +93,7 @@ impl Git {
     /// Returns an error naming the command and git's stderr.
     pub fn run(&self, args: &[&str]) -> Result<String, IdsError> {
         let output = self.output(args)?;
-        checked(args, &output)
+        checked(&self.root, args, &output)
     }
 
     /// Run git and return stdout as exact bytes, failing on a nonzero exit.
@@ -105,7 +105,7 @@ impl Git {
     /// Returns an error naming the command and git's stderr.
     pub fn run_bytes(&self, args: &[&str]) -> Result<Vec<u8>, IdsError> {
         let output = self.output(args)?;
-        checked_bytes(args, output)
+        checked_bytes(&self.root, args, output)
     }
 
     /// Run git with extra environment, failing on a nonzero exit.
@@ -115,7 +115,7 @@ impl Git {
     /// Returns an error naming the command and git's stderr.
     pub fn run_env(&self, args: &[&str], env: &[(&str, &Path)]) -> Result<String, IdsError> {
         let output = self.output_env(args, env)?;
-        checked(args, &output)
+        checked(&self.root, args, &output)
     }
 
     /// Run git feeding `input` on stdin, failing on a nonzero exit.
@@ -132,7 +132,7 @@ impl Git {
                     crate::git::remote_query::display_urls(&args.join(" "))
                 ))
             })?;
-        checked(args, &output)
+        checked(&self.root, args, &output)
     }
 
     /// The full object ID of `rev`, or absence proven by quiet verification.
@@ -146,7 +146,7 @@ impl Git {
         if output.status.code() == Some(1) {
             return Ok(None);
         }
-        let text = checked(&args, &output)?;
+        let text = checked(&self.root, &args, &output)?;
         let sha = text.strip_suffix('\n').unwrap_or(&text);
         if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(IdsError::Git(
@@ -183,7 +183,7 @@ impl Git {
         if output.status.code() == Some(1) {
             return Ok(false);
         }
-        checked(&args, &output)?;
+        checked(&self.root, &args, &output)?;
         Ok(true)
     }
 
@@ -224,7 +224,7 @@ impl Git {
         if output.status.code() == Some(1) {
             return Ok(false);
         }
-        checked(&args, &output)?;
+        checked(&self.root, &args, &output)?;
         Ok(true)
     }
 
@@ -238,7 +238,7 @@ impl Git {
         if output.status.code() == Some(1) {
             return Ok("unknown".to_string());
         }
-        let value = checked(&args, &output)?;
+        let value = checked(&self.root, &args, &output)?;
         // Only Git's own newline is framing; retain the existing empty-value policy.
         let value = value.strip_suffix('\n').unwrap_or(&value);
         Ok(if value.is_empty() {
@@ -457,7 +457,7 @@ impl Drop for TempIndex {
 /// that is not valid UTF-8 is an error, never a substituted spelling (OS
 /// text rule, issue 79). Answers that hold names come through
 /// [`Git::run_bytes`].
-fn checked(args: &[&str], output: &Output) -> Result<String, IdsError> {
+fn checked(root: &Path, args: &[&str], output: &Output) -> Result<String, IdsError> {
     if output.status.success() {
         String::from_utf8(output.stdout.clone()).map_err(|_| {
             IdsError::Git(format!(
@@ -469,19 +469,25 @@ fn checked(args: &[&str], output: &Output) -> Result<String, IdsError> {
         Err(IdsError::Git(format!(
             "git {}: {}",
             crate::git::remote_query::display_urls(&args.join(" ")),
-            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
+            crate::git::remote_query::relay_diagnostic(
+                root,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
         )))
     }
 }
 
-fn checked_bytes(args: &[&str], output: Output) -> Result<Vec<u8>, IdsError> {
+fn checked_bytes(root: &Path, args: &[&str], output: Output) -> Result<Vec<u8>, IdsError> {
     if output.status.success() {
         Ok(output.stdout)
     } else {
         Err(IdsError::Git(format!(
             "git {}: {}",
             crate::git::remote_query::display_urls(&args.join(" ")),
-            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
+            crate::git::remote_query::relay_diagnostic(
+                root,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
         )))
     }
 }
@@ -542,15 +548,20 @@ mod tests {
     #[test]
     fn failed_git_commands_redact_url_arguments_and_stderr() {
         use std::os::unix::process::ExitStatusExt as _;
-        let url = "https://u:FAKE_REGISTRY_TOKEN@host.invalid/repo";
+        // The user name is a credential part of an HTTP URL too (TSK-416
+        // review round 3), so it is long enough to replace, not withhold.
+        let url = "https://FAKE_REGISTRY_USER:FAKE_REGISTRY_TOKEN@host.invalid/repo";
         let output = Output {
             status: std::process::ExitStatus::from_raw(128 << 8),
             stdout: Vec::new(),
             stderr: format!("fatal: cannot fetch '{url}'").into_bytes(),
         };
+        let root = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(root.path()).unwrap();
+        repo.remote("origin", url).unwrap();
         for error in [
-            checked(&["fetch", url], &output).unwrap_err(),
-            checked_bytes(&["fetch", url], output).unwrap_err(),
+            checked(root.path(), &["fetch", url], &output).unwrap_err(),
+            checked_bytes(root.path(), &["fetch", url], output).unwrap_err(),
         ] {
             let text = error.to_string();
             assert!(!text.contains("FAKE_REGISTRY_TOKEN"));
