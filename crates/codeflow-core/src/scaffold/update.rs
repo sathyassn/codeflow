@@ -1460,11 +1460,24 @@ fn journal_override(
     {
         return Ok(None);
     }
-    let record = unchanged_record(generation + 1);
+    let record = unchanged_record(next_generation(dest, generation)?);
     let observed = Journal::observe(root, dest, installed_sha)?;
     Journal::new(observed, written, pristine, record.clone(), &pristine_sha).write(root, dest)?;
     journals.push(dest.to_string());
     Ok(Some(record))
+}
+
+/// The generation after `generation` for the record of `dest`. The record
+/// was refused before any write when it has none
+/// ([`overrides::rebuild`]); this refusal keeps the increment fail-closed
+/// if a caller ever skips that check.
+fn next_generation(dest: &str, generation: u64) -> Result<u64, ScaffoldError> {
+    generation.checked_add(1).ok_or_else(|| {
+        ScaffoldError::invalid(
+            shown!("override state of {}", overrides::dest_shown(dest)),
+            Shown::fixed("the override record's generation cannot advance"),
+        )
+    })
 }
 
 /// Write or remove the override record of `dest` after its file is written.
@@ -1490,9 +1503,10 @@ fn conflict_override_record(
     current: &str,
 ) -> Result<(), ScaffoldError> {
     let generation = plan.old.as_ref().map_or(0, |(record, _)| record.generation);
+    let generation = next_generation(dest, generation)?;
     let record = (!plan.applied.is_empty()).then(|| {
         overrides::record::Record::new(
-            generation + 1,
+            generation,
             pristine,
             plan.applied.clone(),
             &plan.effective,

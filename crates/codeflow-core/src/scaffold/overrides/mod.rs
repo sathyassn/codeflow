@@ -935,9 +935,10 @@ fn record_unreadable(dest: &str) -> ScaffoldError {
 /// Rebuild the effective baseline a record claims: the pristine baseline
 /// with the record's applied set and nothing else. `None` unless the
 /// baseline hashes to the record's pristine hash and to `installed`, the
-/// installed manifest's hash; every unit is one `authority`, the binary's
-/// shipped text for the file, lets a project override, at the place the
-/// binary finds that unit in the baseline, with a replacement of its shape;
+/// installed manifest's hash; its generation can still advance; every unit
+/// is one `authority`, the binary's shipped text for the file, lets a
+/// project override, at the place the binary finds that unit in the
+/// baseline, with a replacement that changes only the unit's fields;
 /// the result changes only those units and reads as the same Markdown blocks
 /// outside them; and it hashes to the record's effective hash. A record
 /// that is consistent with itself but names a unit it may not, or a range
@@ -953,6 +954,9 @@ pub fn rebuild(
     if record.pristine_sha256 != pristine_hash || installed != Some(pristine_hash.as_str()) {
         return None;
     }
+    // No digest covers the generation; a record whose next generation does
+    // not exist cannot be advanced by the write that replaces it.
+    record.generation.checked_add(1)?;
     if !authority.allows(baseline, &record.applied) {
         return None;
     }

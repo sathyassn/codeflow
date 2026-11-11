@@ -1328,6 +1328,28 @@ fn an_upstream_rename_recovers_once_its_record_is_removed() {
     assert_eq!(doctor_overrides(root, plan_v5).status, Status::Pass);
 }
 
+/// A record whose generation is the last `u64`, which no digest covers, is
+/// refused before anything is written, by an update that would rewrite the
+/// file and advance it; doctor fails.
+#[test]
+fn a_record_at_the_last_generation_is_refused() {
+    let dir = scaffold();
+    let root = dir.path();
+    write(root, ".codeflow/overrides.toml", OVERRIDES);
+    update_v1(root);
+    let mut record = Record::read(root, AGENTS).unwrap().unwrap();
+    record.generation = u64::MAX;
+    record.write(root, AGENTS).unwrap();
+    let before = snapshot(root);
+    let error = run(&v2(), root, "3.0.1").expect_err("update refuses the record");
+    assert!(
+        error.contains("does not match the installed baseline"),
+        "{error}"
+    );
+    assert_eq!(snapshot(root), before, "a refusal writes nothing");
+    assert_eq!(doctor_overrides(root, plan_v2).status, Status::Fail);
+}
+
 /// Records made from the first version's rows still apply under the fourth,
 /// with the rows' pointers kept.
 #[test]
