@@ -1113,12 +1113,13 @@ mod tests {
                 assert!(!why.contains(listing), "{listing}: {why}");
             }
         }
-        // Since review round 7 a name that is not plain is withheld and the
-        // remote is named by its place among the configured remotes.
+        // Since review round 7 a name that is not plain is withheld, and
+        // since round 9 the remote is named by the place of its [remote]
+        // section in the repository's configuration file.
         let hostile = fetch(rewrite.path(), &["o$(id)".to_string()], false).unwrap();
         assert!(!hostile.contains("o$(id)"), "{hostile}");
         assert!(
-            hostile.contains("effective URL for <remote 1, name withheld> differs"),
+            hostile.contains("effective URL for <remote 2, name withheld> differs"),
             "{hostile}"
         );
         assert!(hostile.contains("with an editor"), "{hostile}");

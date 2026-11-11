@@ -102,6 +102,21 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a synthetic remote name, never a URL: the remote's URLs are file:// paths, so any question goes to a local path (TSK-416 round 7)",
     ),
     (
+        "codeflow-cli/src/cmd/push_set/tests.rs",
+        "host.invalid",
+        "a synthetic push URL that only carries a password into the credential inventory; the test fetches from a local path and never pushes (TSK-416 round 9)",
+    ),
+    (
+        "codeflow-core/src/hooks/landed_policy.rs",
+        "host.invalid",
+        "a synthetic push URL that only carries a password into the credential inventory; the test fetches from a local path and never pushes (TSK-416 round 9)",
+    ),
+    (
+        "codeflow-core/src/workgraph/work_start.rs",
+        "host.invalid",
+        "a synthetic push URL that only carries a password into the credential inventory; the test fetches from a local path and never pushes (TSK-416 round 9)",
+    ),
+    (
         "codeflow-core/src/security/git.rs",
         "host.invalid",
         "a synthetic remote name, never a URL: the remotes' URLs are file:// paths or read from configuration only, and the test asks no remote (TSK-416 round 7)",

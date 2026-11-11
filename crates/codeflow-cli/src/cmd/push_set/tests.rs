@@ -1255,15 +1255,33 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
 /// TSK-416 review round 2, finding 1: the prune step the push refusals
 /// print hands git the remote as one argument: pasting runs no
 /// substitution, and a name starting with `-` follows `--`. Since review
-/// round 7 only a plain name is pasted; any other name, one a terminal
-/// cannot show as itself included, gets a step the operator types the
-/// name into (review round 8).
+/// round 7 only a plain name of a configured remote is pasted; any other
+/// name, one a terminal cannot show as itself included, gets no command,
+/// only the rename with an editor (review round 9).
 #[cfg(unix)]
 #[test]
 fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
+    use std::io::Write as _;
     let dir = tempfile::tempdir().unwrap();
     git2::Repository::init(dir.path()).unwrap();
     let root = dir.path();
+    let hidden = [
+        "https://user:OPAQUECANARY@host.invalid",
+        "o$(id)",
+        "o\u{200b}x",
+    ];
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(root.join(".git").join("config"))
+        .unwrap();
+    for name in ["origin", "-x"].iter().chain(&hidden) {
+        writeln!(
+            config,
+            "[remote \"{name}\"]\n\turl = file:///nonexistent/r.git"
+        )
+        .unwrap();
+    }
+    drop(config);
     for (remote, expected) in [
         ("origin", vec!["fetch", "--prune", "origin"]),
         ("-x", vec!["fetch", "--prune", "--", "-x"]),
@@ -1284,90 +1302,93 @@ fn the_prune_step_keeps_a_hostile_remote_as_one_argument() {
         assert_eq!(arguments, expected, "{step}");
     }
     // A name that is a URL with a credential (synthetic), holds shell
-    // syntax or a character a terminal hides is never pasted.
-    for hidden in [
-        "https://user:OPAQUECANARY@host.invalid",
-        "o$(id)",
-        "o\u{200b}x",
-    ] {
+    // syntax or a character a terminal hides gets only the rename.
+    for (at, hidden) in hidden.iter().enumerate() {
         let step = prune_step(root, hidden);
+        assert_eq!(
+            step,
+            codeflow_core::security::git::withheld_remote_step(root, hidden)
+        );
+        let section = ["3rd", "4th", "5th"][at];
         assert!(
-            step.contains("`git fetch --prune -- <that name>`"),
+            step.contains(&format!("finds its {section} [remote] section")),
             "{step}"
         );
-        assert!(!step.contains("--all"), "{step}");
         for shown in [
             hidden,
             "OPAQUECANARY",
             "host.invalid",
-            "$(id)",
+            "$(",
             r"o\u{200b}x",
+            "`git",
         ] {
             assert!(!step.contains(shown), "{shown}: {step}");
         }
     }
 }
 
-/// TSK-416 review round 8, finding 2: a withheld remote that
-/// `remote.<name>.skipFetchAll` keeps out of `git fetch --all` is pruned
-/// by the step the refusal prints, the operator typing the name found on
-/// the stated line of `git remote`; `git fetch --prune --all`, the round 7
-/// step, leaves its stale tracking ref in place. The credential is
-/// synthetic, and the remote's URL is a local path.
+/// TSK-416 review round 9, finding 1: a withheld remote that
+/// `remote.<name>.skipFetchAll` keeps out of `git fetch --all` gets no
+/// shell step, only the rename with an editor, located by its `[remote]`
+/// section. The rename, done here by rewriting the section, and the
+/// ordinary prune step printed for the plain name prune the renamed
+/// remote's stale tracking ref. The credentials are synthetic; the remote
+/// fetches from a local path, and its push URL only carries the password
+/// `abc12` into the inventory.
 #[cfg(unix)]
 #[test]
-fn a_skip_fetch_all_remote_is_pruned_by_the_printed_step() {
-    let name = "user-OPAQUECANARY@host.invalid";
-    let h = History::new();
-    let root = h.local.path();
-    let source = h.local.path().to_str().unwrap();
-    h.git(&["config", &format!("remote.{name}.url"), source]);
-    h.git(&[
-        "config",
-        &format!("remote.{name}.fetch"),
-        &format!("+refs/heads/*:refs/remotes/{name}/*"),
-    ]);
-    h.git(&["config", &format!("remote.{name}.skipFetchAll"), "true"]);
-    let stale = format!("refs/remotes/{name}/gone");
-    h.git(&["update-ref", &stale, "HEAD"]);
-    let held = |reference: &str| {
-        git2::Repository::open(root)
+fn a_skip_fetch_all_remote_is_pruned_after_the_rename() {
+    for name in ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"] {
+        let h = History::new();
+        let root = h.local.path();
+        let source = h.local.path().to_str().unwrap();
+        for (key, value) in [
+            ("url", source.to_string()),
+            (
+                "pushurl",
+                "https://user:abc12@host.invalid/x.git".to_string(),
+            ),
+            ("fetch", format!("+refs/heads/*:refs/remotes/{name}/*")),
+            ("skipFetchAll", "true".to_string()),
+        ] {
+            h.git(&["config", &format!("remote.{name}.{key}"), &value]);
+        }
+        let step = prune_step(root, name);
+        for hidden in ["$(", "OPAQUECANARY", "host.invalid", "abc12", "`git"] {
+            assert!(!step.contains(hidden), "{name}: {hidden}: {step}");
+        }
+        assert!(
+            step.starts_with(
+                "the operator opens .git/config in an editor, finds its 1st [remote] section"
+            ),
+            "{step}"
+        );
+        // The rename with an editor: the section header and its fetch line
+        // take the plain name `fork`.
+        let config = root.join(".git").join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let renamed = text
+            .replace(&format!("[remote \"{name}\"]"), "[remote \"fork\"]")
+            .replace(&format!("refs/remotes/{name}/"), "refs/remotes/fork/");
+        assert_ne!(renamed, text);
+        std::fs::write(&config, renamed).unwrap();
+        // The renamed remote's stale ref is pruned by the ordinary step.
+        let stale = "refs/remotes/fork/gone";
+        h.git(&["update-ref", stale, "HEAD"]);
+        let step = prune_step(root, "fork");
+        assert_eq!(step, "run git fetch --prune fork", "{name}");
+        let arguments: Vec<&str> = step
+            .strip_prefix("run git ")
             .unwrap()
-            .find_reference(reference)
-            .is_ok()
-    };
-    let step = prune_step(root, name);
-    assert!(!step.contains("OPAQUECANARY"), "{step}");
-    assert!(!step.contains("host.invalid"), "{step}");
-    // The stated line of `git remote` names this remote.
-    let listed = h.git(&["remote"]);
-    let line = (1..=listed.lines().count())
-        .find(|at| step.contains(&format!("the name on line {at} of `git remote`")))
-        .unwrap_or_else(|| panic!("{step}"));
-    let typed = listed.lines().nth(line - 1).unwrap().to_string();
-    assert_eq!(typed, name, "{listed}");
-    // Round 7's step leaves the stale ref.
-    h.git(&["fetch", "--prune", "--all"]);
-    assert!(
-        held(&stale),
-        "git fetch --prune --all pruned a skipFetchAll remote"
-    );
-    // The printed step, with the name typed, prunes it.
-    let commands: Vec<&str> = step
-        .split('`')
-        .skip(1)
-        .step_by(2)
-        .filter(|span| span.contains("<that name>"))
-        .collect();
-    assert_eq!(commands, ["git fetch --prune -- <that name>"], "{step}");
-    let arguments: Vec<String> = commands[0]
-        .replace("<that name>", "THAT_NAME")
-        .split_whitespace()
-        .skip(1)
-        .map(|word| word.replace("THAT_NAME", &typed))
-        .collect();
-    h.git(&arguments.iter().map(String::as_str).collect::<Vec<_>>());
-    assert!(!held(&stale), "{step}");
+            .split_whitespace()
+            .collect();
+        h.git(&arguments);
+        let held = git2::Repository::open(root)
+            .unwrap()
+            .find_reference(stale)
+            .is_ok();
+        assert!(!held, "{name}: {step}");
+    }
 }
 
 /// TSK-416 review round 2, finding 1: the release preflight remedies print
