@@ -118,8 +118,12 @@ fn push(root: &Path, rest: &[String]) -> Option<String> {
         .any(|name| name == destination.as_bytes());
     if configured {
         if let Err(error) = repo.find_remote(destination) {
+            // The name is configuration text, shown only when plain, and
+            // libgit2's error quotes it (TSK-416 review round 7).
             return Some(format!(
-                "cannot read configured remote {destination}: {error}"
+                "cannot read configured remote {}{}",
+                crate::security::git::shown_remote(root, destination),
+                remote_error(root, destination, error.message())
             ));
         }
     }
@@ -409,7 +413,7 @@ fn fetch_from_repository(
         }
     });
     let selected = selected?;
-    let remote = match fetch_remote(repo, &names, selected) {
+    let remote = match fetch_remote(root, repo, &names, selected) {
         Ok(Some(remote)) => remote,
         Ok(None) => return Some("fetch source is not a configured remote or its URL".into()),
         Err(reason) => return Some(reason),
@@ -420,11 +424,12 @@ fn fetch_from_repository(
     let Some(name_bytes) = remote.name_bytes() else {
         return Some("cannot read the configured fetch remote's name".into());
     };
-    let remote_name = crate::git::GitName::from_bytes(name_bytes);
-    let Ok(name) = remote_name.rule_text() else {
+    let Ok(name) = std::str::from_utf8(name_bytes) else {
+        // The name is withheld: it is configuration text, which can hold a
+        // credential (TSK-416 review round 7).
         return Some(format!(
-            "the fetch remote's name is not valid UTF-8 ({}); the operator renames it",
-            remote_name.display()
+            "the fetch remote's name is not valid UTF-8; {}",
+            crate::security::git::WITHHELD_REMOTE_STEP
         ));
     };
     // Remote::url already expands insteadOf. Config retains the literal URL.
@@ -433,7 +438,7 @@ fn fetch_from_repository(
         .and_then(|config| config.get_string(&format!("remote.{name}.url")))
     {
         Ok(raw) => raw,
-        Err(error) => return Some(raw_url_unread(name, error.message())),
+        Err(error) => return Some(raw_url_unread(root, name, error.message())),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
     let effective = match crate::git::command()
@@ -445,7 +450,7 @@ fn fetch_from_repository(
         Err(error) => {
             return Some(format!(
                 "cannot read effective URL for {}: git could not run: {error}",
-                crate::git::display_text(name)
+                crate::security::git::shown_remote(root, name)
             ))
         }
     };
@@ -455,7 +460,7 @@ fn fetch_from_repository(
         || std::str::from_utf8(&effective.stdout)
             .map_or(true, |text| text.strip_suffix('\n').unwrap_or(text) != raw)
     {
-        return Some(effective_url_differs(name));
+        return Some(effective_url_differs(root, name));
     }
     if requested.is_some_and(|source| !names.contains(&source) && source != raw) {
         return Some("fetch source is not the configured remote's URL".into());
@@ -471,23 +476,35 @@ fn fetch_from_repository(
 /// rewrite rule, can hold a credential (TSK-416 review round 3).
 const NO_CONFIG_LISTING: &str = "with an editor, since printing the configuration shows remote URLs and the bases of url rewrite rules, which can hold a credential";
 
+/// libgit2's error about remote `name`, as " (<message>)", when messages
+/// show that name; else nothing, since the message can quote the name or
+/// its `remote.<name>.url` key (TSK-416 review round 7).
+fn remote_error(root: &Path, name: &str, error: &str) -> String {
+    if crate::security::git::remote_name_shown(root, name) {
+        format!(" ({})", crate::git::display_text(error))
+    } else {
+        String::new()
+    }
+}
+
 /// The refusal when `remote.<name>.url` cannot be read as one value. The
-/// name is shown escaped in prose, and the step prints no command that
-/// would show the URL (TSK-416 review round 3).
-fn raw_url_unread(name: &str, error: &str) -> String {
-    let shown = crate::git::display_text(name);
+/// name is shown only when plain (TSK-416 review round 7), and the step
+/// prints no command that would show the URL (review round 3).
+fn raw_url_unread(root: &Path, name: &str, error: &str) -> String {
+    let shown = crate::security::git::shown_remote(root, name);
     format!(
-        "cannot read the url of remote {shown} as one value ({}); the operator checks that the remote's section in the configuration files sets url exactly once, {NO_CONFIG_LISTING}",
-        crate::git::display_text(error)
+        "cannot read the url of remote {shown} as one value{}; the operator checks that the remote's section in the configuration files sets url exactly once, {NO_CONFIG_LISTING}",
+        remote_error(root, name, error)
     )
 }
 
 /// The refusal when git's effective URL for a remote differs from its
 /// configured one: a `url.<base>.insteadOf` or `pushInsteadOf` rule, or an
 /// included file, rewrites it. The step names neither the URLs nor the
-/// rule's base, which can hold a credential (TSK-416 review round 3).
-fn effective_url_differs(name: &str) -> String {
-    let shown = crate::git::display_text(name);
+/// rule's base, which can hold a credential (TSK-416 review round 3), and
+/// the remote's name only when plain (review round 7).
+fn effective_url_differs(root: &Path, name: &str) -> String {
+    let shown = crate::security::git::shown_remote(root, name);
     format!(
         "effective URL for {shown} differs from its configured url, so a url rewrite rule (insteadOf or pushInsteadOf) or an included configuration file changes where the fetch goes; the operator finds and removes that rule in the configuration files {NO_CONFIG_LISTING}"
     )
@@ -496,18 +513,23 @@ fn effective_url_differs(name: &str) -> String {
 /// Read every configured candidate needed to match a fetch URL. A failed
 /// candidate read never becomes "not this remote" and selects another one.
 fn fetch_remote<'repo>(
+    root: &Path,
     repo: &'repo git2::Repository,
     names: &[&str],
     selected: &str,
 ) -> Result<Option<git2::Remote<'repo>>, String> {
-    // The name is shown escaped and git's error with any URL's credentials
-    // redacted, since a lookup error can quote the configured URL (TSK-416
-    // review round 3).
+    // The name is shown only when plain (TSK-416 review round 7), and git's
+    // error only then, with any URL's credentials redacted, since a lookup
+    // error can quote the configured URL (review round 3) or the name.
     let unread = |what: &str, name: &str, error: &git2::Error| {
         format!(
-            "cannot read configured remote {}{what}: {}",
-            crate::git::display_text(name),
-            crate::git::display_text(&crate::git::remote_query::display_urls(error.message()))
+            "cannot read configured remote {}{what}{}",
+            crate::security::git::shown_remote(root, name),
+            remote_error(
+                root,
+                name,
+                &crate::git::remote_query::display_urls(error.message())
+            )
         )
     };
     let read = |name: &str| {
@@ -1091,20 +1113,63 @@ mod tests {
                 assert!(!why.contains(listing), "{listing}: {why}");
             }
         }
+        // Since review round 7 a name that is not plain is withheld and the
+        // remote is named by its place among the configured remotes.
         let hostile = fetch(rewrite.path(), &["o$(id)".to_string()], false).unwrap();
+        assert!(!hostile.contains("o$(id)"), "{hostile}");
         assert!(
-            hostile.contains("effective URL for o$(id) differs"),
+            hostile.contains("effective URL for <remote 1, name withheld> differs"),
             "{hostile}"
         );
         assert!(hostile.contains("with an editor"), "{hostile}");
-        // Each refusal shows a hostile name escaped, in prose only.
-        let differs = effective_url_differs("o$(id)\u{1b}");
-        let unread = raw_url_unread("x$(id)\u{1b}", "entry is not unique");
+        // Each refusal withholds a hostile name and its libgit2 error, in
+        // prose only.
+        let differs = effective_url_differs(rewrite.path(), "o$(id)\u{1b}");
+        let unread = raw_url_unread(rewrite.path(), "x$(id)\u{1b}", "entry is not unique");
         for why in [&differs, &unread] {
             assert!(!why.contains('\u{1b}'), "{why}");
-            assert!(why.contains(r"$(id)\x1b"), "{why}");
+            assert!(!why.contains("$(id)"), "{why}");
+            assert!(why.contains("<remote, name withheld>"), "{why}");
+            assert!(!why.contains("entry is not unique"), "{why}");
             assert!(!why.contains('`'), "no command: {why}");
             assert!(why.contains("with an editor"), "{why}");
+        }
+    }
+
+    /// TSK-416 review round 7: the sole remote's name is a URL with a
+    /// credential. When its url is rewritten, or set twice, the fetch
+    /// check and the guard name that remote by its place among the
+    /// configured remotes and print the name nowhere. The credentials are
+    /// synthetic.
+    #[test]
+    fn a_fetch_refusal_never_prints_a_credential_remote_name() {
+        use std::io::Write as _;
+        let name = "https://user:OPAQUECANARY@host.invalid";
+        for extra in [
+            // Local URLs only: the guard may ask the remote, and no lookup
+            // leaves the machine (TSK-1156).
+            format!(
+                "[remote \"{name}\"]\n\turl = file:///nonexistent/x.git\n[url \"file:///elsewhere/\"]\n\tinsteadOf = file:///nonexistent/\n"
+            ),
+            format!(
+                "[remote \"{name}\"]\n\turl = file:///nonexistent/a.git\n\turl = file:///nonexistent/b.git\n"
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            git2::Repository::init(dir.path()).unwrap();
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.path().join(".git").join("config"))
+                .unwrap()
+                .write_all(extra.as_bytes())
+                .unwrap();
+            let why = fetch(dir.path(), &[], false).expect("a refusal");
+            assert!(why.contains("<remote 1, name withheld>"), "{why}");
+            let report = format!("{:?}", r21_report_command(dir.path(), "git fetch"));
+            for text in [&why, &report] {
+                assert!(!text.contains("OPAQUECANARY"), "{text}");
+                assert!(!text.contains("host.invalid"), "{text}");
+            }
         }
     }
 

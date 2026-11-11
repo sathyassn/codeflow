@@ -135,7 +135,7 @@ fn line_remote(root: &Path) -> Result<Option<String>, String> {
     };
     let tracked = repo
         .references_glob(&format!("refs/remotes/{remote}/integration/*"))
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::security::git::without_remote_name(root, remote, &e.to_string()))?
         .next()
         .is_some();
     Ok(tracked.then(|| remote.into()))
@@ -158,6 +158,12 @@ fn append_line_drift(
     let rows = match line_drift::read(root, remote.as_deref()) {
         Ok(rows) => rows,
         Err(error) => {
+            // libgit2's errors can quote a tracking ref, which holds the
+            // remote's name (TSK-416 review round 7).
+            let error = remote.as_deref().map_or_else(
+                || error.clone(),
+                |remote| crate::security::git::without_remote_name(root, remote, &error),
+            );
             let _ = writeln!(out, "integration lines unavailable: {error}");
             return;
         }
@@ -207,7 +213,9 @@ fn append_line_drift(
             "line: {} ({source}) · {} behind {} · {state} · oldest unlanded task {age}{flag}",
             crate::git::display_text(&row.line),
             row.behind,
-            crate::git::display_text(&row.target)
+            // The target can be a tracking ref that holds the remote's name,
+            // shown only when plain (TSK-416 review round 7).
+            crate::security::git::shown_ref(root, &row.target)
         );
         if !row.undated_tasks.is_empty() {
             let _ = writeln!(
