@@ -1349,7 +1349,8 @@ fn code_read(words: &[String], arithmetic: &mut Arithmetic) -> bool {
 /// The assignments a declaration builtin (`name`) makes with its words
 /// (`rest`), for [`template_assignments`]. A name reference whose target
 /// is not a plain name, or is or may be a template folder variable,
-/// refuses, and so does a destination that holds an expansion.
+/// refuses, and so do a destination that holds an expansion and an
+/// integer or float attribute.
 fn declared<'w>(
     name: &str,
     rest: &'w [String],
@@ -1367,12 +1368,16 @@ fn declared<'w>(
         && flags
             .iter()
             .any(|flag| flag.starts_with('-') && flag.contains('n'));
-    // A value given to an integer variable is evaluated as arithmetic, and
-    // so is each later value assigned to it.
+    // Every value later written to an integer or float variable, by any
+    // builtin and with no arithmetic syntax on the line, is evaluated as
+    // arithmetic, so giving any variable such an attribute refuses.
     let integer = matches!(name, "integer" | "float")
         || flags
             .iter()
             .any(|flag| flag.starts_with('-') && flag.contains(['i', 'E', 'F']));
+    if integer {
+        return unread();
+    }
     let mut found = Vec::new();
     for word in &rest[flags.len()..] {
         let (destination, target) = match word.split_once('=') {
@@ -1383,11 +1388,6 @@ fn declared<'w>(
             return unread();
         }
         arithmetic.assignment(word);
-        if integer {
-            arithmetic
-                .integers
-                .push(destination_base(destination).to_string());
-        }
         if reference {
             // Only a reference to a plain name the guard can see is read:
             // a template folder variable as its target, or a subscript the
@@ -1421,19 +1421,16 @@ const ARITHMETIC_TESTS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
 
 /// What the shell evaluates as arithmetic on one line, where an assignment
 /// may hide: each expression it evaluates, read from the shared reader's
-/// words and from the line's text, and what decides whether its names
-/// hold literal numbers. Any name read in arithmetic is evaluated in turn
-/// when its value is an expression, an inherited value included, so the
-/// line is read only when every operand is a literal number or a name the
-/// line gave a literal number before anything else ran ([`Self::literal`]).
+/// words and from the line's text. Any name read in arithmetic is
+/// evaluated in turn when its value is an expression, an inherited value
+/// included, so the line is read only when every expression holds literal
+/// numbers and operators alone ([`Self::literal`]). A line that gives any
+/// variable an integer or float attribute refuses before this
+/// ([`declared`]).
 #[derive(Default)]
 struct Arithmetic {
     /// Each expression the shell evaluates.
     expressions: Vec<String>,
-    /// Each assignment word, `NAME=value`, `NAME+=value` or `NAME[i]=value`.
-    assigned: Vec<String>,
-    /// The variables given an integer attribute.
-    integers: Vec<String>,
 }
 
 impl Arithmetic {
@@ -1559,9 +1556,6 @@ impl Arithmetic {
                 at = after;
             }
         }
-        if word.contains('=') {
-            self.assigned.push(word.to_string());
-        }
     }
 
     /// Record the subscript of a variable name the shell sets or reads.
@@ -1595,17 +1589,9 @@ impl Arithmetic {
         }
     }
 
-    /// Whether every expression the line evaluates, values given to an
-    /// integer variable included, holds only literal numbers
-    /// ([`literal_expression`]).
-    fn literal(&mut self) -> bool {
-        for word in &self.assigned {
-            let (destination, value) = word.split_once('=').unwrap_or((word, ""));
-            let base = destination_base(destination);
-            if self.integers.iter().any(|name| name == base) {
-                self.expressions.push(value.to_string());
-            }
-        }
+    /// Whether every expression the line evaluates holds only literal
+    /// numbers and operators ([`literal_expression`]).
+    fn literal(&self) -> bool {
         self.expressions
             .iter()
             .all(|expression| literal_expression(expression))
@@ -2258,6 +2244,7 @@ mod tests {
             format!("printf '%s' 'APPDATA=1'; APPDATA='{root}' hc run peer"),
             format!("trap -p DEBUG; APPDATA='{root}' hc run peer"),
             format!("trap - DEBUG; APPDATA='{root}' hc run peer"),
+            format!("read n < values; APPDATA='{root}' hc run peer"),
         ] {
             assert_eq!(template(&command), vec!["claude -p"], "{command}");
         }
@@ -2370,6 +2357,14 @@ mod tests {
             // too, an accepted over-refusal.
             "printf '%s' '(( v ))'; hc run peer",
             "echo '${s:v}'; hc run peer",
+            // A value any builtin writes to an integer or float variable is
+            // evaluated as arithmetic, with no arithmetic on the line.
+            "export APPDATA; integer n; read n < values; hc run peer",
+            "declare -i n; mapfile n < values; hc run peer",
+            "typeset -ix n; printf -v n %s x; hc run peer",
+            "local -i n; getopts ab n; hc run peer",
+            "float n; for n in x; do :; done; hc run peer",
+            "typeset -E n; read n; hc run peer",
         ];
         let passed: Vec<_> = refusing
             .into_iter()
