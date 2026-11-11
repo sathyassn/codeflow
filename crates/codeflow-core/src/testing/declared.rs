@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::config::{InputClass, TestConfig};
-use super::delivery::{git_output, matches, with_prerequisites};
+use super::delivery::{git_output, git_output_with_index, matches, with_prerequisites};
 
 /// One path change between a base and the working tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,16 +209,29 @@ pub fn parse_name_status(output: &str) -> Result<Vec<Change>, String> {
 
 /// Every change from `base` to the working tree, untracked files included.
 ///
+/// Writes nothing to the repository. A porcelain `git diff` refreshes the
+/// stat data of files whose content is unchanged and writes it back to the
+/// index it read, which `--no-optional-locks` does not prevent, so Git reads
+/// a private copy of the index here and may refresh that copy instead.
+///
 /// # Errors
 ///
 /// Names a Git failure or output this reader cannot read.
 pub fn changes_since(root: &Path, base: &str) -> Result<Vec<Change>, String> {
-    let delta = git_output(
+    let scratch = tempfile::tempdir()
+        .map_err(|error| format!("cannot create a scratch index folder: {error}"))?;
+    let index = private_index(root, scratch.path())?;
+    let delta = git_output_with_index(
         root,
         &["diff", "--name-status", "-z", "--find-renames", base, "--"],
+        Some(&index),
     )?;
     let mut changes = parse_name_status(&delta)?;
-    let untracked = git_output(root, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let untracked = git_output_with_index(
+        root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        Some(&index),
+    )?;
     changes.extend(
         untracked
             .split('\0')
@@ -226,6 +239,31 @@ pub fn changes_since(root: &Path, base: &str) -> Result<Vec<Change>, String> {
             .map(|path| Change::Changed(path.to_string())),
     );
     Ok(changes)
+}
+
+/// A copy of the repository's index in `folder`, or a path there with no
+/// file when the repository has no index yet (Git reads that as empty).
+/// The copy keeps the original's modification time, since Git compares
+/// each entry's time with the index file's to find entries it must
+/// recheck by content.
+fn private_index(root: &Path, folder: &Path) -> Result<std::path::PathBuf, String> {
+    let named = git_output(root, &["rev-parse", "--git-path", "index"])?;
+    let original = root.join(named.strip_suffix('\n').unwrap_or(&named));
+    let copy = folder.join("index");
+    let modified = match std::fs::metadata(&original) {
+        Ok(metadata) => metadata
+            .modified()
+            .map_err(|error| format!("cannot read the index time: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(copy),
+        Err(error) => return Err(format!("cannot read the index: {error}")),
+    };
+    std::fs::copy(&original, &copy).map_err(|error| format!("cannot copy the index: {error}"))?;
+    std::fs::File::options()
+        .write(true)
+        .open(&copy)
+        .and_then(|file| file.set_modified(modified))
+        .map_err(|error| format!("cannot keep the index time: {error}"))?;
+    Ok(copy)
 }
 
 /// The commit to compare with, and where it came from: `since` when given,
@@ -474,5 +512,43 @@ mod tests {
         assert_eq!(base.len(), 40, "{base}");
         assert_eq!(source, "--since HEAD");
         assert!(comparison_base(dir.path(), None).is_err());
+    }
+
+    /// Review finding (TSK-353): a porcelain `git diff` refreshes the stat
+    /// data of a file whose content is unchanged and writes the index back,
+    /// even under `--no-optional-locks`. The report must leave the index
+    /// byte-identical and still not list that file.
+    #[test]
+    fn changes_since_leaves_the_index_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("kept.md"), "same text\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("kept.md")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "test: base",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        // Same bytes, older time: the index's stat data no longer matches.
+        std::fs::File::options()
+            .write(true)
+            .open(dir.path().join("kept.md"))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000))
+            .unwrap();
+        let index_path = dir.path().join(".git").join("index");
+        let before = std::fs::read(&index_path).unwrap();
+        let changes = changes_since(dir.path(), "HEAD").unwrap();
+        assert_eq!(std::fs::read(&index_path).unwrap(), before);
+        assert!(changes.is_empty(), "{changes:?}");
+        assert!(!dir.path().join(".git").join("index.lock").exists());
     }
 }

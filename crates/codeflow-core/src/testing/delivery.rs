@@ -536,12 +536,31 @@ pub fn check_only(
 /// UTF-8 is never matched by its lossy spelling. No run is narrowed by it:
 /// no record earns selection credit (ADR-0089).
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = crate::git::command()
+    git_output_with_index(root, args, None)
+}
+
+/// [`git_output`], reading `index` in place of the repository's index when
+/// given. Every read runs with `--no-optional-locks`. That flag does not
+/// stop a porcelain `git diff` from writing refreshed stat data back to the
+/// index it reads (Git 2.53, `diff.autoRefreshIndex`), so a working-tree
+/// diff passes a private copy of the index here (TSK-353).
+pub(super) fn git_output_with_index(
+    root: &Path,
+    args: &[&str],
+    index: Option<&Path>,
+) -> Result<String, String> {
+    let mut command = crate::git::command();
+    command
+        .arg("--no-optional-locks")
         .args(args)
         .current_dir(root)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_INDEX_FILE");
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("cannot read Git comparison: {error}"))?;
     if !output.status.success() {
