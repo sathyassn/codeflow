@@ -2040,9 +2040,9 @@ does (TSK-1082):
   can set the timeout Grok actually runs, such as Grok's 5 second default,
   which ends the guard before its own deadline.
 
-`codeflow doctor --check git-config-includes` names include files that may
-be writable, distinguishes missing files, and reports when discovery cannot be
-verified. Include-file writes are not guarded, and the check does not certify
+`codeflow doctor --check git-config-includes` reports include files that may
+be writable, each named by its include entry and never by its value or path,
+distinguishes missing files, and reports when discovery cannot be verified. Include-file writes are not guarded, and the check does not certify
 filesystem permissions. The operator inspects or repairs the configuration and
 secures its include paths. This is the diagnostic mitigation for issue 88; it
 avoids starting Git for every path a session guard examines.

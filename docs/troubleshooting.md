@@ -39,13 +39,14 @@ The twenty-six checks fall into six groups by the surface each one reads.
   `project.toml`, whether it is writable, and which git ref the agent guards
   read policy from. `secret-engine` reports the gitleaks binary the
   commit-time secret scan runs when the policy chooses it.
-  `git-config-includes` names included Git configuration files that may be
-  writable and reports a configuration it cannot verify. The operator
-  repairs or secures the include files it names, finding the `include` and
-  `includeIf` entries that name them in the repository, global and system
-  configuration files with an editor. The check shows each include path
-  with any credential redacted; printing configuration values with `git
-  config` would show them unredacted.
+  `git-config-includes` reports included Git configuration files that may
+  be writable and a configuration it cannot verify. It names each include
+  by where its entry stands, such as `include entry 2 of the repository
+  configuration (.git/config)`, and never prints an include value or the
+  path it resolves to, since that text can hold a credential. The operator
+  opens the named configuration file with an editor, finds the `include` or
+  `includeIf` entry at that position, and secures or removes the file it
+  names; printing configuration values with `git config` would show them.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.
