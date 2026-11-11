@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use super::files;
+use super::fragment;
 use super::Event;
 use super::LedgerError;
 
@@ -14,15 +15,19 @@ use super::LedgerError;
 ///
 /// Algorithm:
 /// 1. Read base file: `{type}/{type}.jsonl`
-/// 2. Glob fragments: `{type}/{type}-ses-*.jsonl`
-/// 3. Parse all events from all files
+/// 2. Find session fragments: `{type}/{type}-sid-*.jsonl` and the
+///    pre-4.0.0 `{type}/{type}-ses-*.jsonl`
+/// 3. Parse all events from all files, verifying each fragment's records
+///    against the session its name claims
 /// 4. Sort by timestamp (stable sort preserves intra-file order)
 ///
-/// Unreadable files and corrupt lines refuse the rebuild.
+/// Unreadable files, corrupt lines and fragments whose records are not the
+/// named session's refuse the rebuild.
 ///
 /// # Errors
 ///
-/// Returns `LedgerError::Io` if the directory cannot be read.
+/// Returns `LedgerError::Io` if the directory cannot be read, and
+/// `LedgerError::Corrupt` for a corrupt line or a refused fragment.
 pub fn rebuild_ledger_type(ledger_dir: &Path, type_name: &str) -> Result<Vec<Event>, LedgerError> {
     let subdir = ledger_dir.join(type_name);
     if !subdir.try_exists()? {
@@ -37,21 +42,19 @@ pub fn rebuild_ledger_type(ledger_dir: &Path, type_name: &str) -> Result<Vec<Eve
         read_events_from_file(&base_file, &mut events)?;
     }
 
-    // Read fragment files.
-    let prefix = format!("{type_name}-ses-");
+    // Read session fragments in both namespaces, each verified against the
+    // session its name claims.
     for entry in fs::read_dir(&subdir)? {
         let entry = entry?;
+        let filename = entry.file_name();
+        let Some(key) = fragment::fragment_key(type_name, &filename)? else {
+            continue;
+        };
         let path = entry.path();
-        if entry
-            .file_name()
-            .as_encoded_bytes()
-            .starts_with(prefix.as_bytes())
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-        {
-            read_events_from_file(&path, &mut events)?;
-        }
+        let mut fragment_events = Vec::new();
+        read_events_from_file(&path, &mut fragment_events)?;
+        fragment::verify_fragment(&path, key, &fragment_events)?;
+        events.extend(fragment_events);
     }
 
     // Stable sort by timestamp preserves intra-file order for equal timestamps.
@@ -64,7 +67,9 @@ pub fn rebuild_ledger_type(ledger_dir: &Path, type_name: &str) -> Result<Vec<Eve
 ///
 /// # Errors
 ///
-/// Returns `LedgerError::Io` on directory read failure.
+/// Returns `LedgerError::Io` on directory read failure, and
+/// `LedgerError::Corrupt` for a corrupt line or a refused fragment in any
+/// type.
 pub fn rebuild_all(
     ledger_dir: &Path,
 ) -> Result<std::collections::HashMap<String, Vec<Event>>, LedgerError> {
@@ -228,5 +233,59 @@ NOT VALID JSON
         assert_eq!(result.len(), 2);
         assert!(result.contains_key("sessions"));
         assert!(result.contains_key("work-graph"));
+    }
+
+    #[test]
+    fn rebuild_reads_sid_fragments_beside_legacy_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("work-graph");
+        fs::create_dir_all(&subdir).unwrap();
+        let key = crate::ledger::session_file_key("ses-new");
+        write_event(
+            &subdir.join(format!("work-graph-{key}.jsonl")),
+            "task_created",
+            "2026-01-02T00:00:00Z",
+            Some("ses-new"),
+        );
+        write_event(
+            &subdir.join("work-graph-ses-old.jsonl"),
+            "task_created",
+            "2026-01-01T00:00:00Z",
+            Some("ses-old"),
+        );
+
+        let events = rebuild_ledger_type(dir.path(), "work-graph").unwrap();
+        let ids: Vec<_> = events.iter().map(|e| e.session_id.as_deref()).collect();
+        assert_eq!(ids, [Some("ses-old"), Some("ses-new")]);
+        let all = rebuild_all(dir.path()).unwrap();
+        assert_eq!(all["work-graph"].len(), 2);
+    }
+
+    #[test]
+    fn rebuild_refuses_a_fragment_whose_records_are_not_its_sessions() {
+        for key in [
+            "ses-A".to_string(),
+            crate::ledger::session_file_key("ses-A"),
+        ] {
+            for (case, sids) in [
+                ("mismatched", vec![Some("ses-B")]),
+                ("missing", vec![Some("ses-A"), None]),
+                ("mixed", vec![Some("ses-A"), Some("ses-B")]),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let subdir = dir.path().join("work-graph");
+                fs::create_dir_all(&subdir).unwrap();
+                let fragment = subdir.join(format!("work-graph-{key}.jsonl"));
+                for sid in sids {
+                    write_event(&fragment, "task_created", "2026-01-01T00:00:00Z", sid);
+                }
+                let err = rebuild_ledger_type(dir.path(), "work-graph").unwrap_err();
+                assert!(
+                    matches!(err, LedgerError::Corrupt(_)),
+                    "{key} {case}: {err:?}"
+                );
+                assert!(rebuild_all(dir.path()).is_err(), "{key} {case}");
+            }
+        }
     }
 }

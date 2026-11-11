@@ -10,15 +10,18 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 
 use super::files;
+use super::fragment;
 use super::{session_file_key, CompactionResult, Event, LedgerError};
 
 /// Compact a single ledger type by merging completed session fragments into the base.
 ///
 /// Algorithm:
 /// 1. Acquire `.compaction.lock` (flock exclusive)
-/// 2. Identify completed sessions (has `session_end` AND not current)
+/// 2. Identify completed sessions (has `session_end` AND not current), from
+///    the base file and from session fragments whose records match their name
 /// 3. Read base file events
-/// 4. Read all completed fragment files
+/// 4. Read all completed fragment files, refusing any whose records are not
+///    all the session its name claims
 /// 5. Merge: base + fragments, sort by timestamp (stable)
 /// 6. Write base file atomically (tmp + rename)
 /// 7. Delete merged fragment files
@@ -28,6 +31,9 @@ use super::{session_file_key, CompactionResult, Event, LedgerError};
 ///
 /// Returns `LedgerError::Lock` if another compaction is in progress.
 /// Returns `LedgerError::Io` on filesystem errors.
+/// Returns `LedgerError::Corrupt` for an unparseable line or a session
+/// fragment whose records are another session's, two sessions' or have
+/// no `session_id`; nothing is written or deleted then.
 pub fn compact_ledger_type(
     ledger_dir: &Path,
     type_name: &str,
@@ -81,7 +87,8 @@ pub fn compact_ledger_type(
     // read/replace/delete, so a concurrent append cannot be lost across the
     // read→rename→delete window. `None` = a write is in progress → defer.
     let base_path = subdir.join(format!("{type_name}.jsonl"));
-    let Some(held_locks) = acquire_file_locks(&base_path, &fragments)? else {
+    let fragment_paths: Vec<PathBuf> = fragments.iter().map(|(path, _)| path.clone()).collect();
+    let Some(held_locks) = acquire_file_locks(&base_path, &fragment_paths)? else {
         return Ok(CompactionResult {
             type_name: type_name.to_string(),
             merged_count: 0,
@@ -102,9 +109,13 @@ pub fn compact_ledger_type(
     if !crate::absence::proven_absent(&base_path)? {
         read_events_from_file(&base_path, &mut all_events)?;
     }
-    for frag_path in &fragments {
-        read_events_from_file(frag_path, &mut all_events)?;
+    for (frag_path, key) in &fragments {
+        let mut events = Vec::new();
+        read_events_from_file(frag_path, &mut events)?;
+        fragment::verify_fragment(frag_path, key, &events)?;
+        all_events.extend(events);
     }
+    let fragments: Vec<PathBuf> = fragments.into_iter().map(|(path, _)| path).collect();
 
     // Sort by timestamp (stable preserves intra-file order).
     all_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
@@ -217,29 +228,26 @@ fn find_completed_sessions(
     }
     let base = sessions_dir.join("sessions.jsonl");
     if !crate::absence::proven_absent(&base)? {
-        scan_for_session_ends(&base, &mut completed)?;
+        scan_for_session_ends(&base, None, &mut completed)?;
     }
-    for entry in fs::read_dir(&sessions_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.as_encoded_bytes();
-        if (name.starts_with(b"sessions-ses-") || name.starts_with(b"sessions-sid-"))
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-        {
-            scan_for_session_ends(&path, &mut completed)?;
-        }
+    for (path, key) in fragment_sessions(&sessions_dir, files::SESSIONS)? {
+        scan_for_session_ends(&path, Some(&key), &mut completed)?;
     }
     Ok(completed)
 }
+/// Collect the `session_end` ids in `path`. A fragment (`key` set) is
+/// verified first, so a `session_end` in a file named for another session
+/// completes neither.
 fn scan_for_session_ends(
     path: &Path,
+    key: Option<&str>,
     completed: &mut std::collections::HashSet<String>,
 ) -> Result<(), LedgerError> {
     let mut events = Vec::new();
     read_events_from_file(path, &mut events)?;
+    if let Some(key) = key {
+        fragment::verify_fragment(path, key, &events)?;
+    }
     for event in events {
         if event.event_type == "session_end" {
             if let Some(sid) = event.session_id {
@@ -251,45 +259,33 @@ fn scan_for_session_ends(
     Ok(())
 }
 
-/// Find fragment files that can be compacted (their session is completed).
+/// Every session fragment of `type_name` with the key its name claims, in
+/// both namespaces ([`fragment::fragment_key`]); other files are not read.
 fn fragment_sessions(
     subdir: &Path,
     type_name: &str,
 ) -> Result<Vec<(PathBuf, String)>, LedgerError> {
-    let prefix = format!("{type_name}-");
     let mut fragments = Vec::new();
     for entry in fs::read_dir(subdir)? {
         let entry = entry?;
-        let path = entry.path();
         let filename = entry.file_name();
-        if !filename.as_encoded_bytes().starts_with(prefix.as_bytes())
-            || !path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-        {
-            continue;
+        if let Some(key) = fragment::fragment_key(type_name, &filename)? {
+            fragments.push((entry.path(), key.to_string()));
         }
-        let name = filename.to_str().ok_or_else(|| {
-            LedgerError::Corrupt("cannot read fragment session identity as UTF-8".into())
-        })?;
-        let sid = name
-            .strip_prefix(&prefix)
-            .and_then(|name| name.strip_suffix(".jsonl"))
-            .ok_or_else(|| LedgerError::Corrupt("cannot read fragment filename framing".into()))?;
-        fragments.push((path, sid.to_string()));
     }
     Ok(fragments)
 }
+/// The fragments whose named session is completed and not current, with
+/// their keys. The caller verifies each one's records before merging.
 fn compactable_fragments(
     subdir: &Path,
     type_name: &str,
     completed_sessions: &std::collections::HashSet<String>,
     current_session_id: Option<&str>,
-) -> Result<Vec<PathBuf>, LedgerError> {
+) -> Result<Vec<(PathBuf, String)>, LedgerError> {
     Ok(fragment_sessions(subdir, type_name)?
         .into_iter()
         .filter(|(_, sid)| !is_current(current_session_id, sid) && completed_sessions.contains(sid))
-        .map(|(path, _)| path)
         .collect())
 }
 /// Whether fragment key `key` belongs to the current session, recorded as
@@ -786,5 +782,102 @@ mod r22_regressions {
                 .merged_count,
             1
         );
+    }
+
+    fn record(event: &str, sid: Option<&str>) -> String {
+        let sid = sid
+            .map(|sid| format!(r#","session_id":"{sid}""#))
+            .unwrap_or_default();
+        format!(r#"{{"event":"{event}","timestamp":"2026-01-01T00:00:00Z"{sid}}}"#) + "\n"
+    }
+
+    /// The fragment name for session `sid` in each namespace: the
+    /// pre-4.0.0 `ses-` key and the `sid-` key.
+    fn both_keys(sid: &str) -> [String; 2] {
+        [sid.to_string(), session_file_key(sid)]
+    }
+
+    #[test]
+    fn a_fragment_whose_records_are_not_its_sessions_is_refused_and_kept() {
+        for key in both_keys("ses-A") {
+            for (case, records) in [
+                ("mismatched", record("task_created", Some("ses-B"))),
+                ("missing", record("task_created", None)),
+                (
+                    "mixed",
+                    record("task_created", Some("ses-A")) + &record("task_created", Some("ses-B")),
+                ),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                fs::create_dir(dir.path().join("sessions")).unwrap();
+                fs::write(
+                    dir.path().join("sessions/sessions.jsonl"),
+                    record("session_end", Some("ses-A")),
+                )
+                .unwrap();
+                let graph = dir.path().join("work-graph");
+                fs::create_dir(&graph).unwrap();
+                let fragment = graph.join(format!("work-graph-{key}.jsonl"));
+                fs::write(&fragment, &records).unwrap();
+
+                let err = compact_ledger_type(dir.path(), "work-graph", None).unwrap_err();
+
+                assert!(
+                    matches!(err, LedgerError::Corrupt(_)),
+                    "{key} {case}: {err:?}"
+                );
+                assert_eq!(
+                    fs::read_to_string(&fragment).unwrap(),
+                    records,
+                    "{key} {case}"
+                );
+                assert!(!graph.join("work-graph.jsonl").exists(), "{key} {case}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_session_end_in_another_sessions_file_completes_no_session() {
+        for key in both_keys("ses-A") {
+            let dir = tempfile::tempdir().unwrap();
+            let sessions = dir.path().join("sessions");
+            let graph = dir.path().join("work-graph");
+            fs::create_dir(&sessions).unwrap();
+            fs::create_dir(&graph).unwrap();
+            // A file named for session A holds B's end.
+            let misplaced = sessions.join(format!("sessions-{key}.jsonl"));
+            fs::write(&misplaced, record("session_end", Some("ses-B"))).unwrap();
+            let running = graph.join(format!("work-graph-{}.jsonl", session_file_key("ses-B")));
+            fs::write(&running, record("task_created", Some("ses-B"))).unwrap();
+
+            let err = compact_ledger_type(dir.path(), "work-graph", None).unwrap_err();
+
+            assert!(matches!(err, LedgerError::Corrupt(_)), "{key}: {err:?}");
+            assert!(running.exists(), "{key}: B's fragment stays");
+            assert!(misplaced.exists(), "{key}");
+        }
+    }
+
+    #[test]
+    fn verified_fragments_compact_in_both_namespaces() {
+        for key in both_keys("ses-A") {
+            let dir = tempfile::tempdir().unwrap();
+            let sessions = dir.path().join("sessions");
+            let graph = dir.path().join("work-graph");
+            fs::create_dir(&sessions).unwrap();
+            fs::create_dir(&graph).unwrap();
+            fs::write(
+                sessions.join(format!("sessions-{key}.jsonl")),
+                record("session_end", Some("ses-A")),
+            )
+            .unwrap();
+            let fragment = graph.join(format!("work-graph-{key}.jsonl"));
+            fs::write(&fragment, record("task_created", Some("ses-A"))).unwrap();
+
+            let result = compact_ledger_type(dir.path(), "work-graph", None).unwrap();
+
+            assert_eq!(result.merged_count, 1, "{key}");
+            assert!(!fragment.exists(), "{key}");
+        }
     }
 }

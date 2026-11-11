@@ -18,6 +18,7 @@
 //! types died with their subsystems (charter §3.2 "never imported").
 
 pub mod compact;
+mod fragment;
 mod jsonl;
 pub mod rebuild;
 pub mod refusal;
@@ -61,6 +62,17 @@ pub enum LedgerError {
 
     #[error("corrupt ledger data: {0}")]
     Corrupt(String),
+
+    /// A session writer was handed an event recorded for another session,
+    /// or for none: its fragment holds only its own session's records.
+    #[error(
+        "the event names session {}, but this writer writes session {expected}",
+        .actual.as_deref().unwrap_or("none")
+    )]
+    SessionMismatch {
+        expected: String,
+        actual: Option<String>,
+    },
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

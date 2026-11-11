@@ -195,7 +195,7 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
     let unwritten = |error: LedgerError| unwritten(&ledger_dir, error);
     let identity = identity_of(&ledger_dir, summary.session_id.as_deref())?;
     let session_id = identity.as_ref().map(|i| i.record_id.clone());
-    let file_key = identity.map(|i| i.file_key);
+    let file_key = identity.as_ref().map(|i| i.file_key.clone());
 
     let mut data = HashMap::new();
     data.insert("branch".to_string(), serde_json::json!(summary.branch));
@@ -227,7 +227,7 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
         data,
     };
 
-    let writer = JsonlWriter::new_with_session(&ledger_dir, file_key.clone()).map_err(unwritten)?;
+    let writer = JsonlWriter::new_with_session(&ledger_dir, identity).map_err(unwritten)?;
     writer.append_event(event).map_err(unwritten)?;
 
     let file = match &file_key {
@@ -320,7 +320,7 @@ pub fn record_effective(
     let ledger_dir = info.ledger_dir();
     let identity = identity_of(&ledger_dir, session.session_id.as_deref())?;
     let session_id = identity.as_ref().map(|i| i.record_id.clone());
-    let file_key = identity.map(|i| i.file_key);
+    let file_key = identity.as_ref().map(|i| i.file_key.clone());
     let mut data = HashMap::new();
     data.insert("model".to_string(), serde_json::json!(session.model));
     data.insert("effort".to_string(), serde_json::json!(session.effort));
@@ -337,7 +337,7 @@ pub fn record_effective(
         ),
         data,
     };
-    let writer = JsonlWriter::new_with_session(&ledger_dir, file_key.clone())
+    let writer = JsonlWriter::new_with_session(&ledger_dir, identity)
         .map_err(|error| unwritten(&ledger_dir, error))?;
     writer
         .append_event(event)

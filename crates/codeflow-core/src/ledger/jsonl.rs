@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use fs2::FileExt;
 
 use super::routing::route_event_type;
-use super::{Event, LedgerError, LedgerWriter};
+use super::{Event, LedgerError, LedgerWriter, SessionIdentity};
 
 /// JSONL-based `LedgerWriter` implementation.
 ///
@@ -27,11 +27,12 @@ use super::{Event, LedgerError, LedgerWriter};
 /// └── ...
 /// ```
 ///
-/// When `session_id` is `Some`, writes go to the session fragment file.
-/// When `session_id` is `None`, writes go to the base file.
+/// With a session, writes go to that session's fragment file, named by its
+/// file key, and each event must carry its record id. Without one, writes
+/// go to the base file.
 pub struct JsonlWriter {
     ledger_dir: PathBuf,
-    session_id: Option<String>,
+    session: Option<SessionIdentity>,
     lock_wait: Option<Duration>,
 }
 
@@ -50,24 +51,26 @@ impl JsonlWriter {
         Self::new_with_session(ledger_dir, None)
     }
 
-    /// Create a new `JsonlWriter` with an optional session ID.
+    /// Create a new `JsonlWriter` with an optional session.
     ///
-    /// When `session_id` is `Some`, events are written to session-scoped
-    /// fragment files (`{type}/{type}-{key}.jsonl`). When `None`, events
-    /// are written to the base file (`{type}/{type}.jsonl`).
+    /// With a session (from [`super::session_identity`]), events are
+    /// written to its fragment files (`{type}/{type}-{file_key}.jsonl`),
+    /// and an event whose `session_id` is not the session's record id is
+    /// refused. Without one, events are written to the base file
+    /// (`{type}/{type}.jsonl`).
     ///
     /// # Errors
     ///
     /// Returns `LedgerError::IoAt` naming the directory if it cannot be created.
     pub fn new_with_session(
         ledger_dir: impl Into<PathBuf>,
-        session_id: Option<String>,
+        session: Option<SessionIdentity>,
     ) -> Result<Self, LedgerError> {
         let ledger_dir = ledger_dir.into();
         fs::create_dir_all(&ledger_dir).map_err(at(&ledger_dir))?;
         Ok(Self {
             ledger_dir,
-            session_id,
+            session,
             lock_wait: None,
         })
     }
@@ -119,8 +122,8 @@ impl JsonlWriter {
     /// - Session: `{ledger_dir}/{type_name}/{type_name}-{key}.jsonl`
     fn session_scoped_path(&self, type_name: &str) -> PathBuf {
         let subdir = self.ledger_dir.join(type_name);
-        match &self.session_id {
-            Some(sid) => subdir.join(format!("{type_name}-{sid}.jsonl")),
+        match &self.session {
+            Some(session) => subdir.join(format!("{type_name}-{}.jsonl", session.file_key)),
             None => subdir.join(format!("{type_name}.jsonl")),
         }
     }
@@ -129,6 +132,14 @@ impl JsonlWriter {
     /// appropriate file, holding an exclusive flock for the duration
     /// of the write.
     fn append_to_file(&self, type_name: &str, event: &Event) -> Result<(), LedgerError> {
+        if let Some(session) = &self.session {
+            if event.session_id.as_deref() != Some(session.record_id.as_str()) {
+                return Err(LedgerError::SessionMismatch {
+                    expected: session.record_id.clone(),
+                    actual: event.session_id.clone(),
+                });
+            }
+        }
         let file_path = self.session_scoped_path(type_name);
 
         // Ensure the subdirectory exists.
@@ -453,15 +464,15 @@ mod tests {
     #[test]
     fn test_session_scoped_writes_to_fragment() {
         let dir = tempfile::tempdir().unwrap();
-        let writer =
-            JsonlWriter::new_with_session(dir.path(), Some("ses-test-session".to_string()))
-                .unwrap();
+        let session = crate::ledger::session_identity("test-session").unwrap();
+        let writer = JsonlWriter::new_with_session(dir.path(), Some(session.clone())).unwrap();
 
-        let event = make_event("session_start");
+        let mut event = make_event("session_start");
+        event.session_id = Some(session.record_id.clone());
         writer.append_event(event).unwrap();
 
-        // Should write to sessions/sessions-ses-test-session.jsonl
-        let fragment = session_path(dir.path(), files::SESSIONS, "ses-test-session");
+        // Written to sessions/sessions-{file_key}.jsonl.
+        let fragment = session_path(dir.path(), files::SESSIONS, &session.file_key);
         assert!(fragment.exists(), "fragment file should exist");
         let content = fs::read_to_string(&fragment).unwrap();
         assert!(content.contains("\"event\":\"session_start\""));
@@ -480,16 +491,41 @@ mod tests {
         base_writer.append_event(make_event("finding")).unwrap();
 
         // Write to session fragment.
+        let session = crate::ledger::session_identity("abc").unwrap();
         let session_writer =
-            JsonlWriter::new_with_session(dir.path(), Some("ses-abc".to_string())).unwrap();
-        session_writer.append_event(make_event("finding")).unwrap();
+            JsonlWriter::new_with_session(dir.path(), Some(session.clone())).unwrap();
+        let mut event = make_event("finding");
+        event.session_id = Some(session.record_id.clone());
+        session_writer.append_event(event).unwrap();
 
         let base_content = fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS)).unwrap();
-        let frag_content =
-            fs::read_to_string(session_path(dir.path(), files::MEMORY_EVENTS, "ses-abc")).unwrap();
+        let frag_content = fs::read_to_string(session_path(
+            dir.path(),
+            files::MEMORY_EVENTS,
+            &session.file_key,
+        ))
+        .unwrap();
 
         assert_eq!(base_content.lines().count(), 1);
         assert_eq!(frag_content.lines().count(), 1);
+    }
+
+    #[test]
+    fn a_session_writer_refuses_another_sessions_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = crate::ledger::session_identity("A").unwrap();
+        let writer = JsonlWriter::new_with_session(dir.path(), Some(session.clone())).unwrap();
+        for other in [Some("ses-B".to_string()), None] {
+            let mut event = make_event("finding");
+            event.session_id = other;
+            let err = writer.append_event(event).unwrap_err();
+            assert!(
+                matches!(err, LedgerError::SessionMismatch { .. }),
+                "{err:?}"
+            );
+        }
+        let fragment = session_path(dir.path(), files::MEMORY_EVENTS, &session.file_key);
+        assert!(!fragment.exists(), "nothing is written");
     }
 
     #[test]
