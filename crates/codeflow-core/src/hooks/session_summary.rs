@@ -194,8 +194,8 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
     let ledger_dir = info.ledger_dir();
     let unwritten = |error: LedgerError| unwritten(&ledger_dir, error);
     let identity = identity_of(&ledger_dir, summary.session_id.as_deref())?;
-    let session_id = identity.as_ref().map(|i| i.record_id.clone());
-    let file_key = identity.as_ref().map(|i| i.file_key.clone());
+    let session_id = identity.as_ref().map(|i| i.record_id().to_string());
+    let file_key = identity.as_ref().map(|i| i.file_key().to_string());
 
     let mut data = HashMap::new();
     data.insert("branch".to_string(), serde_json::json!(summary.branch));
@@ -319,8 +319,8 @@ pub fn record_effective(
     };
     let ledger_dir = info.ledger_dir();
     let identity = identity_of(&ledger_dir, session.session_id.as_deref())?;
-    let session_id = identity.as_ref().map(|i| i.record_id.clone());
-    let file_key = identity.as_ref().map(|i| i.file_key.clone());
+    let session_id = identity.as_ref().map(|i| i.record_id().to_string());
+    let file_key = identity.as_ref().map(|i| i.file_key().to_string());
     let mut data = HashMap::new();
     data.insert("model".to_string(), serde_json::json!(session.model));
     data.insert("effort".to_string(), serde_json::json!(session.effort));
@@ -670,21 +670,21 @@ mod tests {
         let mut folded = std::collections::HashSet::new();
         for id in ids {
             let identity = session_identity(id).unwrap();
-            assert_eq!(identity.record_id, format!("ses-{id}"));
-            let hex = identity.file_key.strip_prefix("sid-").unwrap();
+            assert_eq!(identity.record_id(), format!("ses-{id}"));
+            let hex = identity.file_key().strip_prefix("sid-").unwrap();
             assert_eq!(hex.len(), 32, "{id}");
             assert!(
                 hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
                 "{id}"
             );
-            assert!(folded.insert(identity.file_key.to_lowercase()), "{id}");
+            assert!(folded.insert(identity.file_key().to_lowercase()), "{id}");
         }
         // A legacy name and a new id that once shared a file: `_alpha` was
         // `sessions-ses-_alpha`, the name the 71282a421 encoding gave
         // `Alpha`; `Alpha` was `sessions-ses-Alpha`, which folds onto
         // `alpha`'s legacy name.
         for id in ["Alpha", "alpha", "_alpha"] {
-            let key = session_identity(id).unwrap().file_key;
+            let key = session_identity(id).unwrap().file_key().to_string();
             for legacy in ["ses-_alpha", "ses-Alpha", "ses-alpha"] {
                 assert_ne!(key.to_lowercase(), legacy.to_lowercase(), "{id}");
             }
@@ -747,7 +747,7 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(end, effective, "{id}: both records share its file");
-            let key = session_identity(id).unwrap().file_key;
+            let key = session_identity(id).unwrap().file_key().to_string();
             assert!(end.ends_with(format!("sessions/sessions-{key}.jsonl")));
             files.insert(end);
         }

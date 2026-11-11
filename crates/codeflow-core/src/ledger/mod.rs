@@ -74,6 +74,11 @@ pub enum LedgerError {
         actual: Option<String>,
     },
 
+    /// A session writer was given an identity whose file key is not the
+    /// one derived from its record id.
+    #[error("invalid session identity: {0}")]
+    InvalidSessionIdentity(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -107,13 +112,62 @@ pub mod files {
 
 /// A harness session as the ledger records it: the `session_id` its events
 /// carry and the fragment key its file is named by.
+///
+/// The fields are private and the only constructor is [`session_identity`],
+/// which derives the key from the record id, so the pair cannot be forged
+/// outside this module:
+///
+/// ```compile_fail
+/// let forged = codeflow_core::ledger::SessionIdentity {
+///     record_id: "ses-A".into(),
+///     file_key: "ses-B".into(),
+/// };
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionIdentity {
+    record_id: String,
+    file_key: String,
+}
+
+impl SessionIdentity {
     /// `ses-` and the harness id exactly as given, written into each event.
-    pub record_id: String,
+    #[must_use]
+    pub fn record_id(&self) -> &str {
+        &self.record_id
+    }
+
     /// `sid-` and 32 lowercase hex digits: the file is
     /// `{type}/{type}-{key}.jsonl`.
-    pub file_key: String,
+    #[must_use]
+    pub fn file_key(&self) -> &str {
+        &self.file_key
+    }
+
+    /// Check that the key is the one [`session_identity`] derives from the
+    /// record id, so a writer never opens a file named for another session
+    /// or a key that is not a plain file-name part.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::InvalidSessionIdentity`] for an empty or unprefixed
+    /// record id, or a key that is not [`session_file_key`] of it.
+    pub fn verify(&self) -> Result<(), LedgerError> {
+        let invalid = |reason: String| Err(LedgerError::InvalidSessionIdentity(reason));
+        if !self.record_id.starts_with("ses-") || self.record_id.len() == "ses-".len() {
+            return invalid(format!(
+                "record id {:?} is not `ses-` and a harness id",
+                self.record_id
+            ));
+        }
+        let expected = session_file_key(&self.record_id);
+        if self.file_key != expected {
+            return invalid(format!(
+                "file key {:?} is not {expected}, the key of {}",
+                self.file_key, self.record_id
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The prefix of a fragment key derived by [`session_identity`]. Releases

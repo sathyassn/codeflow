@@ -61,11 +61,17 @@ impl JsonlWriter {
     ///
     /// # Errors
     ///
-    /// Returns `LedgerError::IoAt` naming the directory if it cannot be created.
+    /// Returns `LedgerError::InvalidSessionIdentity`, before touching the
+    /// filesystem, when the session's file key is not the one derived from
+    /// its record id ([`SessionIdentity::verify`]), and
+    /// `LedgerError::IoAt` naming the directory if it cannot be created.
     pub fn new_with_session(
         ledger_dir: impl Into<PathBuf>,
         session: Option<SessionIdentity>,
     ) -> Result<Self, LedgerError> {
+        if let Some(session) = &session {
+            session.verify()?;
+        }
         let ledger_dir = ledger_dir.into();
         fs::create_dir_all(&ledger_dir).map_err(at(&ledger_dir))?;
         Ok(Self {
@@ -123,7 +129,7 @@ impl JsonlWriter {
     fn session_scoped_path(&self, type_name: &str) -> PathBuf {
         let subdir = self.ledger_dir.join(type_name);
         match &self.session {
-            Some(session) => subdir.join(format!("{type_name}-{}.jsonl", session.file_key)),
+            Some(session) => subdir.join(format!("{type_name}-{}.jsonl", session.file_key())),
             None => subdir.join(format!("{type_name}.jsonl")),
         }
     }
@@ -133,9 +139,9 @@ impl JsonlWriter {
     /// of the write.
     fn append_to_file(&self, type_name: &str, event: &Event) -> Result<(), LedgerError> {
         if let Some(session) = &self.session {
-            if event.session_id.as_deref() != Some(session.record_id.as_str()) {
+            if event.session_id.as_deref() != Some(session.record_id()) {
                 return Err(LedgerError::SessionMismatch {
-                    expected: session.record_id.clone(),
+                    expected: session.record_id().to_string(),
                     actual: event.session_id.clone(),
                 });
             }
@@ -468,11 +474,11 @@ mod tests {
         let writer = JsonlWriter::new_with_session(dir.path(), Some(session.clone())).unwrap();
 
         let mut event = make_event("session_start");
-        event.session_id = Some(session.record_id.clone());
+        event.session_id = Some(session.record_id().to_string());
         writer.append_event(event).unwrap();
 
         // Written to sessions/sessions-{file_key}.jsonl.
-        let fragment = session_path(dir.path(), files::SESSIONS, &session.file_key);
+        let fragment = session_path(dir.path(), files::SESSIONS, session.file_key());
         assert!(fragment.exists(), "fragment file should exist");
         let content = fs::read_to_string(&fragment).unwrap();
         assert!(content.contains("\"event\":\"session_start\""));
@@ -495,14 +501,14 @@ mod tests {
         let session_writer =
             JsonlWriter::new_with_session(dir.path(), Some(session.clone())).unwrap();
         let mut event = make_event("finding");
-        event.session_id = Some(session.record_id.clone());
+        event.session_id = Some(session.record_id().to_string());
         session_writer.append_event(event).unwrap();
 
         let base_content = fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS)).unwrap();
         let frag_content = fs::read_to_string(session_path(
             dir.path(),
             files::MEMORY_EVENTS,
-            &session.file_key,
+            session.file_key(),
         ))
         .unwrap();
 
@@ -524,8 +530,39 @@ mod tests {
                 "{err:?}"
             );
         }
-        let fragment = session_path(dir.path(), files::MEMORY_EVENTS, &session.file_key);
+        let fragment = session_path(dir.path(), files::MEMORY_EVENTS, session.file_key());
         assert!(!fragment.exists(), "nothing is written");
+    }
+
+    /// A forged identity, built here only because this module can see the
+    /// private fields, is refused before the writer creates anything.
+    #[test]
+    fn a_forged_session_identity_is_refused_before_any_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger_dir = dir.path().join("ledger");
+        let forged = [
+            ("ses-A", "ses-B".to_string()),
+            ("ses-A", crate::ledger::session_file_key("ses-B")),
+            ("ses-A", "sid-../../escape".to_string()),
+            ("ses-A", "sid-a/b".to_string()),
+            ("ses-A", "sid-\0".to_string()),
+            ("ses-", crate::ledger::session_file_key("ses-")),
+            ("A", crate::ledger::session_file_key("A")),
+        ];
+        for (record_id, file_key) in forged {
+            let session = SessionIdentity {
+                record_id: record_id.to_string(),
+                file_key: file_key.clone(),
+            };
+            let result = JsonlWriter::new_with_session(&ledger_dir, Some(session));
+            assert!(
+                matches!(result, Err(LedgerError::InvalidSessionIdentity(_))),
+                "{record_id} {file_key:?}"
+            );
+            assert!(!ledger_dir.exists(), "{record_id} {file_key:?}");
+        }
+        let entries = fs::read_dir(dir.path()).unwrap().count();
+        assert_eq!(entries, 0, "nothing is created beside the ledger either");
     }
 
     #[test]

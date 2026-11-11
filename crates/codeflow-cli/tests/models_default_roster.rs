@@ -508,9 +508,8 @@ fn session_end(root: &Path, session: &str) {
 /// the project's state directory, in file order. The name compares byte
 /// for byte, so a file that differs only by case is not this one.
 fn session_events(root: &Path, session: &str) -> Vec<Value> {
-    let key = codeflow_core::ledger::session_identity(session)
-        .unwrap()
-        .file_key;
+    let identity = codeflow_core::ledger::session_identity(session).unwrap();
+    let key = identity.file_key();
     let name = format!("sessions-{key}.jsonl");
     let mut stack = vec![root.join(".git")];
     let mut found = Vec::new();
