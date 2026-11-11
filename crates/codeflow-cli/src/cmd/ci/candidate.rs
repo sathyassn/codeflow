@@ -4,9 +4,11 @@
 //! its line and hands `codeflow ci` the line's tip as `--base` and the line
 //! as `--into`. This check never trusts that hand-off: it binds the pushed
 //! branch again from its own reads, the fetched line tip, the records at
-//! the default branch's tip and at that line tip, and the advertisement the
-//! hook passed, and refuses with the cause when the binding does not hold
-//! or the base is not the line's tip. A bound candidate is then judged as
+//! the default branch's tip and at that line tip, and the destination's
+//! advertisement, which it requires. It refuses with the cause when the
+//! binding does not hold, when the advertisement is missing, or when a
+//! claim of the hand-off (the policy authority, `--into`, the base) is
+//! missing or differs from what it established. A bound candidate is then judged as
 //! a push of its line would be: the line's records into the line's own
 //! target, the line's direct-commit rule, and each member merge as a
 //! landing on the line.
@@ -16,7 +18,6 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::landing_candidate::{self, BoundLine, Inputs};
-use codeflow_core::workgraph::line_adoption;
 
 /// A pushed landing candidate bound to its line.
 pub(super) struct Bound {
@@ -35,7 +36,7 @@ pub(super) fn check(
     root: &Path,
     pushed_ref: Option<&str>,
     git: &GitPolicy,
-    authority: Option<&str>,
+    claims: (Option<&str>, Option<&str>),
     (base, head): (Option<&str>, &str),
     (destination, advertisement): (Option<&str>, Option<&str>),
     tagged: &mut Vec<super::TaggedViolation>,
@@ -51,7 +52,7 @@ pub(super) fn check(
         root,
         branch,
         git,
-        authority,
+        claims,
         (base, head),
         (destination, advertisement),
     ) {
@@ -80,49 +81,46 @@ pub(super) fn check(
 }
 
 /// Bind `branch` from this run's own reads; the cause when it does not
-/// hold or cannot be read.
+/// hold or cannot be read. Every destination tip comes from the
+/// destination's own advertisement; each claim the hand-off makes (the
+/// policy authority, `--into`, the base) must match what this run
+/// establishes, and a missing claim is refused, never filled in.
 fn bind(
     root: &Path,
     branch: &str,
     git: &GitPolicy,
-    authority: Option<&str>,
+    (authority, into): (Option<&str>, Option<&str>),
     (base, head): (Option<&str>, &str),
     (destination, advertisement): (Option<&str>, Option<&str>),
 ) -> Result<Bound, String> {
-    // The default branch's tip: the authority the hook names, else the
-    // default target's fetched tip, never a local branch.
-    let default_tip = if let Some(tip) = authority {
-        tip.to_string()
-    } else {
-        let target = codeflow_core::workgraph::default_work_target_ref(root)
-            .map_err(|error| format!("the default branch cannot be read: {error}"))?
-            .ok_or("no default branch is fetched here to read the line's binding from")?;
-        line_adoption::reference_tip(root, &target)?
-            .ok_or_else(|| format!("'{target}' cannot be read"))?
+    let (Some(url), Some(listed)) = (destination, advertisement) else {
+        return Err("the run holds no destination advertisement (`--destination` with `--advertisement-stdin`, as the pre-push hook hands over), so the line's tip and the default branch's tip cannot be established independently".to_string());
     };
-    let asked = match (destination, advertisement) {
-        (Some(url), Some(listed)) => Some(
-            codeflow_core::workgraph::release_line::from_advertisement(url, listed).map_err(
-                |error| format!("the destination's advertisement cannot be read: {error}"),
-            )?,
-        ),
-        _ => None,
-    };
-    let advertised: Option<BTreeMap<String, String>> = asked.as_ref().map(|asked| {
-        asked
-            .heads
-            .iter()
-            .map(|(name, tip)| (name.clone(), tip.to_string()))
-            .collect()
-    });
-    // The line's own target: the default branch the destination names,
-    // else the one fetched here.
-    let target = match asked.as_ref().and_then(|asked| asked.default.as_ref()) {
-        Some((name, _)) => name.clone(),
-        None => codeflow_core::workgraph::default_work_target(root)
-            .map_err(|error| format!("the default branch cannot be read: {error}"))?
-            .ok_or("no default branch is known here to judge the line against")?,
-    };
+    let asked = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
+        .map_err(|error| format!("the destination's advertisement cannot be read: {error}"))?;
+    // The default branch and its tip, as the destination advertises them:
+    // the line's own target, and the records that must bind the line.
+    let (target, default_tip) = asked
+        .default
+        .as_ref()
+        .map(|(name, tip)| (name.clone(), tip.to_string()))
+        .ok_or("the destination advertises no default branch, so the line's binding cannot be read at its tip")?;
+    // The policy authority the hand-off names must be that advertised tip.
+    let authority = authority.ok_or("the hand-off names no policy authority (`--policy-from`), so the default branch's tip it judged under cannot be compared with the destination's")?;
+    let named = super::rev_parse(root, authority)?.unwrap_or_else(|| authority.to_string());
+    if !named.eq_ignore_ascii_case(&default_tip) {
+        return Err(format!(
+            "the hand-off's policy authority {} is not the tip of '{}' the destination advertises, {}",
+            &named[..named.len().min(9)],
+            codeflow_core::git::display_text(&target),
+            &default_tip[..default_tip.len().min(9)]
+        ));
+    }
+    let advertised: BTreeMap<String, String> = asked
+        .heads
+        .iter()
+        .map(|(name, tip)| (name.clone(), tip.to_string()))
+        .collect();
     let line = landing_candidate::bind(
         root,
         &Inputs {
@@ -130,10 +128,26 @@ fn bind(
             head,
             policy: git,
             default_tip: &default_tip,
-            advertised: advertised.as_ref(),
+            advertised: &advertised,
             line: None,
         },
     )?;
+    // The line the hand-off names with `--into` must be the bound line.
+    let shown = codeflow_core::git::display_text(&line.line);
+    match into {
+        None => {
+            return Err(format!(
+                "the hand-off names no line (`--into`), so it cannot be compared with '{shown}', the line the candidate is bound to"
+            ))
+        }
+        Some(into) if into != line.line => {
+            return Err(format!(
+                "the hand-off names '{}' with `--into`, but the candidate is bound to '{shown}'",
+                codeflow_core::git::display_text(into)
+            ))
+        }
+        Some(_) => {}
+    }
     let base = base.ok_or("the range has no base, so it cannot start at the line's tip")?;
     let base = super::rev_parse(root, base)?.unwrap_or_else(|| base.to_string());
     if !base.eq_ignore_ascii_case(&line.tip) {

@@ -686,10 +686,13 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         &root,
         args.pushed_ref.as_deref(),
         configured,
-        match &authority {
-            Some(Authority::Named(sha)) => Some(sha.as_str()),
-            _ => None,
-        },
+        (
+            match &authority {
+                Some(Authority::Named(sha)) => Some(sha.as_str()),
+                _ => None,
+            },
+            args.into.as_deref(),
+        ),
         (base_sha.as_deref(), &head),
         (destination.as_deref(), advertisement.as_deref()),
         &mut tagged,
@@ -698,6 +701,8 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     timings.lap("landing-candidate");
     // Judged as a push of the line itself: the line's records into the
     // line's own target, the default branch, as the hook hands a line push.
+    // The hand-off's `--into` named the bound line (checked above), so the
+    // line's own target replaces it only after that check.
     let pushed_name = branch.clone();
     let (branch, line_target, into, into_flag) = match &candidate {
         Some(bound) => (

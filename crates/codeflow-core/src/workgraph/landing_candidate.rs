@@ -8,10 +8,12 @@
 //! pusher cannot forge:
 //!
 //! - the name carries the prefix read from the default branch's policy;
-//! - the candidate's first-parent chain reaches the fetched tip
-//!   (`refs/remotes/origin/<line>`) of exactly one epic line, within
-//!   `git.candidate_search_depth` commits, and that tip is the one the
-//!   destination advertises for the line in the same push;
+//! - the candidate's first-parent chain, `git.candidate_search_depth`
+//!   commits of it, holds the tip of exactly one epic line, counting every
+//!   epic line the destination advertises in the same push and every one
+//!   fetched here, at whatever point of the chain each tip lies; that line's
+//!   advertised tip and its fetched tip (`refs/remotes/origin/<line>`) are
+//!   that same commit;
 //! - the line is bound as an epic line by the records at both the default
 //!   branch's tip and the line's fetched tip, never by the name shape
 //!   `integration/<x>` alone;
@@ -66,9 +68,10 @@ pub struct Inputs<'a> {
     /// The default branch's tip, whose records must bind the line.
     pub default_tip: &'a str,
     /// The branch tips the destination advertises in this push, by branch
-    /// name; `None` when the run holds no advertisement (a run outside the
-    /// pre-push hand-off), which then trusts the fetched tip alone.
-    pub advertised: Option<&'a BTreeMap<String, String>>,
+    /// name. Always required: the destination's line inventory decides
+    /// which line the candidate is cut from, and a fetched tip alone never
+    /// does.
+    pub advertised: &'a BTreeMap<String, String>,
     /// The line the caller already knows the candidate must land on (the
     /// line a push updates); `None` to find it from the first-parent chain.
     pub line: Option<&'a str>,
@@ -109,12 +112,16 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
             .map_err(|e| format!("cannot read {revision}: {e}"))
     };
     let head = resolve(inputs.head)?;
-    let lines = fetched_lines(&repo)?;
-    let (line, tip, chain) = walk(&repo, head, &lines, policy.candidate_search_depth)?;
+    let depth = policy.candidate_search_depth;
+    let chain = first_parent_chain(&repo, head, depth)?;
+    let fetched = fetched_lines(&repo)?;
+    let (line, at) = line_on_chain(&chain, &fetched, inputs.advertised, depth)?;
+    let tip = chain[at];
+    let chain: Vec<Oid> = chain[..at].to_vec();
     if let Some(expected) = inputs.line {
         if line != expected {
             return Err(format!(
-                "its first-parent chain reaches the fetched tip of '{}', not of '{}', the line this push updates",
+                "its first-parent chain reaches the tip of '{}', not of '{}', the line this push updates",
                 crate::git::display_text(&line),
                 crate::git::display_text(expected)
             ));
@@ -122,21 +129,35 @@ pub fn bind(root: &Path, inputs: &Inputs<'_>) -> Result<BoundLine, String> {
     }
     let tip_text = tip.to_string();
     let shown = crate::git::display_text(&line);
-    if let Some(advertised) = inputs.advertised {
-        match advertised.get(&line) {
-            None => {
-                return Err(format!(
-                    "the destination does not advertise '{shown}', so its fetched tip {tip:.9} cannot be confirmed as the line's tip"
-                ))
-            }
-            Some(at) if !at.eq_ignore_ascii_case(&tip_text) => {
-                return Err(format!(
-                    "it is cut from 'origin/{shown}' at {tip:.9}, but the destination advertises '{shown}' at {}: the fetched tip is stale, so fetch the line and rebuild the candidate on its tip",
-                    at.get(..9).unwrap_or(at)
-                ))
-            }
-            Some(_) => {}
+    // The line's tip is confirmed by both reads: the destination's
+    // advertisement in this push and this clone's fetched ref.
+    let fetched_tip = fetched
+        .iter()
+        .find(|(name, _)| name.as_deref() == Some(line.as_str()))
+        .map(|(_, oid)| *oid);
+    match (inputs.advertised.get(&line), fetched_tip) {
+        (None, _) => {
+            return Err(format!(
+                "the destination does not advertise '{shown}', so its fetched tip {tip:.9} cannot be confirmed as the line's tip"
+            ))
         }
+        (Some(advertised), _) if !advertised.eq_ignore_ascii_case(&tip_text) => {
+            return Err(format!(
+                "it is cut from 'origin/{shown}' at {tip:.9}, but the destination advertises '{shown}' at {}: the fetched tip is stale, so fetch the line and rebuild the candidate on its tip",
+                advertised.get(..9).unwrap_or(advertised)
+            ))
+        }
+        (Some(_), None) => {
+            return Err(format!(
+                "'{shown}' is not fetched here ('origin/{shown}' is missing), so the records at its tip {tip:.9} cannot be read: fetch the line"
+            ))
+        }
+        (Some(_), Some(fetched)) if fetched != tip => {
+            return Err(format!(
+                "the destination advertises '{shown}' at {tip:.9}, but 'origin/{shown}' is at {fetched:.9}: fetch the line and rebuild the candidate on its tip"
+            ))
+        }
+        (Some(_), Some(_)) => {}
     }
     for (anchor, place) in [
         (inputs.default_tip, "the default branch".to_string()),
@@ -208,55 +229,94 @@ fn fetched_lines(repo: &Repository) -> Result<Vec<(Option<String>, Oid)>, String
     Ok(lines)
 }
 
-/// Walk `head`'s first-parent chain, `depth` commits at most, to the first
-/// commit that is a fetched epic line's tip: that line, its tip, and the
-/// chain's commits after the tip, newest first.
-fn walk(
-    repo: &Repository,
-    head: Oid,
-    lines: &[(Option<String>, Oid)],
-    depth: u32,
-) -> Result<(String, Oid, Vec<Oid>), String> {
-    let mut chain = Vec::new();
+/// `head`'s first-parent chain, newest first: `head` and at most `depth`
+/// commits before it, ending early at a root commit.
+fn first_parent_chain(repo: &Repository, head: Oid, depth: u32) -> Result<Vec<Oid>, String> {
+    let mut chain = vec![head];
     let mut at = head;
-    for _ in 0..=depth {
-        let here: Vec<&Option<String>> = lines
-            .iter()
-            .filter(|(_, tip)| *tip == at)
-            .map(|(name, _)| name)
-            .collect();
-        match here.as_slice() {
-            [] => {}
-            [Some(name)] => return Ok((name.clone(), at, chain)),
-            [None] => {
-                return Err(format!(
-                    "a fetched line at {at:.9} has a name that is not UTF-8"
-                ))
-            }
-            several => {
-                let names = several
-                    .iter()
-                    .map(|name| name.as_deref().unwrap_or("<not UTF-8>"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(format!(
-                    "its first-parent chain reaches {at:.9}, the fetched tip of several epic lines ({names}), so the line it lands on is ambiguous"
-                ));
-            }
-        }
-        chain.push(at);
+    for _ in 0..depth {
         let commit = repo.find_commit(at).map_err(|e| e.to_string())?;
         match history::parents(repo, &commit)
             .map_err(|e| e.to_string())?
             .first()
         {
-            Some(first) => at = *first,
+            Some(first) => {
+                at = *first;
+                chain.push(at);
+            }
             None => break,
         }
     }
-    Err(format!(
-        "its first-parent chain reaches no fetched epic line tip ('origin/integration/EPC-*') within {depth} commits (git.candidate_search_depth): cut it from a line's fetched tip, or fetch the line it was cut from"
-    ))
+    Ok(chain)
+}
+
+/// The one epic line whose tip lies on `chain`, and the tip's position in
+/// it. The inventory is every epic line the destination advertises and
+/// every epic line fetched here, so a missing tracking ref hides no line
+/// the destination holds. The whole bounded chain is searched, never only
+/// up to the first tip: two lines whose tips lie on the chain, at one
+/// commit or at different points, leave the line ambiguous and refuse.
+/// Where a line's advertised and fetched tips lie at different points, the
+/// advertised one is returned and the caller refuses the mismatch.
+fn line_on_chain(
+    chain: &[Oid],
+    fetched: &[(Option<String>, Oid)],
+    advertised: &BTreeMap<String, String>,
+    depth: u32,
+) -> Result<(String, usize), String> {
+    let place = |tip: Oid| chain.iter().position(|at| *at == tip);
+    // Each line on the chain, with the position of its advertised tip and
+    // of its fetched tip.
+    let mut found: BTreeMap<String, (Option<usize>, Option<usize>)> = BTreeMap::new();
+    for (name, tip) in advertised {
+        if line_adoption::epic_id(name).is_err() {
+            continue;
+        }
+        let tip = Oid::from_str(tip).map_err(|e| {
+            format!(
+                "the destination advertises '{}' at '{}', which is not a commit ID: {e}",
+                crate::git::display_text(name),
+                crate::git::display_text(tip)
+            )
+        })?;
+        if let Some(at) = place(tip) {
+            found.entry(name.clone()).or_default().0 = Some(at);
+        }
+    }
+    for (name, tip) in fetched {
+        let Some(at) = place(*tip) else {
+            continue;
+        };
+        let Some(name) = name else {
+            return Err(format!(
+                "a fetched line at {:.9} has a name that is not UTF-8",
+                chain[at]
+            ));
+        };
+        found.entry(name.clone()).or_default().1 = Some(at);
+    }
+    let mut lines = found.into_iter().filter_map(|(name, (advertised, fetched))| {
+        advertised.or(fetched).map(|at| (name, at))
+    });
+    match (lines.next(), lines.next()) {
+        (None, _) => Err(format!(
+            "its first-parent chain reaches no epic line tip ('integration/EPC-*') the destination advertises or this clone fetched, within {depth} commits (git.candidate_search_depth): cut it from a line's fetched tip, or fetch the line it was cut from"
+        )),
+        (Some(line), None) => Ok(line),
+        (Some(first), Some(second)) => {
+            let names = [first, second]
+                .into_iter()
+                .chain(lines)
+                .map(|(name, at)| {
+                    format!("'{}' at {:.9}", crate::git::display_text(&name), chain[at])
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "its first-parent chain holds the tips of several epic lines ({names}), so the line it lands on is ambiguous"
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

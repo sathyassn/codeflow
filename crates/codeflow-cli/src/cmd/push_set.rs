@@ -350,10 +350,12 @@ enum Landing {
 /// (TSK-1351 AC-1 to AC-3, AC-5). Any other push is [`Landing::Ordinary`].
 /// `None` when it is refused: a condition that does not hold, or cannot be
 /// read, is reported with its cause, so a candidate is never judged
-/// against the default branch.
+/// against the default branch. `pushed` is the whole push set: a line
+/// update is checked against every candidate destination in it before it
+/// is judged as an ordinary line push.
 fn landing(
     root: &Path,
-    r: &PushRef,
+    (r, pushed): (&PushRef, &[&PushRef]),
     branch: &str,
     judged: &Judged,
     destination: &Destination<'_>,
@@ -369,7 +371,7 @@ fn landing(
     if codeflow_core::workgraph::line_adoption::epic_id(branch).is_err() {
         return Ok(Some(Landing::Ordinary));
     }
-    line_landing(root, r, branch, (tip, policy), destination, report)
+    line_landing(root, (r, pushed), branch, (tip, policy), destination, report)
 }
 
 /// The branches the destination advertises in this push, or why they
@@ -416,7 +418,7 @@ fn pushed_candidate(
                 head: &r.local_sha,
                 policy,
                 default_tip: tip,
-                advertised: Some(advertised),
+                advertised,
                 line: None,
             },
         )
@@ -444,14 +446,15 @@ fn pushed_candidate(
 /// exactly as before. `None` when it is refused (reported).
 fn line_landing(
     root: &Path,
-    r: &PushRef,
+    (r, pushed): (&PushRef, &[&PushRef]),
     branch: &str,
     (tip, policy): (&str, &GitPolicy),
     destination: &Destination<'_>,
     report: &mut StageReport,
 ) -> Result<Option<Landing>, String> {
     let advertised = advertised_branches(root, destination);
-    let Some(name) = candidate_at(root, r, policy, advertised.as_ref().ok().copied())? else {
+    let at = (r, pushed);
+    let Some(name) = candidate_at(root, at, policy, advertised.as_ref().ok().copied())? else {
         return Ok(Some(Landing::Ordinary));
     };
     let what = format!(
@@ -467,7 +470,7 @@ fn line_landing(
                 head: &r.local_sha,
                 policy,
                 default_tip: tip,
-                advertised: Some(advertised),
+                advertised,
                 line: Some(branch),
             },
         )
@@ -503,12 +506,14 @@ fn line_landing(
 }
 
 /// The landing candidate whose tip a line push's new tip is: the local ref
-/// pushed, a local branch at that commit, or a branch the destination
-/// advertises there, named with `git.candidate_prefix`. `None` when no
-/// candidate is at it.
+/// pushed, a candidate destination another update of the same push sets to
+/// that commit (a new candidate ref the destination does not hold yet and
+/// that need not exist here), a local branch at that commit, or a branch
+/// the destination advertises there, named with `git.candidate_prefix`.
+/// `None` when no candidate is at it.
 fn candidate_at(
     root: &Path,
-    r: &PushRef,
+    (r, pushed): (&PushRef, &[&PushRef]),
     policy: &GitPolicy,
     advertised: Option<&BTreeMap<String, String>>,
 ) -> Result<Option<String>, String> {
@@ -516,6 +521,14 @@ fn candidate_at(
         if policy.is_candidate_branch(name) {
             return Ok(Some(name.to_string()));
         }
+    }
+    if let Some(name) = pushed
+        .iter()
+        .filter(|other| other.local_sha.eq_ignore_ascii_case(&r.local_sha))
+        .filter_map(|other| other.remote_branch())
+        .find(|name| policy.is_candidate_branch(name))
+    {
+        return Ok(Some(name.to_string()));
     }
     let local = git(
         root,
@@ -574,7 +587,8 @@ fn run_ci_ranges(
                 continue;
             }
         };
-        let Some(landing) = landing(root, r, branch, &judged, destination, report)? else {
+        let Some(landing) = landing(root, (r, pushed), branch, &judged, destination, report)?
+        else {
             continue;
         };
         let (policy, judging) = match &judged {

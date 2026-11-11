@@ -46,8 +46,15 @@ fn hooked_git(root: &Path) -> Command {
 
 /// A real `git push origin <refspec>` through the installed hook.
 fn push(root: &Path, refspec: &str) -> (i32, String) {
+    push_many(root, &[refspec])
+}
+
+/// One real `git push origin <refspec>...` of every refspec through the
+/// installed hook.
+fn push_many(root: &Path, refspecs: &[&str]) -> (i32, String) {
     let out = hooked_git(root)
-        .args(["push", "origin", refspec])
+        .args(["push", "origin"])
+        .args(refspecs)
         .output()
         .unwrap();
     (
@@ -225,6 +232,30 @@ fn refused_by_binding(pushed: &(i32, String), what: &str, cause: &str) {
 /// `codeflow ci` with the pre-push hook's hand-off for the candidate
 /// `name` at `head`, from `base`, into the line.
 fn hand_off(fixture: &Fixture, name: &str, head: &str, base: &str) -> (i32, String) {
+    hand_off_with(fixture, name, head, base, &Claims::default())
+}
+
+/// The claims a hand-off makes, each as the pre-push hook makes it unless
+/// set: `None` in an outer `Option` keeps the hook's value, `Some(None)`
+/// leaves the claim out.
+#[derive(Default)]
+struct Claims<'a> {
+    /// `--policy-from`; the hook passes `main`'s tip.
+    policy_from: Option<Option<&'a str>>,
+    /// `--into`; the hook passes the line.
+    into: Option<Option<&'a str>>,
+    /// Leave out `--destination` and `--advertisement-stdin`.
+    no_advertisement: bool,
+}
+
+/// [`hand_off`] with `claims` in place of the hook's own.
+fn hand_off_with(
+    fixture: &Fixture,
+    name: &str,
+    head: &str,
+    base: &str,
+    claims: &Claims<'_>,
+) -> (i32, String) {
     let root = fixture.root();
     let remote = root.join(".git/destination.git");
     let url = remote.to_str().unwrap();
@@ -240,39 +271,53 @@ fn hand_off(fixture: &Fixture, name: &str, head: &str, base: &str) -> (i32, Stri
             "refs/tags/*",
         ],
     );
+    let pushed_ref = format!("refs/heads/{name}");
+    let mut args: Vec<String> = [
+        "ci",
+        "--base",
+        base,
+        "--head",
+        head,
+        "--branch",
+        name,
+        "--pushed-ref",
+        &pushed_ref,
+        "--run-level",
+        "block",
+        "--commits-from",
+        &main,
+    ]
+    .iter()
+    .map(|arg| (*arg).to_string())
+    .collect();
+    if let Some(policy_from) = claims.policy_from.unwrap_or(Some(&main)) {
+        args.extend(["--policy-from".to_string(), policy_from.to_string()]);
+    }
+    if !claims.no_advertisement {
+        args.extend([
+            "--destination".to_string(),
+            url.to_string(),
+            "--advertisement-stdin".to_string(),
+        ]);
+    }
+    if let Some(into) = claims.into.unwrap_or(Some(LINE)) {
+        args.push(format!("--into={into}"));
+    }
     let mut child = codeflow()
-        .args([
-            "ci",
-            "--base",
-            base,
-            "--head",
-            head,
-            "--branch",
-            name,
-            "--pushed-ref",
-            &format!("refs/heads/{name}"),
-            "--run-level",
-            "block",
-            "--policy-from",
-            &main,
-            "--commits-from",
-            &main,
-            "--destination",
-            url,
-            "--advertisement-stdin",
-            &format!("--into={LINE}"),
-        ])
+        .args(&args)
         .current_dir(root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    std::io::Write::write_all(
-        &mut child.stdin.take().unwrap(),
-        format!("{listed}\n").as_bytes(),
-    )
-    .unwrap();
+    // Without the advertisement flag, stdin is never read: closing it
+    // unwritten keeps the run from waiting on it.
+    let mut stdin = child.stdin.take().unwrap();
+    if !claims.no_advertisement {
+        std::io::Write::write_all(&mut stdin, format!("{listed}\n").as_bytes()).unwrap();
+    }
+    drop(stdin);
     let out = child.wait_with_output().unwrap();
     (
         out.status.code().unwrap_or(-1),
@@ -356,6 +401,76 @@ fn codeflow_ci_binds_the_candidate_again_and_never_trusts_the_hand_off() {
             ),
         ],
     );
+}
+
+/// AC-3: `codeflow ci` establishes every destination tip itself and
+/// refuses a hand-off claim that is missing or conflicts with it: no
+/// advertisement, no policy authority, an authority that is not the
+/// advertised default tip, no `--into`, and an `--into` naming another
+/// line. Each is refused by the candidate binding, never judged.
+#[test]
+fn codeflow_ci_refuses_missing_or_conflicting_hand_off_claims() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    let base = fixture.line_tip.clone();
+    let member = git_out(root, &["rev-parse", MEMBERS[0]]);
+    let not_default = format!(
+        "the hand-off's policy authority {} is not the tip of 'main' the destination advertises",
+        &member[..9]
+    );
+    let cases: [(&str, Claims<'_>, &str); 5] = [
+        (
+            "no advertisement",
+            Claims {
+                no_advertisement: true,
+                ..Claims::default()
+            },
+            "the run holds no destination advertisement",
+        ),
+        (
+            "no policy authority",
+            Claims {
+                policy_from: Some(None),
+                ..Claims::default()
+            },
+            "the hand-off names no policy authority",
+        ),
+        (
+            "an authority that is not the advertised default tip",
+            Claims {
+                policy_from: Some(Some(&member)),
+                ..Claims::default()
+            },
+            &not_default,
+        ),
+        (
+            "no --into",
+            Claims {
+                into: Some(None),
+                ..Claims::default()
+            },
+            "the hand-off names no line (`--into`)",
+        ),
+        (
+            "an --into naming another line",
+            Claims {
+                into: Some(Some("integration/EPC-002-other")),
+                ..Claims::default()
+            },
+            "the hand-off names 'integration/EPC-002-other' with `--into`, but the candidate is bound to",
+        ),
+    ];
+    for (what, claims, cause) in cases {
+        let judged = hand_off_with(&fixture, CANDIDATE, &candidate, &base, &claims);
+        println!("{what}: {}", judged.1);
+        assert_blocks(&judged, what, &["work.landing_candidate", cause]);
+        assert!(
+            !judged.1.contains("landing candidate: '"),
+            "{what} must not bind: {}",
+            judged.1
+        );
+    }
 }
 
 /// AC-1 (negative), AC-4 (second output): a foreign criteria change that
@@ -448,7 +563,7 @@ fn an_unreadable_binding_input_refuses() {
     refused_by_binding(
         &pushed,
         "an unfetched line",
-        "its first-parent chain reaches no fetched epic line tip",
+        &format!("'origin/{LINE}' is missing"),
     );
     assert!(!pushed.1.contains("codeflow ci --base"), "{}", pushed.1);
     assert_eq!(remote_tip(root, CANDIDATE), None);
@@ -551,4 +666,99 @@ fn an_ordinary_line_push_is_judged_as_today() {
         "{}",
         refused.1
     );
+}
+
+/// AC-5: a line update is checked against every candidate destination in
+/// the same push. One push from `feat/x` to a new candidate ref and to the
+/// line at the same commit lands that candidate, though the destination
+/// does not advertise the candidate yet and no local branch names it; the
+/// same push to a different line is refused, since the candidate is bound
+/// to its own line, and that line is not created.
+#[test]
+fn a_line_update_is_checked_against_candidate_refs_in_the_same_push() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate("feat/x");
+    let other = "integration/EPC-001-other-line";
+    let pushed = push_many(
+        root,
+        &[
+            &format!("feat/x:refs/heads/{other}"),
+            "feat/x:refs/heads/candidate/new",
+        ],
+    );
+    println!("{}", pushed.1);
+    refused_by_binding(
+        &pushed,
+        "a push to a new candidate and another line",
+        &format!(
+            "the push of '{other}' lands the candidate 'candidate/new', which is not a bound landing candidate of the line: its first-parent chain reaches the tip of '{LINE}', not of '{other}'"
+        ),
+    );
+    assert_eq!(remote_tip(root, other), None);
+    let landed = push_many(
+        root,
+        &[
+            &format!("feat/x:refs/heads/{LINE}"),
+            "feat/x:refs/heads/candidate/new",
+        ],
+    );
+    println!("{}", landed.1);
+    assert_passes(&landed, "a push to a new candidate and its line");
+    assert!(
+        landed
+            .1
+            .contains(&format!("the push of '{LINE}' lands the landing candidate 'candidate/new'")),
+        "{}",
+        landed.1
+    );
+    assert_eq!(remote_tip(root, LINE), Some(candidate));
+}
+
+/// AC-5: a line push whose new tip is a bound candidate is refused when it
+/// is not a fast-forward of the line to that candidate: here the push
+/// claims the line is at an older commit than the tip the candidate is cut
+/// from. Git itself withholds a non-fast-forward update from the hook and
+/// a forced one meets the force-push rule first, so the hook is driven
+/// directly with the update it would be handed.
+#[test]
+fn a_non_fast_forward_line_push_to_a_candidate_is_refused() {
+    let fixture = fixture();
+    let root = fixture.root();
+    let candidate = fixture.candidate(CANDIDATE);
+    let older = git_out(root, &["rev-parse", &format!("{}^", fixture.line_tip)]);
+    let remote = root.join(".git/destination.git");
+    let mut child = codeflow()
+        .args(["git-hook", "pre-push", "origin", remote.to_str().unwrap()])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(
+        &mut child.stdin.take().unwrap(),
+        format!("refs/heads/{CANDIDATE} {candidate} refs/heads/{LINE} {older}\n").as_bytes(),
+    )
+    .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let refused = (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    );
+    println!("{}", refused.1);
+    refused_by_binding(
+        &refused,
+        "a non-fast-forward line push",
+        &format!(
+            "the push is not a fast-forward of the line to the candidate: the candidate is cut from {}, and the destination's line is at {}",
+            &fixture.line_tip[..9],
+            &older[..9]
+        ),
+    );
+    assert_eq!(remote_tip(root, LINE), Some(fixture.line_tip.clone()));
 }

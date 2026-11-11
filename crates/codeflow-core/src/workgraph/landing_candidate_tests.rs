@@ -95,7 +95,7 @@ impl Fixture {
     fn bind_with(
         &self,
         head: &str,
-        advertised: Option<&BTreeMap<String, String>>,
+        advertised: &BTreeMap<String, String>,
         policy: &GitPolicy,
     ) -> Result<BoundLine, String> {
         bind(
@@ -112,7 +112,7 @@ impl Fixture {
     }
 
     fn bind(&self, head: &str) -> Result<BoundLine, String> {
-        self.bind_with(head, Some(&self.advertised()), &GitPolicy::default())
+        self.bind_with(head, &self.advertised(), &GitPolicy::default())
     }
 
     /// The branch tips origin advertises now.
@@ -195,8 +195,6 @@ fn a_clean_stack_of_member_merges_binds_to_its_line() {
             merges: 2,
         }
     );
-    // Without an advertisement the fetched tip alone is the authority.
-    assert!(f.bind_with(&head, None, &GitPolicy::default()).is_ok());
 }
 
 /// A direct commit on the candidate is refused, naming the commit.
@@ -259,8 +257,18 @@ fn a_cut_from_an_undeclared_integration_copy_is_refused() {
     f.publish(&copy, "integration/EPC-009-copy");
     f.merge("task/TSK-002-two");
     let head = git(f.root(), &["rev-parse", "HEAD"]);
-    refused(f.bind(&head), "'integration/EPC-009-copy' names EPC-009");
-    refused(f.bind(&head), "not a bound epic line");
+    // The real line's tip also lies on the chain, so a search depth that
+    // stops short of it leaves the copy as the only line found.
+    let shallow = GitPolicy {
+        candidate_search_depth: 1,
+        ..GitPolicy::default()
+    };
+    let bound = f.bind_with(&head, &f.advertised(), &shallow);
+    refused(bound, "'integration/EPC-009-copy' names EPC-009");
+    refused(
+        f.bind_with(&head, &f.advertised(), &shallow),
+        "not a bound epic line",
+    );
 }
 
 /// A fetched tip the destination no longer advertises is stale, and a line
@@ -272,20 +280,26 @@ fn a_stale_or_unfetched_tip_is_refused() {
     let mut moved = f.advertised();
     moved.insert(LINE.to_string(), "1".repeat(40));
     refused(
-        f.bind_with(&head, Some(&moved), &GitPolicy::default()),
+        f.bind_with(&head, &moved, &GitPolicy::default()),
         "the fetched tip is stale",
     );
     let mut missing = f.advertised();
     missing.remove(LINE);
     refused(
-        f.bind_with(&head, Some(&missing), &GitPolicy::default()),
+        f.bind_with(&head, &missing, &GitPolicy::default()),
         &format!("the destination does not advertise '{LINE}'"),
     );
+    // Advertised but never fetched here: the line's records cannot be read.
     git(
         f.root(),
         &["update-ref", "-d", &format!("refs/remotes/origin/{LINE}")],
     );
-    refused(f.bind(&head), "reaches no fetched epic line tip");
+    refused(f.bind(&head), &format!("'origin/{LINE}' is missing"));
+    // Neither advertised nor fetched: no line tip on the chain.
+    refused(
+        f.bind_with(&head, &missing, &GitPolicy::default()),
+        "reaches no epic line tip",
+    );
 }
 
 /// Two epic lines fetched at the same commit leave the line ambiguous.
@@ -294,7 +308,44 @@ fn two_lines_at_one_commit_are_refused() {
     let f = fixture();
     f.publish(&f.tip, "integration/EPC-001-twin");
     let head = f.candidate(&["task/TSK-001-one"]);
-    refused(f.bind(&head), "the fetched tip of several epic lines");
+    refused(f.bind(&head), "the tips of several epic lines");
+}
+
+/// Two lines the destination advertises at one commit stay ambiguous when
+/// this clone lacks the tracking ref of one of them: the destination's
+/// inventory decides, never the local tracking refs.
+#[test]
+fn two_advertised_lines_at_one_commit_are_refused_with_one_tracking_ref_missing() {
+    let f = fixture();
+    f.publish(&f.tip, "integration/EPC-001-twin");
+    git(
+        f.root(),
+        &[
+            "update-ref",
+            "-d",
+            "refs/remotes/origin/integration/EPC-001-twin",
+        ],
+    );
+    let head = f.candidate(&["task/TSK-001-one"]);
+    refused(f.bind(&head), "the tips of several epic lines");
+    refused(f.bind(&head), "'integration/EPC-001-twin'");
+}
+
+/// Two line tips at different points of the first-parent chain leave the
+/// line ambiguous: the walk does not stop at the first tip it meets.
+#[test]
+fn two_line_tips_at_different_points_of_the_chain_are_refused() {
+    let f = fixture();
+    let first = f.candidate(&["task/TSK-001-one"]);
+    f.publish(&first, "integration/EPC-002-later");
+    f.merge("task/TSK-002-two");
+    let head = git(f.root(), &["rev-parse", "HEAD"]);
+    refused(f.bind(&head), "the tips of several epic lines");
+    refused(
+        f.bind(&head),
+        &format!("'integration/EPC-002-later' at {}", &first[..9]),
+    );
+    refused(f.bind(&head), &format!("'{LINE}' at {}", &f.tip[..9]));
 }
 
 /// The walk stops at `git.candidate_search_depth`, and the line a push
@@ -307,7 +358,10 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
         candidate_search_depth: 1,
         ..GitPolicy::default()
     };
-    refused(f.bind_with(&head, None, &shallow), "within 1 commits");
+    refused(
+        f.bind_with(&head, &f.advertised(), &shallow),
+        "within 1 commits",
+    );
     let elsewhere = bind(
         f.root(),
         &Inputs {
@@ -315,7 +369,7 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
             head: &head,
             policy: &GitPolicy::default(),
             default_tip: &f.main,
-            advertised: None,
+            advertised: &f.advertised(),
             line: Some("integration/EPC-002-other"),
         },
     );
@@ -327,7 +381,7 @@ fn the_depth_and_the_pushed_line_bound_the_walk() {
             head: &head,
             policy: &GitPolicy::default(),
             default_tip: &f.main,
-            advertised: None,
+            advertised: &f.advertised(),
             line: None,
         },
     );
