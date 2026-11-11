@@ -122,12 +122,23 @@ impl Carried {
 }
 
 /// Whether the line names a terminal carrier at all, a cheap test before
-/// the full read.
+/// the full read, matching names the way the host finds programs.
 fn mentions_carrier(command: &str) -> bool {
+    let command = command.to_ascii_lowercase();
     HC_PROGRAMS
         .iter()
         .chain(HERDR_PROGRAMS)
         .any(|name| command.contains(name))
+}
+
+/// The name a program word runs as, matched the way the host finds the
+/// program.
+fn carrier_name(program: &str) -> String {
+    let name = super::dangerous::program_name(program);
+    match name.strip_suffix(".exe") {
+        Some(stem) => stem.to_string(),
+        None => name,
+    }
 }
 
 /// Every command the line runs through `hc` or `herdr`, with the directory
@@ -140,13 +151,14 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
     }
     let homes = std::iter::once(crate::portable_path::user_home())
         .chain(crate::hooks::git_guard::line_home::assigned().map(Some));
+    let assigned = assigned_template_roots(command, cfg!(windows));
     for home in homes {
         for call in super::outward::unwrapped_commands(command, cwd, home.as_deref()) {
             let Some(program) = call.args.first() else {
                 continue;
             };
-            let name = crate::hooks::git_guard::basename(program);
-            let name = name.strip_suffix(".exe").unwrap_or(name);
+            let name = carrier_name(program);
+            let name = name.as_str();
             let words = Words {
                 args: &call.args[1..],
                 patterns: call
@@ -157,6 +169,7 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
             let place = Place {
                 cwd: call.cwd.clone(),
                 home: home.clone(),
+                assigned: assigned.clone(),
             };
             let before = (out.runs.len(), out.writes.len(), out.unread.len());
             if HC_PROGRAMS.contains(&name) {
@@ -209,7 +222,8 @@ fn unknown_directories(out: &mut Carried) {
         out.unread(
             form,
             "the directory it runs in cannot be established (another machine, a terminal \
-             pane, or a `cd` the guard cannot follow)",
+             pane, a `cd` the guard cannot follow, or a `--cwd` the guard cannot place on \
+             this host)",
         );
     }
 }
@@ -234,6 +248,10 @@ impl Words<'_> {
 struct Place {
     cwd: Option<PathBuf>,
     home: Option<PathBuf>,
+    /// The configuration folders the line assigns to the variables `hc`
+    /// reads its template folders from ([`assigned_template_roots`]), or
+    /// why the guard cannot read one.
+    assigned: Result<Vec<PathBuf>, String>,
 }
 
 /// The options of one carrier form: flags, and options that take a value.
@@ -539,7 +557,7 @@ fn hc_run(words: &Words<'_>, place: &Place, out: &mut Carried) {
         directory: directory.clone(),
     });
     // The first word may name a template, whose command runs instead.
-    match template_command(&carried_words[0], place.home.as_deref()) {
+    match template_command(&carried_words[0], place.home.as_deref(), &place.assigned) {
         Ok(Some(command)) => out.runs.push(Run {
             form: "hc run <template>",
             line: command,
@@ -728,8 +746,8 @@ pub(crate) fn fully_read(args: &[String]) -> bool {
     let Some(program) = args.first() else {
         return false;
     };
-    let name = crate::hooks::git_guard::basename(program);
-    let name = name.strip_suffix(".exe").unwrap_or(name);
+    let name = carrier_name(program);
+    let name = name.as_str();
     let words = Words {
         args: &args[1..],
         patterns: None,
@@ -737,6 +755,7 @@ pub(crate) fn fully_read(args: &[String]) -> bool {
     let place = Place {
         cwd: Some(PathBuf::from("/")),
         home: crate::portable_path::user_home(),
+        assigned: Ok(Vec::new()),
     };
     let mut out = Carried::default();
     if HC_PROGRAMS.contains(&name) {
@@ -791,19 +810,38 @@ fn run_directory(parsed: &Options, place: &Place) -> Result<Option<PathBuf>, Str
     let Some(cwd) = parsed.last("--cwd") else {
         return Ok(Some(base));
     };
+    cwd_path(cwd, &base, place.home.as_deref(), cfg!(windows))
+}
+
+/// The directory `--cwd` names from `base`, read as the host reads it.
+/// `Ok(None)` where the guard cannot place it on this host, because it
+/// depends on state the guard cannot see.
+fn cwd_path(
+    cwd: &str,
+    base: &Path,
+    home: Option<&Path>,
+    windows: bool,
+) -> Result<Option<PathBuf>, String> {
     if cwd.is_empty() || cwd.contains(['$', '`']) || cwd.chars().any(char::is_control) {
         return Err("its `--cwd` holds an expansion the guard cannot fill in".to_string());
     }
+    let bytes = cwd.as_bytes();
+    let placed_by_state = bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && !matches!(bytes.get(2), Some(b'/' | b'\\'));
+    let placed_by_root = cwd.starts_with('\\') && !cwd.starts_with("\\\\");
+    if placed_by_state || placed_by_root {
+        return Ok(None);
+    }
+    if windows && cwd.starts_with('/') {
+        return Ok(crate::portable_path::git_bash_drive_path(cwd));
+    }
     let path = if cwd == "~" {
-        place
-            .home
-            .clone()
-            .ok_or("its `--cwd` names a home the guard cannot read")?
+        home.ok_or("its `--cwd` names a home the guard cannot read")?
+            .to_path_buf()
     } else if let Some(rest) = cwd.strip_prefix("~/") {
-        place
-            .home
-            .as_ref()
-            .ok_or("its `--cwd` names a home the guard cannot read")?
+        home.ok_or("its `--cwd` names a home the guard cannot read")?
             .join(rest)
     } else if cwd.starts_with('~') {
         return Err("its `--cwd` names another user's home".to_string());
@@ -877,9 +915,13 @@ fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// The variables whose folder `hc` reads templates under.
+const TEMPLATE_VARIABLES: &[&str] = &["XDG_CONFIG_HOME", "APPDATA"];
+
 /// The template folders `hc` reads (`hc templates --help`), under each
-/// configuration home it may use.
-fn template_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+/// configuration home it may use: the guard's own environment, and each
+/// folder the line assigns to one of [`TEMPLATE_VARIABLES`].
+fn template_dirs(home: Option<&Path>, assigned: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         dirs.push(PathBuf::from(config).join("herdr-core/templates"));
@@ -890,13 +932,131 @@ fn template_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
         dirs.push(PathBuf::from(appdata).join("herdr-core/templates"));
     }
+    for root in assigned {
+        let dir = root.join("herdr-core/templates");
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
     dirs
+}
+
+/// Every folder the line assigns to one of [`TEMPLATE_VARIABLES`], so a
+/// carried `hc run` reads the templates its process would: in front of a
+/// command, through `env`, `export`, or `hc exec --env`, whose assignments
+/// a carried line holds as prefixes. A name matches the way the host reads
+/// variable names, and every value is judged. A value the guard cannot
+/// read as one absolute folder on this host is an error, which refuses a
+/// template lookup. The scan reads the whole line,
+/// so an assignment in a command that never reaches `hc` adds a folder too,
+/// the stricter reading.
+fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>, String> {
+    let lower = command.to_ascii_lowercase();
+    let mut roots = Vec::new();
+    for variable in TEMPLATE_VARIABLES {
+        let needle = format!("{}=", variable.to_ascii_lowercase());
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(&needle) {
+            let start = from + at;
+            from = start + needle.len();
+            let bounded = lower[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+            if !bounded {
+                continue;
+            }
+            let unread = || {
+                format!(
+                    "`{variable}` is assigned a value the guard cannot read as one absolute \
+                     folder, so it cannot tell which templates `hc` reads"
+                )
+            };
+            let value = assigned_value(&command[from..]).ok_or_else(unread)?;
+            if value.is_empty() {
+                continue;
+            }
+            roots.push(literal_root(&value, windows).ok_or_else(unread)?);
+        }
+    }
+    Ok(roots)
+}
+
+/// The value of an assignment whose text starts at `rest`: one unquoted,
+/// single-quoted or double-quoted span up to the end of the word. `None`
+/// for any other form, or for a value holding an expansion.
+fn assigned_value(rest: &str) -> Option<String> {
+    // The shell ends a word at a blank or an operator; any other character
+    // stays part of the value.
+    let ends = |c: char| " \t\n;|&()<>".contains(c);
+    let (value, after) = match rest.chars().next() {
+        Some('\'') => {
+            let inner = &rest[1..];
+            let end = inner.find('\'')?;
+            (inner[..end].to_string(), &inner[end + 1..])
+        }
+        Some('"') => {
+            let mut value = String::new();
+            let mut chars = rest[1..].char_indices();
+            let mut close = None;
+            while let Some((at, c)) = chars.next() {
+                match c {
+                    '\\' => match chars.next()? {
+                        (_, escaped @ ('"' | '\\')) => value.push(escaped),
+                        (_, other) => {
+                            value.push('\\');
+                            value.push(other);
+                        }
+                    },
+                    '"' => {
+                        close = Some(at);
+                        break;
+                    }
+                    c => value.push(c),
+                }
+            }
+            (value, &rest[1 + close? + 1..])
+        }
+        _ => {
+            let end = rest
+                .find(|c: char| ends(c) || matches!(c, '\'' | '"' | '\\'))
+                .unwrap_or(rest.len());
+            (rest[..end].to_string(), &rest[end..])
+        }
+    };
+    if after.chars().next().is_some_and(|c| !ends(c)) {
+        return None;
+    }
+    if value.contains(['$', '`']) || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value)
+}
+
+/// `value` as the absolute folder a process on this host reads it as.
+/// `None` for a value the guard cannot place on this host.
+fn literal_root(value: &str, windows: bool) -> Option<PathBuf> {
+    if value.starts_with('~') {
+        return None;
+    }
+    if windows {
+        if let Some(native) = crate::portable_path::git_bash_drive_path(value) {
+            return Some(native);
+        }
+    }
+    let path = PathBuf::from(value);
+    path.is_absolute().then_some(path)
 }
 
 /// The command of the template `name`, when one exists. A name that could
 /// be a template whose file the guard cannot read, or whose `command` it
-/// cannot parse, is an error.
-fn template_command(name: &str, home: Option<&Path>) -> Result<Option<String>, String> {
+/// cannot parse, is an error, as is a template folder the line assigns in
+/// a form the guard cannot read.
+fn template_command(
+    name: &str,
+    home: Option<&Path>,
+    assigned: &Result<Vec<PathBuf>, String>,
+) -> Result<Option<String>, String> {
     if name.is_empty()
         || name.starts_with('.')
         || !name
@@ -905,8 +1065,9 @@ fn template_command(name: &str, home: Option<&Path>) -> Result<Option<String>, S
     {
         return Ok(None);
     }
+    let assigned = assigned.as_ref().map_err(Clone::clone)?;
     let mut commands = Vec::new();
-    for dir in template_dirs(home) {
+    for dir in template_dirs(home, assigned) {
         let file = dir.join(format!("{name}.md"));
         let text = match std::fs::read_to_string(&file) {
             Ok(text) => text,
@@ -1348,13 +1509,147 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("peer.md"), "---\ncommand: claude -p\n---\n").unwrap();
         std::fs::write(dir.join("bad.md"), "---\ncommand: |\n---\n").unwrap();
+        let none = Ok(Vec::new());
         assert_eq!(
-            template_command("peer", Some(temp.path())),
+            template_command("peer", Some(temp.path()), &none),
             Ok(Some("claude -p".to_string()))
         );
-        assert!(template_command("bad", Some(temp.path())).is_err());
-        assert_eq!(template_command("absent", Some(temp.path())), Ok(None));
-        assert_eq!(template_command("../peer", Some(temp.path())), Ok(None));
+        assert!(template_command("bad", Some(temp.path()), &none).is_err());
+        assert_eq!(
+            template_command("absent", Some(temp.path()), &none),
+            Ok(None)
+        );
+        assert_eq!(
+            template_command("../peer", Some(temp.path()), &none),
+            Ok(None)
+        );
+    }
+
+    /// Each way the host finds a carrier program names the same carrier.
+    #[test]
+    fn carrier_names_match_as_the_host_finds_them() {
+        let native = ["C:", "tools", "hc.exe"].join("\\");
+        for command in [
+            "HC run -- git status".to_string(),
+            "HC.EXE run -- git status".to_string(),
+            "Hc.Exe run -- git status".to_string(),
+            "/opt/bin/HC.exe run -- git status".to_string(),
+            "Herdr-Core.EXE run -- git status".to_string(),
+            format!("'{native}' run -- git status"),
+            format!("\"{native}\" run -- git status"),
+        ] {
+            assert_eq!(lines(&command), vec!["\"git\" \"status\""], "{command}");
+        }
+        let found = read("HERDR.exe pane run p1 ls");
+        assert_eq!(found.runs[0].line, "ls");
+        let words = |line: &str| -> Vec<String> { vec![line.to_string(), "ls".to_string()] };
+        for program in ["HC.EXE", native.as_str()] {
+            assert!(fully_read(&words(program)), "{program}");
+        }
+    }
+
+    /// The template folders `hc run` reads move with the variables the line
+    /// gives it, including `hc exec --env`; an assignment the guard cannot
+    /// read refuses.
+    #[test]
+    fn assigned_template_folders_are_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("herdr-core").join("templates");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("peer.md"), "---\ncommand: claude -p\n---\n").unwrap();
+        let root = crate::portable_path::slashed(temp.path());
+        let template = |command: &str| -> Vec<String> {
+            let found = read(command);
+            assert!(found.unread.is_empty(), "{command}: {:?}", found.unread);
+            found
+                .runs
+                .iter()
+                .filter(|run| run.form == "hc run <template>")
+                .map(|run| run.line.clone())
+                .collect()
+        };
+        for name in [
+            "APPDATA",
+            "AppData",
+            "appdata",
+            "XDG_CONFIG_HOME",
+            "Xdg_Config_Home",
+        ] {
+            assert_eq!(
+                template(&format!("{name}='{root}' hc run peer")),
+                vec!["claude -p"],
+                "{name}"
+            );
+            assert_eq!(
+                template(&format!("env {name}=\"{root}\" hc run peer")),
+                vec!["claude -p"],
+                "{name}"
+            );
+        }
+        // `hc exec --env` gives the variable to the `hc run` it starts,
+        // which is judged as that line typed bare.
+        let outer = read(&format!("hc exec --env 'AppData={root}' -- hc run peer"));
+        assert!(outer.unread.is_empty(), "{:?}", outer.unread);
+        assert_eq!(template(&outer.runs[0].line), vec!["claude -p"]);
+        for command in [
+            "APPDATA=$X hc run peer",
+            "APPDATA=relative/dir hc run peer",
+            "AppData=~/x hc run peer",
+            "hc exec --env 'AppData=$X' -- hc run peer",
+            "hc exec --env AppData=rel -- hc run peer",
+        ] {
+            let found = read(command);
+            let inner = found
+                .runs
+                .first()
+                .map(|run| read(&run.line))
+                .unwrap_or_default();
+            assert!(
+                found
+                    .unread
+                    .iter()
+                    .chain(&inner.unread)
+                    .any(|u| u.contains("<template>")),
+                "{command}: {found:?} {inner:?}"
+            );
+        }
+    }
+
+    /// `--cwd` is read as the host reads it, and one the guard cannot
+    /// place on the host is unknown.
+    #[test]
+    fn cwd_follows_the_host_paths() {
+        let base = Path::new("/work/repo");
+        let windows = |cwd: &str| cwd_path(cwd, base, None, true);
+        assert_eq!(
+            windows("/c/repo"),
+            Ok(crate::portable_path::git_bash_drive_path("/c/repo"))
+        );
+        assert_eq!(windows("/workspace"), Ok(None));
+        assert_eq!(windows("sub"), Ok(Some(base.join("sub"))));
+        // On the other hosts they are ordinary paths.
+        let posix = |cwd: &str| cwd_path(cwd, base, None, false);
+        assert_eq!(posix("/c/repo"), Ok(Some(PathBuf::from("/c/repo"))));
+        assert_eq!(posix("/workspace"), Ok(Some(PathBuf::from("/workspace"))));
+    }
+
+    /// A directory that depends on state the guard cannot see is unknown,
+    /// and the form refuses.
+    #[test]
+    fn cwd_the_guard_cannot_place_is_unknown() {
+        for cwd in ["C:foo", "c:", "\\foo"] {
+            let found = read(&format!("hc run --cwd '{cwd}' -- true"));
+            assert_eq!(found.runs[0].directory, None, "{cwd}");
+            assert!(
+                found
+                    .unread
+                    .iter()
+                    .any(|u| u.contains("cannot be established")),
+                "{cwd}: {found:?}"
+            );
+            let found = read(&format!("hc file write --cwd '{cwd}' x.txt"));
+            assert!(found.writes.is_empty() && !found.unread.is_empty(), "{cwd}");
+        }
     }
 
     #[test]

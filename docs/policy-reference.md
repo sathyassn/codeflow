@@ -811,9 +811,13 @@ bare (TSK-1344). The code holds the program names in
 `security/terminal_carriers.rs`, and a test keeps them equal to this list.
 
 - Programs: `hc`, `herdr-core`, `herdr`.
+- Names: each program name matches the way the host finds the program.
 - Carried commands: `hc run [options] [--] <program> <args>...`, a single
   shell line, or a template's `command` when the first word names a file in
-  `herdr-core/templates`; `hc exec [options] <program> <args>...` with each
+  `herdr-core/templates` (the folders from the guard's environment and
+  from each `XDG_CONFIG_HOME` or `APPDATA` the line assigns, `hc exec
+  --env` included; an assigned value that is not one readable absolute
+  folder refuses); `hc exec [options] <program> <args>...` with each
   `--env K=V` as an assignment; `hc machine add --via <command>`; `herdr
   pane run <pane> <command>`; `herdr agent start <name> --kind <kind>
   [options] -- <args>...`, judged as `<kind> <args>...`.
@@ -822,9 +826,10 @@ bare (TSK-1344). The code holds the program names in
   directory is unknown, the form refuses whatever it carries, because a
   relative path in it names files the guard cannot see: on another machine
   (`--on`, with or without `--cwd`), in a `herdr` pane (`pane run`,
-  `agent start`), and after a `cd` the guard cannot follow. `herdr pane
-  split` with `--cwd` or `--env` refuses too, since later commands in that
-  pane run under the directory and environment it sets.
+  `agent start`), after a `cd` the guard cannot follow, and for a `--cwd`
+  the guard cannot place on this host. `herdr pane split` with `--cwd` or
+  `--env` refuses too, since later commands in that pane run under the
+  directory and environment it sets.
 - Files: `hc file write` and `hc file edit` meet the Edit tool's path
   rules; on another machine (`--on`) they refuse. The files `hc file
   read`, `hc put` and `hc update --from` read are judged by the
