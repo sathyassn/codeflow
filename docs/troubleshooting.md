@@ -41,8 +41,11 @@ The twenty-six checks fall into six groups by the surface each one reads.
   commit-time secret scan runs when the policy chooses it.
   `git-config-includes` names included Git configuration files that may be
   writable and reports a configuration it cannot verify. The operator
-  inspects `git config --show-origin --includes --list` and repairs or
-  secures its include paths.
+  repairs or secures the include files it names: `git config --show-origin
+  --get-all include.path` shows which configuration file names each plain
+  include, and conditional includes are found in those files with an
+  editor. Printing the whole configuration would show remote URLs and url
+  rewrite bases, which can hold a credential.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.

@@ -214,7 +214,11 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
         .output()
         .map_err(|error| format!("cannot inspect remote update configuration: {error}"))?;
     if !config.status.success() {
-        return Err("cannot inspect remote update configuration; the operator checks git config --show-origin --list".into());
+        // A full listing would print remote URLs and rewrite bases, which
+        // can hold a credential; with its output discarded, git prints
+        // only the error naming the file and line it cannot read (TSK-416
+        // review round 3).
+        return Err("cannot inspect remote update configuration; the operator runs `git config --list > /dev/null`, which prints only the error naming the file and line git cannot read, and repairs that file".into());
     }
     let entries = config_entries(&config.stdout);
     for (key, value) in &entries {
@@ -304,7 +308,9 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
 /// refusing. A remote name picks the fetch mapping the guard proves does not
 /// write policy authority, and a name it cannot read is a remote it cannot
 /// prove, so skipping it would let `git fetch` or `git remote update` run an
-/// unchecked mapping. The operator reads the remote with `git remote -v`.
+/// unchecked mapping. The operator lists the remotes by name with `git
+/// remote`, which prints no URL, since a URL can hold a credential (TSK-416
+/// review round 3).
 pub(super) fn utf8_remote_names(
     remotes: &git2::string_array::StringArray,
 ) -> Result<Vec<String>, String> {
@@ -312,7 +318,7 @@ pub(super) fn utf8_remote_names(
         .iter_bytes()
         .map(|name| {
             std::str::from_utf8(name).map(str::to_owned).map_err(|_| {
-                "a configured remote name is not valid UTF-8, so its fetch mapping cannot be checked; the operator inspects git remote -v".to_string()
+                "a configured remote name is not valid UTF-8, so its fetch mapping cannot be checked; the operator lists the remotes by name with `git remote`, which prints no URL, and renames that remote in the configuration files with an editor".to_string()
             })
         })
         .collect()
@@ -416,7 +422,7 @@ fn fetch_from_repository(
     // Remote::url already expands insteadOf. Config retains the literal URL.
     let raw = match repo.config().and_then(|config| config.get_string(&format!("remote.{name}.url"))) {
         Ok(raw) => raw,
-        Err(error) => return Some(format!("cannot read raw remote.{name}.url: {error}; the operator inspects git config --show-origin --get remote.{name}.url")),
+        Err(error) => return Some(raw_url_unread(name, &error.message())),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
     let effective = match crate::git::command()
@@ -427,7 +433,8 @@ fn fetch_from_repository(
         Ok(output) => output,
         Err(error) => {
             return Some(format!(
-                "cannot read effective URL for {name}: git could not run: {error}"
+                "cannot read effective URL for {}: git could not run: {error}",
+                crate::git::display_text(name)
             ))
         }
     };
@@ -437,7 +444,7 @@ fn fetch_from_repository(
         || std::str::from_utf8(&effective.stdout)
             .map_or(true, |text| text.strip_suffix('\n').unwrap_or(text) != raw)
     {
-        return Some(format!("effective URL for {name} differs from remote.{name}.url; the operator inspects git config --show-origin --get-regexp 'url.*|include.*'"));
+        return Some(effective_url_differs(name));
     }
     if requested.is_some_and(|source| !names.contains(&source) && source != raw) {
         return Some("fetch source is not the configured remote's URL".into());
@@ -448,6 +455,33 @@ fn fetch_from_repository(
     None
 }
 
+/// What a listing of the configuration would print and why no step asks
+/// for one: a remote's URL, and the section name of a `url.<base>`
+/// rewrite rule, can hold a credential (TSK-416 review round 3).
+const NO_CONFIG_LISTING: &str = "with an editor, since printing the configuration shows remote URLs and the bases of url rewrite rules, which can hold a credential";
+
+/// The refusal when `remote.<name>.url` cannot be read as one value. The
+/// name is shown escaped in prose, and the step prints no command that
+/// would show the URL (TSK-416 review round 3).
+fn raw_url_unread(name: &str, error: &str) -> String {
+    let shown = crate::git::display_text(name);
+    format!(
+        "cannot read the url of remote {shown} as one value ({}); the operator checks that the remote's section in the configuration files sets url exactly once, {NO_CONFIG_LISTING}",
+        crate::git::display_text(error)
+    )
+}
+
+/// The refusal when git's effective URL for a remote differs from its
+/// configured one: a `url.<base>.insteadOf` or `pushInsteadOf` rule, or an
+/// included file, rewrites it. The step names neither the URLs nor the
+/// rule's base, which can hold a credential (TSK-416 review round 3).
+fn effective_url_differs(name: &str) -> String {
+    let shown = crate::git::display_text(name);
+    format!(
+        "effective URL for {shown} differs from its configured url, so a url rewrite rule (insteadOf or pushInsteadOf) or an included configuration file changes where the fetch goes; the operator finds and removes that rule in the configuration files {NO_CONFIG_LISTING}"
+    )
+}
+
 /// Read every configured candidate needed to match a fetch URL. A failed
 /// candidate read never becomes "not this remote" and selects another one.
 fn fetch_remote<'repo>(
@@ -455,9 +489,19 @@ fn fetch_remote<'repo>(
     names: &[&str],
     selected: &str,
 ) -> Result<Option<git2::Remote<'repo>>, String> {
+    // The name is shown escaped and git's error with any URL's credentials
+    // redacted, since a lookup error can quote the configured URL (TSK-416
+    // review round 3).
+    let unread = |what: &str, name: &str, error: &git2::Error| {
+        format!(
+            "cannot read configured remote {}{what}: {}",
+            crate::git::display_text(name),
+            crate::git::display_text(&crate::git::remote_query::display_urls(error.message()))
+        )
+    };
     let read = |name: &str| {
         repo.find_remote(name)
-            .map_err(|error| format!("cannot read configured remote {name}: {error}"))
+            .map_err(|error| unread("", name, &error))
     };
     if names.contains(&selected) {
         return read(selected).map(Some);
@@ -466,7 +510,7 @@ fn fetch_remote<'repo>(
         let remote = read(name)?;
         let url = remote
             .url()
-            .map_err(|error| format!("cannot read configured remote {name} URL: {error}"))?;
+            .map_err(|error| unread(" URL", name, &error))?;
         if url == selected {
             return Ok(Some(remote));
         }
@@ -1003,6 +1047,69 @@ mod tests {
         );
         let why = fetch(dir.path(), &[], false).expect("a refusal");
         assert!(why.contains("effective URL for origin differs"), "{why}");
+    }
+
+    /// TSK-416 review round 3, finding 3: the refusals for a rewritten URL
+    /// and for a URL that does not read as one value name neither URL nor
+    /// the rewrite rule's base, either of which can hold a credential, and
+    /// ask for no listing of the configuration that would print them. A
+    /// hostile remote name appears in prose only, escaped, never in a
+    /// command. All credentials here are synthetic.
+    #[test]
+    fn a_remote_url_refusal_prints_no_credential_and_no_config_listing() {
+        let rewrite = repository_with_config(
+            b"[url \"https://u:OPAQUECANARY@rewrite.invalid/\"]\n\tinsteadOf = https://example.invalid/\n[remote \"o$(id)\"]\n\turl = https://example.invalid/o.git\n",
+        );
+        // Two urls: whichever read refuses, git's raw url read or the
+        // remote lookup, the refusal names neither value.
+        let multi = repository_with_config(
+            b"[remote \"x$(id)\"]\n\turl = https://a.invalid/x.git\n\turl = https://u:OPAQUECANARY@b.invalid/x.git\n",
+        );
+        for (dir, args) in [
+            (&rewrite, vec![]),
+            (&rewrite, vec!["o$(id)".to_string()]),
+            (&multi, vec!["x$(id)".to_string()]),
+        ] {
+            let why = fetch(dir.path(), &args, false).expect("a refusal");
+            assert!(!why.contains("OPAQUECANARY"), "{why}");
+            for listing in ["git config", "--show-origin", "--get-regexp", "remote -v", "get-url"] {
+                assert!(!why.contains(listing), "{listing}: {why}");
+            }
+        }
+        let hostile = fetch(rewrite.path(), &["o$(id)".to_string()], false).unwrap();
+        assert!(hostile.contains("effective URL for o$(id) differs"), "{hostile}");
+        assert!(hostile.contains("with an editor"), "{hostile}");
+        // Each refusal shows a hostile name escaped, in prose only.
+        let differs = effective_url_differs("o$(id)\u{1b}");
+        let unread = raw_url_unread("x$(id)\u{1b}", "entry is not unique");
+        for why in [&differs, &unread] {
+            assert!(!why.contains('\u{1b}'), "{why}");
+            assert!(why.contains(r"$(id)\u{1b}"), "{why}");
+            assert!(!why.contains('`'), "no command: {why}");
+            assert!(why.contains("with an editor"), "{why}");
+        }
+    }
+
+    /// TSK-416 review round 3, finding 3: the steps that replaced `git
+    /// remote -v` and a full `git config --show-origin --list` print no URL:
+    /// a remote name that is not UTF-8 points at `git remote`, which lists
+    /// names only, and a configuration git cannot read points at a listing
+    /// whose output is discarded, so only git's error, which names the file
+    /// and line, is shown.
+    #[test]
+    fn the_remote_steps_print_no_url() {
+        let dir = repository_with_config(
+            b"[remote \"caf\xe9\"]\n\turl = https://u:OPAQUECANARY@h.invalid/x.git\n",
+        );
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let why = utf8_remote_names(&repo.remotes().unwrap()).unwrap_err();
+        assert!(why.contains("`git remote`, which prints no URL"), "{why}");
+        assert!(!why.contains("remote -v"), "{why}");
+        assert!(!why.contains("OPAQUECANARY"), "{why}");
+        let broken = repository_with_config(b"[broken\n");
+        let why = update_remotes(broken.path(), &[]).unwrap_err();
+        assert!(why.contains("`git config --list > /dev/null`"), "{why}");
+        assert!(!why.contains("--show-origin"), "{why}");
     }
 
     /// Issue 79: one value in the user's git configuration that is not valid
