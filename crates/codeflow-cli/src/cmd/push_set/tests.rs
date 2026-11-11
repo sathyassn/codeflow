@@ -1143,6 +1143,13 @@ fn judged_by_an_empty_destination(h: &History, tracking: Option<&str>) -> (Vec<S
 fn stale_tracking_refs_for_an_empty_destination_refuse_with_the_fetch_route() {
     let h = History::new();
     let tip = h.git(&["rev-parse", "HEAD"]);
+    // The tracking ref belongs to a configured remote: a ref of no
+    // configured remote has its remote withheld (TSK-416 review round 9).
+    h.git(&[
+        "config",
+        "remote.origin.url",
+        h.remote.path().to_str().unwrap(),
+    ]);
     h.git(&["update-ref", "refs/remotes/origin/main", &tip]);
     let (printed, ran) = judged_by_an_empty_destination(&h, Some("origin"));
     assert!(!ran, "no codeflow ci runs: {printed:#?}");
@@ -1355,10 +1362,12 @@ fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
         // lost every branch.
         h.git(&["fetch", "-q", "--", name]);
         command(h.remote.path(), &["update-ref", "-d", "refs/heads/main"]);
+        // The fetch stored `main`, and on newer git `HEAD` too.
         let held = held_tracking_ref(root, name).unwrap();
-        assert_eq!(
-            held.as_deref(),
-            Some(format!("refs/remotes/{name}/main").as_str())
+        assert!(
+            held.as_deref()
+                .is_some_and(|held| held.starts_with(&format!("refs/remotes/{name}/"))),
+            "{held:?}"
         );
         let step = prune_step(root, name);
         assert_eq!(step, codeflow_core::security::git::WITHHELD_REMOTE_STEP);

@@ -3521,6 +3521,10 @@ mod tests {
             assert!(out.status.success(), "git {args:?}");
             String::from_utf8(out.stdout).unwrap().trim().to_string()
         };
+        // The fetched refs belong to a configured remote: a ref of no
+        // configured remote has its remote withheld (TSK-416 review round
+        // 9). The URL is never asked here.
+        run(&["config", "remote.origin.url", "/nonexistent/origin.git"]);
         let stale = run(&["rev-parse", "main"]);
         let fetched = run(&["rev-parse", "feat/x"]);
         run(&["update-ref", "refs/remotes/origin/main", &fetched]);
