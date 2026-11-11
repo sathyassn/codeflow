@@ -92,6 +92,13 @@ are separate duties; when both are configured, both are required, and the
 approval never counts as the independent review. Another family still
 designs only through the task-specific operator override.
 
+## Note (2026-11-10)
+
+Claude-led design is the default. Under ADR-0101 a project may name
+another seat or line to lead design in `.codeflow/model-selection.json`;
+review independence still applies to its work, and a relaxed review
+route records reduced assurance.
+
 ## Consequences
 
 - Design reasoning becomes explicit and reviewable without expanding the
