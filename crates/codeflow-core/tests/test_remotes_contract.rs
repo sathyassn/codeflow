@@ -87,6 +87,56 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "text for a redaction test; it is never given to a transport",
     ),
     (
+        "codeflow-cli/tests/hooks_cli.rs",
+        "host.invalid",
+        "an include value doctor must not print (TSK-416 round 5); Git reads include.path as a file path, and doctor reads configuration only",
+    ),
+    (
+        "codeflow-core/src/hooks/landed_policy.rs",
+        "h.invalid",
+        "a synthetic remote name whose URL is unset or set to local paths; the refusal comes before any transport (TSK-416 round 6)",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "USERCANARY",
+        "a credential in a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "e.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "h.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "h3.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "h4.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "host.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "s.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "t.invalid",
+        "a configured URL for a redaction test; relay_diagnostic reads configuration only and asks no remote",
+    ),
+    (
         "codeflow-core/src/hooks/gitleaks.rs",
         "github.com",
         "production constant naming the gitleaks release page, not a test remote",
