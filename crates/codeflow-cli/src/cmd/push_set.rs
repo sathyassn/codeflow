@@ -927,7 +927,7 @@ fn branch_option(branch: &str) -> String {
         .unwrap_or_else(|| "--branch <branch>".to_string())
 }
 
-/// "run git fetch --prune <remote>", rendered from the raw remote name: a
+/// "run `git fetch --prune <remote>`", rendered from the raw remote name: a
 /// name holding `$(…)` stays one argument and one starting with `-`
 /// follows `--`; a name with no printed form gets a step that needs no
 /// pasted command (TSK-416 review round 2).
