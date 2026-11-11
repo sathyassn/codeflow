@@ -911,6 +911,30 @@
     },
     {
       "paths": [
+        ".codeflow/**",
+        ".claude/settings.json",
+        ".claude/workflows/**",
+        ".codex/**",
+        ".grok/**",
+        ".github/pull_request_template.md",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-registry.yml",
+        ".gitignore",
+        "docs/architecture.md",
+        "docs/capabilities.md",
+        "docs/product.md",
+        "docs/decisions/ADR-0001-stack-choice.md",
+        "docs/decisions/template.md",
+        "project-management/templates/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-core --test repository_update_noop",
+        "cargo test -p codeflow-core --test manifest_consistency"
+      ]
+    },
+    {
+      "paths": [
         "*.md",
         "**/*.md"
       ],

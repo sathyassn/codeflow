@@ -336,19 +336,40 @@ fn every_guarding_test_names_a_real_binary_or_script() {
     );
 }
 
-/// AC-9: PR 525's range changed managed skill assets and a record linking
-/// into `docs/verification/`; quick ran neither `init_e2e` nor
-/// `release_contract`, and hosted CI failed both. The guards name them.
+/// PR 525's whole range, as `git diff --name-status --find-renames` gave it
+/// (`tests/fixtures/pr-525-range.tsv`).
+fn pr_525_range() -> Vec<Change> {
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pr-525-range.tsv"),
+    )
+    .expect("the PR 525 fixture reads");
+    text.lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            match fields.as_slice() {
+                [status, path] if status.starts_with('D') => Change::Deleted((*path).into()),
+                [status, path] if status.starts_with(['A', 'M', 'T']) => changed(path),
+                [status, from, to] if status.starts_with(['R', 'C']) => Change::Renamed {
+                    from: (*from).into(),
+                    to: (*to).into(),
+                },
+                _ => panic!("unreadable fixture line {line:?}"),
+            }
+        })
+        .collect()
+}
+
+/// AC-9: PR 525's range changed managed skill assets and the scaffold
+/// manifest (`init_e2e.rs:437` counts the cf-present destinations) and a
+/// record linking into `docs/verification/` (`release_contract.rs:481`);
+/// quick ran neither test, and hosted run 41637830020 failed both. Over the
+/// whole range, the guards name both tests for those paths and leave no
+/// path unguarded.
 #[test]
 fn pr_525s_range_names_init_e2e_and_release_contract() {
-    let changes = [
-        changed("assets/base/agents/skills/cf-present/resources/tokens.md"),
-        changed(".agents/skills/cf-present/resources/tokens.md"),
-        changed(".codeflow/.baseline/.claude/skills/cf-present/resources/tokens.md"),
-        changed("project-management/tasks/TSK-1162.md"),
-        changed("docs/verification/evidence/tsk-1162/ink-swatches.html"),
-        changed("crates/codeflow-present/web/src/theme.ts"),
-    ];
+    let changes = pr_525_range();
+    assert_eq!(changes.len(), 625);
     let report = guards(&config(), &changes);
     for test in [
         "cargo test -p codeflow-cli --test init_e2e",
@@ -359,11 +380,59 @@ fn pr_525s_range_names_init_e2e_and_release_contract() {
     assert!(report.guarded["project-management/tasks/TSK-1162.md"]
         .iter()
         .any(|t| t.ends_with("--test release_contract")));
-    assert!(
-        report.guarded["assets/base/agents/skills/cf-present/resources/tokens.md"]
-            .iter()
-            .any(|t| t.ends_with("--test init_e2e"))
-    );
+    for path in [
+        "assets/base/scaffold-manifest.toml",
+        "assets/base/agents/skills/cf-present/resources/design-system/tokens.ts",
+    ] {
+        assert!(
+            report.guarded[path]
+                .iter()
+                .any(|t| t.ends_with("--test init_e2e")),
+            "{path}"
+        );
+    }
+    assert!(report.unguarded.is_empty(), "{:?}", report.unguarded);
+}
+
+/// Review finding (TSK-353, AC-9): `repository_update_noop` replays update
+/// over every manifest destination and every tracked `.codeflow` file, and
+/// `manifest_consistency` compares live managed copies with their sources
+/// and baselines (`docs/decisions/template.md` among them). Every
+/// destination, installed or shipped, names both suites.
+#[test]
+fn every_managed_destination_names_its_reader_suites() {
+    let root = repo_root();
+    let installed: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join(".codeflow/manifest.json")).expect("installed manifest reads"),
+    )
+    .expect("installed manifest is JSON");
+    let shipped = codeflow_core::scaffold::ScaffoldManifest::load(
+        &codeflow_core::scaffold::DirSource::new(root.join("assets")),
+    )
+    .expect("shipped manifest loads");
+    let mut destinations: BTreeSet<String> = installed["files"]
+        .as_object()
+        .expect("installed manifest has a files map")
+        .keys()
+        .cloned()
+        .collect();
+    destinations.extend(shipped.entries.iter().map(|entry| entry.dest.clone()));
+    assert!(destinations.contains("docs/decisions/template.md"));
+    let changes: Vec<Change> = destinations.iter().map(|dest| changed(dest)).collect();
+    let report = guards(&config(), &changes);
+    let mut missing = Vec::new();
+    for dest in &destinations {
+        let tests = report.guarded.get(dest).cloned().unwrap_or_default();
+        for suite in ["repository_update_noop", "manifest_consistency"] {
+            if !tests
+                .iter()
+                .any(|t| t.ends_with(&format!("codeflow-core --test {suite}")))
+            {
+                missing.push(format!("{dest}: {suite}"));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{missing:?}");
 }
 
 /// A docs page names the tests that read docs through the portal config,
