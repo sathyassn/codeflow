@@ -354,17 +354,13 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         }
         // Before any read, a short-name lookup included, so the guard never
         // contacts a host a target names before it refuses.
-        if share_text(&absolute)
-            .is_some_and(|text| outside_chosen_shares(&text, &chosen_shares))
-        {
+        if share_text(&absolute).is_some_and(|text| outside_chosen_shares(&text, &chosen_shares)) {
             return Err(EditError(UNMAPPED_SHARE.into()));
         }
         // First, so a path past the bound reads nothing on disk (TSK-1258).
         let lexical = normalized(&absolute, false)?;
         let resolved = normalized(&absolute, true)?;
-        if share_text(&resolved)
-            .is_some_and(|text| outside_chosen_shares(&text, &chosen_shares))
-        {
+        if share_text(&resolved).is_some_and(|text| outside_chosen_shares(&text, &chosen_shares)) {
             return Err(EditError(UNMAPPED_SHARE.into()));
         }
         // Shell startup files refuse whatever the integrity level (TSK-242),

@@ -159,11 +159,8 @@ pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
     // the volume itself, and `C:name` names no rooted file (TSK-1400).
     let drive = |tail: &str| {
         let bytes = tail.as_bytes();
-        (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && bytes[2] == b'/')
-        .then(|| tail.to_string())
+        (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/')
+            .then(|| tail.to_string())
     };
     // `\??\` is the NT object namespace, which Win32 opens without changing
     // a name, as it opens `\\?\` (review 01).
@@ -286,11 +283,13 @@ pub(crate) fn class_spelling(text: &str) -> Result<Option<String>, String> {
 }
 
 const VERBATIM_SLASH: &str = "cannot map a verbatim or NT namespace path that contains `/`: Windows reads it there as part of a name";
-const MIXED_NT: &str = "cannot map an NT namespace path written with `/`: Windows does not open it in that namespace";
+const MIXED_NT: &str =
+    "cannot map an NT namespace path written with `/`: Windows does not open it in that namespace";
 const MIXED_VERBATIM: &str = "cannot map a verbatim path written with `/`: which file a writer opens for it is not established";
 const DEVICE_ROOT: &str = "cannot map a Windows device root, which names no file";
 const INCOMPLETE_UNC: &str = "cannot map an incomplete UNC path, which names no server and share";
-const DEVICE_CLIMB: &str = "cannot map a Windows device path with a `..` name: Windows can climb out of its drive there";
+const DEVICE_CLIMB: &str =
+    "cannot map a Windows device path with a `..` name: Windows can climb out of its drive there";
 
 /// Whether a name in `rest` is made only of dots and spaces, and is more
 /// than `.`: a name Win32 can read as `..`.
@@ -772,7 +771,10 @@ mod tests {
             (r"\\.\C:\Users\..\..\D:\x", "`..` name"),
             (r"\\.\C:\Users\.. \x", "`..` name"),
             (r"\\.\C:\Users\...\x", "`..` name"),
-            (r"\\?\GLOBALROOT\Device\HarddiskVolume1\x", "device or verbatim namespace"),
+            (
+                r"\\?\GLOBALROOT\Device\HarddiskVolume1\x",
+                "device or verbatim namespace",
+            ),
             (r"\\.\pipe\x", "device or verbatim namespace"),
             (r"C:\Users\u\x::$DATA", "alternate-stream"),
         ] {
