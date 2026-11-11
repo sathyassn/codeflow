@@ -104,8 +104,9 @@ pub(crate) fn filesystem_spelling(text: &str) -> String {
 }
 
 /// Namespaces and streams need a mapping before a guard can compare names.
-/// A namespace spelling becomes the drive or UNC path Windows opens
-/// ([`namespace_spelling`]); one that names no file path refuses. Existing
+/// A namespace spelling becomes the drive or UNC path Windows opens, read
+/// by its prefix class from the text as written ([`class_spelling`]); one
+/// that names no file path refuses. Existing
 /// 8.3 short-name components resolve through the kernel, whose final path
 /// names each entry's long name. A short-looking component that does not
 /// exist refuses while an entry could still be created there, because a
@@ -119,7 +120,7 @@ pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
     let text = path
         .to_str()
         .ok_or("cannot inspect a Windows path as text")?;
-    let plain = match namespace_spelling(&text.replace('\\', "/"))? {
+    let plain = match class_spelling(text)? {
         Some(mapped) => PathBuf::from(mapped.replace('/', "\\")),
         None => without_verbatim(path.to_path_buf()),
     };
@@ -154,12 +155,14 @@ pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
     if lower.contains("::") || lower.contains(":$") {
         return Err("cannot map a Windows alternate-stream path".into());
     }
+    // A rooted drive path only: a bare `C:` after a namespace prefix opens
+    // the volume itself, and `C:name` names no rooted file (TSK-1400).
     let drive = |tail: &str| {
         let bytes = tail.as_bytes();
-        (bytes.len() >= 2
+        (bytes.len() >= 3
             && bytes[0].is_ascii_alphabetic()
             && bytes[1] == b':'
-            && bytes.get(2).is_none_or(|&byte| byte == b'/'))
+            && bytes[2] == b'/')
         .then(|| tail.to_string())
     };
     // `\??\` is the NT object namespace, which Win32 opens without changing
@@ -204,6 +207,145 @@ pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
     } else {
         unc
     }))
+}
+
+/// How Win32 reads the start of a path, told apart from the text as
+/// written, before any separator is rewritten (TSK-1400). Only `\\?\` and
+/// `\??\` spelled with backslashes reach the kernel unchanged; Win32 reads
+/// two separators and `.` as a device path, which it normalizes like an
+/// ordinary path, and two separators and a name as a UNC path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrefixClass {
+    /// `\\?\` or the NT object namespace `\??\`, with backslashes: the rest
+    /// reaches the kernel unchanged, so a `/` there is part of a name.
+    Verbatim,
+    /// `\??\` with a `/` in the prefix: Win32 does not read it as that
+    /// namespace, and the guard has no proof of what a writer opens.
+    MixedNt,
+    /// `\\?\` with a `/` in the prefix: Win32 reads it as a device path,
+    /// not a verbatim one, which the guard has not proved for every writer.
+    MixedVerbatim,
+    /// `\\.\`, with either separator: a device path, normalized.
+    Device,
+    /// `\\.` or `\\?` with nothing after it: the device root, no file.
+    DeviceRoot,
+    /// Two separators and a server name: a UNC path, normalized.
+    Unc,
+    /// Anything else: drive-absolute (`C:\x`), drive-relative (`C:x`),
+    /// drive-rooted without a letter (`\x`) or relative.
+    Ordinary,
+}
+
+/// The [`PrefixClass`] of `text` as written.
+pub(crate) fn prefix_class(text: &str) -> PrefixClass {
+    let bytes = text.as_bytes();
+    let separator = |at: usize| matches!(bytes.get(at), Some(b'/' | b'\\'));
+    if bytes.starts_with(br"\\?\") || bytes.starts_with(br"\??\") {
+        PrefixClass::Verbatim
+    } else if separator(0) && bytes.get(1..3) == Some(&b"??"[..]) && separator(3) {
+        PrefixClass::MixedNt
+    } else if separator(0) && separator(1) && matches!(bytes.get(2), Some(b'.' | b'?')) {
+        match (bytes[2], separator(3), bytes.len()) {
+            (_, false, 3) => PrefixClass::DeviceRoot,
+            (_, false, _) => PrefixClass::Unc,
+            (b'?', true, _) => PrefixClass::MixedVerbatim,
+            _ => PrefixClass::Device,
+        }
+    } else if separator(0) && separator(1) {
+        PrefixClass::Unc
+    } else {
+        PrefixClass::Ordinary
+    }
+}
+
+/// [`namespace_spelling`] for a path written as `text`, read by its
+/// [`PrefixClass`] (TSK-1400). A verbatim or NT namespace path keeps its
+/// names, so one with a `/` after the prefix names no file Win32 would
+/// find under the ordinary spelling, and it refuses. A device path is
+/// normalized; one with a `..` name refuses, because there Win32 can climb
+/// out of the drive into the device namespace. The mixed spellings and the
+/// device root refuse. Other classes map as [`namespace_spelling`] does.
+pub(crate) fn class_spelling(text: &str) -> Result<Option<String>, String> {
+    let refusal = match prefix_class(text) {
+        PrefixClass::Verbatim if text[4..].contains('/') => VERBATIM_SLASH,
+        PrefixClass::Verbatim => {
+            return namespace_spelling(&format!("//?/{}", text[4..].replace('\\', "/")));
+        }
+        PrefixClass::MixedNt => MIXED_NT,
+        PrefixClass::MixedVerbatim => MIXED_VERBATIM,
+        PrefixClass::DeviceRoot => DEVICE_ROOT,
+        PrefixClass::Device if climbs(&text[4..]) => DEVICE_CLIMB,
+        PrefixClass::Device => {
+            return namespace_spelling(&format!("//./{}", text[4..].replace('\\', "/")));
+        }
+        PrefixClass::Unc | PrefixClass::Ordinary => {
+            return namespace_spelling(&text.replace('\\', "/"));
+        }
+    };
+    Err(refusal.into())
+}
+
+const VERBATIM_SLASH: &str = "cannot map a verbatim or NT namespace path that contains `/`: Windows reads it there as part of a name";
+const MIXED_NT: &str = "cannot map an NT namespace path written with `/`: Windows does not open it in that namespace";
+const MIXED_VERBATIM: &str = "cannot map a verbatim path written with `/`: which file a writer opens for it is not established";
+const DEVICE_ROOT: &str = "cannot map a Windows device root, which names no file";
+const INCOMPLETE_UNC: &str = "cannot map an incomplete UNC path, which names no server and share";
+const DEVICE_CLIMB: &str = "cannot map a Windows device path with a `..` name: Windows can climb out of its drive there";
+
+/// Whether a name in `rest` is made only of dots and spaces, and is more
+/// than `.`: a name Win32 can read as `..`.
+fn climbs(rest: &str) -> bool {
+    rest.split(['/', '\\'])
+        .any(|part| part.len() > 1 && part.bytes().all(|byte| matches!(byte, b'.' | b' ')))
+}
+
+/// The path an edit of `path` opens, for the edit guard (TSK-1400): a
+/// namespace or UNC spelling as the rooted drive path or complete UNC path
+/// (server and share) Win32 opens, and `None` for an ordinary path, which
+/// the caller joins to its directory. Every other spelling refuses before
+/// any file is read. On other platforms every path is ordinary.
+///
+/// # Errors
+///
+/// The cause, when the spelling cannot be mapped to one file.
+pub(crate) fn edit_target(path: &Path) -> Result<Option<PathBuf>, String> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    let text = path
+        .to_str()
+        .ok_or("cannot inspect a Windows path as text")?;
+    Ok(edit_target_text(text)?.map(|mapped| PathBuf::from(mapped.replace('/', "\\"))))
+}
+
+/// [`edit_target`] on text, without the platform check, so every host can
+/// test it. The result has `/` separators.
+pub(crate) fn edit_target_text(text: &str) -> Result<Option<String>, String> {
+    let Some(mapped) = class_spelling(text)? else {
+        return Ok(None);
+    };
+    if let Some(unc) = mapped.strip_prefix("//") {
+        let mut parts = unc.split('/');
+        let (server, share) = (
+            parts.next().unwrap_or_default(),
+            parts.next().unwrap_or_default(),
+        );
+        if server.is_empty() || share.is_empty() {
+            return Err(INCOMPLETE_UNC.into());
+        }
+    } else {
+        let bytes = mapped.as_bytes();
+        if !(bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'/')
+        {
+            return Err(format!(
+                "cannot map the Windows path {text}, which names no rooted drive path"
+            ));
+        }
+    }
+    Ok(Some(mapped))
 }
 
 /// Whether every name after a verbatim prefix reads the same in an ordinary
@@ -534,6 +676,108 @@ mod tests {
             "/??/C:/Users/u/public /auth.json",
         ] {
             assert!(namespace_spelling(text).is_err(), "{text}");
+        }
+    }
+
+    /// TSK-1400: the prefix class is read from the text as written, so a
+    /// `/` in the prefix changes the class, as it does for Win32.
+    #[test]
+    fn prefix_classes_are_read_from_the_written_separators() {
+        use PrefixClass::{Device, DeviceRoot, MixedNt, MixedVerbatim, Ordinary, Unc, Verbatim};
+        for (text, class) in [
+            (r"\\?\C:\x", Verbatim),
+            (r"\??\C:\x", Verbatim),
+            (r"\\?\UNC\h\s\x", Verbatim),
+            ("/??/C:/x", MixedNt),
+            (r"\??/C:\x", MixedNt),
+            (r"/??\C:\x", MixedNt),
+            ("//?/C:/x", MixedVerbatim),
+            (r"\\?/C:\x", MixedVerbatim),
+            (r"/\?\C:\x", MixedVerbatim),
+            (r"\\.\C:\x", Device),
+            ("//./C:/x", Device),
+            (r"\\./C:\x", Device),
+            (r"\\?", DeviceRoot),
+            ("//.", DeviceRoot),
+            (r"\\server\share\x", Unc),
+            ("//server/share/x", Unc),
+            (r"\/server/share", Unc),
+            (r"\\?x\share", Unc),
+            (r"\\", Unc),
+            (r"C:\x", Ordinary),
+            ("C:/x", Ordinary),
+            (r"C:\a/b", Ordinary),
+            ("C:x", Ordinary),
+            (r"\x", Ordinary),
+            ("/x", Ordinary),
+            ("x", Ordinary),
+            (r"\??", Ordinary),
+            (r"C:\??\x", Ordinary),
+        ] {
+            assert_eq!(prefix_class(text), class, "{text}");
+        }
+    }
+
+    /// TSK-1400: an edit target maps to a rooted drive path or a complete
+    /// UNC path only; a bare volume, an incomplete share, a `/` inside a
+    /// verbatim or NT path, a mixed namespace prefix, the device root and a
+    /// device path that climbs refuse, and an ordinary path is left to the
+    /// caller's join.
+    #[test]
+    fn edit_targets_map_only_to_a_rooted_drive_or_a_complete_share() {
+        for (text, opened) in [
+            (r"\??\C:\Users\u\x", "C:/Users/u/x"),
+            (r"\??\C:\", "C:/"),
+            (r"\\?\C:\Users\u\x", "C:/Users/u/x"),
+            (r"\\.\C:\Users\u\x", "C:/Users/u/x"),
+            ("//./C:/Users/u/x", "C:/Users/u/x"),
+            (r"\\./C:\Users/u\x", "C:/Users/u/x"),
+            (r"\\.\C:\Users\u\.\x", "C:/Users/u/./x"),
+            (r"\??\UNC\server\share\x", "//server/share/x"),
+            (r"\\?\UNC\localhost\C$\Users\u", "C:/Users/u"),
+            (r"\\localhost\C$\Users\u", "C:/Users/u"),
+            ("//localhost/C$/Users/u", "C:/Users/u"),
+            (r"\\localhost\C$", "C:/"),
+            (r"\\server\share", "//server/share"),
+            (r"\\server/share\x", "//server/share/x"),
+        ] {
+            assert_eq!(
+                edit_target_text(text).unwrap().as_deref(),
+                Some(opened),
+                "{text}"
+            );
+        }
+        for text in [r"C:\x", "C:/x", r"C:\a/b", "C:x", "C:", r"\x", "/x", "x"] {
+            assert_eq!(edit_target_text(text).unwrap(), None, "{text}");
+        }
+        for (text, cause) in [
+            (r"\??\C:", "device or verbatim namespace"),
+            (r"\??\C:x", "device or verbatim namespace"),
+            (r"\\?\C:", "device or verbatim namespace"),
+            (r"\\.\C:", "device or verbatim namespace"),
+            (r"\??\UNC\server", "incomplete UNC"),
+            (r"\??\UNC\", "incomplete UNC"),
+            (r"\\?\UNC\server\", "incomplete UNC"),
+            (r"\\server", "incomplete UNC"),
+            (r"\\server\", "incomplete UNC"),
+            (r"\\", "incomplete UNC"),
+            (r"\??\C:\Users/u", "contains `/`"),
+            (r"\\?\C:\Users/u", "contains `/`"),
+            ("/??/C:/Users/u", "NT namespace path written with `/`"),
+            (r"\??/C:\Users\u", "NT namespace path written with `/`"),
+            ("//?/C:/Users/u", "verbatim path written with `/`"),
+            (r"\\?/C:\Users\u", "verbatim path written with `/`"),
+            (r"\\?", "device root"),
+            (r"\\.", "device root"),
+            (r"\\.\C:\Users\..\..\D:\x", "`..` name"),
+            (r"\\.\C:\Users\.. \x", "`..` name"),
+            (r"\\.\C:\Users\...\x", "`..` name"),
+            (r"\\?\GLOBALROOT\Device\HarddiskVolume1\x", "device or verbatim namespace"),
+            (r"\\.\pipe\x", "device or verbatim namespace"),
+            (r"C:\Users\u\x::$DATA", "alternate-stream"),
+        ] {
+            let error = edit_target_text(text).unwrap_err();
+            assert!(error.contains(cause), "{text}: {error}");
         }
     }
 

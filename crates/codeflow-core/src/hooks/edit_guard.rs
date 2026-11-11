@@ -225,32 +225,80 @@ pub(crate) fn enforcement_path(
         .map_err(|e| e.to_string())
 }
 
-fn absolute_target(path: &Path, cwd: &Path, home: &Path) -> PathBuf {
-    if let Ok(relative) = path.strip_prefix("~") {
-        return home.join(relative);
-    }
-    if path.is_absolute() || nt_namespace(path) {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    }
+/// The path an edit of `path` opens. On Windows a namespace or UNC spelling
+/// is mapped by its prefix class before any join, to the rooted drive path
+/// or complete UNC path Win32 opens ([`crate::portable_path::edit_target`]),
+/// and any other namespace spelling refuses: the standard library reads
+/// `\??\C:\x` as rooted, so a join would put the cwd's drive in front of
+/// it (TSK-1400). The joined path is mapped once more, for a join onto a
+/// namespace or UNC cwd. A drive-rooted path without a letter (`\x`) takes
+/// the cwd's drive, as Win32 takes the writer's current drive.
+fn absolute_target(path: &Path, cwd: &Path, home: &Path) -> Result<PathBuf, EditError> {
+    let written = match path.strip_prefix("~") {
+        Ok(relative) => home.join(relative),
+        Err(_) => path.to_path_buf(),
+    };
+    let joined = match crate::portable_path::edit_target(&written).map_err(EditError)? {
+        Some(mapped) => mapped,
+        None if written.is_absolute() => written,
+        None => cwd.join(&written),
+    };
+    Ok(crate::portable_path::edit_target(&joined)
+        .map_err(EditError)?
+        .unwrap_or(joined))
 }
 
-/// Whether `path` is a Windows NT object namespace path (`\??\C:\x`). The
-/// standard library reads it as rooted but not absolute, so a join would
-/// put the cwd's drive in front, while Win32 opens it as `\\?\C:\x`. It is
-/// kept as written for [`crate::portable_path::guard_path`] to map
-/// (TSK-1400). Other platforms have no such path.
-fn nt_namespace(path: &Path) -> bool {
-    cfg!(windows) && path.to_str().is_some_and(nt_namespace_text)
+/// Why a UNC target outside the session's chosen directories refuses, with
+/// the remedy (TSK-1400). A share can export any directory, the home
+/// included, under any name, so the guard cannot map it to a local path.
+const UNMAPPED_SHARE: &str = "cannot check an edit on a network share outside the home, the repository and the working directory: the share can name a protected directory under another path; use its drive-letter path instead";
+
+/// `path` as slashed, lower-case UNC text, after its namespace or
+/// administrative share is mapped; `None` when it is no UNC path or on
+/// other platforms. The text is [`folded_share`]'s, read without the disk.
+fn share_text(path: &Path) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let mapped = crate::portable_path::edit_target(path)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| path.to_path_buf());
+    folded_share(&crate::portable_path::slashed(&mapped).to_ascii_lowercase())
 }
 
-/// [`nt_namespace`] without the platform check, so every host can test it.
-fn nt_namespace_text(text: &str) -> bool {
-    matches!(
-        text.as_bytes(),
-        [b'/' | b'\\', b'?', b'?', b'/' | b'\\', ..]
-    )
+/// UNC `text` with `/` separators, its empty and `.` names dropped and
+/// each `..` name taking the name before it away, never the server or the
+/// share, as Win32 normalizes a UNC path. A name of dots and spaces only
+/// counts as `..`, since Win32 trims trailing dots and spaces. `None` when
+/// `text` is no UNC path.
+fn folded_share(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("//")?;
+    let mut parts: Vec<&str> = Vec::new();
+    for part in rest.split('/') {
+        if parts.len() < 2 {
+            parts.push(part);
+        } else if part.len() > 1 && part.bytes().all(|byte| matches!(byte, b'.' | b' ')) {
+            if parts.len() > 2 {
+                parts.pop();
+            }
+        } else if !part.is_empty() && part != "." {
+            parts.push(part);
+        }
+    }
+    Some(format!("//{}", parts.join("/")))
+}
+
+/// Whether `target`, UNC text from [`share_text`], lies outside every
+/// directory in `chosen` (the same form). Text without a UNC prefix is not
+/// a share and is never outside.
+fn outside_chosen_shares(target: &str, chosen: &[String]) -> bool {
+    target.starts_with("//")
+        && !chosen.iter().any(|dir| {
+            target
+                .strip_prefix(dir.as_str())
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+        })
 }
 
 /// Return a policy finding per refused target, with the existing rule and remedy.
@@ -284,30 +332,54 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
+    // The UNC directories the session chose: a share target outside them
+    // cannot be mapped to a local path (TSK-1400).
+    let chosen_shares: Vec<String> = [ctx.cwd, ctx.root, ctx.home]
+        .into_iter()
+        .filter_map(share_text)
+        .collect();
     for path in &request.paths {
-        let absolute = absolute_target(path, cwd, ctx.home);
+        let absolute = absolute_target(path, cwd, ctx.home)?;
         // A Windows drive-relative path (`C:name`) keeps its drive and
         // drops the cwd when joined. Windows opens it from the writer's
         // current directory on that drive, which the guard cannot read, so
-        // it cannot be judged and refuses (TSK-1400). Elsewhere every
-        // joined path is absolute.
-        if !absolute.is_absolute() && !nt_namespace(&absolute) {
+        // it cannot be judged and refuses (TSK-1400). Every other target is
+        // absolute here, a namespace spelling included, since
+        // [`absolute_target`] maps it to a drive or UNC path or refuses.
+        if !absolute.is_absolute() {
             return Err(EditError(format!(
                 "cannot check the drive-relative edit path {}: Windows opens it from that drive's current directory, which the guard cannot read",
                 absolute.display()
             )));
         }
+        // Before any read, a short-name lookup included, so the guard never
+        // contacts a host a target names before it refuses.
+        if share_text(&absolute)
+            .is_some_and(|text| outside_chosen_shares(&text, &chosen_shares))
+        {
+            return Err(EditError(UNMAPPED_SHARE.into()));
+        }
         // First, so a path past the bound reads nothing on disk (TSK-1258).
         let lexical = normalized(&absolute, false)?;
-        // Shell startup files refuse whatever the integrity level (TSK-242).
-        if let Some(file) = crate::security::startup::class_target(&absolute, &startup) {
+        let resolved = normalized(&absolute, true)?;
+        if share_text(&resolved)
+            .is_some_and(|text| outside_chosen_shares(&text, &chosen_shares))
+        {
+            return Err(EditError(UNMAPPED_SHARE.into()));
+        }
+        // Shell startup files refuse whatever the integrity level (TSK-242),
+        // judged on the mapped target and its normalized and resolved
+        // spellings, never only on the path as written (TSK-1400).
+        if let Some(file) = [&absolute, &lexical, &resolved]
+            .into_iter()
+            .find_map(|candidate| crate::security::startup::class_target(candidate, &startup))
+        {
             violations.push(Violation::always_blocking(
                 crate::security::startup::RULE,
                 format!("file edit targets the shell startup file `{file}`"),
                 crate::security::startup::SANCTIONED,
             ));
         }
-        let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
             let text = path_text(candidate)?;
             let authority = repository_authority_target(candidate, ctx.root, false);
@@ -2034,17 +2106,47 @@ mod tests {
         assert!(error.contains("every edit is refused"), "{error}");
     }
 
-    /// TSK-1400: an NT object namespace path (`\??\C:\x`) is kept as
-    /// written, never joined to the cwd, so the guard maps it to the file
-    /// Win32 opens.
+    /// TSK-1400 residual 1: a share can export the home under another
+    /// name, so a UNC target is judged only inside a UNC directory the
+    /// session chose; any other share refuses. Drive paths are no shares.
     #[test]
-    fn an_nt_namespace_path_is_recognised_by_its_prefix() {
-        for text in [r"\??\C:\x", "/??/C:/x", r"\??/UNC\h\s"] {
-            assert!(nt_namespace_text(text), "{text}");
+    fn a_share_target_is_judged_only_inside_a_chosen_share() {
+        let chosen = ["//server/homes/u".to_string(), "//server/proj".to_string()];
+        for target in [
+            "//server/homes/u",
+            "//server/homes/u/.codeflow/authority/config.toml",
+            "//server/proj/src/main.rs",
+            "c:/users/u/.codeflow/authority/config.toml",
+        ] {
+            assert!(!outside_chosen_shares(target, &chosen), "{target}");
         }
-        for text in [r"\\?\C:\x", r"C:\??\x", r"\?\x", "??/x", r"\??"] {
-            assert!(!nt_namespace_text(text), "{text}");
+        for target in [
+            "//server/homes/u2/x",
+            "//server/homes/x",
+            "//server/users/u/.codeflow/authority/config.toml",
+            "//localhost/users/u/.codeflow/authority/config.toml",
+            "//other/proj/src/main.rs",
+            "//server/project/x",
+        ] {
+            assert!(outside_chosen_shares(target, &chosen), "{target}");
         }
+        assert!(outside_chosen_shares("//server/proj/x", &[]));
+        // A `..` name climbs within the share as Win32 reads it, so a
+        // target cannot leave a chosen directory unseen.
+        for (text, folded) in [
+            ("//server/homes/u/../u2/x", "//server/homes/u2/x"),
+            ("//server/homes/u/.. /u2/x", "//server/homes/u2/x"),
+            ("//server/homes/u/./x/", "//server/homes/u/x"),
+            ("//server/proj/../../x", "//server/proj/x"),
+            ("//server/homes/u", "//server/homes/u"),
+        ] {
+            assert_eq!(folded_share(text).as_deref(), Some(folded), "{text}");
+        }
+        assert!(outside_chosen_shares(
+            &folded_share("//server/homes/u/../u2/x").unwrap(),
+            &chosen
+        ));
+        assert_eq!(folded_share("c:/users/u"), None);
     }
 
     /// Spellings of the authority directory under `plain`, the home as a
@@ -2056,7 +2158,21 @@ mod tests {
         assert_eq!(&plain[1..3], r":\", "{plain}");
         // `drive` is the letter and `rest` the path after `C:\`.
         let (drive, rest) = (&plain[..1], &plain[3..]);
+        // The same paths with `/` separators.
+        let (plain_slashed, rest_slashed) = (plain.replace('\\', "/"), rest.replace('\\', "/"));
         let covered = vec![
+            // Ordinary drive-absolute, with mixed separators.
+            format!(r"{plain}/.codeflow\authority/config.toml"),
+            // Drive-rooted without a letter: the cwd's drive, which the
+            // fixture's home shares.
+            format!(r"\{rest}\.codeflow\authority\config.toml"),
+            format!("/{rest_slashed}/.codeflow/authority/config.toml"),
+            format!(r"\{rest}/.codeflow\authority/config.toml"),
+            // Device paths, normalized, with either separator.
+            format!(r"\\./{plain}\.codeflow/authority\config.toml"),
+            format!("//./{plain_slashed}/.codeflow/authority/config.toml"),
+            format!(r"\\.\{plain}\.\.codeflow\authority\config.toml"),
+            format!(r"\??\UNC\localhost\{drive}$\{rest}\.codeflow\authority\config.toml"),
             format!(r"{plain}\.codeflow\authority \config.toml"),
             format!(r"{plain}\.codeflow\authority. \config.toml"),
             format!(r"{plain}\.codeflow\authority\config.toml:notes"),
@@ -2095,6 +2211,60 @@ mod tests {
                 format!(r"{drive}:.codeflow\authority\config.toml"),
                 "drive-relative",
             ),
+            // A bare volume or a drive-relative name after a namespace
+            // prefix names no rooted file (finding 1).
+            (format!(r"\??\{drive}:"), "device or verbatim namespace"),
+            (
+                format!(r"\??\{drive}:.codeflow\authority\config.toml"),
+                "device or verbatim namespace",
+            ),
+            (format!(r"\\?\{drive}:"), "device or verbatim namespace"),
+            (format!(r"\\.\{drive}:"), "device or verbatim namespace"),
+            (r"\??\UNC\localhost".to_string(), "incomplete UNC"),
+            (r"\\?\UNC\localhost\".to_string(), "incomplete UNC"),
+            (r"\\localhost".to_string(), "incomplete UNC"),
+            // A `/` inside a verbatim or NT path is part of a name.
+            (
+                format!(r"\??\{plain}/.codeflow/authority/config.toml"),
+                "contains `/`",
+            ),
+            (
+                format!(r"\\?\{plain}/.codeflow/authority/config.toml"),
+                "contains `/`",
+            ),
+            // Mixed namespace prefixes whose reading is unproved.
+            (
+                format!("/??/{plain_slashed}/.codeflow/authority/config.toml"),
+                "NT namespace path written with `/`",
+            ),
+            (
+                format!(r"\??/{plain}\.codeflow\authority\config.toml"),
+                "NT namespace path written with `/`",
+            ),
+            (
+                format!("//?/{plain_slashed}/.codeflow/authority/config.toml"),
+                "verbatim path written with `/`",
+            ),
+            (
+                format!(r"\\?/{plain}\.codeflow\authority\config.toml"),
+                "verbatim path written with `/`",
+            ),
+            (r"\\?".to_string(), "device root"),
+            // A device path can climb out of its drive.
+            (
+                format!(r"\\.\{plain}\x\..\.codeflow\authority\config.toml"),
+                "`..` name",
+            ),
+            // Residual 1: a share outside the chosen directories can export
+            // the home under any name.
+            (
+                format!(r"\\localhost\Users\{rest}\.codeflow\authority\config.toml"),
+                "network share",
+            ),
+            (
+                format!(r"\\?\UNC\localhost\share\{rest}\.codeflow\authority\x"),
+                "network share",
+            ),
         ];
         (covered, unjudged)
     }
@@ -2103,7 +2273,9 @@ mod tests {
     /// for one directory. Volumes with short names disabled give the long
     /// spelling back, which still runs every other form. A spelling the
     /// guard cannot map to one file (a verbatim name Win32 would change, a
-    /// stream type, another namespace, a drive-relative path) returns an
+    /// stream type, another namespace, a bare volume, a mixed namespace
+    /// prefix, a device path that climbs, an incomplete share, a share
+    /// outside the chosen directories, a drive-relative path) returns an
     /// error, which the hook adapter refuses.
     #[cfg(windows)]
     #[test]
@@ -2187,6 +2359,45 @@ mod tests {
                 !refused_under(&f, spelling, &spelling.join(".codeflow/config.toml")),
                 "home {}",
                 spelling.display()
+            );
+        }
+    }
+
+    /// TSK-1400 finding 2: a namespace, share or trimmed spelling of a
+    /// shell startup file refuses under the always-blocking startup rule
+    /// with hook integrity off, because the rule judges the mapped target
+    /// and its normalized spellings, not only the path as written.
+    #[cfg(windows)]
+    #[test]
+    fn startup_files_refuse_under_namespace_spellings_with_integrity_off() {
+        let f = Fixture::new();
+        let home = crate::portable_path::canonicalize(&f.home).unwrap();
+        let plain = home.to_str().unwrap().to_string();
+        assert_eq!(&plain[1..3], r":\", "{plain}");
+        let (drive, rest) = (&plain[..1], &plain[3..]);
+        let ctx = EditContext {
+            cwd: &f.root,
+            root: &f.root,
+            home: &home,
+            git_common_dir: None,
+            level: PolicyLevel::Off,
+        };
+        for target in [
+            format!(r"\??\{plain}\.bashrc"),
+            format!(r"\\?\{plain}\.bashrc"),
+            format!(r"\\.\{plain}\.bashrc"),
+            format!(r"\\localhost\{drive}$\{rest}\.bashrc"),
+            format!(r"\??\UNC\localhost\{drive}$\{rest}\.bashrc"),
+            format!(r"{plain}\.bashrc."),
+            format!(r"\{rest}\.bashrc"),
+        ] {
+            let violations = evaluate(&synthetic("write", json!({ "path": target })), &ctx)
+                .unwrap_or_else(|error| panic!("{target}: {error}"));
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.rule == crate::security::startup::RULE && v.level_fixed),
+                "{target}"
             );
         }
     }
