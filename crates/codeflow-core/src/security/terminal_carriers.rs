@@ -973,10 +973,6 @@ fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>,
         crate::hooks::git_guard::strip_reserved_words(&mut words);
         expanding.drain(..all - words.len());
         let tokens = crate::hooks::git_guard::shell_tokens_expanding(&segment);
-        // A decoded word can hold arithmetic the line's text does not show.
-        if !tokens.iter().all(|(text, _)| arithmetic.scan(text)) {
-            return Err(TEMPLATE_UNREAD.to_string());
-        }
         let found = template_assignments(&words, &expanding, &tokens, &mut arithmetic)?;
         assigned.push(found.into_iter().cloned().collect::<Vec<String>>());
     }
@@ -1259,13 +1255,7 @@ fn template_assignments<'w>(
     if matches!(name, "[[" | "[" | "test") {
         arithmetic.comparison(rest);
     }
-    // A sourced file or a callback runs code the guard cannot see.
-    let callback = matches!(name, "mapfile" | "readarray")
-        && builtin_words(rest, "dnOsuCc")
-            .0
-            .iter()
-            .any(|(letter, _)| *letter == 'C');
-    if callback || matches!(name, "source" | ".") {
+    if !code_read(&words[at..], arithmetic) {
         return unread();
     }
     let destinations: Vec<&str> = match name {
@@ -1306,8 +1296,12 @@ fn template_assignments<'w>(
             // shell evaluates the subscript of a name it sets. A word
             // holding `=` is read as an assignment, which an appending one
             // in program position is.
-            arithmetic.writes.push(words[at..].to_vec());
             for word in &words[at..] {
+                if word.starts_with('-') {
+                    arithmetic.options.push(word.clone());
+                } else if !word.contains('=') {
+                    arithmetic.targets.push(destination_base(word).to_string());
+                }
                 arithmetic.assignment(word);
             }
             Vec::new()
@@ -1318,15 +1312,37 @@ fn template_assignments<'w>(
     }) {
         return unread();
     }
-    if !destinations.is_empty() {
-        arithmetic
-            .writes
-            .push(destinations.iter().map(ToString::to_string).collect());
-    }
     for destination in destinations {
+        arithmetic
+            .targets
+            .push(destination_base(destination).to_string());
         arithmetic.subscript(destination);
     }
     Ok(found)
+}
+
+/// Whether the code a command (`words`, from its program on) has the
+/// current shell run is read. An `eval` body, which the line reader also
+/// splits into commands, holds arithmetic its words no longer mark, so it
+/// is read as code. A trap or scheduled action runs at a time the guard
+/// cannot place, and a sourced file or a callback runs code it cannot
+/// see: those are not read.
+fn code_read(words: &[String], arithmetic: &mut Arithmetic) -> bool {
+    let code = crate::hooks::git_guard::builtin_words(words);
+    let Some(program) = code.first() else {
+        return true;
+    };
+    let rest = &code[1..];
+    match crate::hooks::git_guard::launcher_name(program) {
+        "eval" => arithmetic.scan(&rest.join(" ")),
+        "trap" | "sched" => rest.iter().all(|word| word.starts_with('-')),
+        "source" | "." => false,
+        "mapfile" | "readarray" => !builtin_words(rest, "dnOsuCc")
+            .0
+            .iter()
+            .any(|(letter, _)| *letter == 'C'),
+        _ => true,
+    }
 }
 
 /// The assignments a declaration builtin (`name`) makes with its words
@@ -1366,12 +1382,19 @@ fn declared<'w>(
             return unread();
         }
         arithmetic.assignment(word);
+        arithmetic
+            .targets
+            .push(destination_base(destination).to_string());
         if integer {
             arithmetic
                 .integers
                 .push(destination_base(destination).to_string());
         }
         if reference {
+            // Writes through the reference reach its target.
+            arithmetic
+                .targets
+                .extend(target.map(|target| destination_base(target).to_string()));
             // Only a reference to a plain name the guard can see is read:
             // a template folder variable as its target, or a subscript the
             // shell evaluates, refuses.
@@ -1413,33 +1436,75 @@ const ARITHMETIC_TESTS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
 struct Arithmetic {
     /// Each expression the shell evaluates.
     expressions: Vec<String>,
-    /// The bodies of `((` commands, whose own segments name their operands
-    /// as words and are not writes.
-    bodies: Vec<String>,
     /// Each assignment word, `NAME=value`, `NAME+=value` or `NAME[i]=value`.
     assigned: Vec<String>,
     /// The variables given an integer attribute.
     integers: Vec<String>,
-    /// The words of each command that may write a variable it names.
-    writes: Vec<Vec<String>>,
+    /// Each variable a command may write other than by an assignment word:
+    /// a builtin's destination, a declaration operand, a name reference's
+    /// target, and each word of a command the guard does not know, with
+    /// any subscript removed.
+    targets: Vec<String>,
+    /// The option words of commands the guard does not know, which may
+    /// hold a destination name after the option letters.
+    options: Vec<String>,
 }
 
 impl Arithmetic {
-    /// Read the arithmetic contexts in `text`, a line or one decoded word:
-    /// `((`, `$((` and `$[` bodies, and the subscripts, offsets and
-    /// indirect names of parameter expansions. `false` when a context does
-    /// not close or names its target indirectly.
+    /// Read the arithmetic contexts in `text`, shell code the current shell
+    /// runs: `((`, `$((` and `$[` bodies, and the subscripts, offsets and
+    /// indirect names of parameter expansions. Single-quoted text and
+    /// comments are data. A line holding a here-document is read without
+    /// quotes, since a quote in its body is a plain character. `false`
+    /// when a context does not close, or a parameter names its target
+    /// indirectly or takes a form the reader does not parse.
     fn scan(&mut self, text: &str) -> bool {
+        let quotes = !text.contains("<<");
         let chars: Vec<char> = text.chars().collect();
+        let (mut single, mut ansi, mut double) = (false, false, false);
+        // The position of the last character a backslash escaped.
+        let mut escaped = None;
         let mut at = 0;
         while at < chars.len() {
+            let c = chars[at];
+            if single {
+                if ansi && c == '\\' {
+                    at += 2;
+                    continue;
+                }
+                if c == '\'' {
+                    single = false;
+                }
+                at += 1;
+                continue;
+            }
+            if c == '\\' {
+                escaped = Some(at + 1);
+                at += 2;
+                continue;
+            }
+            if quotes && c == '\'' && !double {
+                single = true;
+                ansi = at > 0 && chars[at - 1] == '$' && escaped != Some(at - 1);
+                at += 1;
+                continue;
+            }
+            if c == '"' {
+                double = !double;
+                at += 1;
+                continue;
+            }
+            let word_start = at == 0 || " \t\n;&|()<>".contains(chars[at - 1]);
+            if quotes && c == '#' && !double && word_start {
+                at += chars[at..].iter().take_while(|c| **c != '\n').count();
+                continue;
+            }
             let next = chars.get(at + 1).copied();
-            match (chars[at], next) {
+            match (c, next) {
                 ('(', Some('(')) => {
                     let Some((body, end)) = closing(&chars, at + 2, '(', ')', true) else {
                         return false;
                     };
-                    self.bodies.push(body.clone());
                     self.expressions.push(body);
                     at = end;
                 }
@@ -1490,12 +1555,24 @@ impl Arithmetic {
                 return listing.then_some(end);
             }
             Some('(') => return None,
-            Some('#') => at += 1,
+            // A length (`${#name}`), unless `#` is the parameter itself.
+            Some('#') if chars.get(at + 1).is_some_and(|c| *c != '}' && *c != ':') => at += 1,
             _ => {}
         }
-        let end = name_end(chars, at);
+        // A name, a positional parameter or a special one; any other form
+        // is not read.
+        let end = match chars.get(at) {
+            Some(c) if c.is_ascii_digit() => {
+                at + chars[at..]
+                    .iter()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count()
+            }
+            Some('@' | '*' | '#' | '?' | '-' | '$' | '!') => at + 1,
+            _ => name_end(chars, at),
+        };
         if end == at {
-            return Some(at);
+            return None;
         }
         at = end;
         if chars.get(at) == Some(&'[') {
@@ -1583,25 +1660,32 @@ impl Arithmetic {
         if self.expressions.is_empty() {
             return true;
         }
-        let mut names = leading_numbers(line);
+        let leading = leading_numbers(line);
+        let mut names = leading.clone();
         names.retain(|name| {
-            let kept_value = self.assigned.iter().all(|word| {
-                let (destination, value) = word.split_once('=').unwrap_or((word, ""));
-                destination_base(destination) != name || (destination == name && is_number(value))
+            // The only assignments to it are the leading ones, each a
+            // plain literal number.
+            let assignments: Vec<&String> = self
+                .assigned
+                .iter()
+                .filter(|word| {
+                    let destination = word.split_once('=').map_or(word.as_str(), |(d, _)| d);
+                    destination_base(destination) == name
+                })
+                .collect();
+            let plain = assignments.iter().all(|word| {
+                word.split_once('=')
+                    .is_some_and(|(destination, value)| destination == name && is_number(value))
             });
-            let written = self.writes.iter().any(|words| {
-                let body = words.len() == 1
-                    && self.bodies.iter().any(|body| {
-                        body.split([' ', '\t', '\n'])
-                            .filter(|part| !part.is_empty())
-                            .eq([words[0].as_str()])
-                    });
-                !body
-                    && words.iter().any(|word| {
-                        word == name || (word.starts_with('-') && word.ends_with(name.as_str()))
-                    })
-            });
-            kept_value && !written
+            let leading_count = leading.iter().filter(|other| *other == name).count();
+            // Nothing else may write it, by any route the guard can see,
+            // and an option word that may hold it counts as a write.
+            let written = self.targets.iter().any(|target| target == name)
+                || self
+                    .options
+                    .iter()
+                    .any(|option| option.ends_with(name.as_str()));
+            plain && assignments.len() == leading_count && !written
         });
         self.expressions
             .iter()
@@ -2323,6 +2407,8 @@ mod tests {
             // does not evaluate, set nothing.
             format!("i=0; (( i++ )); APPDATA='{root}' hc run peer"),
             format!("printf '%s' 'APPDATA=1'; APPDATA='{root}' hc run peer"),
+            format!("printf '%s' '(( v ))'; APPDATA='{root}' hc run peer"),
+            format!("echo '${{s:v}}'; APPDATA='{root}' hc run peer"),
         ] {
             assert_eq!(template(&command), vec!["claude -p"], "{command}");
         }
@@ -2414,6 +2500,22 @@ mod tests {
             "i=0; read i; (( i++ )); hc run peer",
             "false && i=0; (( i++ )); hc run peer",
             "i=0 & (( i++ )); hc run peer",
+            "i=0; read i < values; (( i )); hc run peer",
+            // The shared reader splits this body into a command named `i`,
+            // which may write `i`, so the name is no longer a literal.
+            "i=0; (( i < 3 )); hc run peer",
+            "i=0; i[0]=v; (( i++ )); hc run peer",
+            "i=0; declare -n r=i; r=v; (( i++ )); hc run peer",
+            // Positional and special parameters take offsets too.
+            "set -- abc; echo ${1:v}; hc run peer",
+            "echo ${@:v}; hc run peer",
+            // Code the current shell runs from a quoted word.
+            "eval '(( v ))'; hc run peer",
+            "trap '(( v ))' DEBUG; hc run peer",
+            // Quotes that only look like they open or close data.
+            "echo $'\\''; (( v )); hc run peer",
+            "true # don't\n(( v )); hc run peer",
+            "cat <<EOF\ndon't\nEOF\n(( v )); hc run peer",
         ];
         let passed: Vec<_> = refusing
             .into_iter()
@@ -2441,6 +2543,7 @@ mod tests {
             // another variable.
             "read MY_APPDATA; hc run -- ls",
             "declare -n ref=OTHER; ref=/x; hc run -- ls",
+            "printf '%s' '(( v ))'; hc run -- ls",
         ];
         let refused: Vec<_> = commands
             .into_iter()
