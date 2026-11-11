@@ -20,6 +20,17 @@ in CodeFlow reads one to decide what runs.
 | `--config <path>` | Reads the targets from that file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; evidence binds to that file's bytes. A missing path, a symbolic link, or a file that is not regular or readable is refused before any target starts. CI can use it to run a trusted copy of the config against a candidate checkout (TSK-1020) |
 | No selection flags | Executes every eligible target of the mode |
 
+### A run with no comparison base
+
+A quick or essential run on a branch with no task (`plan/`, `chore/`), on a
+detached head, or on a task with no declared target has no comparison base.
+It runs every target and prints `every target: local narrowing is
+unavailable, since no local run record earns selection credit (ADR-0089)`.
+A run given `--since <rev>` prints the same reason after `--since <rev>
+narrows nothing`. Nothing in the output recommends `--since`, because it
+cannot narrow a run. An unknown, renamed or deleted path, or a changed
+config digest, also runs every target.
+
 The pre-push hook runs no quick target (TSK-449), so cite
 `codeflow test --mode quick` when the pull request is made ready. A run
 records its selection with an empty `skipped` list; a target CI skips
