@@ -7184,7 +7184,5 @@ mod head_tree_records;
 #[path = "acceptance_cli/merged_target_changes.rs"]
 mod merged_target_changes;
 
-// The recorded forge's `gh` and `ssh` stand-ins are shell scripts.
-#[cfg(unix)]
 #[path = "acceptance_cli/candidate_push.rs"]
 mod candidate_push;

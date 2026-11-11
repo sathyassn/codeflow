@@ -48,36 +48,107 @@ fn forge_path(root: &Path) -> std::ffi::OsString {
     std::env::join_paths(paths).unwrap()
 }
 
-/// Install the recorded forge: an `ssh` stand-in that runs the git service
-/// asked for on `remote`, and a `gh` stand-in that answers `gh api <path>`
-/// from a file per path (a missing one answers 404).
-fn record_forge(root: &Path, remote: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let forge = forge_dir(root);
-    std::fs::create_dir_all(forge.join("bin")).unwrap();
-    std::fs::create_dir_all(forge.join("answers")).unwrap();
-    let ssh = forge.join("ssh");
-    std::fs::write(
-        &ssh,
-        format!(
-            "#!/bin/sh\n# Test stand-in for ssh: run the git service asked for on the fixture's bare repository.\nfor last; do :; done\ncase \"$last\" in\n  git-upload-pack*) exec git upload-pack '{0}' ;;\n  git-receive-pack*) exec git receive-pack '{0}' ;;\nesac\necho \"unexpected ssh command: $*\" >&2\nexit 1\n",
-            remote.display()
-        ),
-    )
-    .unwrap();
-    let gh = forge.join("bin/gh");
-    std::fs::write(
-        &gh,
-        format!(
-            "#!/bin/sh\n# Test stand-in for gh: answer `gh api <path>` from the recorded forge.\nfor last; do :; done\nkey=$(printf '%s' \"$last\" | tr -c 'A-Za-z0-9' '_')\nif [ -f '{0}'/\"$key\" ]; then cat '{0}'/\"$key\"; exit 0; fi\necho \"HTTP 404: Not Found ($last)\" >&2\nexit 1\n",
-            forge.join("answers").display()
-        ),
-    )
-    .unwrap();
-    for script in [&ssh, &gh] {
-        std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+/// The `gh` stand-in: answers `gh api <path>` (its last argument) from the
+/// file `<forge>/answers/<path with every non-alphanumeric as _>`, where
+/// `<forge>` is the folder above its own; a missing answer is a 404.
+const GH_SOURCE: &str = r#"fn main() {
+    let exe = std::env::current_exe().expect("own path");
+    let forge = exe.parent().and_then(std::path::Path::parent).expect("forge folder");
+    let path = std::env::args().last().unwrap_or_default();
+    let key: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    match std::fs::read_to_string(forge.join("answers").join(key)) {
+        Ok(body) => print!("{body}"),
+        Err(_) => {
+            eprintln!("HTTP 404: Not Found ({path})");
+            std::process::exit(1);
+        }
     }
-    git(root, &["config", "core.sshCommand", ssh.to_str().unwrap()]);
+}
+"#;
+
+/// The `ssh` stand-in: runs the git service its last argument asks for on
+/// the bare repository named in `<forge>/remote`, with stdin and stdout
+/// passed through, so git's ssh transport reaches a local repository.
+const SSH_SOURCE: &str = r#"fn main() {
+    let exe = std::env::current_exe().expect("own path");
+    let forge = exe.parent().and_then(std::path::Path::parent).expect("forge folder");
+    let remote = std::fs::read_to_string(forge.join("remote")).expect("remote recorded");
+    let command = std::env::args().last().unwrap_or_default();
+    let service = if command.starts_with("git-upload-pack") {
+        "upload-pack"
+    } else if command.starts_with("git-receive-pack") {
+        "receive-pack"
+    } else {
+        eprintln!("unexpected ssh command: {command}");
+        std::process::exit(1);
+    };
+    let status = std::process::Command::new("git")
+        .args([service, remote.trim_end()])
+        .status()
+        .expect("git runs");
+    std::process::exit(status.code().unwrap_or(1));
+}
+"#;
+
+/// The `gh` and `ssh` stand-ins, compiled once per test run with the
+/// toolchain building the tests, so they run on every platform the hook
+/// does (as `remedy_clearing/push.rs` builds its Windows `python3`).
+fn forge_programs() -> &'static (std::path::PathBuf, std::path::PathBuf) {
+    static PROGRAMS: std::sync::OnceLock<(std::path::PathBuf, std::path::PathBuf)> =
+        std::sync::OnceLock::new();
+    PROGRAMS.get_or_init(|| {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("candidate-push-forge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let mut built = Vec::new();
+        for (name, source) in [("gh", GH_SOURCE), ("ssh", SSH_SOURCE)] {
+            let file = dir.join(format!("{name}.rs"));
+            std::fs::write(&file, source).unwrap();
+            let program = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+            let out = Command::new(&rustc)
+                .arg(&file)
+                .arg("-o")
+                .arg(&program)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "the {name} stand-in compiles: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            built.push(program);
+        }
+        let ssh = built.pop().unwrap();
+        let gh = built.pop().unwrap();
+        (gh, ssh)
+    })
+}
+
+/// Install the recorded forge: the `ssh` stand-in, which serves `remote`
+/// as `origin`, and the `gh` stand-in, which answers from recorded files.
+fn record_forge(root: &Path, remote: &Path) {
+    let forge = forge_dir(root);
+    let bin = forge.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(forge.join("answers")).unwrap();
+    std::fs::write(forge.join("remote"), remote.to_str().unwrap()).unwrap();
+    let (gh, ssh) = forge_programs();
+    let installed: Vec<std::path::PathBuf> = [gh, ssh]
+        .iter()
+        .map(|program| {
+            let to = bin.join(program.file_name().unwrap());
+            std::fs::copy(program, &to).unwrap();
+            to
+        })
+        .collect();
+    // Git runs `core.sshCommand` through its shell: forward slashes and
+    // single quotes keep a Windows path whole there.
+    let ssh = installed[1].to_str().unwrap().replace('\\', "/");
+    git(root, &["config", "core.sshCommand", &format!("'{ssh}'")]);
 }
 
 /// Record the forge's answer for the API `path`.
@@ -312,6 +383,7 @@ fn fixture() -> Fixture {
         include_str!("../../../../assets/base/git-hooks/pre-push"),
     )
     .unwrap();
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
