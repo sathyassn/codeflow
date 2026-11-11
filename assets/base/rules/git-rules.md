@@ -157,7 +157,10 @@ reaches the fetched tip of exactly one epic line, the remote advertises
 that tip, the records bind the line, every commit after the tip is a clean
 merge, and each merged head is the current head of an open pull request
 into the line with every `trusted:` check of the default branch's policy
-workflow green at that exact commit, read from the forge. This proves
+workflow green at that exact commit, each written by that workflow's own
+`pull_request_target` run for that pull request, as the forge records
+it. A same-named check from another workflow or event does not count.
+This proves
 admission at the head, not that a person reviewed it. An unreadable forge,
 or a project with no such check, refuses. Anything else, an evil merge
 included, is refused as
