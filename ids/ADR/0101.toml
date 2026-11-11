@@ -1,0 +1,11 @@
+id = "ADR-0101"
+uid = "d61ae9d2-1d6a-4ff7-9219-50774dcc676a"
+kind = "ADR"
+title = "A project can override every model catalog field, and the security floors stay fixed"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-11T04:23:50Z"
+target = "none"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
