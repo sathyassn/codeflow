@@ -312,8 +312,8 @@ fn representative_stack_templates_execute_and_produce_declared_artifacts() {
         (
             "example-rust.json",
             "cargo",
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .observed-command\nmkdir -p target/llvm-cov\nprintf 'SF:src/lib.rs\\nDA:1,1\\nend_of_record\\n' > target/llvm-cov/lcov.info\n",
-            "llvm-cov nextest --workspace --lcov --output-path target/llvm-cov/lcov.info",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .observed-command\nmkdir -p target\nprintf 'SF:src/lib.rs\\nDA:1,1\\nend_of_record\\n' > target/lcov.info\n",
+            "llvm-cov nextest --workspace --lcov --output-path target/lcov.info",
         ),
         (
             "example-python.json",
@@ -493,7 +493,7 @@ fn shipped_templates_match_the_public_mode_and_artifact_contract() {
         .contains("cargo llvm-cov nextest"));
     assert!(rust.targets[0].modes["full"]
         .command
-        .contains("target/llvm-cov/lcov.info"));
+        .contains("--output-path target/lcov.info"));
 
     let python =
         config::load_test_config(&assets_template_dir().join("example-python.json")).unwrap();
