@@ -214,11 +214,10 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
         .output()
         .map_err(|error| format!("cannot inspect remote update configuration: {error}"))?;
     if !config.status.success() {
-        // A full listing would print remote URLs and rewrite bases, which
-        // can hold a credential; with its output discarded, git prints
-        // only the error naming the file and line it cannot read (TSK-416
-        // review round 3).
-        return Err("cannot inspect remote update configuration; the operator runs `git config --list > /dev/null`, which prints only the error naming the file and line git cannot read, and repairs that file".into());
+        // A listing prints configuration values, and git's parse error can
+        // quote the bad line, either of which can hold a credential, so the
+        // step runs no git command (TSK-416 review rounds 3 and 4).
+        return Err(format!("cannot inspect remote update configuration; the operator repairs the configuration file git cannot read (the repository's, the global or the system file, or one they include) {NO_CONFIG_LISTING}"));
     }
     let entries = config_entries(&config.stdout);
     for (key, value) in &entries {
@@ -1093,9 +1092,10 @@ mod tests {
     /// TSK-416 review round 3, finding 3: the steps that replaced `git
     /// remote -v` and a full `git config --show-origin --list` print no URL:
     /// a remote name that is not UTF-8 points at `git remote`, which lists
-    /// names only, and a configuration git cannot read points at a listing
-    /// whose output is discarded, so only git's error, which names the file
-    /// and line, is shown.
+    /// names only. A configuration git cannot read, here because its bad
+    /// line holds a credential, points at the file with an editor and runs
+    /// no git command, since git's parse error can quote that line (round
+    /// 4). All credentials here are synthetic.
     #[test]
     fn the_remote_steps_print_no_url() {
         let dir = repository_with_config(
@@ -1106,10 +1106,17 @@ mod tests {
         assert!(why.contains("`git remote`, which prints no URL"), "{why}");
         assert!(!why.contains("remote -v"), "{why}");
         assert!(!why.contains("OPAQUECANARY"), "{why}");
-        let broken = repository_with_config(b"[broken\n");
-        let why = update_remotes(broken.path(), &[]).unwrap_err();
-        assert!(why.contains("`git config --list > /dev/null`"), "{why}");
-        assert!(!why.contains("--show-origin"), "{why}");
+        for bad in [
+            b"[broken\n".as_slice(),
+            b"https://u:OPAQUECANARY@h.invalid/x.git = [\n".as_slice(),
+        ] {
+            let broken = repository_with_config(bad);
+            let why = update_remotes(broken.path(), &[]).unwrap_err();
+            assert!(!why.contains("OPAQUECANARY"), "{why}");
+            assert!(!why.contains("git config"), "{why}");
+            assert!(!why.contains('`'), "no command: {why}");
+            assert!(why.contains("with an editor"), "{why}");
+        }
     }
 
     /// Issue 79: one value in the user's git configuration that is not valid
