@@ -942,95 +942,123 @@ fn template_dirs(home: Option<&Path>, assigned: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// Every folder the line assigns to one of [`TEMPLATE_VARIABLES`], so a
-/// carried `hc run` reads the templates its process would: in front of a
-/// command, through `env`, `export`, or `hc exec --env`, whose assignments
-/// a carried line holds as prefixes. A name matches the way the host reads
-/// variable names, and every value is judged. A value the guard cannot
-/// read as one absolute folder on this host is an error, which refuses a
-/// template lookup. The scan reads the whole line,
-/// so an assignment in a command that never reaches `hc` adds a folder too,
-/// the stricter reading.
+/// carried `hc run` reads the templates its process would. Each simple
+/// command the line runs, nested bodies included, is read as the words the
+/// shell passes, after quote removal ([`template_assignments`]): an
+/// assignment in front of a command or a launcher (`env`), through an
+/// export builtin, or as a statement of its own, and `hc exec --env`, whose
+/// assignments a carried line holds as prefixes. A word that only looks
+/// like one, as data a command receives, is not read. A name matches the
+/// way the host reads variable names, and every value is judged. A value
+/// the guard cannot read as one absolute folder on this host, or a form
+/// that sets one it cannot read, is an error, which refuses a template
+/// lookup. Every command on the line counts, whether or not its
+/// assignment reaches `hc`, the stricter reading.
 fn assigned_template_roots(command: &str, windows: bool) -> Result<Vec<PathBuf>, String> {
-    let lower = command.to_ascii_lowercase();
     let mut roots = Vec::new();
-    for variable in TEMPLATE_VARIABLES {
-        let needle = format!("{}=", variable.to_ascii_lowercase());
-        let mut from = 0;
-        while let Some(at) = lower[from..].find(&needle) {
-            let start = from + at;
-            from = start + needle.len();
-            let bounded = lower[..start]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-            if !bounded {
+    for segment in crate::hooks::git_guard::expand_commands(command) {
+        let mut words = crate::hooks::git_guard::command_argv(&segment);
+        crate::hooks::git_guard::strip_reserved_words(&mut words);
+        for word in template_assignments(&words)? {
+            let Some((name, value)) = word.split_once('=') else {
                 continue;
-            }
+            };
+            let Some(variable) = TEMPLATE_VARIABLES
+                .iter()
+                .find(|variable| variable.eq_ignore_ascii_case(name))
+            else {
+                continue;
+            };
             let unread = || {
                 format!(
                     "`{variable}` is assigned a value the guard cannot read as one absolute \
                      folder, so it cannot tell which templates `hc` reads"
                 )
             };
-            let value = assigned_value(&command[from..]).ok_or_else(unread)?;
             if value.is_empty() {
                 continue;
             }
-            roots.push(literal_root(&value, windows).ok_or_else(unread)?);
+            if value.contains(['$', '`']) || value.chars().any(char::is_control) {
+                return Err(unread());
+            }
+            roots.push(literal_root(value, windows).ok_or_else(unread)?);
         }
     }
     Ok(roots)
 }
 
-/// The value of an assignment whose text starts at `rest`: one unquoted,
-/// single-quoted or double-quoted span up to the end of the word. `None`
-/// for any other form, or for a value holding an expansion.
-fn assigned_value(rest: &str) -> Option<String> {
-    // The shell ends a word at a blank or an operator; any other character
-    // stays part of the value.
-    let ends = |c: char| " \t\n;|&()<>".contains(c);
-    let (value, after) = match rest.chars().next() {
-        Some('\'') => {
-            let inner = &rest[1..];
-            let end = inner.find('\'')?;
-            (inner[..end].to_string(), &inner[end + 1..])
-        }
-        Some('"') => {
-            let mut value = String::new();
-            let mut chars = rest[1..].char_indices();
-            let mut close = None;
-            while let Some((at, c)) = chars.next() {
-                match c {
-                    '\\' => match chars.next()? {
-                        (_, escaped @ ('"' | '\\')) => value.push(escaped),
-                        (_, other) => {
-                            value.push('\\');
-                            value.push(other);
-                        }
-                    },
-                    '"' => {
-                        close = Some(at);
-                        break;
-                    }
-                    c => value.push(c),
-                }
-            }
-            (value, &rest[1 + close? + 1..])
-        }
-        _ => {
-            let end = rest
-                .find(|c: char| ends(c) || matches!(c, '\'' | '"' | '\\'))
-                .unwrap_or(rest.len());
-            (rest[..end].to_string(), &rest[end..])
-        }
+/// The words of one simple command that assign a variable for the program
+/// it runs or for the commands after it: each `=` word before the program
+/// its launchers run ([`crate::hooks::git_guard::strip_launchers`]), each
+/// one an export builtin receives, and every word of a command that is only
+/// assignments. The program's other operands are data and are not read.
+/// A form that may set one of [`TEMPLATE_VARIABLES`] in a way the guard
+/// cannot read (an assignment word holding an expansion, `read`, a
+/// `${NAME:=...}` default, an `env` whose words its grammar does not read)
+/// is an error.
+fn template_assignments(words: &[String]) -> Result<Vec<&String>, String> {
+    let names = |word: &str| {
+        let lower = word.to_ascii_lowercase();
+        TEMPLATE_VARIABLES
+            .iter()
+            .any(|variable| lower.contains(&variable.to_ascii_lowercase()))
     };
-    if after.chars().next().is_some_and(|c| !ends(c)) {
-        return None;
+    let unread = || {
+        Err(
+            "a command on the line can set a template folder variable in a form the guard \
+             cannot read, so it cannot tell which templates `hc` reads"
+                .to_string(),
+        )
+    };
+    let defaults = words.iter().any(|word| {
+        let lower = word.to_ascii_lowercase();
+        TEMPLATE_VARIABLES.iter().any(|variable| {
+            let variable = variable.to_ascii_lowercase();
+            lower.contains(&format!("${{{variable}="))
+                || lower.contains(&format!("${{{variable}:="))
+        })
+    });
+    if defaults {
+        return unread();
     }
-    if value.contains(['$', '`']) || value.chars().any(char::is_control) {
-        return None;
+    let at = match crate::hooks::git_guard::strip_launchers(words) {
+        Some((_, args)) => words.len() - args.len() - 1,
+        None => words.len(),
+    };
+    let before = &words[..at];
+    let program = words.get(at);
+    if before
+        .iter()
+        .chain(program)
+        .any(|word| word.contains('=') && word.contains(['$', '`']))
+    {
+        return unread();
     }
-    Some(value)
+    let mut found: Vec<&String> = before.iter().filter(|word| word.contains('=')).collect();
+    let Some(program) = program else {
+        return Ok(found);
+    };
+    let rest = &words[at + 1..];
+    match crate::hooks::git_guard::launcher_name(program) {
+        "export" | "declare" | "typeset" | "local" | "readonly" => {
+            if rest
+                .iter()
+                .any(|word| names(word) && word.contains(['$', '`']))
+            {
+                return unread();
+            }
+            found.extend(rest.iter().filter(|word| word.contains('=')));
+        }
+        // An env its launcher reading did not pass, or a builtin that sets
+        // a variable from input.
+        "env" | "read" | "readarray" | "mapfile" | "printf" | "getopts" | "for" | "select"
+            if rest.iter().any(|word| names(word)) =>
+        {
+            return unread();
+        }
+        _ => {}
+    }
+    Ok(found)
 }
 
 /// `value` as the absolute folder a process on this host reads it as.
@@ -1586,6 +1614,17 @@ mod tests {
                 "{name}"
             );
         }
+        // Assignments are read from the words the shell passes, after
+        // quote removal, wherever they reach the carrier.
+        for command in [
+            format!("env 'APPDATA'='{root}' hc run peer"),
+            format!("env AP''PDATA=\"{root}\" hc run peer"),
+            format!("export APPDATA='{root}'; hc run peer"),
+            format!("APPDATA='{root}'; hc run peer"),
+            format!("sh -c \"APPDATA='{root}' hc run peer\""),
+        ] {
+            assert_eq!(template(&command), vec!["claude -p"], "{command}");
+        }
         // `hc exec --env` gives the variable to the `hc run` it starts,
         // which is judged as that line typed bare.
         let outer = read(&format!("hc exec --env 'AppData={root}' -- hc run peer"));
@@ -1597,6 +1636,8 @@ mod tests {
             "AppData=~/x hc run peer",
             "hc exec --env 'AppData=$X' -- hc run peer",
             "hc exec --env AppData=rel -- hc run peer",
+            "read APPDATA; hc run peer",
+            ": ${APPDATA:=rel}; hc run peer",
         ] {
             let found = read(command);
             let inner = found
@@ -1612,6 +1653,21 @@ mod tests {
                     .any(|u| u.contains("<template>")),
                 "{command}: {found:?} {inner:?}"
             );
+        }
+    }
+
+    /// A word that only looks like an assignment, as data a carried
+    /// command receives, sets no template folder and refuses nothing.
+    #[test]
+    fn assignment_shaped_data_is_not_an_assignment() {
+        for command in [
+            "hc run -- echo APPDATA=relative",
+            "hc run echo XDG_CONFIG_HOME=relative",
+            "hc exec -- printf %s APPDATA=relative",
+            "echo APPDATA=relative && hc run -- ls",
+        ] {
+            let found = read(command);
+            assert!(found.unread.is_empty(), "{command}: {:?}", found.unread);
         }
     }
 
