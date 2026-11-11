@@ -35,6 +35,7 @@
 //! by unit against the shipped text: only the targeted units may differ.
 
 pub mod authority;
+mod budget;
 mod oracle;
 pub mod record;
 pub mod sections;
@@ -330,12 +331,15 @@ pub fn agents_tier(src: &str) -> Option<Tier> {
         .map(|output| output.tier)
 }
 
-/// What a value of a row field may hold: one non-empty line, no marker text.
+/// What a value of a row field may hold: one non-empty line, no marker text,
+/// no HTML comment and no character a reader of the rendered text cannot see
+/// ([`sections::is_invisible`]).
 fn row_value_ok(value: &str, table_cell: bool) -> bool {
     let refused = value.trim().is_empty()
         || value.contains(['\n', '\r'])
         || value.contains("<!--")
         || value.contains("-->")
+        || value.chars().any(sections::is_invisible)
         || value.to_ascii_lowercase().contains("codeflow:")
         || (table_cell && value.contains('|'));
     !refused
@@ -481,11 +485,11 @@ pub fn check(
                         index,
                         if is_rule {
                             Shown::fixed(
-                                "a rule override sets only `text` and `title`, each one line with no `<!--`, `-->` or `codeflow:`",
+                                "a rule override sets only `text` and `title`, each one line with no `<!--`, `-->`, `codeflow:` or invisible character",
                             )
                         } else {
                             Shown::fixed(
-                                "a moment override sets only `action`, one line with no `|`, `<!--`, `-->` or `codeflow:`",
+                                "a moment override sets only `action`, one line with no `|`, `<!--`, `-->`, `codeflow:` or invisible character",
                             )
                         },
                     ));
@@ -906,6 +910,9 @@ pub fn prepare(
                     dest_shown(&file.dest)
                 )));
             };
+            if !applied.is_empty() {
+                budget::check(root, &file.dest, &effective, format)?;
+            }
             (pristine, Some(format))
         } else {
             (rendered.clone(), None)

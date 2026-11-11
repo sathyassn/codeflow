@@ -108,6 +108,100 @@ pub fn codex_instruction_limit(root: &std::path::Path) -> std::io::Result<(usize
     ))
 }
 
+/// The instruction limit Codex applies in the project under `root`, or the
+/// reason it cannot be determined. Stricter than [`codex_instruction_limit`],
+/// for a check that must fail closed: the config file must be absent or a
+/// regular, readable, parseable file, and a `project_doc_max_bytes` it sets
+/// must be a positive integer. The doctor measure treats such a file as
+/// holding no setting.
+///
+/// # Errors
+///
+/// A fixed reason, naming no path, when the limit cannot be determined.
+pub fn strict_instruction_limit(
+    root: &std::path::Path,
+) -> Result<(usize, LimitSource), &'static str> {
+    let path = root.join(".codex/config.toml");
+    if crate::absence::proven_absent(&path)
+        .map_err(|_| "the Codex config file's absence cannot be proven")?
+    {
+        return Ok((CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default));
+    }
+    if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
+        return Err("the Codex config file is not a readable regular file");
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|_| "the Codex config file cannot be read")?;
+    let value: toml::Value = text
+        .parse()
+        .map_err(|_| "the Codex config file does not parse")?;
+    let Some(setting) = value.get("project_doc_max_bytes") else {
+        return Ok((CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default));
+    };
+    setting
+        .as_integer()
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .filter(|bytes| *bytes > 0)
+        .map(|bytes| (bytes, LimitSource::ProjectConfig))
+        .ok_or("project_doc_max_bytes in the Codex config file is not a positive integer")
+}
+
+/// The instruction file Codex loads from `dir` and its size: the override
+/// file when it is not empty, else `AGENTS.md`; `None` when neither holds
+/// bytes.
+///
+/// # Errors
+///
+/// A candidate's absence cannot be proven or its metadata cannot be read.
+pub(crate) fn instruction_file(
+    dir: &std::path::Path,
+) -> std::io::Result<Option<(&'static str, usize)>> {
+    for name in ["AGENTS.override.md", "AGENTS.md"] {
+        let path = dir.join(name);
+        if crate::absence::proven_absent(&path)? {
+            continue;
+        }
+        let bytes = std::fs::metadata(path)?.len();
+        if bytes > 0 {
+            return Ok(Some((name, usize::try_from(bytes).unwrap_or(usize::MAX))));
+        }
+    }
+    Ok(None)
+}
+
+/// The bytes Codex loads before the instruction file in the directory of
+/// `dest` (a path relative to `root`): the instruction files of every
+/// directory above it, from the project root down.
+///
+/// # Errors
+///
+/// An ancestor's instruction file cannot be inspected ([`instruction_file`]).
+pub(crate) fn ancestor_instruction_bytes(
+    root: &std::path::Path,
+    dest: &str,
+) -> std::io::Result<usize> {
+    let parts: Vec<_> = std::path::Path::new(dest)
+        .parent()
+        .map(|parent| parent.components().collect())
+        .unwrap_or_default();
+    // `dest` in the root has no ancestor. Otherwise the root, then every
+    // directory of its path except the last, which holds `dest` itself.
+    let Some((_, above)) = parts.split_last() else {
+        return Ok(0);
+    };
+    let mut total = 0;
+    let mut dir = root.to_path_buf();
+    for part in std::iter::once(None).chain(above.iter().map(Some)) {
+        if let Some(part) = part {
+            dir.push(part);
+        }
+        if let Some((_, bytes)) = instruction_file(&dir)? {
+            total += bytes;
+        }
+    }
+    Ok(total)
+}
+
 /// The bytes by which a complete `AGENTS.md` (managed block and project
 /// section together) passes Codex's instruction limit, or `None` when the
 /// whole document fits. The whole document is measured because Codex cuts

@@ -466,6 +466,10 @@ pub enum BodyProblem {
     IndentedCode,
     /// A list item or block quote still open at the end of the body.
     OpenContainer,
+    /// Text a Markdown reader does not show while an agent reads it from the
+    /// raw file: an HTML comment, a raw HTML block that renders nothing, or
+    /// a control, bidirectional, zero-width or other invisible character.
+    Concealed,
 }
 
 impl BodyProblem {
@@ -498,6 +502,9 @@ impl BodyProblem {
             }
             Self::OpenContainer => {
                 "the replacement ends inside a list item or block quote; end it with a blank line"
+            }
+            Self::Concealed => {
+                "the replacement holds text a reviewer would not see in rendered Markdown: an HTML comment, a script, style, declaration or processing-instruction block, or a control, bidirectional, zero-width or other invisible character; write visible text only"
             }
         }
     }
@@ -546,6 +553,12 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
     }
     if body.contains('\r') {
         return Err(BodyProblem::CarriageReturn);
+    }
+    if body.to_ascii_lowercase().contains("codeflow:") {
+        return Err(BodyProblem::StructuralMarker);
+    }
+    if body.contains("<!--") || body.chars().any(is_invisible) {
+        return Err(BodyProblem::Concealed);
     }
     let mut fence: Option<Fence> = None;
     let mut html: Option<&str> = None;
@@ -611,6 +624,12 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
         {
             return Err(BodyProblem::EndsSection);
         }
+        if html_block_end(line).is_some_and(|end| !matches!(end, "</pre>" | "</textarea>")) {
+            // A block that renders nothing (script, style, declaration,
+            // processing instruction, CDATA) hides its text from a reader of
+            // the rendered page. Comments are refused above.
+            return Err(BodyProblem::Concealed);
+        }
         if let Some(end) = html_block_end(line) {
             // The end condition may sit on the opening line itself, after
             // the opener.
@@ -634,6 +653,46 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
         return Err(BodyProblem::OpenContainer);
     }
     Ok(())
+}
+
+/// Whether `c` is a character a reader of rendered or printed text does not
+/// see, though an agent reads it from the raw file: a control character other
+/// than a line feed or tab, a bidirectional control, a zero-width or other
+/// invisible format character, a variation selector, a Unicode tag or a blank
+/// filler. Override text holding one is refused (TSK-1302).
+#[must_use]
+pub fn is_invisible(c: char) -> bool {
+    (c.is_control() && c != '\n' && c != '\t')
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{034F}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061C}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{08E2}'
+                | '\u{115F}'
+                | '\u{1160}'
+                | '\u{17B4}'
+                | '\u{17B5}'
+                | '\u{180B}'..='\u{180F}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{2800}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF0}'..='\u{FFFB}'
+                | '\u{110BD}'
+                | '\u{110CD}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E0FFF}'
+        )
 }
 
 /// The body as it is written: with a final line break.
@@ -708,5 +767,53 @@ mod tests {
         );
         assert_eq!(check_body("```\nopen\n", 2), Err(BodyProblem::OpenFence));
         assert_eq!(check_body("```\n## fenced\n```\n", 2), Ok(()));
+    }
+
+    #[test]
+    fn text_a_reviewer_would_not_see_is_refused() {
+        let concealed = Err(BodyProblem::Concealed);
+        // An HTML comment, closed or open, alone or after text, in a fence.
+        assert_eq!(check_body("<!-- hidden -->\nvisible\n", 2), concealed);
+        assert_eq!(check_body("visible <!-- hidden --> text\n", 2), concealed);
+        assert_eq!(check_body("<!-- open\nhidden\n", 2), concealed);
+        assert_eq!(check_body("```\n<!-- c -->\n```\n", 2), concealed);
+        // Blocks that render nothing.
+        for block in [
+            "<style>\nx\n</style>\n",
+            "<script>\nx\n</script>\n",
+            "<?php x ?>\n",
+            "<![CDATA[x]]>\n",
+            "<!DOCTYPE x>\n",
+        ] {
+            assert_eq!(check_body(block, 2), concealed, "{block:?}");
+        }
+        // Bidirectional, zero-width, tag, selector, soft hyphen, control.
+        for hidden in [
+            '\u{202E}',
+            '\u{2066}',
+            '\u{200B}',
+            '\u{200D}',
+            '\u{2060}',
+            '\u{FEFF}',
+            '\u{00AD}',
+            '\u{E0041}',
+            '\u{FE0F}',
+            '\u{3164}',
+            '\u{061C}',
+            '\u{001B}',
+            '\u{0000}',
+            '\u{0085}',
+        ] {
+            let text = format!("visible{hidden}text\n");
+            assert_eq!(
+                check_body(&text, 2),
+                concealed,
+                "U+{:04X}",
+                u32::from(hidden)
+            );
+        }
+        // Visible text stays accepted: tabs, accents, a code block, a pre block.
+        assert_eq!(check_body("a\tb caf\u{e9} \u{2192} done\n", 2), Ok(()));
+        assert_eq!(check_body("<pre>\nkept\n</pre>\n", 2), Ok(()));
     }
 }

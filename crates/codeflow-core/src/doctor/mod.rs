@@ -4256,7 +4256,7 @@ fn instruction_chains(
 ) -> std::io::Result<()> {
     let dir = root.join(relative);
     let mut total = inherited;
-    if let Some((name, bytes)) = instruction_file(&dir)? {
+    if let Some((name, bytes)) = crate::scaffold::rule_map::instruction_file(&dir)? {
         total += bytes;
         chains.push((crate::portable_path::slashed(&relative.join(name)), total));
     }
@@ -4285,19 +4285,6 @@ fn instruction_chains(
         instruction_chains(root, &relative, depth + 1, total, chains)?;
     }
     Ok(())
-}
-fn instruction_file(dir: &Path) -> std::io::Result<Option<(&'static str, usize)>> {
-    for name in ["AGENTS.override.md", "AGENTS.md"] {
-        let path = dir.join(name);
-        if crate::absence::proven_absent(&path)? {
-            continue;
-        }
-        let bytes = std::fs::metadata(path)?.len();
-        if bytes > 0 {
-            return Ok(Some((name, usize::try_from(bytes).unwrap_or(usize::MAX))));
-        }
-    }
-    Ok(None)
 }
 
 fn chain_label(file: &str) -> String {
