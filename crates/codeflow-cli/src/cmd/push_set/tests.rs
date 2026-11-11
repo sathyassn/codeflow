@@ -1378,9 +1378,9 @@ fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
         // A fresh clone of the same destination holds no tracking ref for
         // it; the failing clone is unchanged.
         let fresh = tempfile::tempdir().unwrap();
-        command(fresh.path(), &["clone", "-q", "--", source, "clone"]);
-        let clone = fresh.path().join("clone");
-        assert_eq!(held_tracking_ref(&clone, "origin").unwrap(), None, "{name}");
+        codeflow_fixture::clone(fresh.path(), source, "copy").run();
+        let copy = fresh.path().join("copy");
+        assert_eq!(held_tracking_ref(&copy, "origin").unwrap(), None, "{name}");
         assert_eq!(held_tracking_ref(root, name).unwrap(), held, "{name}");
     }
 }

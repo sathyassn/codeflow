@@ -1182,19 +1182,9 @@ mod tests {
             // source, whose remote takes the plain name `origin`, reads the
             // policy authority.
             let fresh = tempfile::tempdir().unwrap();
-            let out = crate::git::command()
-                .args(["clone", "-q", "--"])
-                .arg(root)
-                .arg(fresh.path().join("clone"))
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            codeflow_fixture::clone(fresh.path(), root, "copy").run();
             assert!(load_local(root).is_err(), "{name}");
-            let landed = load_local(&fresh.path().join("clone")).unwrap();
+            let landed = load_local(&fresh.path().join("copy")).unwrap();
             assert!(
                 landed.source.starts_with("refs/remotes/origin/"),
                 "{name}: {}",

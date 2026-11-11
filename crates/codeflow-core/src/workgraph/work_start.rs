@@ -6576,17 +6576,14 @@ mod tests {
             // plain name `origin`, resolves the line; the failing clone is
             // left as it was.
             let fresh = tempfile::tempdir().unwrap();
-            let clone = fresh.path().join("clone");
-            git(
-                fresh.path(),
-                &["clone", "-q", "--", source, clone.to_str().unwrap()],
-            );
+            codeflow_fixture::clone(fresh.path(), source, "copy").run();
+            let copy = fresh.path().join("copy");
             assert!(
                 unresolvable_reference(root, &fetched).is_some(),
                 "{name}: the failing clone is unchanged"
             );
             assert!(
-                unresolvable_reference(&clone, "refs/remotes/origin/main").is_none(),
+                unresolvable_reference(&copy, "refs/remotes/origin/main").is_none(),
                 "{name}: {message}"
             );
             let head = Repository::open(root)
@@ -6596,7 +6593,7 @@ mod tests {
                 .target()
                 .unwrap();
             assert_eq!(
-                Repository::open(&clone)
+                Repository::open(&copy)
                     .unwrap()
                     .find_reference("refs/remotes/origin/main")
                     .unwrap()
