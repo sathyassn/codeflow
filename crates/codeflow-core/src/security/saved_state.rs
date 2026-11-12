@@ -651,6 +651,178 @@ pub(super) fn modified_variables(word: &str, vars: &[(String, String)]) -> Chang
     changed
 }
 
+/// How many readings [`alternatives`] makes of one word before the word
+/// fails closed.
+const MAX_READINGS: usize = 64;
+
+/// What [`alternatives`] reads of a word.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Alternatives {
+    /// The word holds no default, assignment or alternate-value form.
+    None,
+    /// Each reading of the word, every such form replaced by one value it
+    /// can give.
+    Readings(Vec<String>),
+    /// More readings than the guard makes, or a value that starts with a
+    /// tilde word the guard cannot place: the word fails closed.
+    Unread,
+}
+
+/// The readings of `word` with each default, assignment or alternate-value
+/// form (`${NAME-word}`, `${NAME:-word}`, `=`, `:=`, zsh's `::=`, `+`,
+/// `:+`, and the unnamed `${:-word}`) replaced by each value it can give,
+/// at any depth: the variable itself, written `${NAME}`, or the word, and
+/// nothing in place of the variable for `+` and `:+`. A word that starts
+/// with `~` gives the home or the variable it names, written as an
+/// expansion. Each reading is then judged as its own path, with the
+/// changes around the form still in place, so a default that gives an
+/// ordinary path runs while one that gives saved state refuses. A form
+/// with flags or another change before its operator stays as written, for
+/// [`modified_variables`] to read.
+pub(super) fn alternatives(word: &str, vars: &[(String, String)]) -> Alternatives {
+    let mut pending = std::collections::VecDeque::from([word.to_string()]);
+    let mut readings = Vec::new();
+    let mut found = false;
+    while let Some(reading) = pending.pop_front() {
+        match alternative_in(&reading, vars) {
+            Form::Values(values) => {
+                found = true;
+                pending.extend(values);
+            }
+            Form::Unplaced => return Alternatives::Unread,
+            Form::Absent => readings.push(reading),
+        }
+        if pending.len() + readings.len() > MAX_READINGS {
+            return Alternatives::Unread;
+        }
+    }
+    if found {
+        Alternatives::Readings(readings)
+    } else {
+        Alternatives::None
+    }
+}
+
+/// How the value of an alternative form follows from its operator.
+#[derive(Clone, Copy)]
+enum Gives {
+    /// `-`, `:-`, `=`, `:=`: the variable, or the word.
+    Either,
+    /// `+`, `:+`: nothing, or the word.
+    Alternate,
+    /// zsh's `::=`: the word.
+    Word,
+}
+
+/// What [`alternative_in`] finds in a word.
+enum Form {
+    /// No alternative form.
+    Absent,
+    /// The form's word starts with a tilde word the guard cannot place.
+    Unplaced,
+    /// The word with the form replaced by each value it can give.
+    Values(Vec<String>),
+}
+
+/// The first alternative form in `word`, outermost first.
+fn alternative_in(word: &str, vars: &[(String, String)]) -> Form {
+    let chars: Vec<char> = word.chars().collect();
+    for open in 0..chars.len() {
+        if chars[open] != '$' || chars.get(open + 1) != Some(&'{') {
+            continue;
+        }
+        let mut at = open + 2;
+        if chars
+            .get(at)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+        {
+            while chars
+                .get(at)
+                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+            {
+                at += 1;
+            }
+        }
+        let name: String = chars[open + 2..at].iter().collect();
+        let op: String = chars[at..].iter().take(3).collect();
+        let (width, gives) = if op.starts_with("::=") {
+            (3, Gives::Word)
+        } else if op.starts_with(":-") || op.starts_with(":=") {
+            (2, Gives::Either)
+        } else if op.starts_with(":+") {
+            (2, Gives::Alternate)
+        } else if name.is_empty() {
+            continue;
+        } else if op.starts_with('-') || op.starts_with('=') {
+            (1, Gives::Either)
+        } else if op.starts_with('+') {
+            (1, Gives::Alternate)
+        } else {
+            continue;
+        };
+        let body = at + width;
+        let mut depth = 0usize;
+        let mut close = None;
+        for (i, c) in chars.iter().enumerate().skip(body) {
+            match c {
+                '{' => depth += 1,
+                '}' if depth == 0 => {
+                    close = Some(i);
+                    break;
+                }
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            continue;
+        };
+        let inner: String = chars[body..close].iter().collect();
+        let Some(inner) = tilde_value(&inner, vars) else {
+            return Form::Unplaced;
+        };
+        let operand = if name.is_empty() {
+            String::new()
+        } else {
+            format!("${{{name}}}")
+        };
+        let values = match gives {
+            Gives::Either => vec![operand, inner],
+            Gives::Alternate => vec![String::new(), inner],
+            Gives::Word => vec![inner],
+        };
+        let before: String = chars[..open].iter().collect();
+        let after: String = chars[close + 1..].iter().collect();
+        return Form::Values(
+            values
+                .into_iter()
+                .map(|value| format!("{before}{value}{after}"))
+                .collect(),
+        );
+    }
+    Form::Absent
+}
+
+/// `word` with a leading `~` or `~NAME` written as the expansion it gives:
+/// the home, or a variable of `vars` of that name. `None` for any other
+/// tilde word (another user's home, a named folder, the directory stack),
+/// which the guard cannot place.
+fn tilde_value(word: &str, vars: &[(String, String)]) -> Option<String> {
+    let Some(rest) = word.strip_prefix('~') else {
+        return Some(word.to_string());
+    };
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+        .unwrap_or(rest.len());
+    let (name, tail) = rest.split_at(end);
+    if name.is_empty() {
+        return matches!(tail.chars().next(), None | Some('/')).then(|| format!("${{HOME}}{tail}"));
+    }
+    vars.iter()
+        .any(|(known, _)| known == name)
+        .then(|| format!("${{{name}}}{tail}"))
+}
+
 /// The reader behind [`modified_variables`].
 struct Scan<'a> {
     chars: &'a [char],

@@ -303,7 +303,8 @@ fn every_changed_variable_in_a_word_is_judged() {
 /// default, replacement, flag and subscript forms, and through a tilde
 /// word inside the expansion. Where its value is or
 /// holds saved state the write fails closed, at the home and at a moved
-/// folder.
+/// folder. A default whose value is the variable itself, with nothing
+/// changed around it, refuses as the path it names.
 #[test]
 fn a_variable_nested_in_a_changed_expansion_is_judged() {
     let f = Fixture::new();
@@ -539,9 +540,10 @@ fn nested_expansions_of_ordinary_values_still_run() {
 /// indirect name, evaluation or prompt expansion of a value, a flag that
 /// takes an argument it does not read, a command substitution inside it, a
 /// tilde word for a home or folder it cannot read, an expansion left open,
-/// or a closing brace left over after one. The guard cannot tell which variables such a
-/// word reads, so it is read as near saved state, at the home and at a
-/// moved folder, whatever the run folder holds.
+/// a closing brace left over after one, or more alternatives than the
+/// guard reads. The guard cannot tell which variables such a word reads,
+/// so it is read as near saved state, at the home and at a moved folder,
+/// whatever the run folder holds.
 #[test]
 fn a_changed_expansion_the_guard_cannot_read_fails_closed() {
     let f = Fixture::new();
@@ -598,6 +600,10 @@ fn a_changed_expansion_the_guard_cannot_read_fails_closed() {
                 "${NOPE:-~+}/session-env/h",
             ),
             ("V=x; echo x > ${V@P}/session-env/h", "${V@P}/session-env/h"),
+            (
+                "echo x > ${A:-a}${B:-b}${C:-c}${D:-d}${E:-e}${F:-f}${G:-g}/session-env/h",
+                "${A:-a}${B:-b}${C:-c}${D:-d}${E:-e}${F:-f}${G:-g}/session-env/h",
+            ),
         ] {
             let message = format!(
                 "a redirect writes `{word}`, which the guard cannot resolve, and a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state; {NEAR}"

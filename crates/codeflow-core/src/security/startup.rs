@@ -1134,11 +1134,57 @@ impl Line<'_> {
     /// assignment can come after the use, so the inherited value may be
     /// the one the shell expands (review round two).
     fn judge(&self, word: &str, dirs: &[PathBuf]) -> Judged {
-        let judged = self.judge_literal(word, dirs);
+        let judged = match self.alternative_readings(word) {
+            Some(readings) => self.judge_readings(word, &readings, dirs),
+            None => self.judge_literal(word, dirs),
+        };
         if matches!(judged, Judged::Ordinary) && self.uses_assigned(word) {
             return Judged::Unresolved(word.to_string());
         }
         judged
+    }
+
+    /// For saved state, the readings of `word` with each default,
+    /// assignment or alternate-value form replaced by each value it can
+    /// give ([`saved_state::alternatives`]). `None` when the word holds no
+    /// such form, and when the word fails closed as a whole (an expansion
+    /// the guard cannot read, or more readings than it makes), which the
+    /// word's own reading then refuses.
+    fn alternative_readings(&self, word: &str) -> Option<Vec<String>> {
+        if self.kind != Kind::SavedState {
+            return None;
+        }
+        let vars = self.vars();
+        if saved_state::modified_variables(word, &vars).unread {
+            return None;
+        }
+        match saved_state::alternatives(word, &vars) {
+            saved_state::Alternatives::Readings(readings) => Some(readings),
+            saved_state::Alternatives::None | saved_state::Alternatives::Unread => None,
+        }
+    }
+
+    /// Judge `word` by its alternative `readings`, each as its own path: a
+    /// class entry when any reading is one, unresolved when any reading is
+    /// (its own reading then says whether it is near the class), and
+    /// otherwise the first placement.
+    fn judge_readings(&self, word: &str, readings: &[String], dirs: &[PathBuf]) -> Judged {
+        let mut placement = None;
+        let mut unresolved = false;
+        for reading in readings {
+            match self.judge(reading, dirs) {
+                Judged::Class(label) => return Judged::Class(label),
+                Judged::Placement(p) => {
+                    placement.get_or_insert(p);
+                }
+                Judged::Unresolved(_) => unresolved = true,
+                Judged::Ordinary => {}
+            }
+        }
+        if unresolved {
+            return Judged::Unresolved(word.to_string());
+        }
+        placement.map_or(Judged::Ordinary, Judged::Placement)
     }
 
     /// Whether `word` expands a variable the line assigns.
@@ -1274,36 +1320,79 @@ impl Line<'_> {
         })
     }
 
+    /// Why an unresolved word may name saved state, by what its changed
+    /// expansions give. A word with a default, assignment or
+    /// alternate-value form is judged by each value the form can give, as
+    /// its own path: it is near when any value is or holds a location, or
+    /// is itself near by the rules below. Otherwise a word that changes
+    /// any variable whose value is or holds a location with a zsh flag,
+    /// modifier or subscript, or reads one inside another changed
+    /// expansion at any depth, is near, whatever other variables it
+    /// changes before it. A changed expansion the guard cannot read to the
+    /// end, and a word with more alternatives than the guard reads, fail
+    /// closed.
+    fn saved_state_near(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
+        const UNREAD: &str = "a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state";
+        let vars = self.vars();
+        let changed = saved_state::modified_variables(word, &vars);
+        if !changed.unread {
+            match saved_state::alternatives(word, &vars) {
+                saved_state::Alternatives::Unread => return Some(UNREAD.to_string()),
+                saved_state::Alternatives::Readings(readings) => {
+                    let noun = self.noun();
+                    let judged: Vec<Judged> = readings
+                        .iter()
+                        .map(|reading| self.judge(reading, dirs))
+                        .collect();
+                    // What the values themselves give comes first, then
+                    // the rules for any unresolved word.
+                    return judged
+                        .iter()
+                        .find_map(|judged| match judged {
+                            Judged::Class(label) => {
+                                Some(format!("one value it can take is the {noun} `{label}`"))
+                            }
+                            Judged::Placement(label) => Some(format!(
+                                "one value it can take is `{label}`, which can hold a {noun}"
+                            )),
+                            Judged::Unresolved(w) => self.saved_state_near(w, dirs),
+                            Judged::Ordinary => None,
+                        })
+                        .or_else(|| {
+                            judged.iter().find_map(|judged| match judged {
+                                Judged::Unresolved(w) => self.unresolved_near_class(w, dirs),
+                                _ => None,
+                            })
+                        });
+                }
+                saved_state::Alternatives::None => {}
+            }
+        }
+        for (name, value) in changed.vars {
+            let near = dirs.iter().any(|dir| {
+                let path = dir.join(&value);
+                self.class
+                    .target(&path)
+                    .or_else(|| self.class.placement(&path))
+                    .is_some()
+            });
+            if near {
+                return Some(format!(
+                    "it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state"
+                ));
+            }
+        }
+        changed.unread.then(|| UNREAD.to_string())
+    }
+
     /// Whether an unresolved word may name a startup file: the line names
     /// one, or the literal directory before the part the shell fills in is
-    /// the home, `/etc` or a startup directory. For saved state, a word
-    /// that changes any variable whose value is or holds a location with a
-    /// zsh flag, modifier or subscript, or reads inside another changed
-    /// expansion at any depth, may name one too, whatever other variables
-    /// the word changes before it; so may a word with a changed expansion
-    /// the guard cannot read to the end, which fails closed.
+    /// the home, `/etc` or a startup directory. For saved state, see
+    /// [`Line::saved_state_near`].
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
         if self.kind == Kind::SavedState {
-            let changed = saved_state::modified_variables(word, &self.vars());
-            for (name, value) in changed.vars {
-                let near = dirs.iter().any(|dir| {
-                    let path = dir.join(&value);
-                    self.class
-                        .target(&path)
-                        .or_else(|| self.class.placement(&path))
-                        .is_some()
-                });
-                if near {
-                    return Some(format!(
-                        "it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state"
-                    ));
-                }
-            }
-            if changed.unread {
-                return Some(
-                    "a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state"
-                        .to_string(),
-                );
+            if let Some(why) = self.saved_state_near(word, dirs) {
+                return Some(why);
             }
         }
         if let Some(name) = self.class.named_in(self.text) {
