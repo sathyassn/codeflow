@@ -1,0 +1,11 @@
+id = "TSK-1466"
+uid = "9d65046c-9ed4-4e5f-b037-0f750c7453e5"
+kind = "TSK"
+title = "Both guards read an enforcement path the same way"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T06:45:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
