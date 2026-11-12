@@ -1,0 +1,11 @@
+id = "TSK-1459"
+uid = "e29babea-bb91-4ae4-8189-e1be5f263eef"
+kind = "TSK"
+title = "The release-route and terminal-carrier guards read assignments through the shared reader"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:04:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
