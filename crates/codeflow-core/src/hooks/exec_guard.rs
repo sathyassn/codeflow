@@ -231,6 +231,16 @@ pub fn evaluate_ruled(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
+    // An agent push of a line or the default branch, read as git-guard
+    // reads it, whatever credential Git uses (TSK-1479 AC-15).
+    for finding in super::git_guard::agent_push_refusals(command, cwd) {
+        if !violations
+            .iter()
+            .any(|existing| existing.rule == finding.rule && existing.message == finding.message)
+        {
+            violations.push(finding);
+        }
+    }
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));

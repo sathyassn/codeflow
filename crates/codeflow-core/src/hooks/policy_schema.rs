@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 82] = [
+pub const SCHEMA: [KeySpec; 83] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -247,6 +247,34 @@ pub const SCHEMA: [KeySpec; 82] = [
         valid: LEVEL_VALID,
         purpose: "A `gh pr merge` whose base branch is protected (git-guard only).",
         notes: "",
+    },
+    KeySpec {
+        path: "git.agent_push_refused_branches",
+        kind: KeyKind::StringList,
+        valid: "an array of branch names or `*` patterns (e.g. integration/*), matched as `git.protected_branches` is matched; an empty array refuses none",
+        purpose: "Branches an agent never pushes: git-guard and exec-guard refuse an agent push that updates or deletes one, in any push form and whatever credential Git uses.",
+        notes: "Read only from the landed policy at the remote's default \
+                branch, like every guard key, so an uncommitted or \
+                branch-local edit has no effect until it lands there. A \
+                fixed floor stays refused whatever the list holds: the \
+                default branch the policy is read at, `main` and `master`. \
+                An empty list lets agents push the lines it would name \
+                where the credential allows; the GitHub CLI credential \
+                admission still never admits an `integration/` name. The \
+                guards read a value that is not an array of non-blank \
+                strings without whitespace as the default list, and \
+                validation reports a value that is not an array of \
+                strings. A push of every \
+                branch (`--all`, `--branches`, `--mirror`, a wildcard) is \
+                refused, as is a push whose destination the guard does not \
+                read: `git send-pack`, `git http-push`, `git subtree push`, \
+                a remote helper run by hand, and a push that leaves its \
+                destination to `push.default` other than `simple` or \
+                `current` or to a `remote.<name>.push` mapping. The git \
+                hooks do not read the key, so the operator's own pushes are \
+                unaffected. Landing a reviewed pull request with `gh pr \
+                merge` is a separate rule, `git.pr_merge_to_protected`, \
+                which this key does not change.",
     },
     KeySpec {
         path: "git.local_ref_protection",

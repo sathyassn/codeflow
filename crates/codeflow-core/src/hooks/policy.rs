@@ -254,6 +254,44 @@ where
     declared_limit(crate::git::remote_query::FETCH_TIMEOUT_KEY, deserializer)
 }
 
+/// Branches an agent never pushes, whatever
+/// [`GitPolicy::agent_push_refused_branches`] holds (TSK-1479 AC-15). The
+/// default branch the policy was read at joins them.
+pub const AGENT_PUSH_FLOOR: [&str; 2] = ["main", "master"];
+
+/// The built-in [`GitPolicy::agent_push_refused_branches`]: the integration
+/// lines.
+#[must_use]
+pub fn default_agent_push_refused_branches() -> Vec<String> {
+    vec!["integration".to_string(), "integration/*".to_string()]
+}
+
+/// `git.agent_push_refused_branches` as written, or the default when the
+/// value is not an array of non-blank strings without whitespace or control
+/// characters: a value the guards cannot read refuses at least what the
+/// default refuses, and never stops the rest of the policy loading.
+fn agent_push_refused_branches<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let read = value.as_array().and_then(|entries| {
+        entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .filter(|name| {
+                        !name.is_empty()
+                            && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+                    })
+                    .map(str::to_string)
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    Ok(read.unwrap_or_else(default_agent_push_refused_branches))
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +315,24 @@ pub struct GitPolicy {
     /// A `gh pr merge` whose base branch is protected (git-guard only). A
     /// human merges via the GitHub UI or their own terminal; agents do not.
     pub pr_merge_to_protected: PolicyLevel,
+    /// Branch names or `*` patterns an agent never pushes (TSK-1479 AC-15),
+    /// matched as [`protected_branches`](GitPolicy::protected_branches) is
+    /// matched. git-guard and exec-guard refuse an agent push that updates
+    /// or deletes a match, in any push form and whatever credential Git
+    /// uses; the git hooks do not read it, so the operator's own pushes are
+    /// unaffected. Default `["integration", "integration/*"]`; an empty
+    /// list lets agents push lines where the credential allows.
+    /// [`AGENT_PUSH_FLOOR`] and the default branch the policy was read at
+    /// are refused whatever the list holds. A value that is not an array of
+    /// non-blank strings without whitespace reads as the default.
+    #[serde(deserialize_with = "agent_push_refused_branches")]
+    pub agent_push_refused_branches: Vec<String>,
+    /// The default branch this policy was read at, when it was read at a
+    /// remote's default branch ([`super::landed_policy`]); `None` for a
+    /// policy read anywhere else. Not a policy key: never read from or
+    /// written to the file. The agent push floor includes it.
+    #[serde(skip)]
+    pub landed_default_branch: Option<String>,
     /// Any local update of a protected branch ref that did not come from the
     /// remote — the harness-agnostic backstop enforced by git's
     /// `reference-transaction` hook (ADR-0007). Catches what classic client
@@ -637,6 +693,8 @@ impl Default for GitPolicy {
             hard_reset_protected: PolicyLevel::Block,
             merge_to_protected: PolicyLevel::Block,
             pr_merge_to_protected: PolicyLevel::Block,
+            agent_push_refused_branches: default_agent_push_refused_branches(),
+            landed_default_branch: None,
             local_ref_protection: PolicyLevel::Block,
             hook_integrity: PolicyLevel::Block,
             root_branch: String::new(),
@@ -803,6 +861,29 @@ impl GitPolicy {
             ..SecurityPolicy::defaults()
         };
         !self.branch_is_protected(branch) && is_on_protected_branch(&fold(branch), &sec)
+    }
+
+    /// The entry that makes `branch` a branch an agent never pushes
+    /// (TSK-1479 AC-15): a name in [`AGENT_PUSH_FLOOR`], the default branch
+    /// this policy was read at, or an entry of
+    /// [`agent_push_refused_branches`](GitPolicy::agent_push_refused_branches),
+    /// each matched as git-guard matches a protected branch. `None` when
+    /// none matches; an empty name matches nothing.
+    #[must_use]
+    pub fn agent_push_refusal(&self, branch: &str) -> Option<&str> {
+        if branch.is_empty() {
+            return None;
+        }
+        let mut entries: Vec<&str> = AGENT_PUSH_FLOOR.to_vec();
+        entries.extend(self.landed_default_branch.as_deref());
+        entries.extend(self.agent_push_refused_branches.iter().map(String::as_str));
+        entries.into_iter().find(|entry| {
+            let one = Self {
+                protected_branches: vec![(*entry).to_string()],
+                ..Self::default()
+            };
+            one.branch_is_protected_any_case(branch) || one.branch_folds_onto_protected(branch)
+        })
     }
 
     /// [`GitPolicy::branch_is_protected`] for an exact name. A name that is

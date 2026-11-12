@@ -200,6 +200,24 @@ protected branch on its own rule. Other calls that contact a remote, such as
 operator's setup; see "Mode A setup (operator)" in
 [the policy reference](../policy-reference.md).
 
+**Branches agents never push.** git-guard and exec-guard refuse an agent push
+that updates or deletes a branch named by `git.agent_push_refused_branches`
+(default `integration` and `integration/*`), `origin`'s default branch,
+`main` or `master`, whatever credential Git uses. Both guards use one reading:
+exec-guard runs git-guard's push rules on the line. The list is read only from
+the landed policy, so an uncommitted or branch-local edit has no effect; an
+empty list frees the lines but never the default branch, `main` or `master`;
+a value the guards cannot read counts as the default list. The guards also
+refuse a push of every branch (`--all`, `--branches`, `--mirror`, a
+wildcard, the matching refspec `:`), a push whose destination they do not
+read (`git send-pack`, `git http-push`, `git subtree push`, a remote helper
+run by hand), and a push that leaves its destination to configuration they
+cannot read as the source's own name: `push.default` other than `simple` or
+`current`, a `remote.<name>.push` mapping, a configuration change earlier on
+the line, or a `-c` option or `GIT_` variable on it. The git hooks do not read
+the key, so the operator's own pushes are unaffected, and landing a reviewed
+pull request with `gh pr merge` stays under `git.pr_merge_to_protected`.
+
 **Refusals and relief.** A refusal names the policy rule and the operator's
 route.
 

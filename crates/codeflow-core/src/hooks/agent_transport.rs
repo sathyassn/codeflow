@@ -28,7 +28,10 @@
 //! must sit under a work-branch prefix of the landed policy, read at
 //! `origin`'s default branch, and must not be protected, an integration
 //! line, a release branch, the ID registry, `origin`'s default branch,
-//! `main` or `master`.
+//! `main`, `master` or a name `git.agent_push_refused_branches` lists.
+//! git-guard and exec-guard refuse a push of that list's names and of the
+//! default branch whatever credential Git uses
+//! ([`super::git_guard::agent_push_refusals`]).
 //!
 //! Every program the call starts must be a credential helper, and the
 //! helpers Git selects for `origin`'s URL must be the exempt helper alone.
@@ -493,8 +496,9 @@ fn tag_exists(repo: &git2::Repository, name: &str) -> Option<bool> {
 }
 
 /// Whether the landed policy admits pushing `name`: it sits under a
-/// work-branch prefix, and is not protected, an integration line, a
-/// release branch, the ID registry, `main` or `master`.
+/// work-branch prefix, and is not protected, a branch agents never push
+/// (`git.agent_push_refused_branches` and its floor), an integration line,
+/// a release branch or the ID registry.
 fn name_admitted(git: &GitPolicy, name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let registry = crate::ids::REGISTRY_BRANCH;
@@ -515,6 +519,7 @@ fn name_admitted(git: &GitPolicy, name: &str) -> bool {
         })
         && !git.branch_is_protected_any_case(name)
         && !git.branch_folds_onto_protected(name)
+        && git.agent_push_refusal(name).is_none()
         && !matches!(lower.as_str(), "main" | "master" | "integration")
         && !lower.starts_with("integration/")
         && lower != registry
