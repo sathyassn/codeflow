@@ -1,0 +1,11 @@
+id = "TSK-1464"
+uid = "142d0a9f-1ef6-4f73-947b-67e6618e143e"
+kind = "TSK"
+title = "A file a verb cannot read is reported as unreadable, never as an uncommitted change"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T04:36:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
