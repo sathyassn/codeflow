@@ -892,6 +892,48 @@ task PR.
 The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
 judges against the pull request's target only.
 
+## Home moves a sync of main accepts
+
+`main` can move a task's home through a reviewed planning merge, as when it
+retargets tasks to itself. When a sync of `main` into a line carries such a
+record, the import check (`work.import_authority`, TSK-1378) follows every
+home move of that task on the first-parent history of `main`'s trusted
+commit since the line's merge base with it:
+
+- Each move must be a merge whose tree is the clean merge of its parents
+  and whose own diff holds only records (the admitted path classes, records
+  only today). The task must be the same single record on both sides.
+- A move before the last one is accepted only while the task is `todo` or
+  `blocked` with no acceptance block on both sides.
+- The line's copy is compared once, with the last move's new home. When the
+  line already names that home, the move is accepted whatever the task's
+  state. When the line names another home or has no copy, it is accepted
+  only when the task was `todo` or `blocked` with no acceptance block on
+  both sides of the move and the line has not changed its copy since the
+  merge base.
+- Anything else is refused with "the landing changes the task's declared
+  home" and the cause. A later change to the record on `main`, a note or a
+  move back included, does not clear an earlier refused move.
+
+A record that names the line as its home but that the line does not hold
+there must prove where it came from: its exact version is on `main`, its
+introduction there is a records-only planning merge of a `todo` or
+`blocked` task, and every later move passes as above. A record the line
+already homes stays under the frozen criteria.
+
+A line can agree to `main`'s version through its own records-only planning
+merge that takes that version's exact bytes while the task is `todo` or
+`blocked`. The walk of that task's moves then starts after that version,
+and later moves on `main` are still judged. A copy taken any other way,
+such as a direct commit, a merge that also carries docs, a completed task,
+a changed copy or a new record on the line, sets no starting point. A sync
+that leaves such a copy unchanged still has `main`'s moves judged.
+
+Every refused record is named with its own cause. A refused move clears
+through the line's own reviewed planning merge where the task's state
+permits it, or by reopening, replanning or correcting the source record
+through its pull request.
+
 ## An epic's parent line
 
 `codeflow ci` and the pre-push hook bind an epic line
