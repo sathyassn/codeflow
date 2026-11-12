@@ -39,6 +39,7 @@ pub(crate) mod git_preflight;
 #[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) mod guard_forms;
 pub mod headless;
+pub(crate) mod install_run;
 pub(crate) mod interpreter;
 pub(crate) mod launchers;
 pub(crate) mod outward;

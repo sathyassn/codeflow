@@ -894,7 +894,7 @@ pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
 
 /// The program name: its last path component, without `.exe`, lower case,
 /// and a GNU-prefixed launcher read as the plain one (`gxargs`, `gtimeout`).
-fn basename(program: &str) -> String {
+pub(crate) fn basename(program: &str) -> String {
     let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
     let name = name.to_ascii_lowercase();
     let name = name.strip_suffix(".exe").unwrap_or(&name);

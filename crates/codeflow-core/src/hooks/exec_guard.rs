@@ -241,6 +241,14 @@ pub fn evaluate_ruled(
             violations.push(headless_violation(levels.headless_peer_runs, &run));
         }
     }
+    // An install run writes the project's install files from any folder,
+    // so it refuses wherever it runs, a certified prose line included
+    // (TSK-1476).
+    if integrity.is_active() {
+        if let Some(run) = crate::security::install_run::install_run(command) {
+            violations.push(install_violation(integrity, &run));
+        }
+    }
 
     for violation in crate::security::outward::evaluate_at(command, levels, Some(cwd)) {
         let duplicate = violations.iter().any(|existing| {
@@ -394,6 +402,39 @@ pub(crate) fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Viola
             }
         ),
         crate::remedy::HEADLESS_PEER_RUN.with(&[("enforcement", enforcement)]),
+    )
+}
+
+/// The install-verb check on interpreter code, read as raw text, when hook
+/// integrity is active.
+pub(crate) fn code_install_violation(level: PolicyLevel, code: &str) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    crate::security::install_run::raw_run(code).map(|run| install_violation(level, &run))
+}
+
+/// An agent's run of the install verbs, under hook integrity at the call's
+/// level: the edit guard's rule for the same files (TSK-1476).
+pub(crate) fn install_violation(
+    level: PolicyLevel,
+    run: &crate::security::install_run::InstallRun,
+) -> Violation {
+    Violation::new(
+        "git.hook_integrity",
+        level,
+        format!(
+            "install run `{}`{}: it writes the project's install files (harness settings, hooks, \
+             policy and workflows), which only the operator installs or refreshes",
+            run.form,
+            if run.parsed {
+                ""
+            } else {
+                " (the line could not be fully parsed; its text names the binary with an \
+                 install verb, which inline text such as a heredoc or quoted message may not do)"
+            }
+        ),
+        crate::remedy::INSTALL_RUN.remedy(),
     )
 }
 

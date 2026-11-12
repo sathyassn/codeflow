@@ -430,7 +430,7 @@ catalog! {
         "the reviewer approves each record listed; the notice ends once this change lands on its target, and removing an entry from `work_records_baseline` in .codeflow/project.toml applies the rules to that record now";
     /// A deprecated policy key.
     POLICY_DEPRECATED = Step::Codeflow("codeflow update"),
-        "`codeflow update` removes it, or delete {key} from .codeflow/policy.json";
+        "the operator runs `codeflow update`, which removes it, or deletes {key} from .codeflow/policy.json";
 
     /// A policy key with no enforcement reader.
     POLICY_UNSUPPORTED = Step::Edit(".codeflow/policy.json"),
@@ -468,11 +468,15 @@ catalog! {
         "task work belongs in a linked worktree: put the root checkout back on its root branch with `git switch {root}`, then work and commit in a worktree (`git worktree add .worktrees/<slug> -b <branch>`, or `git worktree add .worktrees/<slug> <branch>` to continue an existing branch)";
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
-        "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+        "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change only through the operator, by hand or with `codeflow update` (ADR-0009)";
     /// An interpreter given an argument that names, or may name, an
     /// enforcement path (TSK-302).
     INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
-        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change only through the operator, by hand or with `codeflow update` (ADR-0009)";
+    /// An agent's run of the install verbs, which write the project's
+    /// install files (TSK-1476).
+    INSTALL_RUN = Step::Codeflow("codeflow update"),
+        "only the operator runs `codeflow update` and `codeflow init`, with any binary, because they write the files the guards enforce from: ask the operator to run it in their own terminal; `codeflow doctor` reports what is out of date, and `codeflow update --help` prints the options without writing";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";

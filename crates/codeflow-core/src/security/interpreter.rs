@@ -86,6 +86,9 @@ pub(crate) fn evaluate_ruled(
                 ));
             }
         }
+        violations.extend(crate::hooks::exec_guard::code_install_violation(
+            integrity, &code,
+        ));
         for word in outward::literal_words(&code) {
             if levels.secret_reads.is_active() {
                 // An error is a check that could not finish: it refuses and
