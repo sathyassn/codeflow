@@ -1206,7 +1206,14 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
     )?;
     let marker = root.join(".git");
     let registered_marker = canonical(&registered, "registered checkout marker")?;
-    if registered_marker != canonical(&marker, "checkout marker")? {
+    // The registered spelling is usually the checkout's own: one resolution
+    // then answers both (TSK-1275).
+    let checkout_marker = if registered == marker {
+        registered_marker.clone()
+    } else {
+        canonical(&marker, "checkout marker")?
+    };
+    if registered_marker != checkout_marker {
         return Err("worktree registration names a different checkout marker".into());
     }
     let metadata = std::fs::metadata(&marker)
@@ -1368,8 +1375,9 @@ fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
     if !target.is_absolute() {
         return None;
     }
+    // A target spelled as the canonical directory resolves to it unchanged.
     let admin = admin.canonicalize().ok()?;
-    if target.canonicalize().ok()? != admin {
+    if target != admin && target.canonicalize().ok()? != admin {
         return None;
     }
     // A linked worktree's registration: its `gitdir` and `HEAD` files, no
@@ -1386,11 +1394,20 @@ fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
     if named.is_empty() || named.contains(&0) || named.contains(&b'\n') {
         return None;
     }
-    let common = admin
-        .join(Path::new(std::ffi::OsStr::from_bytes(named)))
-        .canonicalize()
-        .ok()?;
-    check_common_paths(&admin, &common).ok()?;
+    // `../..`, which git writes, names the canonical directory's grandparent:
+    // in a path without links `..` is the parent the path spells, so the
+    // registration directory and the common directory are already proven.
+    // Any other spelling is resolved and checked.
+    let common = if named == b"../.." {
+        admin.parent()?.parent()?.to_path_buf()
+    } else {
+        let common = admin
+            .join(Path::new(std::ffi::OsStr::from_bytes(named)))
+            .canonicalize()
+            .ok()?;
+        check_common_paths(&admin, &common).ok()?;
+        common
+    };
     regular(&common.join("HEAD"))?;
     directory(&common.join("objects"))?;
     directory(&common.join("refs"))?;
@@ -1991,7 +2008,26 @@ mod tests {
         assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
         let marker = two_root.join(".git");
         let original = std::fs::read(&marker).unwrap();
-        let per_sibling: [(&str, Box<dyn Fn()>, Box<dyn Fn()>); 6] = [
+        let commondir = two.join("commondir");
+        let written = std::fs::read(&commondir).unwrap();
+        assert_eq!(written.trim_ascii_end(), b"../..");
+        let foreign = dir.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        init_repo(&foreign);
+        let per_sibling: [(&str, Box<dyn Fn()>, Box<dyn Fn()>); 8] = [
+            (
+                "commondir naming another git directory",
+                Box::new(|| {
+                    let other = foreign.join(".git").canonicalize().unwrap();
+                    std::fs::write(&commondir, format!("{}\n", other.display())).unwrap();
+                }),
+                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
+            ),
+            (
+                "commondir that does not resolve",
+                Box::new(|| std::fs::write(&commondir, "../../missing\n").unwrap()),
+                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
+            ),
             (
                 "own config.worktree",
                 Box::new(|| std::fs::write(two.join("config.worktree"), "[core]\n").unwrap()),
@@ -2053,6 +2089,17 @@ mod tests {
             mend();
             assert_eq!(validate_in_one_scope(&[&one, &two]), 1, "{case} mended");
         }
+        // Other spellings of the same directories are resolved, then proven:
+        // an absolute commondir, and a gitfile naming the registration
+        // through a link.
+        std::fs::write(&commondir, format!("{}\n", common.display())).unwrap();
+        assert_eq!(super::sibling_facts(&two, &two_root), Some(common.clone()));
+        std::fs::write(&commondir, &written).unwrap();
+        let alias = dir.path().join("admin-alias");
+        std::os::unix::fs::symlink(&two, &alias).unwrap();
+        std::fs::write(&marker, format!("gitdir: {}\n", alias.display())).unwrap();
+        assert_eq!(super::sibling_facts(&two, &two_root), Some(common.clone()));
+        std::fs::write(&marker, &original).unwrap();
         // Shared files: an include, a conditional include, a core.worktree
         // or a bare repository flag in the common configuration keeps every
         // full open; worktreeConfig alone does not.
