@@ -1556,7 +1556,7 @@ fn update_diff_never_trusts_the_baseline() {
 fn update_reports_never_show_project_values() {
     const SECRET: &str = "opaque-neighbour-value-31337";
     const WORKFLOW: &str = ".github/workflows/codeflow-ci.yml";
-    const CHECKOUT: &str = "          fetch-depth: 0\n";
+    const CHECKOUT: &str = "          fetch-depth: 0\n          persist-credentials: false # no token left for repository code (TSK-1175)\n";
     const POLICY: &str = ".codeflow/policy.json";
     const POLICY_BASELINE: &str = ".codeflow/.baseline/.codeflow/policy.json";
     let (tmp, root) = project();

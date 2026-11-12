@@ -156,8 +156,11 @@ pub struct CiArgs {
     /// or target matches the release pattern is judged as a
     /// release range (SPC-013 R-120). Deciding that asks the destination for
     /// its default branch and that branch's policy, so on a private
-    /// repository the job running codeflow ci needs read access to it (for
-    /// actions/checkout, `persist-credentials: true`).
+    /// repository the job running codeflow ci needs read access to it. On
+    /// GitHub Actions, pass the run's token to the codeflow ci step only
+    /// (`CODEFLOW_CI_TOKEN: ${{ github.token }}`, with `permissions:
+    /// contents: read`); it is sent only to this run's repository over
+    /// HTTPS, and the checkout keeps `persist-credentials: false`.
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
 
@@ -367,6 +370,9 @@ fn run_checks(args: &CiArgs) -> i32 {
     if args.read_release_impact {
         return read_release_impact();
     }
+    // Taken out of the environment before anything starts, so no process
+    // this run starts inherits the token (TSK-1252).
+    let run_token = RunToken::take();
     let environment = match ci_environment(|key| std::env::var_os(key)) {
         Ok(environment) => environment,
         Err(error) => {
@@ -619,6 +625,13 @@ fn run_checks(args: &CiArgs) -> i32 {
             }
         },
     };
+    let run_token = run_token.bind(destination.as_deref(), |key| std::env::var(key).ok());
+    if let RunToken::Withheld(why) = &run_token {
+        eprintln!(
+            "codeflow ci: the run's token ({TOKEN_ENV}) is not sent: {}",
+            codeflow_core::git::display_message(why)
+        );
+    }
     let advertisement = if args.advertisement_stdin {
         let mut listed = String::new();
         if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
@@ -643,6 +656,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             _ => None,
         },
         release: std::cell::OnceCell::new(),
+        token: &run_token,
         // The destination lookup's limits come from the policy that judges
         // the range, read at its authority; with no authority, from the
         // local policy authority or the shipped defaults, never the working
@@ -2750,6 +2764,8 @@ pub(super) struct Names<'a> {
     pub candidate: Option<&'a str>,
     /// The timeout and attempts for asking the destination (TSK-1301).
     pub limits: codeflow_core::git::remote_query::QueryLimits,
+    /// The hosted run's read token for the destination (TSK-1252).
+    pub token: &'a RunToken,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<
@@ -2760,6 +2776,85 @@ pub(super) struct Names<'a> {
             acceptance::ScopeError,
         >,
     >,
+}
+
+/// The variable that carries the hosted run's read token to `codeflow ci`
+/// (TSK-1252). The managed policy workflow sets it on the `codeflow ci`
+/// step only, from `github.token`, under `permissions: contents: read`.
+pub(super) const TOKEN_ENV: &str = "CODEFLOW_CI_TOKEN";
+
+/// The hosted run's read token for the destination lookup, and whether it
+/// is sent (TSK-1252).
+pub(super) enum RunToken {
+    /// No token was given.
+    Absent,
+    /// A token was given and is not sent, for the reason held.
+    Withheld(String),
+    /// A token was given, read but not yet bound to the destination.
+    Given(String),
+    /// The token, bound to the destination of this run's repository.
+    Sent(codeflow_core::git::remote_query::HttpAuth),
+}
+
+impl RunToken {
+    /// The token from [`TOKEN_ENV`], removed from this process's
+    /// environment so no process the run starts inherits it.
+    fn take() -> Self {
+        let value = std::env::var_os(TOKEN_ENV);
+        std::env::remove_var(TOKEN_ENV);
+        match value {
+            None => Self::Absent,
+            Some(value) if value.is_empty() => Self::Absent,
+            Some(value) => match value.into_string() {
+                Ok(token) => Self::Given(token),
+                Err(_) => Self::Withheld("it is not valid UTF-8".into()),
+            },
+        }
+    }
+
+    /// Bind a given token to `destination`, which must be the repository
+    /// the hosted runner names (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`):
+    /// a later step cannot change those values, so a rewritten `origin`
+    /// or `--destination` never receives the token.
+    fn bind(self, destination: Option<&str>, env: impl Fn(&str) -> Option<String>) -> Self {
+        let Self::Given(token) = self else {
+            return self;
+        };
+        let Some(url) = destination else {
+            return Self::Withheld("this run has no destination".into());
+        };
+        let server = env("GITHUB_SERVER_URL").unwrap_or_default();
+        let repository = env("GITHUB_REPOSITORY").unwrap_or_default();
+        match codeflow_core::git::remote_query::HttpAuth::for_run(url, &token, &server, &repository)
+        {
+            Ok(auth) => Self::Sent(auth),
+            Err(why) => Self::Withheld(why),
+        }
+    }
+
+    /// The credential to send, when one is bound.
+    pub(super) fn auth(&self) -> Option<&codeflow_core::git::remote_query::HttpAuth> {
+        match self {
+            Self::Sent(auth) => Some(auth),
+            _ => None,
+        }
+    }
+
+    /// What this run gave the destination, and the fix, for a lookup the
+    /// destination refused.
+    pub(super) fn fix(&self) -> String {
+        match self {
+            Self::Absent | Self::Given(_) => format!(
+                "The missing input is {TOKEN_ENV}: pass the run's token to the codeflow ci step (`{TOKEN_ENV}: ${{{{ github.token }}}}`) with `permissions: contents: read`."
+            ),
+            Self::Withheld(why) => format!(
+                "{TOKEN_ENV} was given but not sent ({why}); it is sent only to this run's own repository over HTTPS."
+            ),
+            Self::Sent(_) => format!(
+                "The destination did not accept the run's token ({TOKEN_ENV}); the job needs `permissions: contents: read` on this repository."
+            ),
+        }
+    }
 }
 
 /// Auto-detect the target branch NAME of a pull request. Verified variable
