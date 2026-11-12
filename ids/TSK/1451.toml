@@ -1,0 +1,11 @@
+id = "TSK-1451"
+uid = "71c78eae-133a-4f1b-8950-7a0b445ad2cc"
+kind = "TSK"
+title = "CodeFlow's own line pushes start no hosted run, and line PRs run short checks only"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:01:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
