@@ -5077,7 +5077,8 @@ fn worktree_add_reads_includes_through_an_admin_alias() {
 /// TSK-1479 AC-14: with the GitHub CLI credential helper configured, both
 /// built guards admit a fetch from `origin` and a fast-forward push of the
 /// work branch, and Git then reaches the bare origin; a push of `main` and
-/// of an `integration/` name is refused, naming the rule. The guards judge
+/// of an `integration/` name is refused, naming the rule, and AC-15's rule
+/// refuses the line push in both guards with no helper too. The guards judge
 /// each line as a payload. The fetch and push this test runs itself go to a
 /// local bare repository, so Git starts no credential helper.
 #[test]
@@ -5131,23 +5132,12 @@ fn agents_fetch_and_push_their_own_work_branch() {
     };
     assert_eq!(tip(&bare, "refs/heads/task/w"), tip(work, "HEAD"));
 
-    // A push of `main` and of an integration line is refused, naming the
-    // rule. The account rule still applies to the helper on both lines, and
-    // git-guard also names the protected branch for `main`.
-    for (line, expected) in [
-        (
-            "git push origin HEAD:refs/heads/main",
-            [
-                ("exec-guard", "security.outward_actions"),
-                ("git-guard", "git.push_to_protected"),
-            ]
-            .as_slice(),
-        ),
-        (
-            "git push origin HEAD:refs/heads/integration/EPC-001-line",
-            [("exec-guard", "security.outward_actions")].as_slice(),
-        ),
-    ] {
+    // A push of `main` and of an integration line is refused by both
+    // guards, naming the rule (AC-15). The account rule still applies to
+    // the helper on both lines, and git-guard also names the protected
+    // branch for `main`.
+    const AGENT_PUSH: &str = "git.agent_push_refused_branches";
+    let refused = |line: &str, expected: &[(&str, &str)]| {
         let outcomes = verdicts(line);
         for (hook, out) in &outcomes {
             eprintln!("{hook} `{line}`: exit {:?}", out.status.code());
@@ -5160,6 +5150,30 @@ fn agents_fetch_and_push_their_own_work_branch() {
                 "{hook} {line} names {rule}: {out:?}"
             );
         }
-    }
+    };
+    refused(
+        "git push origin HEAD:refs/heads/main",
+        &[
+            ("exec-guard", "security.outward_actions"),
+            ("exec-guard", AGENT_PUSH),
+            ("git-guard", "git.push_to_protected"),
+            ("git-guard", AGENT_PUSH),
+        ],
+    );
+    refused(
+        "git push origin HEAD:refs/heads/integration/EPC-001-line",
+        &[
+            ("exec-guard", "security.outward_actions"),
+            ("exec-guard", AGENT_PUSH),
+            ("git-guard", AGENT_PUSH),
+        ],
+    );
+    // With no credential helper configured, the integration line is still
+    // refused by both guards under the same rule.
+    git(&f.root, &["config", "--unset", "credential.helper"]);
+    refused(
+        "git push origin HEAD:refs/heads/integration/EPC-001-line",
+        &[("exec-guard", AGENT_PUSH), ("git-guard", AGENT_PUSH)],
+    );
     assert_ne!(tip(&bare, "refs/heads/main"), tip(work, "HEAD"));
 }

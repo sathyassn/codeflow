@@ -94,13 +94,19 @@ impl Fixture {
     }
 
     fn with(config: &str, setup: impl FnOnce(&git2::Repository, &Path)) -> Self {
+        Self::landed(LANDED_POLICY, config, setup)
+    }
+
+    /// [`Fixture::with`], with `landed` as the policy on `main` and
+    /// `origin/main`.
+    fn landed(landed: &str, config: &str, setup: impl FnOnce(&git2::Repository, &Path)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let parent = crate::portable_path::canonicalize(dir.path()).unwrap();
         let root = parent.join("repo");
         let mut options = git2::RepositoryInitOptions::new();
         options.initial_head("main");
         let repo = git2::Repository::init_opts(&root, &options).unwrap();
-        let main = commit(&repo, LANDED_POLICY, None);
+        let main = commit(&repo, landed, None);
         let work = commit(&repo, WORK_POLICY, Some(main));
         repo.reference("refs/heads/main", main, true, "fixture")
             .unwrap();
@@ -1015,6 +1021,371 @@ fn read_failures_withhold_the_admission() {
         expect_refused(&f.root, lines, &mut wrong);
         for entry in &mut wrong[before..] {
             write!(entry, " [{case}]").unwrap();
+        }
+    }
+    report(&wrong);
+}
+
+/// The rule AC-15 adds.
+const AGENT_PUSH: &str = "git.agent_push_refused_branches";
+
+/// A credential helper other than the GitHub CLI's.
+const KEYCHAIN_HELPER: &str = "[credential]\n\thelper = osxkeychain\n";
+
+/// The landed policy with `git.agent_push_refused_branches` set to `list`,
+/// written as JSON.
+fn landed_with(list: &str) -> String {
+    format!(
+        r#"{{"git":{{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/"],"release_branch_pattern":"rel/v*","agent_push_refused_branches":{list}}}}}"#
+    )
+}
+
+/// git-guard's verdict on `command` run in `cwd`, its context built as the
+/// hook builds it: the landed policy, the current branch, and the readers
+/// for retargets, aliases and branch expressions.
+fn git_guard_verdict(cwd: &Path, command: &str) -> Vec<Violation> {
+    use crate::hooks::git_guard::{self, AliasQuery, GuardContext, Retarget};
+    let policy = crate::hooks::landed_policy::load_local(cwd)
+        .map(|landed| landed.policy.git)
+        .unwrap_or_default();
+    let repo = crate::hooks::repo::open(cwd).unwrap();
+    let branch = repo
+        .as_ref()
+        .map(|repo| crate::hooks::repo::current_branch(repo).unwrap())
+        .unwrap_or_default();
+    let common = repo.as_ref().map(|repo| repo.commondir().to_path_buf());
+    let target = |spec: &Retarget<'_>| git_guard::read_target(cwd, common.as_deref(), spec);
+    let alias = |query: &AliasQuery<'_>| git_guard::read_alias(cwd, query);
+    let branch_name =
+        |target: Option<&Retarget<'_>>, name: &str| git_guard::read_branch_name(cwd, target, name);
+    let ctx = GuardContext {
+        policy: &policy,
+        current_branch: &branch,
+        integrate_token: false,
+        pr_base_lookup: None,
+        dir_target_lookup: Some(&target),
+        alias_lookup: Some(&alias),
+        branch_lookup: Some(&branch_name),
+        discard_lookup: None,
+        root_checkout: None,
+    };
+    git_guard::evaluate_report_at(command, &ctx, cwd).violations
+}
+
+fn agent_push_refused(found: &[Violation]) -> bool {
+    found
+        .iter()
+        .any(|finding| finding.rule == AGENT_PUSH && finding.level == PolicyLevel::Block)
+}
+
+/// Each row is refused by exec-guard and by git-guard under AC-15's rule.
+fn expect_both_refuse(cwd: &Path, rows: &[String], wrong: &mut Vec<String>) {
+    for row in rows {
+        for (guard, found) in [
+            ("exec-guard", verdict(cwd, row)),
+            ("git-guard", git_guard_verdict(cwd, row)),
+        ] {
+            if !agent_push_refused(&found) {
+                wrong.push(format!(
+                    "{guard} should refuse under {AGENT_PUSH}: {row}: {}",
+                    shown(&found)
+                ));
+            }
+        }
+    }
+}
+
+/// Neither guard finds AC-15's rule on any row.
+fn expect_rule_silent(cwd: &Path, rows: &[String], wrong: &mut Vec<String>) {
+    for row in rows {
+        for (guard, found) in [
+            ("exec-guard", verdict(cwd, row)),
+            ("git-guard", git_guard_verdict(cwd, row)),
+        ] {
+            if found.iter().any(|finding| finding.rule == AGENT_PUSH) {
+                wrong.push(format!(
+                    "{guard} should not apply {AGENT_PUSH}: {row}: {}",
+                    shown(&found)
+                ));
+            }
+        }
+    }
+}
+
+/// AC-15: an agent push of an integration line or the default branch is
+/// refused by both guards in every push form and whatever credential is
+/// configured; git-guard passed such a push before this rule. A work branch
+/// push draws no finding from the rule.
+#[test]
+fn agent_pushes_of_lines_and_the_default_branch_are_refused() {
+    if !isolated("agent_pushes_of_lines_and_the_default_branch_are_refused") {
+        return;
+    }
+    let mut wrong = Vec::new();
+    for helper in ["", KEYCHAIN_HELPER, GH_HELPER] {
+        let f = Fixture::new(helper);
+        let before = wrong.len();
+        expect_both_refuse(
+            &f.root,
+            &rows(&[
+                "git push origin HEAD:refs/heads/integration/EPC-001-line",
+                "git push origin HEAD:integration/EPC-001-line",
+                "git push -u origin HEAD:refs/heads/integration",
+                "git push origin integration/EPC-001-line",
+                "git push origin HEAD:heads/integration/EPC-001-line",
+                "git push origin :integration/EPC-001-line",
+                "git push --delete origin integration/EPC-001-line",
+                "git push origin HEAD:refs/heads/main",
+                "git push origin HEAD:master",
+                "git push origin task/agent-work HEAD:refs/heads/integration/EPC-002-line",
+                "git push --all origin",
+                "git push --branches origin",
+                "git push --mirror origin",
+                "git push origin refs/heads/*:refs/heads/*",
+                "git push origin :",
+                "git push https://github.com/example/project.git HEAD:refs/heads/integration/x",
+                "git send-pack origin HEAD:refs/heads/task/agent-work",
+                "git http-push https://github.com/example/project.git HEAD",
+                "git subtree push -P lib origin task/agent-work",
+                "git remote-https origin https://github.com/example/project.git",
+            ]),
+            &mut wrong,
+        );
+        expect_both_refuse(
+            &f.parent,
+            &rows(&["git -C repo push origin HEAD:refs/heads/integration/EPC-001-line"]),
+            &mut wrong,
+        );
+        expect_rule_silent(
+            &f.root,
+            &rows(&[
+                "git push origin HEAD:refs/heads/task/agent-work",
+                "git push -u origin HEAD",
+                "git push origin task/agent-work",
+                "git push origin",
+                "git push",
+                "git push origin HEAD:refs/heads/feat/integration",
+                "git fetch origin",
+            ]),
+            &mut wrong,
+        );
+        for entry in &mut wrong[before..] {
+            write!(entry, " [helper: {helper:?}]").unwrap();
+        }
+    }
+    report(&wrong);
+}
+
+/// AC-15: a push whose destination comes from configuration is refused
+/// unless the guards read it as the source's own name.
+#[test]
+fn push_destinations_left_to_configuration() {
+    if !isolated("push_destinations_left_to_configuration") {
+        return;
+    }
+    let implicit = rows(&[
+        "git push",
+        "git push origin",
+        "git push origin task/agent-work",
+        "git push -u origin HEAD",
+    ]);
+    let explicit = rows(&["git push origin HEAD:refs/heads/task/agent-work"]);
+    let mut wrong = Vec::new();
+    for (case, config, refused) in [
+        (
+            "push.default upstream",
+            "[push]\n\tdefault = upstream\n",
+            true,
+        ),
+        (
+            "push.default matching",
+            "[push]\n\tdefault = matching\n",
+            true,
+        ),
+        (
+            "push.default nothing",
+            "[push]\n\tdefault = nothing\n",
+            true,
+        ),
+        (
+            "remote push mapping",
+            "[remote \"origin\"]\n\tpush = refs/heads/*:refs/heads/integration/*\n",
+            true,
+        ),
+        (
+            "push.default current",
+            "[push]\n\tdefault = current\n",
+            false,
+        ),
+        ("push.default simple", "[push]\n\tdefault = simple\n", false),
+        ("unset", "", false),
+    ] {
+        let f = Fixture::new(config);
+        let before = wrong.len();
+        if refused {
+            expect_both_refuse(&f.root, &implicit, &mut wrong);
+        } else {
+            expect_rule_silent(&f.root, &implicit, &mut wrong);
+        }
+        expect_rule_silent(&f.root, &explicit, &mut wrong);
+        for entry in &mut wrong[before..] {
+            write!(entry, " [{case}]").unwrap();
+        }
+    }
+    let f = Fixture::new("");
+    expect_both_refuse(
+        &f.root,
+        &rows(&[
+            "git -c push.default=upstream push",
+            "git config push.default upstream && git push",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream git push",
+        ]),
+        &mut wrong,
+    );
+    report(&wrong);
+}
+
+/// AC-15: a project's list replaces the default; an empty list refuses no
+/// line; neither removes the floor of `main`, `master` and `origin`'s
+/// default branch.
+#[test]
+fn the_landed_list_replaces_the_default_and_keeps_the_floor() {
+    if !isolated("the_landed_list_replaces_the_default_and_keeps_the_floor") {
+        return;
+    }
+    let mut wrong = Vec::new();
+    let floor = rows(&[
+        "git push origin HEAD:refs/heads/main",
+        "git push origin HEAD:refs/heads/master",
+        "git push origin :main",
+    ]);
+
+    let f = Fixture::landed(&landed_with(r#"["release/*"]"#), "", |_, _| {});
+    expect_both_refuse(
+        &f.root,
+        &rows(&["git push origin HEAD:refs/heads/release/v2"]),
+        &mut wrong,
+    );
+    expect_both_refuse(&f.root, &floor, &mut wrong);
+    expect_rule_silent(
+        &f.root,
+        &rows(&["git push origin HEAD:refs/heads/integration/EPC-001-line"]),
+        &mut wrong,
+    );
+
+    let f = Fixture::landed(&landed_with("[]"), "", |_, _| {});
+    expect_both_refuse(&f.root, &floor, &mut wrong);
+    expect_rule_silent(
+        &f.root,
+        &rows(&[
+            "git push origin HEAD:refs/heads/integration/EPC-001-line",
+            "git push origin HEAD:refs/heads/integration",
+        ]),
+        &mut wrong,
+    );
+
+    // `origin`'s default branch is `trunk`: the list cannot remove it.
+    let f = Fixture::landed(&landed_with("[]"), "", |repo, _| {
+        let main = repo
+            .find_reference("refs/remotes/origin/main")
+            .unwrap()
+            .target()
+            .unwrap();
+        repo.reference("refs/remotes/origin/trunk", main, true, "fixture")
+            .unwrap();
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    });
+    expect_both_refuse(
+        &f.root,
+        &rows(&[
+            "git push origin HEAD:refs/heads/trunk",
+            "git push origin :trunk",
+        ]),
+        &mut wrong,
+    );
+    expect_both_refuse(&f.root, &floor, &mut wrong);
+    report(&wrong);
+}
+
+/// AC-15: the list is read only from the landed policy, so an uncommitted
+/// edit or a commit on the work branch that empties it has no effect.
+#[test]
+fn uncommitted_or_branch_local_lists_have_no_effect() {
+    if !isolated("uncommitted_or_branch_local_lists_have_no_effect") {
+        return;
+    }
+    let lines = rows(&[
+        "git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "git push origin HEAD:refs/heads/integration",
+    ]);
+    let mut wrong = Vec::new();
+    let emptied = landed_with("[]");
+    let f = Fixture::with("", |_, root| {
+        std::fs::write(root.join(".codeflow").join("policy.json"), &emptied).unwrap();
+    });
+    let before = wrong.len();
+    expect_both_refuse(&f.root, &lines, &mut wrong);
+    for entry in &mut wrong[before..] {
+        write!(entry, " [uncommitted edit]").unwrap();
+    }
+    let f = Fixture::with("", |repo, _| {
+        let head = repo.head().unwrap().target().unwrap();
+        let local = commit(repo, &emptied, Some(head));
+        repo.reference(&format!("refs/heads/{WORK}"), local, true, "fixture")
+            .unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+    });
+    let before = wrong.len();
+    expect_both_refuse(&f.root, &lines, &mut wrong);
+    for entry in &mut wrong[before..] {
+        write!(entry, " [branch-local commit]").unwrap();
+    }
+    report(&wrong);
+}
+
+/// AC-15: a value that is not an array of non-blank strings without
+/// whitespace reads as the default list.
+#[test]
+fn a_malformed_list_reads_as_the_default() {
+    if !isolated("a_malformed_list_reads_as_the_default") {
+        return;
+    }
+    let mut wrong = Vec::new();
+    for value in [
+        r#""release/*""#,
+        "[1]",
+        r#"[""]"#,
+        r#"["release/* integration/*"]"#,
+        r#"["release/*", null]"#,
+        "null",
+        "{}",
+        "true",
+    ] {
+        let f = Fixture::landed(&landed_with(value), "", |_, _| {});
+        let before = wrong.len();
+        expect_both_refuse(
+            &f.root,
+            &rows(&[
+                "git push origin HEAD:refs/heads/integration/EPC-001-line",
+                "git push origin HEAD:refs/heads/integration",
+                "git push origin HEAD:refs/heads/main",
+            ]),
+            &mut wrong,
+        );
+        expect_rule_silent(
+            &f.root,
+            &rows(&["git push origin HEAD:refs/heads/release/v2"]),
+            &mut wrong,
+        );
+        for entry in &mut wrong[before..] {
+            write!(entry, " [value {value}]").unwrap();
         }
     }
     report(&wrong);
