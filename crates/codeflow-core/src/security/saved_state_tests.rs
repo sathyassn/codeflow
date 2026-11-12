@@ -436,6 +436,14 @@ fn a_target_is_judged_in_the_directory_its_command_runs_in() {
         for form in bound {
             let command = form.replace("OP", op);
             let found = f.pass_with(&command, &places);
+            // The shell opens a redirect where the line runs, before `env`
+            // changes directory for its program.
+            if form.starts_with("env -C") && op.contains('>') {
+                if !found.is_empty() {
+                    wrong.push(format!("refused: {command}: {found:?}"));
+                }
+                continue;
+            }
             if found != [message.clone()] {
                 wrong.push(format!("{command}: {found:?}"));
             }
