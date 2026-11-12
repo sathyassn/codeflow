@@ -964,7 +964,7 @@ pub const SCHEMA: [KeySpec; 82] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075).",
-        notes: "Default block.",
+        notes: "Default block. The account finding on the GitHub CLI credential helper (`gh auth git-credential`) is skipped for a fetch from `origin` or a push of a work branch in the closed forms the enforcement-planes architecture lists under \"Agent fetch and push\" (TSK-1479).",
     },
     KeySpec {
         path: "security.interpreter_scan",

@@ -168,6 +168,28 @@ changes, repository or account changes, secret-store reads and user-level
 persistence. Commands inside opaque child programs are not inspected. Ordinary
 builds, a task-branch push and a single-file restore stay ordinary work.
 
+**Agent fetch and push.** Agents fetch from `origin` and push their own work
+branches (TSK-1479). Git starts the configured credential helper on each
+transport call, and exec-guard judges that helper as a command of its own, so
+the GitHub CLI helper `gh auth git-credential` draws the
+`security.outward_actions` account finding. That finding is skipped for that
+exact helper body, and only on two closed forms:
+
+- `git [-C <path>] fetch [-q|-p] [origin [<branch>...]]`;
+- `git [-C <path>] push [-u] [-q] origin <src>:refs/heads/<name>`, or the
+  short forms that push the current branch to its own name.
+
+The repository must have one remote, `origin`, with one URL that no rewrite
+changes, no plain `http://` or remote-helper URL, no push, mirror or
+submodule setting that widens the call, and no `.gitmodules`. A pushed name
+must sit under a `git.branch_prefixes` entry of the landed policy, and must not
+be protected, `origin`'s default branch, an integration line, a release
+branch (`git.release_branch_pattern`), the ID registry, `main` or `master`.
+Any read that fails keeps the finding. git-guard still refuses a push to a
+protected branch on its own rule. The identity the helper serves is the
+operator's setup; see "Mode A setup (operator)" in
+[the policy reference](../policy-reference.md).
+
 **Refusals and relief.** A refusal names the policy rule and the operator's
 route.
 
