@@ -2259,8 +2259,8 @@ fn collect(
             if commands.is_empty() && configured.is_empty() {
                 continue;
             }
-            let unknown = reading_unknown(&every, &expanded.readings, index, cwd)
-                .unwrap_or_else(|| run.unknown.clone());
+            let unknown =
+                reading_unknown(&every, &expanded.readings, index, cwd, run.unknown.as_ref());
             if let Some(reason) = unknown.as_ref().or(uncertain.as_ref()) {
                 return Err(reason.clone());
             }
@@ -2275,23 +2275,24 @@ fn collect(
     Ok(())
 }
 
-/// For a segment that is a reading of other commands ([`Reading`]), why
-/// the directories it runs in may be missed: the line's directories are
-/// read without the commands it reads, since it runs in their place
-/// (TSK-1456). `None` for any other segment, which keeps the line's own.
+/// Why the directories the segment at `index` runs in may be missed. For a
+/// reading of other commands ([`Reading`]) the line's directories are read
+/// without the commands it reads, since it runs in their place (TSK-1456);
+/// any other segment keeps the line's own reason, `line`.
 fn reading_unknown(
     segments: &[String],
     readings: &[Reading],
     index: usize,
     cwd: &Path,
-) -> Option<Option<String>> {
+    line: Option<&String>,
+) -> Option<String> {
     let read: Vec<usize> = readings
         .iter()
         .filter(|reading| reading.within.contains(&index))
         .map(|reading| reading.of)
         .collect();
     if read.is_empty() {
-        return None;
+        return line.cloned();
     }
     let kept: Vec<String> = segments
         .iter()
@@ -2299,7 +2300,7 @@ fn reading_unknown(
         .filter(|(at, _)| !read.contains(at))
         .map(|(_, segment)| segment.clone())
         .collect();
-    Some(run_dirs(&kept, cwd).unknown)
+    run_dirs(&kept, cwd).unknown
 }
 
 /// Whether a Git call runs its command in a set of checkouts it reads when
