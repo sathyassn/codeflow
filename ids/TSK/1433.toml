@@ -1,0 +1,11 @@
+id = "TSK-1433"
+uid = "a537011f-659c-477d-9956-56bc865a5356"
+kind = "TSK"
+title = "A task's review is bound to the commit that lands, with no pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:56:41Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
