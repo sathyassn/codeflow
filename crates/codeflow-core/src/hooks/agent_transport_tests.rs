@@ -683,7 +683,9 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
         "!/usr/local/bin/gh auth token",
         "!/usr/local/bin/gh  auth git-credential",
         "!/usr/bin/env gh auth git-credential",
-        "!gh auth git-credential; true",
+        // Quoted, so the `;` is part of the value and not a comment.
+        "\"!gh auth git-credential; true\"",
+        "!gh auth git-credential && true",
         "!git-credential-osxkeychain",
         "git-credential-store",
         "gh auth git-credential",

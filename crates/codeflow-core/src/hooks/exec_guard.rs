@@ -337,11 +337,28 @@ fn runner_violations(
                     &bodies, cwd, integrity,
                 ));
             }
+            // TSK-1479: on an admitted fetch or push, the GitHub CLI
+            // credential helper's account finding is skipped; every other
+            // finding on it stands.
+            let admitted = super::agent_transport::admits(command, cwd, &bodies);
             let _body = RunnerBody::enter();
             bodies
                 .iter()
-                .flat_map(|(body, directory)| {
-                    evaluate_ruled(body, posix, levels, integrity, directory, root, outcome)
+                .flat_map(|body| {
+                    let mut findings = evaluate_ruled(
+                        &body.command,
+                        posix,
+                        levels,
+                        integrity,
+                        &body.directory,
+                        root,
+                        outcome,
+                    );
+                    if admitted && super::agent_transport::exempt_body(body) {
+                        findings
+                            .retain(|finding| !super::agent_transport::is_account_finding(finding));
+                    }
+                    findings
                 })
                 .collect()
         }

@@ -7638,14 +7638,27 @@ pub(crate) fn launched_script(words: &[String], script: &str) -> String {
 /// # Errors
 ///
 /// Why a runner, its command or its directory cannot be read.
-pub(crate) fn git_runner_bodies(
-    command: &str,
-    cwd: &Path,
-) -> Result<Vec<(String, PathBuf)>, String> {
+pub(crate) fn git_runner_bodies(command: &str, cwd: &Path) -> Result<Vec<GitRunnerBody>, String> {
     Ok(runners::read(command, cwd)?
         .into_iter()
-        .map(|body| (body.command, body.directory))
+        .map(|body| GitRunnerBody {
+            command: body.command,
+            directory: body.directory,
+            credential_helper: body.credential_helper,
+        })
         .collect())
+}
+
+/// A command a Git call runs itself, as [`git_runner_bodies`] reads it.
+pub(crate) struct GitRunnerBody {
+    /// The command as Git runs it, without a helper's leading `!`.
+    pub command: String,
+    /// The directory Git runs it in.
+    pub directory: PathBuf,
+    /// Whether it is a credential-helper value Git runs as written: a
+    /// `credential.helper` or `credential.<url>.helper` value with a
+    /// leading `!` or an absolute path (TSK-1479).
+    pub credential_helper: bool,
 }
 
 /// The environment variables whose value is a program Git runs, as the
@@ -7663,14 +7676,17 @@ pub(crate) fn git_runner_unread(why: &str) -> Violation {
 /// [`git_runner_bodies`] read: exec-guard judges the same runner bodies and
 /// directories as git-guard.
 pub(crate) fn git_runner_write_violation_in(
-    bodies: &[(String, PathBuf)],
+    bodies: &[GitRunnerBody],
     cwd: &Path,
     level: PolicyLevel,
 ) -> Option<Violation> {
     if !level.is_active() {
         return None;
     }
-    for (command, directory) in bodies {
+    for GitRunnerBody {
+        command, directory, ..
+    } in bodies
+    {
         let expanded = expand_shell_commands(command);
         let run = run_dirs(&expanded.segments, directory);
         for segment in &expanded.segments {
