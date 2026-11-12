@@ -68,7 +68,14 @@ pub fn run(args: &GitHookArgs) -> i32 {
     let _facts = matches!(args.stage, StageName::ReferenceTransaction)
         .then(codeflow_core::hooks::edit_guard::RepoFactsScope::enter);
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    let root = match super::project_root(&cwd) {
+    // Every stage finds its repository with one set of repository facts, so
+    // the linked checkouts it validates share one full open (TSK-1275); the
+    // other stages keep nothing past this lookup.
+    let root = {
+        let _discovery = codeflow_core::hooks::edit_guard::RepoFactsScope::enter();
+        super::project_root(&cwd)
+    };
+    let root = match root {
         Ok(root) => root,
         Err(error) => {
             if matches!(args.stage, StageName::ReferenceTransaction) {
