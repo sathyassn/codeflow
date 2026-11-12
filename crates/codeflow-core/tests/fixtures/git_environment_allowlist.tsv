@@ -153,6 +153,8 @@ crates/codeflow-core/src/validate/portal.rs	envs(allowed_git_environment(std::en
 crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_COUNT")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
 crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_KEY_0")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
 crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_VALUE_0")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/src/workgraph/history.rs	env_remove(name)	1	TSK-1185 remerge_command removes every inherited GIT_ value, so no graft, shallow or config input reaches the merge judgment.
+crates/codeflow-core/src/workgraph/history.rs	starts_with("GIT_")	1	TSK-1185 remerge_command selects inherited GIT_ names for removal; it never reads or prints their values.
 crates/codeflow-core/tests/authority_job.rs	env(key,value)	1	Passes each test's step variables (HEAD_SHA, VERDICTS and the like) to a bash run of a workflow step against a fake curl; the steps run no Git and inherited Git configuration is left intact.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.env(\"GIT_CONFIG_\\x43OUNT\", \"0\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
@@ -167,6 +169,7 @@ crates/codeflow-core/tests/git_spawn_contract.rs	assert_eq!(environment_spans("c
 crates/codeflow-core/tests/git_spawn_contract.rs	environment_spans("// GIT_CONFIG_COUNT env_clear")	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
 crates/codeflow-core/tests/git_spawn_contract.rs	environment_spans("cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");")	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
 crates/codeflow-core/tests/git_spawn_contract.rs	replace("std::env::var(\"GIT_CONFIG_COUNT\").unwrap()","\"0\"")	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/remerge_git_process.rs	starts_with("GIT_")	1	TSK-1185 reads the names a fake git recorded; it does not change a fixture process environment.
 crates/codeflow-fixture/src/lib.rs	env(mutself,key:implAsRef<OsStr>,value:implAsRef<OsStr>)	1	Closed clone builder forwards caller environment additions; all caller mutation sites are scanned and inherited settings are retained.
 crates/codeflow-fixture/src/lib.rs	envs(self.environment)	1	Closed clone builder forwards caller environment additions; all caller mutation sites are scanned and inherited settings are retained.
 crates/codeflow-present/src/platform.rs	env(STAGE,"inner")	1	Restricted browser/system-tool or canary environment controls, and an inert Windows ACL string; no Git operations.

@@ -41,6 +41,7 @@ use codeflow_core::hooks::{
 };
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
+use codeflow_core::workgraph::history;
 use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
     branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
@@ -361,9 +362,22 @@ pub fn run(args: &CiArgs) -> i32 {
     code
 }
 
+/// What `codeflow ci` says about the installed Git, when it cannot judge a
+/// merge. The judgment itself still refuses; this only says so sooner.
+fn git_floor_notice(version: Result<String, String>) -> Option<codeflow_core::remedy::Finding> {
+    let text = match version {
+        Ok(version) => history::merge_git_refusal(&version)?,
+        Err(reason) => reason,
+    };
+    Some(codeflow_core::remedy::Finding::new(
+        text,
+        codeflow_core::remedy::GIT_MERGE_FLOOR.remedy(),
+    ))
+}
+
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 fn run_checks(args: &CiArgs) -> i32 {
-    let _judgment = codeflow_core::workgraph::history::judgment();
+    let _judgment = history::judgment();
     if args.read_release_impact {
         return read_release_impact();
     }
@@ -384,6 +398,11 @@ fn run_checks(args: &CiArgs) -> i32 {
             return 2;
         }
     };
+    // Early notice of the Git floor: the refusal itself only comes when a
+    // merge on the range is judged, which can be at landing (TSK-1185 AC-9).
+    if let Some(notice) = git_floor_notice(history::installed_git_version()) {
+        eprintln!("{}", notice.line("codeflow ci", "warning"));
+    }
     // An invalid policy cannot verify the consumer's intent — fail loudly,
     // naming each offending key, rather than silently verify against the
     // built-in defaults, which could pass a range the real (mistyped) policy
@@ -632,7 +651,8 @@ fn run_checks(args: &CiArgs) -> i32 {
     } else {
         None
     };
-    let names = Names {
+    let mut names = Names {
+        trusted: None,
         branch: &branch,
         into: into.as_deref(),
         into_flag: args.into.as_deref(),
@@ -653,6 +673,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             codeflow_core::git::remote_query::QueryLimits::from_authority_or_default(&root)
         },
     };
+    names.trusted = mains_bytes_tip(&root, args, authority.as_ref(), &names);
     // Resolve the shared scope before either dependent check. An unreadable
     // destination refuses once; records and acceptance cannot judge it.
     let scope_range = base_sha.as_deref().map(|base| classification::Range {
@@ -1071,7 +1092,7 @@ fn work_checks<'a>(
             branch,
             range_parts.as_ref(),
             release.as_ref(),
-            names.candidate,
+            (names.candidate, names.trusted),
             tagged,
             ran,
         )
@@ -2750,6 +2771,9 @@ pub(super) struct Names<'a> {
     pub candidate: Option<&'a str>,
     /// The timeout and attempts for asking the destination (TSK-1301).
     pub limits: codeflow_core::git::remote_query::QueryLimits,
+    /// The default-branch tip this run verified for main's bytes
+    /// (TSK-1185 AC-14), set only by [`mains_bytes_tip`].
+    pub trusted: Option<codeflow_core::git::Oid>,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<
@@ -2788,6 +2812,91 @@ fn named_branch(base: &str) -> Option<String> {
         .or_else(|| base.strip_prefix("origin/"))
         .unwrap_or(base);
     (!hex && !name.is_empty() && !name.contains(['~', '^', ':', '@'])).then(|| name.to_string())
+}
+
+/// The default-branch tip that turns on main's bytes (TSK-1185 AC-14), for
+/// a range into an epic line. All of these must hold, and each failure
+/// keeps the full checks and says why:
+///
+/// - the authority is the commit `--policy-from` names, which the hosted
+///   policy job sets to `github.sha`, the default branch's commit;
+/// - the run is not the pre-push hand-off: any one of `--pushed-ref`,
+///   `--advertisement-stdin` and `--commits-from` turns the rule off, and
+///   so does a `--destination` given on the command line, since a
+///   requester can redirect the destination the hook asks (`pushurl`,
+///   `insteadOf`). The hook takes the rule only once the destination's
+///   identity can be verified (TSK-1184, TSK-327);
+/// - this run's own query of `origin` names the default branch through its
+///   HEAD, and that branch's tip is exactly the named commit, present here.
+///
+/// The hand-off is recognised by the flags the pre-push hook passes
+/// (`push_set.rs` always passes `--pushed-ref`); `ci_cli/mains_bytes.rs`
+/// pins that the hook's own argument set, and each of these flags alone,
+/// keeps full proof.
+fn mains_bytes_tip(
+    root: &Path,
+    args: &CiArgs,
+    authority: Option<&Authority>,
+    names: &Names<'_>,
+) -> Option<codeflow_core::git::Oid> {
+    let line = names
+        .into
+        .filter(|into| codeflow_core::workgraph::line_adoption::epic_id(into).is_ok())?;
+    let verified = (|| {
+        let Some(Authority::Named(sha)) = authority else {
+            return Err("the run names no default branch commit with --policy-from".to_string());
+        };
+        if args.pushed_ref.is_some()
+            || args.advertisement_stdin
+            || args.commits_from.is_some()
+            || args.destination.is_some()
+        {
+            return Err("this is the pre-push hand-off, whose destination cannot be verified yet (TSK-1184, TSK-327)".to_string());
+        }
+        let url = names
+            .destination
+            .ok_or("there is no origin to ask for the default branch")?;
+        let destination =
+            codeflow_core::workgraph::release_line::ask_destination(root, Some(url), names.limits)?;
+        let (name, tip) = destination
+            .default
+            .ok_or("the destination names no default branch")?;
+        if tip.to_string() != *sha {
+            return Err(format!(
+                "the destination's default branch '{}' is at {tip:.9}, not {}",
+                codeflow_core::git::display_text(&name),
+                short(sha)
+            ));
+        }
+        let present = codeflow_core::workgraph::history::command()
+            .arg("-C")
+            .arg(root)
+            .args(["cat-file", "-e", &format!("{tip}^{{commit}}")])
+            .status()
+            .map_err(|error| format!("cannot look for {tip:.9}: {error}"))?;
+        if !present.success() {
+            return Err(format!("{tip:.9} is not a commit here"));
+        }
+        Ok((name, tip, url))
+    })();
+    match verified {
+        Ok((name, tip, url)) => {
+            println!(
+                "codeflow ci: acceptance: main's bytes on for '{}': the destination {} names '{}' at {tip:.9}, the commit --policy-from names (TSK-1185)",
+                codeflow_core::git::display_text(line),
+                codeflow_core::git::remote_query::display_url(url),
+                codeflow_core::git::display_text(&name),
+            );
+            Some(tip)
+        }
+        Err(why) => {
+            println!(
+                "codeflow ci: acceptance: main's bytes off for '{}', every record keeps the full checks: {why}",
+                codeflow_core::git::display_text(line)
+            );
+            None
+        }
+    }
 }
 
 /// `origin`'s fetch URL: `Ok(None)` when the repository has no such remote
@@ -3451,6 +3560,40 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1185 AC-9: `codeflow ci` names a Git that cannot judge a merge
+    /// before a landing meets the refusal, and says nothing about one that can.
+    #[test]
+    fn tsk1185_ci_warns_early_of_a_git_too_old_to_judge_a_merge() {
+        let notice = super::git_floor_notice(Ok("git version 2.34.1".into())).unwrap();
+        assert!(notice.text.contains("Git 2.34.1 is too old"), "{notice}");
+        assert!(notice.text.contains("not a bad merge"), "{notice}");
+        // The remedy names the same floor the refusal enforces.
+        let (major, minor) = codeflow_core::workgraph::history::MERGE_GIT_FLOOR;
+        assert!(
+            notice
+                .remedy
+                .contains(&format!("Git release build of {major}.{minor} or later")),
+            "{notice}"
+        );
+        let line = notice.line("codeflow ci", "warning");
+        assert!(
+            line.starts_with("codeflow ci: warning: Git 2.34.1"),
+            "{line}"
+        );
+        assert!(
+            line.contains("\n  clear it: install a Git release build"),
+            "{line}"
+        );
+        assert_eq!(
+            super::git_floor_notice(Err("no git".into())).unwrap().text,
+            "no git"
+        );
+        assert_eq!(
+            super::git_floor_notice(Ok("git version 2.41.0".into())),
+            None
+        );
+    }
+
     /// A repository whose `main` holds `base` and whose `HEAD` (`feat/x`)
     /// then commits `head`, each a list of (path, text).
     fn r24_range(base: &[(&str, &str)], head: &[(&str, &str)]) -> tempfile::TempDir {

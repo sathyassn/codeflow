@@ -355,6 +355,8 @@ pub fn blob_id_at(
 
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
+/// A commit id, as the destination query and the acceptance judges hold it.
+pub use git2::Oid;
 pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
 
 /// Whether local commit objects prove that a tip contains `sha`.

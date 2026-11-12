@@ -427,6 +427,68 @@ fn a_clean_sync_cannot_re_home_a_line_task() {
     );
 }
 
+/// TSK-1185: the landing of the record's current text is only the later edit,
+/// so the import check walks back to the commit that moved the task and
+/// refuses it there.
+#[test]
+fn a_later_edit_cannot_hide_a_re_home_from_a_clean_sync() {
+    let dir = fixture();
+    let root = dir.path();
+    let path = "project-management/tasks/TSK-001.md";
+    write(root, path, &task("TSK-001", "main"));
+    commit(root, "docs: main re-homes a line task");
+    write(
+        root,
+        path,
+        &task("TSK-001", "main").replace("Work.", "Other work."),
+    );
+    commit(root, "docs: main edits it after the move");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-001", None);
+    let what = "a re-home under a later edit";
+    blocks(&refused, what, "work.import_authority");
+    blocks(&refused, what, "changes the task's declared home");
+}
+
+/// TSK-1185: a planning landing's move of a line task is refused at the import
+/// check while it is the record's landing, because a sync brings it in off the
+/// receiving head's chain. Under a later edit the earlier-move walk admits it,
+/// since that walk does not ask for the chain, so the sync route must refuse:
+/// a sync changes no record whose home is the line.
+#[test]
+fn a_planned_re_home_of_a_line_task_stays_frozen_on_a_clean_sync() {
+    let dir = fixture();
+    let root = dir.path();
+    let path = "project-management/tasks/TSK-001.md";
+    let land_plan = |branch: &str, content: &str, message: &str| {
+        super::git(root, &["switch", "-q", "-c", branch, "main"]);
+        write(root, path, content);
+        commit(root, message);
+        super::git(root, &["switch", "-q", "main"]);
+        super::git(root, &["merge", "--no-ff", "-q", "--no-edit", branch]);
+    };
+    land_plan(
+        "plan/move-home",
+        &task("TSK-001", "main"),
+        "docs: move the task to main",
+    );
+    sync_branch(root);
+    let moved = ci(root, "Task: EPC-001", None);
+    blocks(&moved, "a planned re-home", "work.import_authority");
+
+    super::git(root, &["switch", "-q", "main"]);
+    land_plan(
+        "plan/edit-task",
+        &task("TSK-001", "main").replace("Work.", "Other work."),
+        "docs: edit the moved task",
+    );
+    sync_branch(root);
+    let edited = ci(root, "Task: EPC-001", None);
+    let what = "a planned re-home under a later edit";
+    blocks(&edited, what, "work.criteria_frozen");
+    blocks(&edited, what, "whose home is the line");
+}
+
 /// A task with no `integration_target`, as a hand-written record may be.
 fn untargeted_task(id: &str, epic: &str) -> String {
     task(id, LINE)

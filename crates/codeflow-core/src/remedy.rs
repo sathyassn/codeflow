@@ -524,6 +524,10 @@ catalog! {
     /// of `codeflow ci` needs.
     GIT_ATTR_SOURCE_UNSUPPORTED = Step::Codeflow("codeflow ci"),
         "install a Git release build of 2.40 or later, whose `git check-attr --source` the conflict-marker check needs, then rerun `codeflow ci`; fetching more history does not help";
+    /// A git older than the merge floor, which `codeflow ci` needs to judge
+    /// a merge on the range (TSK-1185 AC-9).
+    GIT_MERGE_FLOOR = Step::Codeflow("codeflow ci"),
+        "install a Git release build of 2.41 or later, whose `git --attr-source` judging a merge needs, then rerun `codeflow ci`; the merge itself is not at fault";
 
     /// A commit on a declared contract surface.
     BREAKING_WATCH_PATH = Step::Codeflow("codeflow ci"),
