@@ -222,34 +222,18 @@ fn branch_name(name: &str) -> bool {
     !name.starts_with('-') && git2::Reference::is_valid_name(&format!("refs/heads/{name}"))
 }
 
-/// `Some` when the repository at `target` lets the form through; `None` on
-/// any refusal or read failure.
-fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -> Option<()> {
-    let repo = super::repo::open(target).ok()??;
-    let workdir = repo.workdir()?.to_path_buf();
-    let remotes = repo.remotes().ok()?;
-    let names: Vec<&[u8]> = remotes.iter_bytes().collect();
-    if names != [b"origin".as_slice()] {
-        return None;
-    }
-    let config = crate::security::git_config::read(
-        target,
-        &[],
-        &crate::security::git_config::Environment::new(),
-    )
-    .ok()?;
-    let urls = config.get_all("remote.origin.url");
-    let [(_, _, url)] = urls.as_slice() else {
-        return None;
-    };
-    let url = std::str::from_utf8(url).ok()?;
-    if !url_allowed(url) {
-        return None;
-    }
+/// `Some` when the configuration read for `origin`'s `url` selects only the
+/// exempt helper, sets no widening setting and maps fetches only under
+/// `refs/remotes/origin/`; `None` otherwise.
+fn config_allows(
+    config: &crate::security::git_config::EffectiveConfig,
+    url: &str,
+    bodies: &[GitRunnerBody],
+) -> Option<()> {
     // Git runs the helpers its credential configuration selects for
     // `origin`'s URL. Where the model reads that list, it must be the exempt
     // helper alone; where it cannot, every helper body must be exempt.
-    match effective_helpers(&config, url) {
+    match effective_helpers(config, url) {
         Some(helpers) => {
             if !matches!(helpers.as_slice(), [only] if exempt_value(only)) {
                 return None;
@@ -279,6 +263,34 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
             }
         }
     }
+    Some(())
+}
+
+/// `Some` when the repository at `target` lets the form through; `None` on
+/// any refusal or read failure.
+fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -> Option<()> {
+    let repo = super::repo::open(target).ok()??;
+    let workdir = repo.workdir()?.to_path_buf();
+    let remotes = repo.remotes().ok()?;
+    let names: Vec<&[u8]> = remotes.iter_bytes().collect();
+    if names != [b"origin".as_slice()] {
+        return None;
+    }
+    let config = crate::security::git_config::read(
+        target,
+        &[],
+        &crate::security::git_config::Environment::new(),
+    )
+    .ok()?;
+    let urls = config.get_all("remote.origin.url");
+    let [(_, _, url)] = urls.as_slice() else {
+        return None;
+    };
+    let url = std::str::from_utf8(url).ok()?;
+    if !url_allowed(url) {
+        return None;
+    }
+    config_allows(&config, url, bodies)?;
     unrewritten(target, url)?;
     match std::fs::symlink_metadata(workdir.join(".gitmodules")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

@@ -129,6 +129,20 @@ pub fn evaluate_in(
     )
 }
 
+/// Add git-guard's refusals of an agent push of a line or the default
+/// branch, read as git-guard reads them, whatever credential Git uses
+/// (TSK-1479 AC-15). A finding already present is not repeated.
+fn add_agent_push_refusals(command: &str, cwd: &std::path::Path, violations: &mut Vec<Violation>) {
+    for finding in super::git_guard::agent_push_refusals(command, cwd) {
+        if !violations
+            .iter()
+            .any(|existing| existing.rule == finding.rule && existing.message == finding.message)
+        {
+            violations.push(finding);
+        }
+    }
+}
+
 /// [`evaluate_in`] under the outcome [`super::sandbox_state`] selected for
 /// the call (TSK-397): the line's rule, or the line's rule with the strict
 /// branch added. Every check outside the interpreter-argument rule is the
@@ -231,16 +245,7 @@ pub fn evaluate_ruled(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
-    // An agent push of a line or the default branch, read as git-guard
-    // reads it, whatever credential Git uses (TSK-1479 AC-15).
-    for finding in super::git_guard::agent_push_refusals(command, cwd) {
-        if !violations
-            .iter()
-            .any(|existing| existing.rule == finding.rule && existing.message == finding.message)
-        {
-            violations.push(finding);
-        }
-    }
+    add_agent_push_refusals(command, cwd, &mut violations);
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));

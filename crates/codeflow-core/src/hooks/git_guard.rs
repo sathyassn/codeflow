@@ -12193,11 +12193,8 @@ fn check_agent_push(push: &PushIntent, policy: &GitPolicy, out: &mut Vec<Violati
             }
             // Git resolves a destination outside `refs/` against the
             // remote's refs, so `heads/<name>` can update `refs/heads/<name>`.
-            let names = std::iter::once(target.as_str()).chain(target.strip_prefix("heads/"));
-            if let Some(entry) = names
-                .filter_map(|name| policy.agent_push_refusal(name))
-                .next()
-            {
+            let mut names = std::iter::once(target.as_str()).chain(target.strip_prefix("heads/"));
+            if let Some(entry) = names.find_map(|name| policy.agent_push_refusal(name)) {
                 out.push(Violation::always_blocking(
                     AGENT_PUSH_RULE,
                     format!(
@@ -12349,10 +12346,10 @@ fn agent_push_destination(
         let Ok(keys) = config.keys() else {
             return refuse("its configuration cannot be read");
         };
-        if keys
-            .iter()
-            .any(|key| key.starts_with("remote.") && key.ends_with(".push"))
-        {
+        if keys.iter().any(|key| {
+            key.starts_with("remote.")
+                && key.rsplit_once('.').is_some_and(|(_, name)| name == "push")
+        }) {
             return refuse("a `remote.<name>.push` mapping");
         }
         match config.get("push.default") {

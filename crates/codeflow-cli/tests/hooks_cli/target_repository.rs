@@ -5136,7 +5136,7 @@ fn agents_fetch_and_push_their_own_work_branch() {
     // guards, naming the rule (AC-15). The account rule still applies to
     // the helper on both lines, and git-guard also names the protected
     // branch for `main`.
-    const AGENT_PUSH: &str = "git.agent_push_refused_branches";
+    let agent_push = "git.agent_push_refused_branches";
     let refused = |line: &str, expected: &[(&str, &str)]| {
         let outcomes = verdicts(line);
         for (hook, out) in &outcomes {
@@ -5155,17 +5155,17 @@ fn agents_fetch_and_push_their_own_work_branch() {
         "git push origin HEAD:refs/heads/main",
         &[
             ("exec-guard", "security.outward_actions"),
-            ("exec-guard", AGENT_PUSH),
+            ("exec-guard", agent_push),
             ("git-guard", "git.push_to_protected"),
-            ("git-guard", AGENT_PUSH),
+            ("git-guard", agent_push),
         ],
     );
     refused(
         "git push origin HEAD:refs/heads/integration/EPC-001-line",
         &[
             ("exec-guard", "security.outward_actions"),
-            ("exec-guard", AGENT_PUSH),
-            ("git-guard", AGENT_PUSH),
+            ("exec-guard", agent_push),
+            ("git-guard", agent_push),
         ],
     );
     // With no credential helper configured, the integration line is still
@@ -5173,7 +5173,7 @@ fn agents_fetch_and_push_their_own_work_branch() {
     git(&f.root, &["config", "--unset", "credential.helper"]);
     refused(
         "git push origin HEAD:refs/heads/integration/EPC-001-line",
-        &[("exec-guard", AGENT_PUSH), ("git-guard", AGENT_PUSH)],
+        &[("exec-guard", agent_push), ("git-guard", agent_push)],
     );
     assert_ne!(tip(&bare, "refs/heads/main"), tip(work, "HEAD"));
 }
