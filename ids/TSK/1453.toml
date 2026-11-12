@@ -1,0 +1,11 @@
+id = "TSK-1453"
+uid = "d779c08e-ef39-403e-932f-a83c50e01743"
+kind = "TSK"
+title = "A push from a partial clone names its missing file contents and how to fetch them"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:02:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
