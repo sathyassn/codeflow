@@ -319,10 +319,10 @@ fn judge_moves(
             return Err(format!("{MOVED}: the task moved at {at} while it was not todo or blocked, or while it held an acceptance block, before its last move"));
         }
     }
-    let Held::One(moved) = held_at(repo, *last, who) else {
+    let Held::One(arrived) = held_at(repo, *last, who) else {
         return Err(ambiguous(*last));
     };
-    if matches!(line, Held::One(copy) if declared(copy) == declared(&moved)) {
+    if matches!(line, Held::One(copy) if declared(copy) == declared(&arrived)) {
         return Ok(());
     }
     if !permitted(*last) || !permitted(*last_parent) {

@@ -24,11 +24,15 @@ fn the_live_set_is_records_only() {
 /// AC-11: each landing moves the record beside one other path. Records
 /// with docs pass only under the aligned set; every other class is refused
 /// under both, and records alone pass under both.
+/// A case name, the path landed beside the record, and whether the narrow
+/// and the aligned set admit the landing.
+type SetCase<'a> = (&'a str, Option<(&'a str, &'a str)>, bool, bool);
+
 #[test]
 fn planning_landing_paths_narrow_and_aligned() {
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
     let record = path_of("TSK-001");
-    let cases: [(&str, Option<(&str, &str)>, bool, bool); 8] = [
+    let cases: [SetCase; 8] = [
         ("records only", None, true, true),
         (
             "records and docs",

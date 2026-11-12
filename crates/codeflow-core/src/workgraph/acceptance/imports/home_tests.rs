@@ -307,11 +307,15 @@ fn a_main_move_of_a_task_absent_on_the_line_passes() {
     passes(&fixture, "a task absent on the line");
 }
 
+/// A case name, the records `main` starts with, and the record its move
+/// lands.
+type StateCase<'a> = (&'a str, Vec<(&'a str, String)>, String);
+
 /// AC-7: AC-6 fails closed for every condition it cannot prove.
 #[test]
 fn a_main_move_outside_a_permitted_state_stays_refused() {
     let shared = todo("TSK-003", OTHER).replace("uid: uid-TSK-003", "uid: uid-TSK-001");
-    let cases: Vec<(&str, Vec<(&str, String)>, String)> = vec![
+    let cases: Vec<StateCase> = vec![
         (
             "complete at the move",
             vec![("TSK-001", todo("TSK-001", OTHER))],

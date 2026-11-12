@@ -93,6 +93,7 @@ pub fn imported_records(
     result
 }
 
+#[allow(clippy::too_many_lines)] // Keep enumeration, home and record refusals in one judgment order.
 fn compute_imports(
     repo: &Repository,
     base: Oid,
@@ -126,48 +127,20 @@ fn compute_imports(
     let syncs = home::takes_default(repo, anchor, head, default_tip).map_err(unenumerated)?;
     // Each refusal names its record; the check never stops at the first.
     let mut refusals = Vec::new();
-    let refuse = |id: &str, place: &str, reason: &str| {
-        let repair = if reason.starts_with(MOVED) || reason.starts_with(NO_SOURCE) {
-            home_repair(&default.name)
-        } else {
-            SOURCE_REPAIR.to_string()
-        };
-        format!("{id}: blocks come from target history on {place}: {reason}; {repair}")
-            .replace('\n', " ")
-    };
-    let start = if syncs {
-        match home::start_point(repo, anchor, default_tip) {
-            Ok(start) => Some(start),
-            Err(reason) => {
-                refusals.push(unenumerated(reason));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    if let Some(start) = start {
-        for record in graph.records.values() {
-            if record.kind != RecordKind::Task || changed.iter().any(|old| old.id == record.id) {
-                continue;
-            }
-            match unchanged_and_rehomed(repo, record, anchor, head, start) {
-                Ok(false) => {}
-                Ok(true) => {
-                    if let Err(reason) =
-                        home::judge_unchanged(repo, record, default_tip, anchor, head)
-                    {
-                        refusals.push(refuse(&record.id, &format!("`{}`", default.name), &reason));
-                    }
-                }
-                Err(reason) => {
-                    refusals.push(refuse(&record.id, &format!("`{}`", default.name), &reason));
-                }
-            }
-        }
+    let refuse = |id: &str, place: &str, reason: &str| refusal(&default.name, id, place, reason);
+    if syncs {
+        refusals.extend(unchanged_refusals(
+            repo,
+            graph,
+            &changed,
+            &default.name,
+            default_tip,
+            anchor,
+            head,
+        ));
     }
     if changed.is_empty() {
-        return finish(BTreeMap::new(), refusals);
+        return finish(BTreeMap::new(), &refusals);
     }
     for record in &changed {
         let home = record.integration_target.as_deref().map_or(
@@ -320,11 +293,61 @@ fn compute_imports(
             }
         }
     }
-    finish(imported, refusals)
+    finish(imported, &refusals)
+}
+
+/// One record's refusal, with the repair its cause takes, on one line.
+fn refusal(default: &str, id: &str, place: &str, reason: &str) -> String {
+    let repair = if reason.starts_with(MOVED) || reason.starts_with(NO_SOURCE) {
+        home_repair(default)
+    } else {
+        SOURCE_REPAIR.to_string()
+    };
+    format!("{id}: blocks come from target history on {place}: {reason}; {repair}")
+        .replace('\n', " ")
+}
+
+/// The refusals for the tasks the range leaves as the receiving line holds
+/// them, whose home the line re-homed or introduced since its merge base
+/// with the default tip (TSK-1378 AC-13): each still answers for the moves
+/// the default branch made in that span.
+fn unchanged_refusals(
+    repo: &Repository,
+    graph: &Graph,
+    changed: &[&RecordView],
+    default: &str,
+    default_tip: Oid,
+    anchor: Oid,
+    head: Oid,
+) -> Vec<String> {
+    let start = match home::start_point(repo, anchor, default_tip) {
+        Ok(start) => start,
+        Err(reason) => return vec![format!("{UNENUMERATED}: {reason}")],
+    };
+    let mut refusals = Vec::new();
+    for record in graph.records.values() {
+        if record.kind != RecordKind::Task || changed.iter().any(|old| old.id == record.id) {
+            continue;
+        }
+        let judged = match unchanged_and_rehomed(repo, record, anchor, head, start) {
+            Ok(false) => Ok(()),
+            Ok(true) => home::judge_unchanged(repo, record, default_tip, anchor, head),
+            Err(reason) => Err(reason),
+        };
+        if let Err(reason) = judged {
+            refusals.push(refusal(
+                default,
+                &record.id,
+                &format!("`{default}`"),
+                &reason,
+            ));
+        }
+    }
+    refusals
 }
 
 /// The imports, or every refusal on its own line.
-fn finish(imported: Imports, refusals: Vec<String>) -> Result<Imports, String> {
+fn finish(imported: Imports, refusals: &[String]) -> Result<Imports, String> {
     if refusals.is_empty() {
         Ok(imported)
     } else {
@@ -347,11 +370,11 @@ fn unchanged_and_rehomed(
     head: Oid,
     start: Oid,
 ) -> Result<bool, String> {
-    let held = home::entry_at(repo, receiver, &record.path)?;
-    if held.is_none() || held != home::entry_at(repo, head, &record.path)? {
+    let line_entry = home::entry_at(repo, receiver, &record.path)?;
+    if line_entry.is_none() || line_entry != home::entry_at(repo, head, &record.path)? {
         return Ok(false);
     }
-    Ok(held != home::entry_at(repo, start, &record.path)?)
+    Ok(line_entry != home::entry_at(repo, start, &record.path)?)
 }
 
 /// Where a changed record's declared integration line supplies imports.
