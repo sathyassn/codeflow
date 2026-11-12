@@ -406,7 +406,8 @@ fn readings_of_ordinary_program_words_keep_main_verdicts() {
 }
 
 /// The new refusals the operator accepted for TSK-1456: a program word the
-/// shell fills in at run time is judged as each program it could be, and
+/// shell fills in at run time is judged under the programs the guards
+/// protect, and
 /// every such refusal says how to get through, by writing the program name
 /// literally. The policy is the measured fixture's, on `main`.
 #[test]

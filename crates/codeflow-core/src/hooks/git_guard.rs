@@ -7414,8 +7414,8 @@ pub(crate) fn unread_program_hint(words: &[String]) -> String {
         .join(" and ");
     format!(
         ". The shell fills in {shown} in the program position only when the command runs, \
-         so the guard judged each program it could be and refused this one. Write the \
-         program name literally in place of {shown}"
+         so the guard judged the command under the programs it guards and refused this \
+         one. Write the program name literally in place of {shown}"
     )
 }
 
@@ -7485,8 +7485,8 @@ fn expand_segments(
             let program = words[at].as_str();
             let marked = marks[at].as_str();
             let placed = leading_word_written(marked, taker);
-            // A program word the guard cannot fill in is judged under each
-            // program it could be (TSK-1456 AC-9).
+            // A program word the guard cannot fill in is judged under the
+            // programs the guards protect (TSK-1456 AC-9).
             let mut read_unread = |alternatives: &mut Vec<String>| {
                 match unread_program_readings(&marks, at) {
                     Some(readings) => alternatives.extend(readings),
