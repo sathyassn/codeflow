@@ -9,7 +9,7 @@
 //! CODEFLOW_GITLEAKS_BIN=/absolute/path/to/gitleaks \
 //! CODEFLOW_TEST_BINARY=/absolute/path/to/codeflow \
 //! CODEFLOW_PREVIOUS_BINARY=/absolute/path/to/older/codeflow \
-//! cargo test -p codeflow-core --test managed_secret_scan -- --ignored --nocapture
+//! cargo test -p codeflow-core --test managed_leak_scan -- --ignored --nocapture
 //! ```
 
 #[cfg(unix)]
