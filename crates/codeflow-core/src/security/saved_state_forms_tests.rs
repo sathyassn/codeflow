@@ -311,19 +311,40 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
     let home = slashed(&f.home);
     let p = slashed(&conf);
     let mut wrong = Vec::new();
-    for (places, name, rest, value) in [
-        (&moved, "CLAUDE_CONFIG_DIR", "/session-env/h", &p),
-        (&default, "HOME", "/.claude/session-env/h", &home),
+    for (places, name, rest, value, label) in [
+        (&moved, "CLAUDE_CONFIG_DIR", "/session-env/h", &p, LABEL),
+        (
+            &default,
+            "HOME",
+            "/.claude/session-env/h",
+            &home,
+            "~/.claude/session-env",
+        ),
     ] {
+        // An alternative that is the variable itself, with nothing changed
+        // around it, is judged as the path it names.
+        for form in [
+            format!("${{:-${name}}}"),
+            format!("${{NOPE:-${name}}}"),
+            format!("${{NOPE:-~{name}}}"),
+        ] {
+            both_hooks(
+                &f,
+                places,
+                &format!("echo x > {form}{rest}"),
+                &[format!(
+                    "a redirect writes the saved shell state file `{label}`"
+                )],
+                &mut wrong,
+            );
+        }
         for form in [
             // Unnamed, one, two and three levels down.
-            format!("${{:-${name}}}"),
             format!("${{${{:-${name}}}:a}}"),
             format!("${{${{${{:-${name}}}}}:a}}"),
             format!("${{${{${{${{:-${name}}}}}}}:a}}"),
             format!("${{${{:-${{{name}}}}}:a}}"),
             // Named, one, two and three levels down.
-            format!("${{NOPE:-${name}}}"),
             format!("${{${{NOPE:-${name}}}:a}}"),
             format!("${{${{${{NOPE:-${name}}}}}:a}}"),
             format!("${{${{${{${{NOPE:-${name}}}}}}}:a}}"),
@@ -335,7 +356,6 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
             format!("${{ZDOTDIR/#$ZDOTDIR/${name}}}"),
             format!("${{ZDOTDIR[1,${name}]}}"),
             format!("${{{name}}}[1,-1]"),
-            format!("${{NOPE:-~{name}}}"),
             // After variables aimed at ordinary folders.
             format!("${{${{:-$ZDOTDIR}}:h}}/..${{${{:-${name}}}:a}}"),
             format!("${{${{:-$ZDOTDIR/..${name}}}:a}}"),
@@ -378,17 +398,92 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
             &mut wrong,
         );
     }
-    // A tilde alone inside a changed expansion reads the home.
-    let word = "${NOPE:-~}/.claude/session-env/h";
+    // A tilde alone as an alternative is the home.
     both_hooks(
         &f,
         &default,
+        "echo x > ${NOPE:-~}/.claude/session-env/h",
+        &["a redirect writes the saved shell state file `~/.claude/session-env`".to_string()],
+        &mut wrong,
+    );
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Each alternative of a default, assignment or alternate-value form is
+/// judged as the path it gives, with the changes around it: the write
+/// refuses when any alternative is or lies in saved state, two levels of
+/// alternatives down too, and an outer change of a nested alternative
+/// fails closed as before. A default that gives an ordinary path under a
+/// home that holds saved state still runs.
+#[test]
+fn alternatives_are_judged_as_their_own_paths() {
+    let f = Fixture::new();
+    let (conf, default, moved) = ordinary_startup(&f);
+    let p = slashed(&conf);
+    let mut wrong = Vec::new();
+    for (places, name, rest, label) in [
+        (&moved, "CLAUDE_CONFIG_DIR", "/session-env/h", LABEL),
+        (
+            &default,
+            "HOME",
+            "/.claude/session-env/h",
+            "~/.claude/session-env",
+        ),
+    ] {
+        for op in ["-", ":-", "=", ":=", "::=", "+", ":+"] {
+            both_hooks(
+                &f,
+                places,
+                &format!("echo x > ${{OUT{op}${name}{rest}}}"),
+                &[format!(
+                    "a redirect writes the saved shell state file `{label}`"
+                )],
+                &mut wrong,
+            );
+        }
+        for word in [
+            format!("${{OUT:-${{NOPE:-${name}{rest}}}}}"),
+            format!("${{OUT:+${{NOPE:-${name}{rest}}}}}"),
+            format!("${{OUT:-${{NOPE:+${name}}}}}{rest}"),
+        ] {
+            both_hooks(
+                &f,
+                places,
+                &format!("echo x > {word}"),
+                &[format!(
+                    "a redirect writes the saved shell state file `{label}`"
+                )],
+                &mut wrong,
+            );
+        }
+    }
+    // An outer change of nested alternatives still fails closed.
+    let word = "${${OUT:-${NOPE:-$CLAUDE_CONFIG_DIR}}:a}/session-env/h";
+    both_hooks(
+        &f,
+        &moved,
         &format!("echo x > {word}"),
         &[format!(
-            "a redirect writes `{word}`, which the guard cannot resolve, and it changes `$HOME` with a zsh flag, modifier or subscript, and its value `{home}` is or holds saved shell state; {NEAR}"
+            "a redirect writes `{word}`, which the guard cannot resolve, and it changes `$CLAUDE_CONFIG_DIR` with a zsh flag, modifier or subscript, and its value `{p}` is or holds saved shell state; {NEAR}"
         )],
         &mut wrong,
     );
+    // Alternatives that give ordinary paths run, under a home that holds
+    // saved state too.
+    for places in [&default, &moved] {
+        for command in [
+            "echo x > ${OUT:-$HOME/out.log}",
+            "echo x > ${OUT:-~/out.log}",
+            "echo x > ${OUT-$HOME/out.log}",
+            "echo x > ${OUT:=$HOME/out.log}",
+            "echo x > ${OUT:+$HOME/out.log}",
+            "echo x > ${OUT:-${NOPE:-$HOME/out.log}}",
+            "echo x > ${OUT:-$HOME}/out.log",
+            "echo x > ${OUT:-$ZDOTDIR/h}",
+        ] {
+            both_hooks(&f, places, command, &[], &mut wrong);
+        }
+    }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
