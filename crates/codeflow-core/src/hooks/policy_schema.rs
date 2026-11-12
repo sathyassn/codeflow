@@ -268,7 +268,17 @@ pub const SCHEMA: [KeySpec; 82] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "Agent guards (ADR-0009). A write to Git's alternate object lists \
+        notes: "Agent guards (ADR-0009). Only the operator runs `codeflow update` and \
+                `codeflow init`, which write the files the guards enforce from: exec-guard \
+                refuses a run of either verb in every folder, whichever launcher, supplier, \
+                package runner, shell, interpreter, Git runner or `cargo run` starts it and \
+                however the binary's path is written, and a run whose program word or first \
+                operand it cannot resolve; only the exact help and version forms, which write \
+                nothing, stay allowed (TSK-1476). A binary an agent renames or copies, and the \
+                verb's words written to a file and run later, are not named on the line: the \
+                shipped Claude presets deny the native edit tools each worktree's copy of the \
+                enforcement files, and the OS sandbox's write denies bound the rest. \
+                A write to Git's alternate object lists \
                 (`objects/info/alternates`, `objects/info/http-alternates`, in the common \
                 directory a linked worktree shares) refuses like a write to hooks, refs or \
                 config, since an alternate store adds objects Git reads as its own; reading \
