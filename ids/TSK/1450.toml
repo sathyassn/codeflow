@@ -1,0 +1,11 @@
+id = "TSK-1450"
+uid = "9fddc1f6-fde7-4769-abe8-1252957a6d47"
+kind = "TSK"
+title = "CodeFlow's own rules state how epics land during the transition"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:01:34Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
