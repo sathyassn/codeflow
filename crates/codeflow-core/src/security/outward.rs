@@ -647,6 +647,7 @@ fn apply_xargs_input(
     }
 }
 
+#[allow(clippy::too_many_lines)] // One pass over the line's segments in order.
 fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;

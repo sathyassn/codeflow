@@ -7754,15 +7754,24 @@ fn replaced_word(marks: &[String], at: usize, list: Vec<String>) -> String {
     requote_words(&listed)
 }
 
-/// The name zsh's `=name` gives the path of, for a word as written
-/// ([`ShellWord::marked`]) whose `=` is unquoted: `Some(None)` for any
-/// other word, and `None` for `=(…)`, which runs a file the guard cannot
-/// read.
-fn zsh_path_name(marked: &str) -> Option<Option<String>> {
+/// How zsh reads a word as written ([`ShellWord::marked`]) that may start
+/// with an unquoted `=`.
+enum ZshPath {
+    /// `=name`: the path of `name`.
+    Name(String),
+    /// `=(…)`, which runs a file the guard cannot read.
+    Unreadable,
+    /// Any other word.
+    Plain,
+}
+
+/// The name zsh's `=name` gives the path of, for a word as written whose
+/// `=` is unquoted.
+fn zsh_path_name(marked: &str) -> ZshPath {
     match marked.strip_prefix('=') {
-        Some(name) if name.starts_with('(') => None,
-        Some(name) if !name.is_empty() => Some(Some(name.to_string())),
-        _ => Some(None),
+        Some(name) if name.starts_with('(') => ZshPath::Unreadable,
+        Some(name) if !name.is_empty() => ZshPath::Name(name.to_string()),
+        _ => ZshPath::Plain,
     }
 }
 
@@ -7778,15 +7787,21 @@ fn zsh_path_name(marked: &str) -> Option<Option<String>> {
 pub(crate) fn program_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
     let word = marks[at].as_str();
     let mut readings = Vec::new();
-    if let Some(name) = zsh_path_name(word)? {
-        readings.push(replaced_word(marks, at, vec![name]));
+    match zsh_path_name(word) {
+        ZshPath::Unreadable => return None,
+        ZshPath::Name(name) => readings.push(replaced_word(marks, at, vec![name])),
+        ZshPath::Plain => {}
     }
     if word.contains('{') {
         if let Some(list) = brace_expand(word).filter(|list| list != &[word.to_string()]) {
-            if let Some(name) = zsh_path_name(&list[0])? {
-                let mut named = list.clone();
-                named[0] = name;
-                readings.push(replaced_word(marks, at, named));
+            match zsh_path_name(&list[0]) {
+                ZshPath::Unreadable => return None,
+                ZshPath::Name(name) => {
+                    let mut named = list.clone();
+                    named[0] = name;
+                    readings.push(replaced_word(marks, at, named));
+                }
+                ZshPath::Plain => {}
             }
             readings.push(replaced_word(marks, at, list));
         }
@@ -17823,7 +17838,7 @@ mod tests {
         for line in [
             format!("X{stand_in}1 git status"),
             format!("'X{stand_in}1' git status"),
-            format!("$'X\\U000F003D1' git status"),
+            "$'X\\U000F003D1' git status".to_string(),
         ] {
             let (_, marks) = command_argv_marked(&line);
             assert_eq!(unmarked(&marks[0]), "X\u{FFFD}1", "{line}");
