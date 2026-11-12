@@ -27,6 +27,7 @@ use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
 pub(crate) mod line_home;
+mod path_writers;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -1063,8 +1064,13 @@ fn evaluate_report_with_runners(
                 v.level_fixed = true;
             }
             if authority || ctx.policy.hook_integrity.is_active() {
+                // A path writer's finding stands beside the git rules that
+                // follow, so at warn it cannot hide their blocks (TSK-1390).
+                let beside = path_writers::is_finding(&v);
                 violations.push(v);
-                continue;
+                if !beside {
+                    continue;
+                }
             }
         }
 
@@ -6334,6 +6340,72 @@ fn integrity_write_violation(
             ))
         })
         .or_else(|| wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line))
+        .or_else(|| git_path_writer_violation(cmd, args, level, cwd, payload_cwd, line))
+}
+
+/// `args` of a `git` command with the literal values the line assigned
+/// before it filled in.
+fn filled_git_args(cmd: &str, args: &[String], line: &str) -> Vec<String> {
+    filled_words(cmd, args, args, line)
+}
+
+/// `words` with the literal values the line assigned before the command
+/// `cmd args` filled in.
+fn filled_words(cmd: &str, args: &[String], words: &[String], line: &str) -> Vec<String> {
+    let mut literals = Literals::default();
+    for argv in &*line_argvs(line) {
+        if strip_launchers(argv)
+            .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
+        {
+            break;
+        }
+        literals.note(argv);
+    }
+    words.iter().map(|word| literals.fill(word)).collect()
+}
+
+/// A Git alias whose expansion `expanded` is a path writer, judged as that
+/// command from every directory the op can run in (issue 633, review PW-1).
+/// `args` is the op as written, which the line's assignments precede.
+fn alias_path_writer_violation(
+    args: &[String],
+    expanded: &[String],
+    moved: &Moves<'_>,
+    level: PolicyLevel,
+    line: &str,
+    cwd: &Path,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let filled = filled_words("git", args, expanded, line);
+    let (verb, rest) = git_subcommand(&filled)?;
+    match &moved.cwd {
+        Cwd::Paths(dirs) => dirs.iter().find_map(|dir| {
+            path_writers::violation(verb, &filled, rest, level, (&cwd.join(dir), cwd), line)
+        }),
+        Cwd::Unknown(why) => path_writers::unknown_directory(verb, rest, level, why),
+    }
+}
+
+/// A Git command that writes work-tree files without moving HEAD, judged by
+/// the content it would put on an enforcement path, read from the object
+/// store (issue 633). It runs after the other writer checks, so a command
+/// they refuse keeps their reading.
+fn git_path_writer_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    if cmd != "git" || !level.is_active() {
+        return None;
+    }
+    let filled = filled_git_args(cmd, args, line);
+    let (verb, rest) = git_subcommand(&filled)?;
+    path_writers::violation(verb, &filled, rest, level, (cwd, payload_cwd), line)
 }
 
 pub(crate) fn git_command_write_violation(
@@ -6351,16 +6423,7 @@ pub(crate) fn git_command_write_violation(
         return None;
     }
     if cmd == "git" {
-        let mut literals = Literals::default();
-        for words in &*line_argvs(line) {
-            if strip_launchers(words)
-                .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
-            {
-                break;
-            }
-            literals.note(words);
-        }
-        let filled: Vec<_> = args.iter().map(|word| literals.fill(word)).collect();
+        let filled = filled_git_args(cmd, args, line);
         if let Some((verb, rest)) = git_subcommand(&filled) {
             if verb == "config" {
                 if let Some(finding) = checkout_config_write(rest, level) {
@@ -9666,6 +9729,16 @@ fn check_git(
         match expand_alias(args, sub, moved, ctx, depth, branches.config_changed) {
             Ok(expansions) => {
                 for expanded in expansions {
+                    // The alias body may be a path writer; judge it as the
+                    // literal command (issue 633).
+                    out.extend(alias_path_writer_violation(
+                        args,
+                        &expanded,
+                        moved,
+                        ctx.policy.hook_integrity,
+                        &branches.line,
+                        cwd,
+                    ));
                     check_git(&expanded, branches, moved, ctx, out, notes, depth + 1, cwd);
                     branches.discard_state_changed |= git_subcommand(&expanded)
                         .is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));
@@ -13187,6 +13260,11 @@ struct ParsedOptions<'a> {
     /// Known options whose required value is absent.
     missing: Vec<&'a str>,
     ended: bool,
+    /// How many operands came before the `--` that ended the options, when
+    /// one did. `--end-of-options` ends them too but leaves a later `--` as
+    /// an operand, which Git commands such as `checkout` still read as the
+    /// pathspec separator.
+    separated: Option<usize>,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
@@ -13238,6 +13316,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         unread: Vec::new(),
         missing: Vec::new(),
         ended: false,
+        separated: None,
         short: Vec::new(),
         long: Vec::new(),
         sequence: Vec::new(),
@@ -13251,6 +13330,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         if let Some(body) = token.strip_prefix("--") {
             if body.is_empty() {
                 parsed.ended = true;
+                parsed.separated = Some(parsed.operands.len());
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
@@ -16230,17 +16310,21 @@ mod tests {
 
     // -- hard reset / rebase --
 
+    // These judge in an owned repository with an unborn branch, where only
+    // HEAD resolves. A reset to a revision is also judged by the enforcement
+    // content it writes (TSK-1390), and one the guard cannot read refuses.
     #[test]
     fn test_hard_reset_on_protected_blocked() {
         let p = default_policy();
-        let v = evaluate("git reset --hard HEAD~3", &ctx(&p, "main"));
+        let v = evaluate("git reset --hard HEAD", &ctx(&p, "main"));
         assert_eq!(v[0].rule, "git.hard_reset_protected");
     }
 
     #[test]
     fn test_hard_reset_on_feature_allowed() {
         let p = default_policy();
-        assert!(evaluate("git reset --hard HEAD~3", &ctx(&p, "feat/x")).is_empty());
+        let v = evaluate("git reset --hard HEAD", &ctx(&p, "feat/x"));
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
