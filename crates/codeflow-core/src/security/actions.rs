@@ -309,10 +309,33 @@ impl ActionTable {
             .collect()
     }
 
+    /// The `Edit` denies of each linked worktree's copy of the project
+    /// root's enforcement paths (TSK-1476), in every worktree folder at any
+    /// depth under the session's folder, so a project's worktrees are
+    /// covered when the session starts in a folder above the project. Git's
+    /// own files are left out: a linked worktree keeps its configuration and
+    /// hooks in the common directory the root's denies already cover. These
+    /// stay out of `claude_edit_denies`, which the edit guard reads as
+    /// literal paths from each checkout root.
+    #[must_use]
+    pub fn worktree_edit_denies(&self) -> Vec<String> {
+        self.claude_edit_denies
+            .iter()
+            .filter_map(|rule| rule.strip_prefix("Edit(/")?.strip_suffix(')'))
+            .filter(|relative| !relative.starts_with('/') && !relative.starts_with(".git/"))
+            .flat_map(|relative| {
+                crate::hooks::git_guard::WORKTREE_DIRS
+                    .iter()
+                    .map(move |folder| format!("Edit(//**/{folder}/*/{relative})"))
+            })
+            .collect()
+    }
+
     /// The Claude `permissions.deny` array, in its required order: the read
     /// groups (each group's denies, then its carve-outs), the `Edit` denies
-    /// of the enforcement paths, the shell startup class and the default git
-    /// configuration files, then the families.
+    /// of the enforcement paths and of each worktree's copies, the shell
+    /// startup class and the default git configuration files, then the
+    /// families.
     #[must_use]
     pub fn claude_deny(&self) -> Vec<String> {
         self.claude_read_groups
@@ -320,6 +343,7 @@ impl ActionTable {
             .flat_map(|group| group.denies.iter().chain(&group.carveouts))
             .chain(&self.claude_edit_denies)
             .cloned()
+            .chain(self.worktree_edit_denies())
             .chain(self.startup_paths.claude_edit_denies())
             .chain(self.git_config_paths.claude_edit_denies())
             .chain(self.family_rules(Decision::Deny))
