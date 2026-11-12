@@ -316,6 +316,8 @@ struct Seen {
 /// followed where it stands and `..` taken from the folder actually
 /// reached. With `follow_last` false, a link at the last component is the
 /// node itself, as a removal sees it.
+// One loop over the components, as the kernel takes them, kept whole.
+#[allow(clippy::too_many_lines)]
 fn walk(path: &Path, follow_last: bool) -> Seen {
     let mut seen = Seen::default();
     let mut pending: Vec<OsString> = path
@@ -1097,6 +1099,20 @@ impl Held {
                 slot.extend(findings);
             }
         });
+    }
+
+    /// Judge `command`, run in `cwd`, with the locations from this
+    /// process's environment, and hold the findings for `hook`.
+    pub(crate) fn run(hook: Hook, command: &str, cwd: &Path) {
+        Self::hold(hook, evaluate(command, cwd, &Places::from_process_at(cwd)));
+    }
+
+    /// Append the findings `held` holds after `violations`; nothing for an
+    /// inner evaluation, whose findings the outer one appends.
+    pub(crate) fn finish(held: Option<Self>, violations: &mut Vec<Violation>) {
+        if let Some(held) = held {
+            held.append(violations);
+        }
     }
 
     /// Append the held findings after `violations`, each once.

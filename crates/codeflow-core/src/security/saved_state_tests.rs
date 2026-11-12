@@ -60,10 +60,10 @@ impl Fixture {
     fn git(&self, command: &str, places: &Places) -> Vec<Violation> {
         fixed(places.clone(), || git_judge(command, &self.project))
     }
+}
 
-    fn mkdir(&self, path: &Path) {
-        std::fs::create_dir_all(path).unwrap();
-    }
+fn mkdir(path: &Path) {
+    std::fs::create_dir_all(path).unwrap();
 }
 
 fn pass_in(command: &str, cwd: &Path, places: &Places) -> Vec<String> {
@@ -352,10 +352,10 @@ fn saved_state_findings_follow_every_other_finding_unchanged() {
 fn a_target_is_judged_in_the_directory_its_command_runs_in() {
     let f = Fixture::new();
     let d = f.project.join("D");
-    f.mkdir(&d.join("x/shell_snapshots"));
-    f.mkdir(&d.join("session-env"));
+    mkdir(&d.join("x/shell_snapshots"));
+    mkdir(&d.join("session-env"));
     std::fs::write(d.join("session-env/f"), "x").unwrap();
-    f.mkdir(&d.join("src"));
+    mkdir(&d.join("src"));
     let places = Places {
         claude_config: Some(d.clone()),
         codex_home: Some(d.join("x")),
@@ -459,7 +459,7 @@ fn a_target_is_judged_in_the_directory_its_command_runs_in() {
 fn an_unresolved_target_keeps_the_other_checks_judgment() {
     let f = Fixture::new();
     let d = f.home.join("D");
-    f.mkdir(&d.join("x/shell_snapshots"));
+    mkdir(&d.join("x/shell_snapshots"));
     let places = Places {
         codex_home: Some(d.join("x")),
         ..f.places()
@@ -487,7 +487,7 @@ fn an_unresolved_target_keeps_the_other_checks_judgment() {
     }
     // Every reading refuses: both directories hold a location below `x`.
     let e = f.home.join("E");
-    f.mkdir(&e.join("x/session-env"));
+    mkdir(&e.join("x/session-env"));
     let places = Places {
         codex_home: Some(d.join("x")),
         claude_config: Some(e.join("x")),
@@ -505,7 +505,7 @@ fn an_unresolved_target_keeps_the_other_checks_judgment() {
 #[test]
 fn assignment_prefixes_keep_the_program_after_them() {
     let f = Fixture::new();
-    f.mkdir(&f.home.join(".codex/shell_snapshots"));
+    mkdir(&f.home.join(".codex/shell_snapshots"));
     let codex = slashed(&f.home.join(".codex"));
     for prefix in ["X=1", "X+=1", "a[0]=1"] {
         let command = format!("cd ~ && {prefix} rm -rf .codex");
@@ -543,16 +543,16 @@ fn ordinary_lines_still_run() {
         ".codex/shell_snapshots",
         ".config/herdr-core/templates",
     ] {
-        f.mkdir(&f.home.join(folder));
+        mkdir(&f.home.join(folder));
     }
     std::fs::write(f.project.join("README"), "x").unwrap();
-    f.mkdir(&f.project.join("a"));
-    f.mkdir(&f.project.join("target/debug"));
-    f.mkdir(&f.project.join("build/out"));
-    f.mkdir(&f.project.join("notes/session-env"));
-    f.mkdir(&f.project.join("notes/shell_snapshots"));
-    f.mkdir(&f.project.join("deep/a/b"));
-    f.mkdir(&f.home.join("downloads"));
+    mkdir(&f.project.join("a"));
+    mkdir(&f.project.join("target/debug"));
+    mkdir(&f.project.join("build/out"));
+    mkdir(&f.project.join("notes/session-env"));
+    mkdir(&f.project.join("notes/shell_snapshots"));
+    mkdir(&f.project.join("deep/a/b"));
+    mkdir(&f.home.join("downloads"));
     let mut wrong = Vec::new();
     for command in [
         "rm -rf target",
@@ -607,10 +607,10 @@ fn ordinary_lines_still_run() {
 fn a_removal_counts_a_location_only_once_it_exists() {
     let f = Fixture::new();
     let codex = f.home.join(".codex");
-    f.mkdir(&codex);
+    mkdir(&codex);
     assert!(f.pass("rm -rf ~/.codex").is_empty());
     assert!(f.pass("mv ~/.codex ~/.codex-old").is_empty());
-    f.mkdir(&codex.join("shell_snapshots"));
+    mkdir(&codex.join("shell_snapshots"));
     let shown = slashed(&codex);
     assert_eq!(
         f.pass("rm -rf ~/.codex"),
@@ -642,10 +642,10 @@ fn a_removal_counts_a_location_only_once_it_exists() {
 #[test]
 fn an_extraction_above_saved_state_refuses() {
     let f = Fixture::new();
-    f.mkdir(&f.project.join("deep/a/b"));
-    f.mkdir(&f.home.join("downloads"));
-    f.mkdir(&f.home.join(".claude"));
-    f.mkdir(&f.home.join(".config"));
+    mkdir(&f.project.join("deep/a/b"));
+    mkdir(&f.home.join("downloads"));
+    mkdir(&f.home.join(".claude"));
+    mkdir(&f.home.join(".config"));
     let home = slashed(&f.home);
     let refuse = [
         (
@@ -729,9 +729,9 @@ fn an_extraction_above_saved_state_refuses() {
 #[test]
 fn a_tree_placed_into_saved_state_refuses() {
     let f = Fixture::new();
-    f.mkdir(&f.home.join(".claude/session-env/abc"));
-    f.mkdir(&f.project.join("src"));
-    f.mkdir(&f.project.join("session-env"));
+    mkdir(&f.home.join(".claude/session-env/abc"));
+    mkdir(&f.project.join("src"));
+    mkdir(&f.project.join("session-env"));
     let mut wrong = Vec::new();
     for command in [
         "cp -r src ~/.claude/session-env",
@@ -772,7 +772,7 @@ fn a_target_is_the_node_the_kernel_reaches() {
     use std::os::unix::fs::symlink;
     let f = Fixture::new();
     let state = f.home.join(".claude/session-env");
-    f.mkdir(&state.join("abc"));
+    mkdir(&state.join("abc"));
     symlink(&state, f.project.join("link")).unwrap();
     symlink(state.join("abc"), f.project.join("into")).unwrap();
     let label = "~/.claude/session-env";
@@ -832,7 +832,7 @@ fn readings_find_direct_and_linked_targets() {
     use std::os::unix::fs::symlink;
     let f = Fixture::new();
     let state = f.home.join(".claude/session-env");
-    f.mkdir(&state.join("abc"));
+    mkdir(&state.join("abc"));
     symlink(&state, f.project.join("link")).unwrap();
     symlink(state.join("abc"), f.project.join("into")).unwrap();
     let places = Places {
@@ -868,7 +868,7 @@ fn a_location_the_guard_cannot_read_fails_closed() {
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new();
     let claude = f.home.join(".claude");
-    f.mkdir(&claude.join("session-env"));
+    mkdir(&claude.join("session-env"));
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o000)).unwrap();
     // A user the permission does not stop (root) reads it anyway.
     let unreadable = std::fs::symlink_metadata(claude.join("session-env")).is_err();
@@ -895,8 +895,8 @@ fn a_location_the_guard_cannot_read_fails_closed() {
 fn a_non_default_claude_configuration_folder_is_saved_state() {
     let f = Fixture::new();
     let profile = f.home.join("Library/profiles/one/home");
-    f.mkdir(&profile.join("session-env/abc"));
-    f.mkdir(&profile.join("shell-snapshots"));
+    mkdir(&profile.join("session-env/abc"));
+    mkdir(&profile.join("shell-snapshots"));
     let vars = |name: &str| match name {
         "HOME" => Some(f.home.clone().into_os_string()),
         "CLAUDE_CONFIG_DIR" => Some(profile.clone().into_os_string()),
@@ -951,6 +951,7 @@ fn a_non_default_claude_configuration_folder_is_saved_state() {
 /// by a redirect, `tee`, `cp`, `mv` and `ln`, refuse through exec-guard and
 /// git-guard; with the pass turned off, neither hook refuses them.
 #[test]
+#[allow(clippy::too_many_lines)] // one table of rows and its loop
 fn saved_state_writes_refuse_through_both_hooks() {
     let f = Fixture::new();
     let elsewhere = f.home.join("elsewhere");
@@ -1062,7 +1063,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
 #[test]
 fn the_hooks_append_saved_state_findings_last() {
     let f = Fixture::new();
-    f.mkdir(&f.home.join(".codex/shell_snapshots"));
+    mkdir(&f.home.join(".codex/shell_snapshots"));
     let message = format!(
         "`rm` removes `{0}/.codex`, which is or holds saved shell state: `{0}/.codex`",
         slashed(&f.home)

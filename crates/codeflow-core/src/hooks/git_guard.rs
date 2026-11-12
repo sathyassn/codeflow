@@ -511,13 +511,10 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     // Saved shell state is judged in a pass of its own, whose findings come
     // after every other finding of the call, its Git runner bodies'
     // included (TSK-1461).
-    let saved_state = crate::security::startup::saved_state::Held::enter(
-        crate::security::startup::saved_state::Hook::Git,
-    );
+    use crate::security::startup::saved_state::{Held, Hook};
+    let saved_state = Held::enter(Hook::Git);
     let mut report = evaluate_report_with_runners(command, ctx, cwd, true);
-    if let Some(saved_state) = saved_state {
-        saved_state.append(&mut report.violations);
-    }
+    Held::finish(saved_state, &mut report.violations);
     report
 }
 
@@ -1220,13 +1217,10 @@ fn evaluate_report_with_runners(
     }
     // The saved-state pass for this command, held for the end of the call
     // ([`evaluate_report_at`]).
-    crate::security::startup::saved_state::Held::hold(
+    crate::security::startup::saved_state::Held::run(
         crate::security::startup::saved_state::Hook::Git,
-        crate::security::startup::saved_state::evaluate(
-            command,
-            cwd,
-            &crate::security::startup::saved_state::Places::from_process_at(cwd),
-        ),
+        command,
+        cwd,
     );
 
     report.notes = notes;

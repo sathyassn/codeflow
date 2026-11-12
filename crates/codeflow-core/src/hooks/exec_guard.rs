@@ -14,6 +14,7 @@
 use crate::security::dangerous::DangerousModule;
 use crate::security::headless::{headless_peer_run, HeadlessRun};
 use crate::security::privilege::PrivilegeModule;
+use crate::security::startup::saved_state::{Held, Hook};
 use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
 
 use super::policy::{PolicyLevel, SecuritySection};
@@ -190,16 +191,11 @@ pub fn evaluate_ruled(
         violations.push(finding);
         return violations;
     }
-    // Saved shell state is judged in a pass of its own, whose findings come
-    // after every other finding of the call, its nested commands' included
-    // (TSK-1461).
-    let saved_state = crate::security::startup::saved_state::Held::enter(
-        crate::security::startup::saved_state::Hook::Exec,
-    );
+    // Saved shell state: a pass of its own, appended last (TSK-1461).
+    let saved_state = Held::enter(Hook::Exec);
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);
     let _home = super::git_guard::line_home::Scope::enter(command, &line_home);
-    let saved_state_runs = violations.is_empty();
     // Shell startup files: always blocking, no policy key (TSK-242); the
     // default user and system git configuration files by the same check,
     // under `git.hook_integrity` at its level. A command the catastrophic
@@ -207,22 +203,13 @@ pub fn evaluate_ruled(
     // certified prose line is judged here too: the startup check is a
     // write-target check, not a raw-text word check.
     if violations.is_empty() {
+        Held::run(Hook::Exec, command, cwd);
         violations.extend(crate::security::startup::evaluate_with(
             command,
             cwd,
             &crate::security::startup::StartupEnv::from_process_at(cwd),
             integrity,
         ));
-    }
-    if saved_state_runs {
-        crate::security::startup::saved_state::Held::hold(
-            crate::security::startup::saved_state::Hook::Exec,
-            crate::security::startup::saved_state::evaluate(
-                command,
-                cwd,
-                &crate::security::startup::saved_state::Places::from_process_at(cwd),
-            ),
-        );
     }
     if violations.is_empty() {
         if let Some(finding) = super::git_guard::line_home::unread_violation(&line_home, integrity)
@@ -286,9 +273,7 @@ pub fn evaluate_ruled(
             merge_strongest(&mut violations, finding);
         }
     }
-    if let Some(saved_state) = saved_state {
-        saved_state.append(&mut violations);
-    }
+    Held::finish(saved_state, &mut violations);
     violations
 }
 
