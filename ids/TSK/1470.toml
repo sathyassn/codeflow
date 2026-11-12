@@ -1,0 +1,11 @@
+id = "TSK-1470"
+uid = "99959b3c-48b4-42ac-a0c1-4e0571416709"
+kind = "TSK"
+title = "A range that changes the decision map is told when a portal figure goes stale"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T14:50:14Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
