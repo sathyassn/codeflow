@@ -538,6 +538,28 @@ fn relocated(places: &Places) -> Vec<String> {
     out
 }
 
+/// `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set to a folder inside the project.
+/// A command that changes the project's files, such as `git checkout` or
+/// `tar`, can then place a saved shell state file, so the guards refuse it
+/// there; the way through is to keep the configuration folder outside the
+/// project.
+fn inside_project(places: &Places, root: &Path) -> Vec<String> {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    [
+        ("CLAUDE_CONFIG_DIR", &places.claude_config),
+        ("CODEX_HOME", &places.codex_home),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| {
+        let folder = value.as_deref()?;
+        let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+        folder
+            .starts_with(&root)
+            .then(|| format!("{name} is {}", crate::git::display_path(&folder)))
+    })
+    .collect()
+}
+
 pub(super) fn check(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -566,6 +588,14 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         parts.push(format!(
             "{}, so the startup files and saved shell state there have no generated deny; the guards still refuse visible writes to them",
             moved.join(" and ")
+        ));
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_RELOCATED.remedy());
+    }
+    let inside = inside_project(&places, &root);
+    if !inside.is_empty() {
+        parts.push(format!(
+            "{}, inside the project, so a command that changes the project's files, such as `git checkout` or `tar`, is refused where it can place saved shell state; keep the harness configuration folder outside the project",
+            inside.join(" and ")
         ));
         remedy.get_or_insert(remedy::DOCTOR_STARTUP_RELOCATED.remedy());
     }
@@ -944,5 +974,18 @@ mod tests {
         assert!(found.iter().any(|f| f.starts_with("CLAUDE_CONFIG_DIR is ")));
         assert!(found.iter().any(|f| f.starts_with("CODEX_HOME is ")));
         assert!(found.iter().any(|f| f.starts_with("CLAUDE_ENV_FILE is ")));
+        // A configuration folder inside the project is reported on its own;
+        // one outside it, and the default home folders, are not.
+        let project = PathBuf::from("/fixture/work/project");
+        assert!(inside_project(&moved, &project).is_empty());
+        let inside = Places {
+            claude_config: Some(project.join(".harness/claude")),
+            codex_home: Some(PathBuf::from("/fixture/work/project-other/codex")),
+            ..moved
+        };
+        assert_eq!(
+            inside_project(&inside, &project),
+            ["CLAUDE_CONFIG_DIR is /fixture/work/project/.harness/claude"]
+        );
     }
 }
