@@ -416,6 +416,8 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "codeflow orient",
         "codeflow test --mode quick",
         "codeflow validate --docs",
+        "codeflow task status",
+        "codeflow hook exec-guard",
         "command -v codeflow",
         "which codeflow",
         "cargo run -- doctor",
