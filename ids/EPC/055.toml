@@ -1,0 +1,11 @@
+id = "EPC-055"
+uid = "69f71caf-669a-4061-be35-d6cb9652144e"
+kind = "EPC"
+title = "A task lands on its epic's line without a pull request, and the epic reaches main only when complete"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:55:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
