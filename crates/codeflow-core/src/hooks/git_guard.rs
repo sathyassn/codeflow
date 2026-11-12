@@ -14308,6 +14308,11 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut expands = false;
     let mut unquoted_expansions: usize = 0;
     let mut pattern = false;
+    // Whether a quote or escape stands in the word before its first `=`:
+    // the shell then takes no assignment, even from an empty quote, so that
+    // `=` is marked literal ([`ShellWord::marked`], TSK-1456).
+    let mut quoted = false;
+    let mut equals = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -14327,6 +14332,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 cur.push_str(&text);
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '"' if dollar && !in_single && !in_double => {
                 cur.pop();
@@ -14338,16 +14344,19 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 in_double = true;
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '\'' if !in_double => {
                 in_single = !in_single;
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '"' if !in_single => {
                 in_double = !in_double;
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '\\' if !in_single => {
                 // A backslash-newline is a line continuation: both vanish.
@@ -14366,6 +14375,8 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         marked.push(literal_mark(next));
                         started = true;
                         prefix_open = false;
+                        quoted = true;
+                        equals |= next == '=';
                     }
                 }
             }
@@ -14401,16 +14412,22 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 }
                 prefix_open = true;
                 unquoted_prefix = 0;
+                quoted = false;
+                equals = false;
             }
             c => {
                 cur.push(c);
-                marked.push(if in_single || (in_double && !matches!(c, '$' | '`')) {
-                    literal_mark(c)
-                } else if in_double {
-                    quoted_live_mark(c)
-                } else {
-                    unmarked_as(c)
-                });
+                let quoted_name = c == '=' && quoted && !equals;
+                equals |= c == '=';
+                marked.push(
+                    if in_single || (in_double && !matches!(c, '$' | '`')) || quoted_name {
+                        literal_mark(c)
+                    } else if in_double {
+                        quoted_live_mark(c)
+                    } else {
+                        unmarked_as(c)
+                    },
+                );
                 started = true;
                 pattern |= !in_single && !in_double && pattern_character(c);
                 if prefix_open && !in_single && !in_double {
