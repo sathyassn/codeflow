@@ -960,6 +960,7 @@ fn judged_against(h: &History, name: &str, tip: &str, pushed: &[PushRef]) -> Vec
         default: Some((name.to_string(), oid)),
         heads: vec![(name.to_string(), oid)],
         limits: codeflow_core::git::remote_query::QueryLimits::default(),
+        auth: None,
     }));
     let advertised = OnceCell::new();
     let anchor = OnceCell::new();
@@ -1084,6 +1085,7 @@ fn judged_by_an_empty_destination(h: &History, tracking: Option<&str>) -> (Vec<S
         default: None,
         heads: Vec::new(),
         limits: codeflow_core::git::remote_query::QueryLimits::default(),
+        auth: None,
     }));
     let (advertised, anchor, fetch_failed) = (OnceCell::new(), OnceCell::new(), OnceCell::new());
     let destination = Destination {

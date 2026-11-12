@@ -324,8 +324,8 @@ fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Re
     if policy.policy_id != policy_id {
         return Err("routing policy_id must match the current ensemble".into());
     }
-    if policy.default_review != "standing-pair" {
-        return Err("routing policy default_review must be standing-pair".into());
+    if policy.default_review != "cross-family" {
+        return Err("routing policy default_review must be cross-family".into());
     }
     if policy.design_production != "claude-native-session" {
         return Err("routing policy must keep Claude native-session design production".into());
@@ -921,7 +921,7 @@ mod tests {
         RoutingPolicy {
             schema_version: 1,
             policy_id: "claude-codex-duo".into(),
-            default_review: "standing-pair".into(),
+            default_review: "cross-family".into(),
             design_production: "claude-native-session".into(),
             host_does_not_own_duty: true,
             extra_family_review: extra_family_review(invoke_when_available),
@@ -980,7 +980,7 @@ mod tests {
         policy.default_review = "all-qualified".into();
         assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
             .unwrap_err()
-            .contains("standing-pair"));
+            .contains("cross-family"));
         policy = routing_policy(true);
         policy.design_production = "host-drafts".into();
         assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
@@ -996,7 +996,7 @@ mod tests {
     #[test]
     fn routing_policy_rejects_unknown_fields() {
         let error = serde_json::from_str::<RoutingPolicy>(
-            r#"{"schema_version":1,"policy_id":"claude-codex-duo","default_review":"standing-pair","design_production":"claude-native-session","host_does_not_own_duty":true,"extra_family_review":{"never_silent_vote":true,"requires_named_assignment":true,"invoke_when_available":true,"triggers":["x"],"rule":"y","silent":true}}"#,
+            r#"{"schema_version":1,"policy_id":"claude-codex-duo","default_review":"cross-family","design_production":"claude-native-session","host_does_not_own_duty":true,"extra_family_review":{"never_silent_vote":true,"requires_named_assignment":true,"invoke_when_available":true,"triggers":["x"],"rule":"y","silent":true}}"#,
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));

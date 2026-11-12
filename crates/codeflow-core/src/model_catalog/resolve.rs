@@ -163,6 +163,29 @@ impl Resolution {
     }
 }
 
+/// The review participants any model family other than the author's can
+/// fill, in the catalog's preference order (operator decision 2026-11-06).
+/// Reduced assurance on them means no other-family seat is available.
+pub const CROSS_FAMILY_REVIEWS: [(&str, &str); 4] = [
+    ("independent-plan", "engineering-primary"),
+    ("unit-review", "independent"),
+    ("body-review", "engineering-primary"),
+    ("design-and-editorial-review", "executability"),
+];
+
+/// The open reason when no other-family seat can fill a cross-family review.
+pub const NO_OTHER_FAMILY: &str = "reduced assurance: no other-family seat is available; \
+    only the same-family fallback review runs";
+
+/// The open reason when a cross-family review names no author: "other" has
+/// no meaning yet, so this says nothing about which seats are available.
+pub const AUTHOR_LINEAGE_REQUIRED: &str = "author lineage required: a cross-family review is \
+    resolved against the author's family; pass --author";
+
+fn cross_family_review(duty: &str, participant: &str) -> bool {
+    CROSS_FAMILY_REVIEWS.contains(&(duty, participant))
+}
+
 /// The only sanctioned way to fill `design` without the owner's first line.
 const DESIGN_OVERRIDE_PATH: &str = "design waits for the design owner's first line; a \
     committed OPERATOR_OVERRIDE block (task, duty, route, effort, plan, instruction) in the \
@@ -389,6 +412,27 @@ impl Catalog {
             }
             let standing = self.standing_review(request, &triggered.participant);
             if standing.is_some() || self.triggered(&triggered.trigger, request.trigger_facts) {
+                if let Some(chosen) = result.participants.iter_mut().find(|chosen| {
+                    chosen.seat.as_deref().is_some_and(|seat| {
+                        triggered
+                            .participant
+                            .alternatives
+                            .iter()
+                            .all(|alternative| {
+                                matches!(&alternative.target, Target::Seat(id) if id == seat)
+                            })
+                    })
+                }) {
+                    // The extra family already fills a cross-family review here.
+                    chosen.limitations.push(format!(
+                        "also the {} participant: the extra family already reviews",
+                        triggered.participant.id
+                    ));
+                    if let Some(disposition) = standing {
+                        chosen.limitations.push(disposition);
+                    }
+                    continue;
+                }
                 let (filled, open) = (result.participants.len(), result.open.len());
                 self.resolve_participant(&triggered.participant, request, &mut result);
                 if let Some(disposition) = standing {
@@ -641,6 +685,15 @@ impl Catalog {
                     .reasons
                     .push("no eligible version at the adopted effort".into());
             }
+            if cross_family_review(request.duty, &participant.id) {
+                if request.author_lineage.is_none()
+                    && matches!(participant.relation, LineageRelation::OppositeAuthor)
+                {
+                    candidates.reasons.push(AUTHOR_LINEAGE_REQUIRED.into());
+                } else if !self.other_family_available(participant, request) {
+                    candidates.reasons.push(NO_OTHER_FAMILY.into());
+                }
+            }
             if request.duty == "design" {
                 candidates.reasons.push(DESIGN_OVERRIDE_PATH.into());
                 if let Some(note) = &self.authority_note {
@@ -653,6 +706,45 @@ impl Catalog {
                 reasons: candidates.reasons,
             });
         }
+    }
+
+    /// Whether any seat outside the author's family has an eligible version,
+    /// listed on this participant or not.
+    fn other_family_available(
+        &self,
+        participant: &Participant,
+        request: &ResolveRequest<'_>,
+    ) -> bool {
+        let eligible = |seat: &Seat, line: &ProductLine, family: &Family| {
+            line.versions.iter().any(|version| {
+                family.harnesses.iter().any(|harness| {
+                    participant.alternatives.iter().any(|alternative| {
+                        self.eligible(&EligibilityRequest {
+                            duty: request.duty,
+                            line: &line.id,
+                            version: &version.id,
+                            seat: Some(&seat.id),
+                            harness,
+                            effort: alternative.effort,
+                            exclusions: request.exclusions,
+                            observed_ids: request.observed_ids,
+                        })
+                        .is_ok()
+                    })
+                })
+            })
+        };
+        self.seats.iter().any(|seat| {
+            seat.lines
+                .iter()
+                .filter_map(|id| self.line(id))
+                .any(|line| {
+                    self.family(&line.family).is_some_and(|family| {
+                        request.author_lineage != Some(family.lineage.as_str())
+                            && eligible(seat, line, family)
+                    })
+                })
+        })
     }
 
     fn collect_alternative(
@@ -838,13 +930,19 @@ impl Catalog {
                     .role(&line.id)
                     .is_some_and(|role| role != AuthorityRole::Owner)
             });
-        let reduced_assurance = !designated
+        let seat_fallback = !designated
             && request
                 .seat
                 .and_then(|id| self.seat(id))
                 .is_some_and(|seat| seat.lines.first() != Some(&line.id));
+        // Any other family's seat, or a later line of one, still gives a
+        // cross-family review: that fallback is not reduced assurance.
+        let cross_family = cross_family_review(request.duty, &participant.id);
+        let reduced_assurance = seat_fallback && !cross_family;
         if reduced_assurance {
             limitations.push("seat fallback with reduced assurance".into());
+        } else if seat_fallback {
+            limitations.push("seat fallback; still a cross-family review".into());
         }
         if let Some(anchored) = self.authority.as_ref().filter(|_| designated) {
             if let Some(role) = anchored.authority.role(&line.id) {

@@ -1758,6 +1758,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // A run token or runner value that is not UTF-8 proves no binding, so
+    // the token is withheld and a private destination refuses (TSK-1252);
+    // it never sends the token or grants a pass.
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "RunToken::take",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "run_checks",
+        "obtain-absent:var",
+        1,
+        "unproven",
+    ),
     // Rejects blank human explanations only; patterns and paths retain their
     // exact components and use the fixed NFC/ASCII comparison in normalize.
     (
