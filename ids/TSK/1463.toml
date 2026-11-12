@@ -1,0 +1,11 @@
+id = "TSK-1463"
+uid = "56a282c2-0d86-4c10-834c-5195e92b280c"
+kind = "TSK"
+title = "The guards protect harness settings files when the configuration folder is moved"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:05:55Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
