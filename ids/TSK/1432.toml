@@ -1,0 +1,11 @@
+id = "TSK-1432"
+uid = "3c47e82a-8f68-4a3d-9c21-326f768bb704"
+kind = "TSK"
+title = "The rustix dependency carries no known advisory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:55:04Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
