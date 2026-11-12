@@ -1,0 +1,11 @@
+id = "TSK-1483"
+uid = "10f85126-a1ac-4df2-a44d-26b2c94480ec"
+kind = "TSK"
+title = "The shipped presets use the routes and turn the unsandboxed retry off"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T20:16:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
