@@ -1,0 +1,11 @@
+id = "TSK-1436"
+uid = "0190afbf-ff6a-4320-8720-4cfbca4b2513"
+kind = "TSK"
+title = "An epic's own completion stays bound across a clean merge of main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:57:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
