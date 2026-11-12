@@ -1,0 +1,11 @@
+id = "TSK-1434"
+uid = "e28dd954-367b-46cb-be80-a982c177b35b"
+kind = "TSK"
+title = "A clean merge of main is judged by git's own merge and main's first-parent history"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:56:58Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
