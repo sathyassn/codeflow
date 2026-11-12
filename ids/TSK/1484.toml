@@ -1,0 +1,11 @@
+id = "TSK-1484"
+uid = "ae0ab46a-be06-456a-bf8b-8c4506bebfb3"
+kind = "TSK"
+title = "Sandboxed sessions drive seats through a fixed broker"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T20:17:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
