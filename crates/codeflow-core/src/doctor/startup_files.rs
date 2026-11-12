@@ -1,5 +1,6 @@
 //! The `startup-files` check (TSK-242): whether the shell startup class is
-//! in the harness settings this project ships, and which files the home's
+//! in the harness settings this project ships, whether its Claude settings
+//! send native edits to edit-guard (TSK-1461), and which files the home's
 //! startup files source from outside the class.
 //!
 //! The settings are read as listed rules; whether a harness enforces them
@@ -255,6 +256,56 @@ fn missing_rules(root: &Path) -> Vec<String> {
     missing
 }
 
+/// The native edit tools of Claude Code that the shipped presets send to
+/// edit-guard (TSK-1461 AC-11).
+const CLAUDE_EDIT_TOOLS: [&str; 2] = ["Edit", "Write"];
+
+/// The Claude Code native edit tools that the project's
+/// `.claude/settings.json` sends to no edit-guard hook, as a finding that
+/// names the file; `None` when every one reaches edit-guard, or when the
+/// file is absent or does not parse, which [`missing_rules`] already
+/// reports. A group counts when one of its hooks runs edit-guard and its
+/// matcher takes the tool: an absent, empty or `*` matcher takes every
+/// tool, and any other is read as a pattern that must match the whole tool
+/// name. That is the stricter of the readings a harness may apply, so a
+/// matcher that passes here takes the tool under either; one that is not a
+/// valid pattern takes nothing.
+fn claude_edit_guard_gap(root: &Path) -> Option<String> {
+    let claude_file = ".claude/settings.json";
+    let text = std::fs::read_to_string(root.join(claude_file)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let groups = value["hooks"]["PreToolUse"].as_array();
+    let takes = |group: &serde_json::Value, tool: &str| {
+        let runs_guard = group["hooks"].as_array().is_some_and(|hooks| {
+            hooks.iter().any(|hook| {
+                hook["command"]
+                    .as_str()
+                    .and_then(crate::hooks::guard_deadline::guard_of)
+                    == Some("edit-guard")
+            })
+        });
+        let matches = match group.get("matcher") {
+            None | Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(m)) if m.is_empty() || m == "*" => true,
+            Some(serde_json::Value::String(m)) => regex::Regex::new(&format!("^(?:{m})$"))
+                .is_ok_and(|pattern| pattern.is_match(tool)),
+            Some(_) => false,
+        };
+        runs_guard && matches
+    };
+    let open: Vec<String> = CLAUDE_EDIT_TOOLS
+        .iter()
+        .filter(|tool| !groups.is_some_and(|g| g.iter().any(|group| takes(group, tool))))
+        .map(|tool| format!("`{tool}`"))
+        .collect();
+    (!open.is_empty()).then(|| {
+        format!(
+            "{claude_file} sends Claude Code's native {} calls to no edit-guard hook",
+            open.join(" and ")
+        )
+    })
+}
+
 /// The class paths the selected Codex profile leaves writable, read
 /// through its `extends` chain with the nearest profile's entry winning,
 /// and any `write` grant in that chain on a path above a class entry, which
@@ -488,6 +539,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let root = PathBuf::from(&opts.project_dir);
     let places = Places::from_process();
     let missing = missing_rules(&root);
+    let unguarded = claude_edit_guard_gap(&root);
     let moved = relocated(&places);
     let sourced = sourced_files(&places.startup);
     // Every finding is reported together; the remedy is the first one's.
@@ -497,6 +549,12 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         parts.push(format!(
             "{}; the harness sandboxes do not deny every shell startup write (listed rules; native enforcement is not observed here)",
             missing.join("; ")
+        ));
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_PRESETS.remedy());
+    }
+    if let Some(gap) = &unguarded {
+        parts.push(format!(
+            "{gap}, so such an edit of a shell startup file or saved shell state is refused only where a preset `Edit` deny names it"
         ));
         remedy.get_or_insert(remedy::DOCTOR_STARTUP_PRESETS.remedy());
     }
@@ -543,7 +601,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Some(remedy) => (Status::Warn(remedy), parts.join("; ")),
         None => (
             Status::Pass,
-            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
+            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), the Claude settings send native `Edit` and `Write` calls to edit-guard, and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
         ),
     };
     CheckResult {
@@ -743,6 +801,94 @@ mod tests {
         );
         std::fs::write(root.join(".codex/config.toml"), benign).unwrap();
         assert!(missing_rules(root).is_empty(), "{:?}", missing_rules(root));
+    }
+
+    /// TSK-1461 AC-11: Claude settings that send a native edit tool to no
+    /// edit-guard hook are named, tool by tool; the shipped presets and the
+    /// matchers that take both tools pass.
+    #[test]
+    fn claude_settings_without_the_edit_hook_are_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // No file is `missing_rules`' finding, not this one.
+        assert_eq!(claude_edit_guard_gap(root), None);
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
+        for name in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
+            std::fs::copy(shipped.join(name), root.join(".claude/settings.json")).unwrap();
+            assert_eq!(claude_edit_guard_gap(root), None, "{name}");
+        }
+        let guard = "codeflow hook edit-guard --contract 3 || exit 2";
+        let settings = |groups: serde_json::Value| {
+            std::fs::write(
+                root.join(".claude/settings.json"),
+                serde_json::json!({"hooks": {"PreToolUse": groups}}).to_string(),
+            )
+            .unwrap();
+            claude_edit_guard_gap(root)
+        };
+        let group = |matcher: serde_json::Value, command: &str| {
+            let mut group = serde_json::json!({"hooks": [{"type": "command", "command": command}]});
+            if !matcher.is_null() {
+                group["matcher"] = matcher;
+            }
+            group
+        };
+        let both = Some(
+            ".claude/settings.json sends Claude Code's native `Edit` and `Write` calls to no edit-guard hook"
+                .to_string(),
+        );
+        assert_eq!(settings(serde_json::json!([])), both);
+        std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
+        assert_eq!(claude_edit_guard_gap(root), both);
+        // A guard under the shell tools' matcher, or another program under
+        // the edit tools' matcher, takes no edit.
+        assert_eq!(
+            settings(serde_json::json!([group("^(Bash|PowerShell)$".into(), guard)])),
+            both
+        );
+        assert_eq!(
+            settings(serde_json::json!([group("^(Edit|Write)$".into(), "./check.sh")])),
+            both
+        );
+        assert_eq!(
+            settings(serde_json::json!([group("Edit".into(), guard)])),
+            Some(
+                ".claude/settings.json sends Claude Code's native `Write` calls to no edit-guard hook"
+                    .to_string()
+            )
+        );
+        // A pattern read as matching the whole name: `Edi` and `Writer` take
+        // neither tool, and an invalid pattern takes nothing.
+        for matcher in ["Edi|Writer", "(Edit"] {
+            assert_eq!(
+                settings(serde_json::json!([group(matcher.into(), guard)])),
+                both,
+                "{matcher}"
+            );
+        }
+        for matcher in [
+            serde_json::Value::Null,
+            "".into(),
+            "*".into(),
+            "Edit|Write".into(),
+            "Edit|MultiEdit|Write".into(),
+            ".*".into(),
+        ] {
+            assert_eq!(
+                settings(serde_json::json!([group(matcher.clone(), guard)])),
+                None,
+                "{matcher}"
+            );
+        }
+        // Two groups that together take both tools pass.
+        assert_eq!(
+            settings(serde_json::json!([
+                group("Edit".into(), guard),
+                group("Write".into(), guard)
+            ])),
+            None
+        );
     }
 
     #[test]

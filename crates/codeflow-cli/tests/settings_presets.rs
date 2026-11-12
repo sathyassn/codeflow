@@ -2165,7 +2165,7 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         "doctor does not report the missing entries:\n{before}"
     );
     assert!(
-        before.contains(".claude/settings.json") && before.contains("edit-guard"),
+        before.contains(".claude/settings.json") && before.contains("no edit-guard hook"),
         "doctor does not report the missing edit-guard group:\n{before}"
     );
     let planted = snapshot(&root);
@@ -2218,7 +2218,9 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
     }
     let after = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
     assert!(
-        !after.contains("saved shell state") && !after.contains("edit-guard") && after.contains("ok"),
+        !after.contains("saved shell state")
+            && !after.contains("no edit-guard hook")
+            && after.contains("ok"),
         "doctor still reports after the update:\n{after}"
     );
     run_in_home(&root, &home, &["update"]);
