@@ -9923,15 +9923,6 @@ fn check_git(
     };
 
     let mut found: Vec<Violation> = Vec::new();
-    if sub == "push" {
-        found.extend(agent_push_destination(
-            args,
-            rest,
-            moved,
-            cwd,
-            branches.config_changed,
-        ));
-    }
     for (branch, rules, root, folds) in &judged.cases {
         let _folds = folds.map(super::policy::NonAsciiAliasingScope::set);
         let view = GuardContext {
@@ -9955,6 +9946,20 @@ fn check_git(
             {
                 found.push(v);
             }
+        }
+    }
+    let invocation = GitInvocation {
+        args,
+        sub,
+        rest,
+        moved,
+    };
+    for v in judge_agent_push(&invocation, &judged.cases, cwd, branches.config_changed) {
+        if !found
+            .iter()
+            .any(|f| f.rule == v.rule && f.message == v.message)
+        {
+            found.push(v);
         }
     }
     if let Some(why) = judged.unresolved {
@@ -10967,16 +10972,6 @@ fn judge_git_sub(
             }
         }
         "push" => check_push(rest, branch, ctx, out),
-        // Push forms whose destinations the guard does not read: plumbing,
-        // the WebDAV push, a remote helper run by hand, and `git subtree
-        // push`, which runs its own `git push` (TSK-1479 AC-15).
-        "send-pack" | "http-push" => out.push(agent_push_unread(&format!("`git {sub}`"))),
-        "subtree" if rest.iter().any(|word| word == "push") => {
-            out.push(agent_push_unread("`git subtree push`"));
-        }
-        _ if sub.starts_with("remote-") => {
-            out.push(agent_push_unread(&format!("`git {sub}`")));
-        }
         _ => {}
     }
 }
@@ -12207,14 +12202,253 @@ fn check_agent_push(push: &PushIntent, policy: &GitPolicy, out: &mut Vec<Violati
     }
 }
 
-/// The [`AGENT_PUSH_RULE`] refusals git-guard finds on `command` run in
-/// `cwd`, for exec-guard, so both guards refuse the same pushes by one
-/// reading (TSK-1479 AC-15). The policy is the landed policy of the
-/// repository at `cwd`, read without asking the remote; one that cannot be
-/// read is the built-in policy, whose list is the default. Retargeted
-/// commands, aliases and branch expressions are read as git-guard reads
-/// them; the line's runners are judged by exec-guard on its own.
+/// One git invocation as git-guard's walker parsed it: the words after the
+/// program, the subcommand and its arguments, and what the line around it
+/// moved (directories, assignments).
+struct GitInvocation<'a, 'm> {
+    args: &'a [String],
+    sub: &'a str,
+    rest: &'a [String],
+    moved: &'a Moves<'m>,
+}
+
+/// TSK-1479 AC-15: the refusals of an agent push of a branch agents never
+/// push, for one git invocation already parsed, judged on each case (branch
+/// and policy) of the repositories it may run in. This is the one judgement
+/// both guards apply: git-guard's `check_git` among its other rules, and
+/// exec-guard alone through [`agent_push_refusals`].
+fn judge_agent_push(
+    invocation: &GitInvocation<'_, '_>,
+    cases: &[Case<'_>],
+    cwd: &Path,
+    config_changed: bool,
+) -> Vec<Violation> {
+    let (args, sub, rest) = (invocation.args, invocation.sub, invocation.rest);
+    let mut found = Vec::new();
+    match sub {
+        "push" => {
+            found.extend(agent_push_destination(
+                args,
+                rest,
+                invocation.moved,
+                cwd,
+                config_changed,
+            ));
+            for (branch, rules, _, folds) in cases {
+                with_folds(*folds, || {
+                    check_agent_push(&parse_push(rest, branch), rules, &mut found);
+                });
+            }
+        }
+        // Push forms whose destinations the guard does not read: plumbing,
+        // the WebDAV push, a remote helper run by hand, and `git subtree
+        // push`, which runs its own `git push`.
+        "send-pack" | "http-push" => found.push(agent_push_unread(&format!("`git {sub}`"))),
+        "subtree" if rest.iter().any(|word| word == "push") => {
+            found.push(agent_push_unread("`git subtree push`"));
+        }
+        _ if sub.starts_with("remote-") => {
+            found.push(agent_push_unread(&format!("`git {sub}`")));
+        }
+        _ => {}
+    }
+    let mut unique: Vec<Violation> = Vec::new();
+    for v in found {
+        if !unique
+            .iter()
+            .any(|f| f.rule == v.rule && f.message == v.message)
+        {
+            unique.push(v);
+        }
+    }
+    unique
+}
+
+/// The refusal for a part of the line the guard cannot read as a known
+/// program, which could be a `git push` of a branch agents never push.
+fn agent_push_unresolved(what: &str) -> Violation {
+    Violation::always_blocking(
+        AGENT_PUSH_RULE,
+        format!("{what}, so the guard cannot read whether it pushes a branch agents never push"),
+        "name the program and its subcommand directly, as in `git push <remote> <source>:refs/heads/<work branch>`",
+    )
+}
+
+/// Whether a segment's program word is filled in only when the line runs,
+/// so it could name git: the expander left it unread (`expanded`), and it
+/// holds a command substitution or its name after the last `/` holds an
+/// expansion or a brace. A literal name after an expanded directory names
+/// that program.
+fn program_word_unresolved(program: &str, expanded: &Expanded) -> bool {
+    expanded.unread_commands.iter().any(|word| word == program)
+        && (has_substitution(program) || basename(program).contains(['$', '`', '{', '}']))
+}
+
+/// Whether a segment needs exec-guard's AC-15 pass: it runs git, it is past
+/// what the reader follows, or its program word is unresolved.
+fn agent_push_segment(segment: &str, expanded: &Expanded) -> bool {
+    if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
+        return true;
+    }
+    let mut words = command_argv(segment);
+    strip_reserved_words(&mut words);
+    configuration_launch(&words)
+        .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
+        || strip_launchers(&words)
+            .is_some_and(|(program, _)| program_word_unresolved(program, expanded))
+}
+
+/// [`check_git`] limited to what [`judge_agent_push`] needs: aliases
+/// expanded, the target repositories and their cases read, and the branch
+/// and configuration changes that later git calls on the line see. None of
+/// git-guard's other rules run.
+fn agent_push_git(
+    args: &[String],
+    branches: &mut BranchTracker,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+    depth: usize,
+    cwd: &Path,
+) {
+    add_unique(&mut branches.planned, planned_worktrees(moved.tokens, cwd));
+    let unclassified = unclassifiable_git(args).is_some();
+    let Some((sub, rest)) = git_subcommand(args) else {
+        branches.head_may_move = true;
+        return;
+    };
+    branches.head_may_move |= !discard_readonly_git(sub, rest);
+    if !unclassified && !GIT_BUILTINS.contains(&sub) {
+        if let Ok(expansions) = expand_alias(args, sub, moved, ctx, depth, branches.config_changed)
+        {
+            for expanded in expansions {
+                agent_push_git(&expanded, branches, moved, ctx, out, depth + 1, cwd);
+            }
+        }
+    }
+    let judged = judge_target(args, branches, moved, ctx);
+    track_branch_move(
+        sub,
+        rest,
+        &judged.track,
+        branches,
+        ctx.policy,
+        moved.narrows,
+    );
+    if sub == "config" && !config_only_reads(rest) {
+        branches.config_changed = true;
+    }
+    let invocation = GitInvocation {
+        args,
+        sub,
+        rest,
+        moved,
+    };
+    for v in judge_agent_push(&invocation, &judged.cases, cwd, branches.config_changed) {
+        if !out
+            .iter()
+            .any(|f| f.rule == v.rule && f.message == v.message)
+        {
+            out.push(v);
+        }
+    }
+}
+
+/// Walk the line's segments as git-guard's walker does, keeping the shell,
+/// directory, branch and configuration state later git calls see, and
+/// apply [`judge_agent_push`] to each git invocation. A segment past what
+/// the reader follows, or one whose program word is unresolved, refuses.
+fn agent_push_walk(
+    command: &str,
+    expanded: &Expanded,
+    ctx: &GuardContext<'_>,
+    cwd: &Path,
+    out: &mut Vec<Violation>,
+) {
+    let mut branches = BranchTracker::new(ctx.current_branch);
+    branches.line = command.to_string();
+    let segments = &expanded.segments;
+    let roles = flat_top_level(command).and_then(|top| map_top_level(segments, &top));
+    let mut shell = ShellState::new(roles.is_some());
+    let line = LineFacts::read(segments, roles.as_deref(), command);
+    for (idx, segment) in segments.iter().enumerate() {
+        let top_level = match roles.as_ref().map(|r| r[idx]) {
+            Some(Some(join)) => {
+                shell.begin(join);
+                branches.begin(join);
+                true
+            }
+            _ => false,
+        };
+        let mut tokens = shell_tokens(segment);
+        strip_reserved_words(&mut tokens);
+        if tokens.is_empty() {
+            continue;
+        }
+        if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
+            out.push(agent_push_unresolved(
+                "the line nests commands deeper than the guard reads",
+            ));
+            continue;
+        }
+        if let Some(dir) = cd_target(&tokens) {
+            if top_level {
+                if tokens[0] == "cd" || plain_pushd(segment) {
+                    shell.cd(&dir);
+                } else {
+                    shell.observe(&tokens[0], &tokens[1..]);
+                }
+            }
+            continue;
+        }
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        if let Some((program, _)) = strip_launchers(&words) {
+            if program_word_unresolved(program, expanded) {
+                out.push(agent_push_unresolved(&format!(
+                    "the program word `{}` is filled in only when the line runs",
+                    shown_word(program)
+                )));
+            }
+        }
+        let launched = configuration_launch(&words);
+        if top_level {
+            let redirected = words.len() != tokens.len();
+            shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
+        }
+        let Some((program, args)) = launched else {
+            continue;
+        };
+        if top_level {
+            shell.observe(program, args);
+        }
+        if matches!(program_kind(program), ProgramKind::Git) {
+            let moved = line.moves_for(&shell, top_level, &tokens);
+            agent_push_git(args, &mut branches, &moved, ctx, out, 0, cwd);
+        }
+    }
+}
+
+/// The [`AGENT_PUSH_RULE`] refusals on `command` run in `cwd`, for
+/// exec-guard (TSK-1479 AC-15). The line is parsed by git-guard's walker
+/// and each git invocation judged by [`judge_agent_push`], the judgement
+/// git-guard applies, without git-guard's other rules. A segment whose
+/// program word the walker cannot resolve, or text nested past what it
+/// reads, refuses. The policy is the landed policy of the repository at
+/// `cwd`, read without asking the remote, and only for a line that needs
+/// it; one that cannot be read is the built-in policy, whose list is the
+/// default. Programs Git runs and the line's runners reach this pass
+/// through exec-guard's own judgement of them as commands.
 pub(crate) fn agent_push_refusals(command: &str, cwd: &Path) -> Vec<Violation> {
+    let expanded = expand_shell_commands(command);
+    if !expanded
+        .segments
+        .iter()
+        .any(|segment| agent_push_segment(segment, &expanded))
+    {
+        return Vec::new();
+    }
+    let _facts = super::edit_guard::RepoFactsScope::enter();
     let policy = super::landed_policy::load_local(cwd)
         .map(|landed| landed.policy.git)
         .unwrap_or_default();
@@ -12249,11 +12483,9 @@ pub(crate) fn agent_push_refusals(command: &str, cwd: &Path) -> Vec<Violation> {
         discard_lookup: None,
         root_checkout: None,
     };
-    evaluate_report_with_runners(command, &ctx, cwd, false)
-        .violations
-        .into_iter()
-        .filter(|finding| finding.rule == AGENT_PUSH_RULE)
-        .collect()
+    let mut out = Vec::new();
+    agent_push_walk(command, &expanded, &ctx, cwd, &mut out);
+    out
 }
 
 /// The refusal for a push whose destination the guard does not read.
@@ -12367,7 +12599,6 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
     let push = parse_push(rest, branch);
     check_registry_push(&push, rest, out);
     check_protected_push(&push, rest, ctx, out);
-    check_agent_push(&push, ctx.policy, out);
 }
 
 /// The protected-branch rules on a push: `--no-verify`, force, delete and
