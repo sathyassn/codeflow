@@ -1511,10 +1511,9 @@ fn markdown_with_a_visible_place_for_every_word_still_applies() {
 /// project can restore it word for word.
 #[test]
 fn the_shipped_section_text_passes_the_rule() {
-    let skill = std::fs::read_to_string(
-        repo_root().join("assets/base/agents/skills/cf-present/SKILL.md"),
-    )
-    .unwrap();
+    let skill =
+        std::fs::read_to_string(repo_root().join("assets/base/agents/skills/cf-present/SKILL.md"))
+            .unwrap();
     let (_, after) = skill.split_once("## Completion\n").expect("the section");
     let shipped = format!("{}\n", after.trim());
     assert!(shipped.starts_with(COMPLETION_SHIPPED), "{shipped:?}");

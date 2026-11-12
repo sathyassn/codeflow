@@ -16,7 +16,9 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    BlockQuoteKind, CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd,
+};
 
 use super::sections::{is_invisible, Hidden};
 use super::{unit_ranges, AppliedUnit, Target};
@@ -178,15 +180,24 @@ fn every_extension() -> Options {
 ///
 /// This is the one visibility rule for override text: section bodies, row
 /// values, each unit of an override result and persisted records all reach
-/// it. It is an allow-list. A form is accepted only when all of its source
-/// renders as visible text, or it is plain structure: paragraphs, headings
-/// without attributes, emphasis, strong, strikethrough, superscript,
-/// subscript, lists, task markers, tables, block quotes (with or without a
-/// GitHub alert label), definition lists, breaks, rules, code spans, fenced
-/// code with at most a one-word info string, indented code and autolinks.
-/// Every other form is returned as its [`Hidden`] class, and so is text
-/// that decodes to an invisible character. A form inside a code span or a
-/// code fence is text, shown as written.
+/// it. It has two parts.
+///
+/// - An allow-list of forms. A form is accepted only when all of its source
+///   renders as visible text, or it is plain structure: paragraphs, headings
+///   without attributes, emphasis, strong, strikethrough, superscript,
+///   subscript, lists, task markers, tables, block quotes (with or without a
+///   GitHub alert label), definition lists, breaks, rules, code spans, fenced
+///   code whose info string is empty or one short language token, indented
+///   code and autolinks. Every other form is returned as its [`Hidden`]
+///   class, and so is text that decodes to an invisible character.
+/// - A coverage check of the source. The parser keeps no visible place for
+///   some source text and emits no event for it, so a rule over events alone
+///   does not see it. Every character that is not ASCII whitespace or ASCII
+///   punctuation, the characters Markdown syntax is written in, must fall
+///   inside the source of something the page shows ([`Places`]); any other
+///   is returned as [`Hidden::Unrendered`].
+///
+/// A form inside a code span or a code fence is text, shown as written.
 pub(super) fn hidden_forms(text: &str) -> Vec<(Hidden, Range<usize>)> {
     let mut out = Vec::new();
     let all = every_extension();
@@ -219,7 +230,9 @@ fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>
     // closes (none for an autolink, or when a title was already refused),
     // where it starts, and whether visible text has shown inside it.
     let mut open: Vec<(Option<Hidden>, Range<usize>, bool)> = Vec::new();
+    let mut places = Places::new(text);
     for (event, range) in parser.into_offset_iter() {
+        places.see(&event, &range);
         let found = match &event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph
@@ -244,7 +257,7 @@ fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>
                 } => (id.is_some() || !classes.is_empty() || !attrs.is_empty())
                     .then_some(Hidden::HeadingAttributes),
                 Tag::CodeBlock(CodeBlockKind::Fenced(info)) => {
-                    info.split_whitespace().nth(1).map(|_| Hidden::FenceInfo)
+                    (!language_token(text, &range, info)).then_some(Hidden::FenceInfo)
                 }
                 Tag::Link {
                     link_type, title, ..
@@ -304,6 +317,184 @@ fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>
             out.push((class, range));
         }
     }
+    out.extend(places.unshown());
+}
+
+/// The longest fence info string accepted, in bytes.
+const LANGUAGE_TOKEN_MAX: usize = 20;
+
+/// Whether the fence that opens at `range` of `text`, with the decoded info
+/// string `info`, carries no info string or one short language token: ASCII
+/// letters, digits, `+`, `#`, `-` and `.`, at most [`LANGUAGE_TOKEN_MAX`]
+/// bytes, written as it decodes (no escape or character reference). A
+/// renderer shows no part of the info string as text.
+fn language_token(text: &str, range: &Range<usize>, info: &str) -> bool {
+    fence_info_source(text, range) == info
+        && info.len() <= LANGUAGE_TOKEN_MAX
+        && info
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'#' | b'-' | b'.'))
+}
+
+/// The info string of the fence that opens at `range` of `text`, as written:
+/// the opening line after its run of backticks or tildes, trimmed.
+fn fence_info_source<'a>(text: &'a str, range: &Range<usize>) -> &'a str {
+    let fence = first_line(text, range).trim_start_matches([' ', '\t']);
+    let info = if fence.starts_with('~') {
+        fence.trim_start_matches('~')
+    } else {
+        fence.trim_start_matches('`')
+    };
+    info.trim_matches([' ', '\t'])
+}
+
+/// The first line of `range` in `text`, without its line break.
+fn first_line<'a>(text: &'a str, range: &Range<usize>) -> &'a str {
+    text.get(range.clone())
+        .unwrap_or_default()
+        .split('\n')
+        .next()
+        .unwrap_or_default()
+}
+
+/// Whether `c` must fall inside a shown place: every character but ASCII
+/// whitespace and ASCII punctuation, which is what Markdown syntax is
+/// written in. Letters and digits always need one, and so does any other
+/// character, Unicode whitespace included.
+fn needs_place(c: char) -> bool {
+    !c.is_ascii_whitespace() && !c.is_ascii_punctuation()
+}
+
+/// The source places the rendered page shows, collected from the parser's
+/// events (TSK-1302).
+///
+/// The parser drops some source text without an event, so a check that
+/// judges events alone cannot see it. This records, byte by byte, the
+/// source of everything the page shows; [`Places::unshown`] then returns
+/// each run of characters outside all of it that is not syntax.
+struct Places<'a> {
+    text: &'a str,
+    shown: Vec<bool>,
+    /// The lists open at this point: for an ordered list, its start number
+    /// and how many items it has had; `None` for a bullet list.
+    lists: Vec<Option<(u64, u64)>>,
+}
+
+impl<'a> Places<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            shown: vec![false; text.len()],
+            lists: Vec::new(),
+        }
+    }
+
+    fn show(&mut self, range: Range<usize>) {
+        let end = range.end.min(self.shown.len());
+        if let Some(bytes) = self.shown.get_mut(range.start.min(end)..end) {
+            bytes.fill(true);
+        }
+    }
+
+    /// Record what `event`, at `range`, shows on the page.
+    ///
+    /// - Text and code spans show their source, a character reference or an
+    ///   escape included.
+    /// - A task marker shows as a checkbox; its only letter is `x` or `X`.
+    /// - A fence shows its opening line's info string as no text, so the
+    ///   line has a place only when the string is a language token
+    ///   ([`language_token`]); any other is refused as
+    ///   [`Hidden::FenceInfo`].
+    /// - An ordered list item's number has a place when it is the number the
+    ///   page shows (the start plus the item's place) or the list's start
+    ///   repeated, the two usual ways to number a list; either carries
+    ///   nothing the page does not show.
+    /// - A GitHub alert label is one of five fixed words, which the page
+    ///   shows as the alert's title.
+    ///
+    /// Nothing else marks a place. The source of a form the allow-list
+    /// refuses keeps that form's class, which starts no later.
+    fn see(&mut self, event: &Event<'_>, range: &Range<usize>) {
+        match event {
+            Event::Text(_) | Event::Code(_) | Event::TaskListMarker(_) => {
+                self.show(range.clone());
+            }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                if language_token(self.text, range, info) {
+                    let line = first_line(self.text, range).len();
+                    self.show(range.start..range.start + line);
+                }
+            }
+            Event::Start(Tag::List(start)) => self.lists.push(start.map(|start| (start, 0))),
+            Event::End(TagEnd::List(_)) => {
+                self.lists.pop();
+            }
+            Event::Start(Tag::Item) => {
+                if let Some(Some((start, count))) = self.lists.last_mut() {
+                    let (start, place) = (*start, start.checked_add(*count));
+                    *count += 1;
+                    if let Some(len) = item_number(self.text, range.start)
+                        .filter(|(number, _)| *number == start || Some(*number) == place)
+                        .map(|(_, len)| len)
+                    {
+                        self.show(range.start..range.start + len);
+                    }
+                }
+            }
+            Event::Start(Tag::BlockQuote(Some(kind))) => {
+                if let Some(label) = alert_label(self.text, range, *kind) {
+                    self.show(label);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Each run of characters that needs a place and has none, as
+    /// [`Hidden::Unrendered`].
+    fn unshown(&self) -> Vec<(Hidden, Range<usize>)> {
+        let mut out = Vec::new();
+        let mut run: Option<Range<usize>> = None;
+        for (at, c) in self.text.char_indices() {
+            if needs_place(c) && !self.shown[at] {
+                let end = at + c.len_utf8();
+                run = Some(run.map_or(at..end, |open| open.start..end));
+            } else if let Some(open) = run.take() {
+                out.push((Hidden::Unrendered, open));
+            }
+        }
+        out.extend(run.map(|open| (Hidden::Unrendered, open)));
+        out
+    }
+}
+
+/// The number an ordered list item that starts at byte `at` of `text` is
+/// written with, and the length of its digits.
+fn item_number(text: &str, at: usize) -> Option<(u64, usize)> {
+    let rest = text.get(at..)?;
+    let len = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if !(1..=9).contains(&len) || !rest[len..].starts_with(['.', ')']) {
+        return None;
+    }
+    Some((rest[..len].parse().ok()?, len))
+}
+
+/// The bytes of the GitHub alert label `[!WORD]` on the first line of the
+/// block quote at `range`, when its word is the one `kind` names.
+fn alert_label(text: &str, range: &Range<usize>, kind: BlockQuoteKind) -> Option<Range<usize>> {
+    let line = first_line(text, range);
+    let open = line.find("[!")?;
+    let close = open + line[open..].find(']')?;
+    let word = match kind {
+        BlockQuoteKind::Note => "note",
+        BlockQuoteKind::Tip => "tip",
+        BlockQuoteKind::Important => "important",
+        BlockQuoteKind::Warning => "warning",
+        BlockQuoteKind::Caution => "caution",
+    };
+    line[open + 2..close]
+        .eq_ignore_ascii_case(word)
+        .then(|| range.start + open..range.start + close + 1)
 }
 
 /// The bytes of every table cell that starts inside `span`, as Markdown

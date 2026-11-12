@@ -498,8 +498,8 @@ pub enum Hidden {
     Metadata,
     /// A heading with an id, classes or attributes, which render nothing.
     HeadingAttributes,
-    /// A fence info string of more than one word; a renderer shows only the
-    /// code.
+    /// A fence info string that is not empty or one short language token; a
+    /// renderer shows only the code.
     FenceInfo,
     /// A link or image title, shown only on hover if at all.
     LinkTitle,
@@ -515,6 +515,10 @@ pub enum Hidden {
     /// A character reference that decodes to a character a reader does not
     /// see ([`is_invisible`]).
     ReferencedInvisible,
+    /// Source text the parser keeps no visible place for: a letter, digit
+    /// or other character that is not Markdown syntax and falls outside the
+    /// source of everything the rendered page shows.
+    Unrendered,
 }
 
 impl Hidden {
@@ -527,13 +531,14 @@ impl Hidden {
             Self::Footnote => "a footnote",
             Self::Metadata => "a metadata block",
             Self::HeadingAttributes => "a heading with attributes",
-            Self::FenceInfo => "a code fence info string of more than one word",
+            Self::FenceInfo => "a code fence info string that is not one short language token",
             Self::LinkTitle => "a link or image title",
             Self::EmptyLinkText => "a link or image with no text",
             Self::Link => "a link whose destination the rendered page does not show",
             Self::Image => "an image",
             Self::Math => "math",
             Self::ReferencedInvisible => "a character reference to an invisible character",
+            Self::Unrendered => "text the rendered page leaves out",
         }
     }
 }
