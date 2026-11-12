@@ -245,7 +245,7 @@ pub fn evaluate_ruled(
     // so it refuses wherever it runs, a certified prose line included
     // (TSK-1476).
     if integrity.is_active() {
-        if let Some(run) = crate::security::install_run::install_run(command) {
+        if let Some(run) = crate::security::install_run::install_run(command, posix) {
             violations.push(install_violation(integrity, &run));
         }
     }
@@ -427,11 +427,15 @@ pub(crate) fn install_violation(
             "install run `{}`{}: it writes the project's install files (harness settings, hooks, \
              policy and workflows), which only the operator installs or refreshes",
             run.form,
-            if run.parsed {
-                ""
-            } else {
+            if !run.parsed {
                 " (the line could not be fully parsed; its text names the binary with an \
                  install verb, which inline text such as a heredoc or quoted message may not do)"
+            } else if run.in_argument {
+                " (found inside a quoted argument or an assigned value, which the guard read as \
+                 a command line; give such text in a file, or to a program that only prints \
+                 or records it)"
+            } else {
+                ""
             }
         ),
         crate::remedy::INSTALL_RUN.remedy(),

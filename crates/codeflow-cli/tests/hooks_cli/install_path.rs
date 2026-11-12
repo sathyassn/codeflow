@@ -175,6 +175,23 @@ impl Tally {
         }
     }
 
+    /// Each shell row in `rows` draws no install finding from exec-guard,
+    /// run in `cwd`. A refusal by another rule of the line, such as a read
+    /// the guard cannot verify, is that rule's and not this check's.
+    fn install_allowed(&mut self, rows: &[String], cwd: &Path) {
+        for row in rows {
+            match judge(EXEC, &shell(row, cwd), cwd) {
+                Judged::Decided(out) => {
+                    if String::from_utf8_lossy(&out.stderr).contains("install run `") {
+                        self.wrong
+                            .push(format!("should allow: {row}\n  {}", shown(EXEC, &out)));
+                    }
+                }
+                Judged::Deadline => self.deadlines.push(row.clone()),
+            }
+        }
+    }
+
     fn finish(self) {
         assert!(
             self.deadlines.is_empty() && self.wrong.is_empty(),
@@ -243,7 +260,6 @@ fn the_install_verbs_refuse_in_every_form_the_guards_read() {
         format!("eval '{build} update'"),
         format!("echo update | xargs {build}"),
         "find . -name codeflow -type f -exec {} update \\;".to_string(),
-        format!("git -c alias.u='!{build} update' u"),
         format!(r#"python3 -c "import subprocess; subprocess.run(['{build}', 'update'])""#),
         format!(r#"node -e "require('child_process').execFileSync('{build}', ['update'])""#),
         format!(r#"perl -e 'system("{build}", "init", "--yes")'"#),
@@ -436,6 +452,16 @@ fn the_install_check_fires_through_a_git_runner() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
+    // A shell alias was refused before the install check by the rule for
+    // Git runners the guard cannot read, and still is.
+    let alias = "git -c alias.u='!./target/debug/codeflow update' u";
+    tally.refused(
+        &[EXEC, GIT],
+        alias,
+        &shell(alias, &root),
+        &root,
+        integrity_refusal,
+    );
     tally.finish();
 }
 
@@ -472,7 +498,7 @@ fn words_that_name_the_verbs_as_data_stay_allowed() {
     .map(ToString::to_string)
     .collect();
     let mut tally = Tally::default();
-    tally.shell_allowed(&rows, &root);
+    tally.install_allowed(&rows, &root);
     tally.finish();
 }
 
