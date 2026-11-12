@@ -1003,7 +1003,20 @@ fn evaluate_report_with_runners(
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
     let mut earlier_mutation = command.contains("GIT_INDEX_FILE");
+    // The refusals of a reading of a program word the guard cannot fill in
+    // carry their way through (TSK-1456): from `.0` on, the hint `.1`.
+    let mut reading: (usize, String) = (violations.len(), String::new());
+    let hint = |violations: &mut Vec<Violation>, (from, hint): &(usize, String)| {
+        for violation in &mut violations[*from..] {
+            violation.message.push_str(hint);
+        }
+    };
     for (idx, segment) in segments.iter().enumerate() {
+        hint(violations, &reading);
+        reading = (
+            violations.len(),
+            unread_program_hint(&unread_words(&expanded.readings, idx)),
+        );
         branches.discard_state_changed = earlier_mutation;
         earlier_mutation |= may_change_discard_state(segment);
         let top_level = match roles.as_ref().map(|r| r[idx]) {
@@ -1032,13 +1045,13 @@ fn evaluate_report_with_runners(
             }
             continue;
         }
-        // A file substitution in the program position runs a file whose
-        // text the guard cannot read, which could be git itself.
+        // A program word the guard cannot read (a file substitution, whose
+        // file the shell runs) could be git itself.
         if segment == PROGRAM_UNREAD {
             violations.extend(unclassifiable_violation(
                 ctx.policy,
                 None,
-                "a file substitution in the program position decides which program runs",
+                "a word in the program position that the guard cannot read decides which program runs",
                 &crate::remedy::GUARD_UNCLASSIFIABLE,
             ));
             continue;
@@ -1164,6 +1177,7 @@ fn evaluate_report_with_runners(
             ProgramKind::Other => {}
         }
     }
+    hint(violations, &reading);
     // The closed rule (TSK-242): a line that names a user or system git
     // configuration write and carries a form the guard cannot read refuses,
     // unless a form it does read already refused that write.
@@ -1231,18 +1245,23 @@ fn evaluate_report_with_runners(
 /// bodies unwrapped; quotes and escapes removed; redirections, leading
 /// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
 /// `command`, `builtin` and `exec` launchers stripped. The first element is
-/// the program as written, which may still hold a substitution.
-pub(crate) fn simple_commands(command: &str) -> Vec<Vec<String>> {
-    expand_commands(command)
+/// the program as written, which may still hold a substitution. Each comes
+/// with the program words the guard could not fill in that it is a reading
+/// of ([`unread_words`], TSK-1456).
+pub(crate) fn simple_commands(command: &str) -> Vec<(Vec<String>, Vec<String>)> {
+    let expanded = expand_commands_read(command);
+    expanded
+        .segments
         .iter()
-        .filter_map(|segment| {
+        .enumerate()
+        .filter_map(|(index, segment)| {
             let mut words = command_argv(segment);
             strip_reserved_words(&mut words);
             let (program, args) = strip_launchers(&words)?;
             let mut command = Vec::with_capacity(args.len() + 1);
             command.push(program.to_string());
             command.extend(args.iter().cloned());
-            Some(command)
+            Some((command, unread_words(&expanded.readings, index)))
         })
         .collect()
 }
@@ -7284,6 +7303,44 @@ pub(crate) struct Expanded {
 pub(crate) struct Reading {
     pub(crate) within: std::ops::Range<usize>,
     pub(crate) of: usize,
+    /// The program word the guard could not fill in, when these are its
+    /// readings ([`unread_program_readings`]).
+    pub(crate) unread: Option<String>,
+}
+
+/// The program words the guard could not fill in that the segment at
+/// `index` is a reading of, outermost first (TSK-1456).
+pub(crate) fn unread_words(readings: &[Reading], index: usize) -> Vec<String> {
+    let mut words: Vec<(usize, &str)> = readings
+        .iter()
+        .filter(|reading| reading.within.contains(&index))
+        .filter_map(|reading| Some((reading.within.start, reading.unread.as_deref()?)))
+        .collect();
+    words.sort_unstable();
+    words.dedup_by(|a, b| a.1 == b.1);
+    words
+        .into_iter()
+        .map(|(_, word)| word.to_string())
+        .collect()
+}
+
+/// The way through for a refusal of a reading of program words the guard
+/// cannot fill in ([`unread_words`]), appended to the refusal's message.
+/// Empty when there are none.
+pub(crate) fn unread_program_hint(words: &[String]) -> String {
+    if words.is_empty() {
+        return String::new();
+    }
+    let shown = words
+        .iter()
+        .map(|word| format!("`{}`", shown_word(word)))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    format!(
+        ". The shell fills in {shown} in the program position only when the command runs, \
+         so the guard judged each program it could be and refused this one. Write the \
+         program name literally in place of {shown}"
+    )
 }
 
 /// [`expand_commands`], with the command words it could not fill in. A
@@ -7345,17 +7402,33 @@ fn expand_segments(
         // Other readings of this command (TSK-1456): each runs in its place,
         // not after it.
         let mut alternatives: Vec<String> = Vec::new();
+        let mut unread = None;
         if let Some((at, taker)) = launched_at(&words) {
             let program = words[at].as_str();
+            // A program word the guard cannot fill in is judged under each
+            // program it could be (TSK-1456 AC-9).
+            let mut read_unread = |alternatives: &mut Vec<String>| {
+                match unread_program_readings(&words, at) {
+                    Some(readings) => alternatives.extend(readings),
+                    None => unreadable = true,
+                }
+                unread = Some(program.to_string());
+            };
             if expands(program) {
                 if literals.resolves(program) {
                     bodies.push(literals.fill_words(&words));
                 } else {
                     out.unread_commands.push(program.to_string());
+                    // A substitution keeps git-guard's own refusal.
+                    if !program.contains(['`', '\u{1}', '\u{2}']) {
+                        read_unread(&mut alternatives);
+                    }
                 }
             } else if leading_word(program, taker) != LeadingWord::Unplaced {
                 match program_readings(&words, at, &seg) {
-                    Some(readings) => alternatives.extend(readings),
+                    Some(readings) if !readings.is_empty() => alternatives.extend(readings),
+                    Some(_) if unread_pattern(program) => read_unread(&mut alternatives),
+                    Some(_) => {}
                     None => unreadable = true,
                 }
             }
@@ -7383,6 +7456,7 @@ fn expand_segments(
             out.readings.push(Reading {
                 within,
                 of: out.segments.len() - 1,
+                unread,
             });
         }
         if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
@@ -7474,6 +7548,85 @@ pub(crate) fn program_readings(words: &[String], at: usize, segment: &str) -> Op
     if word.contains('{') {
         if let Some(list) = brace_expand(word).filter(|list| list != &[word.to_string()]) {
             readings.push(with(list));
+        }
+    }
+    Some(readings)
+}
+
+/// Whether a program word is a pattern the guard cannot fill in: a glob
+/// (other than the `[` and `[[` test commands) or braces past what
+/// [`brace_expand`] reads (TSK-1456 AC-9).
+fn unread_pattern(word: &str) -> bool {
+    (has_glob(word) && !matches!(word, "[" | "[["))
+        || (word.contains('{') && brace_expand(word).is_none())
+}
+
+/// The program names an unread program word is always judged under
+/// ([`unread_program_readings`]).
+const GUARDED_NAMES: &[&str] = &["gh", "claude", "codex", "grok"];
+
+/// The commands a segment may run when the guard cannot fill in its program
+/// word at `at`, an environment value or a pattern (TSK-1456 AC-9), as
+/// shell text, so the line is refused when any of them is refused: the
+/// command under each name in [`GUARDED_NAMES`]; under `git` when an
+/// argument is a git builtin (`git` with any other first word runs an
+/// alias or a `git-` program, which a reading cannot name); under `sh` when
+/// the first argument is a short option cluster holding `c`; and, as a
+/// launcher, the command from each later word that is not an option, up to
+/// the first word that is itself unread, whose own readings go on from
+/// there, each also under `eval` when its words hold a blank or shell
+/// syntax that `eval` parses again (`eval` takes no options, so its words
+/// start where the launcher's do). `None` past [`UNREAD_ARGS_LIMIT`]
+/// arguments.
+pub(crate) fn unread_program_readings(words: &[String], at: usize) -> Option<Vec<String>> {
+    let args = &words[at + 1..];
+    if args.len() > UNREAD_ARGS_LIMIT {
+        return None;
+    }
+    let with = |name: &str| {
+        let mut named = words[..at].to_vec();
+        named.push(name.to_string());
+        named.extend_from_slice(args);
+        quote_words(&named)
+    };
+    let mut readings: Vec<String> = GUARDED_NAMES.iter().map(|name| with(name)).collect();
+    if args.iter().any(|arg| GIT_BUILTINS.contains(&arg.as_str())) {
+        readings.push(with("git"));
+    }
+    if args.first().is_some_and(|arg| {
+        arg.len() > 1
+            && arg.starts_with('-')
+            && arg[1..].chars().all(|c| c.is_ascii_alphabetic())
+            && arg.contains('c')
+    }) {
+        readings.push(with("sh"));
+    }
+    let parsed_again = |words: &[String]| {
+        words.iter().any(|word| {
+            word.contains(|c: char| {
+                shell_blank(c)
+                    || matches!(
+                        c,
+                        ';' | '&' | '|' | '<' | '>' | '(' | ')' | '\'' | '"' | '\\' | '`'
+                    )
+            })
+        })
+    };
+    for (k, arg) in args.iter().enumerate() {
+        if arg.starts_with('-') {
+            continue;
+        }
+        let mut launched = words[..at].to_vec();
+        launched.extend_from_slice(&args[k..]);
+        readings.push(quote_words(&launched));
+        if parsed_again(&args[k..]) {
+            let mut evaluated = words[..at].to_vec();
+            evaluated.push("eval".to_string());
+            evaluated.extend_from_slice(&args[k..]);
+            readings.push(quote_words(&evaluated));
+        }
+        if expands(arg) || unread_pattern(arg) {
+            break;
         }
     }
     Some(readings)
@@ -8999,11 +9152,16 @@ const NESTING_LIMIT: usize = 8;
 /// It is not a command any shell runs, and the integrity check refuses it.
 pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
 
-/// The segment that stands for a file substitution in the program position
-/// (`<(…)`, `>(…)`, zsh's `=(…)`; TSK-1456 AC-9): the shell runs the file
-/// it makes, whose text the guard cannot read. Git-guard refuses it as
+/// The segment that stands for a program word the guard cannot read
+/// (TSK-1456 AC-9): a file substitution in the program position (`<(…)`,
+/// `>(…)`, zsh's `=(…)`), whose file the shell runs, or an unread word
+/// with more arguments than [`UNREAD_ARGS_LIMIT`]. Git-guard refuses it as
 /// unclassifiable.
-pub(crate) const PROGRAM_UNREAD: &str = "\u{1}codeflow: a file substitution runs as the program";
+pub(crate) const PROGRAM_UNREAD: &str = "\u{1}codeflow: a program word the guard cannot read";
+
+/// The most arguments an unread program word is judged with under each
+/// reading ([`unread_program_readings`]); past it the line is refused.
+const UNREAD_ARGS_LIMIT: usize = 64;
 
 /// Words that leave the shell in command position, so a `(` after them
 /// opens a subshell or a `case` pattern.
@@ -17145,6 +17303,102 @@ mod tests {
         }
         assert_eq!(read("echo {a"), vec![words("echo {a")]);
         assert_eq!(read("git status"), vec![words("git status")]);
+    }
+
+    /// TSK-1456 AC-9: a program word the guard cannot fill in adds the
+    /// command under each guarded name and as a launcher of later words.
+    #[test]
+    fn unread_program_words_add_each_reading() {
+        let read = |line: &str| -> Vec<Vec<String>> {
+            expand_commands(line)
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        };
+        let words = |line: &str| command_argv(line);
+        for (line, present, absent) in [
+            (
+                "$G push origin main",
+                vec![
+                    "git push origin main",
+                    "gh push origin main",
+                    "claude push origin main",
+                    "codex push origin main",
+                    "grok push origin main",
+                    "push origin main",
+                    "origin main",
+                    "main",
+                ],
+                vec!["sh push origin main", "eval push origin main"],
+            ),
+            (
+                "gi* -C repo status",
+                vec!["git -C repo status", "repo status", "status"],
+                vec![],
+            ),
+            (
+                "$N -n 5 git push",
+                vec!["5 git push", "git push"],
+                vec!["sh -n 5 git push"],
+            ),
+            (
+                "$S -c 'git push'",
+                vec!["sh -c 'git push'", "git push"],
+                vec![],
+            ),
+            ("$E 'git push'", vec!["eval 'git push'", "git push"], vec![]),
+            (
+                "$A $B x",
+                vec!["claude $B x", "$B x", "claude x", "x"],
+                vec![],
+            ),
+            (
+                "\"$EDITOR\" notes.md",
+                vec!["claude notes.md", "notes.md"],
+                vec!["git notes.md"],
+            ),
+        ] {
+            let segments = read(line);
+            for reading in present {
+                assert!(
+                    segments.contains(&words(reading)),
+                    "{line}: {reading}: {segments:?}"
+                );
+            }
+            for reading in absent {
+                assert!(
+                    !segments.contains(&words(reading)),
+                    "{line}: {reading}: {segments:?}"
+                );
+            }
+        }
+        // The test command and an assignment keep their single reading.
+        for line in ["[ -f x ]", "[[ -f x ]]", "a[0]=1", "$(echo git) status"] {
+            assert!(
+                !read(line).contains(&words("claude -f x ]")),
+                "{line}: {:?}",
+                read(line)
+            );
+        }
+        assert_eq!(read("[ -f x ]"), vec![words("[ -f x ]")]);
+        let long = format!("$X {}", vec!["a"; UNREAD_ARGS_LIMIT + 1].join(" "));
+        assert!(expand_commands(&long).iter().any(|s| s == PROGRAM_UNREAD));
+        // Each reading names the words it reads, outermost first.
+        let expanded = expand_commands_read("$A $B x; git status");
+        let at = |line: &str| {
+            expanded
+                .segments
+                .iter()
+                .position(|s| command_argv(s) == words(line))
+                .unwrap()
+        };
+        assert_eq!(unread_words(&expanded.readings, at("claude $B x")), ["$A"]);
+        assert_eq!(
+            unread_words(&expanded.readings, at("claude x")),
+            ["$A", "$B"]
+        );
+        assert!(unread_words(&expanded.readings, at("$A $B x")).is_empty());
+        assert!(unread_words(&expanded.readings, at("git status")).is_empty());
     }
 
     /// TSK-1002 review 02: env's split string is read by env's grammar into

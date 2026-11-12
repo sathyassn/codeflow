@@ -183,6 +183,84 @@ fn readings_of_ordinary_program_words_keep_main_verdicts() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// The new refusals the operator accepted for TSK-1456: a program word the
+/// shell fills in at run time is judged as each program it could be, and
+/// every such refusal says how to get through, by writing the program name
+/// literally. The policy is the measured fixture's, on `main`.
+#[test]
+fn refused_readings_of_unread_program_words_give_the_way_through() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"root_checkout_commits":"off","hook_integrity":"block"},"security":{"secret_reads":"off","outward_actions":"off","headless_peer_runs":"block"}}"#,
+    );
+    let headless = "security.headless_peer_runs";
+    let protected = "git.commit_to_protected";
+    let integrity = "git.hook_integrity";
+    let rows = [
+        // Read under the claude, codex or grok name.
+        ("exec-guard", "$MKDIR -p dir", headless, "$MKDIR"),
+        ("exec-guard", "\"$CP\" -p a b", headless, "$CP"),
+        ("exec-guard", "$X -p text", headless, "$X"),
+        (
+            "exec-guard",
+            "$DOCKER run -p 8080:80 img",
+            headless,
+            "$DOCKER",
+        ),
+        ("exec-guard", "$SSH -p 2222 host", headless, "$SSH"),
+        ("exec-guard", "$MYSQL -u root -p", headless, "$MYSQL"),
+        ("exec-guard", "$NPM exec tsc", headless, "$NPM"),
+        ("exec-guard", "$PNPM exec vitest", headless, "$PNPM"),
+        ("exec-guard", "$DOCKER exec -it c sh", headless, "$DOCKER"),
+        (
+            "exec-guard",
+            "$KUBECTL exec pod -- ls",
+            headless,
+            "$KUBECTL",
+        ),
+        ("exec-guard", "$TOOL review file", headless, "$TOOL"),
+        ("exec-guard", "$AGENT agent", headless, "$AGENT"),
+        ("exec-guard", "$X ultrareview", headless, "$X"),
+        // Read as a launcher of a program named by a substitution.
+        (
+            "git-guard",
+            "$PYTHON \"$(git rev-parse --show-toplevel)/scripts/x.py\"",
+            protected,
+            "$PYTHON",
+        ),
+        (
+            "git-guard",
+            "$EDITOR \"$(git rev-parse --show-toplevel)/notes.md\"",
+            protected,
+            "$EDITOR",
+        ),
+        // Read under the git name after a command that may move the shell.
+        ("git-guard", "$X /tmp; $GIT diff", integrity, "$GIT"),
+        ("git-guard", "$X /tmp && $GIT log", integrity, "$GIT"),
+        ("git-guard", "$A $B diff", integrity, "$A"),
+    ];
+    let mut wrong = Vec::new();
+    for (name, command, rule, word) in rows {
+        let out = hook(
+            dir.path(),
+            name,
+            command,
+            &[("PAGER", "less"), ("EDITOR", "nvim"), ("VISUAL", "nvim")],
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let way = format!("Write the program name literally in place of `{word}`");
+        if out.status.code() != Some(2) || !stderr.contains(rule) || !stderr.contains(&way) {
+            wrong.push(format!(
+                "{name}: {command:?}: expected {rule} with the way through, exited {:?}: {stderr}",
+                out.status.code()
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The expansions main already reads or refuses in the program position
 /// keep their verdicts.
 #[test]

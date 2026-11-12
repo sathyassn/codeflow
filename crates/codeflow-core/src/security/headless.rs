@@ -43,6 +43,10 @@ pub struct HeadlessRun {
     /// `false` when the line could not be parsed and its raw text named the
     /// peer with a headless marker.
     pub parsed: bool,
+    /// The program words the guard could not fill in when the run is one
+    /// reading of them (TSK-1456), so the refusal says to write the program
+    /// name literally; empty otherwise.
+    pub unread: Vec<String>,
 }
 
 /// The first headless peer run in `command`, if any.
@@ -64,9 +68,14 @@ fn find(command: &str, depth: usize) -> Option<HeadlessRun> {
         return raw_run(command);
     }
     let mut unresolved = command.contains("<<<");
-    for argv in simple_commands(command) {
+    for (argv, unread) in simple_commands(command) {
         match classify(&argv, depth) {
-            Found::Run(run) => return Some(run),
+            Found::Run(mut run) => {
+                if run.unread.is_empty() {
+                    run.unread = unread;
+                }
+                return Some(run);
+            }
             Found::Unresolved => unresolved = true,
             Found::Nothing => {}
         }
@@ -846,6 +855,7 @@ fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
             peer: cli.peer,
             form,
             parsed: true,
+            unread: Vec::new(),
         }),
         _ => Found::Nothing,
     }
@@ -902,6 +912,7 @@ pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
             peer,
             form,
             parsed: false,
+            unread: Vec::new(),
         })
     })
 }

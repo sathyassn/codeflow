@@ -5,9 +5,10 @@ use super::{
     expand_shell_commands, expands, git_subcommand, inherited_locations, integrity_shell_path,
     launcher_effects, launcher_env, may_change_discard_state, parse_options, quote_words,
     redirect_writes, run_dirs, same_path, shown_word, split_alias, strip_launchers,
-    strip_reserved_words, unresolved_word, Arity, Literals, OptionSpec, ParsedOptions, Reading,
-    Seen, Violation, GIT_BUILTINS, GIT_LOCATION_VARS, GIT_PUSH_OPTIONS, GIT_REBASE_OPTIONS,
-    MAX_ALIAS_DEPTH, NESTING_LIMIT, NESTING_UNREAD, RUN_DIR_LIMIT,
+    strip_reserved_words, unread_program_hint, unread_words, unresolved_word, Arity, Literals,
+    OptionSpec, ParsedOptions, Reading, Seen, Violation, GIT_BUILTINS, GIT_LOCATION_VARS,
+    GIT_PUSH_OPTIONS, GIT_REBASE_OPTIONS, MAX_ALIAS_DEPTH, NESTING_LIMIT, NESTING_UNREAD,
+    RUN_DIR_LIMIT,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -2152,13 +2153,35 @@ fn segment_directories(
         .collect()
 }
 
-#[allow(clippy::too_many_lines)] // One ordered walk of the line's segments shares the earlier-command state.
+/// [`collect_segments`], with the way through added to a refusal of a
+/// reading of a program word the guard cannot fill in (TSK-1456).
 fn collect(
     command: &str,
     cwd: &Path,
     depth: usize,
     inputs: &Inputs,
     bodies: &mut Vec<Body>,
+) -> Result<(), String> {
+    let mut reading = Vec::new();
+    collect_segments(command, cwd, depth, inputs, bodies, &mut reading).map_err(|why| {
+        // A nested walk may have added it already.
+        let hint = unread_program_hint(&reading);
+        if why.ends_with(&hint) {
+            why
+        } else {
+            format!("{why}{hint}")
+        }
+    })
+}
+
+#[allow(clippy::too_many_lines)] // One ordered walk of the line's segments shares the earlier-command state.
+fn collect_segments(
+    command: &str,
+    cwd: &Path,
+    depth: usize,
+    inputs: &Inputs,
+    bodies: &mut Vec<Body>,
+    reading: &mut Vec<String>,
 ) -> Result<(), String> {
     if depth > NESTING_LIMIT {
         return Err("Git runners nest deeper than the guard reads".into());
@@ -2186,6 +2209,7 @@ fn collect(
     let mut earlier = Vec::new();
     let mut landings = Vec::new();
     for (index, segment) in segments.into_iter().enumerate() {
+        *reading = unread_words(&expanded.readings, index);
         let filled = literals.fill(&segment);
         let (mut tokens, mut patterns) = command_argv_patterns(&filled);
         let before = tokens.len();
