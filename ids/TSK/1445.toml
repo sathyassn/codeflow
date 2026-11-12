@@ -1,0 +1,11 @@
+id = "TSK-1445"
+uid = "2db7792f-0599-4d1b-b52c-16736c22bfac"
+kind = "TSK"
+title = "CodeFlow's own workflows follow the epic model"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:59:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
