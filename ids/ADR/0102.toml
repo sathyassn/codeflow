@@ -1,0 +1,11 @@
+id = "ADR-0102"
+uid = "4f4dd15e-4827-4724-bd3e-05ce79753706"
+kind = "ADR"
+title = "A marked epic reaches main once and complete, and line pushes start no hosted run"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:00:20Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
