@@ -12,18 +12,20 @@
 //! - the reviewer named first in `review` is of another lineage;
 //! - or, when it is of the same lineage, the block carries the recorded
 //!   `reduced_assurance` statement in its fixed form: items separated by
-//!   `;`, each a lineage id (`claude`, `codex`, `grok`), then the word
-//!   `unavailable`, then any text, with exactly one item for each lineage
-//!   other than the builder's and none for the builder's, for example
-//!   `codex unavailable, weekly limit at 14:32; grok unavailable, no seat`.
+//!   `;`, each exactly `<lineage id> probed unavailable` with a lineage id
+//!   of `claude`, `codex` or `grok`, one item for each lineage other than
+//!   the builder's and none for the builder's, for example
+//!   `codex probed unavailable; grok probed unavailable`.
 //!
 //! What it is and is not: all three fields are written by the agents under
 //! review, so the check catches a mistake or drift between what a
 //! completion says about its builder and its reviewer, and the fixed form
-//! makes a careless or mistaken reduced-assurance statement refuse, such as
-//! one that only names the other lineages or says one is available. It does
-//! not catch a forged claim: it does not show that any lineage was probed,
-//! and it is no proof that the review was independent or took place (see
+//! makes a careless, mistaken or contradicted reduced-assurance statement
+//! refuse, such as one that only names the other lineages, says one is
+//! available, leaves out the probe or adds words such as `not probed`. It
+//! requires the assertion and does not catch a forged one: it does not show
+//! that any lineage was probed, and it is no proof that the review was
+//! independent or took place (see
 //! [`super::SCOPE_NOTE`]). It reads only the completion in the
 //! tree: never a verdict file and never the path the `review` field cites.
 //! Checking a completion against its verdict file is the adopter's own
@@ -180,28 +182,31 @@ pub(super) fn problem(
     };
     let example = others
         .iter()
-        .map(|lineage| format!("{lineage} {UNAVAILABLE}, <why and when>"))
+        .map(|lineage| format!("{lineage} {PROBED_UNAVAILABLE}"))
         .collect::<Vec<_>>()
         .join("; ");
     Ok(Some(format!(
-        "{}: {LANDED_REVIEW}, and its reviewer `{}` is of the lineage `built_by` names ({built}), so its acceptance block needs `reduced_assurance` recording each other lineage as unavailable: one item per other lineage ({}), separated by `;`, each its lineage id, then `{UNAVAILABLE}`, then any text, for example `{example}`; {reason}",
+        "{}: {LANDED_REVIEW}, and its reviewer `{}` is of the lineage `built_by` names ({built}), so its acceptance block needs `reduced_assurance` recording each other lineage as probed and unavailable: one item per other lineage ({}), separated by `;`, each exactly `<lineage id> {PROBED_UNAVAILABLE}`, for example `{example}`; {reason}",
         task.id,
         crate::git::display_text(seat),
         named(&others)
     )))
 }
 
-/// The second word of each `reduced_assurance` item.
-const UNAVAILABLE: &str = "unavailable";
+/// The words that follow the lineage id in each `reduced_assurance` item,
+/// and nothing after them.
+const PROBED_UNAVAILABLE: &str = "probed unavailable";
 
 /// Why `statement`, a block's `reduced_assurance`, does not record each
-/// lineage in `others` as unavailable in the fixed form, or `None` when it
-/// does. The form: items separated by `;`, each a lineage id of `known`
-/// (exact, as `built_by` is), then the word `unavailable` (a trailing `,`,
-/// `.` or `:` allowed), then any text; exactly one item for each lineage in
-/// `others` and none for `built`. Only ASCII spaces and tabs separate and
-/// trim words, so any other blank stays inside a word and refuses. The form
-/// makes a careless or mistaken statement refuse; it does not show that the
+/// lineage in `others` as probed and unavailable in the fixed form, or
+/// `None` when it does. The form: items separated by `;`, each exactly
+/// three words, a lineage id of `known` (exact, as `built_by` is), then
+/// `probed`, then `unavailable`, with no other word or punctuation; exactly
+/// one item for each lineage in `others` and none for `built`. For example
+/// `codex probed unavailable; grok probed unavailable`. Only ASCII spaces
+/// and tabs separate and trim words, so any other blank stays inside a word
+/// and refuses. The form makes a careless, mistaken or contradicted
+/// statement refuse; it requires the assertion and does not show that the
 /// probe took place.
 fn reduced_assurance_problem(
     statement: Option<&str>,
@@ -224,13 +229,9 @@ fn reduced_assurance_problem(
                 "the item `{shown}` does not start with a lineage id"
             ));
         };
-        if words
-            .next()
-            .map(|word| word.trim_end_matches([',', '.', ':']))
-            != Some(UNAVAILABLE)
-        {
+        if !words.eq(PROBED_UNAVAILABLE.split(' ')) {
             return Some(format!(
-                "the item `{shown}` does not have `{UNAVAILABLE}` as its second word"
+                "the item `{shown}` is not exactly `{lineage} {PROBED_UNAVAILABLE}`"
             ));
         }
         if lineage == built {
@@ -243,8 +244,12 @@ fn reduced_assurance_problem(
         }
     }
     let missing: Vec<&str> = others.difference(&recorded).copied().collect();
-    (!missing.is_empty())
-        .then(|| format!("no item records {} as {UNAVAILABLE}", missing.join(", ")))
+    (!missing.is_empty()).then(|| {
+        format!(
+            "no item records {} as probed and unavailable",
+            missing.join(", ")
+        )
+    })
 }
 
 /// The reviewer a `review` field names: its text before the first comma or
