@@ -11,6 +11,7 @@
 use super::evaluate_at;
 use crate::hooks::policy::{PolicyLevel, SecuritySection};
 use crate::hooks::Violation;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// The work branch the fixture checks out.
@@ -569,7 +570,7 @@ fn push_and_remote_settings_withhold_the_admission() {
         let before = wrong.len();
         expect_account(&f.root, &lines, &mut wrong);
         for entry in &mut wrong[before..] {
-            entry.push_str(&format!(" [setting: {}]", setting.replace('\n', " ")));
+            write!(entry, " [setting: {}]", setting.replace('\n', " ")).unwrap();
         }
     }
     // AC-5: the one remote has another name.
@@ -703,7 +704,7 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
             &mut wrong,
         );
         for entry in &mut wrong[before..] {
-            entry.push_str(&format!(" [helper: {helper}]"));
+            write!(entry, " [helper: {helper}]").unwrap();
         }
     }
     // The exact body on lines that are not admitted.
@@ -749,6 +750,7 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
 /// admission.
 #[test]
 fn read_failures_withhold_the_admission() {
+    type Setup = Box<dyn Fn(&git2::Repository, &Path)>;
     if !isolated("read_failures_withhold_the_admission") {
         return;
     }
@@ -766,7 +768,6 @@ fn read_failures_withhold_the_admission() {
     ]);
     let bare_fetch = rows(&["git fetch"]);
     let mut wrong = Vec::new();
-    type Setup = Box<dyn Fn(&git2::Repository, &Path)>;
     let cases: Vec<(&str, &[String], Setup)> = vec![
         (
             "no origin/HEAD",
@@ -859,7 +860,7 @@ fn read_failures_withhold_the_admission() {
         let before = wrong.len();
         expect_refused(&f.root, lines, &mut wrong);
         for entry in &mut wrong[before..] {
-            entry.push_str(&format!(" [{case}]"));
+            write!(entry, " [{case}]").unwrap();
         }
     }
     report(&wrong);

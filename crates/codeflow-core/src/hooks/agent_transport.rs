@@ -264,27 +264,24 @@ fn repository_allows(target: &Path, form: &Form<'_>) -> Option<()> {
             Some(())
         }
         Form::Push { src, name } => {
-            let name = match name {
-                Some(name) => {
-                    source_allowed(&repo, src)?;
-                    (*name).to_string()
+            let name = if let Some(name) = name {
+                source_allowed(&repo, src)?;
+                (*name).to_string()
+            } else {
+                let current = current?;
+                let name = if *src == "HEAD" {
+                    current.clone()
+                } else {
+                    (*src).to_string()
+                };
+                if name != current {
+                    return None;
                 }
-                None => {
-                    let current = current?;
-                    let name = if *src == "HEAD" {
-                        current.clone()
-                    } else {
-                        (*src).to_string()
-                    };
-                    if name != current {
-                        return None;
-                    }
-                    let resolved = repo.resolve_reference_from_short_name(&name).ok()?;
-                    if resolved.name().ok()? != format!("refs/heads/{name}") {
-                        return None;
-                    }
-                    name
+                let resolved = repo.resolve_reference_from_short_name(&name).ok()?;
+                if resolved.name().ok()? != format!("refs/heads/{name}") {
+                    return None;
                 }
+                name
             };
             // `origin`'s default branch, whatever its name, is never a
             // work branch.
