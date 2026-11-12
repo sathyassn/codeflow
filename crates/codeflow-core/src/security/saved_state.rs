@@ -28,10 +28,10 @@
 //!
 //! The second run compares a target with each location by file identity
 //! (device and inode) along the walk the kernel makes to it, links and `..`
-//! included, so a link before the last component, a case variant or a
-//! folder reached through `cd` to a link is the same node. A node that does
-//! not exist yet, and every node on a system without these identities, is
-//! compared by its readings: as written and as reached through links. A
+//! included, so a link before the last component or a folder reached
+//! through `cd` to a link is the same node. A node that does not exist yet,
+//! and every node on a system without these identities, is compared by its
+//! readings: as written and as reached through links. A
 //! location the guard cannot read is compared by its readings too, so it
 //! fails closed.
 //!
@@ -51,7 +51,9 @@ use crate::hooks::policy::PolicyLevel;
 use crate::hooks::Violation;
 use crate::security::dangerous::{program_name, recursive_rm_operands};
 use crate::security::deletion::{bound_commands_in, bound_path, find_removals, Bound};
-use crate::security::unresolved::{has_writer_entry, writer_effects, writer_name, DirOrder};
+use crate::security::unresolved::{
+    has_writer_entry, is_listed_writer, writer_effects, writer_name, DirOrder,
+};
 
 #[cfg(test)]
 thread_local! {
@@ -333,6 +335,9 @@ fn readings_class(env: &Places) -> Class {
     }
 }
 
+/// The sanctioned path printed with every saved-state refusal.
+pub(crate) const STATE_SANCTIONED: &str = "a harness runs its saved shell state before its later commands, so only the harness writes it: read a file there with a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, and ask the operator to make any other change by hand, outside the agent session; no policy key relaxes this rule";
+
 /// The way through a refusal near saved state names: a program aimed at a
 /// folder that holds it, or a write the guard cannot resolve there.
 const NEAR_WAY: &str = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
@@ -343,8 +348,17 @@ const COPY_WAY: &str = "copy into a named sub-folder that holds no saved shell s
 
 /// The way through a directory change into a location, which the startup
 /// check judges as a target unless the line is only directory changes to
-/// plain, unquoted paths.
-const CD_WAY: &str = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
+/// plain, unquoted paths. A path with a space cannot be written unquoted,
+/// so a listed reader given the full path is a way through too.
+const CD_WAY: &str = "run `cd` alone with a plain unquoted path, or give the full path to a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, instead of changing into the folder";
+
+/// The way through a directory change whose quoted text names a location,
+/// in place of the startup check's words that the program can write it.
+const CD_TEXT_WAY: &str = ", where a harness keeps the shell state it runs before later commands; give the full path to a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, instead of changing into the folder";
+
+/// The way through a program the guard does not list that names a
+/// location: a reader it lists.
+const READ_WAY: &str = "to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`";
 
 /// Phrases of the startup check that name a location rather than say what
 /// is written or placed there; in them a folder is called a location.
@@ -393,7 +407,9 @@ const NEAR_MARKS: &[&str] = &[
 /// Judge `command`, run in `cwd`, with the startup check over the
 /// saved-state class: every form the check reads a write by, judged
 /// against the locations. zsh's clobbering redirects are read as plain
-/// ones first. A refusal near saved state names its way through.
+/// ones first. A refusal near saved state, a directory change into it and
+/// a program the guard does not list that names it each name a way
+/// through.
 #[must_use]
 pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation> {
     if !enabled() {
@@ -419,6 +435,30 @@ pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
     .into_iter()
     .map(|mut finding| {
         finding.message = located(&finding.message, &files);
+        let program = finding
+            .message
+            .strip_prefix('`')
+            .and_then(|rest| rest.split_once('`'))
+            .map(|(name, rest)| (name.to_string(), rest.to_string()));
+        if let Some((name, rest)) = &program {
+            if matches!(name.as_str(), "cd" | "pushd")
+                && rest.starts_with(" is given text that names ")
+            {
+                if let Some(named) = finding.message.strip_suffix(", which it can write") {
+                    finding.message = format!("{named}{CD_TEXT_WAY}");
+                }
+                return finding;
+            }
+            // A program the guard does not list as a writer may only read
+            // what it names: `find` writes by its actions, which are read.
+            if !matches!(name.as_str(), "cd" | "pushd" | "find")
+                && rest.starts_with(" targets the saved shell state ")
+                && !is_listed_writer(name)
+            {
+                finding.message = format!("{}; {READ_WAY}", finding.message);
+                return finding;
+            }
+        }
         let message = &finding.message;
         let way = if message.contains(" copies the contents of ")
             || message.contains(" puts the tree ")
@@ -442,46 +482,107 @@ pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
     .collect()
 }
 
-/// `command` with zsh's clobbering redirects `>!`, `>>!` and `>>|` written
-/// as `>` and `>>`, outside quotes: zsh writes the file they name, and the
-/// shell reader knows the other spellings only.
+/// `command` with each of zsh's clobbering redirects written as the plain
+/// redirect it is: a `!` or `|` after `>`, `>>`, `>&` or `>>&` is dropped,
+/// so `&>|` reads as `&>` too. zsh writes the file each one names.
+///
+/// The rewrite reads no quotes, comments or heredocs: a quote in a comment
+/// or a heredoc body cannot hide a redirect after it. Inside quoted text it
+/// changes data only, which stays quoted. Only a character after a
+/// backslash is kept as written, so an escaped `>` stays an argument.
 fn plain_redirects(command: &str) -> String {
     let chars: Vec<char> = command.chars().collect();
     let mut out = String::with_capacity(command.len());
-    let (mut single, mut double, mut at) = (false, false, 0);
+    let mut at = 0;
     while let Some(&c) = chars.get(at) {
         match c {
-            '\\' if !single => {
+            '\\' => {
                 out.push(c);
                 if let Some(&next) = chars.get(at + 1) {
                     out.push(next);
                 }
                 at += 2;
-                continue;
             }
-            '\'' if !double => single = !single,
-            '"' if !single => double = !double,
-            '>' if !single && !double => {
-                let append = chars.get(at + 1) == Some(&'>');
-                let width = if append { 2 } else { 1 };
-                let next = chars.get(at + width);
-                if next == Some(&'!') || (append && next == Some(&'|')) {
-                    out.push_str(if append { ">>" } else { ">" });
-                    at += width + 1;
-                    continue;
+            '>' => {
+                let mut width = 1;
+                if chars.get(at + width) == Some(&'>') {
+                    width += 1;
                 }
-                if append {
-                    out.push_str(">>");
-                    at += 2;
+                if chars.get(at + width) == Some(&'&') {
+                    width += 1;
+                }
+                let operator: String = chars[at..at + width].iter().collect();
+                out.push_str(&operator);
+                at += width;
+                if matches!(chars.get(at), Some('!' | '|')) {
+                    at += 1;
+                }
+            }
+            _ => {
+                out.push(c);
+                at += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The first variable of `vars` that `word` changes with a zsh modifier or
+/// subscript, with its value: `$NAME:a`, `$NAME[1,-1]`, or a braced form
+/// with anything after the name (`${NAME:a}`, `${NAME[1]}`, `${NAME:-x}`),
+/// zsh's `(flags)`, `=`, `~` and `^` before the name included. The guard
+/// does not compute the result, so the startup check reads such a word as
+/// filled in at run time. Text in single quotes is data.
+pub(super) fn modified_variable(word: &str, vars: &[(String, String)]) -> Option<(String, String)> {
+    let chars: Vec<char> = word.chars().collect();
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let (mut single, mut at) = (false, 0);
+    while let Some(&c) = chars.get(at) {
+        at += 1;
+        match c {
+            '\\' if !single => at += 1,
+            '\'' => single = !single,
+            '$' if !single => {
+                let braced = chars.get(at) == Some(&'{');
+                let mut start = at + usize::from(braced);
+                if braced {
+                    if chars.get(start) == Some(&'(') {
+                        while chars.get(start).is_some_and(|c| *c != ')') {
+                            start += 1;
+                        }
+                        start += 1;
+                    }
+                    while chars.get(start).is_some_and(|c| matches!(c, '=' | '~' | '^')) {
+                        start += 1;
+                    }
+                }
+                let start = start.min(chars.len());
+                let mut end = start;
+                while chars.get(end).copied().is_some_and(ident) {
+                    end += 1;
+                }
+                let name: String = chars[start..end].iter().collect();
+                let Some((_, value)) = vars.iter().find(|(known, _)| *known == name) else {
                     continue;
+                };
+                let next = chars.get(end).copied();
+                let modified = if braced {
+                    next != Some('}') || start != at + 1
+                } else {
+                    next == Some('[')
+                        || (next == Some(':')
+                            && chars
+                                .get(end + 1)
+                                .is_some_and(|c| c.is_ascii_alphabetic() || *c == '&'))
+                };
+                if modified {
+                    return Some((name, value.clone()));
                 }
             }
             _ => {}
         }
-        out.push(c);
-        at += 1;
     }
-    out
+    None
 }
 
 /// A node's identity: its device and inode.
@@ -761,7 +862,7 @@ pub(crate) fn evaluate(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
     }
     messages
         .into_iter()
-        .map(|message| Violation::always_blocking(super::RULE, message, super::SANCTIONED))
+        .map(|message| Violation::always_blocking(super::RULE, message, STATE_SANCTIONED))
         .collect()
 }
 
@@ -780,7 +881,7 @@ pub(crate) fn edit_target(path: &Path, env: &Places) -> Option<Violation> {
     Some(Violation::always_blocking(
         super::RULE,
         format!("file edit targets the saved shell state `{label}`"),
-        super::SANCTIONED,
+        STATE_SANCTIONED,
     ))
 }
 
@@ -893,7 +994,7 @@ impl Pass<'_> {
                     for path in self.paths(path_word, bound, dir).unwrap_or_default() {
                         if let Some(label) = self.written(&walk(&path, true)) {
                             found.push(format!(
-                                "`{name}` targets `{path_word}`, which is saved shell state: `{label}`; to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`"
+                                "`{name}` targets `{path_word}`, which is saved shell state: `{label}`; {READ_WAY}"
                             ));
                         }
                     }
@@ -1011,6 +1112,27 @@ impl Pass<'_> {
                 || copy.sources.len() > 1
                 || dest.ends_with('/')
                 || dests.iter().any(folder_now));
+        // The kernel reads relative symbolic link text from the folder the
+        // link is in, not from where the command runs.
+        if name == "ln" && flagged(&["-s", "--symbolic"]) {
+            let folders: Vec<String> = dests
+                .iter()
+                .filter_map(|d| if into { Some(d.as_path()) } else { d.parent() })
+                .filter_map(|folder| folder.to_str().map(str::to_string))
+                .collect();
+            for source in copy.sources.iter().filter(|s| !s.starts_with(['/', '~'])) {
+                for folder in &folders {
+                    let mut linked = Vec::new();
+                    self.removal(&mut linked, "ln", "links", source, bound, folder);
+                    for message in linked {
+                        let message = format!("{message}; link a named file that is not saved shell state, or a sub-folder that holds none");
+                        if !found.contains(&message) {
+                            found.push(message);
+                        }
+                    }
+                }
+            }
+        }
         for source in copy.sources.iter().filter(|source| !remote(source)) {
             let tree = recursive && self.may_be_tree(source, bound, dir);
             let lands = if tree { Lands::Tree } else { Lands::File };
@@ -1163,7 +1285,7 @@ impl Pass<'_> {
             if hit {
                 found.push(format!(
                     "`{name}` {verb} `{operand}`, which is or holds saved shell state: `{}`",
-                    shown(&path)
+                    shown(&lexical(&path))
                 ));
             }
         }

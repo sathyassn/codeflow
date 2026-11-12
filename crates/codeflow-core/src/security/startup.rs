@@ -255,9 +255,9 @@ pub(crate) struct Class {
     /// which a word may expand ([`Line::vars`]); empty for the startup and
     /// git configuration classes.
     held: Vec<(String, String)>,
-    /// Whether a class folder itself, and every folder inside it, is a
-    /// place a placing program could fill ([`Class::placement`]); false for
-    /// the startup and git configuration classes.
+    /// Whether a class folder itself, and every folder inside it, counts as
+    /// a place a placing program could fill ([`Class::placement`]), as each
+    /// class's builder sets it.
     folders_place: bool,
 }
 
@@ -827,6 +827,32 @@ impl Kind {
             Self::SavedState => "saved shell state files",
         }
     }
+
+    /// The folders a call that places files it does not name is refused
+    /// near, as a refusal names them.
+    fn places(self) -> &'static str {
+        match self {
+            Self::Startup | Self::GitConfig => "the home, `/etc` or a startup directory",
+            Self::SavedState => "the home, `/etc` or a folder that holds saved shell state",
+        }
+    }
+
+    /// What a line names when a placing call runs where the guard cannot
+    /// tell the directory.
+    fn line_places(self) -> &'static str {
+        match self {
+            Self::Startup | Self::GitConfig => "the home or `/etc`",
+            Self::SavedState => self.places(),
+        }
+    }
+
+    /// The sanctioned path printed with a refusal of this class.
+    fn sanctioned(self) -> &'static str {
+        match self {
+            Self::Startup | Self::GitConfig => SANCTIONED,
+            Self::SavedState => saved_state::STATE_SANCTIONED,
+        }
+    }
 }
 
 /// The facts of one command line that every word is judged against.
@@ -874,7 +900,9 @@ impl Line<'_> {
     /// `git config --global` write of a code-running key refuses under.
     fn finding(&self, message: String) -> Violation {
         match self.kind {
-            Kind::Startup | Kind::SavedState => finding(message),
+            Kind::Startup | Kind::SavedState => {
+                Violation::always_blocking(RULE, message, self.kind.sanctioned())
+            }
             Kind::GitConfig => Violation::new(
                 "git.hook_integrity",
                 self.integrity,
@@ -950,8 +978,14 @@ impl Line<'_> {
     }
 
     /// The path `word` names from `dir`, or `None` when part of it is
-    /// filled in at run time.
+    /// filled in at run time. For saved state, a zsh modifier or subscript
+    /// on a variable the guard fills is filled in at run time too.
     fn expand(&self, word: &str, dir: &Path) -> Option<PathBuf> {
+        if self.kind == Kind::SavedState
+            && saved_state::modified_variable(word, &self.vars()).is_some()
+        {
+            return None;
+        }
         let text = self.substitute(word);
         if unresolved_word(&text) {
             return None;
@@ -1202,8 +1236,26 @@ impl Line<'_> {
 
     /// Whether an unresolved word may name a startup file: the line names
     /// one, or the literal directory before the part the shell fills in is
-    /// the home, `/etc` or a startup directory.
+    /// the home, `/etc` or a startup directory. For saved state, a word
+    /// that changes a variable whose value is or holds a location with a
+    /// zsh modifier or subscript may name one too.
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
+        if self.kind == Kind::SavedState {
+            if let Some((name, value)) = saved_state::modified_variable(word, &self.vars()) {
+                let near = dirs.iter().any(|dir| {
+                    let path = dir.join(&value);
+                    self.class
+                        .target(&path)
+                        .or_else(|| self.class.placement(&path))
+                        .is_some()
+                });
+                if near {
+                    return Some(format!(
+                        "it applies a modifier or subscript to `${name}`, whose value `{value}` is or holds saved shell state"
+                    ));
+                }
+            }
+        }
         if let Some(name) = self.class.named_in(self.text) {
             return Some(format!("the line names the {} `{name}`", self.noun()));
         }
@@ -3147,7 +3199,8 @@ impl super::unresolved::WriterGuard for ExecWriter<'_> {
         }
         call_names_place(self.args, Some(&effects.read), line, dirs).then(|| {
             line.finding(format!(
-                "`{name}` is given `{option}`, an option the guard does not read, with the home, `/etc` or a startup directory, where it can place a {noun} it does not name"
+                "`{name}` is given `{option}`, an option the guard does not read, with {}, where it can place a {noun} it does not name",
+                line.kind.places()
             ))
         })
     }
@@ -3187,6 +3240,23 @@ fn copy_judgment(
     let moves = name == "mv";
     let links =
         name == "ln" || (name == "cp" && flagged(&["-s", "-l", "--symbolic-link", "--link"]));
+    // For saved state, relative symbolic link text is read from the folder
+    // the link is made in, as the kernel reads it: the destination when it
+    // may be a folder, and the folder that holds it.
+    let symbolic_from_its_folder =
+        line.kind == Kind::SavedState && name == "ln" && flagged(&["-s", "--symbolic"]);
+    let link_folders: Vec<PathBuf> = if symbolic_from_its_folder {
+        dirs.iter()
+            .filter_map(|d| line.expand(dest, d))
+            .flat_map(|path| {
+                let folder = (crate::absence::is_kind(&path, true) != Some(false))
+                    .then(|| path.clone());
+                folder.into_iter().chain(path.parent().map(Path::to_path_buf))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let dest_judged = line.judge(dest, dirs);
     match &dest_judged {
         Judged::Class(label) => {
@@ -3204,6 +3274,11 @@ fn copy_judgment(
     for source in sources {
         if moves || links {
             if let Some(v) = word_violation(name, source, line, dirs) {
+                return Some(v);
+            }
+        }
+        if symbolic_from_its_folder && !source.starts_with(['/', '~', '$']) {
+            if let Some(v) = word_violation(name, source, line, &link_folders) {
                 return Some(v);
             }
         }
@@ -3287,7 +3362,8 @@ fn placing_violation(
         // told to place into a directory the call names (review round 19).
         Err(()) if call_names_place(args, None, line, dirs) => {
             return Some(line.finding(format!(
-                "`{name}` puts files where its options say, the guard does not read its options, and the call names the home, `/etc` or a startup directory"
+                "`{name}` puts files where its options say, the guard does not read its options, and the call names {}",
+                line.kind.places()
             )));
         }
         Err(()) => Vec::new(),
@@ -3365,7 +3441,8 @@ fn placement_violation(
     }
     if unknown && (line_spells_place(line) || call_names_place(args, None, line, dirs)) {
         return Some(line.finding(format!(
-            "`{name}` runs where the guard cannot tell the directory, on a line that names the home or `/etc`"
+            "`{name}` runs where the guard cannot tell the directory, on a line that names {}",
+            line.kind.line_places()
         )));
     }
     None
