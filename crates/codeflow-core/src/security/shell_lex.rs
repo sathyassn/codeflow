@@ -101,6 +101,87 @@ impl Token {
     }
 }
 
+/// Who reads the words in front of a command (TSK-1456): the shell, at the
+/// start of a simple command, or `env` (and `sudo`), which read their own
+/// argument list up to the command they run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Taker {
+    /// The shell's own words in front of a simple command.
+    Shell,
+    /// The words a launcher such as `env` reads before its command.
+    Env,
+}
+
+/// How one word in front of a command is read ([`leading_word`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeadingWord {
+    /// An assignment every guard skips: a name made of ASCII letters,
+    /// digits and `_`, not starting with a digit, then `=`.
+    Assignment,
+    /// A word holding `=` that some shell or launcher may read as an
+    /// assignment and another as the program. It is never skipped: a
+    /// reader judges it as the program, and the segment reader adds the
+    /// other reading as a command of its own, so each reading is judged.
+    Unplaced,
+    /// The program the command runs.
+    Program,
+}
+
+/// How `word`, standing in front of a command, is read by `taker`. The one
+/// decision every guard uses to find the program behind the words in front
+/// of it (TSK-1456): only [`LeadingWord::Assignment`] is ever skipped.
+pub(crate) fn leading_word(word: &str, taker: Taker) -> LeadingWord {
+    let Some((name, _)) = word.split_once('=') else {
+        return LeadingWord::Program;
+    };
+    if name.is_empty() {
+        return LeadingWord::Program;
+    }
+    let mut chars = name.chars();
+    let identifier = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if identifier {
+        return LeadingWord::Assignment;
+    }
+    // No shell takes a name holding a path or a parenthesis, so the shell
+    // runs such a word; `env` takes any word holding `=`.
+    let head = name.split('[').next().unwrap_or(name);
+    if taker == Taker::Shell && head.contains(['/', '(']) {
+        return LeadingWord::Program;
+    }
+    LeadingWord::Unplaced
+}
+
+/// How many of `words`, from the first, are assignments `taker` skips
+/// ([`LeadingWord::Assignment`]).
+pub(crate) fn skip_leading(words: &[String], taker: Taker) -> usize {
+    words
+        .iter()
+        .take_while(|word| leading_word(word, taker) == LeadingWord::Assignment)
+        .count()
+}
+
+/// The words a brace list in `word` becomes, for a word with one list of
+/// two or more items and no other brace: `a{b,c}d` is `abd` and `acd`.
+/// `None` for any other word.
+pub(crate) fn brace_words(word: &str) -> Option<Vec<String>> {
+    let open = word.find('{')?;
+    let close = open + word[open..].find('}')?;
+    let (before, inner, after) = (&word[..open], &word[open + 1..close], &word[close + 1..]);
+    if !inner.contains(',') || inner.contains('{') || after.contains(['{', '}']) || before.contains('}')
+    {
+        return None;
+    }
+    Some(
+        inner
+            .split(',')
+            .map(|item| format!("{before}{item}{after}"))
+            .collect(),
+    )
+}
+
 /// A lexed line.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Lexed {

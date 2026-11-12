@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::security::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::security::pattern::is_path_targeted;
+use crate::security::shell_lex::{leading_word, skip_leading, LeadingWord, Taker};
 
 use super::git_target::{
     self, assignment, expand_word, flat_top_level, has_substitution, host_absolute, host_path,
@@ -13787,28 +13788,32 @@ fn redirect_operator_len(word: &str) -> Option<usize> {
 /// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
 /// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
 pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
+    let (at, _) = launched_at(tokens)?;
+    Some((tokens[at].as_str(), &tokens[at + 1..]))
+}
+
+/// [`strip_launchers`] as the index of the program word, with who read the
+/// words just before it: [`Taker::Env`] after `env`'s words, else
+/// [`Taker::Shell`]. Only assignments ([`leading_word`]) are skipped
+/// (TSK-1456).
+pub(crate) fn launched_at(tokens: &[String]) -> Option<(usize, Taker)> {
     let mut idx = 0;
+    let mut taker = Taker::Shell;
     loop {
         // Skip leading VAR=val assignments.
-        while idx < tokens.len() {
-            let t = tokens[idx].as_str();
-            if t.split_once('=')
-                .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-            {
-                idx += 1;
-            } else {
-                break;
-            }
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, taker));
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             match skip_launcher_options(t, tokens, idx + 1) {
                 Some(next) => {
                     idx = next;
+                    taker = Taker::Shell;
                     continue;
                 }
                 // `command -v git` only looks the name up; nothing runs.
-                None => return Some((t, &tokens[idx + 1..])),
+                None => return Some((idx, taker)),
             }
         }
         if basename(t) == "busybox"
@@ -13817,6 +13822,7 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 .is_some_and(|a| is_shell(a) || matches!(a.as_str(), "ln" | "link" | "cp" | "dd"))
         {
             idx += 1;
+            taker = Taker::Shell;
             continue;
         }
         if launcher_name(t) == "env" {
@@ -13834,16 +13840,16 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                     idx += 1;
                     while tokens.get(idx).is_some_and(|a| {
                         a.starts_with('-')
-                            || a.split_once('=')
-                                .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+                            || leading_word(a, Taker::Env) == LeadingWord::Assignment
                     }) {
                         idx += 1;
                     }
                 }
             }
+            taker = Taker::Env;
             continue;
         }
-        return Some((t, &tokens[idx + 1..]));
+        return Some((idx, taker));
     }
 }
 
@@ -13867,16 +13873,12 @@ fn is_duration(word: &str) -> bool {
 /// -S`, which packs the command into one word, ends this walk;
 /// [`expand_commands`] reads the packed command as its own segments.
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
     let mut dirs = Vec::new();
     let mut idx = 0;
     loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
         let Some(t) = tokens.get(idx).map(String::as_str) else {
             return (dirs, None);
         };
@@ -13969,10 +13971,7 @@ fn env_long_option(name: &str) -> Result<(&'static str, Option<bool>), &'static 
 /// guessing where the command starts or which directory it runs in.
 pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_>, String> {
     let mut words = EnvWords::default();
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
+    let assignment = |t: &str| leading_word(t, Taker::Env) == LeadingWord::Assignment;
     let mut options = true;
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if options && a == "--" {

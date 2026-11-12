@@ -3,8 +3,62 @@
 //! where another guard check would still refuse the whole line (security
 //! review SR6-4).
 
-use super::{lex, Token};
+use super::{brace_words, leading_word, lex, skip_leading, LeadingWord, Taker, Token};
 use crate::security::outward::{read_line, LEXER_LAUNCHERS, MODELED_LAUNCHERS};
+
+/// TSK-1456: the one decision on a word in front of a command. Only an
+/// identifier name before `=` is an assignment, for both takers, so the set
+/// every guard skips is unchanged; a word some shell or launcher may read
+/// either way is never skipped.
+#[test]
+fn leading_words_skip_only_assignments() {
+    use LeadingWord::{Assignment, Program, Unplaced};
+    for (word, shell, env) in [
+        ("FOO=1", Assignment, Assignment),
+        ("_a1=", Assignment, Assignment),
+        ("A=b=c", Assignment, Assignment),
+        ("git", Program, Program),
+        ("=git", Program, Program),
+        ("=", Program, Program),
+        ("/tmp/a=b/git", Program, Unplaced),
+        ("((i=1))", Program, Unplaced),
+        ("X+=1", Unplaced, Unplaced),
+        ("a[0]=1", Unplaced, Unplaced),
+        ("a[x/y]=1", Unplaced, Unplaced),
+        ("1X=2", Unplaced, Unplaced),
+        ("X-Y=1", Unplaced, Unplaced),
+        ("{X=1,git}", Unplaced, Unplaced),
+        ("$X=1", Unplaced, Unplaced),
+        ("\u{e9}=1", Unplaced, Unplaced),
+    ] {
+        assert_eq!(leading_word(word, Taker::Shell), shell, "shell: {word}");
+        assert_eq!(leading_word(word, Taker::Env), env, "env: {word}");
+    }
+    let words: Vec<String> = ["A=1", "B=2", "X+=1", "C=3", "git"]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(skip_leading(&words, Taker::Shell), 2);
+    assert_eq!(skip_leading(&words, Taker::Env), 2);
+    assert_eq!(skip_leading(&words[2..], Taker::Shell), 0);
+}
+
+/// TSK-1456: a word with one brace list reads as its words; any other
+/// brace shape is not read.
+#[test]
+fn brace_words_read_one_list() {
+    assert_eq!(
+        brace_words("{X=1,git}"),
+        Some(vec!["X=1".to_string(), "git".to_string()])
+    );
+    assert_eq!(
+        brace_words("a{b,,c}d"),
+        Some(vec!["abd".to_string(), "ad".to_string(), "acd".to_string()])
+    );
+    for word in ["{a}", "{a,{b,c}}", "{a,b}{c,d}", "}{a,b}", "a=b", "{a..c}"] {
+        assert_eq!(brace_words(word), None, "{word}");
+    }
+}
 
 fn word(line: &str, command: usize, at: usize) -> Token {
     lex(line).commands[command][at].clone()
