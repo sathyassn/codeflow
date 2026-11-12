@@ -2745,7 +2745,7 @@ mod tests {
             (
                 "gitfile naming another sibling's registration",
                 Box::new(|| {
-                    std::fs::write(&marker, format!("gitdir: {}\n", one.display())).unwrap()
+                    std::fs::write(&marker, format!("gitdir: {}\n", one.display())).unwrap();
                 }),
                 Box::new(|| std::fs::write(&marker, &gitfile).unwrap()),
             ),
