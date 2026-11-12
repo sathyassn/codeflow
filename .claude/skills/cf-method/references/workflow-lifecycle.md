@@ -54,9 +54,10 @@ inside an approved node remain execution evidence.
 Discovery, the one plan and its approval are the orchestrator's workflow:
 both primary families independently research, analyze and identify risks;
 Claude produces design direction and real design work and drafts the one
-plan; Codex challenges it; both seats approve its shape once or record
-settled dissent per `autonomy.md`. Missing seats are recorded as reduced
-assurance after qualified routes are exhausted, never fabricated as
+plan; Codex, or any other family when Codex is unavailable, challenges it;
+Claude and the challenging seat approve its shape once or record settled
+dissent per `autonomy.md`. Missing seats are recorded as reduced assurance
+only after qualified routes to every other family are exhausted, never fabricated as
 completion.
 
 Use `cf-plan` to materialize only warranted records. Where CodeFlow durable
