@@ -16,7 +16,9 @@ use serde::Deserialize;
 
 use crate::security::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::security::pattern::is_path_targeted;
-use crate::security::shell_lex::{leading_word, skip_leading, LeadingWord, Taker};
+use crate::security::shell_lex::{
+    leading_word, leading_word_written, skip_leading, skip_leading_written, LeadingWord, Taker,
+};
 
 use super::git_target::{
     self, assignment, expand_word, flat_top_level, has_substitution, host_absolute, host_path,
@@ -1136,9 +1138,11 @@ fn evaluate_report_with_runners(
 
         // Dispatch on the argument vector the program receives: unquoted
         // redirections are the shell's, not arguments.
-        let mut words = command_argv(segment);
+        let (mut words, mut marks) = command_argv_marked(segment);
+        let written = words.len();
         strip_reserved_words(&mut words);
-        let launched = configuration_launch(&words);
+        marks.drain(..written - words.len());
+        let launched = configuration_launch(&words, Some(&marks));
         if top_level {
             // A redirection can fail, and the assignment with it.
             let redirected = words.len() != tokens.len();
@@ -1260,7 +1264,7 @@ pub(crate) fn simple_commands(command: &str) -> Vec<SimpleCommand> {
             let written = words.len();
             strip_reserved_words(&mut words);
             marks.drain(..written - words.len());
-            let (at, _) = launched_at(&words)?;
+            let (at, _) = launched_at_written(&words, Some(&marks))?;
             Some(SimpleCommand {
                 words: words.split_off(at),
                 marks: marks.split_off(at),
@@ -1670,13 +1674,21 @@ fn configuration_destination(program: &str, word: &str) -> Option<String> {
         .then(|| format!("unresolved variable destination in {program}: {name}"))
 }
 
-/// Look past assignment-shaped words to inspect a possible Git invocation.
+/// The words after every leading word some shell or launcher may take as an
+/// assignment ([`leading_word`] is not [`LeadingWord::Program`]), and after
+/// any other word holding `=` that cannot be a Git or launcher program: the
+/// second reading the outward reader inspects for a possible Git
+/// invocation, beside the first, which judges such a word as the program.
 /// The shape check separately refuses an unresolved destination at that
 /// decision; an uncertain prefix must not hide the command being judged.
 pub(crate) fn configuration_assignment_tail(words: &[String]) -> &[String] {
     let count = words
         .iter()
-        .take_while(|word| configuration_assignment_prefix(word))
+        .take_while(|word| {
+            word.contains('=')
+                && (leading_word(word, Taker::Shell) != LeadingWord::Program
+                    || !configuration_program(word))
+        })
         .count();
     &words[count..]
 }
@@ -1687,22 +1699,49 @@ fn configuration_program(word: &str) -> bool {
         || launcher_name(word) == "env"
 }
 
-fn configuration_assignment_prefix(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        // A literal assignment wins even when its value ends with `/git`.
-        // Otherwise retain a possible Git/launcher program for dispatch.
-        assignment_name(name.strip_suffix('+').unwrap_or(name)) || !configuration_program(word)
-    })
+/// Whether dispatch looks past `word`, with its writing `marked` when the
+/// caller has it ([`leading_word_written`]), to the command after it: an
+/// assignment the shell takes, even when its value ends with `/git`, or a
+/// word holding `=` that cannot be a Git or launcher program. A word some
+/// reader may take as an assignment and that may be Git or a launcher is
+/// judged as the program here, and so is one the shell runs because a
+/// quote stands in its name or `=` when the shell fills in part of it;
+/// [`expand_segments`] judges the command after either as a reading of its
+/// own (TSK-1456).
+fn looked_past(word: &str, marked: Option<&str>) -> bool {
+    let placed = match marked {
+        Some(marked) => leading_word_written(marked, Taker::Shell),
+        None => leading_word(word, Taker::Shell),
+    };
+    let quoted = placed != LeadingWord::Assignment
+        && leading_word(word, Taker::Shell) == LeadingWord::Assignment;
+    word.contains('=')
+        && (placed == LeadingWord::Assignment
+            || !(configuration_program(word) || (quoted && expands(word))))
 }
 
-fn configuration_launch(mut words: &[String]) -> Option<(&str, &[String])> {
+/// The program a segment's words run and its arguments, for dispatch, with
+/// the words as written ([`command_argv_marked`]) when the caller has them,
+/// parallel to `words`.
+fn configuration_launch<'w>(
+    words: &'w [String],
+    marks: Option<&[String]>,
+) -> Option<(&'w str, &'w [String])> {
+    let marks = marks.filter(|marks| marks.len() == words.len());
+    let past = |at: usize| looked_past(&words[at], marks.map(|marks| marks[at].as_str()));
+    let mut from = 0;
     loop {
-        let (program, args) = strip_launchers(configuration_assignment_tail(words))?;
-        if !configuration_assignment_prefix(program) {
-            return Some((program, args));
+        let mut tail = from;
+        while tail < words.len() && past(tail) {
+            tail += 1;
+        }
+        let (at, _) = launched_at_written(&words[tail..], marks.map(|marks| &marks[tail..]))?;
+        let at = tail + at;
+        if !past(at) {
+            return Some((words[at].as_str(), &words[at + 1..]));
         }
         // An env/launcher may expose another unresolved assignment prefix.
-        words = args;
+        from = at + 1;
     }
 }
 
@@ -7420,9 +7459,10 @@ fn expand_segments(
         // not after it.
         let mut alternatives: Vec<String> = Vec::new();
         let mut unread = None;
-        if let Some((at, taker)) = launched_at(&words) {
+        if let Some((at, taker)) = launched_at_written(&words, Some(&marks)) {
             let program = words[at].as_str();
             let marked = marks[at].as_str();
+            let placed = leading_word_written(marked, taker);
             // A program word the guard cannot fill in is judged under each
             // program it could be (TSK-1456 AC-9).
             let mut read_unread = |alternatives: &mut Vec<String>| {
@@ -7446,7 +7486,7 @@ fn expand_segments(
             } else {
                 // A word `env` reads as an assignment may still be one zsh
                 // rewrites first (`env =name`), so its readings stand too.
-                let unplaced = leading_word(program, taker) == LeadingWord::Unplaced;
+                let unplaced = placed == LeadingWord::Unplaced;
                 match program_readings(&marks, at) {
                     Some(readings) if !readings.is_empty() => alternatives.extend(readings),
                     Some(_) if !unplaced && unread_pattern(marked) => {
@@ -7456,7 +7496,7 @@ fn expand_segments(
                     None => unreadable = true,
                 }
             }
-            if leading_word(program, taker) == LeadingWord::Unplaced {
+            if placed == LeadingWord::Unplaced {
                 match other_readings(&marks, at) {
                     Some(readings) => {
                         for reading in readings {
@@ -7466,6 +7506,19 @@ fn expand_segments(
                         }
                     }
                     None => out.unread_commands.push(program.to_string()),
+                }
+                // A word whose text reads as an assignment, but which the
+                // shell runs because a quote stands in its name or `=`, is
+                // skipped by a reader that has only the text; the same
+                // program spelled as the relative path it is reads as the
+                // program everywhere. Only a word holding `/` can name a
+                // guarded program, and its name, before the `=`, never
+                // starts with `/`.
+                if leading_word(program, taker) == LeadingWord::Assignment && program.contains('/')
+                {
+                    let mut spelled = marks.clone();
+                    spelled[at] = format!("{}{}{marked}", literal_mark('.'), literal_mark('/'));
+                    alternatives.push(requote_words(&spelled));
                 }
             }
         }
@@ -14324,13 +14377,29 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
 /// [`Taker::Shell`]. Only assignments ([`leading_word`]) are skipped
 /// (TSK-1456).
 pub(crate) fn launched_at(tokens: &[String]) -> Option<(usize, Taker)> {
+    launched_at_written(tokens, None)
+}
+
+/// [`launched_at`] with the words as written ([`ShellWord::marked`]),
+/// parallel to `tokens`, so a word whose name or `=` a quote made literal
+/// is not skipped as an assignment ([`leading_word_written`]).
+pub(crate) fn launched_at_written(
+    tokens: &[String],
+    marks: Option<&[String]>,
+) -> Option<(usize, Taker)> {
+    let marks = marks.filter(|marks| marks.len() == tokens.len());
     let mut idx = 0;
     let mut taker = Taker::Shell;
     loop {
         // Skip leading VAR=val assignments.
-        idx += tokens
-            .get(idx..)
-            .map_or(0, |rest| skip_leading(rest, taker));
+        idx += match marks {
+            Some(marks) => marks
+                .get(idx..)
+                .map_or(0, |rest| skip_leading_written(rest, taker)),
+            None => tokens
+                .get(idx..)
+                .map_or(0, |rest| skip_leading(rest, taker)),
+        };
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             match skip_launcher_options(t, tokens, idx + 1) {

@@ -3,7 +3,7 @@ use super::actions::{table, PatternToken};
 use super::headless::{
     after_runner_options, package_bin, shell_command_string, skip_env, skip_options,
 };
-use super::shell_lex::{skip_leading, Taker};
+use super::shell_lex::{skip_leading, skip_leading_written, Taker};
 use crate::hooks::git_guard::{
     command_argv, expand_commands, split_alias, strip_launchers, strip_reserved_words, AliasAnswer,
 };
@@ -665,11 +665,19 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     for (stage, segment) in segments.into_iter().enumerate() {
         stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
+        let (_, mut marks) = crate::hooks::git_guard::command_argv_marked(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
         patterns.drain(..before - words.len());
+        marks.drain(..marks.len().saturating_sub(words.len()));
         let trigger = crate::hooks::git_guard::configuration_environment_trigger(&words);
-        let leading = skip_leading(&words, Taker::Shell);
+        // The words as written decide the assignments, so a word whose name
+        // or `=` a quote made literal is the program (TSK-1456).
+        let leading = if marks.len() == words.len() {
+            skip_leading_written(&marks, Taker::Shell)
+        } else {
+            skip_leading(&words, Taker::Shell)
+        };
         if leading == words.len() {
             persistent = trigger.clone().or(persistent);
         }
@@ -702,8 +710,10 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
                     cwd: dir.clone(),
                 });
             }
-            argv(
+            // The assignments in front are already left out above.
+            argv_from(
                 args,
+                0,
                 Some(&assigned_patterns),
                 dir.as_deref(),
                 depth + 1,
@@ -1604,9 +1614,30 @@ pub(crate) fn line_directories(
     set
 }
 
-#[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
 fn argv(
     args: &[String],
+    patterns: Option<&[bool]>,
+    cwd: Option<&Path>,
+    depth: usize,
+    out: &mut Parsed,
+) {
+    argv_from(
+        args,
+        skip_leading(args, Taker::Shell),
+        patterns,
+        cwd,
+        depth,
+        out,
+    );
+}
+
+/// [`argv`] for words whose first `lead` are the assignments in front of
+/// the program, decided by the caller: [`visit_literal`] decides them on
+/// the words as written ([`skip_leading_written`], TSK-1456).
+#[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
+fn argv_from(
+    args: &[String],
+    lead: usize,
     patterns: Option<&[bool]>,
     cwd: Option<&Path>,
     depth: usize,
@@ -1615,7 +1646,7 @@ fn argv(
     if depth > 32 {
         return;
     }
-    let args = &args[skip_leading(args, Taker::Shell)..];
+    let args = &args[lead..];
     let patterns = pattern_tail(patterns, args.len());
     let possible_command = crate::hooks::git_guard::configuration_assignment_tail(args);
     if possible_command.len() < args.len() {

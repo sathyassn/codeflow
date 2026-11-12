@@ -2136,8 +2136,8 @@ fn segment_directories(
                         shell.observe(&tokens[0], &tokens[1..]);
                     }
                 } else {
-                    let words = super::command_argv(segment);
-                    let launched = super::configuration_launch(&words);
+                    let (words, marks) = super::command_argv_marked(segment);
+                    let launched = super::configuration_launch(&words, Some(&marks));
                     shell.assign(
                         &tokens,
                         launched.map(|(program, _)| program),

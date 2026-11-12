@@ -31,7 +31,9 @@
 //! such a run sets `security.headless_peer_runs` to `warn`.
 
 use crate::hooks::git_guard::{assumed_marks, other_readings, simple_commands};
-use crate::security::shell_lex::{leading_word, skip_leading, LeadingWord, Taker};
+use crate::security::shell_lex::{
+    leading_word, leading_word_written, skip_leading, LeadingWord, Taker,
+};
 
 /// A headless peer run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,15 +110,19 @@ fn classify_written(argv: &[String], marks: Option<&[String]>, depth: usize) -> 
         if program.contains(['$', '`']) || program.chars().any(char::is_control) {
             return Found::Unresolved;
         }
+        // Each launcher below leaves a tail of the words, so the same tail
+        // of the words as written stays parallel to them.
+        let tail = marks
+            .filter(|marks| marks.len() == written)
+            .map(|marks| &marks[written - argv.len()..]);
+        let placed = match tail {
+            Some(tail) => leading_word_written(&tail[0], taker),
+            None => leading_word(program, taker),
+        };
         // A word that may be an assignment or the program: each other
         // reading is judged here, and the word as the program below.
-        if leading_word(program, taker) == LeadingWord::Unplaced {
-            // Each launcher below leaves a tail of the words, so the same
-            // tail of the words as written stays parallel to them.
-            let marks = match marks {
-                Some(marks) if marks.len() == written => marks[written - argv.len()..].to_vec(),
-                _ => assumed_marks(argv),
-            };
+        if placed == LeadingWord::Unplaced {
+            let marks = tail.map_or_else(|| assumed_marks(argv), <[String]>::to_vec);
             let Some(readings) = other_readings(&marks, 0) else {
                 return Found::Unresolved;
             };

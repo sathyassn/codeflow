@@ -141,6 +141,11 @@ fn words_the_shell_runs_as_the_program_are_judged_as_the_program() {
         ),
         ("exec-guard", "'X=/usr/local/bin/claude' -p x", headless),
         ("exec-guard", "X+=/usr/local/bin/claude -p x", headless),
+        (
+            "git-guard",
+            "'X='$(echo /usr/bin/git) push --force origin main",
+            Some("a command substitution in the program name"),
+        ),
         // Controls.
         ("git-guard", "'X=1' git status", None),
         ("exec-guard", "'X=1' git status", None),

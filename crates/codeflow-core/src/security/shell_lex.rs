@@ -160,12 +160,41 @@ pub(crate) fn leading_word(word: &str, taker: Taker) -> LeadingWord {
     LeadingWord::Unplaced
 }
 
+/// [`leading_word`] for a word as written, with its expansion provenance
+/// (`ShellWord::marked` in git-guard, TSK-1456). `env` reads the word after
+/// quote removal, as [`leading_word`] does. The shell takes an assignment
+/// only when the name and its `=` are unquoted, so a word whose text reads
+/// as one but whose name or `=` a quote or escape made literal is
+/// [`LeadingWord::Unplaced`]: the shell runs it as the program, and a
+/// reader that has only the text skips it, so each reading is judged.
+pub(crate) fn leading_word_written(marked: &str, taker: Taker) -> LeadingWord {
+    let text = crate::hooks::git_guard::unmarked(marked);
+    let read = leading_word(&text, taker);
+    if taker == Taker::Env || read != LeadingWord::Assignment {
+        return read;
+    }
+    let name = text.split_once('=').map(|(name, _)| name);
+    if marked.split_once('=').map(|(name, _)| name) == name {
+        LeadingWord::Assignment
+    } else {
+        LeadingWord::Unplaced
+    }
+}
+
 /// How many of `words`, from the first, are assignments `taker` skips
 /// ([`LeadingWord::Assignment`]).
 pub(crate) fn skip_leading(words: &[String], taker: Taker) -> usize {
     words
         .iter()
         .take_while(|word| leading_word(word, taker) == LeadingWord::Assignment)
+        .count()
+}
+
+/// [`skip_leading`] for words as written ([`leading_word_written`]).
+pub(crate) fn skip_leading_written(marks: &[String], taker: Taker) -> usize {
+    marks
+        .iter()
+        .take_while(|word| leading_word_written(word, taker) == LeadingWord::Assignment)
         .count()
 }
 
