@@ -357,6 +357,27 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1390: a patch's text, read only for the paths it names. A byte that
+    // is not UTF-8 becomes U+FFFD, which adds or removes no newline, tab,
+    // space or quote, and a path component holding it is not ASCII, so it
+    // reads as landing on every enforcement path and only adds a refusal.
+    (
+        "codeflow-core/src/hooks/git_guard/path_writers.rs",
+        "read_patch",
+        "from_utf8_lossy",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1390: the bytes of a C-quoted patch path. A byte that is not UTF-8
+    // becomes U+FFFD, which is not ASCII, so the component reads as landing on
+    // every enforcement path and only adds a refusal.
+    (
+        "codeflow-core/src/hooks/git_guard/path_writers.rs",
+        "unquote",
+        "from_utf8_lossy",
+        1,
+        "schema-reject-only",
+    ),
     // Added content is tested by secret token patterns; file identities come independently from path_bytes and this text is never a command, path or name.
     (
         "codeflow-core/src/hooks/git_hook.rs",
@@ -1511,6 +1532,24 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1390: a stored tree or index name read strictly as UTF-8. One that
+    // is not reads as a name that lands on every enforcement path, and refuses
+    // when its position can reach one, so a failed decode never reads as an
+    // absent or harmless name.
+    (
+        "crates/codeflow-core/src/hooks/git_guard/path_writers.rs",
+        "Reader::walk",
+        "obtain-absent:from_utf8",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/git_guard/path_writers.rs",
+        "stored_components",
+        "obtain-absent:from_utf8",
+        1,
+        "schema-reject-only",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -1716,6 +1755,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-cli/src/cmd/ci.rs",
         "pr_is_draft",
         "obtain-absent:from_slice",
+        1,
+        "unproven",
+    ),
+    // A run token or runner value that is not UTF-8 proves no binding, so
+    // the token is withheld and a private destination refuses (TSK-1252);
+    // it never sends the token or grants a pass.
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "RunToken::take",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "run_checks",
+        "obtain-absent:var",
         1,
         "unproven",
     ),
@@ -7024,6 +7080,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run_checks", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
+    ("crates/codeflow-core/src/hooks/git_guard/path_writers.rs", "read_patch", "is_file", 1, "Type check on metadata obtained with its error propagated as a refusal; a patch that is not a regular file also refuses, so a FIFO is never opened and nothing is read as absent (TSK-1390)."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
