@@ -156,6 +156,58 @@ fn words_the_shell_runs_as_the_program_are_judged_as_the_program() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// A value the shell keeps in one word, blanks included, never hides the
+/// program after it: each command is judged as the shell reads its words.
+#[test]
+fn values_the_shell_keeps_in_one_word_never_hide_the_program() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"root_checkout_commits":"off","hook_integrity":"block"},"security":{"secret_reads":"off","outward_actions":"block","headless_peer_runs":"block"}}"#,
+    );
+    let force = Some("git.force_push_protected");
+    let headless = Some("security.headless_peer_runs");
+    let rows = [
+        ("git-guard", "X=$[ 1 ] git push --force origin main", force),
+        ("git-guard", "X=${v: 1} git push --force origin main", force),
+        (
+            "git-guard",
+            "X=$[ 1 ] git push --no-verify origin main",
+            Some("git.no_verify_bypass"),
+        ),
+        (
+            "git-guard",
+            "X=${a[ 1 ]} bash -c 'git push --force origin main'",
+            force,
+        ),
+        (
+            "git-guard",
+            "X=${v:- x} sh -c 'git push --force origin main'",
+            force,
+        ),
+        (
+            "git-guard",
+            "env X=${v: 1} git push --force origin main",
+            force,
+        ),
+        ("exec-guard", "X=$[ 1 ] claude -p x", headless),
+        ("exec-guard", "X=${v+ x} codex exec x", headless),
+        (
+            "exec-guard",
+            "X=${v: 1} gh release create v1",
+            Some("security.outward_actions"),
+        ),
+        // Controls.
+        ("git-guard", "X=${v: 1} git status", None),
+        ("git-guard", "X=$[ 1 + 1 ] git status", None),
+        ("exec-guard", "X=${v:-a b} ls -p", None),
+        ("exec-guard", "echo ${v:- a b}", None),
+    ];
+    let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// Main's verdicts that the change keeps: refusals, readings and controls,
 /// each measured on main before the change.
 #[test]

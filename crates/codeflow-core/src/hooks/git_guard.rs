@@ -7547,7 +7547,13 @@ fn expand_segments(
         // A reading goes before the command it reads, so a reader that
         // walks the line in order (the directories it runs in, TSK-216)
         // gives it the directory the command starts in, never one the
-        // command itself may have moved to.
+        // command itself may have moved to. The command as the shell joins
+        // its expansions is a reading of its own, with no unread word.
+        let joined_first = out.segments.len();
+        if let Some(joined) = joined_expansion_reading(&seg) {
+            expand_bodies(vec![joined], out, depth, literals, git_bodies);
+        }
+        let joined_within = joined_first..out.segments.len();
         let first = out.segments.len();
         expand_bodies(alternatives, out, depth, literals, git_bodies);
         let within = first..out.segments.len();
@@ -7557,6 +7563,13 @@ fn expand_segments(
             literals.note(&words);
         }
         out.segments.push(seg);
+        if !joined_within.is_empty() {
+            out.readings.push(Reading {
+                within: joined_within,
+                of: out.segments.len() - 1,
+                unread: None,
+            });
+        }
         if !within.is_empty() {
             out.readings.push(Reading {
                 within,
@@ -7569,6 +7582,120 @@ fn expand_segments(
         }
         expand_bodies(bodies, out, depth, literals, git_bodies);
     }
+}
+
+/// The command `segment` as the shell reads an unquoted `${…}` or `$[…]`
+/// expansion that holds a blank, when that changes the program it runs or
+/// the words in front of it (TSK-1456). The shell keeps such an expansion in
+/// one word, blanks included, while [`shell_words`] splits the word at them,
+/// so a value holding one in front of the program would hide the program.
+/// The reading holds one unknown value in place of each such expansion. A
+/// command whose words up to its program are the same either way has no
+/// reading: its arguments keep the split reading alone.
+fn joined_expansion_reading(segment: &str) -> Option<String> {
+    let joined = join_spaced_expansions(segment)?;
+    let up_to_program = |text: &str| {
+        let (mut words, mut marks) = command_argv_marked(text);
+        let written = words.len();
+        strip_reserved_words(&mut words);
+        marks.drain(..written - words.len());
+        let end = launched_at_written(&words, Some(&marks)).map_or(words.len(), |(at, _)| at + 1);
+        words.truncate(end);
+        words
+    };
+    (up_to_program(&joined) != up_to_program(segment)).then_some(joined)
+}
+
+/// `segment` with each unquoted `${…}` or `$[…]` expansion that holds a
+/// blank replaced by one unknown value ([`substitution_placeholder`]), or
+/// `None` when it has none. Quotes and escapes are read as
+/// [`split_into_segments`] reads them; an expansion with no close stays as
+/// written.
+fn join_spaced_expansions(segment: &str) -> Option<String> {
+    let chars: Vec<char> = segment.chars().collect();
+    let mut out = String::with_capacity(segment.len());
+    let mut joined = false;
+    let (mut single, mut ansi_c, mut double) = (false, false, false);
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        if single {
+            out.push(c);
+            if ansi_c && c == '\\' {
+                if let Some(&next) = chars.get(i + 1) {
+                    out.push(next);
+                    i += 1;
+                }
+            } else if c == '\'' {
+                single = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\\' => {
+                out.push(c);
+                if let Some(&next) = chars.get(i + 1) {
+                    out.push(next);
+                    i += 1;
+                }
+            }
+            '\'' if !double => {
+                single = true;
+                ansi_c = out.ends_with('$') && !out.ends_with("\\$");
+                out.push(c);
+            }
+            '"' => {
+                double = !double;
+                out.push(c);
+            }
+            '$' if !double => match expansion_end(&chars, i + 1) {
+                Some(end) if chars[i..end].iter().any(|c| matches!(c, ' ' | '\t' | '\n')) => {
+                    out.push(substitution_placeholder(false));
+                    joined = true;
+                    i = end;
+                    continue;
+                }
+                _ => out.push(c),
+            },
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    joined.then_some(out)
+}
+
+/// The index just past the close of the `${…}` or `$[…]` expansion whose
+/// opening bracket is at `open`, counting nested brackets of its kind
+/// outside quotes and escapes; `None` when `open` holds no such bracket or
+/// the expansion does not close.
+fn expansion_end(chars: &[char], open: usize) -> Option<usize> {
+    let opener = *chars.get(open)?;
+    let close = match opener {
+        '{' => '}',
+        '[' => ']',
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    let (mut single, mut double) = (false, false);
+    let mut i = open;
+    while let Some(&c) = chars.get(i) {
+        match c {
+            '\\' if !single => i += 1,
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            _ if single || double => {}
+            _ if c == opener => depth += 1,
+            _ if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Expand each body one level deeper than the segment that carries it; past
@@ -17798,6 +17925,53 @@ mod tests {
         );
         assert!(unread_words(&expanded.readings, at("$A $B x")).is_empty());
         assert!(unread_words(&expanded.readings, at("git status")).is_empty());
+    }
+
+    /// TSK-1456: an unquoted `${…}` or `$[…]` expansion holding a blank is
+    /// one word to the shell. When the split words would misplace the
+    /// program, the command is also read with one unknown value in its
+    /// place; arguments keep the split reading alone.
+    #[test]
+    fn expansions_the_shell_keeps_in_one_word_are_read_joined() {
+        let unknown = substitution_placeholder(false);
+        for (segment, joined) in [
+            ("X=${v: 1} git status", "X=\u{0} git status"),
+            ("X=$[ 1 + 1 ] git status", "X=\u{0} git status"),
+            ("X=${a[ 1 ]} git status", "X=\u{0} git status"),
+            ("X=${v:-{ a }} git status", "X=\u{0} git status"),
+            ("env X=${v:- a} git status", "env X=\u{0} git status"),
+            ("${v:- git} status", "\u{0} status"),
+        ] {
+            assert_eq!(
+                joined_expansion_reading(segment),
+                Some(joined.replace('\u{0}', &unknown.to_string())),
+                "{segment}"
+            );
+        }
+        for segment in [
+            // No blank, a quoted blank or a quoted expansion.
+            "X=${v:1} git status",
+            "X=\"${v: 1}\" git status",
+            "X='${v: 1}' git status",
+            "X=\\${v: 1} git status",
+            // An expansion with no close is left as written.
+            "X=${v: 1 git status",
+            // Only an argument holds one.
+            "git log ${v:- a}",
+            "echo $[ 1 + 1 ]",
+        ] {
+            assert_eq!(joined_expansion_reading(segment), None, "{segment}");
+        }
+        let expanded = expand_commands_read("X=${v: 1} git status");
+        assert!(expanded
+            .segments
+            .iter()
+            .any(|s| strip_launchers(&command_argv(s))
+                .is_some_and(|(program, args)| program == "git" && args == ["status"])));
+        assert!(expanded
+            .readings
+            .iter()
+            .any(|reading| reading.unread.is_none()));
     }
 
     /// TSK-1002 review 02: env's split string is read by env's grammar into
