@@ -86,12 +86,14 @@ fn shown(guard: &[&str], out: &Output) -> String {
     )
 }
 
-/// A refusal under hook integrity whose message names the operator.
+/// The install check's own refusal: its finding, under hook integrity,
+/// naming the operator as the one who runs the verbs.
 fn operator_refusal(out: &Output) -> bool {
     let stderr = String::from_utf8_lossy(&out.stderr);
     out.status.code() == Some(2)
         && stderr.contains("git.hook_integrity")
-        && stderr.contains("operator")
+        && stderr.contains("install run `")
+        && stderr.contains("only the operator runs `codeflow update` and `codeflow init`")
 }
 
 /// A refusal under hook integrity.
@@ -335,6 +337,145 @@ fn the_install_verbs_refuse_with_the_installed_binary() {
     tally.finish();
 }
 
+/// AC-1: words the shell expands without a variable sign or a backtick
+/// (braces, patterns and a leading `=`), in the program position, as the
+/// first operand, and among the words cargo passes on, are read as words
+/// the guard cannot resolve.
+#[test]
+fn words_the_shell_expands_refuse_where_the_verb_could_follow() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "codeflow {update,--force}",
+        "codeflow {update,init}",
+        "codeflow upd?te",
+        "codeflow [u]pdate",
+        "codeflow upd*",
+        "./target/debug/codeflow {init,--yes}",
+        "{codeflow,} update",
+        "{./target/debug/codeflow,update}",
+        "./target/debug/codeflo? update",
+        "./target/debug/codefl[o]w init --yes",
+        "=codeflow update",
+        "=codeflow {update,--force}",
+        "nice -n 5 codeflow upd?te",
+        "cargo run -- $V",
+        r#"cargo run -- "$@""#,
+        "cargo run -- {update,--force}",
+        "cargo run -- upd?te",
+        "cargo r {init,--yes}",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    tally.finish();
+}
+
+/// AC-1: a shell reading its input behind a launcher the reader does not
+/// strip, a value assigned for a command that can read it, and a search
+/// program's option that runs a program are judged.
+#[test]
+fn runs_behind_launchers_values_and_options_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "printf 'codeflow update' | chrt -o 0 sh",
+        "echo codeflow init | taskset -c 0 bash",
+        "PAGER='codeflow update' man ls",
+        "export PAGER='codeflow update'; man ls",
+        "rg --pre ./target/debug/codeflow x update",
+        "rg --pre=codeflow pattern init",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    tally.finish();
+}
+
+/// AC-1: on a shell that reads a backslash as a path separator, an
+/// unquoted path of that form is read.
+#[test]
+fn a_backslash_path_refuses_on_a_shell_that_reads_it_as_a_separator() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let mut tally = Tally::default();
+    for row in [
+        r".\target\debug\codeflow.exe update",
+        r".\target\release\codeflow init --yes",
+        r"& .\target\debug\codeflow.exe update --force",
+    ] {
+        tally.refused(
+            &[EXEC],
+            row,
+            &file_tool("PowerShell", &serde_json::json!({"command": row}), &root),
+            &root,
+            operator_refusal,
+        );
+    }
+    tally.finish();
+}
+
+/// AC-1 through a Git runner: a program value Git runs as a command line
+/// reaches the install check itself.
+#[test]
+fn the_install_check_fires_through_a_git_runner() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "git -c core.pager='codeflow update' log -1",
+        "git -c core.pager='./target/debug/codeflow init --yes' log -1",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    tally.finish();
+}
+
+/// AC-6: words that only name the verbs as data stay allowed: the binary's
+/// own verbs that record free text, test operands, other cargo
+/// subcommands, an assigned value no command on the line reads, a folder
+/// of that name given to a program that never runs its operands, and a
+/// search program's pattern.
+#[test]
+fn words_that_name_the_verbs_as_data_stay_allowed() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        r#"codeflow task new --title "the operator runs codeflow update""#,
+        r#"codeflow feedback new "codeflow init wrote a file twice""#,
+        r#"codeflow epic new --title "codeflow update reads the pin""#,
+        r#"[ "$x" = "codeflow update" ]"#,
+        r#"test "$x" = "codeflow init""#,
+        "cargo nextest run update",
+        "cargo +stable nextest run init",
+        "cargo run --example init",
+        "cargo run -p codeflow-cli -- task update TSK-1",
+        r#"export NOTE="run codeflow update""#,
+        r#"NOTE="run codeflow update"; echo done"#,
+        "npm --prefix codeflow update",
+        "make -C codeflow init",
+        "cp -r codeflow update",
+        "ag 'codeflow init' docs",
+        "ack 'codeflow update' docs",
+        r#"jq '.steps[] | select(. == "codeflow update")' plan.json"#,
+        "rg --pre ./tools/pdftext pattern docs",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_allowed(&rows, &root);
+    tally.finish();
+}
+
 /// AC-1 and AC-2 by location, with no exemption by location: a run in a
 /// linked worktree, in a separate scratch repository under the temporary
 /// folder, reached from the project by a directory change, or in a folder
@@ -551,29 +692,55 @@ fn shipped_claude_presets_leave_the_worktree_copies_to_the_guards() {
 #[test]
 fn every_guard_and_hook_message_names_the_operator() {
     let mut unnamed = Vec::new();
-    for clearing in [
-        &codeflow_core::remedy::HOOK_INTEGRITY,
-        &codeflow_core::remedy::INTERPRETER_ARGUMENT,
-        &codeflow_core::remedy::INSTALL_RUN,
-        &codeflow_core::remedy::POLICY_DEPRECATED,
-        &codeflow_core::remedy::POLICY_UNSUPPORTED,
-    ] {
-        if !clearing.text.contains("operator") {
-            unnamed.push(format!("remedy {}", clearing.name));
-        }
-    }
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let names_a_verb =
         |line: &str| line.contains("codeflow update") || line.contains("codeflow init");
+    let mut catalogued = 0;
+    for clearing in codeflow_core::remedy::CATALOG {
+        if names_a_verb(clearing.text) {
+            catalogued += 1;
+            if !clearing.text.contains("operator") {
+                unnamed.push(format!("remedy {}", clearing.name));
+            }
+        }
+    }
+    assert!(
+        catalogued >= 15,
+        "the catalogued remedies naming a verb were not found: {catalogued}"
+    );
+    // Messages outside the catalogue that tell the reader to run a verb.
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let tells_to_run = |line: &str| {
+        [
+            "run `codeflow update",
+            "run `codeflow init",
+            "run codeflow update",
+            "run codeflow init",
+            "then codeflow update",
+            "then `codeflow update",
+        ]
+        .iter()
+        .any(|phrase| line.contains(phrase))
+    };
     for source in [
         "crates/codeflow-core/src/hooks/orient.rs",
+        "crates/codeflow-core/src/hooks/policy_schema.rs",
         "crates/codeflow-core/src/scaffold/version.rs",
+        "crates/codeflow-core/src/scaffold/init.rs",
+        "crates/codeflow-core/src/scaffold/mod.rs",
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "crates/codeflow-core/src/model_catalog/inputs.rs",
+        "crates/codeflow-present/src/error.rs",
         "crates/codeflow-cli/src/cmd/hook.rs",
     ] {
         let text = std::fs::read_to_string(workspace.join(source)).unwrap();
         for line in text.lines() {
-            let message = line.trim_start().starts_with('"');
-            if message && names_a_verb(line) && !line.contains("operator") {
+            let comment = line.trim_start().starts_with("//");
+            if !comment
+                && (tells_to_run(line) || (names_a_verb(line) && line.contains("; then")))
+                && !line.contains("operator")
+            {
                 unnamed.push(format!("{source}: {}", line.trim()));
             }
         }

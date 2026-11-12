@@ -724,7 +724,7 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
             "{form}: {stderr}"
         );
         assert!(
-            !stderr.contains("then run codeflow update"),
+            !stderr.contains("then runs codeflow update"),
             "{form}: {stderr}"
         );
     }
