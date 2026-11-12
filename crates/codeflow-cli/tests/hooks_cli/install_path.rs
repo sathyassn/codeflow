@@ -412,6 +412,30 @@ fn runs_behind_launchers_values_and_options_refuse() {
     tally.finish();
 }
 
+/// AC-1: a package manager that runs a package's binary by name, a
+/// subcommand that runs a command, and a quoted option value naming a
+/// command after its own `=` are judged as the run they start.
+#[test]
+fn package_managers_and_option_values_that_run_the_binary_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "yarn codeflow update",
+        "pnpm codeflow update",
+        "yarn run codeflow update",
+        "pnpm run codeflow init --yes",
+        "npm explore pkg -- codeflow update",
+        "tar -cf a.tar --checkpoint=1 '--checkpoint-action=exec=codeflow update' notes.txt",
+        "tar -cf a.tar --checkpoint-action 'exec=codeflow init --yes' notes.txt",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    tally.finish();
+}
+
 /// AC-1: on a shell that reads a backslash as a path separator, an
 /// unquoted path of that form is read.
 #[test]

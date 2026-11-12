@@ -646,6 +646,24 @@ mod tests {
         }
     }
 
+    /// Package managers that run a package's binary by name, a subcommand
+    /// that runs a command, and a quoted option value that names a command
+    /// after its own `=`.
+    #[test]
+    fn package_managers_and_option_values_that_run_the_binary_are_found() {
+        for command in [
+            "yarn codeflow update",
+            "pnpm codeflow update",
+            "yarn run codeflow update",
+            "pnpm run codeflow init --yes",
+            "npm explore pkg -- codeflow update",
+            "tar -cf a.tar --checkpoint=1 '--checkpoint-action=exec=codeflow update' notes.txt",
+            "tar -cf a.tar --checkpoint-action 'exec=codeflow init --yes' notes.txt",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+    }
+
     #[test]
     fn a_backslash_path_is_read_on_a_shell_that_takes_it_as_a_separator() {
         for command in [
