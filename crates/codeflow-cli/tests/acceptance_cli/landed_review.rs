@@ -238,6 +238,46 @@ fn the_marker_is_read_only_at_the_default_branchs_commit() {
     }
 }
 
+/// A line push whose clone cannot resolve the default branch is refused,
+/// even for a completion on an unmarked epic's line, and the refusal comes
+/// from rules that ran before this check: with `origin/HEAD` naming a
+/// branch the clone has not fetched, the import authority; with no `main`
+/// or `master` at all, the line's own proof. This check's marker read, which
+/// fails closed on the same condition, is not what refuses it.
+#[test]
+fn an_unresolvable_default_branch_refuses_a_completion_on_an_unmarked_line() {
+    let landed = reviewed_by(None, CLAUDE_REVIEW, "", "approved");
+    let root = landed.dir.path();
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ],
+    );
+    let unfetched = push_form(&landed);
+    assert_blocks(
+        &unfetched,
+        "an unfetched default branch",
+        &[
+            "work.import_authority",
+            "published home `trunk` is unavailable",
+        ],
+    );
+    assert!(!unfetched.1.contains("main_landing"), "{}", unfetched.1);
+
+    git(root, &["symbolic-ref", "-d", "refs/remotes/origin/HEAD"]);
+    git(root, &["branch", "-m", "main", "trunk"]);
+    let (code, out) = push_form(&landed);
+    assert_ne!(code, 0, "no default branch: {out}");
+    assert!(
+        out.contains("no main or master branch to land the line on")
+            && !out.contains("main_landing"),
+        "no default branch: {out}"
+    );
+}
+
 /// Batch 1 item 1: a marker the run cannot read refuses, naming the field
 /// and the values it accepts, in both forms.
 #[test]

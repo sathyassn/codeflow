@@ -116,7 +116,7 @@ fn default_tip(repo: &Repository) -> Result<Oid, String> {
         .map(|(_, tip)| *tip)
         .ok_or_else(|| {
             format!(
-                "the default branch `{}` does not resolve here, and the run names no default branch's commit (`--policy-from`)",
+                "the default branch `{}` does not resolve here, and the run was given no default branch's commit",
                 crate::git::display_text(&name.name)
             )
         })
