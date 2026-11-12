@@ -429,6 +429,10 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
     )
 }
 
+#[cfg(all(test, unix))]
+#[path = "agent_transport_tests.rs"]
+mod agent_transport_tests;
+
 #[cfg(test)]
 mod tests {
     #[test]
