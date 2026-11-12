@@ -447,7 +447,8 @@ fn profile_grants(
 }
 
 /// `ZDOTDIR`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or
-/// `APPDATA` set away from the defaults the generated rules name, so the
+/// `APPDATA` set away from the defaults the generated rules name, and a
+/// `CLAUDE_ENV_FILE` outside the default Claude folder they name, so the
 /// relocated startup files and saved shell state have no native deny; the
 /// guards still follow them.
 fn relocated(places: &Places) -> Vec<String> {
@@ -468,6 +469,16 @@ fn relocated(places: &Places) -> Vec<String> {
         if let Some(moved) = value.as_deref().filter(|v| *v != home.join(default)) {
             out.push(format!("{name} is {}", crate::git::display_path(moved)));
         }
+    }
+    if let Some(file) = places
+        .claude_env_file
+        .as_deref()
+        .filter(|file| !file.starts_with(home.join(".claude/session-env")))
+    {
+        out.push(format!(
+            "CLAUDE_ENV_FILE is {}",
+            crate::git::display_path(file)
+        ));
     }
     out
 }
@@ -748,7 +759,7 @@ mod tests {
             claude_config: Some(home.join(".claude")),
             codex_home: Some(home.join(".codex")),
             appdata: Some(home.join("AppData/Roaming")),
-            claude_env_file: None,
+            claude_env_file: Some(home.join(".claude/session-env/abc/hook-1.sh")),
         };
         assert!(relocated(&at_defaults).is_empty());
         let moved = Places {
@@ -762,11 +773,12 @@ mod tests {
             claude_config: Some(PathBuf::from("/fixture/claude")),
             codex_home: Some(PathBuf::from("/fixture/codex")),
             appdata: None,
-            claude_env_file: None,
+            claude_env_file: Some(PathBuf::from("/fixture/env/hook-1.sh")),
         };
         let found = relocated(&moved);
-        assert_eq!(found.len(), 4, "{found:?}");
+        assert_eq!(found.len(), 5, "{found:?}");
         assert!(found.iter().any(|f| f.starts_with("CLAUDE_CONFIG_DIR is ")));
         assert!(found.iter().any(|f| f.starts_with("CODEX_HOME is ")));
+        assert!(found.iter().any(|f| f.starts_with("CLAUDE_ENV_FILE is ")));
     }
 }
