@@ -2202,7 +2202,10 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     the command names a location or runs in a folder that holds one. A
     zsh flag, modifier or subscript on a variable whose value is or holds
     a location fails closed, since the guard does not compute the result,
-    whatever other variables the same word changes.
+    whatever other variables the same word changes. A variable read
+    anywhere inside such an expansion, at any depth, counts as changed,
+    and a changed expansion the guard cannot read to the end fails closed
+    too.
   - A second run adds what the first did not find. It judges a target in
     the directory its command runs in and compares it with each location
     by the node it reaches on disk, links and `..` included. A folder of
