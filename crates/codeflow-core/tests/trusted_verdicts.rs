@@ -199,7 +199,15 @@ fn the_registry_runs_in_its_own_workflow() {
             "{path}"
         );
         let names: Vec<String> = jobs(workflow).into_iter().map(|(_, n, _)| n).collect();
-        assert_eq!(names, ["registry check"], "{path}");
+        // This repository's copy adds the main-only cache writer (TSK-1240):
+        // a job that is no verdict and carries no `trusted:` name. The
+        // shipped template and its baseline keep the one registry job.
+        let expected: &[&str] = if path == ".github/workflows/codeflow-registry.yml" {
+            &["registry check", "cache main build"]
+        } else {
+            &["registry check"]
+        };
+        assert_eq!(names, expected, "{path}");
     }
     for (path, workflow) in &all {
         if jobs(workflow)
@@ -326,4 +334,108 @@ fn every_verdict_job_runs_only_the_default_branch_code() {
             }
         }
     }
+}
+
+/// Each shipped workflow (`assets/base/ci`), parsed.
+fn shipped_workflows() -> Vec<(String, Value)> {
+    workflows()
+        .into_iter()
+        .filter(|(path, _)| path.starts_with("assets/base/ci/"))
+        .collect()
+}
+
+/// TSK-1252 AC-11 (was TSK-1175 AC-1): every shipped checkout disables
+/// credential persistence, and the only steps that receive the run's
+/// token, each in its own environment, are the fetch steps, the pull
+/// request body reads, the `codeflow ci` step and TSK-1177's host-rules
+/// read and producer refusal.
+#[test]
+fn every_shipped_checkout_keeps_no_credential() {
+    let shipped = shipped_workflows();
+    assert!(shipped.len() >= 3, "{}", shipped.len());
+    let mut checkouts = 0;
+    for (path, workflow) in shipped {
+        for (id, _, job) in jobs(&workflow) {
+            for step in job["steps"].as_sequence().unwrap() {
+                let uses = step.get("uses").and_then(Value::as_str).unwrap_or_default();
+                if uses.starts_with("actions/checkout@") {
+                    checkouts += 1;
+                    assert_eq!(
+                        step["with"]["persist-credentials"].as_bool(),
+                        Some(false),
+                        "{path} {id}: a checkout persists its credential"
+                    );
+                }
+                let text = serde_yaml::to_string(step).unwrap();
+                if text.contains("github.token") {
+                    let name = step.get("name").and_then(Value::as_str).unwrap_or_default();
+                    assert!(
+                        [
+                            "Read the pull request's current body",
+                            "the pull request is unchanged since it was judged",
+                            "Fetch the pull request's base and head as data",
+                            "Fetch the shared registry",
+                            "codeflow ci (commit + branch + PR-body standards)",
+                            // TSK-1177: read with the read-only token for
+                            // the report's authority line and the Mode B
+                            // refusal, in the verdict and authority jobs.
+                            "Read the host rules for the authority line",
+                            "Refuse another producer of a trusted name",
+                        ]
+                        .contains(&name),
+                        "{path} {id}: step {name:?} receives the run's token"
+                    );
+                }
+            }
+        }
+    }
+    assert!(checkouts >= 6, "{checkouts}");
+}
+
+/// TSK-1252 AC-1, AC-7: the policy job's `codeflow ci` step reads the
+/// run's token as `CODEFLOW_CI_TOKEN` and no long-lived credential (no
+/// secret, personal token or App key), and the job's token is read-only
+/// with `contents: read`.
+#[test]
+fn the_policy_ci_step_gets_only_the_run_token() {
+    let (path, workflow) = shipped_workflows()
+        .into_iter()
+        .find(|(path, _)| path == "assets/base/ci/codeflow-policy.yml")
+        .unwrap();
+    let (_, _, job) = jobs(&workflow)
+        .into_iter()
+        .find(|(_, name, _)| name == "commit standards")
+        .unwrap();
+    let permissions = job["permissions"].as_mapping().unwrap();
+    assert_eq!(
+        job["permissions"]["contents"].as_str(),
+        Some("read"),
+        "{path}"
+    );
+    for (scope, level) in permissions {
+        assert_eq!(
+            level.as_str(),
+            Some("read"),
+            "{path}: {scope:?} is not read-only"
+        );
+    }
+    let step = job["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| {
+            step.get("name").and_then(Value::as_str)
+                == Some("codeflow ci (commit + branch + PR-body standards)")
+        })
+        .unwrap();
+    assert_eq!(
+        step["env"]["CODEFLOW_CI_TOKEN"].as_str(),
+        Some("${{ github.token }}"),
+        "{path}"
+    );
+    let env = serde_yaml::to_string(&step["env"]).unwrap();
+    for forbidden in ["secrets.", "GH_TOKEN", "GITHUB_TOKEN", "PAT", "APP_"] {
+        assert!(!env.contains(forbidden), "{path}: {forbidden} in {env}");
+    }
+    assert_eq!(env.matches("github.token").count(), 1, "{path}: {env}");
 }

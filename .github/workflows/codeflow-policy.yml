@@ -77,7 +77,10 @@
 # none (ADR-0091, TSK-1177).
 #
 # This repository's copy: CodeFlow is its own first consumer, so the verdict
-# jobs build the authority's own source in place of the pinned release, and
+# jobs run the authority's own build in place of the pinned release (the
+# binary a push to the default branch saved and attested, used only when
+# its attestation verifies and rebuilt otherwise; these jobs never save a
+# cache), and
 # a second verdict job, `trusted: release impact`, runs scripts/release.py
 # check-pr from the authority with the authority's binary, the pull request
 # body and its range as data. That job reads, logs and rechecks the body as the
@@ -166,7 +169,30 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The cache key names the default branch's exact commit and the build
+      # environment. It is computed from this checkout before any pull
+      # request data is fetched, so nothing a pull request controls reaches
+      # it.
+      - name: Identify the authority build
+        id: authority-build
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [ "$sha" = "$AUTHORITY_SHA" ]
+          git diff --quiet
+          git diff --cached --quiet
+          identity=$({
+            rustc -vV
+            cargo -V
+            cc --version
+            printf '%s\n' "${ImageOS:?}" "${ImageVersion:?}" "${RUNNER_ARCH:?}"
+            printf '%s\n' "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" "${CC-}" "${CFLAGS-}" "${LDFLAGS-}"
+          } | sha256sum | cut -d ' ' -f 1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "key=codeflow-policy-main-binary-v3-$sha-$identity" >> "$GITHUB_OUTPUT"
 
       - name: Assert the authority checkout
         env:
@@ -178,9 +204,111 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      - name: Build codeflow from the authority's source
+      # The limit of this design: the attestation covers the bytes that run, and
+      # nothing else. actions/cache extracts an archive (tar -P) before any
+      # check can run, so restoring an entry is not made safe by it; the
+      # restore goes to a fresh directory off PATH and is deleted unless the
+      # attestation verifies. On a miss the job builds with the dependency
+      # cache restored from the default branch's scope, whose trust is its
+      # single writer (codeflow-registry.yml, job cache-main-build).
+      # Read only: a verdict run restores the binary that a push to the
+      # default branch saved and attested (codeflow-registry.yml, job
+      # cache-main-build). The exact key only; no fallback key and no save.
+      - name: Restore the authority binary
+        id: authority-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/codeflow-main-binary
+          key: ${{ steps.authority-build.outputs.key }}
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The restored file is used only when its attestation verifies against
+      # the default branch's workflow identity and commit, and it then reports
+      # the authority's commit and a clean tree. Anything else deletes the
+      # restored directory and the job builds.
+      - name: Verify the authority binary
+        id: authority-verify
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+          CACHE_HIT: ${{ steps.authority-cache.outputs.cache-hit }}
+          BINARY_DIR: ${{ runner.temp }}/codeflow-main-binary
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          binary="$BINARY_DIR/codeflow"
+          verified=false
+          if [ "$CACHE_HIT" = true ]; then
+            if [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] \
+              && timeout 60 gh attestation verify "$binary" \
+                --repo "$GITHUB_REPOSITORY" \
+                --cert-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/codeflow-registry.yml@refs/heads/main" \
+                --source-ref refs/heads/main \
+                --source-digest "$AUTHORITY_SHA" \
+                --signer-digest "$AUTHORITY_SHA" \
+                --deny-self-hosted-runners > /dev/null \
+              && version=$(timeout 30 env -i "$binary" --version) \
+              && [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$AUTHORITY_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]; then
+              verified=true
+            else
+              echo "::warning::the cache entry for $AUTHORITY_SHA did not verify; deleting it from this job and building instead"
+            fi
+          fi
+          if [ "$verified" = true ]; then
+            mkdir -p target/release
+            cp "$binary" target/release/codeflow
+            echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+          else
+            rm -rf "$BINARY_DIR"
+          fi
+          echo "verified=$verified" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.authority-verify.outputs.verified != 'true'
+        with:
+          prefix-key: codeflow-policy-main-deps-v3
+          shared-key: authority
+          save-if: false
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - name: Build the authority binary
+        if: steps.authority-verify.outputs.verified != 'true'
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
           cargo build --release --locked -p codeflow-cli
+          version=$(target/release/codeflow --version)
+          if ! [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$AUTHORITY_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]; then
+            echo "::error::the rebuilt authority binary does not report $AUTHORITY_SHA with a clean tree"; exit 1
+          fi
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
       - name: Assert the authority checkout
@@ -628,7 +756,30 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The cache key names the default branch's exact commit and the build
+      # environment. It is computed from this checkout before any pull
+      # request data is fetched, so nothing a pull request controls reaches
+      # it.
+      - name: Identify the authority build
+        id: authority-build
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [ "$sha" = "$AUTHORITY_SHA" ]
+          git diff --quiet
+          git diff --cached --quiet
+          identity=$({
+            rustc -vV
+            cargo -V
+            cc --version
+            printf '%s\n' "${ImageOS:?}" "${ImageVersion:?}" "${RUNNER_ARCH:?}"
+            printf '%s\n' "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" "${CC-}" "${CFLAGS-}" "${LDFLAGS-}"
+          } | sha256sum | cut -d ' ' -f 1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "key=codeflow-policy-main-binary-v3-$sha-$identity" >> "$GITHUB_OUTPUT"
 
       - name: Assert the authority checkout
         env:
@@ -640,9 +791,111 @@ jobs:
             echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
           fi
 
-      - name: Build codeflow from the authority's source
+      # The limit of this design: the attestation covers the bytes that run, and
+      # nothing else. actions/cache extracts an archive (tar -P) before any
+      # check can run, so restoring an entry is not made safe by it; the
+      # restore goes to a fresh directory off PATH and is deleted unless the
+      # attestation verifies. On a miss the job builds with the dependency
+      # cache restored from the default branch's scope, whose trust is its
+      # single writer (codeflow-registry.yml, job cache-main-build).
+      # Read only: a verdict run restores the binary that a push to the
+      # default branch saved and attested (codeflow-registry.yml, job
+      # cache-main-build). The exact key only; no fallback key and no save.
+      - name: Restore the authority binary
+        id: authority-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/codeflow-main-binary
+          key: ${{ steps.authority-build.outputs.key }}
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # The restored file is used only when its attestation verifies against
+      # the default branch's workflow identity and commit, and it then reports
+      # the authority's commit and a clean tree. Anything else deletes the
+      # restored directory and the job builds.
+      - name: Verify the authority binary
+        id: authority-verify
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+          CACHE_HIT: ${{ steps.authority-cache.outputs.cache-hit }}
+          BINARY_DIR: ${{ runner.temp }}/codeflow-main-binary
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          binary="$BINARY_DIR/codeflow"
+          verified=false
+          if [ "$CACHE_HIT" = true ]; then
+            if [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] \
+              && timeout 60 gh attestation verify "$binary" \
+                --repo "$GITHUB_REPOSITORY" \
+                --cert-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/codeflow-registry.yml@refs/heads/main" \
+                --source-ref refs/heads/main \
+                --source-digest "$AUTHORITY_SHA" \
+                --signer-digest "$AUTHORITY_SHA" \
+                --deny-self-hosted-runners > /dev/null \
+              && version=$(timeout 30 env -i "$binary" --version) \
+              && [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$AUTHORITY_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]; then
+              verified=true
+            else
+              echo "::warning::the cache entry for $AUTHORITY_SHA did not verify; deleting it from this job and building instead"
+            fi
+          fi
+          if [ "$verified" = true ]; then
+            mkdir -p target/release
+            cp "$binary" target/release/codeflow
+            echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+          else
+            rm -rf "$BINARY_DIR"
+          fi
+          echo "verified=$verified" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.authority-verify.outputs.verified != 'true'
+        with:
+          prefix-key: codeflow-policy-main-deps-v3
+          shared-key: authority
+          save-if: false
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      - name: Build the authority binary
+        if: steps.authority-verify.outputs.verified != 'true'
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
           cargo build --release --locked -p codeflow-cli
+          version=$(target/release/codeflow --version)
+          if ! [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$AUTHORITY_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]; then
+            echo "::error::the rebuilt authority binary does not report $AUTHORITY_SHA with a clean tree"; exit 1
+          fi
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
       - name: Assert the authority checkout
