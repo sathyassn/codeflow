@@ -15,11 +15,13 @@ use codeflow_core::security::actions;
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
-/// `exec-guard` security stage added in ADR-0008). `session-orient` also
-/// carries the TSK-128 prompt reminder, dispatched on the event.
-const HOOK_NAMES: [&str; 4] = [
+/// `exec-guard` security stage added in ADR-0008, and `edit-guard` on the
+/// native edit tools, TSK-1461). `session-orient` also carries the TSK-128
+/// prompt reminder, dispatched on the event.
+const HOOK_NAMES: [&str; 5] = [
     "git-guard",
     "exec-guard",
+    "edit-guard",
     "session-orient",
     "session-summary",
 ];
@@ -347,7 +349,7 @@ fn every_hook_command_is_a_known_codeflow_hook() {
                 "{name}: hook command {command:?} names unknown subcommand {sub:?}"
             );
         }
-        // All three hooks are wired in every preset.
+        // Every known hook is wired in every preset.
         for hook in HOOK_NAMES {
             assert!(
                 commands
@@ -465,6 +467,70 @@ fn exec_guard_wired_in_every_preset() {
                 .any(|c| c.starts_with("codeflow hook exec-guard --contract 3")),
             "{name}: exec-guard hook not wired"
         );
+    }
+}
+
+/// The `PreToolUse` group of a hook file whose hooks run edit-guard.
+fn edit_guard_groups(value: &serde_json::Value) -> Vec<&serde_json::Value> {
+    value["hooks"]["PreToolUse"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|group| {
+            let mut commands = Vec::new();
+            collect_hook_commands(&group["hooks"], &mut commands);
+            commands
+                .iter()
+                .any(|c| c.starts_with("codeflow hook edit-guard --contract 3"))
+        })
+        .collect()
+}
+
+/// TSK-1461 part 5: every Claude preset sends Claude Code's native `Edit`
+/// and `Write` calls to edit-guard, as the Codex and Grok hook files send
+/// theirs: one group, its own matcher, and the same command and bounds as
+/// the shipped shell guards.
+#[test]
+fn edit_guard_wired_in_every_preset() {
+    let shell_guard = |value: &serde_json::Value| -> serde_json::Value {
+        value["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .find(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
+            })
+            .expect("exec-guard entry")
+            .clone()
+    };
+    for other in ["../codex/hooks.json", "../grok/hooks.json"] {
+        let text = std::fs::read_to_string(settings_dir().join(other)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(edit_guard_groups(&value).len(), 1, "{other}");
+    }
+    for name in preset_files() {
+        let value = load(&name);
+        let groups = edit_guard_groups(&value);
+        assert_eq!(groups.len(), 1, "{name}: one edit-guard group");
+        let group = groups[0];
+        assert_eq!(
+            group["matcher"].as_str(),
+            Some("^(Edit|Write)$"),
+            "{name}: edit-guard takes Claude Code's native edit tools"
+        );
+        let hooks = group["hooks"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1, "{name}: edit-guard alone in its group");
+        // The same entry as the shell guards, with the guard's name.
+        let mut expected = shell_guard(&value);
+        let command = expected["command"]
+            .as_str()
+            .unwrap()
+            .replacen("hook exec-guard", "hook edit-guard", 1);
+        expected["command"] = command.into();
+        assert_eq!(hooks[0], expected, "{name}");
     }
 }
 
