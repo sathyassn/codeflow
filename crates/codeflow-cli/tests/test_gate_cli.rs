@@ -14,12 +14,16 @@ mod capacity;
 #[cfg(unix)]
 #[path = "test_gate_cli/containment.rs"]
 mod containment;
+#[path = "test_gate_cli/coverage_defaults.rs"]
+mod coverage_defaults;
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
 mod evidence;
 #[path = "test_gate_cli/named_config.rs"]
 mod named_config;
+#[path = "test_gate_cli/no_comparison_base.rs"]
+mod no_comparison_base;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 #[cfg(unix)]
@@ -92,7 +96,7 @@ fn every_selection_control_names_why_every_target_runs() {
     for (args, reason) in [
         (
             vec!["test", "--mode", "quick"],
-            "every target: no local run record earns selection credit (ADR-0089)",
+            "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)",
         ),
         (
             vec!["test", "--mode", "quick", "--since", "HEAD"],
@@ -1373,9 +1377,21 @@ fn selection_runs_everything_for_shared_unmatched_rename_deletion_and_unproven_b
             &["test", "--mode", "quick", "--since", &comparison],
         );
         assert!(output.status.success(), "{case}: {}", stderr(&output));
+        // TSK-1039 AC-4: each case prints the reason and says every target
+        // was selected for it, never that the change narrowed anything.
+        let text = stderr(&output);
+        let reason = format!(
+            "every target: --since {comparison} narrows nothing; local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)"
+        );
+        assert!(text.contains(&reason), "{case}: {text}");
+        assert!(!text.contains("skipped "), "{case}: {text}");
         let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
         for target in ["producer", "docs", "present", "release"] {
             assert!(runs.lines().any(|line| line == target), "{case}: {runs}");
+            assert!(
+                text.contains(&format!("selected {target}: {reason}")),
+                "{case} {target}: {text}"
+            );
         }
     }
 }

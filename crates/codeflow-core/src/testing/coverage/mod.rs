@@ -6,6 +6,7 @@ pub mod cobertura;
 pub mod go_cover;
 pub mod istanbul;
 pub mod lcov;
+pub mod producer;
 
 /// Parsed per-file coverage data.
 #[derive(Debug, Clone)]

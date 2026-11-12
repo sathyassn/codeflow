@@ -724,6 +724,56 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
     }
 }
 
+/// TSK-1014 AC-5: test setup on a fresh project writes the detected
+/// stack's coverage producer, and only then: `codeflow update` and a second
+/// setup leave an existing config, one written before producers existed,
+/// byte for byte as it was.
+#[test]
+fn coverage_producers_are_written_at_setup_and_never_by_update() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"proj\"\n").unwrap();
+    assert!(codeflow(&root, &["init", "--yes", "--minimal"])
+        .status
+        .success());
+    let setup = codeflow(&root, &["test", "setup"]);
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/test-config.json")).unwrap();
+    let target = &written["targets"][0];
+    assert_eq!(
+        target["coverage"],
+        serde_json::json!({"format": "lcov", "path": "target/lcov.info", "rules": []}),
+        "{written}"
+    );
+    assert!(
+        target["modes"]["full"]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("cargo llvm-cov"),
+        "{written}"
+    );
+
+    let existing = r#"{"schema_version": "1.0", "targets": [
+  {"name": "rust-core", "runner": "cargo", "modes": {"full": {"command": "cargo test --workspace"}}}]}
+"#;
+    std::fs::write(root.join(".codeflow/test-config.json"), existing).unwrap();
+    let update = codeflow(&root, &["update"]);
+    assert!(
+        update.status.success(),
+        "{}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+    assert_eq!(read(&root, ".codeflow/test-config.json"), existing);
+    assert!(codeflow(&root, &["test", "setup"]).status.success());
+    assert_eq!(read(&root, ".codeflow/test-config.json"), existing);
+}
+
 /// TSK-127: a fresh scaffold at every tier installs the kernel-rendered rule
 /// map, its references and the CLAUDE file through the real binary, and
 /// `codeflow doctor` warns once an AGENTS.md passes Codex's 32 KiB limit.
