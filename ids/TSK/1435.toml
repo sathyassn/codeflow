@@ -1,0 +1,11 @@
+id = "TSK-1435"
+uid = "bafb767a-415a-4444-ab5f-308f11ede1a5"
+kind = "TSK"
+title = "A hand-resolved merge of main reopens review only for its difference"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:57:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
