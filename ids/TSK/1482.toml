@@ -1,0 +1,11 @@
+id = "TSK-1482"
+uid = "c1c706d6-1544-43b5-9222-0e8ad862a00b"
+kind = "TSK"
+title = "Each regular host-state tool runs through a named route or reports why it cannot"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T20:15:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
