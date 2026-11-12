@@ -358,7 +358,8 @@ const CD_TEXT_WAY: &str = ", where a harness keeps the shell state it runs befor
 
 /// The way through a program the guard does not list that names a
 /// location: a reader it lists.
-const READ_WAY: &str = "to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`";
+const READ_WAY: &str =
+    "to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`";
 
 /// Phrases of the startup check that name a location rather than say what
 /// is written or placed there; in them a folder is called a location.
@@ -552,7 +553,10 @@ pub(super) fn modified_variable(word: &str, vars: &[(String, String)]) -> Option
                         }
                         start += 1;
                     }
-                    while chars.get(start).is_some_and(|c| matches!(c, '=' | '~' | '^')) {
+                    while chars
+                        .get(start)
+                        .is_some_and(|c| matches!(c, '=' | '~' | '^'))
+                    {
                         start += 1;
                     }
                 }

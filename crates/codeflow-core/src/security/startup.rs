@@ -3220,6 +3220,22 @@ impl super::unresolved::WriterGuard for ExecWriter<'_> {
     }
 }
 
+/// The folders a symbolic link made at `dest` can be in, from which the
+/// kernel reads its relative text: `dest` when it may be a folder, and the
+/// folder that holds it.
+fn link_folders(dest: &str, line: &Line<'_>, dirs: &[PathBuf]) -> Vec<PathBuf> {
+    dirs.iter()
+        .filter_map(|d| line.expand(dest, d))
+        .flat_map(|path| {
+            let folder =
+                (crate::absence::is_kind(&path, true) != Some(false)).then(|| path.clone());
+            folder
+                .into_iter()
+                .chain(path.parent().map(Path::to_path_buf))
+        })
+        .collect()
+}
+
 /// A copy, link or move judged as a whole: the destination and each
 /// source's landing place are judged; a moved or hard-linked startup file
 /// refuses (a later write through the new name edits it); a tree copied or
@@ -3245,15 +3261,8 @@ fn copy_judgment(
     // may be a folder, and the folder that holds it.
     let symbolic_from_its_folder =
         line.kind == Kind::SavedState && name == "ln" && flagged(&["-s", "--symbolic"]);
-    let link_folders: Vec<PathBuf> = if symbolic_from_its_folder {
-        dirs.iter()
-            .filter_map(|d| line.expand(dest, d))
-            .flat_map(|path| {
-                let folder = (crate::absence::is_kind(&path, true) != Some(false))
-                    .then(|| path.clone());
-                folder.into_iter().chain(path.parent().map(Path::to_path_buf))
-            })
-            .collect()
+    let text_folders = if symbolic_from_its_folder {
+        link_folders(dest, line, dirs)
     } else {
         Vec::new()
     };
@@ -3278,7 +3287,7 @@ fn copy_judgment(
             }
         }
         if symbolic_from_its_folder && !source.starts_with(['/', '~', '$']) {
-            if let Some(v) = word_violation(name, source, line, &link_folders) {
+            if let Some(v) = word_violation(name, source, line, &text_folders) {
                 return Some(v);
             }
         }

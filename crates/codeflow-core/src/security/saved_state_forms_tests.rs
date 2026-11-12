@@ -43,8 +43,20 @@ fn every_redirect_spelling_refuses_through_both_hooks() {
     for op in [
         ">!", ">>!", ">|", ">>|", ">&!", ">&|", ">>&!", ">>&|", "&>!", "&>|", "&>>!", "&>>|",
     ] {
-        both_hooks(&f, &places, &format!("echo x {op} {l}/h"), &writes, &mut wrong);
-        both_hooks(&f, &places, &format!("echo x {op}{l}/h"), &writes, &mut wrong);
+        both_hooks(
+            &f,
+            &places,
+            &format!("echo x {op} {l}/h"),
+            &writes,
+            &mut wrong,
+        );
+        both_hooks(
+            &f,
+            &places,
+            &format!("echo x {op}{l}/h"),
+            &writes,
+            &mut wrong,
+        );
     }
     for command in [
         format!("# it's a note\necho x >! {l}/h"),
@@ -92,7 +104,12 @@ fn a_changed_expansion_of_a_filled_variable_fails_closed() {
             "/.claude/session-env/h",
             slashed(&f.home),
         ),
-        (moved.clone(), "CLAUDE_CONFIG_DIR", "/session-env/h", slashed(&conf)),
+        (
+            moved.clone(),
+            "CLAUDE_CONFIG_DIR",
+            "/session-env/h",
+            slashed(&conf),
+        ),
         (with_env, "CLAUDE_ENV_FILE", "", slashed(&env_file)),
     ] {
         for form in [
@@ -144,7 +161,10 @@ fn link_text_is_read_from_the_link_s_folder() {
     let text = "../../../../conf/session-env";
     // From `sub` the text reaches the location; from the project it does not.
     assert_eq!(lexical(&sub.join(text)), lexical(&conf.join("session-env")));
-    assert_ne!(lexical(&f.project.join(text)), lexical(&conf.join("session-env")));
+    assert_ne!(
+        lexical(&f.project.join(text)),
+        lexical(&conf.join("session-env"))
+    );
     let first = [format!(
         "`ln` targets the saved shell state location `{LABEL}`"
     )];

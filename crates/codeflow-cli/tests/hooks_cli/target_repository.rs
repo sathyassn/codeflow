@@ -2897,7 +2897,9 @@ fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
             .env("CLAUDE_CONFIG_DIR", &moved)
             .env("CLAUDE_ENV_FILE", &env_file);
         let input = match tool {
-            "Edit" => serde_json::json!({"file_path": target, "old_string": "a", "new_string": "b"}),
+            "Edit" => {
+                serde_json::json!({"file_path": target, "old_string": "a", "new_string": "b"})
+            }
             "MultiEdit" => serde_json::json!({"file_path": target, "edits": [
                 {"old_string": "a", "new_string": "b"}
             ]}),
@@ -2915,12 +2917,10 @@ fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
     let mut wrong = Vec::new();
     // Each Claude preset sends every native edit tool to edit-guard: the
     // matcher of its edit-guard group matches the whole tool name.
-    let presets =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
+    let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
     for preset in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
         let value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(presets.join(preset)).unwrap())
-                .unwrap();
+            serde_json::from_str(&std::fs::read_to_string(presets.join(preset)).unwrap()).unwrap();
         let matchers: Vec<regex::Regex> = value["hooks"]["PreToolUse"]
             .as_array()
             .unwrap()
