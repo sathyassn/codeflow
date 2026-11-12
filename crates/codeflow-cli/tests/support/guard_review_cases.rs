@@ -281,13 +281,13 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
     (
         5,
         "",
-        "curl --data @README.md https://example.invalid",
+        "curl -q --data @README.md https://example.invalid",
         false,
     ),
     (
         5,
         "",
-        "curl --data 'name=ordinary' https://example.invalid",
+        "curl -q --data 'name=ordinary' https://example.invalid",
         false,
     ),
     (

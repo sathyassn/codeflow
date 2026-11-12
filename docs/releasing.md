@@ -232,6 +232,220 @@ The tracked `scripts/operator/tsk-1241/apply-codeflow-ci.sh` and its
 `linux-measurement-job.yml` currently prepare only the manual comparison;
 applying that script does not activate the tier split.
 
+### What stops an agent from releasing
+
+Agents here push and call the API as the operator's account, so GitHub
+cannot tell an agent's request from the operator's. Two layers keep agents
+from releasing: the session guard, which judges each command an agent runs,
+and the remote settings, which GitHub enforces for every request.
+
+The guard (`exec-guard`, rule `security.outward_actions`) refuses these
+routes and names the form it refused. It reads `gh`, `curl`, `wget`,
+HTTPie and xh. It reads a URL's scheme, userinfo, host and port, and
+compares the host in lower case without a trailing dot, so
+`https://user@api.github.com:443/` is the API host. The `gh` repository is
+the one every `-R`, `--repo` and `GH_REPO` names. When they name none, it
+is gh's current repository, and every GitHub remote here must name the
+policy authority's repository. gh's `{owner}` and `{repo}` placeholders
+resolve to that same repository:
+
+| Route | Refused forms |
+|---|---|
+| Dispatch of a release workflow | `gh workflow run`, and the workflow dispatch API through `gh api` or `curl`, dry runs included |
+| Repository dispatch | An event type a release workflow listens for, or one the guard cannot read |
+| Deployment approval | `pending_deployments` and `deployment_protection_rule` writes |
+| Starting a run another way | Deployment and deployment status writes, `createDeployment`; `gh workflow enable` or the enable API for a release workflow |
+| Changing what a release run reads | A variable a release workflow reads (`vars.NAME`, or any name when it indexes or serializes `vars`), set or deleted through `gh variable` or the API; secrets the same way, which the account rule also refuses |
+| Release or tag creation | `gh release create`, `edit`, `upload` and `delete`; API writes under `releases`, `git/tags` and `git/refs/tags`; a `git/refs` POST whose ref is not a branch; the matching GraphQL mutations sent by any client to a GraphQL path of an API host, and a GraphQL write whose body holds no query the guard can read |
+| Release tag push | `refs/tags/` refspecs, `--tags`, `--follow-tags`, and a bare `v*` or digit-led name with or without a local tag |
+| Removing a floor | Writes to Actions policies, environments, rulesets and branch protection, for a repository or an organization where one exists |
+
+A release workflow is a workflow file at the policy authority (the remote's
+default branch as last fetched) that runs on `workflow_dispatch` or
+`repository_dispatch` and can publish: its token can write contents,
+packages, deployments, pages, attestations, Actions or administration,
+or an OIDC token, or its
+permissions are left to the repository default, or it deploys to an
+environment, calls a reusable workflow, or reads a secret other than
+`GITHUB_TOKEN`. A file the guard cannot read or parse counts as a release
+workflow. The guard also refuses what it cannot map: a numeric workflow id,
+a name that matches no workflow file, a repository other than the
+authority's, repositories in `-R`, `GH_REPO` and the path that disagree,
+a repository named by number (`repositories/{id}`), an unresolved variable
+in the path, and a `--ref` whose copy of the workflow file is not in a
+fetched tracking ref or is a release workflow there.
+
+An HTTP client write to a host other than GitHub's, such as
+`curl -X POST https://localhost:8080/x -d a`, is allowed. The guard
+refuses a client call only when it may reach a GitHub API host:
+
+- a write to a destination that parses as a GitHub API host and is a
+  route above;
+- a write the guard cannot rule out as GitHub: an option it does not know,
+  a destination that does not parse, a redirect, a proxy, a remapped host
+  or a Host header, or options or URLs read from a file;
+- any call, reads included, when a config file the client reads may add a
+  URL, a method or a body.
+
+The clients are read this way:
+
+- **`curl`:** a write option is `-X` other than GET or HEAD, `-d` and every
+  `--data` form, `--json`, `-F`, `--form-string`, `-T` or `-K`. Each
+  `--next` request is judged with its own method, and `--expand-url` is
+  read as a URL. Without `-q` or `--disable` as the first argument, curl
+  reads `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, `$HOME/.curlrc`,
+  then, when `XDG_CONFIG_HOME` is unset or empty,
+  `$CURL_HOME/.config/curlrc` and `$HOME/.config/curlrc`, and the account
+  home's `.curlrc` (curl's `src/tool_findfile.c`). The guard checks all of
+  them whatever `XDG_CONFIG_HOME` holds. When any of them exists, every
+  curl call without `-q` first is refused, and the message names the file. On
+  Windows curl also reads a file beside `curl.exe`, so every curl call
+  there needs `-q` first.
+- **`wget`:** wget reads a system `wgetrc` at a path built into it, which
+  the guard cannot check, so every wget call needs `--no-config`. A write
+  also needs `--max-redirect=0` and known options only. `-e`, `--config`
+  and `-i` are refused.
+- **HTTPie and xh:** both read default options from a `config.json` that
+  no flag skips: `HTTPie` in `$HTTPIE_CONFIG_DIR`, `$XDG_CONFIG_HOME/httpie`,
+  `~/.config/httpie` and `~/.httpie`; xh in `$XH_CONFIG_DIR`,
+  `$XDG_CONFIG_HOME/xh`, `~/.config/xh` and, on macOS,
+  `~/Library/Application Support/xh`. When one exists, every call is
+  refused, naming the file. The fix is to set the variable on the call to
+  a directory without a `config.json`
+  (`HTTPIE_CONFIG_DIR=/path/to/empty-dir http ...`): set that way, the
+  variable is the only directory the client reads. Set through `env`,
+  `export` or an expansion, it is not certain to reach the call, so the
+  other paths still count. A write with known options to a parsed host
+  other than GitHub's passes.
+- **`gh`:** an alias is read from every config gh may read and judged as
+  its expansion. A shell alias, or a config the guard cannot read, is
+  refused, naming the alias and the config file; the fix is to call the gh
+  command the alias stands for. `GH_CONFIG_DIR` set on the call is the
+  only config gh reads.
+
+Each refusal names its fix: `-q` first for curl, `--no-config` for wget,
+the variable to set for HTTPie and xh, and the gh command for an alias.
+
+A project whose clients legitimately read a config file can opt out of
+the config-file refusal per tool with `security.trusted_client_configs`
+in `.codeflow/policy.json`, listing any of `curl`, `wget`, `httpie`, `xh`
+and `gh_aliases`. The list is empty by default. It is read only from the
+policy on the remote's default branch as last fetched, never from a
+working copy, a local commit or the environment, so a requester cannot
+set it without a reviewed merge. A tool is trusted only when every policy
+source the guard reads lists it: the call's repository and, for a Claude
+Code call made outside it, the session project. An opt-out lifts only that tool's
+config-file refusal. Every GitHub destination check stays: a write to a
+GitHub API route, an unknown option, an unparsed destination and a
+redirect are still refused, and a readable gh alias is still judged as its
+expansion. The cost is the threat the refusal closed: with the opt-out on,
+a config file the requester can write can redirect that tool's call to a
+GitHub write.
+
+An empty variable counts as the current directory, since `HTTPie` joins
+an empty `XDG_CONFIG_HOME`, xh an empty `XH_CONFIG_DIR` and gh an empty
+`HOME` onto it. The config files are found through the environment the
+call runs with:
+an inline assignment (`CURL_HOME=/x curl`), an `env` prefix and its `-i`,
+`-u` and `-C` options, an `export` or assignment earlier on the line, the
+guard's own environment, and the account home from the password database.
+Every value any of these gives is checked. When a value cannot be resolved
+(an expansion, a command substitution, `~`, an `env` option the guard does
+not read, or `source`, `eval`, `read` or `${NAME:=value}` that may set
+one), the guard counts a config file as present.
+
+A URL that does not parse is refused in a write: a host held in a
+variable, userinfo with a second `@`, a port that is not a number, a `.`
+or `..` path segment, or braces or brackets `curl` would expand.
+
+The guard cannot judge these routes, so a remote setting is their floor:
+
+| Route the guard cannot judge | Floor |
+|---|---|
+| A script or program that calls the API itself, a gh extension included | The remote settings below |
+| A client that reads a config file from a path the guard does not check, such as one a patched build adds | The remote settings below |
+| A client that reaches the API at an IP address, or through a name the guard does not know as an API host | The remote settings below |
+| A workflow file changed on a branch, pushed, then dispatched from that branch | An Actions policy actor rule on the release workflow, once agents have their own identity |
+| A tag created by a step the guard does not model and pushed under a name without the release tag shape | A `creation` rule on the `release tags` ruleset |
+| A re-run of a release run (`gh run rerun`, the re-run API routes, the web page) | The re-run check in each publishing job, below |
+
+The floors and who can set them:
+
+- **A `creation` rule on the `release tags` ruleset (`refs/tags/v*`).**
+  `codeflow remote protect` can write it under an administrator's token.
+- **A `release` environment with the operator as required reviewer.**
+  While agents and the operator share one account, this is a floor only
+  together with the guard's `pending_deployments` refusal, because an agent
+  holding that token can approve through the API. "Prevent self-review"
+  would stop the operator approving their own dispatch. It becomes a floor
+  on its own once agents have their own identity.
+- **An Actions policy actor rule on the release dispatch workflow,** naming
+  only the operator's user id, once agents have their own identity. An
+  actor rule applies to every run of the files it targets, whatever the
+  event, so the dispatch must first move out of `release.yml`, which also
+  runs on `pull_request`, into its own workflow file.
+
+Any change to these settings is the operator's decision.
+
+A re-run carries only a run id, and the guard makes no network read to
+learn which workflow the run belongs to. So each job that publishes
+refuses its own re-run as its first step. CodeFlow's own publishing jobs
+carry that step, checked by the `release_rerun_contract` test; the
+operator applied them, because the guard refuses an agent's write to
+`.github/workflows`. GitHub sets
+`GITHUB_RUN_ATTEMPT`, which a requester cannot change; it is 1 on the first
+attempt and grows with each re-run
+([contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)).
+A re-run of failed jobs or of one job runs only those jobs and the jobs
+that depend on them
+([re-running jobs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)),
+so a gate job that passed before does not run again; the check therefore
+sits in every publishing job, before any step that publishes:
+
+```yaml
+- name: Refuse a re-run of a publishing job
+  shell: bash
+  run: |
+    if [ "$GITHUB_RUN_ATTEMPT" != 1 ] && [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+      echo "::error::This job publishes, and attempt $GITHUB_RUN_ATTEMPT is a re-run. Dispatch a fresh run instead; a re-run would publish without the jobs that passed before."
+      exit 1
+    fi
+```
+
+A pull request run of `release.yml` publishes nothing, so its re-run
+passes. After a failed release run, dispatch a fresh run; it resumes the
+draft release. The `release_rerun_contract` test requires the check first
+in every job that has an `environment`, a publishing action, a publishing
+command, a `gh api` call that writes (an implied POST included) or an HTTP
+write to the API host. A job that calls a reusable workflow must call one
+the test also reads. The step's `run` must be the text above byte for
+byte once YAML has parsed it, with `shell: bash`; the step may have no
+`if`, neither it nor its job `continue-on-error`, and no `env` may set
+`GITHUB_RUN_ATTEMPT` or `GITHUB_EVENT_NAME`. No later step of the job may
+have an `if` that calls a status function (`always`, `failure`,
+`cancelled`, `success`), since that step would run after the check fails.
+A test also compares the example above with that text. CodeFlow installs
+no release workflow, so an adopter copies the step unchanged into each
+publishing job of their own.
+
+For an adopter, the token an agent holds decides what the remote refuses:
+
+- a token without Actions write cannot dispatch a workflow;
+- a token without Deployments write cannot approve a pending deployment;
+- a token without Administration write cannot remove these floors.
+
+A repository dispatch needs only Contents write, so withholding Actions
+write does not stop it; the guard's refusal does not depend on the token.
+A fine-grained token for an agent can be started from this pre-filled link,
+which the operator reviews and generates:
+[new agent token](https://github.com/settings/personal-access-tokens/new?name=codeflow-agent&description=Agent+token+without+release+rights&expires_in=30&contents=write&pull_requests=write&issues=write&actions=read&statuses=read)
+(contents and pull requests write, issues write, actions and statuses
+read; no deployments, environments, administration or workflows).
+
+The pre-push hook does not refuse release tag pushes. It runs for humans
+and agents alike, so a refusal there would also stop a human whose own
+release starts with a tag push, as many adopters' releases do.
+
 ## Technical
 
 Work through each section below that your release touches.
