@@ -71,6 +71,9 @@ pub(crate) fn preserves(old: &RecordView, new: &RecordView) -> Result<(), String
         if old.review != new.review {
             return Err("redaction changes review provenance".into());
         }
+        if old.built_by != new.built_by || old.reduced_assurance != new.reduced_assurance {
+            return Err("redaction changes built_by or reduced_assurance".into());
+        }
         if old.verdict != new.verdict {
             return Err("redaction changes verdict".into());
         }

@@ -3681,14 +3681,24 @@ pub fn is_correction(found: &Finding) -> bool {
     found.note && found.rule == FROZEN_RULE && found.message.contains(CORRECTION)
 }
 
-/// Whether `found` refuses the reviewer a completion names for its landing
-/// on its epic line with no pull request (ADR-0102, TSK-1433), which
-/// `codeflow ci` prints with its own remedy.
+/// Whether `found` refuses the lineages a completion records for its
+/// landing on its marked epic's line with no pull request (ADR-0102,
+/// TSK-1433), which `codeflow ci` prints with its own remedy.
 #[must_use]
 pub fn is_landed_review(found: &Finding) -> bool {
     !found.note
         && found.rule == BINDING_RULE
         && found.message.contains(landed_review::LANDED_REVIEW)
+}
+
+/// Whether `found` refuses a line whose epic's `main_landing` marker the
+/// run cannot read at the default branch's commit (TSK-1433), which
+/// `codeflow ci` prints with its own remedy.
+#[must_use]
+pub fn is_landing_marker(found: &Finding) -> bool {
+    !found.note
+        && found.rule == BINDING_RULE
+        && found.message.contains(landed_review::LANDING_MARKER)
 }
 
 /// Why `new` is not a text correction of `old` (ADR-0080): the same
@@ -4187,6 +4197,7 @@ pub fn completions_in_range(
         criteria,
         run,
         (line, receiving_line(line, None), None),
+        None,
         stacked,
     )
 }
@@ -4209,6 +4220,9 @@ fn receiving_line<'a>(branch: Option<&'a str>, into: Option<&'a str>) -> Option<
 /// line that receives the range's merges (`receiving`, see
 /// [`receiving_line`]) given apart, and the receiving line's tip when this
 /// is the push of a task branch into it (`sync_tip`, see [`LineSyncTip`]).
+/// `default_commit` is the default branch's commit the run names as its
+/// policy authority, where a marked epic's `main_landing` is read
+/// ([`landed_review::marked`]).
 #[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
 #[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 fn completions_received(
@@ -4219,6 +4233,7 @@ fn completions_received(
     criteria: &Criteria,
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
+    default_commit: Option<Oid>,
     stacked: &[StackedHead],
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
@@ -4263,12 +4278,15 @@ fn completions_received(
     let mut reviewed = Vec::new();
     let mut proofs = LineProofs::default();
     // The judged branch is itself an epic line: its push lands tasks on it,
-    // and its pull request carries them to the default branch. Neither run
-    // has a task pull request body whose Reviews row it could check, so a
-    // completion's record must name a reviewer of another lineage than its
-    // builder's (ADR-0102, TSK-1433). A task pull request, or a push of its
-    // branch, is judged as before.
-    let landing_line = receiving_line(line, None).is_some();
+    // and its pull request carries them to the default branch. When the
+    // epic is marked `whole-epic` on the default branch, neither run has a
+    // task pull request body whose Reviews row it could check, so a
+    // completion must record a reviewer of another lineage than the one
+    // that built it (ADR-0102, TSK-1433). The marker is read once, at the
+    // first completion it governs. A task pull request, a push of its
+    // branch and an unmarked line are judged as before.
+    let landing_line = receiving_line(line, None);
+    let mut marker: Option<Result<bool, String>> = None;
     for task in after
         .records
         .values()
@@ -4366,9 +4384,21 @@ fn completions_received(
             if let Some(proof) = bound.proof {
                 reviewed.push(proof.reviewed);
             }
-            if let Some(block) = block.as_ref().filter(|_| landing_line) {
-                if let Some(problem) = landed_review::problem(task, block)? {
-                    findings.push(finding(BINDING_RULE, problem));
+            if let (Some(block), Some(name)) = (block.as_ref(), landing_line) {
+                let first = marker.is_none();
+                match marker
+                    .get_or_insert_with(|| landed_review::marked(repo, name, default_commit))
+                {
+                    Ok(true) => {
+                        if let Some(problem) = landed_review::problem(task, block)? {
+                            findings.push(finding(BINDING_RULE, problem));
+                        }
+                    }
+                    // One refusal for the run: no completion on the line
+                    // passes until the marker reads.
+                    Err(refusal) if first => findings.push(finding(BINDING_RULE, refusal.clone())),
+                    // Unmarked, or the refusal is already recorded.
+                    Ok(false) | Err(_) => {}
                 }
             }
             // A completion made before the range head but bound at it (a
@@ -4948,6 +4978,7 @@ pub fn pull_request_findings_into(
         criteria,
         &run,
         (branch, receiving_line(branch, into), sync_tip),
+        candidate,
         &stacked,
     )?);
     Ok(found)

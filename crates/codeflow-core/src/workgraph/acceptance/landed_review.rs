@@ -1,31 +1,129 @@
-//! The reviewer a completion names when its task lands on its epic line
-//! with no pull request (ADR-0102, TSK-1433). No pull request body carries a
-//! Reviews row for such a landing, so the task's record alone shows the
-//! review. The completion binding and the records rule already hold its
-//! acceptance block to the commit the landing carries and to an approving
-//! verdict; this check adds the reviewer: named first in the block's
-//! `review` field, and of another lineage than the one the record's
-//! `- Builder:` line names.
+//! The lineages a completion records when its task lands on a marked epic's
+//! line with no pull request (ADR-0102, TSK-1433).
 //!
-//! [`problem`] reads only the record, so the line's push and the epic's pull
-//! request into the default branch reach the same verdict for the same
-//! completion. Like the rest of the acceptance check it proves what the
-//! record states, not that the review took place (see [`super::SCOPE_NOTE`]).
+//! An epic whose record on the default branch sets `main_landing:
+//! whole-epic` lands its tasks on its line with no pull request, so no pull
+//! request body carries a Reviews row for them, and the task's record alone
+//! shows the review. The completion binding and the records rule already
+//! hold the acceptance block to the commit the landing carries and to an
+//! approving verdict. On such a line this check adds the lineages:
+//!
+//! - the block names the one lineage that built the task in `built_by`;
+//! - the reviewer named first in `review` is of another lineage;
+//! - or, when it is of the same lineage, the block carries the recorded
+//!   `reduced_assurance` statement, which names each other lineage as
+//!   probed and unavailable.
+//!
+//! What it is and is not: both fields are written by the agents under
+//! review, so the check catches a mistake or drift between what a
+//! completion says about its builder and its reviewer. It does not catch a
+//! forged claim, and it is no proof that the review was independent or took
+//! place (see [`super::SCOPE_NOTE`]). It reads only the completion in the
+//! tree: never a verdict file and never the path the `review` field cites.
+//! Checking a completion against its verdict file is the adopter's own
+//! landing process.
+//!
+//! The marker is read once per run, only from the epic record at the
+//! default branch's commit the run is judged against (ADR-0091), never from
+//! the line, a pull request head or the working tree. On every other line,
+//! and on a line whose epic is unmarked, the check is inert. [`problem`]
+//! reads only the record, so the line's push and the epic's pull request
+//! into the default branch reach the same verdict for the same completion.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use super::RecordView;
+use git2::{Oid, Repository};
+
+use super::{Graph, RecordKind, RecordView};
 use crate::workgraph::record_text::AcceptanceBlock;
 
-/// The phrase every finding of this check carries, so `codeflow ci` can give
-/// it its own remedy ([`super::is_landed_review`]).
-pub(super) const LANDED_REVIEW: &str = "lands on its epic line with no pull request";
+/// The phrase every lineage finding of this check carries, so `codeflow ci`
+/// can give it its own remedy ([`super::is_landed_review`]).
+pub(super) const LANDED_REVIEW: &str = "lands on its marked epic's line with no pull request";
 
-/// Why the reviewer `block` names does not admit `task`'s landing on its
-/// epic line, or `None` when it does: the reviewer is of a lineage the
-/// record names for its builder, or names no known lineage while the record
-/// names the builder's.
+/// The phrase a marker this run cannot read carries, so `codeflow ci` can
+/// give it its own remedy ([`super::is_landing_marker`]).
+pub(super) const LANDING_MARKER: &str = "cannot read its epic's `main_landing` marker";
+
+/// The epic record field that marks an epic whose tasks land on its line
+/// with no pull request (ADR-0102).
+const MAIN_LANDING: &str = "main_landing";
+
+/// The marker value whose epic lands its tasks with no pull request.
+const WHOLE_EPIC: &str = "whole-epic";
+
+/// The marker value of an epic that lands through checkpoint pull requests,
+/// which an absent field also means.
+const CHECKPOINT_PRS: &str = "checkpoint-prs";
+
+/// Whether the epic whose line `line` is marks itself `whole-epic` in its
+/// record at the default branch's commit: `at`, the commit the run names as
+/// its policy authority (`--policy-from`, which the pre-push hook and the
+/// hosted workflow set to the default branch's tip), else the tip of the
+/// default branch this clone resolves. An epic record that commit does not
+/// hold, or one with no `main_landing` field, is unmarked.
+///
+/// # Errors
+/// The refusal, naming the field and the values it accepts, when the
+/// default branch's commit or the epic record there cannot be read, or the
+/// field holds a value other than `whole-epic` or `checkpoint-prs`.
+pub(super) fn marked(repo: &Repository, line: &str, at: Option<Oid>) -> Result<bool, String> {
+    let refuse = |reason: String| {
+        format!(
+            "{line} {LANDING_MARKER}: {reason}; the field is read only from the epic record at the default branch's commit, and accepts `{WHOLE_EPIC}` or `{CHECKPOINT_PRS}` (an absent field means `{CHECKPOINT_PRS}`)"
+        )
+    };
+    let epic = crate::workgraph::line_adoption::epic_id(line).map_err(&refuse)?;
+    let tip = match at {
+        Some(tip) => tip,
+        None => default_tip(repo).map_err(&refuse)?,
+    };
+    let graph = Graph::from_revision(repo, &tip.to_string())
+        .map_err(|error| refuse(format!("the records at {tip} cannot be read: {error}")))?;
+    let Some(record) = graph
+        .records
+        .get(epic)
+        .filter(|record| record.kind == RecordKind::Epic)
+    else {
+        return Ok(false);
+    };
+    let (fields, _) = crate::validate::parse_frontmatter(record.content.as_bytes())
+        .map_err(|error| refuse(format!("{} at {tip}: {error}", record.path)))?;
+    match fields.get(MAIN_LANDING) {
+        None => Ok(false),
+        Some(serde_yaml::Value::String(value)) if value == WHOLE_EPIC => Ok(true),
+        Some(serde_yaml::Value::String(value)) if value == CHECKPOINT_PRS => Ok(false),
+        Some(value) => Err(refuse(format!(
+            "{} at {tip} sets `{MAIN_LANDING}` to `{}`",
+            record.path,
+            crate::git::display_text(
+                serde_yaml::to_string(value)
+                    .unwrap_or_default()
+                    .trim_end_matches('\n')
+            )
+        ))),
+    }
+}
+
+/// The tip of the default branch this clone resolves: the first of the
+/// references [`super::target_tips`] lists for the name
+/// [`super::default_target_name`] finds.
+fn default_tip(repo: &Repository) -> Result<Oid, String> {
+    let name = super::default_target_name(repo)?;
+    super::target_tips(repo, &name.name)?
+        .first()
+        .map(|(_, tip)| *tip)
+        .ok_or_else(|| {
+            format!(
+                "the default branch `{}` does not resolve here, and the run names no default branch's commit (`--policy-from`)",
+                crate::git::display_text(&name.name)
+            )
+        })
+}
+
+/// Why the lineages `block` records do not admit `task`'s landing on its
+/// marked epic's line, or `None` when they do.
 ///
 /// # Errors
 /// The shipped model catalog, which names the lineages, does not parse.
@@ -34,33 +132,55 @@ pub(super) fn problem(
     block: &AcceptanceBlock,
 ) -> Result<Option<String>, String> {
     let words = lineage_words()?;
-    let built_by = builder(&task.body)
-        .map(|line| lineages(words, line))
-        .unwrap_or_default();
-    if built_by.is_empty() {
-        return Ok(None);
-    }
+    let known: BTreeSet<&str> = words.values().map(String::as_str).collect();
+    let named = |set: &BTreeSet<&str>| set.iter().copied().collect::<Vec<_>>().join(", ");
+    let built = match block.built_by.as_deref() {
+        None => {
+            return Ok(Some(format!(
+                "{}: {LANDED_REVIEW}, and its acceptance block has no `built_by`, the one lineage that built it ({})",
+                task.id,
+                named(&known)
+            )))
+        }
+        Some(value) => match known.get(value) {
+            Some(lineage) => *lineage,
+            None => {
+                return Ok(Some(format!(
+                    "{}: {LANDED_REVIEW}, and its acceptance block's `built_by: {}` is not one lineage id ({})",
+                    task.id,
+                    crate::git::display_text(value),
+                    named(&known)
+                )))
+            }
+        },
+    };
     let seat = reviewer(&block.review);
     let reviewed_by = lineages(words, seat);
-    let named = |set: &BTreeSet<&str>| set.iter().copied().collect::<Vec<_>>().join(", ");
     if reviewed_by.is_empty() {
-        let known: BTreeSet<&str> = words.values().map(String::as_str).collect();
         return Ok(Some(format!(
-            "{}: {LANDED_REVIEW}, and its acceptance block's review names no reviewer of a known lineage ({}) before its first comma or semicolon, so it does not show a review by another lineage than the builder's ({})",
+            "{}: {LANDED_REVIEW}, and its acceptance block's review names no reviewer of a known lineage ({}) before its first comma or semicolon, so it does not show who reviewed the work `built_by` says {built} built",
             task.id,
-            named(&known),
-            named(&built_by)
+            named(&known)
         )));
     }
-    let shared: BTreeSet<&str> = reviewed_by.intersection(&built_by).copied().collect();
-    if shared.is_empty() {
+    if !reviewed_by.contains(built) {
+        return Ok(None);
+    }
+    let others: BTreeSet<&str> = known.iter().copied().filter(|l| *l != built).collect();
+    let probed = block
+        .reduced_assurance
+        .as_deref()
+        .map(|statement| lineages(words, statement))
+        .unwrap_or_default();
+    let missing: BTreeSet<&str> = others.difference(&probed).copied().collect();
+    if missing.is_empty() {
         return Ok(None);
     }
     Ok(Some(format!(
-        "{}: {LANDED_REVIEW}, and its reviewer `{}` is of the lineage the record names for its builder ({}), so the review is not by another lineage",
+        "{}: {LANDED_REVIEW}, and its reviewer `{}` is of the lineage `built_by` names ({built}), while its acceptance block's `reduced_assurance` does not name {} as probed and unavailable, so it records neither a review by another lineage nor why none was possible",
         task.id,
         crate::git::display_text(seat),
-        named(&shared)
+        named(&missing)
     )))
 }
 
@@ -72,24 +192,6 @@ fn reviewer(review: &str) -> &str {
         .next()
         .unwrap_or_default()
         .trim_matches([' ', '\t', '"', '\''])
-}
-
-/// The value of the first `- Builder:` item in the record's
-/// `## Execution contract` section.
-fn builder(body: &str) -> Option<&str> {
-    let mut in_contract = false;
-    for line in body.lines() {
-        if let Some(heading) = line.strip_prefix("## ") {
-            in_contract = heading.trim_matches([' ', '\t']) == "Execution contract";
-            continue;
-        }
-        if in_contract {
-            if let Some(value) = line.strip_prefix("- Builder:") {
-                return Some(value.trim_matches([' ', '\t']));
-            }
-        }
-    }
-    None
 }
 
 /// Each word that names exactly one lineage in the model catalog shipped
@@ -158,29 +260,25 @@ fn words(text: &str) -> impl Iterator<Item = String> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workgraph::work_start::RecordKind;
 
-    fn record(builder: Option<&str>) -> RecordView {
-        let contract = builder.map_or_else(String::new, |builder| {
-            format!("## Execution contract\n\n- Builder: {builder}\n\n")
-        });
-        let text = format!(
-            "---\nid: TSK-001\nepic_id: EPC-001\nstatus: complete\n---\n\n# TSK-001: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n{contract}## Closeout\n\nDone.\n"
-        );
+    fn record() -> RecordView {
+        let text = "---\nid: TSK-001\nepic_id: EPC-001\nstatus: complete\n---\n\n# TSK-001: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Execution contract\n\n- Builder: Codex GPT-6.1 Sol, else a Claude Opus 5.5 subagent.\n\n## Closeout\n\nDone.\n";
         RecordView::parse(
             RecordKind::Task,
             "project-management/tasks/TSK-001.md",
-            &text,
+            text,
         )
         .unwrap()
     }
 
-    fn block(review: &str) -> AcceptanceBlock {
+    fn block(built_by: Option<&str>, review: &str, reduced: Option<&str>) -> AcceptanceBlock {
         AcceptanceBlock {
             superseded: false,
             reason: None,
             reviewed: "0".repeat(40),
             review: review.into(),
+            built_by: built_by.map(Into::into),
+            reduced_assurance: reduced.map(Into::into),
             criteria: Vec::new(),
             journey: "verified | ran".into(),
             not_verified: "none".into(),
@@ -189,44 +287,38 @@ mod tests {
         }
     }
 
-    fn judge(builder: Option<&str>, review: &str) -> Option<String> {
-        problem(&record(builder), &block(review)).unwrap()
+    fn judge(built_by: Option<&str>, review: &str, reduced: Option<&str>) -> Option<String> {
+        problem(&record(), &block(built_by, review, reduced)).unwrap()
     }
 
     #[test]
     fn a_reviewer_of_another_lineage_admits_the_landing() {
-        for (builder, review) in [
-            (
-                "Claude Opus 5.5 at medium",
-                "Codex GPT-6.1 Sol at medium, whole unit",
-            ),
-            ("Codex GPT-6 Astra at high", "Grok 4.7; whole unit"),
-            ("Grok 4.7", "Claude Fable 5.1 as cf-reviewer, whole unit"),
-            (
-                "Codex GPT-6.1 Sol, else a Claude Opus 5.5 subagent",
-                "Grok 4.7 at high, whole unit",
-            ),
+        for (built_by, review) in [
+            ("claude", "Codex GPT-6.1 Sol at medium, whole unit"),
+            ("codex", "Grok 4.7; whole unit"),
+            ("grok", "Claude Fable 5.1 as cf-reviewer, whole unit"),
+            // The plan's Builder line names Codex and a Claude fallback;
+            // only `built_by` says who built.
+            ("codex", "Claude Fable 5.1, whole unit"),
         ] {
-            assert_eq!(judge(Some(builder), review), None, "{builder} / {review}");
+            assert_eq!(
+                judge(Some(built_by), review, None),
+                None,
+                "{built_by} / {review}"
+            );
         }
     }
 
     #[test]
     fn a_reviewer_of_the_builders_lineage_is_refused() {
-        for (builder, review) in [
-            ("Claude Opus 5.5 at medium", "Claude Fable 5.1, whole unit"),
-            (
-                "Codex GPT-6.1 Sol at medium",
-                "GPT-6 Astra (gpt-6-astra, high), whole unit",
-            ),
-            (
-                "Codex GPT-6.1 Sol, else a Claude Opus 5.5 subagent",
-                "Sonnet 5.5; whole unit",
-            ),
+        for (built_by, review) in [
+            ("claude", "Claude Fable 5.1, whole unit"),
+            ("codex", "GPT-6 Astra (gpt-6-astra, high), whole unit"),
+            ("claude", "Sonnet 5.5; whole unit"),
         ] {
-            let found = judge(Some(builder), review).expect(review);
+            let found = judge(Some(built_by), review, None).expect(review);
             assert!(
-                found.contains("is of the lineage the record names for its builder"),
+                found.contains("is of the lineage `built_by` names"),
                 "{found}"
             );
             assert!(found.contains(LANDED_REVIEW), "{found}");
@@ -234,32 +326,40 @@ mod tests {
     }
 
     #[test]
+    fn a_same_lineage_review_passes_only_with_the_reduced_assurance_statement() {
+        let review = "Claude Opus 5.5 subagent at medium, whole unit";
+        let stated = "Codex and Grok probed live at 16:24 on 2026-11-05, both unavailable";
+        assert_eq!(judge(Some("claude"), review, Some(stated)), None);
+        let found = judge(Some("claude"), review, Some("Codex was out")).expect("one named");
+        assert!(found.contains("does not name grok as probed"), "{found}");
+        let found = judge(Some("claude"), review, None).expect("no statement");
+        assert!(found.contains("does not name codex, grok"), "{found}");
+    }
+
+    #[test]
+    fn built_by_names_exactly_one_lineage_id() {
+        let review = "Grok 4.7, whole unit";
+        let found = judge(None, review, None).expect("missing");
+        assert!(found.contains("has no `built_by`"), "{found}");
+        for value in ["codex, claude", "Codex", "codex claude", "gpt"] {
+            let found = judge(Some(value), review, None).expect(value);
+            assert!(
+                found.contains("is not one lineage id (claude, codex, grok)"),
+                "{found}"
+            );
+        }
+    }
+
+    #[test]
     fn a_review_that_names_no_known_reviewer_is_refused() {
         let found =
-            judge(Some("Claude Opus 5.5"), "https://example.test/pr/1#review").expect("refused");
+            judge(Some("claude"), "https://example.test/pr/1#review", None).expect("refused");
         assert!(
             found.contains("names no reviewer of a known lineage (claude, codex, grok)"),
             "{found}"
         );
         // A lineage named after the first comma does not name the reviewer.
-        assert!(judge(Some("Claude Opus 5.5"), "Reduced assurance, Codex was out").is_some());
-    }
-
-    #[test]
-    fn the_rule_holds_a_record_to_the_builder_lineage_it_names() {
-        assert_eq!(judge(Some("anyone."), "Claude Fable 5.1"), None);
-        assert_eq!(judge(None, "Claude Fable 5.1"), None);
-    }
-
-    #[test]
-    fn the_builder_is_read_only_from_the_execution_contract() {
-        assert_eq!(builder("## Description\n\n- Builder: Claude\n"), None);
-        assert_eq!(
-            builder(
-                "## Execution contract\n\n- Source: x\n- Builder: Codex GPT-6.1 Sol.\n\n## Closeout\n- Builder: Claude\n"
-            ),
-            Some("Codex GPT-6.1 Sol.")
-        );
+        assert!(judge(Some("claude"), "Reduced assurance, Codex was out", None).is_some());
     }
 
     #[test]

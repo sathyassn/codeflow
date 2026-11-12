@@ -4941,13 +4941,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         11,
         "display",
     ),
-    // Finds the record's `## Execution contract` heading and its `- Builder:` item in human-authored prose; the value only selects lineage words and never becomes an identity, path or revision.
+    // Drops the line ending YAML adds when a refused `main_landing` value is rendered for the refusal message; the value is only shown, and the marker is judged on the parsed value.
     (
         "crates/codeflow-core/src/workgraph/acceptance/landed_review.rs",
-        "builder",
-        "lines",
+        "marked",
+        "trim_end_matches",
         1,
-        "prose",
+        "display",
     ),
     // Removes ASCII spaces, tabs and quotes around the reviewer a review field names in prose; the text only selects lineage words and is shown in a refusal, never used as an identity.
     (

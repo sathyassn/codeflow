@@ -892,23 +892,22 @@ fn clears_review_row_binding() {
     );
 }
 
-/// ADR-0102, TSK-1433: a task that lands on its epic line with no pull
-/// request names a reviewer of another lineage than the builder its record
-/// names. A review reference that names no reviewer does not; the printed
-/// steps record the review again, naming its reviewer first.
+/// ADR-0102, TSK-1433: a task that lands on its marked epic's line with no
+/// pull request records the lineage that built it and a reviewer of
+/// another lineage. A review reference that names neither does not; the
+/// printed steps record the review again, naming both.
 #[test]
 fn clears_landed_review() {
     const LINE: &str = "integration/EPC-001-line";
     let hosted = Hosted::new();
     let root = &hosted.root;
     hosted.plan_task("plan/work");
-    let planned = read(root, TASK).replacen(
-        "\n## Closeout\n",
-        "\n## Execution contract\n\n- Builder: Claude Opus 5.5 at medium.\n\n## Closeout\n",
-        1,
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ntitle: \"the line\"\nstatus: planning\nmain_landing: whole-epic\nwork_type: feat\nspecs: []\ncreated: 2026-11-12\n---\n\n# EPC-001: the line\n\n## Summary\n\nA line.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n",
     );
-    write(root, TASK, &planned);
-    commit_all(root, "docs: name the builder");
+    commit_all(root, "docs: mark the epic");
     hosted.land("plan/work");
     hosted.branch(LINE);
     commit(root, "x.txt", "feat: add x");
@@ -928,15 +927,16 @@ fn clears_landed_review() {
     commit_all(root, "chore: complete the work");
     prove(
         "LANDED_REVIEW",
-        "lands on its epic line with no pull request",
+        "lands on its marked epic's line with no pull request",
         || hosted.ci(LINE, &[]),
         |printed| {
             // A reviewer of another lineage reviews the head; take the
-            // printed steps in order, naming that reviewer first.
+            // printed steps in order, naming the builder's lineage and
+            // that reviewer first.
             let acceptance = review_head(root);
             let named = std::fs::read_to_string(&acceptance).unwrap().replace(
                 "session:proof@sha256:00",
-                "Codex GPT-6.1 Sol at medium, whole unit",
+                "Codex GPT-6.1 Sol at medium, whole unit\n  built_by: claude",
             );
             std::fs::write(&acceptance, named).unwrap();
             let steps: Vec<&str> = printed
