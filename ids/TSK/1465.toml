@@ -1,0 +1,11 @@
+id = "TSK-1465"
+uid = "1e2bb608-81a4-4f0c-bd91-6597f32c0dbc"
+kind = "TSK"
+title = "The decision-map figure counts the decisions the map lists"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T06:45:28Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
