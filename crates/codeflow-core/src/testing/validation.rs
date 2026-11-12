@@ -108,25 +108,29 @@ pub fn parse_target_coverage(
     Ok(coverages)
 }
 
-/// Evaluate coverage thresholds for a target.
+/// Evaluate coverage thresholds for a target. A coverage block that sets no
+/// rules of its own is judged by `defaults`, the project's
+/// `defaults.coverage` (TSK-1014).
 #[must_use]
 pub fn evaluate_target_thresholds(
     target: &TargetConfig,
+    defaults: &[crate::testing::config::CoverageRule],
     file_coverages: &[FileCoverage],
     changed_files: &[String],
 ) -> Vec<threshold::ThresholdResult> {
     let Some(cov_config) = &target.coverage else {
         return Vec::new();
     };
+    let (rules, _) = cov_config.effective_rules(defaults);
 
     let mut results = threshold::evaluate_file_thresholds(
-        &cov_config.rules,
+        rules,
         file_coverages,
         changed_files,
         &cov_config.exceptions,
     );
     results.extend(
-        threshold::evaluate_aggregate_thresholds(&cov_config.rules, file_coverages)
+        threshold::evaluate_aggregate_thresholds(rules, file_coverages)
             .into_iter()
             .map(|aggregate| threshold::ThresholdResult {
                 file: if aggregate.measured_lines == 0 {
@@ -657,7 +661,7 @@ mod tests {
             },
         ];
 
-        let results = evaluate_target_thresholds(&target, &coverages, &[]);
+        let results = evaluate_target_thresholds(&target, &[], &coverages, &[]);
         assert_eq!(results.len(), 2);
 
         let main_result = results.iter().find(|r| r.file == "src/main.rs").unwrap();
