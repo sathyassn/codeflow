@@ -296,6 +296,136 @@ fn every_changed_variable_in_a_word_is_judged() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// A variable the guard fills that a word reads anywhere inside a changed
+/// expansion counts as changed, at every depth of nesting: inside an
+/// unnamed or a named expansion, one, two or three levels down, braced or
+/// not, alone or after variables aimed at ordinary folders, and in the
+/// default, replacement, flag and subscript forms. Where its value is or
+/// holds saved state the write fails closed, at the home and at a moved
+/// folder. The same nestings of ordinary variables and literals still run.
+#[test]
+fn a_variable_nested_in_a_changed_expansion_is_judged() {
+    let f = Fixture::new();
+    mkdir(&f.home.join(".claude/session-env"));
+    let (conf, moved) = moved_conf(&f);
+    let ordinary = f.home.parent().unwrap().join("zd");
+    mkdir(&ordinary);
+    let with_ordinary = |places: Places| Places {
+        startup: StartupEnv {
+            zdotdir: Some(ordinary.clone()),
+            ..places.startup
+        },
+        ..places
+    };
+    let default = with_ordinary(f.places());
+    let moved = with_ordinary(moved);
+    let home = slashed(&f.home);
+    let p = slashed(&conf);
+    let out = slashed(&f.project.join("out"));
+    let mut wrong = Vec::new();
+    for (places, name, rest, value) in [
+        (&moved, "CLAUDE_CONFIG_DIR", "/session-env/h", &p),
+        (&default, "HOME", "/.claude/session-env/h", &home),
+    ] {
+        for form in [
+            // Unnamed, one, two and three levels down.
+            format!("${{:-${name}}}"),
+            format!("${{${{:-${name}}}:a}}"),
+            format!("${{${{${{:-${name}}}}}:a}}"),
+            format!("${{${{${{${{:-${name}}}}}}}:a}}"),
+            format!("${{${{:-${{{name}}}}}:a}}"),
+            // Named, one, two and three levels down.
+            format!("${{NOPE:-${name}}}"),
+            format!("${{${{NOPE:-${name}}}:a}}"),
+            format!("${{${{${{NOPE:-${name}}}}}:a}}"),
+            format!("${{${{${{${{NOPE:-${name}}}}}}}:a}}"),
+            format!("${{${{ZDOTDIR:+${name}}}:a}}"),
+            // Other changes around the nested one.
+            format!("${{=${{:-${name}}}}}"),
+            format!("$={{${{:-${name}}}}}"),
+            format!("${{${{:-${name}}}[1,-1]}}"),
+            format!("${{(U)${{:-${name}}}}}"),
+            format!("${{(j:/:)${{:-${name}}}}}"),
+            format!("${{ZDOTDIR/#$ZDOTDIR/${name}}}"),
+            format!("${{ZDOTDIR[1,${name}]}}"),
+            // After variables aimed at ordinary folders.
+            format!("${{${{:-$ZDOTDIR}}:h}}/..${{${{:-${name}}}:a}}"),
+            format!("${{${{:-$ZDOTDIR/..${name}}}:a}}"),
+            format!("${{${{${{NOPE:-$ZDOTDIR}}}}:h}}/..${{${{${{${{:-${name}}}}}}}:a}}"),
+        ] {
+            let word = format!("{form}{rest}");
+            let message = format!(
+                "a redirect writes `{word}`, which the guard cannot resolve, and it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state; {NEAR}"
+            );
+            both_hooks(
+                &f,
+                places,
+                &format!("echo x > {word}"),
+                &[message],
+                &mut wrong,
+            );
+        }
+    }
+    // The same nestings of ordinary variables and literals: the write runs.
+    for places in [&default, &moved] {
+        for command in [
+            "echo x > ${${:-$ZDOTDIR}:a}/h".to_string(),
+            "echo x > ${NOPE:-$ZDOTDIR}/h".to_string(),
+            "echo x > ${${${:-$ZDOTDIR}}:a}/h".to_string(),
+            "echo x > ${${${${NOPE:-$ZDOTDIR}}}:a}/h".to_string(),
+            "echo x > ${(U)${:-$ZDOTDIR}}/h".to_string(),
+            "echo x > ${${:-out}:a}/h".to_string(),
+            "echo x > ${${${:-out/x}:h}:a}/h".to_string(),
+            "echo x > ${#ZDOTDIR}.log".to_string(),
+            "echo x > out-$(date).log".to_string(),
+            format!("OUT={out}; echo x > ${{${{OUT:-$ZDOTDIR}}:h}}/h"),
+            format!("OUT={out}; echo x > ${{${{${{:-$OUT}}}}:a}}/h"),
+        ] {
+            both_hooks(&f, places, &command, &[], &mut wrong);
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// A changed expansion the guard cannot read to the end fails closed: an
+/// indirect name, a flag that takes an argument it does not read, a
+/// command substitution inside it, an expansion left open, or a closing
+/// brace left over after one. The guard cannot tell which variables such a
+/// word reads, so it is read as near saved state, at the home and at a
+/// moved folder, whatever the run folder holds.
+#[test]
+fn a_changed_expansion_the_guard_cannot_read_fails_closed() {
+    let f = Fixture::new();
+    mkdir(&f.home.join(".claude/session-env"));
+    let (_, moved) = moved_conf(&f);
+    let mut wrong = Vec::new();
+    for places in [&f.places(), &moved] {
+        for (assign, word) in [
+            ("V=CLAUDE_CONFIG_DIR; ", "${(P)V}/session-env/h"),
+            ("V=CLAUDE_CONFIG_DIR; ", "${!V}/session-env/h"),
+            ("", "${(P)${:-CLAUDE_CONFIG_DIR}}/session-env/h"),
+            ("V=X; ", "${(e)V}/session-env/h"),
+            ("", "${(s:)}:)CLAUDE_CONFIG_DIR}/session-env/h"),
+            ("", "${(%):-%~}/session-env/h"),
+            ("", "${${:-$(pwd)}:a}/session-env/h"),
+            ("", "${NOPE:-x/session-env/h"),
+            ("", "${NOPE:-}x}/session-env/h"),
+        ] {
+            let message = format!(
+                "a redirect writes `{word}`, which the guard cannot resolve, and a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state; {NEAR}"
+            );
+            both_hooks(
+                &f,
+                places,
+                &format!("{assign}echo x > {word}"),
+                &[message],
+                &mut wrong,
+            );
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// The kernel reads a symbolic link's relative text from the folder the
 /// link is in, so a link made in another folder than the command runs in
 /// is judged from there, and a destination is tried as a folder whatever
