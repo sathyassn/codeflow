@@ -2189,24 +2189,44 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   - `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME` and, on Windows,
     `APPDATA` move the matching entries when the hook process has the
     variable. The preset denies name the default folders; `codeflow
-    doctor` reports a moved one.
-  - exec-guard and git-guard judge these locations in a pass of their own.
-    It runs after every other check and only adds refusals after the
-    other findings, so it never changes what another rule reports. A
-    target is judged in the directory its command runs in, and is compared
-    with each location by the node it reaches on disk, links and `..`
-    included. A folder of your own that only has the same name as one of
-    these folders is ordinary.
+    doctor` reports a moved one, and a `CLAUDE_ENV_FILE` outside the
+    default Claude folder, which no preset deny names.
+  - exec-guard and git-guard judge these locations after every other
+    check, and only add refusals after the other findings, so they never
+    change what another rule reports. The first run is the shell startup
+    check's own judge over these locations: every form it reads a write
+    by, such as a redirect, an option that names an output file, a glob,
+    interpreter code or a command variable that names a location, refuses
+    here too. Where it cannot tell what a command writes, it refuses when
+    the command names a location or runs in a folder that holds one. zsh's
+    `>!`, `>>!` and `>>|` are read as plain redirects.
+  - A second run adds what the first did not find. It judges a target in
+    the directory its command runs in and compares it with each location
+    by the node it reaches on disk, links and `..` included. A folder of
+    your own that only has the same name as one of these folders is
+    ordinary.
   - A write refuses: a redirect, `tee`, `cp`, `mv`, `ln` or another
-    writing program whose target is a location or lies in one.
+    writing program whose target is a location or lies in one. A program
+    the guard does not list as a writer that names a location refuses
+    too; the message names the readers the guard lists, such as `cat`.
   - A removal refuses when the node it removes is a location, lies in one
     or is a folder above one that exists (`rm -r`, `find -delete`, a
     `find -exec` remover, the source of `mv`). It reads the node without
     following a link below it; a trailing `/` follows a link the operand
-    names. `rmdir`, `unlink` and a plain `rm` refuse only a location or a
-    path in one.
+    names. `rmdir`, `unlink` and a plain `rm` refuse a location, a path in
+    one, or a link on the way to one, and `ln` or `mv` refuse to replace
+    such a link.
+  - A link made to a location or to a folder above one refuses, since a
+    later write through it lands there.
   - A copy, sync or move of a tree refuses when what it places lands in a
-    location or above one.
+    location or above one. A source that does not exist yet counts as a
+    tree, since an earlier command on the line can make it.
+  - A placing program run in or aimed at a folder that holds a location,
+    such as `tar xf` or `patch` after a `cd` there, `wget -P` or
+    `find -exec`, refuses, and so does a `cd` into a location on a line
+    that runs other programs. Each message names the way through: aim the
+    program at a named sub-folder, name the file it writes, or run `cd`
+    alone with a plain unquoted path.
   - An extraction (`tar -x`, `unzip`) refuses when its folder is a
     location, lies in one or is above one, such as the home, `~/.claude`
     or `~/.config`, since the guard cannot see what the archive holds. The
@@ -2216,6 +2236,11 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     location, runs.
   - edit-guard refuses a native edit of a file in a location. Creating a
     herdr-core template is the operator's step.
+  - Not covered: a hard link made earlier to a file inside a folder
+    location; a path that interpreter code builds at run time; a rename
+    pattern that spells a moved folder by its variable; archive options
+    that write outside the folder the extraction names; and paths fed to
+    `xargs` or `parallel` as input.
 - **Windows.** A PowerShell profile under a redirected `Documents` folder,
   such as one in OneDrive, is outside the class. On native Windows Claude
   Code has no Bash sandbox, so the class rests on the `Edit` denies for its
