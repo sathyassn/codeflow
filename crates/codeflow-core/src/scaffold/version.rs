@@ -197,7 +197,7 @@ pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<super::
     // and `init`, `update` and `doctor` already name it where it matters.
     (is_older(&state.scaffold_version, binary_version) == Ok(true)).then(|| {
         crate::shown!(
-            "codeflow: scaffold {} is behind binary {} — run `codeflow update`",
+            "codeflow: scaffold {} is behind binary {}; the operator runs `codeflow update`",
             Shown::version(&state.scaffold_version),
             Shown::version(binary_version)
         )

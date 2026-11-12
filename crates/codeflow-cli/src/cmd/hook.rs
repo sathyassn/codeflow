@@ -88,7 +88,7 @@ pub struct HookArgs {
 pub fn run(args: &HookArgs) -> i32 {
     if args.contract.is_some_and(|version| version != 3) {
         eprintln!(
-            "codeflow: unsupported hook contract; {}; then codeflow update",
+            "codeflow: unsupported hook contract; the operator installs the current binary with: {}; then runs codeflow update",
             codeflow_core::hooks::landed_policy::INSTALL
         );
         return 2;

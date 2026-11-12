@@ -94,7 +94,7 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
     {
         let _ = writeln!(
             out,
-            "hook binary missing or older; {}; then codeflow update",
+            "hook binary missing or older; the operator installs it with: {}; then runs codeflow update",
             super::landed_policy::INSTALL
         );
     }

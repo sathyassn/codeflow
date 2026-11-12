@@ -214,7 +214,7 @@ fn project_with_worktrees(temp: &Path) -> PathBuf {
     root
 }
 
-/// AC-1: a CodeFlow binary other than the installed one, run as either
+/// AC-1: a build of the binary other than the installed one, run as either
 /// install verb, is refused in each form the guards read, and the refusal
 /// names the operator.
 #[test]
@@ -384,7 +384,11 @@ fn the_install_verbs_refuse_in_every_folder() {
         &root,
         operator_refusal,
     );
-    tally.shell_refused(&["codeflow init --yes".to_string()], &plain, operator_refusal);
+    tally.shell_refused(
+        &["codeflow init --yes".to_string()],
+        &plain,
+        operator_refusal,
+    );
     tally.finish();
 }
 
@@ -455,9 +459,7 @@ fn worktree_copies_refuse_every_shell_write_route() {
             format!("sed -i.bak s/a/b/ {folder}/.claude/settings.json"),
             format!("echo x > {folder}/.codeflow/git-hooks/pre-push"),
             format!("rm {folder}/.codeflow/policy.json"),
-            format!(
-                r#"python3 -c "open('{folder}/.codeflow/policy.json', 'w').write('x')""#
-            ),
+            format!(r#"python3 -c "open('{folder}/.codeflow/policy.json', 'w').write('x')""#),
         ];
         tally.shell_refused(&rows, &root, integrity_refusal);
         let inside = [
@@ -495,10 +497,7 @@ fn worktree_copies_refuse_native_file_tools() {
                     "Edit",
                     serde_json::json!({"file_path": target, "old_string": "{}", "new_string": "{ }"}),
                 ),
-                (
-                    "write",
-                    serde_json::json!({"path": target, "content": "x"}),
-                ),
+                ("write", serde_json::json!({"path": target, "content": "x"})),
                 (
                     "apply_patch",
                     serde_json::json!({"command": format!(
@@ -538,7 +537,10 @@ fn every_shipped_claude_preset_denies_the_worktree_copies() {
                 .map(move |folder| format!("Edit(//**/{folder}/*/{relative})"))
         })
         .collect();
-    assert!(!expected.is_empty(), "the action table names no root denies");
+    assert!(
+        !expected.is_empty(),
+        "the action table names no root denies"
+    );
     let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
     let mut missing = Vec::new();
     for name in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
@@ -564,6 +566,85 @@ fn every_shipped_claude_preset_denies_the_worktree_copies() {
     );
 }
 
+/// AC-4: every guard and hook message that names an install verb as the
+/// way to clear it names the operator as the one who runs it: the guard
+/// remedies, the policy warnings the hooks print, the messages the hook
+/// entry points and the session start print, and the fallback line of
+/// every shipped hook entry and git hook shim.
+#[test]
+fn every_guard_and_hook_message_names_the_operator() {
+    let mut unnamed = Vec::new();
+    for clearing in [
+        &codeflow_core::remedy::HOOK_INTEGRITY,
+        &codeflow_core::remedy::INTERPRETER_ARGUMENT,
+        &codeflow_core::remedy::INSTALL_RUN,
+        &codeflow_core::remedy::POLICY_DEPRECATED,
+        &codeflow_core::remedy::POLICY_UNSUPPORTED,
+    ] {
+        if !clearing.text.contains("operator") {
+            unnamed.push(format!("remedy {}", clearing.name));
+        }
+    }
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let names_a_verb =
+        |line: &str| line.contains("codeflow update") || line.contains("codeflow init");
+    for source in [
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "crates/codeflow-core/src/scaffold/version.rs",
+        "crates/codeflow-cli/src/cmd/hook.rs",
+    ] {
+        let text = std::fs::read_to_string(workspace.join(source)).unwrap();
+        for line in text.lines() {
+            let message = line.trim_start().starts_with('"');
+            if message && names_a_verb(line) && !line.contains("operator") {
+                unnamed.push(format!("{source}: {}", line.trim()));
+            }
+        }
+    }
+    let mut hook_files: Vec<String> = [
+        "assets/base/settings/default.json",
+        "assets/base/settings/acceptEdits.json",
+        "assets/base/settings/bypass-sandboxed.json",
+        "assets/base/codex/hooks.json",
+        "assets/base/grok/hooks.json",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    for shim in [
+        "commit-msg",
+        "pre-commit",
+        "pre-merge-commit",
+        "pre-push",
+        "reference-transaction",
+    ] {
+        hook_files.push(format!("assets/base/git-hooks/{shim}"));
+    }
+    let mut fallbacks = 0;
+    for file in &hook_files {
+        let text = std::fs::read_to_string(workspace.join(file)).unwrap();
+        for line in text
+            .lines()
+            .filter(|line| line.contains("echo") && names_a_verb(line))
+        {
+            fallbacks += 1;
+            if !line.contains("the operator") {
+                unnamed.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        fallbacks >= 25,
+        "the shipped fallback lines were not found: {fallbacks}"
+    );
+    assert!(
+        unnamed.is_empty(),
+        "messages that name an install verb without the operator ({}):\n{}",
+        unnamed.len(),
+        unnamed.join("\n")
+    );
+}
+
 /// The shipped Codex profiles name no worktree path, since a pattern with a
 /// wildcard folder
 /// makes Codex refuse to delete every folder it reaches, worktrees
@@ -578,5 +659,8 @@ fn codex_keeps_the_worktree_copies_guarded_by_the_hooks() {
         .filter(|line| !line.starts_with('#'))
         .filter(|line| line.contains(".worktrees/") || line.contains(".claude/worktrees/"))
         .collect();
-    assert!(named.is_empty(), "Codex profiles name worktree paths: {named:?}");
+    assert!(
+        named.is_empty(),
+        "Codex profiles name worktree paths: {named:?}"
+    );
 }
