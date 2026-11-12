@@ -175,6 +175,8 @@ fn unread_program_words_are_judged_through_git_aliases() {
         ("git-guard", "$G ship", force, "$G"),
         ("git-guard", "${G:-git} ship", force, "${G:-git}"),
         ("git-guard", "$G -C . ship", force, "$G"),
+        ("git-guard", "$G --git-dir .git ship", force, "$G"),
+        ("git-guard", "gi* ship", force, "gi*"),
     ];
     let mut wrong = Vec::new();
     for (name, command, rule, word) in rows {
@@ -189,12 +191,14 @@ fn unread_program_words_are_judged_through_git_aliases() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    // Literal `git` reads the alias the same way, and a word that is no
-    // alias is allowed as `git` allows it.
+    // Literal `git` reads the alias the same way. A first word that is no
+    // alias and no builtin keeps main's verdict, as does a quoted `$`.
     let rows = [
         ("git-guard", "git ship", Some(force)),
         ("git-guard", "$G status", None),
         ("git-guard", "$TOOL data/in.txt", None),
+        ("git-guard", "$TOOL notes.md", None),
+        ("git-guard", "'$G' ship", None),
     ];
     let wrong = check(dir.path(), &rows);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

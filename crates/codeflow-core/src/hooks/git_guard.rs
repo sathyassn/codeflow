@@ -1178,6 +1178,28 @@ fn evaluate_report_with_runners(
                     &crate::remedy::GUARD_UNCLASSIFIABLE,
                 ));
             }
+            // A program word the guard cannot fill in (TSK-1456 AC-9).
+            ProgramKind::Other
+                if marks
+                    .get(words.len() - args.len() - 1)
+                    .is_some_and(|marked| expands_marked(marked) || unread_pattern(marked)) =>
+            {
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                let from = violations.len();
+                check_unread_git_alias(
+                    args,
+                    &mut branches,
+                    &moved,
+                    ctx,
+                    violations,
+                    &mut notes,
+                    cwd,
+                );
+                hint(
+                    violations,
+                    &(from, unread_program_hint(&[program.to_string()])),
+                );
+            }
             ProgramKind::Other => {}
         }
     }
@@ -7662,8 +7684,9 @@ const GUARDED_NAMES: &[&str] = &["gh", "claude", "codex", "grok"];
 /// word at `at`, an environment value or a pattern (TSK-1456 AC-9), as
 /// shell text, so the line is refused when any of them is refused: the
 /// command under each name in [`GUARDED_NAMES`]; under `git` when an
-/// argument is a git builtin (`git` with any other first word runs an
-/// alias or a `git-` program, which a reading cannot name); under `sh` when
+/// argument is a git builtin (a first word that is an alias of the
+/// repository is judged by git-guard on the command itself,
+/// [`check_unread_git_alias`]); under `sh` when
 /// the first argument is a short option cluster holding `c`; and, as a
 /// launcher, the command from each later word that is not an option, up to
 /// the first word that is itself unread, whose own readings go on from
@@ -9988,6 +10011,43 @@ fn check_authority(
                 "the operator repairs the configured remote; agents use its ordinary fetch mapping",
             ));
         }
+    }
+}
+
+/// A program word the guard cannot fill in may be Git running an alias of
+/// the repository (TSK-1456): when the command's first word that is not an
+/// option is no Git builtin, each alias it names is judged as literal `git`
+/// judges it, and one the guard cannot read refuses as it does for literal
+/// `git`. A builtin is judged through the command's `git` reading
+/// ([`unread_program_readings`]); a word that is no alias names a `git-`
+/// program, which the line could run by its own name as well.
+fn check_unread_git_alias(
+    args: &[String],
+    branches: &mut BranchTracker,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+    notes: &mut Vec<crate::remedy::Finding>,
+    cwd: &Path,
+) {
+    let Some((sub, _)) = git_subcommand(args) else {
+        return;
+    };
+    if GIT_BUILTINS.contains(&sub) || expands(sub) {
+        return;
+    }
+    match expand_alias(args, sub, moved, ctx, 0, branches.config_changed) {
+        Ok(expansions) => {
+            for expanded in expansions {
+                check_git(&expanded, branches, moved, ctx, out, notes, 1, cwd);
+            }
+        }
+        Err(why) => out.extend(
+            Unclassified::Alias(format!(
+                "`git {sub}` may be an alias the guard cannot resolve ({why})"
+            ))
+            .violation(ctx.policy, None),
+        ),
     }
 }
 
