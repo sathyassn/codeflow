@@ -368,7 +368,7 @@ fn hidden_row_value(
             index,
             shown!(
                 "its `{}` value holds {} at byte {}, {}",
-                Shown::fixed(*field),
+                Shown::fixed(field),
                 Shown::fixed(class.what()),
                 Shown::count(at),
                 Shown::fixed(sections::HIDDEN_WHY)

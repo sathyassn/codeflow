@@ -1340,7 +1340,10 @@ fn inline_text_the_page_does_not_show_is_refused() {
         &body_holds(IMAGE),
     );
     assert_refused(
-        &one("rule:outcome", "text = 'Name [it](https://example.com/x) now.'"),
+        &one(
+            "rule:outcome",
+            "text = 'Name [it](https://example.com/x) now.'",
+        ),
         &value_holds("text", LINK),
     );
     assert_refused(
@@ -1351,7 +1354,10 @@ fn inline_text_the_page_does_not_show_is_refused() {
         &value_holds("title", LINK_TITLE),
     );
     assert_refused(
-        &one("moment:build", "action = 'build ![it](https://example.com/a.png)'"),
+        &one(
+            "moment:build",
+            "action = 'build ![it](https://example.com/a.png)'",
+        ),
         &value_holds("action", IMAGE),
     );
 }

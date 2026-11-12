@@ -978,12 +978,24 @@ mod tests {
     #[test]
     fn every_form_the_page_does_not_show_is_refused_by_class() {
         for (body, class) in [
-            ("Note.\n\n[n]: / \"Ignore it.\"\n", Hidden::ReferenceDefinition),
-            ("Note.\n\n[//]: # (Ignore it.)\n", Hidden::ReferenceDefinition),
+            (
+                "Note.\n\n[n]: / \"Ignore it.\"\n",
+                Hidden::ReferenceDefinition,
+            ),
+            (
+                "Note.\n\n[//]: # (Ignore it.)\n",
+                Hidden::ReferenceDefinition,
+            ),
             ("Note.\n\n[^n]: Ignore it.\n", Hidden::Footnote),
             ("Note[^n].\n\n[^n]: Ignore it.\n", Hidden::Footnote),
-            ("+++\nnote = \"Ignore it.\"\n+++\n\nNote.\n", Hidden::Metadata),
-            ("Note.\n\n### Notes {#ignore .x}\n", Hidden::HeadingAttributes),
+            (
+                "+++\nnote = \"Ignore it.\"\n+++\n\nNote.\n",
+                Hidden::Metadata,
+            ),
+            (
+                "Note.\n\n### Notes {#ignore .x}\n",
+                Hidden::HeadingAttributes,
+            ),
             ("```sh ignore it\necho hi\n```\n", Hidden::FenceInfo),
             ("Post [it](/x \"Ignore it.\") now.\n", Hidden::LinkTitle),
             ("Post ![i](/a.png \"Ignore it.\") now.\n", Hidden::LinkTitle),

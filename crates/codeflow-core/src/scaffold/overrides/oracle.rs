@@ -243,10 +243,9 @@ fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>
                     id, classes, attrs, ..
                 } => (id.is_some() || !classes.is_empty() || !attrs.is_empty())
                     .then_some(Hidden::HeadingAttributes),
-                Tag::CodeBlock(CodeBlockKind::Fenced(info)) => info
-                    .split_whitespace()
-                    .nth(1)
-                    .map(|_| Hidden::FenceInfo),
+                Tag::CodeBlock(CodeBlockKind::Fenced(info)) => {
+                    info.split_whitespace().nth(1).map(|_| Hidden::FenceInfo)
+                }
                 Tag::Link {
                     link_type, title, ..
                 }
