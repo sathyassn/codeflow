@@ -280,9 +280,11 @@ pub const SCHEMA: [KeySpec; 82] = [
                 given to a program that never runs its operands. A binary an agent renames or \
                 copies, and the verb's words written to a file and run later, are not named on \
                 the line; that is a named residual. The guards hold each worktree's copies of \
-                the enforcement files as they hold the root checkout's; the shipped presets \
-                name no worktree path, since a deny there also stops Git's own writes in a \
-                sandboxed session. \
+                the enforcement files as they hold the root checkout's, against shell writes \
+                and against the file tools edit-guard is bound to. The shipped presets name no \
+                worktree path, since a deny there also stops Git's own writes in a sandboxed \
+                session, and bind no guard to Claude's own file tools, so in a Claude session \
+                those tools can still change a worktree's copies. \
                 A write to Git's alternate object lists \
                 (`objects/info/alternates`, `objects/info/http-alternates`, in the common \
                 directory a linked worktree shares) refuses like a write to hooks, refs or \
