@@ -191,6 +191,111 @@ fn a_changed_expansion_of_a_filled_variable_fails_closed() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// A word can change more than one variable the guard fills. Each changed
+/// variable is judged, wherever it stands in the word: the write fails
+/// closed when any one's value is or holds saved state, after a variable
+/// aimed at an ordinary folder too, at the home and at a moved folder. A
+/// word whose changed variables are all aimed at ordinary folders still
+/// runs.
+#[test]
+fn every_changed_variable_in_a_word_is_judged() {
+    let f = Fixture::new();
+    mkdir(&f.home.join(".claude/session-env"));
+    let (conf, moved) = moved_conf(&f);
+    // A startup variable aimed at an ordinary folder, above no location.
+    let ordinary = f.home.parent().unwrap().join("zd");
+    mkdir(&ordinary);
+    let with_ordinary = |places: Places| Places {
+        startup: StartupEnv {
+            zdotdir: Some(ordinary.clone()),
+            ..places.startup
+        },
+        ..places
+    };
+    let default = with_ordinary(f.places());
+    let moved = with_ordinary(moved);
+    let home = slashed(&f.home);
+    let p = slashed(&conf);
+    let out = slashed(&f.project.join("out"));
+    let mut wrong = Vec::new();
+    for (places, assign, word, name, value) in [
+        // An ordinary variable first, then one whose value holds saved
+        // state, braced and unbraced.
+        (
+            &moved,
+            "",
+            "${ZDOTDIR:h}/..${CLAUDE_CONFIG_DIR:a}/session-env/h".to_string(),
+            "CLAUDE_CONFIG_DIR",
+            &p,
+        ),
+        (
+            &moved,
+            "",
+            "$ZDOTDIR:h/..$CLAUDE_CONFIG_DIR:a/session-env/h".to_string(),
+            "CLAUDE_CONFIG_DIR",
+            &p,
+        ),
+        (
+            &default,
+            "",
+            "${ZDOTDIR:h}/..${HOME:a}/.claude/session-env/h".to_string(),
+            "HOME",
+            &home,
+        ),
+        // The reverse order.
+        (
+            &moved,
+            "",
+            "${CLAUDE_CONFIG_DIR:a}/session-env/x${ZDOTDIR:t}".to_string(),
+            "CLAUDE_CONFIG_DIR",
+            &p,
+        ),
+        (
+            &default,
+            "",
+            "${HOME:a}/.claude/session-env/x${ZDOTDIR:t}".to_string(),
+            "HOME",
+            &home,
+        ),
+        // Three changed variables, the last one near saved state.
+        (
+            &moved,
+            "OUT=",
+            "${ZDOTDIR:h}/..${OUT:a}/..${CLAUDE_CONFIG_DIR:a}/session-env/h".to_string(),
+            "CLAUDE_CONFIG_DIR",
+            &p,
+        ),
+        (
+            &default,
+            "OUT=",
+            "${ZDOTDIR:h}/..${OUT:a}/..${HOME:a}/.claude/session-env/h".to_string(),
+            "HOME",
+            &home,
+        ),
+    ] {
+        let command = if assign.is_empty() {
+            format!("echo x > {word}")
+        } else {
+            format!("{assign}{out}; echo x > {word}")
+        };
+        let message = format!(
+            "a redirect writes `{word}`, which the guard cannot resolve, and it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state; {NEAR}"
+        );
+        both_hooks(&f, places, &command, &[message], &mut wrong);
+    }
+    // Every changed variable aimed at an ordinary folder: the write runs.
+    for places in [&default, &moved] {
+        for command in [
+            format!("OUT={out}; echo x > ${{ZDOTDIR:h}}/..${{OUT:a}}/h"),
+            format!("OUT={out}; echo x > $OUT:a/..$ZDOTDIR:t/h"),
+            format!("OUT={out}; echo x > ${{OUT:h}}/x${{ZDOTDIR:t}}${{OUT:t}}"),
+        ] {
+            both_hooks(&f, places, &command, &[], &mut wrong);
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// The kernel reads a symbolic link's relative text from the folder the
 /// link is in, so a link made in another folder than the command runs in
 /// is judged from there, and a destination is tried as a folder whatever
