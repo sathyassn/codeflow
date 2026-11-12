@@ -1,0 +1,11 @@
+id = "TSK-1441"
+uid = "e62533bb-4088-4d41-9f52-34d4f878e0f7"
+kind = "TSK"
+title = "The work next listing shows a cross-epic task waiting for that work on the default branch"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:58:57Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
