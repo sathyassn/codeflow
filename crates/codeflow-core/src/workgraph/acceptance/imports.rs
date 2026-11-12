@@ -854,6 +854,9 @@ pub fn imported_record_paths(
 }
 
 #[cfg(test)]
+mod home_tests;
+
+#[cfg(test)]
 thread_local! { static COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[cfg(test)]
