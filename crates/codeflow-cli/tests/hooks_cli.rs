@@ -10223,7 +10223,7 @@ fn guard_time_bound_separates_linear_from_quadratic_growth() {
     let launch = Duration::from_millis(50);
     // 1466 ms is the eval control recorded on the loaded coverage host.
     for control in [Duration::from_millis(1466), Duration::from_millis(400)] {
-        let per_step = control - launch;
+        let per_step = control.checked_sub(launch).unwrap();
         let linear = launch + per_step * 4;
         let quadratic = launch + per_step * 16;
         assert!(linear <= guard_time_bound(control), "linear at {control:?}");
@@ -10246,10 +10246,11 @@ fn guard_time_bound_separates_linear_from_quadratic_growth() {
     ]);
     assert!(chain <= guard_time_bound(control));
     // Quadratic growth in every round still fails.
+    let per_step = control.checked_sub(launch).unwrap();
     let chain = median_duration(&mut [
-        launch + (control - launch) * 16,
-        launch + (control - launch) * 15,
-        launch + (control - launch) * 17,
+        launch + per_step * 16,
+        launch + per_step * 15,
+        launch + per_step * 17,
     ]);
     assert!(chain > guard_time_bound(control));
 }

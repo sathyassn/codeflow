@@ -1437,7 +1437,6 @@ fn config_is_sibling_independent(path: &Path) -> bool {
     let Ok(mut entries) = config.entries(None) else {
         return false;
     };
-    let mut independent = true;
     while let Some(entry) = entries.next() {
         let Ok(entry) = entry else {
             return false;
@@ -1445,18 +1444,19 @@ fn config_is_sibling_independent(path: &Path) -> bool {
         let Ok(name) = entry.name().map(str::to_ascii_lowercase) else {
             return false;
         };
-        if name.starts_with("include.") || name.starts_with("includeif.") || name == "core.worktree"
-        {
-            independent = false;
-        } else if name == "core.bare"
+        let bare_not_false = name == "core.bare"
             && !entry
                 .value()
-                .is_ok_and(|value| matches!(git2::Config::parse_bool(value), Ok(false)))
+                .is_ok_and(|value| matches!(git2::Config::parse_bool(value), Ok(false)));
+        if name.starts_with("include.")
+            || name.starts_with("includeif.")
+            || name == "core.worktree"
+            || bare_not_false
         {
-            independent = false;
+            return false;
         }
     }
-    independent
+    true
 }
 
 /// The shared configuration of one physical common directory: its local
@@ -1990,6 +1990,72 @@ mod tests {
         assert!(super::SIBLING_GATE.with(|gate| gate.borrow().is_none()));
     }
 
+    /// A named condition of a skip test: how to break it and how to mend it.
+    #[cfg(unix)]
+    type Case<'a> = (&'a str, Box<dyn Fn() + 'a>, Box<dyn Fn() + 'a>);
+
+    /// TSK-1275: a commondir naming any other directory keeps the full open,
+    /// and other spellings of the same directories are resolved before they
+    /// prove anything: an absolute commondir, and a gitfile naming the
+    /// registration through a link.
+    #[cfg(unix)]
+    #[test]
+    fn commondir_and_gitfile_spellings_are_resolved_before_a_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, two_root) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        let marker = two_root.join(".git");
+        let original = std::fs::read(&marker).unwrap();
+        let commondir = two.join("commondir");
+        let written = std::fs::read(&commondir).unwrap();
+        assert_eq!(written.trim_ascii_end(), b"../..");
+        let foreign = dir.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        init_repo(&foreign);
+        let unproven: [Case; 2] = [
+            (
+                "commondir naming another git directory",
+                Box::new(|| {
+                    let other = foreign.join(".git").canonicalize().unwrap();
+                    std::fs::write(&commondir, format!("{}\n", other.display())).unwrap();
+                }),
+                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
+            ),
+            (
+                "commondir that does not resolve",
+                Box::new(|| std::fs::write(&commondir, "../../missing\n").unwrap()),
+                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
+            ),
+        ];
+        for (case, break_it, mend) in &unproven {
+            break_it();
+            assert!(super::sibling_facts(&two, &two_root).is_none(), "{case}");
+            let skips = {
+                let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+                let before = skipped();
+                super::read_registration(&one).unwrap();
+                let _ = super::read_registration(&two);
+                skipped() - before
+            };
+            assert_eq!(skips, 0, "{case}");
+            mend();
+            assert_eq!(validate_in_one_scope(&[&one, &two]), 1, "{case} mended");
+        }
+        std::fs::write(&commondir, format!("{}\n", common.display())).unwrap();
+        assert_eq!(super::sibling_facts(&two, &two_root), Some(common.clone()));
+        std::fs::write(&commondir, &written).unwrap();
+        let alias = dir.path().join("admin-alias");
+        std::os::unix::fs::symlink(&two, &alias).unwrap();
+        std::fs::write(&marker, format!("gitdir: {}\n", alias.display())).unwrap();
+        assert_eq!(super::sibling_facts(&two, &two_root), Some(common.clone()));
+        std::fs::write(&marker, &original).unwrap();
+    }
+
     /// TSK-1275: each condition of the equivalence table keeps the full open
     /// for the sibling it concerns, and a shared file that could differ per
     /// sibling keeps it for all of them. Every case is judged as the files
@@ -2008,26 +2074,7 @@ mod tests {
         assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
         let marker = two_root.join(".git");
         let original = std::fs::read(&marker).unwrap();
-        let commondir = two.join("commondir");
-        let written = std::fs::read(&commondir).unwrap();
-        assert_eq!(written.trim_ascii_end(), b"../..");
-        let foreign = dir.path().join("foreign");
-        std::fs::create_dir(&foreign).unwrap();
-        init_repo(&foreign);
-        let per_sibling: [(&str, Box<dyn Fn()>, Box<dyn Fn()>); 8] = [
-            (
-                "commondir naming another git directory",
-                Box::new(|| {
-                    let other = foreign.join(".git").canonicalize().unwrap();
-                    std::fs::write(&commondir, format!("{}\n", other.display())).unwrap();
-                }),
-                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
-            ),
-            (
-                "commondir that does not resolve",
-                Box::new(|| std::fs::write(&commondir, "../../missing\n").unwrap()),
-                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
-            ),
+        let per_sibling: [Case; 6] = [
             (
                 "own config.worktree",
                 Box::new(|| std::fs::write(two.join("config.worktree"), "[core]\n").unwrap()),
@@ -2089,17 +2136,6 @@ mod tests {
             mend();
             assert_eq!(validate_in_one_scope(&[&one, &two]), 1, "{case} mended");
         }
-        // Other spellings of the same directories are resolved, then proven:
-        // an absolute commondir, and a gitfile naming the registration
-        // through a link.
-        std::fs::write(&commondir, format!("{}\n", common.display())).unwrap();
-        assert_eq!(super::sibling_facts(&two, &two_root), Some(common.clone()));
-        std::fs::write(&commondir, &written).unwrap();
-        let alias = dir.path().join("admin-alias");
-        std::os::unix::fs::symlink(&two, &alias).unwrap();
-        std::fs::write(&marker, format!("gitdir: {}\n", alias.display())).unwrap();
-        assert_eq!(super::sibling_facts(&two, &two_root), Some(common.clone()));
-        std::fs::write(&marker, &original).unwrap();
         // Shared files: an include, a conditional include, a core.worktree
         // or a bare repository flag in the common configuration keeps every
         // full open; worktreeConfig alone does not.
