@@ -199,8 +199,10 @@ const UNAVAILABLE: &str = "unavailable";
 /// does. The form: items separated by `;`, each a lineage id of `known`
 /// (exact, as `built_by` is), then the word `unavailable` (a trailing `,`,
 /// `.` or `:` allowed), then any text; exactly one item for each lineage in
-/// `others` and none for `built`. The form makes a careless or mistaken
-/// statement refuse; it does not show that the probe took place.
+/// `others` and none for `built`. Only ASCII spaces and tabs separate and
+/// trim words, so any other blank stays inside a word and refuses. The form
+/// makes a careless or mistaken statement refuse; it does not show that the
+/// probe took place.
 fn reduced_assurance_problem(
     statement: Option<&str>,
     built: &str,
@@ -211,9 +213,12 @@ fn reduced_assurance_problem(
         return Some("it has no `reduced_assurance`".into());
     };
     let mut recorded = BTreeSet::new();
-    for item in statement.split(';').map(str::trim) {
+    for item in statement
+        .split(';')
+        .map(|item| item.trim_matches([' ', '\t']))
+    {
         let shown = crate::git::display_text(item);
-        let mut words = item.split_whitespace();
+        let mut words = item.split([' ', '\t']).filter(|word| !word.is_empty());
         let Some(lineage) = words.next().and_then(|word| known.get(word)).copied() else {
             return Some(format!(
                 "the item `{shown}` does not start with a lineage id"
@@ -471,6 +476,12 @@ mod tests {
             (
                 "codex unavailable; grok unavailable;",
                 "the item `` does not start with a lineage id",
+            ),
+            // Only ASCII space and tab separate words: a non-breaking space
+            // leaves `codex\u{a0}unavailable` one word, which is no lineage id.
+            (
+                "codex\u{a0}unavailable; grok unavailable",
+                "does not start with a lineage id",
             ),
         ] {
             let found = judge(Some("claude"), review, Some(stated)).expect(stated);
