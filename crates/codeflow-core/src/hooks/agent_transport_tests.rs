@@ -32,12 +32,20 @@ const PLAIN_HELPER: &str = "[credential]\n\thelper = !gh auth git-credential\n";
 /// configuration, home and environment cut off; returns `true` in that
 /// child, which then runs the rows.
 fn isolated(test: &str) -> bool {
+    isolated_with(test, None)
+}
+
+/// [`isolated`], with `system` as the child's system Git configuration
+/// file when given.
+fn isolated_with(test: &str, system: Option<&str>) -> bool {
     const CHILD: &str = "CODEFLOW_TSK1479_TRANSPORT_CHILD";
     if std::env::var(CHILD).as_deref() == Ok(test) {
         return true;
     }
     let home = tempfile::tempdir().unwrap();
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
+    let system_file = home.path().join("system-gitconfig");
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
         .args([
             "--exact",
             &format!("hooks::exec_guard::agent_transport_tests::{test}"),
@@ -50,11 +58,16 @@ fn isolated(test: &str) -> bool {
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", home.path())
         .env("TMPDIR", std::env::temp_dir())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+    if let Some(contents) = system {
+        std::fs::write(&system_file, contents).unwrap();
+        command.env("GIT_CONFIG_SYSTEM", &system_file);
+    } else {
+        command
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+    }
+    let output = command.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success() && stdout.contains("1 passed"),
@@ -743,6 +756,147 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
             }
         }
     }
+    report(&wrong);
+}
+
+/// `git remote` subcommands that contact a remote, and the other verbs that
+/// do, start the credential helper, so they keep the account rule; the
+/// admission covers only the fetch and push forms. Before this change the
+/// guard read no helper for `git remote`, so `git remote update` passed.
+#[test]
+fn remote_contacting_verbs_keep_the_account_rule() {
+    if !isolated("remote_contacting_verbs_keep_the_account_rule") {
+        return;
+    }
+    let f = Fixture::new(GH_HELPER);
+    let mut wrong = Vec::new();
+    expect_account(
+        &f.root,
+        &rows(&[
+            "git remote update",
+            "git remote update origin",
+            "git remote -v update",
+            "git remote prune origin",
+            "git remote prune -n origin",
+            "git remote show origin",
+            "git remote set-head origin -a",
+            "git remote set-head origin --auto",
+        ]),
+        &mut wrong,
+    );
+    expect_refused(
+        &f.root,
+        &rows(&[
+            "git remote frobnicate origin",
+            "git remote add -f upstream https://github.com/example/upstream.git",
+            "git remote add --fetch upstream https://github.com/example/upstream.git",
+            "git maintenance run --task=prefetch",
+            "git request-pull HEAD origin",
+        ]),
+        &mut wrong,
+    );
+    // `git remote` calls that only read local configuration start no
+    // helper and stay ordinary work.
+    expect_pass(
+        &f.root,
+        &rows(&[
+            "git remote",
+            "git remote -v",
+            "git remote get-url origin",
+            "git remote get-url --push origin",
+            "git remote show -n origin",
+        ]),
+        &mut wrong,
+    );
+    report(&wrong);
+}
+
+/// The system configuration's `osxkeychain` helper, as Homebrew's Git
+/// ships it, and a later empty `helper =` for the host, as
+/// `gh auth setup-git` writes it: Git runs the GitHub CLI helper alone, so
+/// the admission applies. Before this change the guard did not model the
+/// empty value, and the `osxkeychain` body withheld the admission.
+#[test]
+fn system_helper_cleared_by_a_later_reset_is_admitted() {
+    if !isolated_with(
+        "system_helper_cleared_by_a_later_reset_is_admitted",
+        Some("[credential]\n\thelper = osxkeychain\n"),
+    ) {
+        return;
+    }
+    let lines = rows(&[
+        "git fetch origin",
+        "git push origin HEAD:refs/heads/task/agent-work",
+    ]);
+    let mut wrong = Vec::new();
+    expect_pass(&Fixture::new(GH_HELPER).root, &lines, &mut wrong);
+    for config in [
+        // A reset for another host clears nothing for `origin`.
+        "[credential \"https://gitlab.com\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        // A helper after the GitHub CLI helper runs too.
+        "[credential \"https://github.com\"]\n\thelper =\n\thelper = !/usr/local/bin/gh auth git-credential\n[credential]\n\thelper = store\n",
+        // Patterns the model does not read: a wildcard host and a path.
+        "[credential \"https://*.github.com\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://github.com/example\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        // A user in the pattern.
+        "[credential \"https://agent@github.com\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+    ] {
+        let before = wrong.len();
+        expect_account(&Fixture::new(config).root, &lines, &mut wrong);
+        for entry in &mut wrong[before..] {
+            write!(entry, " [config: {}]", config.replace('\n', " ")).unwrap();
+        }
+    }
+    report(&wrong);
+}
+
+/// The system `osxkeychain` helper with no reset after it: Git runs both
+/// helpers, so the account rule stands.
+#[test]
+fn system_helper_without_a_reset_keeps_the_account_rule() {
+    if !isolated_with(
+        "system_helper_without_a_reset_keeps_the_account_rule",
+        Some("[credential]\n\thelper = osxkeychain\n"),
+    ) {
+        return;
+    }
+    let f = Fixture::new(
+        "[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+    );
+    let mut wrong = Vec::new();
+    expect_account(
+        &f.root,
+        &rows(&[
+            "git fetch origin",
+            "git push origin HEAD:refs/heads/task/agent-work",
+        ]),
+        &mut wrong,
+    );
+    report(&wrong);
+}
+
+/// A reset that comes before the system `osxkeychain` helper clears
+/// nothing after it: Git runs both helpers, so the account rule stands.
+#[test]
+fn reset_before_the_system_helper_keeps_the_account_rule() {
+    if !isolated_with(
+        "reset_before_the_system_helper_keeps_the_account_rule",
+        Some("[credential \"https://github.com\"]\n\thelper =\n[credential]\n\thelper = osxkeychain\n"),
+    ) {
+        return;
+    }
+    let f = Fixture::new(
+        "[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+    );
+    let mut wrong = Vec::new();
+    expect_account(
+        &f.root,
+        &rows(&[
+            "git fetch origin",
+            "git push origin HEAD:refs/heads/task/agent-work",
+        ]),
+        &mut wrong,
+    );
     report(&wrong);
 }
 
