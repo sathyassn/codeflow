@@ -213,3 +213,26 @@ operator's decision of 15:34: Windows leaves line pushes. The Decision, the
 table, the Consequences and the history now say so. This record moved from
 PR 631 to the records pull request into `main` so the placement reaches
 `main` ahead of the line.
+
+## Note, 2026-11-06, line pushes
+
+A line push starts `codeflow-line-push.yml`, because a job in `codeflow-ci.yml`
+whose `if:` is false would leave a `windows` row at the line's tip, which is
+also the head of the pull request into `main`. Where the Consequences above
+describe a line push running Windows today, that ends when TSK-1321 lands.
+Until TSK-1026 lands, a line push runs every Linux job and a pull request into
+`main` runs full Linux too. The operator applies the `integration/**` ruleset
+change in two steps.
+
+## Note, 2026-11-10, line pull requests
+
+The Consequences bullet that begins "Today a line push cannot reuse"
+describes the workflows before TSK-1321. With TSK-1321 a pull request into an
+integration line starts `codeflow-line-pr.yml` and never `codeflow-ci.yml`,
+so it runs only the short checks: `codeflow build`, the `present` and
+`checks` parts of the gate, the secret scan with its allowlist canary and the
+security review, and it reports `codeflow gates (line)`. It runs no Linux
+coverage shard and no Windows job, and the reduced Windows tier is gone.
+`docs/releasing.md`, "Where CI suites run", now gives the one table for each
+event and how the workflows apply it; it no longer separates today from
+after TSK-1321.

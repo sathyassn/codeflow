@@ -4489,6 +4489,8 @@ const ENFORCEMENT_TEXT: &[&str] = &[
     ".git/packed-refs",
     ".git/refs/remotes",
     ".github/workflows/codeflow-ci.yml",
+    ".github/workflows/codeflow-line-pr.yml",
+    ".github/workflows/codeflow-line-push.yml",
     ".codex",
     ".grok",
 ];
@@ -17821,6 +17823,25 @@ mod tests {
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// A line workflow's verdict admits a line pull request, so a command
+    /// naming either file reads as naming an enforcement file, as
+    /// `codeflow-ci.yml` does. This reads the list directly: `evaluate`
+    /// under `ctx` has no repository to resolve, so it refuses any path
+    /// under `.github/workflows` with or without these entries.
+    #[test]
+    fn test_the_line_workflows_are_enforcement_files() {
+        for file in ["codeflow-line-pr.yml", "codeflow-line-push.yml"] {
+            let path = format!(".github/workflows/{file}");
+            for text in [
+                format!("sed -i s/a/b/ {path}"),
+                format!("sh -c 'rm {path}'"),
+                format!("rm ./.GITHUB//workflows/{file}"),
+            ] {
+                assert_eq!(enforcement_text(&text), Some(path.as_str()), "{text}");
+            }
         }
     }
 

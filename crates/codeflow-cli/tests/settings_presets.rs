@@ -1287,7 +1287,7 @@ fn every_preset_denies_every_action_family() {
 }
 
 /// The enforcement paths (design 2.2), each needing an `Edit(...)` deny.
-const ENFORCEMENT_PATHS: [&str; 10] = [
+const ENFORCEMENT_PATHS: [&str; 12] = [
     ".claude/settings.json",
     ".codeflow/policy.json",
     ".codeflow/project.toml",
@@ -1298,6 +1298,8 @@ const ENFORCEMENT_PATHS: [&str; 10] = [
     ".grok/hooks/codeflow.json",
     ".grok/sandbox.toml",
     ".github/workflows/codeflow-ci.yml",
+    ".github/workflows/codeflow-line-pr.yml",
+    ".github/workflows/codeflow-line-push.yml",
 ];
 
 /// Gitignore-style path glob: `**/` spans zero or more directories, a

@@ -513,6 +513,28 @@ jobs:
       # request, a skipped verdict, a retarget and any API error refuse.
       # The script comes from the authority checkout above, never from the
       # pull request or its target.
+      # A pull request into a line that has main's line workflows starts
+      # codeflow-line-pr.yml and not codeflow-ci.yml (TSK-1321), so it is
+      # judged on that run's verdict, and that run's completion re-runs this
+      # job. The base commit decides, never the head: both line workflows on
+      # the base must be blobs that main held, at this run's main commit or a
+      # commit on its first-parent history, so a line cannot install its own
+      # copy, or one that lived only on a branch main merged, and leave the
+      # full gates. A line without them keeps both verdicts, as does every
+      # adopter's line.
+      # Transitional: `exact_sync` goes once no line lacks the placement (TSK-1321).
+      # The pull request that syncs main into such a line has the new trigger, so
+      # codeflow-ci.yml cannot start for it. It alone is judged on the line verdict,
+      # and only when its head's tree is the clean merge of the live base and a
+      # commit of main, both read here, with nothing added, and its line workflows
+      # are main's own. Any read that fails, a conflict or any other tree keeps
+      # both verdicts. Git reads the head as data.
+      # `pull_request` runs a workflow from the head's merge, so a head could edit
+      # the line workflow and post its own green verdict. Each line workflow at the
+      # head, and in the head's clean merge with the base, must be main's or, off
+      # the exact-sync path, the base commit's, read here; a change to one reaches
+      # a line only through main. Anything else, a conflict or a failed read
+      # included, refuses.
       - name: the exact head's ready codeflow-ci run passed
         if: github.event_name == 'pull_request_target'
         env:
@@ -521,9 +543,74 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          workflow=.github/workflows/codeflow-ci.yml
+          set -- --require "codeflow gates" --require windows
+          line=.github/workflows/codeflow-line-pr.yml
+          push_file=.github/workflows/codeflow-line-push.yml
+          from_main() {
+            # The base's copy of $1 is a blob of $1 at this run's main commit
+            # or at a commit on its first-parent history. Every copy main held
+            # was introduced by such a commit that changed the file, so those
+            # commits are read; a merged branch's own commits are not main's.
+            base_blob=$(git rev-parse --verify --quiet "refs/codeflow/pr-base:$1") || return 1
+            commits=$(git rev-list --first-parent "$GITHUB_SHA" -- "$1") || return 1
+            for commit in $commits; do
+              [ "$(git rev-parse --verify --quiet "$commit:$1")" = "$base_blob" ] && return 0
+            done
+            return 1
+          }
+          exact_sync() {
+            [ -f "$line" ] || return 1
+            live_base=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .base.sha) || return 1
+            [ "$live_base" = "$BASE_SHA" ] || return 1
+            main_tip=$(gh api "repos/$REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha) || return 1
+            if [ "$main_tip" != "$GITHUB_SHA" ]; then
+              relation=$(gh api "repos/$REPOSITORY/compare/$GITHUB_SHA...$main_tip" --jq .status) || return 1
+              [ "$relation" = ahead ] || return 1
+            fi
+            merged=$(git merge-tree --write-tree refs/codeflow/pr-base "$GITHUB_SHA") || return 1
+            head_tree=$(git rev-parse --verify 'refs/codeflow/pr-head^{tree}') || return 1
+            [ "$merged" = "$head_tree" ]
+          }
+          reviewed_line_workflows() {
+            # $1 is base when the base's copies may stay, main when only main's
+            # may. The head and its merge with the base are both read.
+            merged=$(git merge-tree --write-tree refs/codeflow/pr-base refs/codeflow/pr-head) || return 1
+            for file in "$line" "$push_file"; do
+              main_blob=$(git rev-parse --verify --quiet "$GITHUB_SHA:$file") || main_blob=none
+              base_blob=none
+              if [ "$1" = base ]; then
+                base_blob=$(git rev-parse --verify --quiet "refs/codeflow/pr-base:$file") || return 1
+              fi
+              for side in refs/codeflow/pr-head "$merged"; do
+                blob=$(git rev-parse --verify --quiet "$side:$file") || return 1
+                [ "$blob" = "$main_blob" ] || [ "$blob" = "$base_blob" ] || return 1
+              done
+            done
+          }
+          case "$BASE_REF" in
+            integration/?*)
+              keep=
+              if from_main "$line" && from_main "$push_file"; then
+                keep=base
+              elif exact_sync; then
+                keep=main
+              fi
+              if [ -n "$keep" ]; then
+                reviewed_line_workflows "$keep" || {
+                  echo "::error::a line workflow at this head, or in its merge with the base, is not a copy main reviewed; change it through main"
+                  exit 1
+                }
+                workflow=$line
+                set -- --require "codeflow gates (line)"
+              fi
+              ;;
+          esac
           python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
-            --base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows
+            --base "$BASE_REF" --workflow "$workflow" "$@"
 
       - name: Assert the authority checkout
         env:

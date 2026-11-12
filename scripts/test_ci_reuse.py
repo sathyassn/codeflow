@@ -29,6 +29,7 @@ SPEC.loader.exec_module(reuse)
 
 PUSHED, HEAD, MAIN = "a" * 40, "b" * 40, "c" * 40
 WORKFLOW = ".github/workflows/codeflow-ci.yml"
+LINE_WORKFLOW = ".github/workflows/codeflow-line-pr.yml"
 PUSH_ONLY = {"reuse a pull request verdict"}
 MAIN_REF = "refs/heads/main"
 APT_KEY = "playwright-apt-ubuntu24-20261005.1-1.56.1"
@@ -63,7 +64,7 @@ jobs:
     needs: reuse
   windows-tests:
     if: ${{ !cancelled() && needs.windows-build.result == 'success' }}
-    name: windows tests (${{ matrix.partition }} of 12)
+    name: windows tests (${{ matrix.partition }} of 16)
     needs: windows-build
 """
 PUSH_RUN = 500
@@ -121,7 +122,7 @@ PUSH_JOBS = [job("reuse a pull request verdict", label="ubuntu-24.04"),
 
 
 GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"),
-              *(job(f"windows tests ({n} of 12)") for n in range(1, 13)),
+              *(job(f"windows tests ({n} of 16)") for n in range(1, 17)),
               job("windows tier", label="ubuntu-24.04"), job("windows tier journeys", "skipped"),
               job("windows"), job("secret scan"), job("reuse a pull request verdict", "skipped")]
 
@@ -429,6 +430,28 @@ class ProvenanceTests(unittest.TestCase):
             self.assertNotIn(never, names)
 
 
+class VerdictFormTests(unittest.TestCase):
+    """A verdict runs unless the run was cancelled. A report job that reads a
+    reused job's result opens the same way and is still skipped with it."""
+
+    WORKFLOW = (
+        "jobs:\n"
+        "  gates:\n    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (x) }}\n    name: part\n"
+        "  report:\n    if: ${{ !cancelled() && needs.gates.result != 'skipped' && (x) }}\n    name: report\n"
+        "    needs: gates\n"
+        "  verdict:\n    if: ${{ !cancelled() && !(github.event_name == 'pull_request') }}\n    name: verdict\n"
+        "    needs: [gates, report]\n"
+        "  old:\n    if: ${{ always() && !(github.event_name == 'pull_request') }}\n    name: old\n"
+        "    needs: gates\n")
+
+    def test_both_verdict_forms_are_verdicts_and_a_report_job_is_not(self):
+        self.assertEqual(reuse.verdict_jobs(self.WORKFLOW), {"verdict", "old"})
+
+    def test_a_report_job_is_reused_and_a_verdict_is_not(self):
+        names = [pattern.pattern for pattern in reuse.reused_jobs(self.WORKFLOW)]
+        self.assertEqual(sorted(names), ["part", "report"])
+
+
 class ImageBindingTests(unittest.TestCase):
     """TSK-359: each job the push skips must have run on the push's image."""
 
@@ -450,7 +473,7 @@ class ImageBindingTests(unittest.TestCase):
         self.assertIn("20261025.353.1", message)
 
     def test_a_drifted_windows_job_image_or_version_is_refused(self):
-        name = "windows tests (1 of 12)"
+        name = "windows tests (1 of 16)"
         for image, version in (("windows-2022", "20261021.278.1"), ("windows-2025-vs2026", "20261030.294.1")):
             with self.subTest(image=image, version=version):
                 self.assertIn(f"{name!r} ran on image", self.skipped(FakeApi(logs={self.job_id(name): log(image, version)})))
@@ -512,8 +535,8 @@ class ImageBindingTests(unittest.TestCase):
 
         def reused(name):
             return any(p.fullmatch(name) for p in patterns)
-        for name in ("codeflow build", "codeflow gates (checks)", "codeflow gates (coverage 1 of 2)",
-                     "codeflow gates (coverage report)", "windows test build", "windows tests (3 of 12)",
+        for name in ("codeflow build", "codeflow gates (checks)", "codeflow gates (coverage 1 of 3)",
+                     "codeflow gates (coverage report)", "windows test build", "windows tests (3 of 16)",
                      "windows checks (doc, clippy, Node)", "windows journeys", "windows release journey"):
             self.assertTrue(reused(name), name)
         for name in ("codeflow gates", "windows", "secret scan", "security review", "gitleaks allowlist canary",
@@ -573,7 +596,7 @@ class RefusalTests(unittest.TestCase):
                               self.skipped(api=FakeApi(runs=[other])))
 
     def test_a_skipped_failed_or_missing_job_runs_everything(self):
-        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 12)", "skipped"), *GREEN_JOBS[3:]],
+        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 16)", "skipped"), *GREEN_JOBS[3:]],
                      [*GREEN_JOBS[:3], job("windows", "failure"), *GREEN_JOBS[4:]],
                      [*GREEN_JOBS[:5], job("reuse a pull request verdict", "success")],
                      [job for job in GREEN_JOBS if job["name"] != "windows"],
@@ -701,6 +724,30 @@ class AdmissionTests(unittest.TestCase):
         reason = self.refused(FakeApi(jobs={77: draft}))
         self.assertIn("'codeflow gates' of run 77 concluded skipped", reason)
         self.assertIn("mark the pull request ready", reason)
+
+    def test_a_draft_s_skipped_line_verdict_refuses(self):
+        # A line pull request is admitted on the line workflow's run, under the
+        # same rule: a draft's skipped verdict never admits.
+        path = ".github/workflows/codeflow-line-pr.yml"
+        name = "codeflow gates (line)"
+        api = FakeApi(runs=[run(path=path)], jobs={77: [job(name, "skipped"), job("secret scan")]})
+        with self.assertRaises(reuse.Skip) as caught:
+            reuse.admit(HEAD, path, {name}, api, 95)
+        self.assertIn(f"{name!r} of run 77 concluded skipped", str(caught.exception))
+        api = FakeApi(runs=[run(path=path)], jobs={77: [job(name)]})
+        self.assertEqual(reuse.admit(HEAD, path, {name}, api, 95), 77)
+
+    def test_a_cancelled_run_s_line_verdict_refuses(self):
+        # A cancelled run ends with its verdict cancelled or skipped, and GitHub
+        # counts a skipped required check as a success. Admission does not.
+        path = ".github/workflows/codeflow-line-pr.yml"
+        name = "codeflow gates (line)"
+        for conclusion in ("cancelled", "skipped"):
+            with self.subTest(conclusion):
+                api = FakeApi(runs=[run(path=path)], jobs={77: [job(name, conclusion)]})
+                with self.assertRaises(reuse.Skip) as caught:
+                    reuse.admit(HEAD, path, {name}, api, 95)
+                self.assertIn(f"{name!r} of run 77 concluded {conclusion}", str(caught.exception))
 
     def test_no_ready_run_refuses_and_may_be_waited_for(self):
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
@@ -987,8 +1034,33 @@ class CompletionRerunTests(unittest.TestCase):
     standards job is re-run once, only for the run's own open, ready pull
     request at that head; nothing is written but the job re-run."""
 
-    def rerun(self, api, run_id=77, head=HEAD):
-        return admission.rerun(run_id, head, WORKFLOW, POLICY, STANDARDS, api)
+    def rerun(self, api, run_id=77, head=HEAD, workflows=(WORKFLOW, LINE_WORKFLOW)):
+        return admission.rerun(run_id, head, set(workflows), POLICY, STANDARDS, api)
+
+    def test_a_line_pull_request_whose_only_run_is_the_line_workflow_is_rerun(self):
+        # TSK-1321: a pull request into a line that has the placement starts
+        # codeflow-line-pr.yml and no codeflow-ci.yml run, so that run's
+        # completion is the only event that can re-run commit standards.
+        def line_api():
+            return AdmissionApi(runs=[run(base="integration/x", path=LINE_WORKFLOW)],
+                                pull=pull_record(base={"ref": "integration/x"}))
+        api = line_api()
+        self.assertIn("re-ran", self.rerun(api))
+        self.assertEqual(api.posts, ["actions/jobs/9001/rerun"])
+        # Admission that names only codeflow-ci.yml (main before TSK-1321)
+        # refuses that run, so the line pull request would never be judged
+        # again.
+        api = line_api()
+        with self.assertRaises(admission.Skip):
+            self.rerun(api, workflows=(WORKFLOW,))
+        self.assertEqual(api.posts, [])
+
+    def test_no_named_workflow_reruns_nothing(self):
+        api = AdmissionApi()
+        for workflows in ((), ("",)):
+            with self.subTest(workflows=workflows), self.assertRaises(admission.Skip):
+                self.rerun(api, workflows=workflows)
+        self.assertEqual(api.posts, [])
 
     def test_a_completed_run_reruns_the_newest_policy_job(self):
         api = AdmissionApi(policy_runs=[policy_run(id=499, run_number=8), policy_run()],
@@ -1051,7 +1123,8 @@ class CompletionRerunTests(unittest.TestCase):
             out = io.StringIO()
             with mock.patch.object(admission, "Writer", return_value=api), redirect_stdout(out):
                 code = admission.rerun_main(["--repo", "o/r", "--run", "77", "--head", HEAD, "--workflow", WORKFLOW,
-                                             "--policy-workflow", POLICY, "--job", STANDARDS])
+                                             "--workflow", LINE_WORKFLOW, "--policy-workflow", POLICY,
+                                             "--job", STANDARDS])
             return code, out.getvalue()
         self.assertEqual(run_main(AdmissionApi())[0], 0)
         for broken in ("run", "pull", "policy runs", "policy jobs", "post"):
@@ -1103,7 +1176,7 @@ class WindowsTierTests(unittest.TestCase):
 
     REDUCED = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")
                and item["name"] != "windows tier journeys"] + [
-        job("windows tests (${{ matrix.partition }} of 12)", "skipped"),
+        job("windows tests (${{ matrix.partition }} of 16)", "skipped"),
         job("windows test build", "skipped"), job("windows journeys", "skipped"),
         job("windows tier journeys")]
 
@@ -1121,19 +1194,19 @@ class WindowsTierTests(unittest.TestCase):
         self.assertIn("partitions run on this push", self.reason(self.REDUCED))
 
     def test_a_missing_or_repeated_partition_is_not_a_full_tier(self):
-        full = [item for item in GREEN_JOBS if item["name"] != "windows tests (12 of 12)"]
+        full = [item for item in GREEN_JOBS if item["name"] != "windows tests (16 of 16)"]
         self.assertIn("did not run every Windows test partition", self.reason(full))
         self.assertIn("did not run every Windows test partition",
-                      self.reason(GREEN_JOBS + [job("windows tests (1 of 12)")]))
+                      self.reason(GREEN_JOBS + [job("windows tests (1 of 16)")]))
 
     def test_mixed_partition_counts_are_not_a_full_tier(self):
-        mixed = [item for item in GREEN_JOBS if item["name"] != "windows tests (12 of 12)"]
+        mixed = [item for item in GREEN_JOBS if item["name"] != "windows tests (16 of 16)"]
         self.assertIn("did not run every Windows test partition",
                       self.reason(mixed + [job("windows tests (12 of 13)")]))
 
     def test_a_skipped_partition_job_is_refused_by_its_conclusion(self):
         skipped = [item for item in GREEN_JOBS if not item["name"].startswith("windows tests (")] + [
-            job("windows tests (${{ matrix.partition }} of 12)", "skipped")]
+            job("windows tests (${{ matrix.partition }} of 16)", "skipped")]
         self.assertIn("concluded skipped", self.reason(skipped))
 
     def test_a_run_with_no_partition_job_at_all_is_not_a_full_tier(self):

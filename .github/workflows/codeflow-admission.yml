@@ -32,11 +32,17 @@
 # Failure: any API error, unexpected record or refused write fails this job
 # and re-runs nothing, so the required check keeps its refusal until it is
 # re-run by hand.
+#
+# Lines (TSK-1321): a pull request into a line with the placement starts
+# codeflow-line-pr and no codeflow-ci run, so a completed codeflow-line-pr run
+# starts this workflow too. The script reads the run's workflow file from the
+# API and re-runs nothing unless it is one of the two named below; commit
+# standards then decides which run and verdicts admit, from the base commit.
 name: codeflow-admission
 
 on:
   workflow_run:
-    workflows: [codeflow-ci]
+    workflows: [codeflow-ci, codeflow-line-pr]
     types: [completed]
 
 permissions: {}
@@ -95,5 +101,6 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           python3 -I scripts/policy-admission.py rerun --repo "$REPOSITORY" --run "$RUN_ID" --head "$HEAD_SHA" \
-            --workflow .github/workflows/codeflow-ci.yml --policy-workflow .github/workflows/codeflow-policy.yml \
+            --workflow .github/workflows/codeflow-ci.yml --workflow .github/workflows/codeflow-line-pr.yml \
+            --policy-workflow .github/workflows/codeflow-policy.yml \
             --job "commit standards"

@@ -125,7 +125,11 @@ Local-artifact authority job:
   - `codeflow gates` is the one verdict over the gate's parallel parts, its
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
-    partitions and journeys.
+    partitions and journeys. It is computed from each job's result and names
+    every job that is not green. A pull request into an integration line
+    runs no Windows job and no Linux coverage shard and publishes neither
+    verdict: it starts `codeflow-line-pr.yml`, whose verdict is `codeflow
+    gates (line)`; see [Where CI suites run](#where-ci-suites-run).
   - On a push to main or to an integration line whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and
@@ -242,8 +246,8 @@ an operator decision; agents and Coordinators never rule on it.
 | Weekly run, `main` | secret scan of the full history and dependency audit | yes | yes | yes | yes | yes | yes |
 
 - The short checks are the Linux build and lint checks, the policy check
-  (`codeflow-policy.yml`, pull requests only) with its `commit standards` and `trusted: release impact` jobs, and the secret scan in
-  `codeflow-ci.yml`.
+  (`codeflow-policy.yml`, pull requests only) with its `commit standards`
+  and `trusted: release impact` jobs, and the secret scan.
 - The security review is not one of the short checks the operator named.
   It runs on every event as a secure default; removing it from an event
   needs its own operator decision.
@@ -267,31 +271,41 @@ an operator decision; agents and Coordinators never rule on it.
 - A reuse that cannot be proven runs the suite. A batch of several pull
   requests pushes a tree no member tested, so only a one-member landing on
   an equal tree reuses that member's short checks.
+- Until TSK-1026 AC-15 lands, a pull request into `main` runs full Linux as
+  well as full Windows. After it, Linux is reused from the line push on the
+  same tree.
 - A newer push to a line cancels the older push run on that line, so the
   newest tip's run is the evidence (TSK-1313, PR 583; the `concurrency`
-  block in `codeflow-ci.yml`). A run in progress for a push
+  block in `codeflow-line-push.yml`). A run in progress for a push
   to `main`, a scheduled run or a dispatched run is never cancelled; GitHub
   may still replace a pending run in the same group.
+- On a pull request into a line only a new commit cancels a running run. A
+  same-head event such as marking it ready cancels nothing, so it never
+  costs that head its verdict.
+- A cancelled run starts no more jobs and posts no verdict. A job that failed
+  still reaches its verdict, which fails. `commit standards` admits only a
+  verdict that succeeded, so a cancelled or skipped verdict never admits.
 - Local full gates keep coverage instrumentation whatever the event.
 
 The workflows apply the table as follows:
 
-- Today a ready line pull request still runs the Linux gate parts
-  (`codeflow build` and the `present` and `checks` parts,
-  `codeflow-ci.yml:250`, `:273`, `:284-292`) and the two coverage shards
-  and their report (`:584`, `:592`, `:667`). The reduced Windows tier
-  (`REDUCED_TIER`, `:755-789`) skips the Windows test build, the twelve
-  partitions and `windows-journeys` (`:812`, `:877`, `:1010`), and still runs the
-  Windows checks, the release journey and `windows-tier-journeys` (`:946`,
-  `:993`, `:1064`). The `windows` verdict accepts exactly that result
-  (`:1132-1138`).
-- After TSK-1321 (PR 620) lands, a line pull request runs only the short
-  checks, the coverage shards and every Windows job leave it, and the line
-  push runs the Linux suites and no Windows job. Until then a line push
-  also runs the full Windows suites.
-- The daily run is Windows only today (`windows-daily.yml:1-9`). The Linux
-  build, lint, tests and coverage join it when TSK-1321 (PR 620) lands
-  (CI/CD coherence review of 2026-11-06, Grok's finding 8).
+- A ready line pull request starts `codeflow-line-pr.yml` and never
+  `codeflow-ci.yml`, so it leaves no row of `codeflow gates` or `windows`,
+  skipped or otherwise. That workflow runs `codeflow build`, the `present`
+  and `checks` parts, the secret scan and the security review, and reports
+  `codeflow gates (line)`. `commit standards` admits it on that verdict when
+  the base line has that workflow. A line without it keeps both required
+  verdicts, with one transitional exception: the exact sync of `main`, whose
+  tree is the clean merge of the line and `main` with nothing added.
+- A line push starts `codeflow-line-push.yml` and never `codeflow-ci.yml`, so
+  it leaves no `windows` row, skipped or otherwise, at the line's tip. That
+  workflow runs the Linux build, the `present` and `checks` parts, the three
+  coverage shards and their report, the secret scan and the security review,
+  and reports `codeflow gates`, which passes only when every Linux job passed.
+- The daily run skips a tip that already has a passing daily run or a green
+  full run of `codeflow-ci.yml` within `DAILY_PROOF_MAX_AGE_DAYS`, and reruns
+  it at that age so image drift stays covered. A line push is not a full run,
+  so a line tip gets one daily run of both suites.
 - The daily workflows (`windows-daily.yml`) are already on `main`. They
   start from it and run `main` and each active integration line at that
   line's own ref.
@@ -662,7 +676,7 @@ ADR-0013, ADR-0014 and the parity section of
 | Duo contract and interactive lanes | The host-neutral duo contract test passes. Both native interactive lanes complete a scoped canary with the task's required Model Context Protocol (MCP) tools: Claude Code to Codex through the interactive Codex CLI in a Herdr tab (the plugin only as a recorded fallback), and Codex to Claude through task-scoped Herdr (tmux as the last fallback) with the qualified tracked Stop/StopFailure lifecycle, as `cf-model-orchestrator/resources/routing/transport.md` states. Record versions, effort, exact commands, observed tool access and graceful degradation. Auth status output never replaces a working interactive session |
 | Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
 | CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
-| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as two shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
+| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as three shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
 | Distribution plan | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows |
 | Source archive | `source.tar.gz` comes from `git archive`, so it leaves out `docs/verification/` (`export-ignore` in `.gitattributes`). A contract test compares the real archive with the tracked files |
 | Installers | Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |

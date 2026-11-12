@@ -1,5 +1,6 @@
 //! The workflow-change finding (TSK-336 AC-11, ADR-0091): a range that
-//! changes a managed workflow or `codeflow-release.yml` gets a warning
+//! changes a managed workflow, `codeflow-release.yml`,
+//! `codeflow-line-pr.yml` or `codeflow-line-push.yml` gets a warning
 //! naming the triggers, the permissions and the jobs it changes. The
 //! default branch's copy of a workflow judges every pull request, so a
 //! head's edit takes effect only once it lands there; the warning puts
@@ -23,15 +24,27 @@ pub(super) const RULE: &str = "ci.workflow_change";
 /// installs but which carries a verdict job.
 const RELEASE_WORKFLOW: &str = ".github/workflows/codeflow-release.yml";
 
+/// This repository's own workflow for pull requests into an integration
+/// line, which no manifest entry installs but which carries the verdict
+/// `commit standards` admits those pull requests on.
+const LINE_WORKFLOW: &str = ".github/workflows/codeflow-line-pr.yml";
+
+/// This repository's own workflow for pushes to an integration line, which
+/// no manifest entry installs but which posts `codeflow gates` at the line's
+/// tip.
+const LINE_PUSH_WORKFLOW: &str = ".github/workflows/codeflow-line-push.yml";
+
 /// The workflow paths the finding watches: every managed workflow the
-/// shipped manifest installs, and the release workflow. A manifest that
-/// will not load leaves the known policy and CI workflows, so the watch
+/// shipped manifest installs, and the release and line workflows. A manifest
+/// that will not load leaves the known policy and CI workflows, so the watch
 /// never empties.
 fn watched() -> BTreeSet<String> {
     let mut paths: BTreeSet<String> = [
         ".github/workflows/codeflow-ci.yml",
         ".github/workflows/codeflow-policy.yml",
         RELEASE_WORKFLOW,
+        LINE_WORKFLOW,
+        LINE_PUSH_WORKFLOW,
     ]
     .into_iter()
     .map(str::to_owned)

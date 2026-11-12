@@ -1161,7 +1161,9 @@ The rulesets:
   deletion; no bypass; no creation rule, and the checks are not required
   when a line is created, so a new line can still be cut. Every later
   update of the line stays under C, and the default branch takes the
-  line's content only through B.
+  line's content only through B. Its test verdicts are `codeflow gates` and
+  `windows`, or `codeflow gates (line)` alone where a workflow on the default
+  branch declares that name. The shipped scaffold does not.
 
 The flags:
 

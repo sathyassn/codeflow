@@ -1,15 +1,19 @@
-# Daily full Windows coverage of main and each active integration line, as
-# scripts/windows-daily.py defines active. A daily result is never merge evidence.
-# With the reduced tier on (codeflow-ci.yml), the twelve partitions leave line pull
-# requests, and this run and the line pushes cover them. A line this run leaves out
-# has only its pushes: it has no daily evidence, and the verdict says so.
+# Daily runs of the full Linux and Windows suites (the Linux build and gates parts,
+# the Linux coverage shards and every Windows job) of main and each active
+# integration line, as scripts/windows-daily.py defines active (ADR-0097). A daily
+# result is never merge evidence. Pull requests into a line run only the short
+# checks (codeflow-ci.yml), so the Linux coverage shards and every Windows job
+# leave them. The line pushes run the Linux suites, and this run and the pull
+# request into main run Windows. A line this run leaves out gets no Windows job
+# and no daily evidence until its pull request into main, and the verdict says so.
 #
 # This workflow starts the runs and runs no line code. Caches are scoped by the ref a
 # run is under, so each line's run is started at that line's own ref, never as a job
 # here under main. windows-daily-verdict.yml judges the runs later.
 #
-# A line whose exact tip already has a passing daily run gets no new one until that
-# run is older than DAILY_PROOF_MAX_AGE_DAYS, in the sources job, so a project changes
+# A line whose exact tip already has a passing daily run or a green full run of
+# codeflow-ci.yml gets no new one until that run is older than
+# DAILY_PROOF_MAX_AGE_DAYS, in the sources job, so a project changes
 # the age there. A rerun at that age keeps image drift covered at a known interval.
 name: daily Windows
 

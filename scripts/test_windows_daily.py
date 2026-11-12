@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Daily Windows source selection, the reader's verdict, workflow controls, and
-the reduced Windows tier's switch and verdict, run from the workflow's own text.
+"""Daily Windows and Linux coverage source selection, the reader's verdict,
+workflow controls, and which jobs read the tier, from the workflows' own text.
 """
 
 import contextlib
@@ -23,6 +23,27 @@ daily = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(daily)
 SHA = "a" * 40
 LINE = "refs/heads/integration/example"
+
+
+def total(run_id, sha=SHA, covered=950):
+    """A run's recorded Linux coverage total: 95 percent of 1000 lines at `sha`."""
+    return {"lines": 1000, "covered": covered, "floor": 90.0, "sha": sha}
+
+
+# No test reaches GitHub for a coverage total: every run recorded `total` unless a
+# test passes its own. CoverageReaderTests covers the reader's checks of it.
+DOWNLOAD = daily.download_coverage
+PATCHES =[mock.patch.object(daily, "download_coverage", total)]
+
+
+def setUpModule():
+    for patch in PATCHES:
+        patch.start()
+
+
+def tearDownModule():
+    for patch in PATCHES:
+        patch.stop()
 
 
 class SourceTests(unittest.TestCase):
@@ -75,8 +96,19 @@ def jobs(text):
         r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)", text, re.M | re.S)}
 
 
-def commands(job):
-    """Read run scalars from the repository's fixed-indentation workflow style."""
+# The one daily-only command: the report job records the total and the commit.
+RECORD_TOTAL = ("python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 3 "
+                "--total-file target/coverage/daily-coverage-total.json target/coverage/data")
+
+
+def commands(job, push_only=True):
+    """Read run scalars from the repository's fixed-indentation workflow style.
+    With push_only False, a step that runs only on a push is left out: the daily
+    run is a dispatch, so it has no such step."""
+    if not push_only:
+        steps = re.split(r"(?m)^(?=      - )", job)
+        job = "".join(step for step in steps
+                      if not re.search(r"(?m)^        if: .*github\.event_name == 'push'", step))
     found = []
     for m in re.finditer(r"^        run: (.*)(?:\n|$)", job, re.M):
         command = m.group(1)
@@ -109,24 +141,50 @@ class WorkflowTests(unittest.TestCase):
         permissions = runner.split("\npermissions:\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(permissions.split(), ["contents:", "read"])
 
-    def test_daily_jobs_execute_the_full_existing_windows_commands(self):
+    def test_daily_jobs_execute_the_full_existing_linux_and_windows_commands(self):
         existing = jobs((ROOT / ".github/workflows/codeflow-ci.yml").read_text())
         added = jobs(workflow("windows-daily-run"))
-        self.assertEqual(set(added), daily.WINDOWS_JOBS)
-        for name in daily.WINDOWS_JOBS:
+        self.assertEqual(set(added), daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS)
+        for name in daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS:
             with self.subTest(job=name):
-                self.assertEqual(commands(added[name]), commands(existing[name]))
-                self.assertIn("runs-on: windows-latest", added[name])
+                daily_only = [RECORD_TOTAL] if name == "gates-coverage-report" else []
+                self.assertEqual(commands(added[name]), commands(existing[name], push_only=False) + daily_only)
+                runner = "windows-latest" if name in daily.WINDOWS_JOBS else "ubuntu-24.04"
+                self.assertIn(f"runs-on: {runner}", added[name])
                 self.assertEqual(added[name].count("persist-credentials: false"), 1)
                 self.assertEqual(added[name].count("uses: actions/checkout@"), 1)
-        self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]", added["windows-tests"])
+        self.assertIn("shard: [1, 2, 3]", added["gates-coverage"])
+        self.assertIn("--shards 3 ", RECORD_TOTAL)
+        self.assertEqual(len(re.findall(r"^\s+shard: \[1, 2, 3\]$", existing["gates-coverage"], re.M)), 1)
+        self.assertIn("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]", added["windows-tests"])
         self.assertIn("fail-fast: false", added["windows-tests"])
+        self.assertIn("needs: gates-build", added["gates"])
+
+    def test_the_daily_gate_parts_run_codeflow_ci_s_targets(self):
+        def parts(job):
+            return re.findall(r"- part: (\S+)\n(?:\s*#.*\n)*\s+only: (\S+)", job)
+        existing = jobs(workflow("codeflow-ci"))["gates"]
+        added = jobs(workflow("windows-daily-run"))["gates"]
+        self.assertEqual(parts(added), parts(existing))
+        self.assertEqual(tuple(part for part, _ in parts(added)), daily.GATE_PARTS)
+        self.assertIn(f"part: [{', '.join(daily.GATE_PARTS)}]", added)
+
+    def test_the_total_is_recorded_for_this_commit_and_kept_under_the_floor_too(self):
+        report = jobs(workflow("windows-daily-run"))["gates-coverage-report"]
+        steps = re.findall(r"^      - name: (.*)$", report, re.M)
+        self.assertEqual(steps[-2:], ["Record the coverage total for the daily verdict",
+                                      "Keep the coverage total for the daily verdict"])
+        kept = report.split("      - name: Keep the coverage total for the daily verdict\n", 1)[1]
+        self.assertIn("if: ${{ !cancelled() }}", kept)
+        self.assertIn(f"name: {daily.COVERAGE_ARTIFACT}", kept)
+        self.assertIn(f"path: target/coverage/{daily.COVERAGE_FILE}", kept)
+        self.assertIn(f"--total-file target/coverage/{daily.COVERAGE_FILE}", RECORD_TOTAL)
 
     def test_every_job_stops_when_its_commit_is_not_the_requested_one(self):
         """The exact-SHA check: dispatching at a ref runs its tip, which can have moved."""
         added = jobs(workflow("windows-daily-run"))
         self.assertIn("TESTED_SHA: ${{ inputs.source-sha }}", workflow("windows-daily-run"))
-        for name in daily.WINDOWS_JOBS:
+        for name in daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS:
             with self.subTest(job=name):
                 steps = re.findall(r"^      - name: (.*)$", added[name], re.M)
                 self.assertEqual(steps[:2], ["Check out this run's commit", "Report and verify the tested commit"])
@@ -149,11 +207,12 @@ class WorkflowTests(unittest.TestCase):
         names = set()
         for job in jobs(workflow("windows-daily-run")).values():
             name = re.search(r"^    name: (.*)$", job, re.M).group(1)
-            if "${{ matrix.partition }}" not in name:
+            axis = re.search(r"\$\{\{ matrix\.(\w+) \}\}", name)
+            if not axis:
                 names.add(name)
                 continue
-            partitions = re.search(r"^\s+partition: \[(.*)\]$", job, re.M).group(1).split(", ")
-            names.update(name.replace("${{ matrix.partition }}", partition) for partition in partitions)
+            values = re.search(rf"^\s+{axis.group(1)}: \[(.*)\]$", job, re.M).group(1).split(", ")
+            names.update(name.replace(axis.group(0), value) for value in values)
         self.assertEqual(names, daily.RUN_JOB_NAMES)
 
 
@@ -248,7 +307,7 @@ class ReaderTests(unittest.TestCase):
     def judge(self, runs=None, job_rows=None, runner=RUNNER_TEXT, ref=LINE):
         return daily.judge({"ref": ref, "sha": SHA}, REQUESTED_AT, [recorded_run()] if runs is None else runs,
                            lambda run: recorded_jobs() if job_rows is None else job_rows,
-                           lambda sha: runner, RUNNER_HASH)
+                           lambda sha: runner, RUNNER_HASH, total, 90.0)
 
     def test_a_run_matching_every_record_is_credited(self):
         result = self.judge()
@@ -289,7 +348,7 @@ class ReaderTests(unittest.TestCase):
                 rows = [{"name": n, "conclusion": state if n == name else "success"} for n in names]
                 with self.subTest(name=name, state=state):
                     self.assertEqual(self.judge(job_rows=rows)["result"], "no-credit")
-        without_partition = [row for row in recorded_jobs() if row["name"] != "windows tests (7 of 12)"]
+        without_partition = [row for row in recorded_jobs() if row["name"] != "windows tests (7 of 16)"]
         self.assertEqual(self.judge(job_rows=without_partition)["result"], "no-credit")
         self.assertEqual(self.judge(job_rows=recorded_jobs() + [{"name": "extra", "conclusion": "success"}])["result"],
                          "no-credit")
@@ -313,7 +372,7 @@ class MissingRunTests(unittest.TestCase):
 
     def judge(self, runs):
         return daily.judge({"ref": LINE, "sha": SHA}, REQUESTED_AT, runs, lambda run: recorded_jobs(),
-                           lambda sha: RUNNER_TEXT, RUNNER_HASH)
+                           lambda sha: RUNNER_TEXT, RUNNER_HASH, total, 90.0)
 
     def test_no_run_at_all_is_no_evidence(self):
         result = self.judge([])
@@ -436,15 +495,15 @@ class MissingRunTests(unittest.TestCase):
             summary = (Path(temp) / "summary").read_text()
             self.assertIn(SHA, summary)
             self.assertIn("no evidence for a newer branch tip", summary)
-            self.assertIn(f"{LINE}` at `{'b' * 40}`: left out, no daily evidence", summary)
+            self.assertIn(f"{LINE}` at `{'b' * 40}`: left out, no daily evidence and no daily coverage", summary)
+            self.assertIn(f"Linux line coverage 95.00 percent (950 of 1000 lines) measured at `{SHA}`", summary)
             self.assertIn("differs from main's", summary)
 
 
-NEEDS = {"scripts/windows-partitions.py": {"drift", "reports", "--list"}, "scripts/journey-gate.py": {"--part"},
-         "scripts/windows-test-times.json": set()}
-PARTITIONS = 'add_parser("drift")\nadd_parser("reports")\nadd_argument("--list")\n'
-COMPLETE = {"scripts/windows-partitions.py": PARTITIONS, "scripts/journey-gate.py": 'add_argument("--part")',
-            "scripts/windows-test-times.json": "{}", daily.RUNNER_PATH: RUNNER_TEXT}
+NEEDS = {"scripts/partition-check.py": {"check", "reports", "--count"}, "scripts/journey-gate.py": {"--part"}}
+PARTITIONS = 'add_parser("check")\nadd_parser("reports")\nadd_argument("--count")\n'
+COMPLETE = {"scripts/partition-check.py": PARTITIONS, "scripts/journey-gate.py": 'add_argument("--part")',
+            daily.RUNNER_PATH: RUNNER_TEXT}
 
 
 def line_tree(needs):
@@ -467,10 +526,11 @@ class ActiveLineTests(unittest.TestCase):
 
     def test_the_needs_are_read_from_the_runner_itself(self):
         needs = daily.runner_needs(workflow("windows-daily-run"))
-        self.assertLessEqual({"drift", "reports", "check", "filter"}, needs["scripts/windows-partitions.py"])
+        self.assertLessEqual({"reports", "check", "--count", "--prefix", "--results", "--list"},
+                             needs["scripts/partition-check.py"])
         self.assertLessEqual({"--part", "--skip-benchmark", "--results"}, needs["scripts/journey-gate.py"])
         self.assertIn("scripts/test_gate_parity.py", needs)
-        self.assertIn("scripts/windows-test-times.json", needs)
+        self.assertNotIn("scripts/windows-test-times.json", needs)
         self.assertLessEqual({"identity", "--ref"}, needs["scripts/windows-daily.py"])
 
     def test_a_runner_naming_no_script_proves_no_line(self):
@@ -488,10 +548,10 @@ class ActiveLineTests(unittest.TestCase):
         self.assertEqual(left_out, [])
 
     def test_a_line_without_the_partition_script_is_left_out_and_named(self):
-        tree = {k: v for k, v in COMPLETE.items() if k != "scripts/windows-partitions.py"}
+        tree = {k: v for k, v in COMPLETE.items() if k != "scripts/partition-check.py"}
         matrix, left_out = self.select({(LINE, SHA): tree})
         self.assertEqual(matrix["include"], [])
-        self.assertEqual(left_out, [{"ref": LINE, "sha": SHA, "missing": ["no scripts/windows-partitions.py"]}])
+        self.assertEqual(left_out, [{"ref": LINE, "sha": SHA, "missing": ["no scripts/partition-check.py"]}])
 
     def test_a_line_with_another_runner_file_is_left_out_and_named(self):
         """Its run could not be credited, so it gets no run."""
@@ -502,19 +562,19 @@ class ActiveLineTests(unittest.TestCase):
                 self.assertEqual(left_out[0]["missing"], [f"{daily.RUNNER_PATH} differs from main's"])
 
     def test_a_line_whose_script_lacks_a_runner_command_is_left_out_and_named(self):
-        tree = {**COMPLETE, "scripts/windows-partitions.py": 'add_parser("check")\nadd_argument("--list")\n'}
+        tree = {**COMPLETE, "scripts/partition-check.py": 'add_parser("check")\nadd_argument("--list")\n'}
         _, left_out = self.select({(LINE, SHA): tree})
-        self.assertEqual(left_out[0]["missing"], ["scripts/windows-partitions.py has no drift",
-                                                  "scripts/windows-partitions.py has no reports"])
+        self.assertEqual(left_out[0]["missing"], ["scripts/partition-check.py has no --count",
+                                                  "scripts/partition-check.py has no reports"])
 
     def test_a_line_whose_script_lacks_a_runner_flag_is_left_out_and_named(self):
         _, left_out = self.select({(LINE, SHA): {**COMPLETE, "scripts/journey-gate.py": "pass"}})
         self.assertEqual(left_out[0]["missing"], ["scripts/journey-gate.py has no --part"])
 
     def test_a_command_named_only_in_a_comment_does_not_count(self):
-        tree = {**COMPLETE, "scripts/windows-partitions.py": '# drift reports\nadd_argument("--list")\n'}
+        tree = {**COMPLETE, "scripts/partition-check.py": '# check reports\nadd_argument("--count")\n'}
         _, left_out = self.select({(LINE, SHA): tree})
-        self.assertIn("scripts/windows-partitions.py has no drift", left_out[0]["missing"])
+        self.assertIn("scripts/partition-check.py has no reports", left_out[0]["missing"])
 
     def test_main_is_always_selected_and_never_read(self):
         def read(sha, path):
@@ -532,24 +592,27 @@ class ActiveLineTests(unittest.TestCase):
 
 class DailyCacheTests(unittest.TestCase):
     """A run's caches belong to its own ref. The daily run still saves none: the
-    line's push runs keep them current, and it adds nothing worth saving."""
+    runs on main keep them current, and it adds nothing worth saving."""
 
     def steps_using(self, action):
         pattern = rf"^      - uses: {re.escape(action)}@[^\n]*\n((?:        .*\n)*)"
         return re.findall(pattern, workflow("windows-daily-run"), re.M)
 
     def test_each_rust_cache_restores_and_never_saves(self):
+        # Two Windows jobs, the coverage shards, the Linux build and the gate parts.
         steps = self.steps_using("Swatinem/rust-cache")
-        self.assertEqual(len(steps), 2)
+        self.assertEqual(len(steps), 5)
         for step in steps:
             self.assertIn("save-if: false", step)
             self.assertNotIn("cache-on-failure", step)
 
     def test_node_uses_no_package_cache(self):
+        # One Windows job, the coverage shards, and two in the gate parts.
         steps = self.steps_using("actions/setup-node")
-        self.assertEqual(len(steps), 1)
-        self.assertIn("package-manager-cache: false", steps[0])
-        self.assertNotRegex(steps[0], r"(?m)^\s*(cache|cache-dependency-path):")
+        self.assertEqual(len(steps), 4)
+        for step in steps:
+            self.assertIn("package-manager-cache: false", step)
+            self.assertNotRegex(step, r"(?m)^\s*(cache|cache-dependency-path):")
 
     def test_a_new_action_in_a_daily_workflow_needs_a_decision_here(self):
         """Actions with no cache, or whose cache the two tests above pin. Artifacts
@@ -601,13 +664,13 @@ class DiscoverJourneyTests(unittest.TestCase):
             origin.mkdir()
             self.git(origin, "init", "-q", "-b", "start")
             whole = line_tree(daily.runner_needs(workflow("windows-daily-run")))
-            behind = {**whole, "scripts/windows-partitions.py": 'add_parser("check")\n'}
+            behind = {**whole, "scripts/partition-check.py": 'add_parser("check")\n'}
             self.commit(origin, "main", {"README": "x"})
             self.commit(origin, "integration/whole", whole)
             self.commit(origin, "integration/behind", behind)
             self.commit(origin, "integration/old", {"README": "x"})
-            folder = {key: text for key, text in whole.items() if key != "scripts/windows-test-times.json"}
-            self.commit(origin, "integration/folder", {**folder, "scripts/windows-test-times.json/x": "{}"})
+            folder = {key: text for key, text in whole.items() if key != "scripts/partition-check.py"}
+            self.commit(origin, "integration/folder", {**folder, "scripts/partition-check.py/x": "{}"})
             self.git(origin, "checkout", "-q", "--orphan", "other")
             checkout = temp / "checkout"
             checkout.mkdir()
@@ -619,15 +682,15 @@ class DiscoverJourneyTests(unittest.TestCase):
             matrix = json.loads(out.splitlines()[0].split("=", 1)[1])
             self.assertEqual([row["ref"] for row in matrix["include"]],
                              ["refs/heads/integration/whole", daily.MAIN])
-            self.assertIn("Left out, no daily evidence: not proven active", summary)
-            self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*windows-partitions.py has no drift")
+            self.assertIn("Left out, no daily evidence and no daily coverage: not proven active", summary)
+            self.assertRegex(summary, r"integration/behind` at `[0-9a-f]{40}`: .*partition-check.py has no reports")
             self.assertRegex(summary, r"integration/old` at `[0-9a-f]{40}`: .*differs from main's; no scripts/")
             requested = json.loads((checkout / daily.REQUESTED_FILE).read_text())
             self.assertEqual(requested["include"], matrix["include"])
             self.assertEqual(requested["runner_sha256"], daily.runner_hash(workflow("windows-daily-run")))
             self.assertEqual({row["ref"] for row in requested["left_out"]},
                              {f"refs/heads/integration/{name}" for name in ("behind", "old", "folder")})
-            self.assertRegex(summary, r"integration/folder` at `[0-9a-f]{40}`: no scripts/windows-test-times.json")
+            self.assertRegex(summary, r"integration/folder` at `[0-9a-f]{40}`: no scripts/partition-check.py")
 
     def test_an_unreadable_remote_fails_the_run_and_offers_no_lines(self):
         with tempfile.TemporaryDirectory() as name:
@@ -694,27 +757,121 @@ class DailyCoverageTests(unittest.TestCase):
                          ["${{ needs.sources.outputs.runs == 'true' }}"])
         self.assertEqual(set(daily.sources(f"{SHA}\trefs/heads/main\n")["include"][0]), {"ref", "sha"})
 
-    def test_a_run_skips_no_windows_job_and_has_no_tier(self):
-        """Only the journey reader has a condition, and the verdict refuses its skip."""
+    def test_a_run_skips_no_windows_or_coverage_job_and_has_no_tier(self):
+        """Only the two readers of other jobs' files have a condition, and the verdict
+        refuses their skip."""
         runner = jobs(workflow("windows-daily-run"))
         conditions = {name: re.findall(r"^    if: (.*)$", job, re.M) for name, job in runner.items()}
         self.assertEqual(conditions, {
             "windows-build": [], "windows-tests": [], "windows": [], "windows-release-journey": [],
             "windows-journeys": ["${{ always() && needs.windows-tests.result != 'skipped' }}"],
+            "gates-coverage": [],
+            "gates-coverage-report": ["${{ always() && needs.gates-coverage.result != 'skipped' }}"],
+            "gates-build": [], "gates": [],
         })
 
     def test_a_selected_line_that_fails_its_build_fails_visibly(self):
         """The active test reads files; a selected line can still fail when it runs."""
         result = daily.judge({"ref": LINE, "sha": SHA}, REQUESTED_AT, [recorded_run(conclusion="failure")],
-                             lambda run: recorded_jobs(), lambda sha: RUNNER_TEXT, RUNNER_HASH)
+                             lambda run: recorded_jobs(), lambda sha: RUNNER_TEXT, RUNNER_HASH, total, 90.0)
         self.assertEqual(result["result"], "failure")
         self.assertIsNone(result["tested_sha"])
 
-    def test_the_daily_run_is_windows_only(self):
+    def test_the_daily_run_is_the_full_linux_and_windows_suites_without_the_release_gates(self):
         runner = jobs(workflow("windows-daily-run"))
         for name in daily.WINDOWS_JOBS:
             self.assertIn("runs-on: windows-latest", runner[name])
-        self.assertEqual(set(runner), daily.WINDOWS_JOBS)
+        for name in daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS:
+            self.assertIn("runs-on: ubuntu-24.04", runner[name])
+        self.assertEqual(set(runner), daily.WINDOWS_JOBS | daily.COVERAGE_JOBS | daily.LINUX_GATE_JOBS)
+        self.assertNotIn("gates-release", runner)
+
+
+class CoverageReaderTests(unittest.TestCase):
+    """The reader credits a line only with a coverage total for the requested commit
+    at or above main's floor, and the verdict reports it. The total comes from the
+    line's run, so the reader checks it and holds it to main's floor."""
+
+    def judge(self, coverage_of=total, floor=90.0, conclusion="success"):
+        return daily.judge({"ref": LINE, "sha": SHA}, REQUESTED_AT, [recorded_run(conclusion=conclusion)],
+                           lambda run: recorded_jobs(), lambda sha: RUNNER_TEXT, RUNNER_HASH, coverage_of, floor)
+
+    def test_a_total_at_or_over_the_floor_is_credited_and_reported_with_its_commit(self):
+        for covered in (900, 950):
+            with self.subTest(covered=covered):
+                result = self.judge(lambda run: total(run, covered=covered))
+                self.assertEqual(result["result"], "credited")
+                self.assertEqual(result["coverage"], {"lines": 1000, "covered": covered,
+                                                      "percent": covered / 10, "sha": SHA})
+                report = daily.verdict_report({"result": "success", "lines": [result]})
+                self.assertIn(f"Linux line coverage {covered / 10:.2f} percent ({covered} of 1000 lines) "
+                              f"measured at `{SHA}`; main's floor is 90 percent", report)
+
+    def test_a_total_under_main_s_floor_fails_even_when_the_run_passed(self):
+        """A line that lowered its own floor still passes its own report job."""
+        result = self.judge(lambda run: {**total(run, covered=899), "floor": 50.0})
+        self.assertEqual(result["result"], "failure")
+        self.assertIn("89.90 percent is under main's 90 percent floor", result["reasons"][0])
+        self.assertIsNone(result["tested_sha"])
+
+    def test_the_floor_is_main_s_rust_coverage_floor(self):
+        self.assertEqual(daily.main_floor(), 90.0)
+        self.assertEqual(self.judge(lambda run: total(run, covered=899), floor=None)["result"], "failure")
+
+    def test_a_missing_unreadable_malformed_or_other_commit_total_gets_no_credit(self):
+        def fails(run):
+            raise subprocess.CalledProcessError(1, "gh")
+
+        for coverage_of, reason in (
+                (None, "recorded no Linux coverage total"),
+                (lambda run: None, "recorded no Linux coverage total"),
+                (lambda run: [], "recorded no Linux coverage total"),
+                (fails, "could be read"),
+                (lambda run: {**total(run), "lines": 0}, "malformed"),
+                (lambda run: {**total(run), "covered": 1001}, "malformed"),
+                (lambda run: {**total(run), "covered": 950.0}, "malformed"),
+                (lambda run: {**total(run), "lines": True}, "malformed"),
+                (lambda run: {**total(run), "covered": -1}, "malformed"),
+                (lambda run: total(run, sha="b" * 40), "not " + SHA),
+                (lambda run: {**total(run), "sha": None}, "not " + SHA)):
+            with self.subTest(reason=reason, coverage_of=coverage_of):
+                result = self.judge(coverage_of)
+                self.assertEqual(result["result"], "no-credit")
+                self.assertIn(reason, result["reasons"][0])
+                self.assertIsNone(result["tested_sha"])
+                report = daily.verdict_report({"result": "failure", "lines": [result]})
+                self.assertIn("no Linux coverage total recorded", report)
+
+    def test_a_failed_run_still_reports_its_total(self):
+        result = self.judge(lambda run: total(run, covered=850), conclusion="failure")
+        self.assertEqual(result["result"], "failure")
+        self.assertEqual(result["coverage"]["percent"], 85.0)
+
+    def test_the_reader_downloads_the_total_from_the_run_by_its_artifact_name(self):
+        def fake(command, **kwargs):
+            folder = Path(command[command.index("--dir") + 1])
+            (folder / daily.COVERAGE_FILE).write_text(json.dumps(total(7)), encoding="utf-8")
+            return ""
+
+        with mock.patch.object(daily.subprocess, "check_output", side_effect=fake) as called, \
+                mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"}):
+            self.assertEqual(DOWNLOAD(7), total(7))
+        self.assertEqual(called.call_args.args[0], ["gh", "run", "download", "7", "--repo", "o/n", "--name",
+                                                    daily.COVERAGE_ARTIFACT, "--dir", mock.ANY])
+
+    def test_a_run_without_a_total_is_not_a_proof_for_a_skip(self):
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"}):
+            to_run, skipped = daily.skip_proven(
+                {"include": [{"ref": LINE, "sha": SHA}]}, 7,
+                lambda path: {"jobs": recorded_jobs()} if "/jobs?" in path else {"workflow_runs": [recorded_run()]},
+                lambda sha, path: RUNNER_TEXT, RUNNER_HASH, REQUESTED_AT + timedelta(hours=1), lambda run: None)
+        self.assertEqual((len(to_run["include"]), skipped), (1, []))
+
+    def test_a_daily_coverage_result_is_never_merge_evidence(self):
+        self.assertIn("never merge evidence", daily.verdict_report({"result": "success", "lines": []}))
+        for name in ("ci-reuse.py", "gate-parity.py"):
+            self.assertNotIn(daily.COVERAGE_ARTIFACT, (ROOT / "scripts" / name).read_text(encoding="utf-8"))
+        self.assertNotIn(daily.COVERAGE_ARTIFACT, workflow("codeflow-ci"))
 
 
 class LeftOutLineTests(unittest.TestCase):
@@ -723,7 +880,7 @@ class LeftOutLineTests(unittest.TestCase):
 
     SHA_OUT = "b" * 40
     REQUEST = {"include": [{"ref": daily.MAIN, "sha": SHA}], "skipped": [],
-               "left_out": [{"ref": LINE, "sha": "b" * 40, "missing": ["no scripts/windows-partitions.py"]}]}
+               "left_out": [{"ref": LINE, "sha": "b" * 40, "missing": ["no scripts/partition-check.py"]}]}
     NOW = REQUESTED_AT + timedelta(hours=6)
 
     def evidence(self, request=None):
@@ -749,7 +906,7 @@ class LeftOutLineTests(unittest.TestCase):
         self.assertEqual(result["result"], "success")
         self.assertEqual(result["lines"][1:], [{
             "ref": LINE, "requested_sha": self.SHA_OUT, "tested_sha": None, "run_id": None,
-            "result": "no-evidence", "left_out": True, "reasons": ["no scripts/windows-partitions.py"]}])
+            "result": "no-evidence", "left_out": True, "reasons": ["no scripts/partition-check.py"]}])
         self.assertEqual(result["lines"][0]["result"], "credited")
         self.assertNotIn("left_out", result["lines"][0])
 
@@ -775,7 +932,9 @@ class LeftOutLineTests(unittest.TestCase):
 
     def test_the_report_says_no_daily_evidence_for_that_line_and_limits_the_pass(self):
         report = daily.verdict_report(self.evidence())
-        self.assertIn(f"`{LINE}` at `{self.SHA_OUT}`: left out, no daily evidence\n  - no scripts/", report)
+        self.assertIn(f"`{LINE}` at `{self.SHA_OUT}`: left out, no daily evidence and no daily coverage\n"
+                      "  - no scripts/", report)
+        self.assertNotIn(f"measured at `{self.SHA_OUT}`", report)
         self.assertIn("It covers only the lines credited below.", report)
         self.assertNotIn(f"`{LINE}` at `{self.SHA_OUT}`: credited", report)
 
@@ -793,9 +952,9 @@ class LeftOutLineTests(unittest.TestCase):
                 self.evidence(request)
 
     def test_a_left_out_line_can_earn_no_reduced_tier_credit(self):
-        """The tier and the proof that a run was full tier read nothing the daily run
-        produces, so a daily pass can credit no line with them. The tier verdict
-        still calls its own pass not full evidence, for any line."""
+        """The verdicts and the proof that a run was full read nothing the daily run
+        produces, so a daily pass can credit no line with them, and no tier remains
+        that could."""
         readers = {
             "codeflow-ci.yml": workflow("codeflow-ci"),
             "ci-reuse.py": (ROOT / "scripts/ci-reuse.py").read_text(encoding="utf-8"),
@@ -806,13 +965,7 @@ class LeftOutLineTests(unittest.TestCase):
                                  "windows-daily-verdict", "windows-daily-run", "workflows/windows-daily"):
                 with self.subTest(reader=name, output=daily_output):
                     self.assertNotIn(daily_output, text)
-        tier = jobs(workflow("codeflow-ci"))["windows-tier"]
-        self.assertNotRegex(tier, r"(?i)\bdaily\b")
-        self.assertNotIn("needs:", tier)
-        self.assertNotIn("actions/", tier)
-        self.assertNotRegex(tier, r"\bgh\b")
-        verdict = jobs(workflow("codeflow-ci"))["windows-verdict"]
-        self.assertIn("not full Windows evidence", step_script(verdict, "Every Windows job passed"))
+        self.assertNotIn("windows-tier", jobs(workflow("codeflow-ci")))
 
 
 class SkipTests(unittest.TestCase):
@@ -957,7 +1110,7 @@ class SkipTests(unittest.TestCase):
         out, summary, request = self.discover([recorded_run(head_branch="main", created_at=stamp)])
         self.assertIn("runs=false", out)
         self.assertIn('matrix={"include":[]}', out)
-        self.assertIn("Skipped: a passing run within 7 days", summary)
+        self.assertIn("Skipped: a passing daily or full run within 7 days", summary)
         self.assertEqual(request["include"], [])
         self.assertEqual(request["skipped"], [{"ref": daily.MAIN, "sha": SHA, "run_id": 7}])
         self.assertEqual(request["max_age_days"], 7)
@@ -1028,131 +1181,121 @@ def step_script(job, step):
     return "\n".join(script)
 
 
-SWITCH = re.compile(r'REDUCED_TIER: "(on|off)"')
+class PlacementWiringTests(unittest.TestCase):
+    """How the moved jobs read their conditions. scripts/test_ci_placement.py holds
+    where each runs."""
 
-
-class TierSwitchTests(unittest.TestCase):
-    """AC-5: with the switch on a pull request into a line takes the reduced
-    tier; with it off, and for any other base, every partition stays."""
-
-    def tier(self, switch, base):
-        job = jobs(workflow("codeflow-ci"))["windows-tier"]
-        self.assertRegex(job, SWITCH)
-        script = step_script(job, "Choose the Windows tier")
-        with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / "output"
-            done = subprocess.run(["bash", "-e", "-c", script], text=True, capture_output=True, env={
-                "PATH": os.environ["PATH"], "REDUCED_TIER": switch, "BASE": base, "GITHUB_OUTPUT": str(output)})
-            self.assertEqual(done.returncode, 0, done.stderr)
-            return output.read_text().strip()
-
-    def test_switch_on_reduces_only_a_pull_request_into_an_integration_line(self):
-        self.assertEqual(self.tier("on", "integration/EPC-022-x"), "tier=reduced")
-        for base in ("main", "master", "task/integration/x", "integration", ""):
-            with self.subTest(base=base):
-                self.assertEqual(self.tier("on", base), "tier=full")
-
-    def test_switch_off_keeps_every_partition_on_every_base(self):
-        for base in ("integration/EPC-022-x", "main", "master"):
-            with self.subTest(base=base):
-                self.assertEqual(self.tier("off", base), "tier=full")
-
-    def test_any_other_switch_value_keeps_every_partition(self):
-        for switch in ("", "ON", "true", "yes"):
-            with self.subTest(switch=switch):
-                self.assertEqual(self.tier(switch, "integration/EPC-022-x"), "tier=full")
-
-    def test_only_a_pull_request_chooses_a_tier(self):
-        job = jobs(workflow("codeflow-ci"))["windows-tier"]
-        self.assertIn("if: github.event_name == 'pull_request'", job)
-
-    def test_the_skip_comes_from_the_build_job_and_a_push_keeps_it_running(self):
+    def test_no_job_reads_a_tier_and_the_later_jobs_follow_the_first(self):
         ci = jobs(workflow("codeflow-ci"))
-        self.assertIn("needs.windows-tier.outputs.tier != 'reduced'", ci["windows-build"])
-        self.assertIn("!cancelled()", ci["windows-build"])
-        self.assertIn("needs: [reuse, windows-tier]", ci["windows-build"])
+        self.assertNotIn("windows-tier", ci)
+        for moved in ("gates-coverage", "windows-build", "windows", "windows-release-journey"):
+            with self.subTest(job=moved):
+                self.assertIn("needs: reuse", ci[moved])
+                self.assertNotIn("tier", ci[moved])
+        self.assertIn("needs.gates-coverage.result != 'skipped'", ci["gates-coverage-report"])
         self.assertIn("needs.windows-build.result == 'success'", ci["windows-tests"])
         self.assertIn("needs.windows-tests.result != 'skipped'", ci["windows-journeys"])
-        for kept in ("windows", "windows-release-journey"):
-            self.assertNotIn("windows-tier", ci[kept])
-        self.assertIn("needs.windows-tier.outputs.tier == 'reduced'", ci["windows-tier-journeys"])
 
     def test_the_daily_runner_has_no_tier(self):
         self.assertNotIn("tier", workflow("windows-daily-run").lower())
 
 
-class TierVerdictTests(unittest.TestCase):
-    """AC-4 and AC-5: the `windows` verdict accepts exactly the reduced tier's
-    declared skips, refuses any other skip, and its summary says so."""
+class FullRunCreditTests(unittest.TestCase):
+    """A green full run of the exact tip skips the daily run. Anything less does not."""
 
-    SHA = "c" * 40
+    NOW = datetime(2026, 11, 7, tzinfo=timezone.utc)
+    SINCE = NOW - timedelta(days=7)
+    LINE = "refs/heads/integration/EPC-1-x"
+    ROW = {"ref": LINE, "sha": SHA}
+    MAIN_FULL = daily.runner_hash("the full workflow\n")
 
-    def verdict(self, **changes):
-        job = jobs(workflow("codeflow-ci"))["windows-verdict"]
-        script = step_script(job, "Every Windows job passed")
-        env = {"REUSE": "skipped", "REUSED": "", "TIER": "reduced", "EVENT": "pull_request",
-               "BASE": "integration/EPC-022-x", "CHECKS": "success", "BUILD": "skipped", "TESTS": "skipped",
-               "JOURNEYS": "skipped", "RELEASE": "success", "TIER_JOURNEYS": "success", "MISSING": ""}
-        env.update(changes)
-        with tempfile.TemporaryDirectory() as temp:
-            summary = Path(temp) / "summary.md"
-            summary.touch()
-            done = subprocess.run(["bash", "-e", "-c", script], text=True, capture_output=True, env={
-                **env, "PATH": os.environ["PATH"], "GITHUB_SHA": self.SHA, "GITHUB_STEP_SUMMARY": str(summary),
-                "GITHUB_SERVER_URL": "https://example.invalid", "GITHUB_REPOSITORY": "o/n"})
-            return done.returncode, done.stdout, summary.read_text()
+    def full(self, **changes):
+        return {"id": 9, "path": daily.FULL_PATH, "event": "pull_request", "head_sha": SHA,
+                "head_branch": "integration/EPC-1-x", "status": "completed", "conclusion": "success",
+                "created_at": "2026-11-06T00:00:00Z", **changes}
 
-    def test_the_declared_skips_pass_and_the_summary_names_the_commit_and_the_limit(self):
-        code, _, summary = self.verdict()
-        self.assertEqual(code, 0)
-        self.assertIn(self.SHA, summary)
-        self.assertIn("twelve test partitions were skipped by tier", summary)
-        self.assertIn("not full Windows evidence", summary)
+    def api(self, runs, rows=None):
+        rows = [{"name": name, "conclusion": "success"} for name in daily.FULL_JOB_NAMES] if rows is None else rows
 
-    def test_any_other_skip_or_outcome_is_refused(self):
-        for name in ("CHECKS", "RELEASE", "TIER_JOURNEYS"):
-            for state in ("skipped", "failure", "cancelled", ""):
-                with self.subTest(name=name, state=state):
-                    code, out, summary = self.verdict(**{name: state})
-                    self.assertEqual(code, 1)
-                    self.assertIn("reduced Windows tier accepts only", out)
-                    self.assertEqual(summary, "")
+        def answer(path):
+            if "codeflow-ci.yml/runs" in path:
+                self.assertIn(f"head_sha={SHA}", path)
+                return {"workflow_runs": runs}
+            if "windows-daily-run.yml/runs" in path:
+                return {"workflow_runs": []}
+            return {"jobs": rows}
+        return answer
 
-    def test_a_partition_path_job_that_ran_is_not_a_declared_skip(self):
-        for name in ("BUILD", "TESTS", "JOURNEYS"):
-            for state in ("success", "failure", "cancelled"):
-                with self.subTest(name=name, state=state):
-                    self.assertEqual(self.verdict(**{name: state})[0], 1)
+    def setUp(self):
+        patched = mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/n"})
+        patched.start()
+        self.addCleanup(patched.stop)
 
-    def test_the_reduced_tier_is_refused_on_main_and_on_a_push(self):
-        for changes in ({"BASE": "main"}, {"BASE": "master"}, {"BASE": ""}, {"EVENT": "push"},
-                        {"EVENT": "schedule"}, {"EVENT": "workflow_dispatch"}):
-            with self.subTest(changes=changes):
-                self.assertEqual(self.verdict(**changes)[0], 1)
+    def credit(self, runs, rows=None, text="the full workflow\n"):
+        return daily.full_run_credit(self.ROW, self.SINCE, self.api(runs, rows), lambda sha, path: text, self.MAIN_FULL)
 
-    def test_the_full_tier_still_needs_every_job(self):
-        full = {"TIER": "full", "BUILD": "success", "TESTS": "success", "JOURNEYS": "success",
-                "TIER_JOURNEYS": "skipped"}
-        self.assertEqual(self.verdict(**full)[0], 0)
-        for name in ("CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE"):
-            for state in ("skipped", "failure", "cancelled"):
-                with self.subTest(name=name, state=state):
-                    self.assertEqual(self.verdict(**{**full, name: state})[0], 1)
+    def test_every_job_green_at_the_exact_tip_is_credited(self):
+        for event in ("pull_request", "push"):
+            with self.subTest(event=event):
+                self.assertEqual(self.credit([self.full(event=event)])["run_id"], 9)
 
-    def test_the_tier_journey_job_is_refused_outside_the_reduced_tier(self):
-        full = {"TIER": "full", "BUILD": "success", "TESTS": "success", "JOURNEYS": "success"}
-        for state in ("success", "failure", "cancelled", ""):
-            with self.subTest(state=state):
-                self.assertEqual(self.verdict(**{**full, "TIER_JOURNEYS": state})[0], 1)
+    def test_a_run_that_differs_in_any_recorded_field_is_not_credited(self):
+        for change in ({"head_sha": "b" * 40}, {"head_branch": "integration/other"}, {"conclusion": "failure"},
+                       {"status": "in_progress"}, {"path": ".github/workflows/codeflow-line-push.yml"},
+                       {"event": "workflow_dispatch"}, {"created_at": "2026-10-01T00:00:00Z"}):
+            with self.subTest(change=change):
+                self.assertIsNone(self.credit([self.full(**change)]))
 
-    def test_a_missing_tier_on_a_skipped_build_is_refused(self):
-        self.assertEqual(self.verdict(TIER="", TIER_JOURNEYS="skipped")[0], 1)
+    def test_a_skipped_or_missing_job_is_not_credited(self):
+        # A run that reused a verdict skipped its jobs; a line push has no Windows job.
+        names = sorted(daily.FULL_JOB_NAMES)
+        for name in names:
+            for rows in ([{"name": n, "conclusion": "skipped" if n == name else "success"} for n in names],
+                         [{"name": n, "conclusion": "success"} for n in names if n != name]):
+                with self.subTest(name=name):
+                    self.assertIsNone(self.credit([self.full()], rows))
 
-    def test_reuse_still_needs_every_windows_job_skipped(self):
-        reused = {"TIER": "", "REUSE": "success", "REUSED": "123", "CHECKS": "skipped", "RELEASE": "skipped",
-                  "TIER_JOURNEYS": "skipped", "EVENT": "push", "BASE": ""}
-        self.assertEqual(self.verdict(**reused)[0], 0)
-        self.assertEqual(self.verdict(**{**reused, "TIER_JOURNEYS": "success"})[0], 1)
+    def test_a_line_s_own_workflow_file_is_not_credited(self):
+        for text in ("a line's edit\n", "", None):
+            with self.subTest(text=text):
+                self.assertIsNone(self.credit([self.full()], text=text))
+
+    def test_a_full_run_skips_the_line_and_the_verdict_stands_on_it(self):
+        read = lambda sha, path: "the full workflow\n" if path == daily.FULL_PATH else RUNNER_TEXT
+        matrix, skipped = daily.skip_proven({"include": [self.ROW]}, 7, self.api([self.full()]), read, RUNNER_HASH,
+                                            self.NOW, main_full=self.MAIN_FULL)
+        self.assertEqual(matrix["include"], [])
+        self.assertEqual(skipped, [{**self.ROW, "run_id": 9, "full_run": True}])
+        report = daily.coverage_line({"full_run": True})
+        self.assertIn("coverage report job", report)
+
+    def verdict(self, runs):
+        dispatcher = {"id": 5, "path": daily.DISPATCHER_PATH, "head_branch": "main", "event": "schedule",
+                      "status": "completed", "created_at": "2026-11-06T06:23:00Z"}
+        answer = self.api(runs)
+
+        def api(path):
+            return {"workflow_runs": [dispatcher]} if "windows-daily.yml/runs" in path else answer(path)
+
+        request = {"include": [], "skipped": [{"ref": daily.MAIN, "sha": SHA, "run_id": 9, "full_run": True}],
+                   "left_out": [],
+                   "max_age_days": 7, "runner_sha256": RUNNER_HASH, "full_sha256": self.MAIN_FULL}
+        return daily.read_evidence(api, lambda run_id: request, lambda sha, path: "the full workflow\n",
+                                   datetime(2026, 11, 6, 12, tzinfo=timezone.utc))
+
+    def test_the_verdict_checks_a_full_run_again(self):
+        self.assertEqual(self.verdict([self.full(head_branch="main", event="push")])["result"], "success")
+        result = self.verdict([])
+        self.assertEqual(result["result"], "failure")
+        self.assertIn("no longer stands", daily.verdict_report(result))
+
+    def test_no_age_or_no_main_copy_means_no_skip(self):
+        read = lambda sha, path: "the full workflow\n"
+        for age, main_full in ((0, self.MAIN_FULL), (7, None)):
+            with self.subTest(age=age):
+                matrix, skipped = daily.skip_proven({"include": [self.ROW]}, age, self.api([self.full()]), read,
+                                                    RUNNER_HASH, self.NOW, main_full=main_full)
+                self.assertEqual((matrix["include"], skipped), ([self.ROW], []))
 
 
 if __name__ == "__main__":

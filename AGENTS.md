@@ -133,16 +133,25 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     not cover a target defined only in essential. Workspace lints: clippy all
     = deny, pedantic = warn. Edition 2021, workspace-managed dependency
     versions in the root `Cargo.toml`.
-- **Landings batch, with hosted green once per candidate.** When a line
+- **Landings batch, with hosted green once per batch.** When a line
   lands, every pull request into it that is reviewed and ready at that
   moment goes onto one landing candidate, in dependency order, with one full
-  gate and one hosted run for the whole batch. Each line has one candidate
-  at a time, and different lines land in parallel. A pull request that
-  becomes ready later joins the next candidate; it is never held behind
+  gate and one hosted run for the whole batch. Here that hosted run is the
+  batch's line push, which runs the full Linux suites. Each line has one
+  candidate at a time, and different lines land in parallel. A pull request
+  that becomes ready later joins the next candidate; it is never held behind
   another pull request's landing or hosted run.
-  - The candidate lands when its own hosted "codeflow gates" and "windows"
-    verdicts are green and the line's current tip, which it was built on,
-    has green verdicts too.
+  - The candidate lands when its full gate is green and the line's current
+    tip, which it was built on, has a green hosted "codeflow gates" verdict.
+    A push to a candidate branch starts no hosted run, so the candidate's
+    full Linux proof is its full gate, and its line push proves it on
+    GitHub.
+  - A line's tip has no "windows" verdict and needs none. "windows" belongs
+    to the pull request into `main`, where it stays required.
+  - Transitional, until every line has synced main: a line without
+    `.github/workflows/codeflow-line-push.yml` still runs both verdicts, so
+    its tip, and each pull request into it, needs green "codeflow gates" and
+    "windows" verdicts.
   - Recovery exception: while the tip is red or lacks evidence, a candidate
     may carry only the repair of the failure and the work needed to produce
     the evidence, such as a workflow fix without which the jobs cannot run;
@@ -151,17 +160,16 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     review and its candidate's full gate. After such a landing, the next
     candidate waits for green verdicts on the new tip.
   - Pending (a run still in progress) is not green: wait for it.
-  - Cancelled, skipped and missing (no run for the candidate or the tip) are
-    not green: start or rerun the run. A skip counts only when it is a reuse
-    that names a green run (TSK-359).
-  - Stale (a green verdict for an earlier tip or candidate) is not evidence
-    for the current one.
+  - Cancelled, skipped and missing (no run for the tip) are not green: start
+    or rerun the run. A skip counts only when it is a reuse that names a
+    green run (TSK-359).
+  - Stale (a green verdict for an earlier tip) is not evidence for the
+    current one.
   - A failure shown to come from runner infrastructure is rerun, never read
     as a pass. A failure shown to be unrelated to the candidate still
     blocks it until repaired, under the recovery exception.
-  - Once TSK-358 lands, a pull request into a line also needs its own green
-    "codeflow gates" and "windows" verdicts at the exact head that lands;
-    TSK-358 updates this sentence when it lands.
+  - A pull request into a line needs its own green "codeflow gates (line)"
+    verdict at the exact head that lands.
 - **Direct heavy Cargo work uses `codeflow reserve -- <command>` while another worktree may be gating; keep its target directory inside this worktree.**
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
