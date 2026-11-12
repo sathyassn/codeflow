@@ -2002,6 +2002,118 @@ fn the_verdict_job_refuses_a_run_not_for_the_default_branch() {
     }
 }
 
+/// TSK-1347 AC-11: every verdict job's first step stops a run whose head
+/// the pull request has moved past, and fails it, so a superseded run never
+/// passes; the current head, a failed read and an unclear answer judge in
+/// full. Run on the shipped job and both of this repository's jobs.
+#[test]
+fn a_superseded_head_stops_before_judging_and_an_unclear_read_judges_in_full() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let head = "1111111111111111111111111111111111111111";
+    let newer = "2222222222222222222222222222222222222222";
+    let pull = |sha: &str| format!(r#"{{"number":7,"head":{{"sha":"{sha}"}}}}"#);
+    for (label, script) in [
+        ("shipped commit-lint", job(POLICY, "commit-lint")),
+        ("own commit-lint", job(OWN_POLICY, "commit-lint")),
+        ("own release-impact", job(OWN_POLICY, "release-impact")),
+    ] {
+        let script = run_blocks(script, "Resolve the authority")
+            .into_iter()
+            .next()
+            .expect("the resolve step");
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // The fake host prints FAKE_PULL as the pull request, or fails as
+        // curl -f does on an HTTP error when FAKE_PULL is unset.
+        std::fs::write(
+            bin.join("curl"),
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CALLS\"\n[ -n \"${FAKE_PULL+x}\" ] || { echo 'curl: (22) The requested URL returned error: 403' >&2; exit 22; }\nprintf '%s' \"$FAKE_PULL\"\n",
+        )
+        .unwrap();
+        Command::new("chmod")
+            .arg("755")
+            .arg(bin.join("curl"))
+            .status()
+            .unwrap();
+        let calls = dir.path().join("calls");
+        let resolve = |answer: Option<&str>| {
+            let mut command = Command::new("bash");
+            command
+                .args(["-c", &script])
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("EVENT", "pull_request_target")
+                .env("DEFAULT_BRANCH", "main")
+                .env("GITHUB_REF", "refs/heads/main")
+                .env("AUTHORITY_SHA", sha)
+                .env("GITHUB_STEP_SUMMARY", dir.path().join("summary"))
+                .env("GH_TOKEN", "read-only-token")
+                .env("PR_NUMBER", "7")
+                .env("GITHUB_API_URL", "https://api.example.test")
+                .env("GITHUB_REPOSITORY", "o/r")
+                .env("EVENT_HEAD", head)
+                .env("CALLS", &calls)
+                .env_remove("FAKE_PULL");
+            if let Some(answer) = answer {
+                command.env("FAKE_PULL", answer);
+            }
+            let out = command.output().unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+            )
+        };
+
+        // A superseded head: the run fails before anything is judged.
+        let (code, stdout) = resolve(Some(&pull(newer)));
+        assert_eq!(code, Some(1), "{label}: {stdout}");
+        assert!(
+            stdout.contains(&format!("this run is for head {head}, but the pull request head is now {newer}; it stops before judging")),
+            "{label}: {stdout}"
+        );
+        assert!(!stdout.contains("judged by"), "{label}: {stdout}");
+
+        // The current head: the run goes on, and says nothing about it.
+        let (code, stdout) = resolve(Some(&pull(head)));
+        assert_eq!(code, Some(0), "{label}: {stdout}");
+        assert!(stdout.contains(&format!("judged by main@{sha}")), "{label}");
+        assert!(!stdout.contains("judges in full"), "{label}: {stdout}");
+
+        // A failed read, and answers that are not one full commit id, are
+        // unclear: the run judges in full, never stops.
+        for answer in [
+            None,
+            Some("not json"),
+            Some(r#"{"number":7}"#),
+            Some(r#"{"head":{"sha":"2222"}}"#),
+            Some(r#"{"head":{"sha":"2222222222222222222222222222222222222222\nx"}}"#),
+            Some(r#"{"head":{"sha":"2222222222222222222222222222222222222222 "}}"#),
+        ] {
+            let (code, stdout) = resolve(answer);
+            assert_eq!(code, Some(0), "{label} {answer:?}: {stdout}");
+            assert!(
+                stdout.contains("could not be read clearly, so this run judges in full"),
+                "{label} {answer:?}: {stdout}"
+            );
+            assert!(stdout.contains(&format!("judged by main@{sha}")), "{label}");
+        }
+
+        // The read is one GET of this pull request with the job's token.
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        assert!(
+            calls.lines().all(
+                |line| line.contains("https://api.example.test/repos/o/r/pulls/7")
+                    && line.contains("Authorization: Bearer read-only-token")
+                    && !line.contains("-X")
+            ),
+            "{calls}"
+        );
+    }
+}
+
 /// A pull request that edits the enforcing workflow to pass, raises the pin
 /// and relaxes the policy changes nothing: the `pull_request_target` run
 /// reads the workflow, the pin and the policy from the target.

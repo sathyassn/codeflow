@@ -28,6 +28,15 @@ much working method comes with it.
   pushes and deletion for everyone, whoever created it: a ruleset counts
   only with an empty bypass list, and branch protection only when it binds
   administrators. Rules it cannot read are a warning, never a pass.
+- On a public GitHub repository, GitHub blocks `pull_request_target`, the
+  event the policy check runs on, from 2026-12-02 unless an Actions event
+  policy allows it, and then no pull request can merge. An administrator
+  creates one policy that allows the event for `codeflow-policy.yml` alone;
+  the command is in `assets/base/ci/README.md` "Public GitHub
+  repositories". `codeflow remote protect` creates that policy when it is
+  missing, except in a `--branch` run, which leaves this repository-wide
+  setting alone and says so. The same doctor check reports a missing or
+  too-wide policy.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 

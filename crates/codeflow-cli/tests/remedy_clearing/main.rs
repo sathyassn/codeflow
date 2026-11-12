@@ -234,6 +234,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_REGISTRY_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
+    ("DOCTOR_EVENT_POLICY", Excluded(HostingRemote)),
+    ("DOCTOR_EVENT_POLICY_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
