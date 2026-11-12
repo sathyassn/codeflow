@@ -127,7 +127,7 @@ Three PreToolUse handlers add fast, pre-git feedback.
 |---|---|---|
 | `git-guard` | git policy | blocks the git rows above, the PR-content checks, structural override-token laundering, discards of local-only work, and changes to the tracking refs and transport settings that decide policy authority |
 | `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads, interpreter literals and enforcement paths given to an interpreter as arguments refuse at their rule's level |
-| `edit-guard` | the action table's enforcement paths and shell startup files | native file edits (Claude Code `Edit` and `Write`, Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths or shell startup files refuse, including patch move sources and destinations |
+| `edit-guard` | the action table's enforcement paths and shell startup files | native file edits (Claude Code `Edit`, `MultiEdit`, `Write` and `NotebookEdit`, Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths or shell startup files refuse, including patch move sources and destinations |
 
 The handlers are wired per harness.
 
@@ -294,9 +294,12 @@ TSK-242).
   any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME` move the matching
   entries; a relative `ZDOTDIR` protects the zsh names in every directory.
 - **Saved shell state.** The table's `saved_state_paths`: the shell state
-  harnesses run before later commands, and the `CLAUDE_ENV_FILE` file.
-  exec-guard and git-guard judge writes to it as they judge startup
-  files, and by the node on disk; edit-guard refuses native edits.
+  harnesses run before later commands, and a file a harness setting names
+  for it. exec-guard and git-guard judge writes to it as they judge
+  startup files, and by the node on disk. edit-guard refuses the native
+  edits a harness sends it: the Claude presets' edit-guard entry and the
+  Codex and Grok hook files send theirs. Settings without that entry have
+  only the preset's edit denies, which name the default folders.
 - **The git configuration files.** The table's `git_config_paths`: the
   default user and system files (`~/.gitconfig`, `~/.config/git/config`,
   `/etc/gitconfig` and the `/usr/local` and Homebrew ones), whose keys can

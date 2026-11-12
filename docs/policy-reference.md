@@ -2161,9 +2161,11 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   its preservation semantics are left to the sandbox.
 - **Claude Code.** The generated denies name the default locations. A
   `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny. The
-  presets send Claude's native `Edit` and `Write` calls to edit-guard,
-  which reads the moved folders from the hook's environment, so a native
-  write there is refused by the guard. On macOS Claude merges the `Edit` denies into the sandbox
+  presets send Claude's native `Edit`, `MultiEdit`, `Write` and
+  `NotebookEdit` calls to edit-guard through the preset's edit-guard
+  entry, which reads the moved folders from the hook's environment, so a
+  native write there is refused by the guard. Settings without that entry
+  have only the `Edit` denies, which name the default locations. On macOS Claude merges the `Edit` denies into the sandbox
   write deny, so a nested `.envrc` written from Bash is held there too. On
   Linux and WSL2 a wildcard `denyWrite` entry is skipped, so `.envrc` in an
   arbitrary directory is an `Edit` deny only and a nested one written from
@@ -2181,17 +2183,15 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   `XDG_CONFIG_HOME` only when it sits outside the workspace. `.envrc` in the workspace has no Grok rule, since a
   Grok deny also blocks reads; the guards refuse it.
 - **Saved shell state.** The action table's `saved_state_paths` lists the
-  state a harness runs before later commands: Claude Code's `session-env`
-  and `shell-snapshots` folders, Codex's `shell_snapshots` folder and
-  herdr-core's template folder, each below the home. The file
-  `CLAUDE_ENV_FILE` names is one more location. The harness writes these
-  itself, from its own process or from a hook, outside the sandbox and the
-  permission rules, so the entries hold only the agent's own writes.
-  - `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME` and, on Windows,
-    `APPDATA` move the matching entries when the hook process has the
-    variable. The preset denies name the default folders; `codeflow
-    doctor` reports a moved one, and a `CLAUDE_ENV_FILE` outside the
-    default Claude folder, which no preset deny names.
+  shell state that Claude Code, Codex and herdr-core run before their
+  later commands, below the home, and a file a harness setting names for
+  that state is one more location. The harness writes these itself, from
+  its own process or from a hook, outside the sandbox and the permission
+  rules, so the entries hold only the agent's own writes.
+  - A harness setting that moves its configuration folder moves the
+    matching entries when the hook process has the setting. The preset
+    denies name the default folders, and `codeflow doctor` reports a
+    moved one.
   - exec-guard and git-guard judge these locations after every other
     check, and only add refusals after the other findings, so they never
     change what another rule reports. The first run is the shell startup
@@ -2200,7 +2200,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     interpreter code or a command variable that names a location, refuses
     here too. Where it cannot tell what a command writes, it refuses when
     the command names a location or runs in a folder that holds one. zsh's
-    `>!`, `>>!` and `>>|` are read as plain redirects.
+    clobbering redirects are read as plain redirects wherever the line
+    holds them, and a modifier or subscript on a variable whose value is
+    or holds a location fails closed.
   - A second run adds what the first did not find. It judges a target in
     the directory its command runs in and compares it with each location
     by the node it reaches on disk, links and `..` included. A folder of
@@ -2218,7 +2220,8 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     one, or a link on the way to one, and `ln` or `mv` refuse to replace
     such a link.
   - A link made to a location or to a folder above one refuses, since a
-    later write through it lands there.
+    later write through it lands there. Relative link text is read from
+    the folder the link is made in, as the kernel reads it.
   - A copy, sync or move of a tree refuses when what it places lands in a
     location or above one. A source that does not exist yet counts as a
     tree, since an earlier command on the line can make it.
@@ -2226,24 +2229,37 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     such as `tar xf` or `patch` after a `cd` there, `wget -P` or
     `find -exec`, refuses, and so does a `cd` into a location on a line
     that runs other programs. Each message names the way through: aim the
-    program at a named sub-folder, name the file it writes, or run `cd`
-    alone with a plain unquoted path.
+    program at a named sub-folder, name the file it writes, run `cd` alone
+    with a plain unquoted path, or give the full path to a reader the
+    guard lists instead of changing into the folder.
+  - When a setting moves a location inside a project or a temporary
+    folder, that folder is above a location, so placing programs run
+    there refuse too, such as `git checkout`, `git pull`, `git merge`, an
+    extraction, `find -exec` and a redirect to a name the guard cannot
+    resolve. Keep a harness's configuration folder outside the projects
+    it works on.
   - An extraction (`tar -x`, `unzip`) refuses when its folder is a
-    location, lies in one or is above one, such as the home, `~/.claude`
-    or `~/.config`, since the guard cannot see what the archive holds. The
+    location, lies in one or is above one, such as the home or a harness's
+    configuration folder, since the guard cannot see what the archive holds. The
     message names the way through: extract into a named sub-folder that is
     not above saved shell state, with `tar -C <dir>` or `unzip -d <dir>`.
     An extraction in a project, or in a folder of the home above no
     location, runs.
   - edit-guard refuses a native edit of a file in a location, wherever
-    the harness keeps it. The Claude presets send native `Edit` and
-    `Write` calls to it, as the Codex and Grok hook files send theirs, and
-    `codeflow doctor` reports Claude settings that do not. Creating a
-    herdr-core template is the operator's step.
-  - Two limits come from the design. The guard cannot see what an archive
-    holds, so it judges an extraction by the folder it writes into. Where
-    a file system gives no file identity, the second run compares paths
-    as written and as reached through links, not by the node on disk.
+    the harness keeps it, when the harness sends the edit to it. The
+    Claude presets send Claude Code's native `Edit`, `MultiEdit`, `Write`
+    and `NotebookEdit` calls to it through the preset's edit-guard entry,
+    as the Codex and Grok hook files send theirs, and `codeflow doctor`
+    reports Claude settings without that entry. Settings without it have
+    only the preset's edit denies, which name the default folders.
+    Creating a herdr-core template is the operator's step.
+  - Three limits come from the design. The guard cannot see what an
+    archive holds, so it judges an extraction by the folder it writes
+    into. Where a file system gives no file identity, the second run
+    compares paths as written and as reached through links, not by the
+    node on disk. A program or script that picks the file it writes
+    itself, without the command line naming a location, is judged only
+    by what the line names.
   - Some command shapes that can reach saved state are not yet judged;
     TSK-1471 tracks them, and this page lists them once each fix is on
     main.
