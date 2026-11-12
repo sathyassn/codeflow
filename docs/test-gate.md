@@ -20,6 +20,17 @@ in CodeFlow reads one to decide what runs.
 | `--config <path>` | Reads the targets from that file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; evidence binds to that file's bytes. A missing path, a symbolic link, or a file that is not regular or readable is refused before any target starts. CI can use it to run a trusted copy of the config against a candidate checkout (TSK-1020) |
 | No selection flags | Executes every eligible target of the mode |
 
+### A run with no comparison base
+
+A quick or essential run on a branch with no task (`plan/`, `chore/`), on a
+detached head, or on a task with no declared target has no comparison base.
+It runs every target and prints `every target: local narrowing is
+unavailable, since no local run record earns selection credit (ADR-0089)`.
+A run given `--since <rev>` prints the same reason after `--since <rev>
+narrows nothing`. Nothing in the output recommends `--since`, because it
+cannot narrow a run. An unknown, renamed or deleted path, or a changed
+config digest, also runs every target.
+
 The pre-push hook runs no quick target (TSK-449), so cite
 `codeflow test --mode quick` when the pull request is made ready. A run
 records its selection with an empty `skipped` list; a target CI skips
@@ -194,3 +205,54 @@ The evidence fields are recorded in
 [ADR-0085](decisions/ADR-0085-gate-selection-requires-evidence-for-the-exact-c.md);
 the withdrawal of selection credit in
 [ADR-0089](decisions/ADR-0089-local-gate-runs-earn-no-selection-credit.md).
+
+### Coverage rules and their defaults
+
+A full run reads each target's coverage artifact and judges it by rules.
+The rules come from one of two places:
+
+```
+target has a coverage block?
+  no  -> nothing is measured; while defaults.coverage is not empty and the
+         target is a test target, one warning names it and the missing
+         producer, and its verdict is unchanged
+  yes -> block sets rules?
+           yes -> its own rules alone
+           no  -> the rules in defaults.coverage, marked
+                  "(rules from defaults.coverage)"; with empty defaults
+                  the block only collects
+```
+
+- Defaults carry rules only. The producer, meaning the artifact's format
+  and path and the full-mode command that writes it, is always the
+  target's own `coverage` block.
+- Inherited rules enforce exactly as a target's own rules do: a shortfall
+  fails the gate, and so does a missing or unreadable artifact.
+- A test target is one whose `runner` names a test runner (anything but
+  `custom`) or that declares a test `report`.
+- A `changed_files` rule needs a comparison base that standalone
+  `codeflow test` lacks, so the loader refuses one in a target's own rules
+  and in defaults that a target would inherit.
+- Quick and essential runs measure no coverage, so neither the rules nor
+  the warning apply there.
+
+`codeflow test setup` writes a coverage block for each target it detects,
+only when it creates the config. The detected target's full command runs
+the stack's producer, and the block sets no rules:
+
+| Stack | Producer | Artifact |
+|---|---|---|
+| Rust (`cargo`) | cargo-llvm-cov | `target/lcov.info` (lcov) |
+| Python (`pytest`) | coverage.py | `coverage.xml` (cobertura) |
+| Node (`vitest`) | `@vitest/coverage-v8` | `coverage/lcov.info` (lcov) |
+| Node (`jest`) | Jest's own coverage | `coverage/lcov.info` (lcov) |
+| Go | `go test -coverprofile` | `coverage.out` (go-cover) |
+
+cargo-llvm-cov does not create its output's folder; cargo creates
+`target/` for its build while `CARGO_TARGET_DIR` is unset, so with that
+variable pointing elsewhere, move the Rust path and `--output-path` under
+it. `codeflow update` never rewrites the test config, and the gate's own
+detection for a project with no config keeps the plain test commands. A
+full gate cannot pass until the producer its full command runs is
+installed, so `codeflow doctor` prints one line naming a missing producer
+and the command that installs it.
