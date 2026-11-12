@@ -443,8 +443,9 @@ fn profile_grants(
     grants
 }
 
-/// `ZDOTDIR` or `XDG_CONFIG_HOME` set away from the defaults the generated
-/// rules name, so the relocated startup files have no native deny; the
+/// `ZDOTDIR`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or
+/// `APPDATA` set away from the defaults the generated rules name, so the
+/// relocated startup files and saved shell state have no native deny; the
 /// guards still follow them.
 fn relocated(env: &StartupEnv) -> Vec<String> {
     let Some(home) = env.home.as_deref() else {
@@ -454,15 +455,15 @@ fn relocated(env: &StartupEnv) -> Vec<String> {
     if let Some(z) = env.zdotdir.as_deref().filter(|z| *z != home) {
         out.push(format!("ZDOTDIR is {}", crate::git::display_path(z)));
     }
-    if let Some(x) = env
-        .xdg_config
-        .as_deref()
-        .filter(|x| *x != home.join(".config"))
-    {
-        out.push(format!(
-            "XDG_CONFIG_HOME is {}",
-            crate::git::display_path(x)
-        ));
+    for (name, value, default) in [
+        ("XDG_CONFIG_HOME", &env.xdg_config, ".config"),
+        ("CLAUDE_CONFIG_DIR", &env.claude_config, ".claude"),
+        ("CODEX_HOME", &env.codex_home, ".codex"),
+        ("APPDATA", &env.appdata, "AppData/Roaming"),
+    ] {
+        if let Some(moved) = value.as_deref().filter(|v| *v != home.join(default)) {
+            out.push(format!("{name} is {}", crate::git::display_path(moved)));
+        }
     }
     out
 }
@@ -486,7 +487,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     }
     if !moved.is_empty() {
         parts.push(format!(
-            "{}, so the startup files there have no generated deny; the guards still refuse visible writes to them",
+            "{}, so the startup files and saved shell state there have no generated deny; the guards still refuse visible writes to them",
             moved.join(" and ")
         ));
         remedy.get_or_insert(remedy::DOCTOR_STARTUP_RELOCATED.remedy());
@@ -557,6 +558,10 @@ mod tests {
             zdotdir: None,
             xdg_config: None,
             etc_roots: Vec::new(),
+            claude_config: None,
+            codex_home: None,
+            appdata: None,
+            claude_env_file: None,
         };
         let found = sourced_files(&env);
         assert_eq!(
@@ -586,6 +591,10 @@ mod tests {
             zdotdir: None,
             xdg_config: None,
             etc_roots: Vec::new(),
+            claude_config: None,
+            codex_home: None,
+            appdata: None,
+            claude_env_file: None,
         };
         let found = sourced_files(&env);
         assert!(found.unprotected.is_empty(), "{:?}", found.unprotected);
@@ -731,6 +740,10 @@ mod tests {
             zdotdir: Some(home.clone()),
             xdg_config: Some(home.join(".config")),
             etc_roots: Vec::new(),
+            claude_config: Some(home.join(".claude")),
+            codex_home: Some(home.join(".codex")),
+            appdata: Some(home.join("AppData/Roaming")),
+            claude_env_file: None,
         };
         assert!(relocated(&at_defaults).is_empty());
         let moved = StartupEnv {
@@ -739,7 +752,14 @@ mod tests {
             zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
             xdg_config: Some(PathBuf::from("/fixture/xdg")),
             etc_roots: Vec::new(),
+            claude_config: Some(PathBuf::from("/fixture/claude")),
+            codex_home: Some(PathBuf::from("/fixture/codex")),
+            appdata: None,
+            claude_env_file: None,
         };
-        assert_eq!(relocated(&moved).len(), 2);
+        let found = relocated(&moved);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(found.iter().any(|f| f.starts_with("CLAUDE_CONFIG_DIR is ")));
+        assert!(found.iter().any(|f| f.starts_with("CODEX_HOME is ")));
     }
 }
