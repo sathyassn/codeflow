@@ -1,0 +1,11 @@
+id = "TSK-1456"
+uid = "de8aa88b-0ba3-437d-8c08-43ea3112c10e"
+kind = "TSK"
+title = "The guards find the program a command line runs behind its leading assignments"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:03:11Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
