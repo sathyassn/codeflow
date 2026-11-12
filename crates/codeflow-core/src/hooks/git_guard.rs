@@ -7644,9 +7644,22 @@ pub(crate) fn git_runner_bodies(command: &str, cwd: &Path) -> Result<Vec<GitRunn
         .map(|body| GitRunnerBody {
             command: body.command,
             directory: body.directory,
-            credential_helper: body.credential_helper,
+            helper: body.helper,
         })
         .collect())
+}
+
+/// Whether a runner body is a credential-helper value, and how Git runs it
+/// (TSK-1479).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HelperKind {
+    /// Not a `credential.helper` or `credential.<url>.helper` value.
+    NotHelper,
+    /// A helper value Git runs as written: a leading `!` or an absolute
+    /// path.
+    AsWritten,
+    /// A helper name Git runs as `git credential-<name>`.
+    Named,
 }
 
 /// A command a Git call runs itself, as [`git_runner_bodies`] reads it.
@@ -7655,10 +7668,9 @@ pub(crate) struct GitRunnerBody {
     pub command: String,
     /// The directory Git runs it in.
     pub directory: PathBuf,
-    /// Whether it is a credential-helper value Git runs as written: a
-    /// `credential.helper` or `credential.<url>.helper` value with a
-    /// leading `!` or an absolute path (TSK-1479).
-    pub credential_helper: bool,
+    /// Whether the command is a credential-helper value, and how Git runs
+    /// it.
+    pub helper: HelperKind,
 }
 
 /// The environment variables whose value is a program Git runs, as the

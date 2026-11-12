@@ -185,8 +185,18 @@ submodule setting that widens the call, and no `.gitmodules`. A pushed name
 must sit under a `git.branch_prefixes` entry of the landed policy, and must not
 be protected, `origin`'s default branch, an integration line, a release
 branch (`git.release_branch_pattern`), the ID registry, `main` or `master`.
+Every program the call starts must be a credential helper, and the helpers
+Git selects for `origin`'s URL must be the GitHub CLI helper alone. The guard
+reads that selection as Git makes it: matching `credential.helper` entries
+apply in configuration order, and an empty value clears those before it, so
+a system `osxkeychain` helper that `gh auth setup-git`'s empty `helper =`
+clears does not count. Where the guard cannot read the selection (a
+wildcard, path or user in the pattern, or an origin that is not a plain
+HTTPS URL), every helper the call may start must be the GitHub CLI helper.
 Any read that fails keeps the finding. git-guard still refuses a push to a
-protected branch on its own rule. The identity the helper serves is the
+protected branch on its own rule. Other calls that contact a remote, such as
+`git remote update`, `git remote prune`, `git remote show` and
+`git maintenance`, start the helper too and keep the finding. The identity the helper serves is the
 operator's setup; see "Mode A setup (operator)" in
 [the policy reference](../policy-reference.md).
 

@@ -28,12 +28,20 @@
 //! must sit under a work-branch prefix of the landed policy, read at
 //! `origin`'s default branch, and must not be protected, an integration
 //! line, a release branch, the ID registry, `origin`'s default branch,
-//! `main` or `master`. Any read
-//! that fails withholds the admission, and the account finding stands.
+//! `main` or `master`.
+//!
+//! Every program the call starts must be a credential helper, and the
+//! helpers Git selects for `origin`'s URL must be the exempt helper alone.
+//! The selection is modelled as Git's credential configuration makes it:
+//! matching helper entries apply in configuration order, and an empty value
+//! clears those before it, so a system `osxkeychain` that a later empty
+//! `helper =` clears does not count. Where the model cannot read the
+//! selection, every helper the call may start must be the exempt one. Any
+//! read that fails withholds the admission, and the account finding stands.
 
 use std::path::Path;
 
-use super::git_guard::GitRunnerBody;
+use super::git_guard::{GitRunnerBody, HelperKind};
 use super::policy::GitPolicy;
 use super::Violation;
 
@@ -64,25 +72,43 @@ pub(crate) fn is_account_finding(finding: &Violation) -> bool {
 /// whose last component is `gh`.
 #[must_use]
 pub(crate) fn exempt_body(body: &GitRunnerBody) -> bool {
-    body.credential_helper
-        && body
-            .command
-            .strip_suffix(" auth git-credential")
-            .is_some_and(|program| {
-                program == "gh"
-                    || (program.starts_with('/')
-                        && program.ends_with("/gh")
-                        && program
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c)))
-            })
+    body.helper == HelperKind::AsWritten && exempt_command(&body.command)
+}
+
+/// Whether `command` is `gh auth git-credential`, with `gh` named bare or
+/// by a plain absolute path whose last component is `gh`.
+fn exempt_command(command: &str) -> bool {
+    command
+        .strip_suffix(" auth git-credential")
+        .is_some_and(|program| {
+            program == "gh"
+                || (program.starts_with('/')
+                    && program.ends_with("/gh")
+                    && program
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c)))
+        })
+}
+
+/// Whether the configured helper `value` is the exempt helper as Git runs
+/// it: a leading `!` or an absolute path, then [`exempt_command`].
+fn exempt_value(value: &str) -> bool {
+    match value.strip_prefix('!') {
+        Some(command) => exempt_command(command),
+        None => value.starts_with('/') && exempt_command(value),
+    }
 }
 
 /// Whether `command`, run in `cwd`, is an admitted fetch or push whose Git
-/// runner `bodies` are all the exempt helper.
+/// runner `bodies` are all credential helpers and whose effective helper
+/// list for `origin` is the exempt helper alone.
 #[must_use]
 pub(crate) fn admits(command: &str, cwd: &Path, bodies: &[GitRunnerBody]) -> bool {
-    if bodies.is_empty() || !bodies.iter().all(exempt_body) {
+    if !bodies.iter().any(exempt_body)
+        || bodies
+            .iter()
+            .any(|body| body.helper == HelperKind::NotHelper)
+    {
         return false;
     }
     let Some(line) = line(command) else {
@@ -91,7 +117,7 @@ pub(crate) fn admits(command: &str, cwd: &Path, bodies: &[GitRunnerBody]) -> boo
     let target = line
         .directory
         .map_or_else(|| cwd.to_path_buf(), |dir| cwd.join(dir));
-    repository_allows(&target, &line.form).is_some()
+    repository_allows(&target, &line.form, bodies).is_some()
 }
 
 enum Form<'a> {
@@ -195,7 +221,7 @@ fn branch_name(name: &str) -> bool {
 
 /// `Some` when the repository at `target` lets the form through; `None` on
 /// any refusal or read failure.
-fn repository_allows(target: &Path, form: &Form<'_>) -> Option<()> {
+fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -> Option<()> {
     let repo = super::repo::open(target).ok()??;
     let workdir = repo.workdir()?.to_path_buf();
     let remotes = repo.remotes().ok()?;
@@ -216,6 +242,21 @@ fn repository_allows(target: &Path, form: &Form<'_>) -> Option<()> {
     let url = std::str::from_utf8(url).ok()?;
     if !url_allowed(url) {
         return None;
+    }
+    // Git runs the helpers its credential configuration selects for
+    // `origin`'s URL. Where the model reads that list, it must be the exempt
+    // helper alone; where it cannot, every helper body must be exempt.
+    match effective_helpers(&config, url) {
+        Some(helpers) => {
+            if !matches!(helpers.as_slice(), [only] if exempt_value(only)) {
+                return None;
+            }
+        }
+        None => {
+            if !bodies.iter().all(exempt_body) {
+                return None;
+            }
+        }
     }
     if WIDENING_SETTINGS
         .iter()
@@ -307,6 +348,80 @@ fn url_allowed(url: &str) -> bool {
         && !url
             .get(..7)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+}
+
+/// The credential helpers Git runs for `url`, in order, as Git's credential
+/// configuration selects them: every `credential.helper` value, and every
+/// `credential.<pattern>.helper` value whose pattern matches `url`, applied
+/// in configuration order, where an empty value clears the helpers selected
+/// before it. `None` when the model cannot read the list exactly: `url` is
+/// not a plain `https://<host>/<path>` URL, a helper key's pattern is not a
+/// plain `https://<host>` or `https://<host>/`, or a helper key or value is
+/// unreadable.
+fn effective_helpers(
+    config: &crate::security::git_config::EffectiveConfig,
+    url: &str,
+) -> Option<Vec<String>> {
+    let host = https_host(url, false)?;
+    let mut helpers = Vec::new();
+    for (key, value) in config.entries() {
+        // Section and variable names arrive folded to lower case.
+        let Some(rest) = key.strip_prefix(b"credential.") else {
+            continue;
+        };
+        let applies = if rest == b"helper" {
+            true
+        } else if let Some(pattern) = rest.strip_suffix(b".helper") {
+            let pattern = std::str::from_utf8(pattern).ok()?;
+            https_host(pattern, true)?.eq_ignore_ascii_case(host)
+        } else {
+            continue;
+        };
+        if !applies {
+            continue;
+        }
+        // A helper key without `=` is an error to Git; the model stops.
+        let value = std::str::from_utf8(value?).ok()?;
+        if value.is_empty() {
+            helpers.clear();
+        } else {
+            helpers.push(value.to_string());
+        }
+    }
+    Some(helpers)
+}
+
+/// The host of a plain `https://<host>` URL: no user, port, query or
+/// fragment, and a host of ASCII letters, digits, `.` and `-`. With
+/// `pattern`, the URL may end at the host or at one `/`; otherwise it must
+/// carry a path after the host.
+fn https_host(url: &str, pattern: bool) -> Option<&str> {
+    let rest = url
+        .get(..8)?
+        .eq_ignore_ascii_case("https://")
+        .then(|| &url[8..])?;
+    let (host, path) = match rest.split_once('/') {
+        Some((host, path)) => (host, Some(path)),
+        None => (rest, None),
+    };
+    let plain_host = !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with('.')
+        && !host.contains("..")
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+    let path_ok = if pattern {
+        path.is_none_or(str::is_empty)
+    } else {
+        path.is_some_and(|path| {
+            !path.is_empty()
+                && path
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+        })
+    };
+    (plain_host && path_ok).then_some(host)
 }
 
 /// `Some` when Git's own fetch and push URLs for `origin` are the
