@@ -136,7 +136,8 @@ worker as a native subagent of your own session, never as a separate CLI
 session or Herdr tab; without a native route, the primary keeps the work
 and records the missing route. Another family runs as a native interactive
 seat with its provenance recorded, never headless and never through a
-relay; an unavailable seat gets bounded recovery, then is recorded as
+relay; an unavailable seat gets bounded recovery, then another family's
+seat takes its work, and only when none is available is it recorded as
 reduced assurance naming the missing review, never faked. Where installed,
 `.agents/skills/cf-model-orchestrator/resources/capability-routing.md`
 governs routing; the primary retains judgment and safety, and inspects,
@@ -302,8 +303,9 @@ Unknown availability or usage stays unknown.
 
 **Review verdicts need an independent pass.** A verdict comes from a
 read-only, fresh-context pass against criteria and evidence by a reviewer of
-the other lineage where a seat exists, never headless. Only when no
-other-lineage seat exists does the same-family fallback give it: `cf-reviewer`
+another model family, never headless. The preferred seat is not required:
+a review by any other family counts as cross-family. Only when no
+other-family seat is available does the same-family fallback give it: `cf-reviewer`
 in Claude Code or, elsewhere, a separate qualified interactive pass, with the
 reduced assurance recorded. This is the one statement of when `cf-reviewer`
 runs. Self-review is not review.

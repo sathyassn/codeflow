@@ -529,12 +529,23 @@ fn the_guard_refuses_each_commit_creating_command_at_a_root_off_its_branch() {
     let root = repo_with_commit(&dir.path().join("r"));
     git(&root, &["switch", "--quiet", "-c", "feat/x"]);
     let policy = GitPolicy::default();
+    // git-guard reads the mailbox `git am` applies (TSK-1390); this one
+    // changes an ordinary file.
+    let mailbox = dir.path().join("patch.mbox");
+    std::fs::write(
+        &mailbox,
+        "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n\
+         From: t <t@example.invalid>\nSubject: [PATCH] x\n\n---\n\
+         diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -0,0 +1 @@\n+x\n",
+    )
+    .unwrap();
+    let am = format!("git am '{}'", crate::portable_path::slashed(&mailbox));
     for command in [
         "git commit -m x",
         "git merge feat/y",
         "git cherry-pick abc123",
         "git revert HEAD",
-        "git am patch.mbox",
+        am.as_str(),
         "git rebase main",
         "git pull",
     ] {

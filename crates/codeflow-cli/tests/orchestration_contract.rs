@@ -346,10 +346,11 @@ fn unit_review_owes_codex_for_claude(catalog: &Catalog) -> Result<(), String> {
     Ok(())
 }
 
-/// The combined body is reviewed by both standing seats.
+/// A Claude-authored body is reviewed by both standing seats; the engineering
+/// reviewer is relative to the author.
 fn body_review_owes_both_standing_seats(catalog: &Catalog) -> Result<(), String> {
     for host in hosts(catalog) {
-        let result = resolve(catalog, "body-review", host, None);
+        let result = resolve(catalog, "body-review", host, Some("claude"));
         let seats: BTreeSet<_> = result
             .participants
             .iter()
@@ -635,7 +636,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "**The Claude judgment primary owns integrated Claude judgment.**",
         "task fit",
         "verified native routing, and resources, on the plan's assignment line",
-        "Codex supplies independent review",
+        "The cross-family seat supplies independent review",
         "owns the final quality verdict",
         "**Accountable route use.**",
         "Use the concrete selectors",
@@ -648,7 +649,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "**Bounded parallelism.**",
         // TSK-184: one plan, approved once; the round cap is gone.
         // EPC-018 settled dissent (ADR-0070) rides inside the one approval.
-        "Plan settlement ends when both seats approve one version, with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or the host stops for the operator.",
+        "Plan settlement ends when the Claude primary and the cross-family seat approve one version, with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or the host stops for the operator.",
         "approval of an older version does not carry forward",
     ] {
         assert!(
@@ -715,7 +716,7 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
     let rules = managed_catalog().rules.join(" ");
     for required in [
         "Primary seats retain independent planning and approval duties.",
-        "The standing pair is the usual quality floor; extra catalog families never vote silently.",
+        "The Claude primary and one cross-family seat, Codex preferred, are the usual quality floor; any other family can take the cross-family seat, and extra catalog families never vote silently.",
         "Internal workers never replace a primary or named cross-lineage reviewer.",
         "Claude-side internal routing belongs to the Claude primary.",
         "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
@@ -736,7 +737,7 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "\"invoke_when_available\": true",
         "complex architecture",
         "security-sensitive change",
-        "standing pair cannot reach justified confidence",
+        "Claude and the cross-family seat cannot reach justified confidence",
     ] {
         assert!(
             policy.contains(required),
@@ -766,7 +767,7 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "generic same-lineage subagent never satisfies",
         "never a silent third vote",
         "available-and-named or unavailable-with-limitation",
-        "A Grok Build host coordinates the standing pair through Herdr",
+        "A Grok Build host coordinates the Claude and Codex seats through Herdr",
         "implementer check",
         "Default UI assignment is Claude as responsible primary and executor",
         "Playwright remains the deterministic web driver",
@@ -904,7 +905,7 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "Give both seats the same immutable brief; its scope is where each starts.",
         "each seat independently returns its findings",
         "Claude drafts the one plan **from its native session**",
-        "Codex challenges that plan against its own findings: feasibility, failure modes, security, testing, maintainability",
+        "Codex, or another family when Codex is unavailable, challenges that plan against its own findings: feasibility, failure modes, security, testing, maintainability",
         // TSK-255: the challenge asks for fit, a composed failure case and
         // whether a criterion can pass while the outcome is missed.
         "fit to the existing code (the mechanism extended, what is reused, each departure with its reason)",
@@ -932,7 +933,7 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
     // TSK-127 moved the entry-point cell's doctrine into the owning skill.
     assert!(
         normalized.contains(
-            "Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex challenges it; the host assigns"
+            "Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex or a different lineage challenges it; the host assigns"
         ),
         "the orchestrator skill must expose independent discovery in its description"
     );
@@ -1884,7 +1885,7 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
     for required in [
         "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route.",
         // EPC-018 settled dissent (ADR-0070) rides inside the one approval.
-        "Plan settlement ends when both seats approve one version, with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or the host stops for the operator.",
+        "Plan settlement ends when the Claude primary and the cross-family seat approve one version, with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or the host stops for the operator.",
         "When review findings are acted on, they are batched per [findings](resources/quality/findings.md)",
         "as [findings](resources/quality/findings.md) sets out, fixed in the same open PR.",
     ] {
@@ -3058,7 +3059,7 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
     LiveStateObligation {
         path: "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
         section: "Invariants",
-        clause: "Record reduced assurance only after a live probe fails, naming the probe and its time.",
+        clause: "Record reduced assurance only after live probes of every other family's seat fail, naming the probes and their time.",
         reversed: "Record reduced assurance as soon as a seat is believed unavailable.",
     },
     LiveStateObligation {

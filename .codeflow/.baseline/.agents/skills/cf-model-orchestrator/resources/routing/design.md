@@ -34,7 +34,10 @@ QA**). Codex QAs through Computer Use in the Codex seat that
 [cross-family transport](transport.md) names, with actual Computer Use
 access verified. If Codex produces a UI unit, Claude
 is the independent reviewer and performs Computer Use QA in Claude Code;
-Codex executor verification is not independent QA. Playwright remains the
+Codex executor verification is not independent QA. `computer-use-qa` is an
+exception to "any other family counts": its seats stay Codex and Claude,
+because Grok has no harness in this catalog that can run this QA, so a
+Claude-authored unit with no Codex seat leaves the duty open. Playwright remains the
 deterministic web driver; Computer Use is not a default web driver and not
 design authorship. A non-design worker may collect rendered/tool evidence but
 never settles the direction, authors the design, or interprets it in place of

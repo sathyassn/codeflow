@@ -327,7 +327,7 @@ fn each_invalid_block_rejects_the_whole_file() {
         ),
         (
             Box::new(|v| v["standing_reviews"][0]["seat"] = json!("quartz-seat")),
-            "standing-pair",
+            "standing duo seat",
         ),
         (
             Box::new(|v| v["standing_reviews"][0]["seat"] = json!("nobody")),
