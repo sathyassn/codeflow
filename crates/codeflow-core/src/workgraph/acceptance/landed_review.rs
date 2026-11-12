@@ -531,6 +531,27 @@ mod tests {
         }
     }
 
+    /// Items separated otherwise than by `;`: a missing separator makes one
+    /// item of two assertions, and the reversed order still needs the probe.
+    #[test]
+    fn a_reduced_assurance_statement_with_a_missing_separator_is_refused() {
+        let review = "Claude Opus 5.5 subagent at medium, whole unit";
+        for (stated, why) in [
+            (
+                "codex probed unavailable grok probed unavailable",
+                "the item `codex probed unavailable grok probed unavailable` is not exactly `codex probed unavailable`",
+            ),
+            (
+                "grok unavailable;codex unavailable",
+                "the item `grok unavailable` is not exactly `grok probed unavailable`",
+            ),
+        ] {
+            let found = judge(Some("claude"), review, Some(stated)).expect(stated);
+            assert!(found.contains(why), "{stated}: {found}");
+            assert!(found.contains(LANDED_REVIEW), "{found}");
+        }
+    }
+
     #[test]
     fn built_by_names_exactly_one_lineage_id() {
         let review = "Grok 4.7, whole unit";
