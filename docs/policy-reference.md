@@ -1495,9 +1495,8 @@ level:
   call that names a file of the class, in any spelling the guard expands
   (`~`, `$HOME`, `${HOME}`, `$ZDOTDIR`, braces, globs, case) and through
   symbolic links;
-- the same writes to a path under `$CLAUDE_CONFIG_DIR` or `$CODEX_HOME`,
-  or to the file `$CLAUDE_ENV_FILE` names, when the guard holds the
-  variable (the saved shell state below);
+- a write, removal, copy or extraction that reaches the saved shell state
+  of Claude Code, Codex or herdr-core (the saved shell state below);
 - an archive, sync, download or checkout that writes into the home, `/etc`
   or a startup directory, where it can place a file it does not name. The
   directory comes from the same reading as the writer options above:
@@ -2180,48 +2179,43 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   probed in this task), which covers a moved `ZDOTDIR` or
   `XDG_CONFIG_HOME` only when it sits outside the workspace. `.envrc` in the workspace has no Grok rule, since a
   Grok deny also blocks reads; the guards refuse it.
-- **Saved shell state.** The class holds the state a harness runs before
-  later commands: Claude Code's `session-env` and `shell-snapshots`
-  folders and the file `CLAUDE_ENV_FILE` names, Codex's `shell_snapshots`
-  folder, and herdr-core's template folder. The harness writes these
+- **Saved shell state.** The action table's `saved_state_paths` lists the
+  state a harness runs before later commands: Claude Code's `session-env`
+  and `shell-snapshots` folders, Codex's `shell_snapshots` folder and
+  herdr-core's template folder, each below the home. The file
+  `CLAUDE_ENV_FILE` names is one more location. The harness writes these
   itself, from its own process or from a hook, outside the sandbox and the
   permission rules, so the entries hold only the agent's own writes.
-  - A `CLAUDE_CONFIG_DIR` or `CODEX_HOME` moved elsewhere has no native
-    deny, as with a moved `XDG_CONFIG_HOME`. The guards follow it when the
-    hook process has the variable, and `codeflow doctor` reports it.
-  - The folder names `session-env`, `shell-snapshots`, `shell_snapshots`
-    and `herdr-core/templates` are protected wherever such a folder is, so
-    another profile's folder, or one the guard holds no variable for, is
-    covered for shell writes and for native edits in harnesses that invoke
-    edit-guard. A folder of your own with one of these names is refused
-    too, and the operator renames it.
-  - exec-guard judges file operations on these folders in a separate pass.
-    It runs after every other check, only when no other check refused, so
-    it adds refusals and never changes another finding. It judges a
-    command only where it can bind the target exactly: the directory the
-    command runs in and each operand. A target that is one of several
-    words in a loop, or behind a branch that may change directory, keeps
-    the judgment the other checks give it.
-  - Removal (`rm -r`, `find -delete`, a `find -exec` remover, the source
-    of `mv`) refuses when the node it removes is or holds saved state. It
-    reads the node without following a link below it; a trailing `/`
-    follows a link the operand names. `rmdir`, `unlink` and a plain `rm`
-    are judged by path alone.
-  - Placement (a recursive `cp`, `ditto`, a recursive `rsync`, the
-    destination of `mv`, a `tar` or `unzip` extract) refuses when the
-    target is or lies in a location the guard identifies by path: the
-    default folders and the folders the moved variables name. When a
-    source may be a tree, the pass also refuses a target above such a
-    location, reads the four levels below the target for one of the
-    folder names, and judges a link it finds by where the link leads.
-  - The scan is bounded: four levels, 65536 directories and 1048576 listed
-    entries. A directory past the fourth level, an entry it cannot read, a
-    listing that fails or a spent budget refuses, and the message asks for
-    a narrower target directory the guard can read. A folder that does not
-    exist yet is not seen.
-  - A line that names one of these folders is held to the closed rule
-    above, so a listing piped into a program that is not a data reader
-    refuses. Creating a herdr-core template is the operator's step.
+  - `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME` and, on Windows,
+    `APPDATA` move the matching entries when the hook process has the
+    variable. The preset denies name the default folders; `codeflow
+    doctor` reports a moved one.
+  - exec-guard and git-guard judge these locations in a pass of their own.
+    It runs after every other check and only adds refusals after the
+    other findings, so it never changes what another rule reports. A
+    target is judged in the directory its command runs in, and is compared
+    with each location by the node it reaches on disk, links and `..`
+    included. A folder of your own that only has the same name as one of
+    these folders is ordinary.
+  - A write refuses: a redirect, `tee`, `cp`, `mv`, `ln` or another
+    writing program whose target is a location or lies in one.
+  - A removal refuses when the node it removes is a location, lies in one
+    or is a folder above one that exists (`rm -r`, `find -delete`, a
+    `find -exec` remover, the source of `mv`). It reads the node without
+    following a link below it; a trailing `/` follows a link the operand
+    names. `rmdir`, `unlink` and a plain `rm` refuse only a location or a
+    path in one.
+  - A copy, sync or move of a tree refuses when what it places lands in a
+    location or above one.
+  - An extraction (`tar -x`, `unzip`) refuses when its folder is a
+    location, lies in one or is above one, such as the home, `~/.claude`
+    or `~/.config`, since the guard cannot see what the archive holds. The
+    message names the way through: extract into a named sub-folder that is
+    not above saved shell state, with `tar -C <dir>` or `unzip -d <dir>`.
+    An extraction in a project, or in a folder of the home above no
+    location, runs.
+  - edit-guard refuses a native edit of a file in a location. Creating a
+    herdr-core template is the operator's step.
 - **Windows.** A PowerShell profile under a redirected `Documents` folder,
   such as one in OneDrive, is outside the class. On native Windows Claude
   Code has no Bash sandbox, so the class rests on the `Edit` denies for its

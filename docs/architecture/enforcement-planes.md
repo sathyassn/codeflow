@@ -293,15 +293,16 @@ TSK-242).
   directories in the home, the system ones under `/etc`, and `.envrc` in
   any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME` move the matching
   entries; a relative `ZDOTDIR` protects the zsh names in every directory.
-- **Saved shell state.** The class also holds the state a harness or
-  terminal tool runs before later commands: Claude Code's `session-env`
-  and `shell-snapshots` folders and the file `CLAUDE_ENV_FILE` names,
-  Codex's `shell_snapshots` folder, and herdr-core's template folder.
-  `$CLAUDE_CONFIG_DIR`, `$CODEX_HOME` and, on Windows, `$APPDATA` move
-  those entries. The three folder names and `herdr-core/templates` are
-  protected wherever they are. exec-guard judges removals and placements
-  of trees around them in a separate pass that runs after every other
-  check and only adds refusals.
+- **Saved shell state.** The table's `saved_state_paths`: the state a
+  harness or terminal tool runs before later commands, Claude Code's
+  `session-env` and `shell-snapshots` folders, Codex's `shell_snapshots`
+  folder and herdr-core's template folder, plus the file
+  `CLAUDE_ENV_FILE` names. `$CLAUDE_CONFIG_DIR`, `$CODEX_HOME`,
+  `$XDG_CONFIG_HOME` and, on Windows, `$APPDATA` move those entries.
+  exec-guard and git-guard judge writes, removals, copies and extractions
+  that reach them in a pass of their own, which compares each target with
+  each location by the node it reaches on disk, runs after every other
+  check and only adds refusals; edit-guard refuses a native edit there.
 - **The git configuration files.** The table's `git_config_paths`: the
   default user and system files (`~/.gitconfig`, `~/.config/git/config`,
   `/etc/gitconfig` and the `/usr/local` and Homebrew ones), whose keys can
