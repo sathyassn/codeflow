@@ -1015,47 +1015,231 @@ fn saved_state_writes_refuse_through_both_hooks() {
         for (command, message) in [
             (
                 format!("echo 'export PATH=/tmp/x:$PATH' >> {target}"),
-                format!("a redirect writes `{target}`, which is saved shell state: `{label}`"),
+                format!("a redirect writes the saved shell state file `{label}`"),
             ),
             (
                 format!("tee -a {target} < /dev/null"),
-                format!("`tee` writes `{target}`, which is saved shell state: `{label}`"),
+                format!("`tee` targets the saved shell state file `{label}`"),
             ),
             (
                 format!("cp evil.sh {target}"),
-                format!("`cp` writes `{target}`, which is saved shell state: `{label}`"),
+                format!("`cp` writes the saved shell state file `{label}`"),
             ),
             (
                 format!("mv evil.sh {target}"),
-                format!("`mv` writes `{target}`, which is saved shell state: `{label}`"),
+                format!("`mv` writes the saved shell state file `{label}`"),
             ),
             (
                 format!("ln -sf /tmp/evil.sh {target}"),
-                format!("`ln` writes `{target}`, which is saved shell state: `{label}`"),
+                format!("`ln` writes the saved shell state file `{label}`"),
             ),
         ] {
-            for (hook, found, before) in [
-                (
-                    "exec-guard",
-                    f.exec(&command, places),
-                    without(|| f.exec(&command, places)),
-                ),
-                (
-                    "git-guard",
-                    f.git(&command, places),
-                    without(|| f.git(&command, places)),
-                ),
-            ] {
-                if saved(&found) != [message.clone()] {
-                    wrong.push(format!("{hook} {command}: {:?}", shown_findings(&found)));
-                }
-                if !saved(&before).is_empty() {
-                    wrong.push(format!("{hook} refused before: {command}"));
-                }
-            }
+            both_hooks(&f, places, &command, &[message], &mut wrong);
         }
     }
+    // One row for each form the guard reads a write by. `P` is a Claude
+    // configuration folder the session moved outside the home, and `L`
+    // the location in it, so no row spells the home or a startup folder.
+    // The rows from the removal on are refusals near saved state: each
+    // names its way through.
+    let conf = f.home.parent().unwrap().join("conf");
+    mkdir(&conf.join("session-env/abc"));
+    mkdir(&conf.join("projects/p"));
+    std::fs::write(conf.join("session-env/h"), "x").unwrap();
+    mkdir(&f.project.join("s"));
+    mkdir(&f.project.join("src/old"));
+    mkdir(&f.project.join("target"));
+    let moved = Places {
+        claude_config: Some(conf.clone()),
+        ..f.places()
+    };
+    let p = slashed(&conf);
+    let l = format!("{p}/session-env");
+    let label = "$CLAUDE_CONFIG_DIR/session-env";
+    // The text rule names the location by its full path, as it compares it.
+    let needle = key(&lexical(&conf.join("session-env")));
+    let near = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
+    let forms: Vec<(String, String)> = vec![
+        (
+            format!("echo x > {l}/h"),
+            format!("a redirect writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("dd of={l}/h"),
+            format!("`dd` targets the saved shell state file `{label}`"),
+        ),
+        (
+            format!("curl --output-dir {l} -o h https://example.test/x"),
+            format!("`curl` targets the saved shell state file `{label}`"),
+        ),
+        (
+            format!("cp e {l}/h"),
+            format!("`cp` writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("ln {l}/h a"),
+            format!("`ln` targets the saved shell state file `{label}`"),
+        ),
+        (
+            format!("cp --parents e {l}/h"),
+            format!("`cp` writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("find . -fprint {l}/h"),
+            format!("`find` targets the saved shell state file `{label}`"),
+        ),
+        (
+            format!("cd {l} && curl -O https://example.test/x"),
+            format!("`curl` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+        (
+            format!("python3 -c \"open('{l}/h','w')\""),
+            format!("interpreter code names the saved shell state file `{needle}`, which it can write"),
+        ),
+        (
+            format!("echo 'x > {l}/h' | sh"),
+            format!("text this call produces names the saved shell state file `{needle}`, and the line runs `sh`, which is not a data reader, so it could run or apply that text; read the file in its own call"),
+        ),
+        (
+            format!("cp e {p}/*/h"),
+            format!("`cp` writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("PAGER='sh {l}/h' git log"),
+            format!("`PAGER` is set to a command that names the saved shell state file `{needle}`, which a program the line runs would execute"),
+        ),
+        (
+            format!("echo x >! {l}/h"),
+            format!("a redirect writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("echo x >>! {l}/h"),
+            format!("a redirect writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("echo x >>| {l}/h"),
+            format!("a redirect writes the saved shell state file `{label}`"),
+        ),
+        (
+            format!("rm -rf {p}"),
+            format!("`rm` removes `{p}`, which is or holds saved shell state: `{p}`"),
+        ),
+        (
+            format!("echo x > {p}/$f"),
+            format!("a redirect writes `{p}/$f`, which the guard cannot resolve, and its directory is `{p}`; {near}"),
+        ),
+        (
+            format!("cp -r s/. {p}/"),
+            format!("`cp` copies the contents of `s/.` into `{p}/`, where saved shell state files live; copy into a named sub-folder that holds no saved shell state"),
+        ),
+        (
+            format!("wget -P {p} https://example.test/x"),
+            format!("`wget` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+        (
+            format!("cd {p} && tar xf a.tar"),
+            format!("`tar` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+        (
+            format!("cd {p} && patch -p1 < fix.diff"),
+            format!("`patch` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+        (
+            format!("find {p} -name x -exec chmod 600 {{}} +"),
+            format!("`find` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+    ];
+    for (command, message) in &forms {
+        both_hooks(&f, &moved, command, &[message.clone()], &mut wrong);
+    }
+    // A held variable whose value has a space, used unquoted: zsh does not
+    // split it, so the write lands in the location.
+    let spaced = f.home.join("Library/Application Support/claude");
+    mkdir(&spaced.join("session-env"));
+    let places = Places {
+        claude_config: Some(spaced),
+        ..f.places()
+    };
+    both_hooks(
+        &f,
+        &places,
+        "echo x > $CLAUDE_CONFIG_DIR/session-env/h",
+        &["a redirect writes the saved shell state file `$CLAUDE_CONFIG_DIR/session-env`".to_string()],
+        &mut wrong,
+    );
+    // Controls near saved state: a named file beside it, a removal of a
+    // neighbour, removals in a project and a search that runs nothing.
+    for command in [
+        format!("echo x > {p}/notes.md"),
+        format!("rm -rf {p}/projects/p"),
+        "rm -rf target".to_string(),
+        "rm -rf src/old".to_string(),
+        format!("find {p} -name x"),
+    ] {
+        both_hooks(&f, &moved, &command, &[], &mut wrong);
+    }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Check that `command` gives exactly `messages` as its saved-state
+/// findings through exec-guard and git-guard, and none with the pass
+/// turned off.
+fn both_hooks(
+    f: &Fixture,
+    places: &Places,
+    command: &str,
+    messages: &[String],
+    wrong: &mut Vec<String>,
+) {
+    for (hook, found, before) in [
+        (
+            "exec-guard",
+            f.exec(command, places),
+            without(|| f.exec(command, places)),
+        ),
+        (
+            "git-guard",
+            f.git(command, places),
+            without(|| f.git(command, places)),
+        ),
+    ] {
+        if saved(&found) != messages {
+            wrong.push(format!("{hook} {command}: {:?}", shown_findings(&found)));
+        }
+        if !saved(&before).is_empty() {
+            wrong.push(format!("{hook} refused before: {command}"));
+        }
+    }
+}
+
+/// The lead in Director ruling C: main's judge returns the first finding a
+/// segment gives, so with `git.hook_integrity` at warn, a warn-level git
+/// finding in an earlier segment is all it returns, and a write to a shell
+/// startup file later on the line gives no finding of its own. This row
+/// only reads main's judge, with main's class, and changes nothing.
+/// Settled: confirmed. The startup write is hidden behind the warn
+/// finding; fixing that is main's, outside this unit.
+#[test]
+fn a_warn_level_git_finding_comes_before_a_later_startup_write() {
+    let f = Fixture::new();
+    let env = StartupEnv {
+        home: Some(f.home.clone()),
+        ..StartupEnv::default()
+    };
+    let found = crate::security::startup::evaluate_with(
+        "git config core.hooksPath /tmp/h; cp evil.sh ~/.zshrc",
+        &f.project,
+        &env,
+        PolicyLevel::Warn,
+    );
+    let rules: Vec<(String, PolicyLevel)> =
+        found.iter().map(|v| (v.rule.clone(), v.level)).collect();
+    assert_eq!(
+        rules,
+        [("git.hook_integrity".to_string(), PolicyLevel::Warn)],
+        "{:?}",
+        shown_findings(&found)
+    );
 }
 
 /// Each finding of the pass is one always-blocking `security.shell_startup`
