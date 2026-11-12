@@ -294,11 +294,9 @@ TSK-242).
   any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME` move the matching
   entries; a relative `ZDOTDIR` protects the zsh names in every directory.
 - **Saved shell state.** The table's `saved_state_paths`: the shell state
-  Claude Code, Codex and herdr-core run before later commands, and the
-  `CLAUDE_ENV_FILE` file. exec-guard and git-guard refuse writes that
-  reach it, with the startup check's own judge run over these locations
-  and a second reading by the node on disk; edit-guard refuses native
-  edits.
+  harnesses run before later commands, and the `CLAUDE_ENV_FILE` file.
+  exec-guard and git-guard judge writes to it as they judge startup
+  files, and by the node on disk; edit-guard refuses native edits.
 - **The git configuration files.** The table's `git_config_paths`: the
   default user and system files (`~/.gitconfig`, `~/.config/git/config`,
   `/etc/gitconfig` and the `/usr/local` and Homebrew ones), whose keys can
