@@ -1844,6 +1844,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // An unread settings file names no edit hook gap here because missing_rules already pushes a named finding for it, and startup_files::check reports any finding as a warning, never a pass.
+    (
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "claude_edit_guard_gap",
+        "obtain-absent:read_to_string",
+        1,
+        "unproven",
+    ),
+    // A settings file that does not parse names no edit hook gap here because missing_rules already pushes a named finding for it, and startup_files::check reports any finding as a warning, never a pass.
+    (
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "claude_edit_guard_gap",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
     // shell_blank is exactly space, tab and newline, the shell's blanks before a comment mark.
     (
         "crates/codeflow-core/src/doctor/startup_files.rs",
