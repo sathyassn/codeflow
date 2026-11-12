@@ -38,8 +38,12 @@ use std::cell::{OnceCell, RefCell};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-use super::{key, lexical, reads_only, shown, Class, StartupEnv, LINK_LIMIT};
-use crate::hooks::git_guard::{has_glob, is_shell, startup_glob_paths};
+use super::{
+    judge_class, key, lexical, reads_only, resolve, shown, Class, Entry, Kind, StartupEnv,
+    LINK_LIMIT,
+};
+use crate::hooks::git_guard::{expand_commands_read, has_glob, is_shell, startup_glob_paths};
+use crate::hooks::policy::PolicyLevel;
 use crate::hooks::Violation;
 use crate::security::dangerous::{program_name, recursive_rm_operands};
 use crate::security::deletion::{bound_commands_in, bound_path, find_removals, Bound};
@@ -236,38 +240,191 @@ struct Location {
     seen: Seen,
 }
 
-/// The saved-state locations: the table's entries below each home, the
-/// ones a variable the guard holds moves, and the file `CLAUDE_ENV_FILE`
-/// names.
-fn locations(env: &Places) -> Vec<Location> {
+/// The saved-state locations, each with its label, its path and whether it
+/// is a folder: the table's entries below each home, the ones a variable
+/// the guard holds moves, and the file `CLAUDE_ENV_FILE` names.
+fn spots(env: &Places) -> Vec<(String, PathBuf, bool)> {
     let mut out = Vec::new();
-    let mut add = |label: String, path: &Path, dir: bool| {
-        out.push(Location {
-            label,
-            dir,
-            seen: walk(path, true),
-        });
-    };
     let table = &crate::security::actions::table().saved_state_paths;
     for entry in &table.home {
         let dir = entry.ends_with('/');
         let rel = entry.trim_end_matches('/');
         for home in env.startup.home.iter().chain(&env.startup.other_homes) {
-            add(format!("~/{rel}"), &home.join(rel), dir);
+            out.push((format!("~/{rel}"), home.join(rel), dir));
         }
         for (prefix, variable, root) in env.moved() {
             if let (Some(rest), Some(root)) = (rel.strip_prefix(prefix), root) {
-                add(format!("${variable}/{rest}"), &root.join(rest), dir);
+                out.push((format!("${variable}/{rest}"), root.join(rest), dir));
             }
         }
     }
     for entry in &table.absolute {
         let dir = entry.ends_with('/');
         let rel = entry.trim_end_matches('/');
-        add(rel.to_string(), Path::new(rel), dir);
+        out.push((rel.to_string(), PathBuf::from(rel), dir));
     }
     if let Some(file) = &env.claude_env_file {
-        add("$CLAUDE_ENV_FILE".to_string(), file, false);
+        out.push(("$CLAUDE_ENV_FILE".to_string(), file.clone(), false));
+    }
+    out
+}
+
+/// The saved-state locations, each walked once.
+fn locations(env: &Places) -> Vec<Location> {
+    spots(env)
+        .into_iter()
+        .map(|(label, path, dir)| Location {
+            label,
+            dir,
+            seen: walk(&path, true),
+        })
+        .collect()
+}
+
+/// The saved-state locations as a class of the startup check: each
+/// location an entry, the table's anchored spellings and the full path of
+/// each location a variable places as the text rule's needles, the
+/// variables the guard holds, and each location's folder as a place a
+/// placing program could fill.
+fn readings_class(env: &Places) -> Class {
+    let table = &crate::security::actions::table().saved_state_paths;
+    let mut needles: Vec<String> = table
+        .home
+        .iter()
+        .chain(&table.absolute)
+        .map(|entry| entry.trim_end_matches('/').to_lowercase())
+        .collect();
+    let mut entries = Vec::new();
+    for (label, path, dir) in spots(env) {
+        let written = key(&lexical(&path));
+        let mut readings = vec![written.clone()];
+        if let Ok(real) = resolve(&path) {
+            let real = key(&real);
+            if !readings.contains(&real) {
+                readings.push(real);
+            }
+        }
+        // A location a variable places is named by its full path.
+        if label.starts_with('$') && !needles.contains(&written) {
+            needles.push(written);
+        }
+        entries.push(Entry::At {
+            label,
+            readings,
+            dir,
+        });
+    }
+    Class {
+        entries,
+        homes: env
+            .startup
+            .home
+            .iter()
+            .chain(&env.startup.other_homes)
+            .map(|home| key(&lexical(home)))
+            .collect(),
+        needles,
+        held: env.held(),
+        folders_place: true,
+    }
+}
+
+/// The way through a refusal near saved state names: a program aimed at a
+/// folder that holds it, or a write the guard cannot resolve there.
+const NEAR_WAY: &str = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
+
+/// The way through a copy of a folder's contents or a tree into a folder
+/// that holds saved state.
+const COPY_WAY: &str = "copy into a named sub-folder that holds no saved shell state";
+
+/// Words of a refusal of the startup check that mean the command acts
+/// near saved state rather than on a location it names.
+const NEAR_MARKS: &[&str] = &[
+    "which the guard cannot resolve",
+    "where it can place",
+    "cannot tell the directory",
+    "does not read its options",
+    "an option the guard does not read",
+];
+
+/// Judge `command`, run in `cwd`, with the startup check over the
+/// saved-state class: every form the check reads a write by, judged
+/// against the locations. zsh's clobbering redirects are read as plain
+/// ones first. A refusal near saved state names its way through.
+#[must_use]
+pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation> {
+    if !enabled() {
+        return Vec::new();
+    }
+    let line = plain_redirects(command);
+    let expanded = expand_commands_read(&line);
+    let class = readings_class(env);
+    judge_class(
+        &line,
+        cwd,
+        &env.startup,
+        &expanded,
+        &class,
+        Kind::SavedState,
+        PolicyLevel::Off,
+    )
+    .into_iter()
+    .map(|mut finding| {
+        let message = &finding.message;
+        let way = if message.contains(" copies the contents of ") || message.contains(" puts the tree ")
+        {
+            Some(COPY_WAY)
+        } else if NEAR_MARKS.iter().any(|mark| message.contains(mark)) {
+            Some(NEAR_WAY)
+        } else {
+            None
+        };
+        if let Some(way) = way {
+            finding.message = format!("{message}; {way}");
+        }
+        finding
+    })
+    .collect()
+}
+
+/// `command` with zsh's clobbering redirects `>!`, `>>!` and `>>|` written
+/// as `>` and `>>`, outside quotes: zsh writes the file they name, and the
+/// shell reader knows the other spellings only.
+fn plain_redirects(command: &str) -> String {
+    let chars: Vec<char> = command.chars().collect();
+    let mut out = String::with_capacity(command.len());
+    let (mut single, mut double, mut at) = (false, false, 0);
+    while let Some(&c) = chars.get(at) {
+        match c {
+            '\\' if !single => {
+                out.push(c);
+                if let Some(&next) = chars.get(at + 1) {
+                    out.push(next);
+                }
+                at += 2;
+                continue;
+            }
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '>' if !single && !double => {
+                let append = chars.get(at + 1) == Some(&'>');
+                let width = if append { 2 } else { 1 };
+                let next = chars.get(at + width);
+                if next == Some(&'!') || (append && next == Some(&'|')) {
+                    out.push_str(if append { ">>" } else { ">" });
+                    at += width + 1;
+                    continue;
+                }
+                if append {
+                    out.push_str(">>");
+                    at += 2;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push(c);
+        at += 1;
     }
     out
 }
@@ -1066,8 +1223,13 @@ fn plain_operands(args: &[String]) -> Vec<&str> {
 /// findings of its nested commands included.
 pub(crate) struct Held(usize);
 
+/// A held finding, and whether the startup check's run over the saved-state
+/// class gave it ([`readings`]), so it is dropped when the call already
+/// refuses under the same rule.
+type Kept = (bool, Violation);
+
 thread_local! {
-    static HELD: RefCell<[Option<Vec<Violation>>; 2]> = const { RefCell::new([None, None]) };
+    static HELD: RefCell<[Option<Vec<Kept>>; 2]> = const { RefCell::new([None, None]) };
 }
 
 /// The hooks that hold findings, each in a slot of its own.
@@ -1092,19 +1254,28 @@ impl Held {
         })
     }
 
-    /// Add `findings` to the ones `hook` holds.
-    pub(crate) fn hold(hook: Hook, findings: Vec<Violation>) {
+    /// Add `findings` to the ones `hook` holds; `read` marks the startup
+    /// check's findings over the saved-state class.
+    fn hold(hook: Hook, findings: Vec<Violation>, read: bool) {
         HELD.with(|held| {
             if let Some(slot) = held.borrow_mut()[hook as usize].as_mut() {
-                slot.extend(findings);
+                slot.extend(findings.into_iter().map(|finding| (read, finding)));
             }
         });
     }
 
     /// Judge `command`, run in `cwd`, with the locations from this
-    /// process's environment, and hold the findings for `hook`.
+    /// process's environment, and hold the findings for `hook`: the
+    /// startup check over the saved-state class ([`readings`]), and the
+    /// identity pass ([`evaluate`]) only when that check finds nothing.
     pub(crate) fn run(hook: Hook, command: &str, cwd: &Path) {
-        Self::hold(hook, evaluate(command, cwd, &Places::from_process_at(cwd)));
+        let places = Places::from_process_at(cwd);
+        let read = readings(command, cwd, &places);
+        if read.is_empty() {
+            Self::hold(hook, evaluate(command, cwd, &places), false);
+        } else {
+            Self::hold(hook, read, true);
+        }
     }
 
     /// Append the findings `held` holds after `violations`; nothing for an
@@ -1115,10 +1286,17 @@ impl Held {
         }
     }
 
-    /// Append the held findings after `violations`, each once.
+    /// Append the held findings after `violations`, each once. A finding
+    /// of the startup check over the saved-state class is dropped when the
+    /// call already refuses under that rule: the startup check over its own
+    /// class met the same rule first.
     pub(crate) fn append(self, violations: &mut Vec<Violation>) {
         let held = HELD.with(|held| held.borrow_mut()[self.0].take().unwrap_or_default());
-        for finding in held {
+        let refused = violations.iter().any(|v| v.rule == super::RULE);
+        for (read, finding) in held {
+            if read && refused {
+                continue;
+            }
             let duplicate = violations
                 .iter()
                 .any(|v| v.rule == finding.rule && v.message == finding.message);

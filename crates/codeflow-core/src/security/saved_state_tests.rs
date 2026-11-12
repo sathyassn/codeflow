@@ -1088,9 +1088,26 @@ fn saved_state_writes_refuse_through_both_hooks() {
             format!("find . -fprint {l}/h"),
             format!("`find` targets the saved shell state file `{label}`"),
         ),
+        // The startup check judges a `cd` operand as a target on a line
+        // that is not only directory changes, so it refuses first here and
+        // on `cd L && ls` below: that check's own rule, applied to this
+        // class.
         (
             format!("cd {l} && curl -O https://example.test/x"),
+            format!("`cd` targets the saved shell state file `{label}`"),
+        ),
+        (
+            format!("wget -P {l} https://example.test/x"),
+            format!("`wget` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+        // The working directory alone, with no `cd` on the line.
+        (
+            format!("env -C {l} curl -O https://example.test/x"),
             format!("`curl` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
+        ),
+        (
+            format!("cd {l} && ls"),
+            format!("`cd` targets the saved shell state file `{label}`"),
         ),
         (
             format!("python3 -c \"open('{l}/h','w')\""),
@@ -1098,15 +1115,21 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("echo 'x > {l}/h' | sh"),
-            format!("text this call produces names the saved shell state file `{needle}`, and the line runs `sh`, which is not a data reader, so it could run or apply that text; read the file in its own call"),
+            format!("interpreter code names the saved shell state file `{needle}`, which it can write"),
         ),
         (
             format!("cp e {p}/*/h"),
             format!("`cp` writes the saved shell state file `{label}`"),
         ),
+        // The program the variable names is judged as a command of its
+        // own too, so this row gives two findings.
         (
             format!("PAGER='sh {l}/h' git log"),
             format!("`PAGER` is set to a command that names the saved shell state file `{needle}`, which a program the line runs would execute"),
+        ),
+        (
+            String::new(),
+            format!("the line names the saved shell state file `{needle}`, and `sh {l}/h` runs a script the guard does not read, so it could write that file out of the guard's sight; run that command in a call that does not name the file"),
         ),
         (
             format!("echo x >! {l}/h"),
@@ -1149,8 +1172,16 @@ fn saved_state_writes_refuse_through_both_hooks() {
             format!("`find` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
         ),
     ];
-    for (command, message) in &forms {
-        both_hooks(&f, &moved, command, &[message.clone()], &mut wrong);
+    // A row with no command adds a finding to the row before it.
+    let mut rows: Vec<(String, Vec<String>)> = Vec::new();
+    for (command, message) in forms {
+        match rows.last_mut() {
+            Some((_, messages)) if command.is_empty() => messages.push(message),
+            _ => rows.push((command, vec![message])),
+        }
+    }
+    for (command, messages) in &rows {
+        both_hooks(&f, &moved, command, messages, &mut wrong);
     }
     // A held variable whose value has a space, used unquoted: zsh does not
     // split it, so the write lands in the location.
@@ -1182,8 +1213,8 @@ fn saved_state_writes_refuse_through_both_hooks() {
 }
 
 /// Check that `command` gives exactly `messages` as its saved-state
-/// findings through exec-guard and git-guard, and none with the pass
-/// turned off.
+/// findings through exec-guard and git-guard, in any order, and none with
+/// the pass turned off.
 fn both_hooks(
     f: &Fixture,
     places: &Places,
@@ -1203,7 +1234,11 @@ fn both_hooks(
             without(|| f.git(command, places)),
         ),
     ] {
-        if saved(&found) != messages {
+        let mut got = saved(&found);
+        got.sort();
+        let mut want = messages.to_vec();
+        want.sort();
+        if got != want {
             wrong.push(format!("{hook} {command}: {:?}", shown_findings(&found)));
         }
         if !saved(&before).is_empty() {
