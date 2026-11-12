@@ -12,7 +12,9 @@
   - The guards refuse a native edit that writes that state, in Claude
     Code, Codex and Grok. The Claude presets now send Claude Code's
     `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard,
-    as the Codex and Grok hook files already send theirs.
+    as the Codex and Grok hook files already send theirs. A Claude native
+    edit also gets edit-guard's refusals for the enforcement paths and
+    for a moved startup folder.
   - The presets deny the same writes, `codeflow update` adds the entries
     and the edit hook to an existing project, and `codeflow doctor`
     reports settings that lack them.

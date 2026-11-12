@@ -2199,10 +2199,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     by, such as a redirect, an option that names an output file, a glob,
     interpreter code or a command variable that names a location, refuses
     here too. Where it cannot tell what a command writes, it refuses when
-    the command names a location or runs in a folder that holds one. zsh's
-    clobbering redirects are read as plain redirects wherever the line
-    holds them, and a modifier or subscript on a variable whose value is
-    or holds a location fails closed.
+    the command names a location or runs in a folder that holds one. A
+    zsh flag, modifier or subscript on a variable whose value is or holds
+    a location fails closed, since the guard does not compute the result.
   - A second run adds what the first did not find. It judges a target in
     the directory its command runs in and compares it with each location
     by the node it reaches on disk, links and `..` included. A folder of
@@ -2221,23 +2220,35 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     such a link.
   - A link made to a location or to a folder above one refuses, since a
     later write through it lands there. Relative link text is read from
-    the folder the link is made in, as the kernel reads it.
+    the folder the link is made in, as the kernel reads it. The
+    destination counts as a folder whatever it is when the guard reads the
+    line, since an earlier command on the line can make it one, unless
+    `-T` makes it the link itself.
   - A copy, sync or move of a tree refuses when what it places lands in a
     location or above one. A source that does not exist yet counts as a
     tree, since an earlier command on the line can make it.
   - A placing program run in or aimed at a folder that holds a location,
     such as `tar xf` or `patch` after a `cd` there, `wget -P` or
     `find -exec`, refuses, and so does a `cd` into a location on a line
-    that runs other programs. Each message names the way through: aim the
-    program at a named sub-folder, name the file it writes, run `cd` alone
-    with a plain unquoted path, or give the full path to a reader the
-    guard lists instead of changing into the folder.
-  - When a setting moves a location inside a project or a temporary
-    folder, that folder is above a location, so placing programs run
-    there refuse too, such as `git checkout`, `git pull`, `git merge`, an
-    extraction, `find -exec` and a redirect to a name the guard cannot
-    resolve. Keep a harness's configuration folder outside the projects
-    it works on.
+    that runs other programs. Each message names the location and the way
+    through: aim the program at a named sub-folder, name the file it
+    writes, run `cd` alone with a plain unquoted path, or give the full
+    path to a reader the guard lists instead of changing into the folder.
+    For a program that changes the files of the folder it runs in, the way
+    through is to keep the harness's configuration folder outside the
+    project.
+  - The folder that holds a location is the run folder when a setting
+    moves a harness's configuration folder inside it, and also the home,
+    `/etc` or the root. Every program the guard knows to place files in
+    the folder it runs in refuses there (an extraction, a copy, a download,
+    `patch`, `rsync`, `scp` and the like), and so does every `git` command
+    that can change the work tree, such as `checkout`, `pull`, `merge`,
+    `switch`, `rebase`, `reset`, `restore`, `stash`, `cherry-pick` and
+    `clone`; `git` commands that only read, or that keep the work tree, run.
+    So do `find -exec` and a redirect to a name the guard cannot resolve.
+    A project's own `.claude/` folder never counts. No policy key relaxes
+    this rule. Keep a harness's configuration folder outside the projects
+    it works on; `codeflow doctor` says when it is not.
   - An extraction (`tar -x`, `unzip`) refuses when its folder is a
     location, lies in one or is above one, such as the home or a harness's
     configuration folder, since the guard cannot see what the archive holds. The
@@ -2253,13 +2264,15 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     reports Claude settings without that entry. Settings without it have
     only the preset's edit denies, which name the default folders.
     Creating a herdr-core template is the operator's step.
-  - Three limits come from the design. The guard cannot see what an
+  - Four limits come from the design. The guard cannot see what an
     archive holds, so it judges an extraction by the folder it writes
     into. Where a file system gives no file identity, the second run
     compares paths as written and as reached through links, not by the
     node on disk. A program or script that picks the file it writes
     itself, without the command line naming a location, is judged only
-    by what the line names.
+    by what the line names. The guard judges the file system as it is
+    before the line runs, so a link made and used on one line is read as
+    text.
   - Some command shapes that can reach saved state are not yet judged;
     TSK-1471 tracks them, and this page lists them once each fix is on
     main.
