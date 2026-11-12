@@ -58,7 +58,7 @@ fn develop_is_an_orchestrated_stage_or_recorded_solo_fallback() {
             "inside cf-model-orchestrator",
             "recorded solo fallback",
             "Do not use as an alternate entry point",
-            "records the required interactive seat unavailable",
+            "records every other-family interactive seat unavailable",
         ],
     );
 }
