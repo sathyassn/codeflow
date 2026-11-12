@@ -204,6 +204,48 @@ fn unread_program_words_are_judged_through_git_aliases() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// An unread program word whose first argument names an alias of the
+/// repository is read by the Git runner reader as literal `git` reads it,
+/// so a program the alias makes Git run is judged at exec-guard. A word
+/// whose braces or pattern the runner reader cannot read is refused with
+/// the way through. The configured program is a string the guard reads;
+/// Git never runs here.
+#[test]
+fn unread_program_words_read_the_runners_of_a_git_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    git(dir.path(), &["config", "alias.inspect", "diff --ext-diff"]);
+    git(dir.path(), &["config", "diff.external", "claude -p x"]);
+    std::fs::write(dir.path().join("base.txt"), "base\nchanged\n").unwrap();
+    let headless = "security.headless_peer_runs";
+    let integrity = "git.hook_integrity";
+    let rows = [
+        ("exec-guard", "git inspect", Some(headless)),
+        ("exec-guard", "$TOOL inspect", Some(headless)),
+        ("exec-guard", "\"$TOOL\" inspect", Some(headless)),
+        ("exec-guard", "${TOOL:-git} inspect", Some(integrity)),
+        ("exec-guard", "gi* inspect", Some(integrity)),
+        // A quoted `$` and a first word that is no alias keep main's
+        // verdict.
+        ("exec-guard", "'$TOOL' inspect", None),
+        ("exec-guard", "$TOOL notes.md", None),
+    ];
+    let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    let mut wrong = Vec::new();
+    for word in ["${TOOL:-git}", "gi*"] {
+        let out = hook(dir.path(), "exec-guard", &format!("{word} inspect"), false);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !stderr.contains(&format!(
+            "Write the program name literally in place of `{word}`"
+        )) {
+            wrong.push(format!("{word}: no way through: {stderr}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The expansions the shell applies only in some forms (`~+`, `~-` and
 /// zsh's glob qualifiers) in the program position: each keeps main's
 /// verdict, or is read under each guarded name and refused with the way

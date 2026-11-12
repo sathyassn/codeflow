@@ -2072,6 +2072,45 @@ fn note_config_write(args: &[String], settings: &mut bool, aliases: &mut bool) {
     }
 }
 
+/// The arguments Git takes when a program word the guard cannot fill in,
+/// a value or a pattern, is Git running an alias of the repository
+/// (TSK-1456): the command's first word that is not an option is no Git
+/// program and names an alias where the command may run. Its runners are
+/// then read as literal `git` reads them, the alias's included. A builtin
+/// is read through the command's `git` reading, and any other word keeps
+/// the command's own verdict.
+fn unread_alias(
+    segment: &str,
+    program: &str,
+    args: &[String],
+    locations: &[PathBuf],
+    env: &crate::security::git_config::Environment,
+) -> Option<Vec<String>> {
+    let (_, marks) = super::command_argv_marked(segment);
+    let unread = match marks.len().checked_sub(args.len() + 1) {
+        Some(at) if super::unmarked(&marks[at]) == program => {
+            super::expands_marked(&marks[at]) || super::unread_pattern(&marks[at])
+        }
+        _ => expands(program) || super::has_glob(program),
+    };
+    if !unread {
+        return None;
+    }
+    let (verb, _) = git_subcommand(args)?;
+    if known_program(verb) || expands(verb) {
+        return None;
+    }
+    let global = globals(args).ok()?;
+    let key = format!("alias.{verb}");
+    locations
+        .iter()
+        .any(|at| {
+            crate::security::git_config::read(at, global, &config_environment(env))
+                .is_ok_and(|config| config.get(&key).is_ok_and(|value| value.is_some()))
+        })
+        .then(|| args.to_vec())
+}
+
 fn literal_segments(segments: &[String]) -> Vec<String> {
     let mut bindings = Literals::default();
     segments
@@ -2219,7 +2258,18 @@ fn collect_segments(
         let Some((program, args)) = strip_launchers(&tokens) else {
             continue;
         };
-        let Some(args) = arguments(program, args) else {
+        let alias = unread_alias(
+            &filled,
+            program,
+            args,
+            &locations[index],
+            &inputs.environment,
+        );
+        let alias_read = alias.is_some();
+        if alias_read {
+            *reading = vec![program.to_string()];
+        }
+        let Some(args) = arguments(program, args).or(alias) else {
             let (writes, lands) = (earlier.len(), landings.len());
             note_segment(
                 &filled,
@@ -2283,8 +2333,20 @@ fn collect_segments(
             if commands.is_empty() && configured.is_empty() {
                 continue;
             }
-            let unknown =
-                reading_unknown(&every, &expanded.readings, index, cwd, run.unknown.as_ref());
+            // Read as Git running an alias, the unread word is this command
+            // itself, which runs in the directory it starts in: only the
+            // line's other commands may move the shell.
+            let unknown = if alias_read {
+                let others: Vec<String> = every
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, _)| *at != index)
+                    .map(|(_, segment)| segment.clone())
+                    .collect();
+                run_dirs(&others, cwd).unknown
+            } else {
+                reading_unknown(&every, &expanded.readings, index, cwd, run.unknown.as_ref())
+            };
             if let Some(reason) = unknown.as_ref().or(uncertain.as_ref()) {
                 return Err(reason.clone());
             }
