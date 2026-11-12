@@ -285,6 +285,48 @@ change to a record whose home is the line, so the refusal applies only when
 that rule was broken. A records-only sync that already passes as a planning
 amendment keeps that class.
 
+#### Home moves that `main` made
+
+`main` can move a task's home through a reviewed planning merge, as when it
+retargets tasks to itself. The import check (`work.import_authority`) then
+follows every home move of that task on the first-parent history of `main`'s
+trusted commit since the line's merge base with it. Each move must be a
+merge whose tree is the clean merge of its parents and whose own diff holds
+only records and plans (the path classes the check admits, records only
+today). The task must also be the same single record on both sides of the
+move. A move before the last one is accepted only while the task is `todo`
+or `blocked` with no acceptance block on both sides.
+
+The line's copy is compared once, with the last move's new home:
+
+- the line already names that home: accepted, whatever the task's state;
+- the line names another home or has no copy: accepted only when the task
+  was `todo` or `blocked` with no acceptance block on both sides of the move
+  and the line has not changed its copy since the merge base.
+
+Anything else is refused with "the landing changes the task's declared
+home" and the cause. A later change to the record on `main`, a note or a
+move back included, does not clear an earlier refused move.
+
+A record that names the line as its home but that the line does not hold
+there must prove where it came from. Its exact version must be on `main`.
+Its introduction there must be a records-only planning merge of a `todo` or
+`blocked` task, and every later move must pass as above. A record the line
+already homes stays under the frozen criteria.
+
+A line can agree to `main`'s version through its own records-only planning
+merge that takes that version's exact bytes while the task is `todo` or
+`blocked`. The walk of that task's moves then starts after that version,
+and later moves on `main` are still judged. A copy taken any other way sets
+no starting point. Examples are a direct commit, a merge that also carries
+docs, a completed task, a changed copy or a new record on the line. A sync
+that leaves such a copy unchanged still has `main`'s moves judged.
+
+Every refused record is named with its own cause. The routes that clear a
+refused move are the line's own reviewed planning merge where the task's
+state permits it, or reopening, replanning or correcting the source record
+through its pull request.
+
 Refused, naming the cause:
 
 | What the range holds | Why |
@@ -294,6 +336,7 @@ Refused, naming the cause:
 | A merge of the line into the sync branch, after the line moved | Its second parent is the line's, not `main`'s; redo the sync from the line's new tip |
 | A run with no `--policy-from` | No default-branch commit to trust |
 | A change to a record whose home is the line | It changes only on the line, through a planning amendment that names the epic |
+| A task whose home `main` moved by a direct commit, a merge carrying more than records, or in a state the move does not permit | The line did not agree to that home; the import check names each such record |
 | A commit that is not a merge, before or after the merge or as the whole range | The commit is work of its own; it lands through its task |
 | A merge with a resolved conflict or a change of its own | Its tree differs from the clean merge of its parents; land it through a task |
 | A branch named like a sync whose history is not one | A name proves nothing |
