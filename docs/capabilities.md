@@ -512,8 +512,9 @@ stops before implementation. Planning, review and batch landing follow
 [how work moves to main](delivery.md) (ADR-0076).
 
 Both seats independently discover from the same immutable brief before either
-sees the other's findings. Claude then drafts the one plan, Codex challenges
-it, and both approve one version before implementation.
+sees the other's findings. Claude then drafts the one plan, Codex (or another
+family when Codex is unavailable) challenges it, and both approve one version
+before implementation.
 
 Material product or visual work also records a `DESIGN_INTENT` in that plan
 (ADR-0043, ADR-0051).
