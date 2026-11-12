@@ -1105,10 +1105,14 @@ mod tests {
             "doas X+=1 grok -p z",
             "nohup env X[0]=1 claude -p x",
             "sudo env X[0]=1 claude -p x",
+            "env '=x' claude -p x",
+            "env -i = codex exec y",
+            "sudo =x claude -p x",
         ] {
             assert!(headless_peer_run(line).is_some(), "{line}");
         }
         for line in [
+            "'=x' claude -p x",
             "X+=1 claude",
             "env X[0]=1 ls -p",
             "sudo X+=1 git status",

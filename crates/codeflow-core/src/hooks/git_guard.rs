@@ -7424,17 +7424,28 @@ fn expand_segments(
                         read_unread(&mut alternatives);
                     }
                 }
-            } else if leading_word(program, taker) != LeadingWord::Unplaced {
+            } else {
+                // A word `env` reads as an assignment may still be one zsh
+                // rewrites first (`env =name`), so its readings stand too.
+                let unplaced = leading_word(program, taker) == LeadingWord::Unplaced;
                 match program_readings(&words, at, &seg) {
                     Some(readings) if !readings.is_empty() => alternatives.extend(readings),
-                    Some(_) if unread_pattern(program) => read_unread(&mut alternatives),
+                    Some(_) if !unplaced && unread_pattern(program) => {
+                        read_unread(&mut alternatives);
+                    }
                     Some(_) => {}
                     None => unreadable = true,
                 }
             }
             if leading_word(program, taker) == LeadingWord::Unplaced {
                 match other_readings(&words, at) {
-                    Some(readings) => alternatives.extend(readings),
+                    Some(readings) => {
+                        for reading in readings {
+                            if !alternatives.contains(&reading) {
+                                alternatives.push(reading);
+                            }
+                        }
+                    }
                     None => out.unread_commands.push(program.to_string()),
                 }
             }

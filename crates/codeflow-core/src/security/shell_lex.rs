@@ -134,8 +134,14 @@ pub(crate) fn leading_word(word: &str, taker: Taker) -> LeadingWord {
     let Some((name, _)) = word.split_once('=') else {
         return LeadingWord::Program;
     };
+    // A shell word with nothing before its `=` is the program. `env` takes
+    // every operand holding `=` before its command as an assignment, so
+    // such a word is never the program `env` runs.
     if name.is_empty() {
-        return LeadingWord::Program;
+        return match taker {
+            Taker::Shell => LeadingWord::Program,
+            Taker::Env => LeadingWord::Unplaced,
+        };
     }
     let mut chars = name.chars();
     let identifier = chars
