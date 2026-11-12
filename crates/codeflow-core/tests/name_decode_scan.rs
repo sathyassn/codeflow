@@ -4274,7 +4274,27 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Unicode trim is refused; Unicode trimming only widens the refusal.
     (
         "crates/codeflow-core/src/scaffold/overrides/mod.rs",
-        "row_value_ok",
+        "row_value_plain",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1302: the visibility check refuses a fence info string with more
+    // than one word; a Unicode split finds a second word wherever an ASCII
+    // split does, so it only widens the refusal.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/oracle.rs",
+        "hidden_with",
+        "split_whitespace",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1302: link text that is empty after a Unicode trim counts as not
+    // shown, which refuses the link; Unicode trimming only widens the
+    // refusal, and invisible characters are refused separately.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/oracle.rs",
+        "hidden_with",
         "trim",
         1,
         "schema-reject-only",
