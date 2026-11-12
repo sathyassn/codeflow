@@ -1225,21 +1225,26 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
     if metadata.is_file() && registered_marker.parent() != Some(root.as_path()) {
         return Err("worktree registration disagrees with its marker's directory".into());
     }
-    // TSK-1275: a sibling skips its full open only when its own facts hold
-    // and an earlier full open of another sibling of the same physical common
-    // directory, in this evaluation, accepted the files they share.
-    let facts = gated_sibling_facts(admin, &root);
-    if facts
-        .as_ref()
-        .is_some_and(|common| common_is_proven(common))
-    {
-        #[cfg(test)]
-        SKIPPED_OPENS.with(|skips| skips.set(skips.get() + 1));
-        return Ok(CheckedRegistration {
-            marker: registered,
-            checkout: Some(root),
-        });
-    }
+    // TSK-1275: a sibling skips its full open only when its own facts hold,
+    // an earlier full open of another sibling of the same physical common
+    // directory, in this evaluation, accepted the files they share, and
+    // those files read now as they did then.
+    let judged = if let Some(common) = gated_sibling_facts(admin, &root) {
+        match gate_step(admin, &common) {
+            GateStep::Skip => {
+                #[cfg(test)]
+                SKIPPED_OPENS.with(|skips| skips.set(skips.get() + 1));
+                return Ok(CheckedRegistration {
+                    marker: registered,
+                    checkout: Some(root),
+                });
+            }
+            GateStep::Judge(before) => Some((common, before)),
+            GateStep::Open => None,
+        }
+    } else {
+        None
+    };
     let checkout = open_checkout(&root)
         .map_err(|error| format!("cannot open registered checkout: {error}"))?;
     if !checkout.is_worktree()
@@ -1249,10 +1254,10 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
         return Err("worktree registration disagrees with its checkout marker".into());
     }
     check_common_directory(&checkout)?;
-    if let Some(common) = facts {
+    if let Some((common, before)) = judged {
         #[cfg(test)]
         interleave("after-gate-open");
-        judge_shared_files(admin, common);
+        judge_shared_files(admin, common, before);
     }
     Ok(CheckedRegistration {
         marker: registered,
@@ -1266,8 +1271,10 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
 #[derive(Default)]
 pub(super) struct SiblingGate {
     /// Physical common directories one full sibling open accepted, whose
-    /// shared configuration is the same for every sibling.
-    proven: std::collections::HashSet<PathBuf>,
+    /// shared configuration is the same for every sibling, each with the
+    /// stamp of the shared files that open read. A skip relies on them only
+    /// while they still read the same.
+    proven: std::collections::HashMap<PathBuf, SharedStamp>,
     /// Common directories, spelled as their registrations are listed, whose
     /// shared configuration can differ between siblings, so every sibling
     /// keeps its full open and no facts are read for them.
@@ -1285,11 +1292,150 @@ thread_local! {
     static SKIPPED_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn common_is_proven(common: &Path) -> bool {
-    SIBLING_GATE.with(|gate| {
-        gate.borrow()
+#[cfg(all(test, unix))]
+thread_local! {
+    /// Whether [`shared_stamp`] refuses shared files changed within
+    /// [`SETTLED_MARGIN_SECS`]. Tests build their fixtures moments before
+    /// they validate them, so only the test of the margin turns it on.
+    static REQUIRE_SETTLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A shared file is relied on only when it last changed more than this many
+/// seconds before it was stamped. A later change then always moves its
+/// change time, at every timestamp granularity the guard meets (1 s on
+/// HFS+ and network volumes, 2 s on FAT); a change inside one tick could
+/// otherwise leave the stamp as it was.
+#[cfg(unix)]
+const SETTLED_MARGIN_SECS: i64 = 3;
+
+/// One shared file as it read at one moment: its device, inode and size,
+/// then its modification and status-change times in seconds and
+/// nanoseconds. A write moves the status-change time, which no caller can
+/// set back, and a replacement moves the inode.
+type FileStamp = (u64, u64, u64, (i64, i64), (i64, i64));
+
+/// The files every sibling of one common directory reads on a full open,
+/// as they read at one moment (TSK-1275): the common `config` and
+/// `info/grafts`, and the global, XDG and system configuration files libgit2
+/// finds then. `None` beside a path records it proven absent.
+type SharedStamp = Vec<(PathBuf, Option<FileStamp>)>;
+
+/// The change time, in seconds, a stamped file must be older than: no limit
+/// when the margin is off (tests only), and nothing settles when the clock
+/// cannot be read.
+#[cfg(unix)]
+fn settled_before() -> i64 {
+    #[cfg(test)]
+    if !REQUIRE_SETTLED.with(std::cell::Cell::get) {
+        return i64::MAX;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .map_or(i64::MIN, |now| now.saturating_sub(SETTLED_MARGIN_SECS))
+}
+
+/// The shared files of `common` as they read now. `None`, which no stamp
+/// equals, when a file cannot be read or proven absent, or changed within
+/// the settling margin. No sibling skips on a host that is not Unix, so
+/// there no stamp is taken.
+fn shared_stamp(common: &Path) -> Option<SharedStamp> {
+    #[cfg(unix)]
+    {
+        shared_stamp_unix(common)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = common;
+        None
+    }
+}
+
+#[cfg(unix)]
+fn shared_stamp_unix(common: &Path) -> Option<SharedStamp> {
+    use std::os::unix::fs::MetadataExt;
+    let limit = settled_before();
+    // The common config must be a regular file to qualify at all, so it is
+    // stamped without following a link; libgit2 follows links for the rest.
+    let mut files = vec![
+        (common.join("config"), false),
+        (common.join("info").join("grafts"), true),
+    ];
+    files.extend(
+        [
+            git2::Config::find_global(),
+            git2::Config::find_xdg(),
+            git2::Config::find_system(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|path| (path, true)),
+    );
+    let mut stamps = Vec::with_capacity(files.len());
+    for (path, follow) in files {
+        let read = if follow {
+            std::fs::metadata(&path)
+        } else {
+            std::fs::symlink_metadata(&path)
+        };
+        let stamp = match read {
+            Ok(meta) => Some((
+                meta.dev(),
+                meta.ino(),
+                meta.size(),
+                (meta.mtime(), meta.mtime_nsec()),
+                (meta.ctime(), meta.ctime_nsec()),
+            )),
+            Err(_) if matches!(crate::absence::proven_absent(&path), Ok(true)) => None,
+            Err(_) => return None,
+        };
+        if let Some((_, _, _, (modified, _), (changed, _))) = stamp {
+            if modified.max(changed) >= limit {
+                return None;
+            }
+        }
+        stamps.push((path, stamp));
+    }
+    Some(stamps)
+}
+
+/// What a sibling whose own facts hold does next.
+enum GateStep {
+    /// The common directory is proven and its shared files read as they
+    /// did when it was proven: skip the full open.
+    Skip,
+    /// Nothing is proven yet: take the full open, then judge the shared
+    /// files against this stamp, taken before the open.
+    Judge(Option<SharedStamp>),
+    /// The shared files changed since the proof: take the full open, and
+    /// every later sibling of this common directory takes it too.
+    Open,
+}
+
+fn gate_step(admin: &Path, common: &Path) -> GateStep {
+    let proven = SIBLING_GATE.with(|slot| {
+        slot.borrow()
             .as_ref()
-            .is_some_and(|gate| gate.proven.contains(common))
+            .is_some_and(|gate| gate.proven.contains_key(common))
+    });
+    let now = shared_stamp(common);
+    if !proven {
+        return GateStep::Judge(now);
+    }
+    SIBLING_GATE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(gate) = slot.as_mut() else {
+            return GateStep::Open;
+        };
+        if now.is_some() && gate.proven.get(common) == now.as_ref() {
+            return GateStep::Skip;
+        }
+        gate.proven.remove(common);
+        if let Some(listed) = listed_common(admin) {
+            gate.doubtful.insert(listed.to_path_buf());
+        }
+        GateStep::Open
     })
 }
 
@@ -1315,12 +1461,18 @@ fn gated_sibling_facts(admin: &Path, root: &Path) -> Option<PathBuf> {
 /// After a full open of a sibling whose own facts held succeeded, judge
 /// once per evaluation whether the files siblings share read the same for
 /// every sibling, and record the answer for the rest of this evaluation.
-fn judge_shared_files(admin: &Path, common: PathBuf) {
-    let independent = shared_config_is_sibling_independent(&common);
+/// The judged files must be the ones that open read: their stamp from
+/// before the open must still hold after the judgement, or the common
+/// directory stays doubtful.
+fn judge_shared_files(admin: &Path, common: PathBuf, before: Option<SharedStamp>) {
+    let proven = before.filter(|before| {
+        shared_config_is_sibling_independent(&common)
+            && shared_stamp(&common).as_ref() == Some(before)
+    });
     SIBLING_GATE.with(|gate| {
         if let Some(gate) = gate.borrow_mut().as_mut() {
-            if independent {
-                gate.proven.insert(common);
+            if let Some(stamp) = proven {
+                gate.proven.insert(common, stamp);
             } else if let Some(listed) = listed_common(admin) {
                 gate.doubtful.insert(listed.to_path_buf());
             }
@@ -1401,19 +1553,21 @@ fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
         return None;
     }
     // `../..`, which git writes, names the canonical directory's grandparent:
-    // in a path without links `..` is the parent the path spells, so the
-    // registration directory and the common directory are already proven.
-    // Any other spelling is resolved and checked.
+    // in a path without links `..` is the parent the path spells. Any other
+    // spelling is resolved.
     let common = if named == b"../.." {
         admin.parent()?.parent()?.to_path_buf()
     } else {
-        let common = admin
+        admin
             .join(Path::new(std::ffi::OsStr::from_bytes(named)))
             .canonicalize()
-            .ok()?;
-        check_common_paths(&admin, &common).ok()?;
-        common
+            .ok()?
     };
+    // Either way the full open's physical check applies: the registration
+    // directory must be `<common>/worktrees`. A listed registration can link
+    // to an administrative directory anywhere under the common directory,
+    // and the full open refuses that.
+    check_common_paths(&admin, &common).ok()?;
     regular(&common.join("HEAD"))?;
     directory(&common.join("objects"))?;
     directory(&common.join("refs"))?;
@@ -2614,6 +2768,43 @@ mod tests {
             assert_eq!(inside.err(), main.err(), "{case}");
             assert_eq!(validate_in_one_scope(&[&one, &two]), 1, "{case} mended");
         }
+    }
+
+    /// TSK-1275: shared files changed within the settling margin are not
+    /// relied on, so every sibling keeps its full open; once they have
+    /// settled, the next evaluation skips again. A benign change between the
+    /// gate's open and its judgement also keeps every full open.
+    #[cfg(unix)]
+    #[test]
+    fn shared_files_are_relied_on_only_once_settled_and_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, _) = sibling(dir.path(), "two");
+        let (three, _) = sibling(dir.path(), "three");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        let config = common.join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let (path, replacement) = (config.clone(), format!("{text}[user]\n\tname = x\n"));
+        let fired = interleave_once("after-gate-open", move || {
+            std::fs::write(&path, &replacement).unwrap();
+        });
+        assert_eq!(validate_in_one_scope(&[&one, &two, &three]), 0);
+        super::INTERLEAVE.with(|slot| *slot.borrow_mut() = None);
+        assert!(fired.get());
+        assert_eq!(validate_in_one_scope(&[&one, &two, &three]), 2);
+        super::REQUIRE_SETTLED.with(|require| require.set(true));
+        std::fs::write(&config, &text).unwrap();
+        assert_eq!(validate_in_one_scope(&[&one, &two, &three]), 0);
+        std::thread::sleep(std::time::Duration::from_secs(
+            u64::try_from(super::SETTLED_MARGIN_SECS).unwrap() + 1,
+        ));
+        let settled = validate_in_one_scope(&[&one, &two, &three]);
+        super::REQUIRE_SETTLED.with(|require| require.set(false));
+        assert_eq!(settled, 2);
     }
 
     #[test]
