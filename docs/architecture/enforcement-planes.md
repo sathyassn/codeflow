@@ -183,12 +183,17 @@ route.
 - The `security.dangerous_commands` floor cannot be lowered.
 - `security.shell_startup` has no key and no relief: the operator edits
   their own shell startup files.
+- An agent's run of `codeflow update` or `codeflow init` refuses under
+  `git.hook_integrity` in every folder (TSK-1476): only the operator
+  installs or refreshes the enforcement files. A binary an agent renames or
+  copies is not named on the line; the presets' native edit denies on each
+  worktree's copies and the OS sandbox bound its writes.
 
 **Hook wrappers.**
 
 - Contract-3 git shims exit 1 when the `codeflow` binary is missing or older.
-  They print the installer and `codeflow update`, so install the new binary
-  before running `codeflow update`.
+  They print the installer and `codeflow update` as the operator's steps:
+  the operator installs the new binary, then runs `codeflow update`.
 - A harness wrapper is `codeflow hook <name> --contract 3`, then a fallback
   that exits 2 whenever the hook fails and always ends with a line saying it
   blocked. Codex treats exit 2 with an empty stderr as a failed hook and lets
