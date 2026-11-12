@@ -263,12 +263,7 @@ fn a_local_main_holding_the_move_grants_nothing() {
     let published = fixture.oid("main");
     fixture.land("main", &[(&path_of("TSK-001"), &moved("TSK-001", "main"))]);
     // A remote whose `main` is the commit before the move; nothing is fetched.
-    fixture.git(&[
-        "remote",
-        "add",
-        "origin",
-        "https://example.test/fixture.git",
-    ]);
+    fixture.git(&["remote", "add", "origin", "file:///nonexistent/repo.git"]);
     fixture.git(&[
         "update-ref",
         "refs/remotes/origin/main",
