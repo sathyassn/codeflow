@@ -1,0 +1,11 @@
+id = "TSK-1469"
+uid = "82b32caa-8567-484e-a365-daecdbd73510"
+kind = "TSK"
+title = "A whole-epic line judges builder lineage from a source the builder cannot write"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T14:49:53Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
