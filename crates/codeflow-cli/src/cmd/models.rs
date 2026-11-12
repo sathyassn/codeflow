@@ -1,4 +1,5 @@
-//! Read-only catalog resolution. No registry updates or native launches.
+//! Catalog resolution. No registry updates or native launches; the only
+//! write is the session's own `--effective` record in the sessions ledger.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +18,7 @@ pub struct ModelsArgs {
 
 #[derive(Debug, Subcommand)]
 enum ModelsCommand {
-    /// Resolve every participant and obligation without launching or writing.
+    /// Resolve every participant and obligation without launching; only `--effective` writes a record.
     Resolve(ResolveArgs),
 }
 
@@ -55,14 +56,70 @@ struct ResolveArgs {
     /// Exact override invocation effort.
     #[arg(long)]
     effort: Option<String>,
+    /// The model and effort this session's harness runs at, `<model>@<effort>`: recorded to the sessions ledger as given; the resolution is unchanged and nothing is re-launched. Requires --session.
+    #[arg(long, requires = "session")]
+    effective: Option<String>,
+    /// The harness's id for this session, as its hooks receive it: the --effective record goes to that session's ledger file, beside its session summary.
+    // Required, with no default: codeflow learns a session id only from the
+    // SessionEnd hook payload (`hooks/session_summary.rs`). The harness
+    // markers in `root_checkout::AGENT_MARKERS` are read for presence only,
+    // Claude Code exports no session id there, and nothing ties a Codex or
+    // Grok variable's value to the payload id, so a guessed default could
+    // file the record under another session.
+    #[arg(long, requires = "effective")]
+    session: Option<String>,
     /// Print the resolution as JSON; input errors go to stderr with exit 2.
     #[arg(long)]
     json: bool,
 }
 
+/// The harness choice as recorded: it applies over the resolved suggestion.
+struct EffectiveReport {
+    model: String,
+    effort: String,
+    host: String,
+    session: Option<String>,
+    applies_over_suggestion: bool,
+    recorded_to: Option<String>,
+}
+
+/// Record the session's effective model and effort. A ledger failure is a
+/// warning: the session runs unchanged and the report says nothing was stored.
+fn record_effective(args: &ResolveArgs) -> Result<Option<EffectiveReport>, String> {
+    let Some(value) = &args.effective else {
+        return Ok(None);
+    };
+    let session = codeflow_core::hooks::session_summary::EffectiveSession::parse(
+        value,
+        &args.host,
+        args.session.as_deref().unwrap_or_default(),
+    )?;
+    let root = super::repo_root()?;
+    let recorded_to = match codeflow_core::hooks::session_summary::record_effective(&root, &session)
+    {
+        Ok(path) => path.map(|path| codeflow_core::git::display_path(&path)),
+        Err(error) => {
+            eprintln!(
+                "models resolve: effective model not recorded ({}): {}",
+                crate::cmd::shown(&error.cause),
+                crate::cmd::shown(&error.path.display().to_string())
+            );
+            None
+        }
+    };
+    Ok(Some(EffectiveReport {
+        model: session.model,
+        effort: session.effort,
+        host: session.host,
+        session: session.session_id,
+        applies_over_suggestion: true,
+        recorded_to,
+    }))
+}
+
 pub fn run(args: &ModelsArgs) -> i32 {
     let ModelsCommand::Resolve(args) = &args.command;
-    let result = match resolve(args) {
+    let (result, effective) = match resolve(args).and_then(|r| Ok((r, record_effective(args)?))) {
         Ok(result) => result,
         Err(reason) => {
             eprintln!(
@@ -73,7 +130,20 @@ pub fn run(args: &ModelsArgs) -> i32 {
         }
     };
     if args.json {
-        match serde_json::to_string_pretty(&result) {
+        let value = serde_json::to_value(&result).map(|mut value| {
+            if let Some(effective) = &effective {
+                value["effective_session"] = serde_json::json!({
+                    "model": effective.model,
+                    "effort": effective.effort,
+                    "host": effective.host,
+                    "session": effective.session,
+                    "applies_over_suggestion": effective.applies_over_suggestion,
+                    "recorded_to": effective.recorded_to,
+                });
+            }
+            value
+        });
+        match value.and_then(|value| serde_json::to_string_pretty(&value)) {
             Ok(json) => println_block!(codeflow_core::git::TextBlock::json(&json)),
             Err(error) => {
                 eprintln!("models resolve: {error}", error = crate::cmd::shown(&error));
@@ -82,6 +152,19 @@ pub fn run(args: &ModelsArgs) -> i32 {
         }
     } else {
         render_text(&result);
+        if let Some(effective) = &effective {
+            println!(
+                "effective session: model={} effort={} host={} session={} (the harness choice applies over the suggestion; {})",
+                crate::cmd::shown(&effective.model),
+                crate::cmd::shown(&effective.effort),
+                effective.host,
+                effective.session.as_deref().unwrap_or_default(),
+                effective.recorded_to.as_deref().map_or_else(
+                    || "not recorded".to_owned(),
+                    |path| format!("recorded to {}", crate::cmd::shown(&path.to_owned()))
+                )
+            );
+        }
     }
     i32::from(result.is_open())
 }

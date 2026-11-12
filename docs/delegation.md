@@ -27,6 +27,24 @@ in its own interactive session under your own login.
 - They never log in for you.
 - They never count a same-vendor model as an independent reviewer.
 
+CodeFlow suggests each seat's model and effort from the managed catalog;
+`codeflow models resolve` prints the suggestion. The model and effort you
+choose in your own harness apply over that suggestion.
+
+- Your agent records the effective model and effort by running
+  `codeflow models resolve --effective <model>@<effort> --session <id>`
+  when it knows the session's id: the one the harness gives its hooks. The
+  command appends an `effective_model` event to that session's
+  sessions-ledger file, beside the session's summary, and leaves the
+  resolution unchanged.
+- CodeFlow never guesses the id. It learns a session id only from the
+  SessionEnd hook payload. Claude Code exports none to the session's shell.
+  Codex and Grok Build set session variables there (ADR-0074), but nothing
+  shows their values equal the hook id. An agent that cannot read its id
+  records nothing and reports the effective model and effort as
+  unrecorded.
+- CodeFlow never re-launches a session to change its model or effort.
+
 ## Architecture
 
 Every peer runs as its own interactive CLI in a Herdr tab, whichever host

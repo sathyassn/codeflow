@@ -1121,7 +1121,7 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's high default; the primary retains orchestration and approval and uses capable permitted same-family reasoning routes when delegation adds value or a trigger requires xhigh. Worker effort is selected for its unit without blanket inflation. Extra catalog families are named on trigger when available. Preserve independent plans, primary approval, owning-family routing, and verified native evidence.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at each seat's resolved default effort; the primary retains orchestration and approval at that effort and uses capable permitted same-family reasoning routes when delegation adds value or a trigger requires xhigh. Worker effort is selected for its unit without blanket inflation. Extra catalog families are named on trigger when available. Preserve independent plans, primary approval, owning-family routing, and verified native evidence.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -1137,11 +1137,13 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"effort\": \"high\"",
+            "\"high_when\"",
+            "\"effort\": \"medium\", \"high_when\": []",
+            "\"effort\": \"medium\", \"high_when\": [ \"important-work\"",
             "\"xhigh_triggers\"",
-            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval",
+            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at its own effort and keeps approval",
             "Claude-side internal routing belongs to the Claude primary",
-            "A high primary retains orchestration",
+            "A primary retains orchestration at its seat's effort",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
           ]
         }

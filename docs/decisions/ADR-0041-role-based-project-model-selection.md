@@ -91,3 +91,9 @@ versions on one machine; it cannot designate a seat or claim evidence.
 Schema 1 remains the binding-reference form. Schema 2 adds an optional
 project design-authority block and standing extra-family reviews; binding
 references keep the rules above. See the ADR-0069 note of 2026-10-04.
+
+## Note (2026-11-10)
+
+The catalog the 2026-09-25 note names as schema 5 is schema 6 since
+TSK-1292. ADR-0069's note of 2026-11-10 lists the fields schema 6 adds and
+the upgrade step.

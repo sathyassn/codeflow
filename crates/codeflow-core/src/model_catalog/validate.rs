@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::{Catalog, Effort, Lifecycle, Participant, Target, Version};
+use super::{Catalog, Effort, Launch, Lifecycle, Participant, Seat, Target, Version};
 use crate::model_qualification::{
     harness_catalog, trusted_version_probe, validate_binding,
     validate_repository_relative_reference,
@@ -25,32 +25,34 @@ fn unique<'a>(values: impl Iterator<Item = &'a str>, label: &str) -> Result<(), 
     Ok(())
 }
 
-pub(super) fn floor(duty: &str, seat: bool) -> Effort {
-    if duty == "xhigh-reasoning" {
-        Effort::Xhigh
-    } else if seat
-        || !matches!(
-            duty,
-            "bounded-execution"
-                | "light-execution"
-                | "evidence-collection"
-                | "engineering-implementation"
-                | "design-implementation"
-        )
-    {
-        Effort::High
-    } else {
-        Effort::Medium
-    }
-}
+/// The catalog key whose floor covers every duty `effort_floors` does not name.
+pub(super) const DEFAULT_FLOOR: &str = "default";
+
+/// The generated worker duty an xhigh trigger requires.
+pub(super) const XHIGH_REASONING: &str = "xhigh-reasoning";
 
 impl Catalog {
+    /// The lowest effort a route may request for `duty`: the seat's own
+    /// `effort` for a seat route, else the duty's `effort_floors` entry or
+    /// the catalog's `default` floor. Every value is catalog data.
+    pub(super) fn floor(&self, duty: &str, seat: Option<&Seat>) -> Effort {
+        if let Some(seat) = seat {
+            return seat.effort;
+        }
+        self.effort_floors
+            .get(duty)
+            .or_else(|| self.effort_floors.get(DEFAULT_FLOOR))
+            .copied()
+            // `validate` refuses a catalog without the default floor.
+            .unwrap_or(Effort::Xhigh)
+    }
+
     /// Validate catalog references, trust boundaries and effort floors.
     ///
     /// # Errors
     /// Rejects unsupported native metadata and contradictory routing policy.
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 5 {
+        if self.schema_version != super::SCHEMA_VERSION {
             return Err(format!(
                 "unsupported model catalog schema {}",
                 self.schema_version
@@ -183,6 +185,19 @@ impl Catalog {
                 return Err(format!("seat {} has no family or lines", seat.id));
             }
             unique(seat.lines.iter().map(String::as_str), "seat line")?;
+            unique(seat.high_when.iter().map(String::as_str), "seat high_when")?;
+            for trigger in &seat.high_when {
+                if !self.named_policies.contains_key(trigger)
+                    && !self.high_triggers.contains(trigger)
+                    && !self.xhigh_triggers.contains(trigger)
+                {
+                    return Err(format!(
+                        "seat {} high_when names unknown policy or trigger {trigger}",
+                        seat.id
+                    ));
+                }
+            }
+            let mut seat_lines = 0;
             for (index, id) in seat.lines.iter().enumerate() {
                 let line = self
                     .line(id)
@@ -190,14 +205,27 @@ impl Catalog {
                 if line.family != seat.family {
                     return Err(format!("seat {} line {id} has another family", seat.id));
                 }
+                // A subagent-only line stays listed so a project can move its
+                // `launch` later; it never fills the seat while it is subagent-only.
+                if line.launch == Launch::SubagentOnly {
+                    if index == 0 {
+                        return Err(format!(
+                            "seat {} first line {id} is launch: subagent-only; a seat's first \
+                             line must be able to fill it",
+                            seat.id
+                        ));
+                    }
+                    continue;
+                }
+                seat_lines += 1;
                 if !line.versions.iter().any(|v| {
                     !v.personal_candidate
                         && v.lifecycle != Lifecycle::Retired
                         && (v.lifecycle != Lifecycle::FallbackOnly || index > 0)
-                        && v.efforts.contains(&Effort::High)
+                        && v.efforts.contains(&seat.effort)
                         && (v.designations.iter().any(|d| d.seat == seat.id)
                             || v.selectors.iter().any(|(h, s)| {
-                                self.full_binding(seat, v, h, s, Effort::High).is_some()
+                                self.full_binding(seat, v, h, s, seat.effort).is_some()
                             }))
                 }) {
                     return Err(format!(
@@ -205,6 +233,9 @@ impl Catalog {
                         seat.id
                     ));
                 }
+            }
+            if seat_lines == 0 {
+                return Err(format!("seat {} has no line that can fill it", seat.id));
             }
         }
         Ok(())
@@ -262,6 +293,26 @@ impl Catalog {
         if self.high_triggers.is_empty() || self.xhigh_triggers.is_empty() || self.rules.is_empty()
         {
             return Err("catalog needs effort triggers and rules".into());
+        }
+        if !self.effort_floors.contains_key(DEFAULT_FLOOR) {
+            return Err(format!("effort_floors needs a {DEFAULT_FLOOR} floor"));
+        }
+        // An xhigh trigger is met only by a worker at xhigh: a missing or
+        // lower floor would let a lower worker count as satisfying it.
+        if self.effort_floors.get(XHIGH_REASONING) != Some(&Effort::Xhigh) {
+            return Err(format!(
+                "effort_floors needs {XHIGH_REASONING}: xhigh; a lower worker cannot satisfy an \
+                 xhigh trigger"
+            ));
+        }
+        for duty in self.effort_floors.keys() {
+            if duty != DEFAULT_FLOOR
+                && duty != XHIGH_REASONING
+                && duty != super::DESIGN_APPROVAL
+                && !self.duties.contains_key(duty)
+            {
+                return Err(format!("effort_floors names unknown duty {duty}"));
+            }
         }
         let native_triggers = crate::model_qualification::routing_policy_triggers()?;
         for (name, facts) in &self.named_policies {
@@ -332,8 +383,32 @@ impl Catalog {
                     return Err(format!("unsupported alternative harness {harness}"));
                 }
             }
-            if alternative.effort < floor(duty, !matches!(alternative.target, Target::Line(_))) {
-                return Err(format!("duty {duty} default below its effort floor"));
+            // A seat route runs at its seat's `effort`; only a line route
+            // names its own, at or above the duty's floor.
+            match (&alternative.target, alternative.effort) {
+                (Target::Seat(_) | Target::HostSeat, Some(_)) => {
+                    return Err(format!(
+                        "duty {duty} names an effort on a seat route; a seat route runs at its \
+                         seat's effort field"
+                    ));
+                }
+                (Target::Line(id), None) => {
+                    return Err(format!("duty {duty} routes line {id} without an effort"));
+                }
+                (Target::Line(_), Some(effort)) if effort < self.floor(duty, None) => {
+                    return Err(format!("duty {duty} default below its effort floor"));
+                }
+                _ => {}
+            }
+            if let Target::Line(id) = &alternative.target {
+                if self
+                    .line(id)
+                    .is_some_and(|line| line.launch == Launch::Seat)
+                {
+                    return Err(format!(
+                        "duty {duty} routes line {id} as a worker, but its launch is seat"
+                    ));
+                }
             }
             if duty == "design" && alternative.target != Target::Seat(self.design_owner.clone()) {
                 return Err("design must use the design owner seat".into());

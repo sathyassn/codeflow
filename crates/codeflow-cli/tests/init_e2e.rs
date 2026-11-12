@@ -438,7 +438,7 @@ fn assert_update_round_trips(root: &Path) {
     );
 }
 
-/// TSK-085: the scaffolded catalog is the managed schema 5 roster and the
+/// TSK-085: the scaffolded catalog is the managed schema 6 roster and the
 /// model-bindings check accepts it after an update. A designated roster
 /// without full-suite records is advisory (WARN), never a failure.
 fn assert_model_bindings_after_update(root: &Path) {
@@ -1604,6 +1604,345 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
         format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
     )
     .unwrap();
+}
+
+/// The shipped catalog in the schema 5 shape an earlier release installed:
+/// no line `launch`, no seat `effort` or `high_when`, no `effort_floors`.
+fn schema_5_catalog() -> String {
+    let mut catalog: serde_json::Value = serde_json::from_str(&read(
+        &repo_root(),
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .unwrap();
+    catalog["schema_version"] = 5.into();
+    catalog.as_object_mut().unwrap().remove("effort_floors");
+    for line in catalog["lines"].as_array_mut().unwrap() {
+        line.as_object_mut().unwrap().remove("launch");
+    }
+    for seat in catalog["seats"].as_array_mut().unwrap() {
+        let seat = seat.as_object_mut().unwrap();
+        seat.remove("effort");
+        seat.remove("high_when");
+    }
+    // Schema 5 named an effort on every route, seat routes included.
+    for duty in catalog["duties"].as_object_mut().unwrap().values_mut() {
+        for participant in duty["required"].as_array_mut().unwrap() {
+            for alternative in participant["alternatives"].as_array_mut().unwrap() {
+                if alternative.get("effort").is_none() {
+                    alternative["effort"] = "high".into();
+                }
+            }
+        }
+    }
+    format!("{}\n", serde_json::to_string_pretty(&catalog).unwrap())
+}
+
+/// TSK-1292 AC-6 (upgrade): a project an earlier release set up with the
+/// schema 5 catalog, and a committed design authority naming the Claude
+/// seat's second line (Fable) co-owner as ADR-0069 documents, upgrades its
+/// binary. `models resolve`, doctor and the preflight refuse the catalog,
+/// naming both schemas and `codeflow update`; after the update resolve
+/// returns the new defaults and the co-owner block still resolves, as a
+/// subagent consult of the seat because that line is `launch: subagent-only`.
+#[test]
+fn an_upgrade_refuses_a_schema_5_catalog_until_codeflow_update() {
+    const REFUSAL: &str =
+        "installed model catalog is schema 5, which predates schema 6; run `codeflow update`";
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--standard"]);
+    assert!(init.status.success(), "{}", output_text(&init));
+    let (owner, first, second, _) = design_owner_lines(&root);
+    let selection = commit_design_authority(&root, &owner, &first, &second);
+    let older = schema_5_catalog();
+    for tree in [".agents", ".claude"] {
+        record_as_installed(
+            &root,
+            &format!("{tree}/skills/cf-model-orchestrator/resources/current-ensemble.json"),
+            Some(&older),
+        );
+    }
+
+    let resolve = [
+        "models",
+        "resolve",
+        "--duty",
+        "unit-review",
+        "--host",
+        "claude-code",
+    ];
+    let refused = codeflow(&root, &[&resolve[..], &["--author", "claude"]].concat());
+    assert_eq!(refused.status.code(), Some(2), "{}", output_text(&refused));
+    assert!(
+        output_text(&refused).contains(REFUSAL),
+        "{}",
+        output_text(&refused)
+    );
+    let doctor = codeflow(&root, &["doctor", "--check", "model-bindings"]);
+    assert!(!doctor.status.success(), "{}", output_text(&doctor));
+    assert!(
+        output_text(&doctor).contains(REFUSAL),
+        "{}",
+        output_text(&doctor)
+    );
+    let preflight = output_text(&codeflow(&root, &["doctor", "--preflight"]));
+    assert!(
+        preflight.contains("seats: unavailable: ") && preflight.contains(REFUSAL),
+        "{preflight}"
+    );
+    assert!(
+        !preflight.contains("seat codex-primary: configured"),
+        "{preflight}"
+    );
+
+    let update = codeflow(&root, &["update"]);
+    assert!(update.status.success(), "{}", output_text(&update));
+    let resolved = codeflow(
+        &root,
+        &[&resolve[..], &["--author", "claude", "--json"]].concat(),
+    );
+    assert!(resolved.status.success(), "{}", output_text(&resolved));
+    let result: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    let first = &result["participants"][0];
+    assert_eq!(first["seat"], "codex-primary");
+    assert_eq!(first["pinned_id"], "gpt-6.1-sol");
+    assert_eq!(first["effort"], "medium");
+    assert_model_bindings_after_update(&root);
+
+    // The existing co-owner block is unchanged and still resolves.
+    assert_eq!(read(&root, ".codeflow/model-selection.json"), selection);
+    let approval = resolve_json(&root, "design-approval", &[]);
+    let approver = &approval["participants"][0];
+    assert_eq!(
+        approver["participant"],
+        format!("approver:{second}").as_str(),
+        "{approval}"
+    );
+    assert_eq!(approver["seat"], serde_json::Value::Null);
+    assert_eq!(approver["approval_owner"], owner.as_str());
+    assert!(
+        approver["limitations"].to_string().contains(&format!(
+            "subagent consult of seat {owner}: line {second} is launch: subagent-only"
+        )),
+        "{approval}"
+    );
+}
+
+/// `models resolve --json` with `args` in `root`, expecting success.
+fn models_json(root: &Path, args: &[&str]) -> serde_json::Value {
+    let out = codeflow(root, &[&["models", "resolve", "--json"][..], args].concat());
+    assert!(out.status.success(), "{args:?}: {}", output_text(&out));
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// The first participant's seat (or `worker`), pinned id and effort.
+fn seat_pin_effort(result: &serde_json::Value) -> (String, String, String) {
+    let p = &result["participants"][0];
+    (
+        p["seat"].as_str().unwrap_or("worker").to_owned(),
+        p["pinned_id"].as_str().unwrap().to_owned(),
+        p["effort"].as_str().unwrap().to_owned(),
+    )
+}
+
+/// TSK-1292 AC-6 (fresh install): `codeflow init --standard`, with no
+/// update, installs the shipped catalog, and the built binary resolves the
+/// 2026-11-03 defaults from it, keeps Fable and Astra to subagent routes and
+/// records a harness choice in the session's ledger file.
+#[test]
+fn a_fresh_standard_install_resolves_the_shipped_defaults() {
+    let (_tmp, root) = fresh("--standard");
+    fresh_install_ships_the_table(&root);
+    fresh_install_resolves_the_defaults(&root);
+    fresh_install_records_the_harness_choice(&root);
+}
+
+/// The installed catalog is the shipped one, with its seats and launch.
+fn fresh_install_ships_the_table(root: &Path) {
+    let managed = read(
+        &repo_root(),
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    );
+    for tree in [".agents", ".claude"] {
+        assert_eq!(
+            read(
+                root,
+                &format!("{tree}/skills/cf-model-orchestrator/resources/current-ensemble.json")
+            ),
+            managed,
+            "{tree}"
+        );
+    }
+    // The shipped table: each seat's lines and effort, and each line's launch.
+    let catalog: serde_json::Value = serde_json::from_str(&managed).unwrap();
+    let seats: Vec<String> = catalog["seats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| format!("{} {} {}", s["id"], s["lines"], s["effort"]))
+        .collect();
+    assert_eq!(
+        seats,
+        [
+            r#""claude-primary" ["opus","fable"] "high""#,
+            r#""codex-primary" ["sol","astra"] "medium""#,
+            r#""grok-primary" ["grok"] "medium""#,
+        ]
+    );
+    let launch: Vec<String> = catalog["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            format!(
+                "{}={}",
+                l["id"].as_str().unwrap(),
+                l["launch"].as_str().unwrap()
+            )
+        })
+        .collect();
+    for expected in [
+        "opus=either",
+        "fable=subagent-only",
+        "sonnet=subagent-only",
+        "sol=either",
+        "astra=subagent-only",
+        "luna=subagent-only",
+        "grok=seat",
+    ] {
+        assert!(
+            launch.iter().any(|l| l == expected),
+            "{expected}: {launch:?}"
+        );
+    }
+}
+
+/// The built binary resolves the 2026-11-03 defaults from that catalog and
+/// keeps Fable and Astra to subagent routes.
+fn fresh_install_resolves_the_defaults(root: &Path) {
+    let triple = |s: &str, p: &str, e: &str| (s.to_owned(), p.to_owned(), e.to_owned());
+    for (host, expected) in [
+        (
+            "claude-code",
+            triple("claude-primary", "claude-opus-5-5", "high"),
+        ),
+        (
+            "codex-app",
+            triple("codex-primary", "gpt-6.1-sol", "medium"),
+        ),
+        ("grok-cli", triple("grok-primary", "grok-4.7", "medium")),
+    ] {
+        let result = models_json(root, &["--duty", "orchestrate", "--host", host]);
+        assert_eq!(seat_pin_effort(&result), expected, "{host}");
+    }
+    let review = models_json(
+        root,
+        &[
+            "--duty",
+            "unit-review",
+            "--host",
+            "claude-code",
+            "--author",
+            "claude",
+        ],
+    );
+    assert_eq!(
+        seat_pin_effort(&review),
+        triple("codex-primary", "gpt-6.1-sol", "medium")
+    );
+    let fallbacks: Vec<&str> = review["participants"][0]["remaining_alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["pinned_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(fallbacks, ["gpt-6-sol", "gpt-5.6-sol"]);
+    let general = [
+        "--duty",
+        "general-review",
+        "--host",
+        "claude-code",
+        "--author",
+        "claude",
+    ];
+    assert_eq!(
+        seat_pin_effort(&models_json(root, &general)),
+        triple("grok-primary", "grok-4.7", "medium")
+    );
+    let raised = models_json(
+        root,
+        &[&general[..], &["--trigger", "security-sensitive change"]].concat(),
+    );
+    assert_eq!(
+        seat_pin_effort(&raised),
+        triple("grok-primary", "grok-4.7", "high")
+    );
+    // Fable runs as a worker; no seat anywhere resolves Fable or Astra.
+    let reasoning = models_json(
+        root,
+        &[
+            "--duty",
+            "reasoning-support",
+            "--host",
+            "claude-code",
+            "--author",
+            "codex",
+        ],
+    );
+    assert!(
+        reasoning["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["pinned_id"] == "claude-fable-5-1" && p["seat"].is_null()),
+        "{reasoning}"
+    );
+    for host in ["claude-code", "codex-app", "grok-cli"] {
+        let result = models_json(root, &["--duty", "orchestrate", "--host", host]);
+        let pin = &result["participants"][0]["pinned_id"];
+        assert!(
+            pin != "claude-fable-5-1" && pin != "gpt-6-astra",
+            "{host}: {result}"
+        );
+    }
+}
+
+/// The harness choice is recorded in the session's own ledger file.
+fn fresh_install_records_the_harness_choice(root: &Path) {
+    let recorded = models_json(
+        root,
+        &[
+            "--duty",
+            "orchestrate",
+            "--host",
+            "claude-code",
+            "--effective",
+            "claude-sonnet-5-5@medium",
+            "--session",
+            "fresh-install-session",
+        ],
+    );
+    let effective = &recorded["effective_session"];
+    assert_eq!(effective["session"], "fresh-install-session");
+    let path = PathBuf::from(effective["recorded_to"].as_str().unwrap());
+    let path = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    assert!(
+        // `sid-` and the first 128 bits of SHA-256("ses-fresh-install-session").
+        path.ends_with("sessions/sessions-sid-d08f602b9e46619426248c62a9991060.jsonl"),
+        "{}",
+        path.display()
+    );
+    let event: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim_end()).unwrap();
+    assert_eq!(event["event"], "effective_model");
+    assert_eq!(event["session_id"], "ses-fresh-install-session");
+    assert_eq!(event["model"], "claude-sonnet-5-5");
+    assert_eq!(event["effort"], "medium");
 }
 
 /// The installed doctrine sentences a fresh scaffold must carry.
@@ -3180,6 +3519,22 @@ fn design_owner_lines(root: &Path) -> (String, String, String, Vec<String>) {
     (owner, first, second, versions)
 }
 
+/// Record both installed catalogs with `line` at `launch: either`, as an
+/// unmodified install, so a later `codeflow update` restores them cleanly.
+fn launch_line_as_either(root: &Path, line: &str) {
+    for tree in [".agents", ".claude"] {
+        let rel = format!("{tree}/skills/cf-model-orchestrator/resources/current-ensemble.json");
+        let mut catalog: serde_json::Value = serde_json::from_str(&read(root, &rel)).unwrap();
+        for entry in catalog["lines"].as_array_mut().unwrap() {
+            if entry["id"] == line {
+                entry["launch"] = "either".into();
+            }
+        }
+        let text = format!("{}\n", serde_json::to_string_pretty(&catalog).unwrap());
+        record_as_installed(root, &rel, Some(&text));
+    }
+}
+
 /// Commit, through the scaffolded hooks, a schema 2 selection naming
 /// `second` co-owner and a task record targeting `integration/design`.
 fn commit_design_authority(root: &Path, owner: &str, first: &str, second: &str) -> String {
@@ -3261,6 +3616,10 @@ fn resolve_json(root: &Path, duty: &str, extra: &[String]) -> serde_json::Value 
 fn a_fresh_project_resolves_design_to_its_committed_co_owner() {
     let (_tmp, root) = fresh("--standard");
     let (owner, first, second, first_versions) = design_owner_lines(&root);
+    // The shipped second line is `launch: subagent-only` (TSK-1292), so it
+    // never fills the seat; a project override (TSK-1294) may move it to
+    // `either`. Stand in for that override with the installed catalog.
+    launch_line_as_either(&root, &second);
     let selection = commit_design_authority(&root, &owner, &first, &second);
 
     let exclusions: Vec<String> = first_versions

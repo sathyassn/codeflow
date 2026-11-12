@@ -358,3 +358,43 @@ same-family approval never fills the independent review, and a standing
 review adds a named, labelled participant, so an extra family never votes
 silently. With no file or a schema 1 file every duty resolves exactly as
 before.
+
+## Note (2026-11-10)
+
+TSK-1292 moves the managed catalog to schema 6, applying the operator's
+model defaults of 2026-11-03. The model usage rules the orchestrator skill
+stated as prose are now catalog fields:
+
+- `launch` on each product line: `seat`, `subagent-only` or `either`. A
+  `subagent-only` line never fills a seat, and the refusal names the field.
+- `effort` on each seat: its default and its floor. Every ordinary route to
+  a seat runs at it: a duty's seat route names no effort of its own, and
+  validation refuses one that does. A line route still names its effort.
+- `high_when` on each seat: the named policies or trigger facts that raise
+  it to high.
+- `effort_floors`: the floor for each worker duty, with a required
+  `default`. It replaces the floors the engine held as constants. Its
+  `xhigh-reasoning` entry must be `xhigh`, so a lower worker cannot satisfy
+  an xhigh trigger.
+
+With seat `effort`, the earlier statements in this record that seats enter
+at high and that a seat stays at high on an xhigh trigger now read: a seat
+enters at its own `effort`, and on an xhigh trigger it stays at that effort
+and keeps approval.
+
+This narrows the 2026-10-04 note for a design co-owner or consultant on a
+`subagent-only` line, as Fable is in the managed catalog. Such a block stays
+valid when the line has an active version at the seat's effort. The line
+approves (co-owner) or advises (consultant) on `design-approval` as a
+subagent consult of the design owner seat, which keeps approval; it never
+fills the `design` duty, because that is a seat role; only a line whose
+`launch` allows a seat fills it. The owner line must be able to fill the
+seat.
+
+A binary at schema 6 refuses a schema 5 file with a message that names
+both schemas and `codeflow update`, in `models resolve`, `doctor` and
+`doctor --preflight`; the update installs the current catalog. The user's
+harness choice of model and effort applies over the resolved suggestion;
+`codeflow models resolve --effective <model>@<effort> --session <id>`
+records it in that harness session's sessions-ledger file and never
+re-launches a session.

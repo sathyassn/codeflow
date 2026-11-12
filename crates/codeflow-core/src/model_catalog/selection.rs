@@ -122,7 +122,7 @@ impl ProjectSelection {
             if entry.role == role {
                 role_seen = true;
                 if record.requested.harness == harness {
-                    if record.requested.effort != effort.as_str() || effort < Effort::High {
+                    if record.requested.effort != effort.as_str() || effort < seat.effort {
                         return Err("project binding effort mismatch or below seat floor".into());
                     }
                     resolved = Some(ResolvedSelection {

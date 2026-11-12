@@ -185,7 +185,7 @@ fn design_approval_is_a_separate_same_family_duty_never_the_independent_review()
     let route = Alternative {
         target: Target::Line("orchid-support".into()),
         harness: Some("claude-code".into()),
-        effort: Effort::High,
+        effort: Some(Effort::High),
     };
     assert!(c
         .resolve(&ResolveRequest {
@@ -409,4 +409,50 @@ fn the_catalog_cannot_define_the_engine_owned_design_approval_duty() {
         |v| v["duties"]["design-approval"] = v["duties"]["design"].clone(),
         "engine-owned",
     );
+}
+
+/// TSK-1292: a co-owner on a `launch: subagent-only` line, as Fable is in the
+/// managed catalog, approves as a subagent consult of the design owner seat,
+/// at the seat's effort, and never fills the design seat.
+#[test]
+fn a_subagent_only_co_owner_approves_as_a_subagent_consult_and_never_designs() {
+    let mut value = fixture();
+    value["lines"][1]["launch"] = json!("subagent-only");
+    let mut c = parse(&value).unwrap();
+    let selection =
+        ProjectSelection::parse(&serde_json::to_vec(&authority_json()).unwrap()).unwrap();
+    selection.validate_blocks(&c).unwrap();
+    c.authority = selection
+        .design_authority
+        .clone()
+        .map(|authority| AnchoredAuthority {
+            authority,
+            source: "committed on integration/fixture at 0123abcd".into(),
+        });
+    c.selection = Some(selection);
+    let observed = BTreeMap::new();
+
+    let approval = c.resolve(&request("design-approval", &observed)).unwrap();
+    let chosen = &approval.participants[0];
+    assert_eq!(chosen.participant, "approver:orchid-support");
+    assert_eq!(chosen.line, "orchid-support");
+    assert!(chosen.seat.is_none(), "{chosen:?}");
+    assert_eq!(chosen.approval_owner.as_deref(), Some("orchid-seat"));
+    assert_eq!(chosen.effort, Effort::High);
+    assert!(!chosen.reduced_assurance);
+    assert!(chosen.limitations.iter().any(|l| l
+        == "subagent consult of seat orchid-seat: line orchid-support is launch: \
+            subagent-only"));
+    assert!(chosen
+        .limitations
+        .iter()
+        .any(|l| l.starts_with("design co-owner by project designation")));
+
+    // It never fills the design seat: with the owner excluded, design is open.
+    let exclusions = [exclude("orchid-one")];
+    let design = c
+        .resolve(&with_exclusions("design", &observed, &exclusions))
+        .unwrap();
+    assert!(design.participants.is_empty(), "{design:?}");
+    assert!(design.is_open());
 }

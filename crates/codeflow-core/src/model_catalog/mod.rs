@@ -1,4 +1,4 @@
-//! Schema 5 model catalog and deterministic duty resolution (ADR-0069).
+//! The managed model catalog and deterministic duty resolution (ADR-0069).
 //!
 //! This module reads data only. It never launches, probes, reads a clock, or
 //! authenticates an operator. Callers supply fresh native facts and anchored
@@ -32,7 +32,14 @@ pub use resolve::{
 };
 pub use selection::{BindingReference, ProjectSelection};
 
-/// Managed schema 5 data. Load through [`Catalog::parse`] before resolving.
+/// The managed catalog schema this binary reads. Schema 6 (TSK-1292) adds
+/// each line's `launch`, each seat's `effort` and `high_when`, and the
+/// catalog's `effort_floors`; an earlier schema is refused until
+/// `codeflow update` installs the current catalog.
+pub const SCHEMA_VERSION: u64 = 6;
+
+/// Managed catalog data at [`SCHEMA_VERSION`]. Load through
+/// [`Catalog::parse`] before resolving.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
@@ -53,6 +60,10 @@ pub struct Catalog {
     pub standing_seats: Vec<String>,
     pub design_owner: String,
     pub duties: BTreeMap<String, Duty>,
+    /// The lowest effort a worker route may request, per duty. `default`
+    /// covers every duty the map does not name; a seat route's floor is its
+    /// seat's `effort` instead.
+    pub effort_floors: BTreeMap<String, Effort>,
     pub high_triggers: Vec<String>,
     pub xhigh_triggers: Vec<String>,
     /// Named policy to its trigger facts; no expressions or executable content.
@@ -80,9 +91,33 @@ pub struct Family {
 pub struct ProductLine {
     pub id: String,
     pub family: String,
+    /// Whether the line fills a seat, runs only as a subagent, or both.
+    pub launch: Launch,
     pub adoption: Adoption,
     pub adopted_version: String,
     pub versions: Vec<Version>,
+}
+
+/// How a line may be launched. A `subagent-only` line resolves only for a
+/// worker route and never fills a seat; a `seat` line never runs as a worker.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Launch {
+    Seat,
+    SubagentOnly,
+    Either,
+}
+
+impl Launch {
+    /// The catalog spelling, for refusals that name the field.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Seat => "seat",
+            Self::SubagentOnly => "subagent-only",
+            Self::Either => "either",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -144,6 +179,11 @@ pub struct Seat {
     pub family: String,
     pub role: String,
     pub lines: Vec<String>,
+    /// The seat's default effort, and the floor for every route to it.
+    pub effort: Effort,
+    /// Named policies or trigger facts that raise this seat's route to
+    /// `high` when it would otherwise run below it.
+    pub high_when: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -192,7 +232,11 @@ pub struct Alternative {
     pub target: Target,
     /// None uses the host harness when supported, else the family's first one.
     pub harness: Option<String>,
-    pub effort: Effort,
+    /// A line route's effort. A duty's seat route names none: it runs at its
+    /// seat's `effort`, so that one field sets every ordinary seat route.
+    /// An `OPERATOR_OVERRIDE` route always names its exact effort.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

@@ -26,7 +26,11 @@ use crate::ledger::LedgerError;
 pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
     match event_type {
         // sessions.jsonl
-        "session_start" | "session_end" => Ok(files::SESSIONS),
+        // `effective_model`: the model and effort a session's harness chose,
+        // recorded as given (TSK-1292).
+        "session_start" | "session_end" | crate::hooks::session_summary::EFFECTIVE_MODEL => {
+            Ok(files::SESSIONS)
+        }
 
         // memory-events.jsonl — recall's zero-ceremony corpus (charter §3.3)
         // `candidate_removed`: a landing candidate branch removed by

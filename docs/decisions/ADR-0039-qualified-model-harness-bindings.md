@@ -99,3 +99,9 @@ promoted binding: a seat served by designation alone is reported as
 suite and an approved binding record under this decision. `doctor --check
 model-bindings` adds illustrative catalog resolutions and keeps the
 harness-version and settings drift checks for binding records.
+
+## Note (2026-11-10)
+
+The catalog the 2026-09-25 note names as schema 5 is schema 6 since
+TSK-1292. ADR-0069's note of 2026-11-10 lists the fields schema 6 adds and
+the upgrade step.

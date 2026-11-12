@@ -81,7 +81,8 @@ fn configured_values_are_marked_configured_and_never_observed() {
     );
     for line in [
         "seat claude-primary: configured claude-opus-5-5 through claude-code, efforts medium|high|xhigh",
-        "seat codex-primary: configured gpt-6-astra through codex-cli",
+        // TSK-1292: GPT-6.1 Sol is the Codex seat's first line; Astra is subagent-only.
+        "seat codex-primary: configured gpt-6.1-sol through codex-cli",
         "sandbox claude: configured enabled true, failIfUnavailable true (.claude/settings.json)",
         "sandbox codex: configured default profile cf-guard, profiles cf-builder|cf-guard (.codex/config.toml)",
         "executable claude: unavailable: not found on PATH",
@@ -137,6 +138,33 @@ fn missing_evidence_is_reported_unavailable() {
         assert!(out.contains(line), "missing {line:?} in\n{out}");
     }
     assert!(!out.contains("configured"), "nothing is configured:\n{out}");
+}
+
+/// TSK-1292: preflight reads the catalog through the resolver's strict
+/// loader, so a schema 5 catalog is never shown as the configured roster.
+#[test]
+fn a_schema_5_catalog_is_reported_unavailable_with_the_update_hint() {
+    let project = configured_project();
+    let mut catalog: serde_json::Value = serde_json::from_str(&repo_file(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .unwrap();
+    catalog["schema_version"] = 5.into();
+    write(
+        project.path(),
+        CATALOG,
+        &serde_json::to_string_pretty(&catalog).unwrap(),
+    );
+    let empty = tempfile::tempdir().unwrap();
+    let out = preflight(project.path(), empty.path());
+    assert!(
+        out.contains("seats: unavailable: ")
+            && out.contains(
+                "installed model catalog is schema 5, which predates schema 6; run `codeflow update`"
+            ),
+        "{out}"
+    );
+    assert!(!out.contains("seat codex-primary: configured"), "{out}");
 }
 
 #[test]

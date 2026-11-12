@@ -246,9 +246,65 @@ fn design_seat(catalog: &Value) -> DesignSeat {
     }
 }
 
+/// The managed catalog with the design seat's second line moved to
+/// `launch: either`, as a project override (TSK-1294) may do: catalog data only.
+fn with_second_design_line_launchable(catalog: &Value) -> Value {
+    let mut changed = catalog.clone();
+    let second = design_seat(catalog).second;
+    for line in changed["lines"].as_array_mut().unwrap() {
+        if line["id"] == second.as_str() {
+            line["launch"] = json!("either");
+        }
+    }
+    changed
+}
+
+/// TSK-1292 AC-2: the design seat's second line is `launch: subagent-only`
+/// in the managed catalog, so a seat route naming it is refused, naming the
+/// field, even with a matching committed override block.
+#[test]
+fn a_seat_route_naming_a_subagent_only_line_is_refused() {
+    let catalog = managed();
+    let d = design_seat(&catalog);
+    assert_eq!(line(&catalog, &d.second)["launch"], "subagent-only");
+    let route = format!("{}@{}", d.second, d.harness);
+    let repo = planning_repo(
+        &catalog,
+        &[("TSK-900", override_block("TSK-900", &route, "high"))],
+    );
+    repo.refused(
+        "design",
+        &[
+            "--task",
+            "TSK-900",
+            "--override",
+            "TSK-900",
+            "--route",
+            &route,
+            "--effort",
+            "high",
+        ],
+        &format!("line {}, which is launch: subagent-only", d.second),
+    );
+    // Without an override the seat never reaches for that line either: with
+    // its first line excluded, design stays open.
+    let excluded = format!("selector:{}", d.first_pinned);
+    let open = repo.resolved(
+        "design",
+        "claude-code",
+        "none",
+        &["--exclude", &excluded],
+        false,
+    );
+    assert!(
+        open["participants"].as_array().unwrap().is_empty(),
+        "{open}"
+    );
+}
+
 #[test]
 fn design_override_fills_the_seat_second_line_only_from_the_anchored_block() {
-    let catalog = managed();
+    let catalog = with_second_design_line_launchable(&managed());
     let d = design_seat(&catalog);
     let route = format!("{}@{}", d.second, d.harness);
     let excluded = format!("selector:{}", d.first_pinned);
@@ -353,14 +409,9 @@ fn design_override_fills_the_seat_second_line_only_from_the_anchored_block() {
     );
 }
 
-/// A newer designated version for `seat_id`'s first line, and that duty's seat
-/// alternative moved to `effort`: catalog data only.
-fn with_newer_first_line_version(
-    catalog: &mut Value,
-    seat_id: &str,
-    duty: &str,
-    effort: &str,
-) -> String {
+/// A newer designated version for `seat_id`'s first line, and that seat's
+/// `effort` moved to `effort`: catalog data only.
+fn with_newer_first_line_version(catalog: &mut Value, seat_id: &str, effort: &str) -> String {
     let first = seat(catalog, seat_id)["lines"][0]
         .as_str()
         .unwrap()
@@ -380,11 +431,10 @@ fn with_newer_first_line_version(
         .find(|l| l["id"] == first.as_str())
         .unwrap();
     target["versions"].as_array_mut().unwrap().push(next);
-    for participant in catalog["duties"][duty]["required"].as_array_mut().unwrap() {
-        for alternative in participant["alternatives"].as_array_mut().unwrap() {
-            if alternative["target"]["id"] == seat_id {
-                alternative["effort"] = json!(effort);
-            }
+    // A seat route runs at its seat's `effort` field (TSK-1292).
+    for entry in catalog["seats"].as_array_mut().unwrap() {
+        if entry["id"] == seat_id {
+            entry["effort"] = json!(effort);
         }
     }
     pinned
@@ -400,16 +450,20 @@ fn catalog_data_alone_moves_resolution_fallback_and_open_duties() {
 
     let review = repo.resolved("unit-review", "claude-code", "claude", &[], true);
     let design = repo.resolved("design", "claude-code", "none", &[], true);
-    for result in [&review, &design] {
+    // Each seat runs at its own catalog `effort` (TSK-1292).
+    for (result, seat_id) in [(&review, codex_id), (&design, owner.as_str())] {
         assert_pinned_launches(&catalog, result);
-        assert_eq!(result["participants"][0]["effort"], "high");
+        assert_eq!(result["participants"][0]["seat"], seat_id);
+        assert_eq!(
+            result["participants"][0]["effort"],
+            seat(&catalog, seat_id)["effort"]
+        );
     }
-    assert_eq!(review["participants"][0]["seat"], codex_id);
 
     // A catalog-only change moves the requested selector and effort.
     let mut changed = catalog.clone();
-    let review_pin = with_newer_first_line_version(&mut changed, codex_id, "unit-review", "xhigh");
-    let design_pin = with_newer_first_line_version(&mut changed, &owner, "design", "xhigh");
+    let review_pin = with_newer_first_line_version(&mut changed, codex_id, "xhigh");
+    let design_pin = with_newer_first_line_version(&mut changed, &owner, "xhigh");
     for version in changed["lines"]
         .as_array_mut()
         .unwrap()

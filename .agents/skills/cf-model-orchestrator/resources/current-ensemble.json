@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "policy_id": "claude-codex-duo",
   "families": [
     {
@@ -44,6 +44,7 @@
     {
       "id": "opus",
       "family": "claude",
+      "launch": "either",
       "adoption": "manual",
       "adopted_version": "claude-opus-5-5",
       "versions": [
@@ -74,6 +75,7 @@
     {
       "id": "fable",
       "family": "claude",
+      "launch": "subagent-only",
       "adoption": "manual",
       "adopted_version": "claude-fable-5-1",
       "versions": [
@@ -103,6 +105,7 @@
     {
       "id": "sonnet",
       "family": "claude",
+      "launch": "subagent-only",
       "adoption": "manual",
       "adopted_version": "claude-sonnet-5-5",
       "versions": [
@@ -126,6 +129,7 @@
     {
       "id": "astra",
       "family": "codex",
+      "launch": "subagent-only",
       "adoption": "manual",
       "adopted_version": "gpt-6-astra",
       "versions": [
@@ -157,6 +161,7 @@
     {
       "id": "sol",
       "family": "codex",
+      "launch": "either",
       "adoption": "manual",
       "adopted_version": "gpt-6.1-sol",
       "versions": [
@@ -231,6 +236,7 @@
     {
       "id": "luna",
       "family": "codex",
+      "launch": "subagent-only",
       "adoption": "manual",
       "adopted_version": "gpt-6-luna",
       "versions": [
@@ -254,6 +260,7 @@
     {
       "id": "terra",
       "family": "codex",
+      "launch": "subagent-only",
       "adoption": "manual",
       "adopted_version": "gpt-5.6-terra",
       "versions": [
@@ -278,6 +285,7 @@
     {
       "id": "grok",
       "family": "grok",
+      "launch": "seat",
       "adoption": "manual",
       "adopted_version": "grok-4.7",
       "versions": [
@@ -330,16 +338,20 @@
       "lines": [
         "opus",
         "fable"
-      ]
+      ],
+      "effort": "high",
+      "high_when": []
     },
     {
       "id": "codex-primary",
       "family": "codex",
       "role": "codex-engineering-primary",
       "lines": [
-        "astra",
-        "sol"
-      ]
+        "sol",
+        "astra"
+      ],
+      "effort": "medium",
+      "high_when": []
     },
     {
       "id": "grok-primary",
@@ -347,6 +359,11 @@
       "role": "grok-engineering-primary",
       "lines": [
         "grok"
+      ],
+      "effort": "medium",
+      "high_when": [
+        "important-work",
+        "extra-family-review"
       ]
     }
   ],
@@ -365,8 +382,7 @@
               "target": {
                 "kind": "host-seat"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -385,8 +401,7 @@
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -400,8 +415,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -420,8 +434,7 @@
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -440,8 +453,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             },
             {
               "target": {
@@ -628,16 +640,14 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "opposite-author",
@@ -656,8 +666,7 @@
                   "kind": "seat",
                   "id": "grok-primary"
                 },
-                "harness": null,
-                "effort": "high"
+                "harness": null
               }
             ],
             "relation": "opposite-author",
@@ -676,8 +685,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -691,8 +699,7 @@
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -711,8 +718,7 @@
                   "kind": "seat",
                   "id": "grok-primary"
                 },
-                "harness": null,
-                "effort": "high"
+                "harness": null
               }
             ],
             "relation": "opposite-author",
@@ -731,24 +737,21 @@
                 "kind": "seat",
                 "id": "grok-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "opposite-author",
@@ -797,8 +800,7 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -825,16 +827,14 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "grok-primary"
               },
-              "harness": null,
-              "effort": "high"
+              "harness": null
             }
           ],
           "relation": "any",
@@ -853,16 +853,14 @@
                 "kind": "seat",
                 "id": "codex-primary"
               },
-              "harness": "codex-app",
-              "effort": "high"
+              "harness": "codex-app"
             },
             {
               "target": {
                 "kind": "seat",
                 "id": "claude-primary"
               },
-              "harness": "claude-code",
-              "effort": "high"
+              "harness": "claude-code"
             }
           ],
           "relation": "opposite-author",
@@ -871,6 +869,14 @@
       ],
       "triggered": []
     }
+  },
+  "effort_floors": {
+    "default": "high",
+    "bounded-execution": "medium",
+    "engineering-implementation": "medium",
+    "evidence-collection": "medium",
+    "light-execution": "medium",
+    "xhigh-reasoning": "xhigh"
   },
   "high_triggers": [
     "complex or difficult architecture, technical, planning, or design work, whether greenfield or improving existing systems",
@@ -891,6 +897,10 @@
       "unresolved standing-pair disagreement or unclear settlement",
       "consequential or irreversible work",
       "standing pair cannot reach justified confidence"
+    ],
+    "important-work": [
+      "security-sensitive change",
+      "release or publication"
     ]
   },
   "rules": [
@@ -898,8 +908,8 @@
     "Primary seats retain independent planning and approval duties.",
     "High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.",
     "The standing pair is the usual quality floor; extra catalog families never vote silently.",
-    "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
-    "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval. With no such worker the obligation stays open and the trigger is unmet.",
+    "A primary retains orchestration at its seat's effort; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
+    "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at its own effort and keeps approval. With no such worker the obligation stays open and the trigger is unmet.",
     "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
     "Cross-family entry always invokes the receiving qualified primary at default effort as ROLE: peer; only that primary dispatches its own same-family ROLE: worker escalation. A caller never selects a foreign worker directly.",
@@ -907,7 +917,9 @@
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
     "The design owner seat's first line owns design direction, real design and fidelity approval. A later line of that seat designs as a committed project co-owner or by a task-specific OPERATOR_OVERRIDE, and otherwise orchestrates, plans and reviews as a reduced-assurance fallback.",
-    "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the design owner rule.",
+    "A seat's effort field is its default and floor, not a ceiling; its high_when policies raise it to high. Worker floors are effort_floors. Complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task; design follows the design owner rule.",
+    "A line's launch field decides how it runs: subagent-only lines resolve only for worker duties and never fill a seat; seat lines never run as workers; either lines do both.",
+    "The user's harness choice of model and effort applies over the resolved suggestion. A session that knows the id its harness gives its hooks records the effective model and effort with codeflow models resolve --effective <model>@<effort> --session <id>. A session that cannot read that id records nothing, never guesses one, and reports the effective model and effort as unrecorded. Never re-launch a session to change them.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
     "A designation is not qualification: report it as designated, full suite not run, until an exact full-suite binding record exists.",
     "An observed id that differs from the pinned id inherits no designation and no evidence.",

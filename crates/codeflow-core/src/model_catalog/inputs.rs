@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{AnchoredAuthority, Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection};
+use super::{
+    AnchoredAuthority, Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection,
+    SCHEMA_VERSION,
+};
 
 const EMBEDDED: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -12,8 +15,9 @@ const RESOURCE: &str = "skills/cf-model-orchestrator/resources/current-ensemble.
 /// Read the installed managed catalog, falling back to the shipped catalog.
 ///
 /// # Errors
-/// Rejects unreadable or invalid catalogs, including any schema other than 5;
-/// never falls back past invalid data.
+/// Rejects unreadable or invalid catalogs, including any schema other than
+/// [`SCHEMA_VERSION`]; an earlier schema names `codeflow update`. Never falls
+/// back past invalid data.
 pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
     for prefix in [".agents", ".claude"] {
         let path = root.join(prefix).join(RESOURCE);
@@ -22,13 +26,13 @@ pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
                 let schema = serde_json::from_slice::<serde_json::Value>(&bytes)
                     .ok()
                     .and_then(|value| value["schema_version"].as_u64());
-                if schema.is_some_and(|version| version < 5) {
-                    format!(
-                        "{}: installed model catalog predates schema 5; run `codeflow update`",
+                match schema {
+                    Some(version) if version < SCHEMA_VERSION => format!(
+                        "{}: installed model catalog is schema {version}, which predates \
+                         schema {SCHEMA_VERSION}; run `codeflow update`",
                         path.display()
-                    )
-                } else {
-                    error
+                    ),
+                    _ => error,
                 }
             });
         }
@@ -63,7 +67,9 @@ pub(super) fn optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
 fn validate_selection(selection: &ProjectSelection, catalog: &Catalog) -> Result<(), String> {
     // Validate even an empty selection, and every selected tuple before
     // resolving any duty.
-    selection.resolve(catalog, &catalog.bindings, "", "", Effort::High)?;
+    // The empty role matches no entry, so the effort argument is never compared.
+    let any_effort = catalog.floor("", None);
+    selection.resolve(catalog, &catalog.bindings, "", "", any_effort)?;
     for entry in &selection.bindings {
         let record = catalog
             .bindings

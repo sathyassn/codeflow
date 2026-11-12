@@ -298,7 +298,7 @@ fn an_invalid_block_rejects_the_whole_file() {
     // A same-family line the design owner seat does not list.
     let mut catalog = fixture_data::fixture();
     catalog["lines"].as_array_mut().unwrap().push(json!({
-        "id": "orchid-spare", "family": "orchid", "adoption": "manual",
+        "id": "orchid-spare", "family": "orchid", "launch": "either", "adoption": "manual",
         "adopted_version": "orchid-spare-one",
         "versions": [fixture_data::version("orchid-spare-one", &["claude-code"], None)]
     }));

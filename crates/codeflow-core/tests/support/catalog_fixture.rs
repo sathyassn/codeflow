@@ -15,6 +15,11 @@ fn alt(kind: &str, id: &str, effort: &str, harness: Option<&str>) -> Value {
     json!({"target":{"kind":kind,"id":id},"harness":harness,"effort":effort})
 }
 
+/// A seat route names no effort: it runs at its seat's `effort` field.
+fn seat_alt(id: &str, harness: Option<&str>) -> Value {
+    json!({"target":{"kind":"seat","id":id},"harness":harness})
+}
+
 fn participant(id: &str, alternatives: Vec<Value>, relation: &str) -> Value {
     json!({"id":id,"alternatives":Value::Array(alternatives),"relation":relation,"label":"required"})
 }
@@ -24,7 +29,7 @@ fn duty(participants: Vec<Value>) -> Value {
 }
 
 pub fn fixture() -> Value {
-    let seat = |id| alt("seat", id, "high", None);
+    let seat = |id| seat_alt(id, None);
     let worker = |id| alt("line", id, "medium", None);
     let independent = || {
         participant(
@@ -40,27 +45,27 @@ pub fn fixture() -> Value {
     );
     second["label"] = json!("second-opinion");
     json!({
-        "schema_version":5,"policy_id":"fictional-pair",
+        "schema_version":6,"policy_id":"fictional-pair",
         "families":[
             {"id":"orchid","provider":"anthropic","lineage":"claude","harnesses":["claude-code"],"probes":["claude-cli-version"],"usage_bucket":"orchid-bucket"},
             {"id":"quartz","provider":"openai","lineage":"codex","harnesses":["codex-cli","codex-app"],"probes":["codex-cli-version"],"usage_bucket":"quartz-bucket"},
             {"id":"cinder","provider":"xai","lineage":"grok","harnesses":["grok-cli"],"probes":["grok-cli-version"],"usage_bucket":"cinder-bucket"}
         ],
         "lines":[
-            {"id":"orchid-main","family":"orchid","adoption":"manual","adopted_version":"orchid-one","versions":[version("orchid-one",&["claude-code"],Some("orchid-seat"))]},
-            {"id":"orchid-support","family":"orchid","adoption":"manual","adopted_version":"orchid-two","versions":[version("orchid-two",&["claude-code"],Some("orchid-seat"))]},
-            {"id":"quartz-main","family":"quartz","adoption":"manual","adopted_version":"quartz-one","versions":[version("quartz-one",&["codex-cli","codex-app"],Some("quartz-seat"))]},
-            {"id":"quartz-worker","family":"quartz","adoption":"workers","adopted_version":"quartz-two","versions":[version("quartz-two",&["codex-cli","codex-app"],None)]},
-            {"id":"cinder-main","family":"cinder","adoption":"manual","adopted_version":"cinder-one","versions":[version("cinder-one",&["grok-cli"],Some("cinder-seat"))]}
+            {"id":"orchid-main","family":"orchid","launch":"either","adoption":"manual","adopted_version":"orchid-one","versions":[version("orchid-one",&["claude-code"],Some("orchid-seat"))]},
+            {"id":"orchid-support","family":"orchid","launch":"either","adoption":"manual","adopted_version":"orchid-two","versions":[version("orchid-two",&["claude-code"],Some("orchid-seat"))]},
+            {"id":"quartz-main","family":"quartz","launch":"either","adoption":"manual","adopted_version":"quartz-one","versions":[version("quartz-one",&["codex-cli","codex-app"],Some("quartz-seat"))]},
+            {"id":"quartz-worker","family":"quartz","launch":"either","adoption":"workers","adopted_version":"quartz-two","versions":[version("quartz-two",&["codex-cli","codex-app"],None)]},
+            {"id":"cinder-main","family":"cinder","launch":"either","adoption":"manual","adopted_version":"cinder-one","versions":[version("cinder-one",&["grok-cli"],Some("cinder-seat"))]}
         ],
         "seats":[
-            {"id":"orchid-seat","family":"orchid","role":"claude-judgment-primary","lines":["orchid-main","orchid-support"]},
-            {"id":"quartz-seat","family":"quartz","role":"codex-engineering-primary","lines":["quartz-main"]},
-            {"id":"cinder-seat","family":"cinder","role":"grok-engineering-primary","lines":["cinder-main"]}
+            {"id":"orchid-seat","family":"orchid","role":"claude-judgment-primary","lines":["orchid-main","orchid-support"],"effort":"high","high_when":[]},
+            {"id":"quartz-seat","family":"quartz","role":"codex-engineering-primary","lines":["quartz-main"],"effort":"high","high_when":[]},
+            {"id":"cinder-seat","family":"cinder","role":"grok-engineering-primary","lines":["cinder-main"],"effort":"high","high_when":[]}
         ],
         "standing_seats":["orchid-seat","quartz-seat"],"design_owner":"orchid-seat",
         "duties":{
-            "orchestrate":duty(vec![participant("host",vec![json!({"target":{"kind":"host-seat"},"harness":null,"effort":"high"})],"any")]),
+            "orchestrate":duty(vec![participant("host",vec![json!({"target":{"kind":"host-seat"},"harness":null})],"any")]),
             "independent-plan":duty(vec![participant("design-primary",vec![seat("orchid-seat")],"any"),participant("engineering-primary",vec![seat("quartz-seat")],"any")]),
             "body-review":duty(vec![participant("engineering-primary",vec![seat("quartz-seat")],"any"),participant("design-primary",vec![seat("orchid-seat")],"any")]),
             "design":duty(vec![participant("designer",vec![seat("orchid-seat")],"any")]),
@@ -74,8 +79,9 @@ pub fn fixture() -> Value {
             "general-review":duty(vec![participant("independent",vec![seat("cinder-seat"),seat("orchid-seat")],"opposite-author"),second]),
             "design-and-editorial-review":duty(vec![participant("advisory",vec![alt("line","orchid-support","high",None)],"any"),participant("executability",vec![seat("quartz-seat")],"any")]),
             "consultation":duty(vec![participant("consultant",vec![alt("line","orchid-support","high",None),seat("quartz-seat"),seat("cinder-seat")],"any")]),
-            "computer-use-qa":duty(vec![participant("qa",vec![alt("seat","quartz-seat","high",Some("codex-app")),alt("seat","orchid-seat","high",Some("claude-code"))],"opposite-author")])
+            "computer-use-qa":duty(vec![participant("qa",vec![seat_alt("quartz-seat",Some("codex-app")),seat_alt("orchid-seat",Some("claude-code"))],"opposite-author")])
         },
+        "effort_floors":{"default":"high","bounded-execution":"medium","light-execution":"medium","evidence-collection":"medium","engineering-implementation":"medium","design-implementation":"medium","xhigh-reasoning":"xhigh"},
         "high_triggers":["material"],"xhigh_triggers":["deep"],"named_policies":{"extra-review":["material"]},"rules":["Launch the resolved pinned identity."],"bindings":[]
     })
 }

@@ -46,13 +46,13 @@ fn assert_invalid(mut change: impl FnMut(&mut Value), reason: &str) {
 }
 
 #[test]
-fn schema_five_roundtrip_is_valid() {
+fn schema_six_roundtrip_is_valid() {
     let catalog = catalog();
     assert_eq!(
         Catalog::parse(&serde_json::to_vec(&catalog).unwrap())
             .unwrap()
             .schema_version,
-        5
+        6
     );
 }
 #[test]
@@ -179,10 +179,33 @@ fn evidence_requires_record() {
     );
 }
 #[test]
-fn seat_defaults_cannot_be_medium_but_bounded_workers_can() {
+fn seat_routes_take_the_seat_effort_and_line_routes_name_their_own() {
+    // A seat route that names an effort would shadow its seat's field.
     assert_invalid(
         |v| {
-            v["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] =
+            v["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("high");
+        },
+        "names an effort on a seat route",
+    );
+    assert_invalid(
+        |v| {
+            v["duties"]["unit-review"]["required"][0]["alternatives"][0]["effort"] = json!("high");
+        },
+        "names an effort on a seat route",
+    );
+    // A line route names its effort, at or above the duty floor.
+    assert_invalid(
+        |v| {
+            v["duties"]["bounded-execution"]["required"][0]["alternatives"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("effort");
+        },
+        "routes line quartz-worker without an effort",
+    );
+    assert_invalid(
+        |v| {
+            v["duties"]["consultation"]["required"][0]["alternatives"][0]["effort"] =
                 json!("medium");
         },
         "below its effort floor",
@@ -475,7 +498,7 @@ fn override_record() -> OperatorOverride {
         route: Alternative {
             target: Target::Line("orchid-support".into()),
             harness: Some("claude-code".into()),
-            effort: Effort::High,
+            effort: Some(Effort::High),
         },
         plan_version: "Plan v3.4".into(),
         instruction_record: "approved-plan.md#operator-instruction".into(),
@@ -572,7 +595,7 @@ fn override_route_mismatch_is_open() {
 fn override_effort_mismatch_is_open() {
     let record = override_record();
     let route = Alternative {
-        effort: Effort::Xhigh,
+        effort: Some(Effort::Xhigh),
         ..record.route.clone()
     };
     assert!(
@@ -617,9 +640,9 @@ fn override_unsupported_and_below_floor_efforts_remain_open() {
     let mut c = catalog();
     c.lines[1].versions[0].efforts = vec![Effort::High];
     let mut record = override_record();
-    record.route.effort = Effort::Xhigh;
+    record.route.effort = Some(Effort::Xhigh);
     assert!(override_result(Some(&record), &record.route, &c, &[], &BTreeMap::new()).is_open());
-    record.route.effort = Effort::Medium;
+    record.route.effort = Some(Effort::Medium);
     assert!(override_result(
         Some(&record),
         &record.route,
@@ -1020,7 +1043,7 @@ fn native_harness_exclusion_can_use_a_listed_transport_alternative() {
         Alternative {
             target: Target::Seat("quartz-seat".into()),
             harness: Some("codex-app".into()),
-            effort: Effort::High,
+            effort: None,
         },
     );
     let exclusions = [Exclusion {
@@ -1140,9 +1163,28 @@ fn schema_four_is_rejected_after_the_managed_switch() {
         .join(".agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(load_catalog(dir.path())
-        .unwrap_err()
-        .ends_with("installed model catalog predates schema 5; run `codeflow update`"));
+    assert!(load_catalog(dir.path()).unwrap_err().ends_with(
+        "installed model catalog is schema 4, which predates schema 6; run `codeflow update`"
+    ));
+}
+
+#[test]
+fn schema_five_is_refused_with_the_update_hint() {
+    let mut five = fixture();
+    five["schema_version"] = json!(5);
+    assert_eq!(
+        parse(&five).unwrap_err(),
+        "unsupported model catalog schema 5"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join(".agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&five).unwrap()).unwrap();
+    assert!(load_catalog(dir.path()).unwrap_err().ends_with(
+        "installed model catalog is schema 5, which predates schema 6; run `codeflow update`"
+    ));
 }
 
 #[test]
@@ -1240,7 +1282,7 @@ fn route_less_override_leaves_eligible_design_open() {
 #[test]
 fn override_floor_is_explicitly_the_design_duty_floor() {
     let mut record = override_record();
-    record.route.effort = Effort::Medium;
+    record.route.effort = Some(Effort::Medium);
     let result = override_result(
         Some(&record),
         &record.route,
@@ -1288,11 +1330,12 @@ fn resolution_revalidates_public_catalog_mutations() {
     let observed = BTreeMap::new();
     let req = request("orchestrate", &observed);
     assert!(!c.resolve(&req).unwrap().is_open());
-    c.duties.get_mut("orchestrate").unwrap().required[0].alternatives[0].effort = Effort::Medium;
+    c.duties.get_mut("orchestrate").unwrap().required[0].alternatives[0].effort =
+        Some(Effort::Medium);
     assert!(c
         .resolve(&req)
         .unwrap_err()
-        .contains("below its effort floor"));
+        .contains("names an effort on a seat route"));
 }
 
 #[test]
@@ -1308,6 +1351,245 @@ fn native_routing_policy_trigger_is_shared_with_catalog_validation() {
     assert!(!result.is_open());
     assert_eq!(result.participants.len(), 2);
     assert_eq!(result.participants[1].participant, "extra");
+}
+
+// TSK-1292: every effort floor and launch rule is catalog data.
+
+/// The fixture with the engineering seat (`quartz-seat`) at medium: the
+/// seat field alone, with every route left as it is.
+fn medium_engineering_seat() -> Value {
+    let mut value = fixture();
+    value["seats"][1]["effort"] = json!("medium");
+    value
+}
+
+#[test]
+fn a_seat_effort_field_alone_sets_every_ordinary_route_to_it() {
+    let c = parse(&medium_engineering_seat()).unwrap();
+    let observed = BTreeMap::new();
+    let review = c.resolve(&request("unit-review", &observed)).unwrap();
+    assert_eq!(review.participants[0].seat.as_deref(), Some("quartz-seat"));
+    assert_eq!(review.participants[0].effort, Effort::Medium);
+    // Another seat keeps its own effort.
+    let design = c.resolve(&request("design", &observed)).unwrap();
+    assert_eq!(design.participants[0].effort, Effort::High);
+}
+
+#[test]
+fn the_host_route_runs_at_each_host_seat_effort() {
+    // Each host's orchestrate route takes that seat's `effort`, for all three.
+    let mut value = fixture();
+    value["seats"][0]["effort"] = json!("high");
+    value["seats"][1]["effort"] = json!("medium");
+    value["seats"][2]["effort"] = json!("medium");
+    let observed = BTreeMap::new();
+    let host = |c: &Catalog, harness: &'static str| {
+        let result = c
+            .resolve(&ResolveRequest {
+                host_harness: harness,
+                ..request("orchestrate", &observed)
+            })
+            .unwrap();
+        let chosen = &result.participants[0];
+        (chosen.seat.clone().unwrap(), chosen.effort)
+    };
+    let c = parse(&value).unwrap();
+    assert_eq!(
+        host(&c, "claude-code"),
+        (String::from("orchid-seat"), Effort::High)
+    );
+    assert_eq!(
+        host(&c, "codex-cli"),
+        (String::from("quartz-seat"), Effort::Medium)
+    );
+    assert_eq!(
+        host(&c, "grok-cli"),
+        (String::from("cinder-seat"), Effort::Medium)
+    );
+    // Changing one seat field alone moves only that host.
+    value["seats"][2]["effort"] = json!("xhigh");
+    let c = parse(&value).unwrap();
+    assert_eq!(
+        host(&c, "grok-cli"),
+        (String::from("cinder-seat"), Effort::Xhigh)
+    );
+    assert_eq!(
+        host(&c, "codex-cli"),
+        (String::from("quartz-seat"), Effort::Medium)
+    );
+}
+
+#[test]
+fn a_seat_rises_to_high_only_on_its_high_when_policies() {
+    let mut value = medium_engineering_seat();
+    value["seats"][1]["high_when"] = json!(["extra-review"]);
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let plain = c.resolve(&request("unit-review", &observed)).unwrap();
+    assert_eq!(plain.participants[0].effort, Effort::Medium);
+    let facts = vec!["material".to_owned()];
+    let mut req = request("unit-review", &observed);
+    req.trigger_facts = &facts;
+    let raised = c.resolve(&req).unwrap();
+    assert_eq!(raised.participants[0].seat.as_deref(), Some("quartz-seat"));
+    assert_eq!(raised.participants[0].effort, Effort::High);
+    // An unknown policy name is refused.
+    value["seats"][1]["high_when"] = json!(["unregistered"]);
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("high_when names unknown policy"));
+}
+
+#[test]
+fn a_subagent_only_line_never_fills_a_seat_and_the_refusal_names_the_field() {
+    let mut value = fixture();
+    value["lines"][1]["launch"] = json!("subagent-only");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    // As a worker it still resolves.
+    let consult = c.resolve(&request("consultation", &observed)).unwrap();
+    assert_eq!(consult.participants[0].line, "orchid-support");
+    assert!(consult.participants[0].seat.is_none());
+    // As a seat it is refused, naming the field.
+    let error = c
+        .eligible(&EligibilityRequest {
+            duty: "orchestrate",
+            line: "orchid-support",
+            version: "orchid-two",
+            seat: Some("orchid-seat"),
+            harness: "claude-code",
+            effort: Effort::High,
+            exclusions: &[],
+            observed_ids: &observed,
+        })
+        .unwrap_err();
+    assert!(error.contains("launch: subagent-only"), "{error}");
+    // With the first line excluded, the seat stays open rather than use it.
+    let excluded = [exclude("orchid-one")];
+    let mut req = request("orchestrate", &observed);
+    req.exclusions = &excluded;
+    let open = c.resolve(&req).unwrap();
+    assert!(open.is_open(), "{open:?}");
+    // A seat whose first line is subagent-only cannot fill it.
+    value["lines"][0]["launch"] = json!("subagent-only");
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("is launch: subagent-only"));
+}
+
+#[test]
+fn a_seat_only_line_never_runs_as_a_worker() {
+    assert_invalid(
+        |v| v["lines"][3]["launch"] = json!("seat"),
+        "its launch is seat",
+    );
+}
+
+#[test]
+fn worker_floors_are_the_catalog_effort_floors() {
+    assert_invalid(
+        |v| {
+            v["effort_floors"]
+                .as_object_mut()
+                .unwrap()
+                .remove("default");
+        },
+        "effort_floors needs a default floor",
+    );
+    assert_invalid(
+        |v| v["effort_floors"]["absent-duty"] = json!("medium"),
+        "effort_floors names unknown duty",
+    );
+    // Moving a duty's floor is catalog data: consultation may now run medium.
+    let mut value = fixture();
+    value["effort_floors"]["consultation"] = json!("medium");
+    value["duties"]["consultation"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let result = c.resolve(&request("consultation", &observed)).unwrap();
+    assert_eq!(result.participants[0].effort, Effort::Medium);
+    // Without that floor entry, the same route is below the default floor.
+    value["effort_floors"]
+        .as_object_mut()
+        .unwrap()
+        .remove("consultation");
+    assert!(parse(&value)
+        .unwrap_err()
+        .contains("below its effort floor"));
+}
+
+#[test]
+fn a_fallback_only_version_backs_its_own_seat_line() {
+    // The first seat line holds an active version and an older fallback-only
+    // one: the fallback fills the seat when the active version is excluded.
+    let mut value = fixture();
+    let mut older = version("orchid-zero", &["claude-code"], Some("orchid-seat"));
+    older["lifecycle"] = json!("fallback-only");
+    value["lines"][0]["versions"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, older);
+    value["lines"][1]["launch"] = json!("subagent-only");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let excluded = [exclude("orchid-one")];
+    let mut req = request("orchestrate", &observed);
+    req.exclusions = &excluded;
+    let result = c.resolve(&req).unwrap();
+    assert_eq!(result.participants[0].version, "orchid-zero");
+}
+
+#[test]
+fn an_xhigh_trigger_needs_an_xhigh_reasoning_floor_of_xhigh() {
+    assert_invalid(
+        |v| {
+            v["effort_floors"]
+                .as_object_mut()
+                .unwrap()
+                .remove("xhigh-reasoning");
+        },
+        "effort_floors needs xhigh-reasoning: xhigh",
+    );
+    assert_invalid(
+        |v| v["effort_floors"]["xhigh-reasoning"] = json!("high"),
+        "effort_floors needs xhigh-reasoning: xhigh",
+    );
+}
+
+#[test]
+fn identity_drift_never_admits_a_seat_only_line_as_an_xhigh_worker() {
+    // The Grok-style seat line is `launch: seat`. Its newer version is a
+    // worker-adopted, undesignated one whose observed identity drifted.
+    let mut value = fixture();
+    value["lines"][4]["launch"] = json!("seat");
+    value["lines"][4]["adoption"] = json!("workers");
+    value["lines"][4]["versions"]
+        .as_array_mut()
+        .unwrap()
+        .push(version("cinder-two", &["grok-cli"], None));
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::from([("cinder-two-pin".into(), "cinder-two-drift".into())]);
+    let facts = vec!["deep".to_owned()];
+    let mut req = request("general-review", &observed);
+    req.trigger_facts = &facts;
+    let result = c.resolve(&req).unwrap();
+    assert_eq!(result.participants[0].seat.as_deref(), Some("cinder-seat"));
+    assert!(
+        result.obligations.iter().all(|o| o.line != "cinder-main"),
+        "{result:?}"
+    );
+    assert!(!result.xhigh_trigger_met, "{result:?}");
+    // With `launch: either`, the same drifted version is a worker candidate.
+    value["lines"][4]["launch"] = json!("either");
+    let c = parse(&value).unwrap();
+    let result = c.resolve(&req).unwrap();
+    assert!(
+        result
+            .obligations
+            .iter()
+            .any(|o| o.line == "cinder-main" && o.effort == Effort::Xhigh),
+        "{result:?}"
+    );
 }
 
 // Project design authority and standing reviews (issue 43).
