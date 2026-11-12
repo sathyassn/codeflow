@@ -537,84 +537,308 @@ fn plain_redirects(command: &str) -> String {
     out
 }
 
+/// What [`modified_variables`] reads of a word.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Changed {
+    /// Every variable the word changes, each once with its value, in the
+    /// order the word names them.
+    pub(super) vars: Vec<(String, String)>,
+    /// Set when the word holds a changed expansion the scan cannot read to
+    /// the end, so it cannot tell which variables it reads: an indirect
+    /// name, evaluation or prompt expansion of a value, a flag it does not
+    /// know or one that takes an argument, a command substitution inside
+    /// it, a tilde word for a home or folder that is not a variable it
+    /// knows, an expansion left open, or a closing brace left over after
+    /// one. The startup check reads such a word as near saved state.
+    pub(super) unread: bool,
+}
+
+/// zsh flags inside `${(...)}` that the scan reads: each changes the value
+/// without reading another variable or taking an argument. Any other flag
+/// (an indirect name, evaluation, prompt expansion, or one with an
+/// argument such as a join or split string) leaves the word unread.
+const READ_FLAGS: &str = "@#*~-+0AaBbCcDEFfiknLMmNOoQqRStUuVvWwXz";
+
 /// Every variable of `vars` that `word` changes with a zsh flag, modifier
 /// or subscript, each once with its value, in the order the word names
-/// them: `$NAME:a`, `$NAME[1,-1]`, a braced form with anything after the
-/// name (`${NAME:a}`, `${NAME[1]}`, `${NAME:-x}`), zsh's `(flags)`, `=`,
-/// `~` and `^` before the name, braced or not, and a braced expansion that
-/// holds another one. The guard does not compute the result, so the
-/// startup check reads such a word as filled in at run time, and judges
-/// each changed variable: one aimed at an ordinary folder never hides
-/// another in the same word.
+/// them: `$NAME:a`, `$NAME[1,-1]`, zsh's `=`, `~` and `^` before the name,
+/// and every variable read anywhere inside a braced expansion that is more
+/// than `${NAME}`, at any depth of nesting (`${NAME:a}`, `${NAME:-$OTHER}`,
+/// `${(U)NAME}`, a braced expansion that holds another one, named or not,
+/// and `~` or `~NAME` inside one, which read the home or a variable).
+/// The guard does not compute the result, so the startup check reads such
+/// a word as filled in at run time, and judges each changed variable: one
+/// aimed at an ordinary folder never hides another in the same word.
 ///
 /// The word is read as the command reader hands it over, with its quotes
 /// and backslashes removed, so a quote or backslash left in it is a
 /// literal character and hides nothing: every `$` counts, as the
-/// substitution that fills the word counts it.
-pub(super) fn modified_variables(word: &str, vars: &[(String, String)]) -> Vec<(String, String)> {
-    let mut changed_vars: Vec<(String, String)> = Vec::new();
+/// substitution that fills the word counts it. A changed expansion the
+/// scan cannot read to the end sets [`Changed::unread`], so the word fails
+/// closed.
+pub(super) fn modified_variables(word: &str, vars: &[(String, String)]) -> Changed {
     let chars: Vec<char> = word.chars().collect();
-    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let flags = |mut at: usize| {
-        while chars.get(at).is_some_and(|c| matches!(c, '=' | '~' | '^')) {
-            at += 1;
-        }
-        at
+    let mut scan = Scan {
+        chars: &chars,
+        unread: false,
+        named_dirs: Vec::new(),
     };
+    let mut names: Vec<String> = Vec::new();
+    // Whether a changed braced expansion came before, so a closing brace
+    // left over after it shows the scan may have closed it too soon. Braces
+    // with no `$` before them pair among themselves (`{a,b}`).
+    let mut after_changed = false;
+    let mut bare = 0usize;
     let mut at = 0;
     while let Some(&c) = chars.get(at) {
-        at += 1;
+        if c == '{' {
+            bare += 1;
+        } else if c == '}' {
+            if bare > 0 {
+                bare -= 1;
+            } else if after_changed {
+                scan.unread = true;
+            }
+        }
         if c != '$' {
+            at += 1;
             continue;
         }
-        let braced = chars.get(at) == Some(&'{');
-        let mut start = at + usize::from(braced);
-        // Whether a flag or an inner expansion changes the name's value.
-        let mut changed = false;
-        if braced && chars.get(start) == Some(&'(') {
-            while chars.get(start).is_some_and(|c| *c != ')') {
-                start += 1;
+        let start = scan.prefix(at + 1);
+        let prefixed = start != at + 1;
+        if chars.get(start) == Some(&'{') {
+            let (end, read, changed) = scan.braced(start + 1);
+            // A subscript or modifier right after the braces is read as a
+            // change too, as the guard does not know whether zsh takes it.
+            if changed || prefixed || scan.modifier_at(end) {
+                names.extend(read);
+                after_changed = true;
             }
-            start += 1;
-            changed = true;
+            at = end;
+            continue;
         }
-        let after = flags(start);
-        changed |= after != start;
-        start = after;
-        if braced && chars.get(start) == Some(&'$') {
-            // The outer braces hold an expansion of their own.
-            start += 1;
-            if chars.get(start) == Some(&'{') {
-                start += 1;
+        let end = scan.name(start);
+        if end > start {
+            if prefixed || scan.modifier_at(end) {
+                names.push(chars[start..end].iter().collect());
             }
-            start = flags(start);
-            changed = true;
+            at = end;
+        } else {
+            at = start.max(at + 1);
         }
-        let start = start.min(chars.len());
-        let mut end = start;
-        while chars.get(end).copied().is_some_and(ident) {
-            end += 1;
+    }
+    let mut changed = Changed {
+        vars: Vec::new(),
+        unread: scan.unread,
+    };
+    for name in &scan.named_dirs {
+        // `~NAME` is the value of a variable of that name, else a home or
+        // a named folder the guard cannot read.
+        if vars.iter().any(|(known, _)| known == name) {
+            names.push(name.clone());
+        } else {
+            changed.unread = true;
         }
-        let name: String = chars[start..end].iter().collect();
+    }
+    for name in names {
         let Some((_, value)) = vars.iter().find(|(known, _)| *known == name) else {
             continue;
         };
-        let next = chars.get(end).copied();
-        let modified = changed
-            || if braced {
-                next != Some('}')
-            } else {
-                next == Some('[')
-                    || (next == Some(':')
-                        && chars
-                            .get(end + 1)
-                            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '&'))
-            };
-        if modified && !changed_vars.iter().any(|(known, _)| *known == name) {
-            changed_vars.push((name, value.clone()));
+        if !changed.vars.iter().any(|(known, _)| *known == name) {
+            changed.vars.push((name, value.clone()));
         }
     }
-    changed_vars
+    changed
+}
+
+/// The reader behind [`modified_variables`].
+struct Scan<'a> {
+    chars: &'a [char],
+    unread: bool,
+    /// The names a `~NAME` inside a changed expansion reads, in order.
+    named_dirs: Vec<String>,
+}
+
+impl Scan<'_> {
+    /// Whether a subscript or a zsh modifier starts at `at`: `[`, or `:`
+    /// before a letter or `&`.
+    fn modifier_at(&self, at: usize) -> bool {
+        match self.chars.get(at) {
+            Some('[') => true,
+            Some(':') => self
+                .chars
+                .get(at + 1)
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == '&'),
+            _ => false,
+        }
+    }
+
+    /// The index after zsh's `=`, `~` and `^` at `at`.
+    fn prefix(&self, mut at: usize) -> usize {
+        while self
+            .chars
+            .get(at)
+            .is_some_and(|c| matches!(c, '=' | '~' | '^'))
+        {
+            at += 1;
+        }
+        at
+    }
+
+    /// The index after the variable name at `at`, or `at` when none starts
+    /// there.
+    fn name(&self, at: usize) -> usize {
+        if !self
+            .chars
+            .get(at)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+        {
+            return at;
+        }
+        let mut end = at;
+        while self
+            .chars
+            .get(end)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+        {
+            end += 1;
+        }
+        end
+    }
+
+    /// Read the braced expansion whose body starts at `at`, after its
+    /// `${`: the index after its closing brace, every variable name it
+    /// reads at any depth, and whether it is more than `${NAME}`. A brace
+    /// with no `$` before it inside the body is counted too, so a body the
+    /// shell reads further than the scan leaves it open, and an open one
+    /// is unread.
+    fn braced(&mut self, at: usize) -> (usize, Vec<String>, bool) {
+        let mut names = Vec::new();
+        let Some((mut at, mut changed)) = self.head(at, &mut names) else {
+            return (self.chars.len(), names, true);
+        };
+        let mut depth = 0usize;
+        loop {
+            match self.chars.get(at) {
+                None => {
+                    self.unread = true;
+                    return (at, names, true);
+                }
+                Some('}') if depth == 0 => return (at + 1, names, changed),
+                Some('}') => {
+                    depth -= 1;
+                    at += 1;
+                    continue;
+                }
+                Some('{') => {
+                    depth += 1;
+                    at += 1;
+                    continue;
+                }
+                Some('$') => at = self.nested(at, &mut names),
+                Some('~') => at = self.tilde(at, &mut names),
+                Some('`' | '\u{1}' | '\u{2}') => {
+                    self.unread = true;
+                    at += 1;
+                }
+                Some('@') if self.chars.get(at + 1) == Some(&'P') => {
+                    // bash's prompt expansion of the value can read
+                    // variables the value names.
+                    self.unread = true;
+                    at += 1;
+                }
+                Some(_) => at += 1,
+            }
+            changed = true;
+        }
+    }
+
+    /// Read the head of a braced body at `at`: zsh's `(flags)`, the `=`,
+    /// `~`, `^`, `#`, `+` and `!` before the name, and the name, which goes
+    /// to `names`. Returns where the rest starts and whether the head
+    /// changes the value, or `None` when the flag group never closes.
+    fn head(&mut self, mut at: usize, names: &mut Vec<String>) -> Option<(usize, bool)> {
+        let mut changed = false;
+        if self.chars.get(at) == Some(&'(') {
+            changed = true;
+            let Some(close) = self.chars[at..].iter().position(|c| *c == ')') else {
+                self.unread = true;
+                return None;
+            };
+            if !self.chars[at + 1..at + close]
+                .iter()
+                .all(|c| READ_FLAGS.contains(*c))
+            {
+                self.unread = true;
+            }
+            at += close + 1;
+        }
+        let start = at;
+        while self
+            .chars
+            .get(at)
+            .is_some_and(|c| matches!(c, '=' | '~' | '^' | '#' | '+'))
+        {
+            at += 1;
+        }
+        if self.chars.get(at) == Some(&'!') {
+            // An indirect name: the variable it reads is a value.
+            self.unread = true;
+            at += 1;
+        }
+        changed |= at != start;
+        let end = self.name(at);
+        if end > at {
+            names.push(self.chars[at..end].iter().collect());
+            at = end;
+        }
+        Some((at, changed))
+    }
+
+    /// Read the expansion at `at`, a `$` inside a braced body, into
+    /// `names`, and return the index after it.
+    fn nested(&mut self, at: usize, names: &mut Vec<String>) -> usize {
+        let start = self.prefix(at + 1);
+        match self.chars.get(start) {
+            Some('{') => {
+                let (end, read, _) = self.braced(start + 1);
+                names.extend(read);
+                end
+            }
+            Some('(') => {
+                // A command or arithmetic substitution: the variables it
+                // reads are not in the word.
+                self.unread = true;
+                start + 1
+            }
+            _ => {
+                let end = self.name(start);
+                if end > start {
+                    names.push(self.chars[start..end].iter().collect());
+                }
+                end.max(at + 1)
+            }
+        }
+    }
+
+    /// Read the tilde word at `at` inside a braced body, and return the
+    /// index after it: `~` alone reads the home, `~NAME` a variable's value
+    /// or a home or named folder, and `~+`, `~-` and `~N` folders the
+    /// guard cannot read.
+    fn tilde(&mut self, at: usize, names: &mut Vec<String>) -> usize {
+        let end = self.name(at + 1);
+        if end > at + 1 {
+            self.named_dirs
+                .push(self.chars[at + 1..end].iter().collect());
+            return end;
+        }
+        match self.chars.get(at + 1) {
+            None | Some('/' | '}' | ':') => names.push("HOME".to_string()),
+            Some(c) if matches!(c, '+' | '-') || c.is_ascii_digit() => self.unread = true,
+            _ => {}
+        }
+        at + 1
+    }
 }
 
 /// A node's identity: its device and inode.

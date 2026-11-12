@@ -1016,12 +1016,15 @@ impl Line<'_> {
 
     /// The path `word` names from `dir`, or `None` when part of it is
     /// filled in at run time. For saved state, a zsh modifier or subscript
-    /// on a variable the guard fills is filled in at run time too.
+    /// on a variable the guard fills, or one the word reads inside another
+    /// changed expansion, is filled in at run time too, and so is a changed
+    /// expansion the guard cannot read to the end.
     fn expand(&self, word: &str, dir: &Path) -> Option<PathBuf> {
-        if self.kind == Kind::SavedState
-            && !saved_state::modified_variables(word, &self.vars()).is_empty()
-        {
-            return None;
+        if self.kind == Kind::SavedState {
+            let changed = saved_state::modified_variables(word, &self.vars());
+            if changed.unread || !changed.vars.is_empty() {
+                return None;
+            }
         }
         let text = self.substitute(word);
         if unresolved_word(&text) {
@@ -1275,11 +1278,14 @@ impl Line<'_> {
     /// one, or the literal directory before the part the shell fills in is
     /// the home, `/etc` or a startup directory. For saved state, a word
     /// that changes any variable whose value is or holds a location with a
-    /// zsh flag, modifier or subscript may name one too, whatever other
-    /// variables the word changes before it.
+    /// zsh flag, modifier or subscript, or reads inside another changed
+    /// expansion at any depth, may name one too, whatever other variables
+    /// the word changes before it; so may a word with a changed expansion
+    /// the guard cannot read to the end, which fails closed.
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
         if self.kind == Kind::SavedState {
-            for (name, value) in saved_state::modified_variables(word, &self.vars()) {
+            let changed = saved_state::modified_variables(word, &self.vars());
+            for (name, value) in changed.vars {
                 let near = dirs.iter().any(|dir| {
                     let path = dir.join(&value);
                     self.class
@@ -1292,6 +1298,12 @@ impl Line<'_> {
                         "it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state"
                     ));
                 }
+            }
+            if changed.unread {
+                return Some(
+                    "a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state"
+                        .to_string(),
+                );
             }
         }
         if let Some(name) = self.class.named_in(self.text) {

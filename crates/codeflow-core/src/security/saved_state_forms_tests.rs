@@ -299,29 +299,17 @@ fn every_changed_variable_in_a_word_is_judged() {
 /// A variable the guard fills that a word reads anywhere inside a changed
 /// expansion counts as changed, at every depth of nesting: inside an
 /// unnamed or a named expansion, one, two or three levels down, braced or
-/// not, alone or after variables aimed at ordinary folders, and in the
-/// default, replacement, flag and subscript forms. Where its value is or
+/// not, alone or after variables aimed at ordinary folders, in the
+/// default, replacement, flag and subscript forms, and through a tilde
+/// word inside the expansion. Where its value is or
 /// holds saved state the write fails closed, at the home and at a moved
-/// folder. The same nestings of ordinary variables and literals still run.
+/// folder.
 #[test]
 fn a_variable_nested_in_a_changed_expansion_is_judged() {
     let f = Fixture::new();
-    mkdir(&f.home.join(".claude/session-env"));
-    let (conf, moved) = moved_conf(&f);
-    let ordinary = f.home.parent().unwrap().join("zd");
-    mkdir(&ordinary);
-    let with_ordinary = |places: Places| Places {
-        startup: StartupEnv {
-            zdotdir: Some(ordinary.clone()),
-            ..places.startup
-        },
-        ..places
-    };
-    let default = with_ordinary(f.places());
-    let moved = with_ordinary(moved);
+    let (conf, default, moved) = ordinary_startup(&f);
     let home = slashed(&f.home);
     let p = slashed(&conf);
-    let out = slashed(&f.project.join("out"));
     let mut wrong = Vec::new();
     for (places, name, rest, value) in [
         (&moved, "CLAUDE_CONFIG_DIR", "/session-env/h", &p),
@@ -344,10 +332,10 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
             format!("${{=${{:-${name}}}}}"),
             format!("$={{${{:-${name}}}}}"),
             format!("${{${{:-${name}}}[1,-1]}}"),
-            format!("${{(U)${{:-${name}}}}}"),
-            format!("${{(j:/:)${{:-${name}}}}}"),
             format!("${{ZDOTDIR/#$ZDOTDIR/${name}}}"),
             format!("${{ZDOTDIR[1,${name}]}}"),
+            format!("${{{name}}}[1,-1]"),
+            format!("${{NOPE:-~{name}}}"),
             // After variables aimed at ordinary folders.
             format!("${{${{:-$ZDOTDIR}}:h}}/..${{${{:-${name}}}:a}}"),
             format!("${{${{:-$ZDOTDIR/..${name}}}:a}}"),
@@ -366,7 +354,70 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
             );
         }
     }
-    // The same nestings of ordinary variables and literals: the write runs.
+    // zsh flags around a nested expansion. At the home, the line also
+    // names the location in words, and the command reader's own finding
+    // for the flag group refuses it first.
+    for flags in ["U", "j:/:"] {
+        let word = format!("${{({flags})${{:-$CLAUDE_CONFIG_DIR}}}}/session-env/h");
+        both_hooks(
+            &f,
+            &moved,
+            &format!("echo x > {word}"),
+            &[format!(
+                "a redirect writes `{word}`, which the guard cannot resolve, and it changes `$CLAUDE_CONFIG_DIR` with a zsh flag, modifier or subscript, and its value `{p}` is or holds saved shell state; {NEAR}"
+            )],
+            &mut wrong,
+        );
+        both_hooks(
+            &f,
+            &default,
+            &format!("echo x > ${{({flags})${{:-$HOME}}}}/.claude/session-env/h"),
+            &[format!(
+                "text this call produces names the saved shell state location `.claude/session-env`, and the line runs `{flags}`, which is not a data reader, so it could run or apply that text; read the file in its own call"
+            )],
+            &mut wrong,
+        );
+    }
+    // A tilde alone inside a changed expansion reads the home.
+    let word = "${NOPE:-~}/.claude/session-env/h";
+    both_hooks(
+        &f,
+        &default,
+        &format!("echo x > {word}"),
+        &[format!(
+            "a redirect writes `{word}`, which the guard cannot resolve, and it changes `$HOME` with a zsh flag, modifier or subscript, and its value `{home}` is or holds saved shell state; {NEAR}"
+        )],
+        &mut wrong,
+    );
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// The home with a saved-state folder, a startup variable aimed at an
+/// ordinary folder, and the moved Claude configuration folder: the moved
+/// folder, then the default and the moved locations with that variable.
+fn ordinary_startup(f: &Fixture) -> (PathBuf, Places, Places) {
+    mkdir(&f.home.join(".claude/session-env"));
+    let (conf, moved) = moved_conf(f);
+    let ordinary = f.home.parent().unwrap().join("zd");
+    mkdir(&ordinary);
+    let with_ordinary = |places: Places| Places {
+        startup: StartupEnv {
+            zdotdir: Some(ordinary.clone()),
+            ..places.startup
+        },
+        ..places
+    };
+    (conf, with_ordinary(f.places()), with_ordinary(moved))
+}
+
+/// Nestings of ordinary variables and literals inside changed expansions
+/// still run, at the home and at a moved folder.
+#[test]
+fn nested_expansions_of_ordinary_values_still_run() {
+    let f = Fixture::new();
+    let (_, default, moved) = ordinary_startup(&f);
+    let out = slashed(&f.project.join("out"));
+    let mut wrong = Vec::new();
     for places in [&default, &moved] {
         for command in [
             "echo x > ${${:-$ZDOTDIR}:a}/h".to_string(),
@@ -377,6 +428,8 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
             "echo x > ${${:-out}:a}/h".to_string(),
             "echo x > ${${${:-out/x}:h}:a}/h".to_string(),
             "echo x > ${#ZDOTDIR}.log".to_string(),
+            "echo x > ${NOPE:-~ZDOTDIR}/h".to_string(),
+            "echo x > ${ZDOTDIR}/h".to_string(),
             "echo x > out-$(date).log".to_string(),
             format!("OUT={out}; echo x > ${{${{OUT:-$ZDOTDIR}}:h}}/h"),
             format!("OUT={out}; echo x > ${{${{${{:-$OUT}}}}:a}}/h"),
@@ -388,9 +441,10 @@ fn a_variable_nested_in_a_changed_expansion_is_judged() {
 }
 
 /// A changed expansion the guard cannot read to the end fails closed: an
-/// indirect name, a flag that takes an argument it does not read, a
-/// command substitution inside it, an expansion left open, or a closing
-/// brace left over after one. The guard cannot tell which variables such a
+/// indirect name, evaluation or prompt expansion of a value, a flag that
+/// takes an argument it does not read, a command substitution inside it, a
+/// tilde word for a home or folder it cannot read, an expansion left open,
+/// or a closing brace left over after one. The guard cannot tell which variables such a
 /// word reads, so it is read as near saved state, at the home and at a
 /// moved folder, whatever the run folder holds.
 #[test]
@@ -400,27 +454,60 @@ fn a_changed_expansion_the_guard_cannot_read_fails_closed() {
     let (_, moved) = moved_conf(&f);
     let mut wrong = Vec::new();
     for places in [&f.places(), &moved] {
-        for (assign, word) in [
-            ("V=CLAUDE_CONFIG_DIR; ", "${(P)V}/session-env/h"),
-            ("V=CLAUDE_CONFIG_DIR; ", "${!V}/session-env/h"),
-            ("", "${(P)${:-CLAUDE_CONFIG_DIR}}/session-env/h"),
-            ("V=X; ", "${(e)V}/session-env/h"),
-            ("", "${(s:)}:)CLAUDE_CONFIG_DIR}/session-env/h"),
-            ("", "${(%):-%~}/session-env/h"),
-            ("", "${${:-$(pwd)}:a}/session-env/h"),
-            ("", "${NOPE:-x/session-env/h"),
-            ("", "${NOPE:-}x}/session-env/h"),
+        // The line, and the word as the command reader hands it over: a
+        // flag group is cut at its first `)`, and a command substitution
+        // stands as a marker.
+        for (line, word) in [
+            (
+                "V=CLAUDE_CONFIG_DIR; echo x > ${(P)V}/session-env/h",
+                "${(P)V}/session-env/h",
+            ),
+            (
+                "V=CLAUDE_CONFIG_DIR; echo x > ${!V}/session-env/h",
+                "${!V}/session-env/h",
+            ),
+            (
+                "echo x > ${(P)${:-CLAUDE_CONFIG_DIR}}/session-env/h",
+                "${(P)${:-CLAUDE_CONFIG_DIR}}/session-env/h",
+            ),
+            (
+                "V=X; echo x > ${(e)V}/session-env/h",
+                "${(e)V}/session-env/h",
+            ),
+            (
+                "echo x > ${(s:)}:)CLAUDE_CONFIG_DIR}/session-env/h",
+                "${(s:)}:",
+            ),
+            (
+                "echo x > ${(%):-%/}/session-env/h",
+                "${(%):-%/}/session-env/h",
+            ),
+            (
+                "echo x > ${${:-$(pwd)}:a}/session-env/h",
+                "${${:-\u{2}}:a}/session-env/h",
+            ),
+            (
+                "echo x > ${NOPE:-x/session-env/h",
+                "${NOPE:-x/session-env/h",
+            ),
+            (
+                "echo x > ${NOPE:-}x}/session-env/h",
+                "${NOPE:-}x}/session-env/h",
+            ),
+            (
+                "echo x > ${NOPE:-~nobody}/session-env/h",
+                "${NOPE:-~nobody}/session-env/h",
+            ),
+            (
+                "echo x > ${NOPE:-~+}/session-env/h",
+                "${NOPE:-~+}/session-env/h",
+            ),
+            ("V=x; echo x > ${V@P}/session-env/h", "${V@P}/session-env/h"),
         ] {
             let message = format!(
                 "a redirect writes `{word}`, which the guard cannot resolve, and a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state; {NEAR}"
             );
-            both_hooks(
-                &f,
-                places,
-                &format!("{assign}echo x > {word}"),
-                &[message],
-                &mut wrong,
-            );
+            both_hooks(&f, places, line, &[message], &mut wrong);
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
