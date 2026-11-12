@@ -1,0 +1,11 @@
+id = "TSK-1473"
+uid = "d37b729e-6e7d-4780-b0ec-c43ace737f97"
+kind = "TSK"
+title = "The release journey tests clear every agent session marker before they commit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T14:51:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
