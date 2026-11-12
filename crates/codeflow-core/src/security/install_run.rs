@@ -163,8 +163,8 @@ fn simple(command: &str) -> Vec<Simple> {
             let total = words.len();
             strip_reserved_words(&mut words);
             literal.drain(..total - words.len());
-            let start =
-                strip_launchers(&words).map_or(words.len(), |(_, args)| words.len() - args.len() - 1);
+            let start = strip_launchers(&words)
+                .map_or(words.len(), |(_, args)| words.len() - args.len() - 1);
             let values = words[..start]
                 .iter()
                 .filter_map(|word| assigned(word))
@@ -261,8 +261,7 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
     }
     if name == BINARY
         && written(0)
-        && first_operand(&argv[1..])
-            .is_some_and(|operand| RECORD_VERBS.contains(&operand.as_str()))
+        && first_operand(&argv[1..]).is_some_and(|operand| RECORD_VERBS.contains(&operand.as_str()))
         && argv[1..]
             .iter()
             .position(|word| word != "--")
@@ -278,8 +277,12 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
         let in_program_position = at == 0 || starts_a_command(before);
         if in_program_position
             && (!written(at)
-                || matches!(basename(word).as_str(), "alias" | "function" | "source" | ".")
-                || (SHELLS.contains(&basename(word).as_str()) && shell_command_string(after).is_none()))
+                || matches!(
+                    basename(word).as_str(),
+                    "alias" | "function" | "source" | "."
+                )
+                || (SHELLS.contains(&basename(word).as_str())
+                    && shell_command_string(after).is_none()))
         {
             found = Found::Unresolved;
         }

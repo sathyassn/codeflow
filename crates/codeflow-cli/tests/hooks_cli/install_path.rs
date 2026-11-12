@@ -704,10 +704,7 @@ fn shipped_claude_presets_leave_the_worktree_copies_to_the_guards() {
             }
         }
     }
-    assert!(
-        named.is_empty(),
-        "presets name worktree paths: {named:?}"
-    );
+    assert!(named.is_empty(), "presets name worktree paths: {named:?}");
 }
 
 /// AC-4: every guard and hook message that names an install verb as the
