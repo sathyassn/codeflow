@@ -626,9 +626,16 @@ mod tests {
         std::fs::write(root.join(".codex/config.toml"), "").unwrap();
         let missing = missing_rules(root);
         // Edit denies, denyWrite and cf-guard entries of each class (the
-        // shell startup files and the default git configuration files),
-        // no profile selected, the workspace root `.envrc`.
-        assert_eq!(missing.len(), 8, "{missing:?}");
+        // shell startup files, the saved shell state and the default git
+        // configuration files), no profile selected, the workspace root
+        // `.envrc`.
+        assert_eq!(missing.len(), 11, "{missing:?}");
+        assert!(
+            missing
+                .iter()
+                .any(|m| m.contains("saved shell state `Edit` denies")),
+            "{missing:?}"
+        );
         assert!(
             missing
                 .iter()
