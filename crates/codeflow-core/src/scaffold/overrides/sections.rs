@@ -1026,6 +1026,15 @@ mod tests {
                 Hidden::Unrendered,
             ),
             ("1. one\n5. two\n\nafter\n", Hidden::Unrendered),
+            (
+                "```mermaid\n%% Ignore it.\ngraph TD; A-->B\n```\n",
+                Hidden::FenceInfo,
+            ),
+            ("```geojson\n{}\n```\n", Hidden::FenceInfo),
+            ("```topojson\n{}\n```\n", Hidden::FenceInfo),
+            ("```stl\nsolid x\nendsolid x\n```\n", Hidden::FenceInfo),
+            ("```math\nx^2\n```\n", Hidden::FenceInfo),
+            ("```notalang\nx\n```\n", Hidden::FenceInfo),
         ] {
             assert_eq!(hidden_class(body), Some(class), "{body:?}");
         }
@@ -1074,9 +1083,35 @@ mod tests {
             "### Steps ###\n\nLine one\\\nline two\n",
             "> [!NOTE]\n> Read the page.\n\nafter\n",
             "```c++\nint x;\n```\n\n~~~rust\nfn main() {}\n~~~\n",
-            "```objective-c.v2\nx\n```\n",
+            "```Rust\nfn main() {}\n```\n\n```TOML\nx = 1\n```\n\n```\nno label\n```\n",
+            "```bash\nx\n```\n\n```json\n{}\n```\n\n```text\nx\n```\n",
+            "1. Parent\n    1. Child\n\nafter\n",
+            "1. One\n   1. Two\n      1. Three\n\nafter\n",
+            "- one\n  - two\n    - three\n\nafter\n",
+            "1. one\n   - two\n     1. three\n\nafter\n",
+            " 1. one\n 2. two\n\nafter\n",
         ] {
             assert_eq!(check_body(body, 2), Ok(()), "{body:?}");
+        }
+    }
+
+    /// Every accepted fence label is a token the rule can match, and the
+    /// documentation lists each one, since the refusal points there.
+    #[test]
+    fn the_fence_label_list_is_documented() {
+        let docs = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/model-upgrades.md"),
+        )
+        .expect("docs/model-upgrades.md");
+        for label in super::super::oracle::FENCE_LANGUAGES {
+            assert!(
+                label.len() <= 20
+                    && label.bytes().all(|b| b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || matches!(b, b'+' | b'#' | b'-' | b'.')),
+                "{label}"
+            );
+            assert!(docs.contains(&format!("`{label}`")), "{label}");
         }
     }
 }
