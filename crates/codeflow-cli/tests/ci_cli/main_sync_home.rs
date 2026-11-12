@@ -41,10 +41,10 @@ fn a_main_planning_move_the_line_already_names_passes() {
     let root = dir.path();
     super::git(root, &["switch", "-q", "-c", "task/TSK-001-work", "main"]);
     write(root, "src/work.rs", "pub fn work() {}\n");
+    write(root, "changelog.d/TSK-001.md", FRAGMENT);
     commit(root, "feat: the work");
     let reviewed = stdout_of(root, &["rev-parse", "HEAD"]);
     write(root, RECORD, &completed(LINE, &reviewed));
-    write(root, "changelog.d/TSK-001.md", FRAGMENT);
     commit(root, "docs: complete TSK-001");
     super::git(root, &["switch", "-q", "main"]);
     super::git(
