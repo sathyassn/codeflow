@@ -1,0 +1,11 @@
+id = "TSK-1449"
+uid = "abf8b57d-d696-45ce-b9fe-1f1b6caa894e"
+kind = "TSK"
+title = "The dependency audit and the full-range secret scan run in every local gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:01:17Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
