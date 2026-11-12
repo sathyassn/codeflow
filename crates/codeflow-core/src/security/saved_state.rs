@@ -337,6 +337,11 @@ const NEAR_WAY: &str = "aim the program at a named sub-folder that holds no save
 /// that holds saved state.
 const COPY_WAY: &str = "copy into a named sub-folder that holds no saved shell state";
 
+/// The way through a directory change into a location, which the startup
+/// check judges as a target unless the line is only directory changes to
+/// plain, unquoted paths.
+const CD_WAY: &str = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
+
 /// Words of a refusal of the startup check that mean the command acts
 /// near saved state rather than on a location it names.
 const NEAR_MARKS: &[&str] = &[
@@ -371,9 +376,15 @@ pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
     .into_iter()
     .map(|mut finding| {
         let message = &finding.message;
-        let way = if message.contains(" copies the contents of ") || message.contains(" puts the tree ")
+        let way = if message.contains(" copies the contents of ")
+            || message.contains(" puts the tree ")
         {
             Some(COPY_WAY)
+        } else if ["`cd` targets ", "`pushd` targets "]
+            .iter()
+            .any(|start| message.starts_with(start))
+        {
+            Some(CD_WAY)
         } else if NEAR_MARKS.iter().any(|mark| message.contains(mark)) {
             Some(NEAR_WAY)
         } else {
@@ -831,9 +842,17 @@ impl Pass<'_> {
             return;
         }
         if !has_writer_entry(name) {
+            // A program the guard does not know may only read what it is
+            // given, so the message says it targets the path.
             for word in args {
                 for path_word in operand_paths(word) {
-                    self.write(found, name, path_word, bound, dir);
+                    for path in self.paths(path_word, bound, dir).unwrap_or_default() {
+                        if let Some(label) = self.written(&walk(&path, true)) {
+                            found.push(format!(
+                                "`{name}` targets `{path_word}`, which is saved shell state: `{label}`; to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`"
+                            ));
+                        }
+                    }
                 }
             }
             return;
@@ -904,6 +923,17 @@ impl Pass<'_> {
                 self.removal(found, "mv", "moves", source, bound, dir);
             }
         }
+        // A link, hard or symbolic, to a location or a folder above one is
+        // a second way to it: a later write through the link lands there.
+        if name == "ln" {
+            for source in &copy.sources {
+                let mut linked = Vec::new();
+                self.removal(&mut linked, "ln", "links", source, bound, dir);
+                found.extend(linked.into_iter().map(|message| {
+                    format!("{message}; link a named file that is not saved shell state, or a sub-folder that holds none")
+                }));
+            }
+        }
         let Some(dest) = copy.dest.as_deref().filter(|dest| !remote(dest)) else {
             return;
         };
@@ -920,12 +950,23 @@ impl Pass<'_> {
         };
         // The destination is a folder each source lands in: a target
         // directory, more than one source, a trailing `/`, or a folder now.
-        let into = copy.target
-            || copy.sources.len() > 1
-            || dest.ends_with('/')
-            || dests
-                .iter()
-                .any(|d| std::fs::metadata(d).is_ok_and(|m| m.is_dir()));
+        // `-T` makes it never a folder, and `ln -n` does not follow a link
+        // there, so the link itself is replaced.
+        let whole = matches!(name, "ln" | "mv" | "cp") && flagged(&["-T", "--no-target-directory"]);
+        let unfollowed = name == "ln" && flagged(&["-n", "-h", "--no-dereference"]);
+        let folder_now = |d: &PathBuf| {
+            let metadata = if unfollowed {
+                std::fs::symlink_metadata(d)
+            } else {
+                std::fs::metadata(d)
+            };
+            metadata.is_ok_and(|m| m.is_dir())
+        };
+        let into = !whole
+            && (copy.target
+                || copy.sources.len() > 1
+                || dest.ends_with('/')
+                || dests.iter().any(folder_now));
         for source in copy.sources.iter().filter(|source| !remote(source)) {
             let tree = recursive && self.may_be_tree(source, bound, dir);
             let lands = if tree { Lands::Tree } else { Lands::File };
@@ -1004,18 +1045,26 @@ impl Pass<'_> {
         Some(self.base.join(text))
     }
 
-    /// Whether a copy's source may be a directory tree: a directory that is
-    /// not a link, or a source the pass cannot read.
+    /// Whether a copy's source may be a directory tree: a directory, a link
+    /// to one, or a source the pass cannot read. A source not found may be
+    /// a tree an earlier command on the line makes.
     fn may_be_tree(&self, source: &str, bound: &Bound, dir: &str) -> bool {
         let Some(paths) = self.paths(source, bound, dir) else {
             return true;
         };
-        paths
+        paths.iter().any(|path| match std::fs::metadata(path) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(_) => true,
+        })
+    }
+
+    /// The location whose way passes through `seen`'s own node as a link:
+    /// replacing or removing that link changes where the location is.
+    fn link_on_the_way(&self, seen: &Seen) -> Option<&Location> {
+        let end = seen.end?;
+        self.locations()
             .iter()
-            .any(|path| match std::fs::symlink_metadata(path) {
-                Ok(metadata) => metadata.is_dir(),
-                Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-            })
+            .find(|at| !at.seen.unread && at.seen.links.contains(&end))
     }
 
     /// The location a written path is or lies in.
@@ -1095,6 +1144,11 @@ impl Pass<'_> {
                     "`{name}` removes `{operand}`, which is saved shell state: `{}`",
                     at.label
                 ));
+            } else if let Some(at) = self.link_on_the_way(&seen) {
+                found.push(format!(
+                    "`{name}` removes `{operand}`, a link on the way to the saved shell state `{}`; remove a named file that is not on that way",
+                    at.label
+                ));
             }
         }
     }
@@ -1124,6 +1178,18 @@ impl Pass<'_> {
                 Some(placed) => path.join(placed),
                 None => path,
             };
+            if matches!(name, "ln" | "mv") {
+                // A link or a move onto a link on the way to a location
+                // replaces the link, which moves the location; a copy writes
+                // through it and is judged where it lands.
+                if let Some(at) = self.link_on_the_way(&walk(&path, false)) {
+                    found.push(format!(
+                        "`{name}` replaces `{target}`, a link on the way to the saved shell state `{}`; name a file that is not on that way",
+                        at.label
+                    ));
+                    continue;
+                }
+            }
             let seen = walk(&path, true);
             if let Some(at) = self.locations().iter().find(|at| within(&seen, at)) {
                 found.push(match lands {
@@ -1152,7 +1218,7 @@ impl Pass<'_> {
                     if name == "unzip" { "-d <dir>" } else { "-C <dir>" },
                 ),
                 Lands::Tree | Lands::File => format!(
-                    "`{name}` places files into `{target}`, which is, holds or lies in saved shell state: `{}`",
+                    "`{name}` places files into `{target}`, which is, holds or lies in saved shell state: `{}`; copy into a named sub-folder that holds no saved shell state",
                     at.label
                 ),
             });

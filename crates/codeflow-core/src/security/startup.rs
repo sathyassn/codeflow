@@ -815,7 +815,7 @@ impl Kind {
         match self {
             Self::Startup => "shell startup file",
             Self::GitConfig => "user or system git config file",
-            Self::SavedState => "saved shell state file",
+            Self::SavedState => "saved shell state location",
         }
     }
 
@@ -824,7 +824,7 @@ impl Kind {
         match self {
             Self::Startup => "shell startup files",
             Self::GitConfig => "user or system git config files",
-            Self::SavedState => "saved shell state files",
+            Self::SavedState => "saved shell state locations",
         }
     }
 }

@@ -1015,23 +1015,23 @@ fn saved_state_writes_refuse_through_both_hooks() {
         for (command, message) in [
             (
                 format!("echo 'export PATH=/tmp/x:$PATH' >> {target}"),
-                format!("a redirect writes the saved shell state file `{label}`"),
+                format!("a redirect writes the saved shell state location `{label}`"),
             ),
             (
                 format!("tee -a {target} < /dev/null"),
-                format!("`tee` targets the saved shell state file `{label}`"),
+                format!("`tee` targets the saved shell state location `{label}`"),
             ),
             (
                 format!("cp evil.sh {target}"),
-                format!("`cp` writes the saved shell state file `{label}`"),
+                format!("`cp` writes the saved shell state location `{label}`"),
             ),
             (
                 format!("mv evil.sh {target}"),
-                format!("`mv` writes the saved shell state file `{label}`"),
+                format!("`mv` writes the saved shell state location `{label}`"),
             ),
             (
                 format!("ln -sf /tmp/evil.sh {target}"),
-                format!("`ln` writes the saved shell state file `{label}`"),
+                format!("`ln` writes the saved shell state location `{label}`"),
             ),
         ] {
             both_hooks(&f, places, &command, &[message], &mut wrong);
@@ -1059,34 +1059,35 @@ fn saved_state_writes_refuse_through_both_hooks() {
     // The text rule names the location by its full path, as it compares it.
     let needle = key(&lexical(&conf.join("session-env")));
     let near = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
+    let cd_way = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
     let forms: Vec<(String, String)> = vec![
         (
             format!("echo x > {l}/h"),
-            format!("a redirect writes the saved shell state file `{label}`"),
+            format!("a redirect writes the saved shell state location `{label}`"),
         ),
         (
             format!("dd of={l}/h"),
-            format!("`dd` targets the saved shell state file `{label}`"),
+            format!("`dd` targets the saved shell state location `{label}`"),
         ),
         (
             format!("curl --output-dir {l} -o h https://example.test/x"),
-            format!("`curl` targets the saved shell state file `{label}`"),
+            format!("`curl` targets the saved shell state location `{label}`"),
         ),
         (
             format!("cp e {l}/h"),
-            format!("`cp` writes the saved shell state file `{label}`"),
+            format!("`cp` writes the saved shell state location `{label}`"),
         ),
         (
             format!("ln {l}/h a"),
-            format!("`ln` targets the saved shell state file `{label}`"),
+            format!("`ln` targets the saved shell state location `{label}`"),
         ),
         (
             format!("cp --parents e {l}/h"),
-            format!("`cp` writes the saved shell state file `{label}`"),
+            format!("`cp` writes the saved shell state location `{label}`"),
         ),
         (
             format!("find . -fprint {l}/h"),
-            format!("`find` targets the saved shell state file `{label}`"),
+            format!("`find` targets the saved shell state location `{label}`"),
         ),
         // The startup check judges a `cd` operand as a target on a line
         // that is not only directory changes, so it refuses first here and
@@ -1094,54 +1095,54 @@ fn saved_state_writes_refuse_through_both_hooks() {
         // class.
         (
             format!("cd {l} && curl -O https://example.test/x"),
-            format!("`cd` targets the saved shell state file `{label}`"),
+            format!("`cd` targets the saved shell state location `{label}`; {cd_way}"),
         ),
         (
             format!("wget -P {l} https://example.test/x"),
-            format!("`wget` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`wget` runs in `{l}`, where it can place a saved shell state location it does not name; {near}"),
         ),
         // The working directory alone, with no `cd` on the line.
         (
             format!("env -C {l} curl -O https://example.test/x"),
-            format!("`curl` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`curl` runs in `{l}`, where it can place a saved shell state location it does not name; {near}"),
         ),
         (
             format!("cd {l} && ls"),
-            format!("`cd` targets the saved shell state file `{label}`"),
+            format!("`cd` targets the saved shell state location `{label}`; {cd_way}"),
         ),
         (
             format!("python3 -c \"open('{l}/h','w')\""),
-            format!("interpreter code names the saved shell state file `{needle}`, which it can write"),
+            format!("interpreter code names the saved shell state location `{needle}`, which it can write"),
         ),
         (
             format!("echo 'x > {l}/h' | sh"),
-            format!("interpreter code names the saved shell state file `{needle}`, which it can write"),
+            format!("interpreter code names the saved shell state location `{needle}`, which it can write"),
         ),
         (
             format!("cp e {p}/*/h"),
-            format!("`cp` writes the saved shell state file `{label}`"),
+            format!("`cp` writes the saved shell state location `{label}`"),
         ),
         // The program the variable names is judged as a command of its
         // own too, so this row gives two findings.
         (
             format!("PAGER='sh {l}/h' git log"),
-            format!("`PAGER` is set to a command that names the saved shell state file `{needle}`, which a program the line runs would execute"),
+            format!("`PAGER` is set to a command that names the saved shell state location `{needle}`, which a program the line runs would execute"),
         ),
         (
             String::new(),
-            format!("the line names the saved shell state file `{needle}`, and `sh {l}/h` runs a script the guard does not read, so it could write that file out of the guard's sight; run that command in a call that does not name the file"),
+            format!("the line names the saved shell state location `{needle}`, and `sh {l}/h` runs a script the guard does not read, so it could write that file out of the guard's sight; run that command in a call that does not name the file"),
         ),
         (
             format!("echo x >! {l}/h"),
-            format!("a redirect writes the saved shell state file `{label}`"),
+            format!("a redirect writes the saved shell state location `{label}`"),
         ),
         (
             format!("echo x >>! {l}/h"),
-            format!("a redirect writes the saved shell state file `{label}`"),
+            format!("a redirect writes the saved shell state location `{label}`"),
         ),
         (
             format!("echo x >>| {l}/h"),
-            format!("a redirect writes the saved shell state file `{label}`"),
+            format!("a redirect writes the saved shell state location `{label}`"),
         ),
         (
             format!("rm -rf {p}"),
@@ -1153,23 +1154,23 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("cp -r s/. {p}/"),
-            format!("`cp` copies the contents of `s/.` into `{p}/`, where saved shell state files live; copy into a named sub-folder that holds no saved shell state"),
+            format!("`cp` copies the contents of `s/.` into `{p}/`, where saved shell state locations live; copy into a named sub-folder that holds no saved shell state"),
         ),
         (
             format!("wget -P {p} https://example.test/x"),
-            format!("`wget` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`wget` writes into `{p}`, where it can place a saved shell state location it does not name; {near}"),
         ),
         (
             format!("cd {p} && tar xf a.tar"),
-            format!("`tar` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`tar` runs in `{p}`, where it can place a saved shell state location it does not name; {near}"),
         ),
         (
             format!("cd {p} && patch -p1 < fix.diff"),
-            format!("`patch` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`patch` runs in `{p}`, where it can place a saved shell state location it does not name; {near}"),
         ),
         (
             format!("find {p} -name x -exec chmod 600 {{}} +"),
-            format!("`find` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`find` writes into `{p}`, where it can place a saved shell state location it does not name; {near}"),
         ),
     ];
     // A row with no command adds a finding to the row before it.
@@ -1195,7 +1196,10 @@ fn saved_state_writes_refuse_through_both_hooks() {
         &f,
         &places,
         "echo x > $CLAUDE_CONFIG_DIR/session-env/h",
-        &["a redirect writes the saved shell state file `$CLAUDE_CONFIG_DIR/session-env`".to_string()],
+        &[
+            "a redirect writes the saved shell state location `$CLAUDE_CONFIG_DIR/session-env`"
+                .to_string(),
+        ],
         &mut wrong,
     );
     // Controls near saved state: a named file beside it, a removal of a
@@ -1208,6 +1212,201 @@ fn saved_state_writes_refuse_through_both_hooks() {
         format!("find {p} -name x"),
     ] {
         both_hooks(&f, &moved, &command, &[], &mut wrong);
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// A link is a second way to what it leads to. Removing or replacing a
+/// link on the way to a location refuses, and so does a link made to a
+/// location or a folder above one. A copy whose source does not exist yet
+/// may be a tree an earlier command makes, and a program the guard does not
+/// know that names a location through a link refuses with the readers it
+/// lists. Each row runs through exec-guard and git-guard.
+#[cfg(unix)]
+#[test]
+fn links_and_unread_sources_refuse_through_both_hooks() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    let claude = f.home.join(".claude");
+    mkdir(&claude.join("session-env/abc"));
+    mkdir(&claude.join("projects/p"));
+    std::fs::write(claude.join("session-env/h"), "x").unwrap();
+    std::fs::write(f.project.join("a"), "x").unwrap();
+    // `conf` is a link to the configuration folder, which the session
+    // names by the link.
+    symlink(&claude, f.project.join("conf")).unwrap();
+    symlink(claude.join("session-env"), f.project.join("lnk")).unwrap();
+    let linked = Places {
+        claude_config: Some(f.project.join("conf")),
+        ..f.places()
+    };
+    let label = "$CLAUDE_CONFIG_DIR/session-env";
+    let l = slashed(&claude.join("session-env"));
+    let p = slashed(&claude);
+    let mut wrong = Vec::new();
+    for (command, messages) in [
+        (
+            "unlink conf".to_string(),
+            vec![format!("`unlink` removes `conf`, a link on the way to the saved shell state `{label}`; remove a named file that is not on that way")],
+        ),
+        (
+            "rm conf".to_string(),
+            vec![format!("`rm` removes `conf`, a link on the way to the saved shell state `{label}`; remove a named file that is not on that way")],
+        ),
+        (
+            "ln -sfn /tmp conf".to_string(),
+            vec![format!("`ln` replaces `conf`, a link on the way to the saved shell state `{label}`; name a file that is not on that way")],
+        ),
+        (
+            "mv -T a conf".to_string(),
+            vec![format!("`mv` replaces `conf`, a link on the way to the saved shell state `{label}`; name a file that is not on that way")],
+        ),
+        // The startup check reads a link made to a location as a target.
+        (
+            format!("ln -s {l} here"),
+            vec!["`ln` targets the saved shell state location `~/.claude/session-env`".to_string()],
+        ),
+        (
+            format!("ln -s {p} here"),
+            vec![format!("`ln` links `{p}`, which is or holds saved shell state: `{p}`; link a named file that is not saved shell state, or a sub-folder that holds none")],
+        ),
+        (
+            format!("mkdir -p s2/x && cp -r s2/. {p}/"),
+            vec![format!("`cp` copies the contents of `s2/.` into `{p}/`, where saved shell state locations live; copy into a named sub-folder that holds no saved shell state")],
+        ),
+        (
+            "mytool lnk/h".to_string(),
+            vec!["`mytool` targets the saved shell state location `~/.claude/session-env`".to_string()],
+        ),
+    ] {
+        both_hooks(&f, &linked, &command, &messages, &mut wrong);
+    }
+    // Where the startup check finds those three first, the identity pass
+    // still finds each on its own.
+    for (command, message) in [
+        (
+            format!("ln -s {l} here"),
+            format!("`ln` links `{l}`, which is or holds saved shell state: `{l}`; link a named file that is not saved shell state, or a sub-folder that holds none"),
+        ),
+        (
+            format!("mkdir -p s2/x && cp -r s2/. {p}/"),
+            format!("`cp` places files into `{p}/`, which is, holds or lies in saved shell state: `~/.claude/session-env`; copy into a named sub-folder that holds no saved shell state"),
+        ),
+        (
+            "mytool lnk/h".to_string(),
+            "`mytool` targets `lnk/h`, which is saved shell state: `~/.claude/session-env`; to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`".to_string(),
+        ),
+    ] {
+        let found = f.pass_with(&command, &linked);
+        if found != [message] {
+            wrong.push(format!("identity {command}: {found:?}"));
+        }
+    }
+    // Controls: a link placed inside the folder a link leads to, a move
+    // into it, a link to a neighbour of saved state and reading through a
+    // link with a listed reader.
+    for command in [
+        "ln -sf /tmp/x conf".to_string(),
+        "mv a conf".to_string(),
+        format!("ln -s {p}/projects/p here"),
+        "cat lnk/h".to_string(),
+    ] {
+        both_hooks(&f, &linked, &command, &[], &mut wrong);
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Which directories a `cd` refuses. Into a location folder, `cd D && ls`
+/// refuses with the way through, and `cd D` alone passes when `D` is a
+/// plain unquoted path; a quoted path keeps the startup check's judgment,
+/// so `cd 'D'` alone refuses too. A path with a space must be quoted, so a
+/// location below one refuses either way. The folder `CLAUDE_ENV_FILE`
+/// points into and the folders above the locations pass in every form.
+/// Measured for the report's table.
+#[test]
+#[allow(clippy::too_many_lines)] // one table of folders and its loops
+fn a_directory_change_refuses_only_into_a_location() {
+    let f = Fixture::new();
+    let profile = f
+        .home
+        .join("Library/Application Support/orca/claude-profiles/x/home");
+    let env_dir = f.home.join("elsewhere/env");
+    let located = [
+        (f.home.join(".claude/session-env"), "~/.claude/session-env"),
+        (
+            f.home.join(".claude/shell-snapshots"),
+            "~/.claude/shell-snapshots",
+        ),
+        (
+            f.home.join(".codex/shell_snapshots"),
+            "~/.codex/shell_snapshots",
+        ),
+        (
+            f.home.join(".config/herdr-core/templates"),
+            "~/.config/herdr-core/templates",
+        ),
+        (
+            f.home.join("AppData/Roaming/herdr-core/templates"),
+            "~/AppData/Roaming/herdr-core/templates",
+        ),
+    ];
+    let parents = [
+        env_dir.clone(),
+        f.home.join(".claude"),
+        profile.clone(),
+        f.home.join(".codex"),
+        f.home.join(".grok"),
+        f.home.clone(),
+    ];
+    for (dir, _) in &located {
+        mkdir(dir);
+    }
+    for dir in &parents {
+        mkdir(dir);
+    }
+    mkdir(&profile.join("session-env"));
+    let home = f.home.clone().into_os_string();
+    let config = profile.clone().into_os_string();
+    let env_file = env_dir.join("hook-1.sh").into_os_string();
+    let places = Places::from_vars(
+        &move |asked| match asked {
+            "HOME" => Some(home.clone()),
+            "CLAUDE_CONFIG_DIR" => Some(config.clone()),
+            "CLAUDE_ENV_FILE" => Some(env_file.clone()),
+            _ => None,
+        },
+        &f.project,
+    );
+    let cd_way = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
+    let mut wrong = Vec::new();
+    for (dir, label) in &located {
+        let d = slashed(dir);
+        let refusal = [format!(
+            "`cd` targets the saved shell state location `{label}`; {cd_way}"
+        )];
+        both_hooks(&f, &places, &format!("cd {d} && ls"), &refusal, &mut wrong);
+        both_hooks(&f, &places, &format!("cd {d}"), &[], &mut wrong);
+        both_hooks(&f, &places, &format!("cd '{d}'"), &refusal, &mut wrong);
+    }
+    // The text rule names the location by its full path, as it compares it.
+    let spaced = profile.join("session-env");
+    let refusal = [format!(
+        "`cd` is given text that names the saved shell state location `{}`, which it can write",
+        key(&lexical(&spaced))
+    )];
+    let d = slashed(&spaced);
+    both_hooks(
+        &f,
+        &places,
+        &format!("cd '{d}' && ls"),
+        &refusal,
+        &mut wrong,
+    );
+    both_hooks(&f, &places, &format!("cd '{d}'"), &refusal, &mut wrong);
+    for dir in &parents {
+        let d = slashed(dir);
+        both_hooks(&f, &places, &format!("cd '{d}' && ls"), &[], &mut wrong);
+        both_hooks(&f, &places, &format!("cd '{d}'"), &[], &mut wrong);
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
