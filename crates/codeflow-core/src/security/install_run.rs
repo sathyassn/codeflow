@@ -10,7 +10,8 @@
 //! judged with the words after it when it can be the program that runs: the
 //! first word, a word after a launcher, supplier or package runner, or any
 //! word of a program this reader does not know. A program known never to
-//! run its operands (`cp`, `make`, `npm` and the like) gives no such word.
+//! run its operands (`cp`, `make` and the like) gives no such word; `npm`
+//! is read that way except after a subcommand that runs a command.
 //! `cargo run` and `cargo r` are judged by the words cargo passes to the
 //! program it builds. A word the shell expands (a variable, a substitution,
 //! a pattern, braces or a leading `=`) in the program position or as the
@@ -77,18 +78,22 @@ const RECORD_VERBS: &[&str] = &["adr", "epic", "feedback", "recall", "spec", "ta
 /// Programs known never to run one of their operands as a program, so a
 /// folder or file named like the binary among their words is data. A
 /// quoted argument holding a space is still read as a command line, since
-/// a value such as a `make` variable can be.
+/// a value such as a `make` variable can be. `npm` runs a command only
+/// after a word in [`STARTS_A_COMMAND`]; package managers that run a
+/// package's binary by name, such as `yarn` and `pnpm`, are not listed.
 const NOT_LAUNCHERS: &[&str] = &[
     "chmod", "chown", "cmp", "cp", "cut", "diff", "du", "file", "ln", "make", "mkdir", "mv", "npm",
-    "pnpm", "rm", "rmdir", "sort", "stat", "tar", "tee", "touch", "tr", "uniq", "yarn",
+    "rm", "rmdir", "sort", "stat", "tar", "tee", "touch", "tr", "uniq",
 ];
 
 /// Shell builtins that set variables from their operands.
 const DECLARES: &[&str] = &["declare", "export", "local", "readonly", "typeset"];
 
-/// Words after which a supplier or package runner starts the command that
-/// follows.
-const STARTS_A_COMMAND: &[&str] = &["-exec", "-execdir", "-ok", "-okdir", "exec", "x", "dlx"];
+/// Words after which a supplier or package manager starts the command
+/// that follows.
+const STARTS_A_COMMAND: &[&str] = &[
+    "-exec", "-execdir", "-ok", "-okdir", "exec", "explore", "x", "dlx",
+];
 
 /// Suppliers that add the words they read after the command they run.
 const APPENDING: &[&str] = &["parallel", "xargs"];
@@ -240,12 +245,22 @@ fn find(command: &str, depth: usize) -> Option<InstallRun> {
 }
 
 /// A run inside a quoted argument or an assignment's value, read as a
-/// command line.
+/// command line. A value whose first word holds an `=`, such as an
+/// option's `exec=<command>`, is also read from after that `=`.
 fn in_value(value: &str, depth: usize) -> Option<InstallRun> {
-    find(value, depth + 1).map(|run| InstallRun {
-        in_argument: true,
-        ..run
-    })
+    find(value, depth + 1)
+        .or_else(|| {
+            let (head, tail) = value.split_once('=')?;
+            if head.contains(shell_blank) {
+                None
+            } else {
+                in_value(tail, depth + 1)
+            }
+        })
+        .map(|run| InstallRun {
+            in_argument: true,
+            ..run
+        })
 }
 
 /// Judge one simple command's argument vector, with whether the shell
