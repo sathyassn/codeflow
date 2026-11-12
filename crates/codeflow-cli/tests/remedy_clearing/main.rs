@@ -115,6 +115,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
     ("REVIEW_ROW_BINDING", Runs),
+    ("LANDED_REVIEW", Runs),
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),

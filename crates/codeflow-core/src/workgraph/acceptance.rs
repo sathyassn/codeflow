@@ -462,6 +462,7 @@ mod authority {
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
 mod imports;
+mod landed_review;
 mod planning_move;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
@@ -3680,6 +3681,16 @@ pub fn is_correction(found: &Finding) -> bool {
     found.note && found.rule == FROZEN_RULE && found.message.contains(CORRECTION)
 }
 
+/// Whether `found` refuses the reviewer a completion names for its landing
+/// on its epic line with no pull request (ADR-0102, TSK-1433), which
+/// `codeflow ci` prints with its own remedy.
+#[must_use]
+pub fn is_landed_review(found: &Finding) -> bool {
+    !found.note
+        && found.rule == BINDING_RULE
+        && found.message.contains(landed_review::LANDED_REVIEW)
+}
+
 /// Why `new` is not a text correction of `old` (ADR-0080): the same
 /// criteria in the same order, each with the tags and form it had. `None`
 /// when only the text of existing criteria changes.
@@ -4251,6 +4262,13 @@ fn completions_received(
     );
     let mut reviewed = Vec::new();
     let mut proofs = LineProofs::default();
+    // The judged branch is itself an epic line: its push lands tasks on it,
+    // and its pull request carries them to the default branch. Neither run
+    // has a task pull request body whose Reviews row it could check, so a
+    // completion's record must name a reviewer of another lineage than its
+    // builder's (ADR-0102, TSK-1433). A task pull request, or a push of its
+    // branch, is judged as before.
+    let landing_line = receiving_line(line, None).is_some();
     for task in after
         .records
         .values()
@@ -4347,6 +4365,11 @@ fn completions_received(
             );
             if let Some(proof) = bound.proof {
                 reviewed.push(proof.reviewed);
+            }
+            if let Some(block) = block.as_ref().filter(|_| landing_line) {
+                if let Some(problem) = landed_review::problem(task, block)? {
+                    findings.push(finding(BINDING_RULE, problem));
+                }
             }
             // A completion made before the range head but bound at it (a
             // frozen range) did not make the head's change: name the head.

@@ -892,6 +892,74 @@ fn clears_review_row_binding() {
     );
 }
 
+/// ADR-0102, TSK-1433: a task that lands on its epic line with no pull
+/// request names a reviewer of another lineage than the builder its record
+/// names. A review reference that names no reviewer does not; the printed
+/// steps record the review again, naming its reviewer first.
+#[test]
+fn clears_landed_review() {
+    const LINE: &str = "integration/EPC-001-line";
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    let planned = read(root, TASK).replacen(
+        "\n## Closeout\n",
+        "\n## Execution contract\n\n- Builder: Claude Opus 5.5 at medium.\n\n## Closeout\n",
+        1,
+    );
+    write(root, TASK, &planned);
+    commit_all(root, "docs: name the builder");
+    hosted.land("plan/work");
+    hosted.branch(LINE);
+    commit(root, "x.txt", "feat: add x");
+    let acceptance = review_head(root);
+    let out = codeflow(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            &acceptance,
+        ],
+    );
+    assert!(out.contains("todo -> complete"), "{out}");
+    commit_all(root, "chore: complete the work");
+    prove(
+        "LANDED_REVIEW",
+        "lands on its epic line with no pull request",
+        || hosted.ci(LINE, &[]),
+        |printed| {
+            // A reviewer of another lineage reviews the head; take the
+            // printed steps in order, naming that reviewer first.
+            let acceptance = review_head(root);
+            let named = std::fs::read_to_string(&acceptance).unwrap().replace(
+                "session:proof@sha256:00",
+                "Codex GPT-6.1 Sol at medium, whole unit",
+            );
+            std::fs::write(&acceptance, named).unwrap();
+            let steps: Vec<&str> = printed
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("codeflow task status"))
+                .collect();
+            assert_eq!(steps.len(), 2, "{printed}");
+            assert_eq!(steps[0], printed_command(printed, "LANDED_REVIEW", None));
+            for step in steps {
+                run_printed(
+                    root,
+                    step,
+                    &[("<id>", "TSK-001"), ("<file>", &acceptance)],
+                    &[],
+                );
+            }
+            commit_all(root, "chore: record the review by another lineage");
+        },
+    );
+}
+
 /// An epic acceptance block for AC-1 reviewing `reviewed`, written beside
 /// the project; returns its path.
 fn epic_block(root: &Path, reviewed: &str, ac1: &str) -> String {
