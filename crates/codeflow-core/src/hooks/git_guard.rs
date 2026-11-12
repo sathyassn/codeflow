@@ -4505,10 +4505,7 @@ const ENFORCEMENT_DIRS: &[&str] = &[
 
 /// The folders linked worktrees live in, matched when the text names the
 /// folder or one entry of it (`.worktrees`, `.worktrees/<name>`).
-/// The shipped presets deny the native edit tools each worktree's copy of
-/// the enforcement files from the same list
-/// (`ActionTable::worktree_edit_denies`, TSK-1476).
-pub(crate) const WORKTREE_DIRS: &[&str] = &[".claude/worktrees", ".worktrees"];
+const WORKTREE_DIRS: &[&str] = &[".claude/worktrees", ".worktrees"];
 
 /// Programs that only read the paths they are given, so running them
 /// through `find -exec` or `xargs` changes nothing. None of them has an

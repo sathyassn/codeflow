@@ -1089,8 +1089,7 @@ fn codex_rules_are_generated_from_the_action_table() {
 /// the design started from, with two stated departures: the read rules are
 /// ordered in groups (review of PR 749), so the deny array holds the same
 /// rules as the reference in a different order; and the shell startup class
-/// and the default git configuration files (TSK-242), and the denies of each
-/// worktree's copies of the enforcement paths (TSK-1476), added after the
+/// and the default git configuration files (TSK-242), added after the
 /// samples were taken, add their `Edit` denies and sandbox `denyWrite`
 /// entries, which are removed here before the comparison. Hook commands are excluded: their fail-closed form and
 /// `--contract` flag are TSK-173's.
@@ -1135,7 +1134,6 @@ fn the_generator_reproduces_the_reference_samples() {
         table.apply_to_claude_preset(&mut generated);
         let mut startup = table.startup_paths.claude_edit_denies();
         startup.extend(table.git_config_paths.claude_edit_denies());
-        startup.extend(table.worktree_edit_denies());
         let deny = generated["permissions"]["deny"].as_array_mut().unwrap();
         deny.retain(|rule| !startup.iter().any(|s| rule == s));
         generated["sandbox"]["filesystem"]

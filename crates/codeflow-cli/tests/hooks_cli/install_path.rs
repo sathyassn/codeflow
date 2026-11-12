@@ -521,50 +521,25 @@ fn worktree_copies_refuse_native_file_tools() {
     tally.finish();
 }
 
-/// AC-3: every shipped Claude preset denies the native edit tools each
-/// worktree's copy of every enforcement file the root checkout's denies
-/// name, wherever the project sits under the session's folder. Git's own
-/// files are left out: a linked worktree keeps its configuration and hooks
-/// in the common directory the root's denies already cover.
+/// AC-3: the shipped Claude presets name no worktree path. A deny on a
+/// worktree's copy would apply to git's own writes in a sandboxed session
+/// too, so `git worktree add`, `merge` and `checkout` would fail there. The
+/// guard rows above hold those copies.
 #[test]
-fn every_shipped_claude_preset_denies_the_worktree_copies() {
-    let expected: Vec<String> = codeflow_core::security::actions::table()
-        .claude_edit_denies
-        .iter()
-        .filter_map(|rule| rule.strip_prefix("Edit(/")?.strip_suffix(')'))
-        .filter(|relative| !relative.starts_with(".git/") && !relative.starts_with('/'))
-        .flat_map(|relative| {
-            WORKTREE_FOLDERS
-                .iter()
-                .map(move |folder| format!("Edit(//**/{folder}/*/{relative})"))
-        })
-        .collect();
-    assert!(
-        !expected.is_empty(),
-        "the action table names no root denies"
-    );
+fn shipped_claude_presets_leave_the_worktree_copies_to_the_guards() {
     let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
-    let mut missing = Vec::new();
+    let mut named = Vec::new();
     for name in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
         let text = std::fs::read_to_string(presets.join(name)).unwrap();
-        let preset: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let deny: Vec<&str> = preset["permissions"]["deny"]
-            .as_array()
-            .unwrap_or_else(|| panic!("{name} has no deny list"))
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect();
-        for entry in &expected {
-            if !deny.contains(&entry.as_str()) {
-                missing.push(format!("{name}: {entry}"));
+        for folder in WORKTREE_FOLDERS {
+            if text.contains(&format!("{folder}/*/")) {
+                named.push(format!("{name}: {folder}"));
             }
         }
     }
     assert!(
-        missing.is_empty(),
-        "missing worktree denies ({}):\n{}",
-        missing.len(),
-        missing.join("\n")
+        named.is_empty(),
+        "presets name worktree paths: {named:?}"
     );
 }
 
