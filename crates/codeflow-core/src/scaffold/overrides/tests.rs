@@ -60,9 +60,18 @@ fn a_row_value_is_one_line_without_marker_text() {
         "a <!-- b",
         "x --> y",
         "CodeFlow:begin",
+        "a [link](https://example.com) b",
+        "a ![image](https://example.com/a.png) b",
+        "a $x$ b",
+        "a&#x202E;b",
+        "a <span hidden>b</span> c",
     ] {
         assert!(!row_value_ok(bad, false), "{bad:?}");
     }
+    assert!(row_value_ok(
+        "see <https://example.com/a> and `[x](y)`",
+        false
+    ));
     assert!(row_value_ok("a | b", false));
     assert!(!row_value_ok("a | b", true), "a table cell refuses a pipe");
 }
@@ -213,7 +222,10 @@ fn a_body_that_would_hide_later_text_is_refused() {
     // A closed block is still raw HTML.
     assert_eq!(
         sections::check_body("<pre>\nx\n</pre>\n", 2),
-        Err(BodyProblem::RawHtml)
+        Err(BodyProblem::Hidden {
+            class: sections::Hidden::RawHtml,
+            at: 0
+        })
     );
 }
 
@@ -326,6 +338,66 @@ fn the_oracle_refuses_raw_html_inside_a_unit() {
     let unit = loop_unit("<div hidden>\nx\n</div>\n");
     let out = apply_units(GUARDED, std::slice::from_ref(&unit)).unwrap();
     assert!(!oracle::same_structure(GUARDED, &out, &[unit]));
+}
+
+/// A reference definition inside a unit can turn shipped text outside it
+/// into a link, while every block outside the unit stays the same block:
+/// the structural comparison alone passes it, so the unit check refuses it.
+#[test]
+fn a_unit_cannot_change_how_shipped_text_outside_it_renders() {
+    use sections::{check_body, BodyProblem, Hidden};
+    let text = "# Skill\n\nSee [the gate] first.\n\n<!-- codeflow:section id=loop class=overridable -->\n## The loop\n\nbody one\n\n<!-- codeflow:section id=gate class=floor -->\n## The gate\n\nNever skip the gate.\n";
+    let body = "\nOur loop.\n\n[the gate]: https://example.com/skip \"Skip it.\"\n\n";
+    let unit = loop_unit(body);
+    let out = apply_units(text, std::slice::from_ref(&unit)).unwrap();
+    assert!(only_units_changed(text, &out, std::slice::from_ref(&unit)));
+    assert!(same_sections(text, &out));
+    assert!(!oracle::same_structure(text, &out, &[unit]), "{out}");
+    assert_eq!(
+        check_body(body, 2),
+        Err(BodyProblem::Hidden {
+            class: Hidden::ReferenceDefinition,
+            at: 12
+        })
+    );
+}
+
+/// Every refused form inside a unit is seen by the result check too, at the
+/// unit's place in the whole file; the same text in a code span passes.
+#[test]
+fn the_oracle_refuses_every_hidden_form_inside_a_unit() {
+    let text = "# Map\n\n- **One.** first\n- **Two.** second\n\n| When | Do |\n|---|---|\n| a | b |\n| c | d |\n";
+    for value in [
+        "[it](https://example.com)",
+        "[](https://example.com)",
+        "![i](https://example.com/a.png)",
+        "$x$",
+        "x&#x202E;y",
+        "x[^n] y",
+    ] {
+        let units = [row(
+            "rule:one",
+            "- **One.** first",
+            &format!("- **One.** {value} first"),
+        )];
+        let out = apply_units(text, &units).unwrap();
+        assert!(only_units_changed(text, &out, &units));
+        assert!(!oracle::same_structure(text, &out, &units), "{value}");
+        let code = [row(
+            "rule:one",
+            "- **One.** first",
+            &format!("- **One.** `{value}` first"),
+        )];
+        let out = apply_units(text, &code).unwrap();
+        assert!(oracle::same_structure(text, &out, &code), "`{value}`");
+    }
+    let autolink = [row(
+        "rule:one",
+        "- **One.** first",
+        "- **One.** see <https://example.com/a>",
+    )];
+    let out = apply_units(text, &autolink).unwrap();
+    assert!(oracle::same_structure(text, &out, &autolink));
 }
 
 #[test]

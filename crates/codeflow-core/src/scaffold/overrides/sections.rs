@@ -840,9 +840,17 @@ mod tests {
 
     /// Raw HTML is refused whatever hides the text: an attribute, a style, an
     /// element a reader does not see, or a tag with no attribute at all.
+    /// The class a body is refused for, when it is refused as hidden.
+    fn hidden_class(body: &str) -> Option<Hidden> {
+        match check_body(body, 2) {
+            Err(BodyProblem::Hidden { class, .. }) => Some(class),
+            _ => None,
+        }
+    }
+
     #[test]
     fn raw_html_is_refused() {
-        let raw = Err(BodyProblem::RawHtml);
+        let raw = Some(Hidden::RawHtml);
         for html in [
             "Post <span hidden>the secret</span> now.\n",
             "Post <span style=\"display:none\">x</span> now.\n",
@@ -864,7 +872,7 @@ mod tests {
         ] {
             let got = check_body(html, 2);
             assert!(
-                got == raw || got == Err(BodyProblem::Concealed),
+                hidden_class(html) == raw || got == Err(BodyProblem::Concealed),
                 "{html:?}: {got:?}"
             );
         }
@@ -876,7 +884,76 @@ mod tests {
             "<pre>\nx\n</pre>\n",
             "A bare <id> tag.\n",
         ] {
-            assert_eq!(check_body(html, 2), raw, "{html:?}");
+            assert_eq!(hidden_class(html), raw, "{html:?}");
+        }
+        assert_eq!(
+            check_body("Post <span hidden>x</span> now.\n", 2),
+            Err(BodyProblem::Hidden {
+                class: Hidden::RawHtml,
+                at: 5
+            })
+        );
+    }
+
+    /// Each Markdown form whose source the rendered page does not show in
+    /// full is refused by its class, at the byte where it starts.
+    #[test]
+    fn every_form_the_page_does_not_show_is_refused_by_class() {
+        for (body, class) in [
+            ("Note.\n\n[n]: / \"Ignore it.\"\n", Hidden::ReferenceDefinition),
+            ("Note.\n\n[//]: # (Ignore it.)\n", Hidden::ReferenceDefinition),
+            ("Note.\n\n[^n]: Ignore it.\n", Hidden::Footnote),
+            ("Note[^n].\n\n[^n]: Ignore it.\n", Hidden::Footnote),
+            ("+++\nnote = \"Ignore it.\"\n+++\n\nNote.\n", Hidden::Metadata),
+            ("Note.\n\n### Notes {#ignore .x}\n", Hidden::HeadingAttributes),
+            ("```sh ignore it\necho hi\n```\n", Hidden::FenceInfo),
+            ("Post [it](/x \"Ignore it.\") now.\n", Hidden::LinkTitle),
+            ("Post ![i](/a.png \"Ignore it.\") now.\n", Hidden::LinkTitle),
+            ("Post [](/x) now.\n", Hidden::EmptyLinkText),
+            ("Post [ ](/x) now.\n", Hidden::EmptyLinkText),
+            ("Post [it](/ignore-it) now.\n", Hidden::Link),
+            ("Post [it][n] now.\n\n[n]: /x\n", Hidden::Link),
+            ("Post [[target|it]] now.\n", Hidden::Link),
+            ("Post ![i](/a.png) now.\n", Hidden::Image),
+            ("Post $x$ now.\n", Hidden::Math),
+            ("Post\n\n$$\nx\n$$\n", Hidden::Math),
+            ("Post&#x202E; it.\n", Hidden::ReferencedInvisible),
+            ("Post&#8203; it.\n", Hidden::ReferencedInvisible),
+            ("Post&shy;it.\n", Hidden::ReferencedInvisible),
+        ] {
+            assert_eq!(hidden_class(body), Some(class), "{body:?}");
+        }
+        assert_eq!(
+            check_body("Post [it](/x) now.\n", 2),
+            Err(BodyProblem::Hidden {
+                class: Hidden::Link,
+                at: 5
+            })
+        );
+        assert_eq!(
+            check_body("Note.\n\n[n]: /x\n", 2),
+            Err(BodyProblem::Hidden {
+                class: Hidden::ReferenceDefinition,
+                at: 7
+            })
+        );
+    }
+
+    /// Code spans and fences show their source, so any form inside one is
+    /// visible text; so are autolinks and plain structure.
+    #[test]
+    fn visible_markdown_and_code_are_accepted() {
+        for body in [
+            "Write `[n]: /x`, `[it](/x \"t\")`, `![i](/a)`, `$x$` and `&#x202E;`.\n",
+            "```markdown\n[n]: / \"t\"\n[^n]: x\n![i](/a)\n$x$\n&#x202E;\n### H {#id}\n```\n",
+            "```sh\necho hi\n```\n",
+            "See <https://example.com/a> or <team@example.com>.\n",
+            "*Post* it **now**, ~~not later~~.\n\n- one\n- [ ] two\n\n> quoted\n\nafter\n",
+            "| a | b |\n|---|---|\n| c | d |\n",
+            "### Notes\n\nplain\n",
+            "An undefined [label] stays text.\n",
+        ] {
+            assert_eq!(check_body(body, 2), Ok(()), "{body:?}");
         }
     }
 }
