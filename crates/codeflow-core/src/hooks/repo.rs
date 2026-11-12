@@ -937,8 +937,9 @@ type Interleave = Box<dyn FnMut(&str)>;
 
 #[cfg(test)]
 thread_local! {
-    /// Runs at the named points inside [`shared_git_tree`] so a test can
-    /// swap a folder exactly there.
+    /// Runs at the named points inside [`shared_git_tree`] and the sibling
+    /// gate of [`read_registration`] so a test can swap a folder or a file
+    /// exactly there.
     pub(crate) static INTERLEAVE: std::cell::RefCell<Option<Interleave>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -1249,6 +1250,8 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
     }
     check_common_directory(&checkout)?;
     if let Some(common) = facts {
+        #[cfg(test)]
+        interleave("after-gate-open");
         judge_shared_files(admin, common);
     }
     Ok(CheckedRegistration {
@@ -1323,6 +1326,8 @@ fn judge_shared_files(admin: &Path, common: PathBuf) {
             }
         }
     });
+    #[cfg(test)]
+    interleave("after-gate-judged");
 }
 
 /// TSK-1275: the per-sibling facts that, with an earlier full open of
@@ -2397,6 +2402,218 @@ mod tests {
             refused.contains("worktree registration"),
             "unexpected refusal: {refused}"
         );
+    }
+
+    /// TSK-1275: the registration listing is one reading per guard
+    /// evaluation. A registration added after it was read is not listed again
+    /// in that evaluation, which never reads the new registration's files,
+    /// and the next evaluation lists it.
+    #[test]
+    fn a_registration_added_inside_one_evaluation_is_listed_by_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        git(dir.path(), &["worktree", "add", "-b", "one", "one"]);
+        let scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+        let repo = super::open(dir.path()).unwrap().unwrap();
+        assert_eq!(super::registrations(&repo).unwrap().len(), 1);
+        git(dir.path(), &["worktree", "add", "-b", "two", "two"]);
+        assert_eq!(super::registrations(&repo).unwrap().len(), 1);
+        drop(scope);
+        let _next = crate::hooks::edit_guard::RepoFactsScope::enter();
+        assert_eq!(super::registrations(&repo).unwrap().len(), 2);
+    }
+
+    /// Runs `action` once, the first time the sibling gate reaches `stage`
+    /// on this thread; the returned flag says whether it ran.
+    #[cfg(unix)]
+    fn interleave_once(
+        stage: &'static str,
+        action: impl FnOnce() + 'static,
+    ) -> std::rc::Rc<std::cell::Cell<bool>> {
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = fired.clone();
+        let mut action = Some(action);
+        super::INTERLEAVE.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |at: &str| {
+                if at != stage {
+                    return;
+                }
+                if let Some(action) = action.take() {
+                    action();
+                    seen.set(true);
+                }
+            }));
+        });
+        fired
+    }
+
+    /// TSK-1275: a listed registration that links to an administrative
+    /// directory elsewhere under the common directory is refused by the full
+    /// open, because its registration directory is not `<common>/worktrees`.
+    /// After another sibling has proven the common directory in the same
+    /// evaluation it is still refused and never skips, whichever way its
+    /// gitfile names the administrative directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_registration_linked_elsewhere_under_the_common_directory_stays_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (listed, two_root) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        assert_eq!(validate_in_one_scope(&[&one, &listed]), 1);
+        // Git's own `commondir` text, `../..`, still names the common
+        // directory from the moved administrative directory.
+        let moved = common.join("other").join("two");
+        std::fs::create_dir(common.join("other")).unwrap();
+        std::fs::rename(&listed, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &listed).unwrap();
+        assert_eq!(
+            std::fs::read(moved.join("commondir"))
+                .unwrap()
+                .trim_ascii_end(),
+            b"../.."
+        );
+        for named in [&listed, &moved] {
+            std::fs::write(
+                two_root.join(".git"),
+                format!("gitdir: {}\n", named.display()),
+            )
+            .unwrap();
+            assert!(
+                super::sibling_facts(&listed, &two_root).is_none(),
+                "{}",
+                named.display()
+            );
+            // Outside an evaluation every sibling is opened, as on main.
+            let Err(refused) = super::read_registration(&listed) else {
+                panic!("the full open refuses a registration outside <common>/worktrees");
+            };
+            assert!(
+                refused.contains("common directory disagrees"),
+                "unexpected refusal: {refused}"
+            );
+            let (skips, inside) = {
+                let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+                let before = skipped();
+                super::read_registration(&one).unwrap();
+                let inside = super::read_registration(&listed);
+                (skipped() - before, inside)
+            };
+            assert_eq!(skips, 0, "{}", named.display());
+            assert_eq!(inside.err(), Some(refused), "{}", named.display());
+        }
+    }
+
+    /// TSK-1275 (AC-3, AC-6): the shared configuration replaced inside one
+    /// guard evaluation, right after the gate's full open or right after the
+    /// gate proved it, is read by every sibling validated afterwards, as
+    /// main's own open of each sibling reads it. A format version libgit2
+    /// refuses is refused by discovery at either point.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_config_replaced_inside_one_evaluation_is_read_by_later_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, _) = sibling(dir.path(), "two");
+        let (three, _) = sibling(dir.path(), "three");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        // The skip is live here: two of three siblings skip.
+        assert_eq!(validate_in_one_scope(&[&one, &two, &three]), 2);
+        let config = common.join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let refused = text.replacen(
+            "repositoryformatversion = 0",
+            "repositoryformatversion = 99",
+            1,
+        );
+        assert_ne!(refused, text);
+        // Main's answer once the change is in place: each sibling refuses.
+        std::fs::write(&config, &refused).unwrap();
+        assert!(super::read_registration(&two).is_err());
+        for stage in ["after-gate-open", "after-gate-judged"] {
+            std::fs::write(&config, &text).unwrap();
+            let (path, replacement) = (config.clone(), refused.clone());
+            let fired =
+                interleave_once(stage, move || std::fs::write(&path, &replacement).unwrap());
+            let discovered = {
+                let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+                super::RepoInfo::discover(dir.path())
+            };
+            super::INTERLEAVE.with(|slot| *slot.borrow_mut() = None);
+            assert!(fired.get(), "{stage}: the gate's full open ran");
+            assert!(
+                discovered.is_err(),
+                "{stage}: a sibling validated after the change refuses it"
+            );
+        }
+        std::fs::write(&config, &text).unwrap();
+    }
+
+    /// TSK-1275 (AC-3, AC-6): a sibling's registration files replaced after
+    /// another sibling proved the common directory, inside the same
+    /// evaluation, are read afresh. The replaced sibling never skips, and its
+    /// full open refuses it with main's error.
+    #[cfg(unix)]
+    #[test]
+    fn a_registration_replaced_after_the_gate_is_proven_is_read_afresh() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, two_root) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        let foreign = dir.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        init_repo(&foreign);
+        let foreign_git = foreign.join(".git").canonicalize().unwrap();
+        let marker = two_root.join(".git");
+        let gitfile = std::fs::read(&marker).unwrap();
+        let commondir = two.join("commondir");
+        let written = std::fs::read(&commondir).unwrap();
+        let replaced: [Case; 2] = [
+            (
+                "commondir naming another repository",
+                Box::new(|| {
+                    std::fs::write(&commondir, format!("{}\n", foreign_git.display())).unwrap();
+                }),
+                Box::new(|| std::fs::write(&commondir, &written).unwrap()),
+            ),
+            (
+                "gitfile naming another sibling's registration",
+                Box::new(|| {
+                    std::fs::write(&marker, format!("gitdir: {}\n", one.display())).unwrap()
+                }),
+                Box::new(|| std::fs::write(&marker, &gitfile).unwrap()),
+            ),
+        ];
+        for (case, replace, mend) in &replaced {
+            replace();
+            let main = super::read_registration(&two);
+            mend();
+            let (skips, inside) = {
+                let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+                let before = skipped();
+                super::read_registration(&one).unwrap();
+                replace();
+                let inside = super::read_registration(&two);
+                (skipped() - before, inside)
+            };
+            mend();
+            assert!(main.is_err(), "{case}");
+            assert_eq!(skips, 0, "{case}");
+            assert_eq!(inside.err(), main.err(), "{case}");
+            assert_eq!(validate_in_one_scope(&[&one, &two]), 1, "{case} mended");
+        }
     }
 
     #[test]
