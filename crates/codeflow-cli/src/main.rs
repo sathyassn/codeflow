@@ -96,7 +96,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scaffold this project (idempotent, non-destructive, offline).
+    /// Scaffold this project (idempotent, non-destructive, offline); the operator runs it, and the guards refuse an agent's run.
     #[command(group(ArgGroup::new("tier").args(["minimal", "standard", "full"])))]
     Init {
         /// The discipline floor: full git-discipline enforcement (all hooks + CI + in-session guards + armed policy) and a lean agent contract — for any repo.
@@ -120,7 +120,7 @@ enum Command {
         #[arg(long)]
         workspace: bool,
     },
-    /// Refresh managed scaffold files (3-way merge; never clobbers).
+    /// Refresh managed scaffold files (3-way merge; never clobbers); the operator runs it, and the guards refuse an agent's run.
     Update {
         /// Write the report plus each applied change to a file. The export
         /// never shows a value, key name or line from the project's files or

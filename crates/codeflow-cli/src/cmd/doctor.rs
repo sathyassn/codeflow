@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(code, 0, "a warning never fails doctor: {out}");
         assert!(out.starts_with("warn  config:"), "got: {out}");
         assert!(
-            out.contains("\n      clear it: run `codeflow init` in the project root"),
+            out.contains("\n      clear it: the operator runs `codeflow init` in the project root"),
             "got: {out}"
         );
     }

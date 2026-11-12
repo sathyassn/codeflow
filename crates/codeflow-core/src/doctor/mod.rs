@@ -420,7 +420,7 @@ fn check_hooks(opts: &Options) -> CheckResult {
             name: "hooks".into(),
             status: Status::Fail,
             message: format!(
-                "codeflow binary not found in PATH; {}; then codeflow update",
+                "codeflow binary not found in PATH; the operator installs it with: {}; then runs codeflow update",
                 crate::hooks::landed_policy::INSTALL
             ),
             duration: start.elapsed(),
@@ -435,7 +435,7 @@ fn check_hooks(opts: &Options) -> CheckResult {
             name: "hooks".into(),
             status: Status::Fail,
             message: format!(
-                "codeflow binary is older than hook contract 3; {}; then codeflow update",
+                "codeflow binary is older than hook contract 3; the operator installs the current one with: {}; then runs codeflow update",
                 crate::hooks::landed_policy::INSTALL
             ),
             duration: start.elapsed(),
@@ -5259,7 +5259,7 @@ mod tests {
             remedy.contains("`codeflow update` does not rewrite .grok/hooks/custom.json"),
             "{remedy}"
         );
-        assert!(!remedy.contains("run `codeflow update`"), "{remedy}");
+        assert!(!remedy.contains("runs `codeflow update`"), "{remedy}");
 
         std::fs::write(project.join(".grok/hooks/codeflow.json"), stale).unwrap();
         std::fs::remove_file(project.join(".grok/hooks/custom.json")).unwrap();
@@ -5267,7 +5267,7 @@ mod tests {
         let Status::Warn(remedy) = &r.status else {
             panic!("{:?} {}", r.status, r.message);
         };
-        assert!(remedy.contains("run `codeflow update`"), "{remedy}");
+        assert!(remedy.contains("runs `codeflow update`"), "{remedy}");
 
         opts.update_plan = None;
         let r = check_grok(&opts);
@@ -8064,7 +8064,7 @@ mod tests {
         let json = serde_json::to_string(&warn).unwrap();
         assert_eq!(
             json,
-            "{\"warn\":\"run `codeflow init` in the project root\"}"
+            "{\"warn\":\"the operator runs `codeflow init` in the project root\"}"
         );
     }
 

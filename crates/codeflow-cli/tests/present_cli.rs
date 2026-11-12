@@ -3222,7 +3222,9 @@ fn first_use_without_a_writable_state_parent_names_the_provisioning_command() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("run `codeflow update` once outside the agent sandbox to create it"),
+        stderr.contains(
+            "the operator runs `codeflow update` once outside the agent sandbox to create it"
+        ),
         "{stderr}"
     );
     assert!(!state_root.exists());

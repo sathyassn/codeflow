@@ -95,7 +95,7 @@ impl PinReport {
             "  next: review the digests and land this change on its own; CI then installs only these archives",
         ));
         lines.push(shown!(
-            "  then: with codeflow {} installed, run `codeflow update` on a new branch",
+            "  then: with codeflow {} installed, the operator runs `codeflow update` on a new branch",
             Shown::version(&self.version)
         ));
         Shown::join(lines, "\n")
@@ -526,7 +526,7 @@ pub fn pin_release(
     let file = Shown::path(PROJECT_TOML);
     let text = read_beneath_root(root, PROJECT_TOML)
         .map_err(|error| Shown::from(&error))?
-        .ok_or_else(|| shown!("no {}: run `codeflow init` first", file))?;
+        .ok_or_else(|| shown!("no {}: the operator runs `codeflow init` first", file))?;
     let mut state: toml::Table = toml::from_str(&text).map_err(|error| {
         shown!(
             "{} does not parse: {}",
@@ -678,7 +678,7 @@ mod tests {
         let shown = report.to_string();
         assert!(shown.contains("scaffold_version 1.2.3 -> 1.3.0"), "{shown}");
         assert!(
-            shown.contains("run `codeflow update` on a new branch"),
+            shown.contains("the operator runs `codeflow update` on a new branch"),
             "{shown}"
         );
     }

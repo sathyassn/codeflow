@@ -274,10 +274,15 @@ pub const SCHEMA: [KeySpec; 82] = [
                 package runner, shell, interpreter, Git runner or `cargo run` starts it and \
                 however the binary's path is written, and a run whose program word or first \
                 operand it cannot resolve; only the exact help and version forms, which write \
-                nothing, stay allowed (TSK-1476). A binary an agent renames or copies, and the \
-                verb's words written to a file and run later, are not named on the line: the \
-                shipped Claude presets deny the native edit tools each worktree's copy of the \
-                enforcement files, and the OS sandbox's write denies bound the rest. \
+                nothing, stay allowed (TSK-1476). Words that only name the verbs stay data: the \
+                binary's own record verbs, test operands, a search program's pattern, an \
+                assigned value no later command on the line reads, and a folder of that name \
+                given to a program that never runs its operands. A binary an agent renames or \
+                copies, and the verb's words written to a file and run later, are not named on \
+                the line; that is a named residual. The guards hold each worktree's copies of \
+                the enforcement files as they hold the root checkout's; the shipped presets \
+                name no worktree path, since a deny there also stops Git's own writes in a \
+                sandboxed session. \
                 A write to Git's alternate object lists \
                 (`objects/info/alternates`, `objects/info/http-alternates`, in the common \
                 directory a linked worktree shares) refuses like a write to hooks, refs or \
@@ -1604,7 +1609,7 @@ pub fn upgrade_order_hint(errors: &[PolicyError], binary_version: &str) -> Optio
         .any(|e| e.message.starts_with("unknown key"))
         .then(|| {
             format!(
-                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary; `codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
+                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary; the operator's `codeflow update --pin <version>` also pins its release digests) and land it; then the operator runs `codeflow update` on a new branch, so the new binary judges the new keys"
             )
         })
 }

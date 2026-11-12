@@ -317,7 +317,7 @@ catalog! {
         "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
-        "run `codeflow update`, which restores {path} at this project's tier";
+        "the operator runs `codeflow update`, which restores {path} at this project's tier";
     /// References into an absent epics layer.
     DOCS_EPICS_UNCHECKED = Step::Codeflow("codeflow epic new"),
         "create each epic named with `codeflow epic new`, or remove the references to it";
@@ -468,15 +468,15 @@ catalog! {
         "task work belongs in a linked worktree: put the root checkout back on its root branch with `git switch {root}`, then work and commit in a worktree (`git worktree add .worktrees/<slug> -b <branch>`, or `git worktree add .worktrees/<slug> <branch>` to continue an existing branch)";
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
-        "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change only through the operator, by hand or with `codeflow update` (ADR-0009)";
+        "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change only through the operator, by hand or by running `codeflow update` (ADR-0009)";
     /// An interpreter given an argument that names, or may name, an
     /// enforcement path (TSK-302).
     INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
-        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change only through the operator, by hand or with `codeflow update` (ADR-0009)";
+        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change only through the operator, by hand or by running `codeflow update` (ADR-0009)";
     /// An agent's run of the install verbs, which write the project's
     /// install files (TSK-1476).
     INSTALL_RUN = Step::Codeflow("codeflow update"),
-        "only the operator runs `codeflow update` and `codeflow init`, with any binary, because they write the files the guards enforce from: ask the operator to run it in their own terminal; `codeflow doctor` reports what is out of date, and `codeflow update --help` prints the options without writing";
+        "only the operator runs `codeflow update` and `codeflow init`, whichever build of the binary, because they write the files the guards enforce from: ask the operator to run it in their own terminal; `codeflow doctor` reports what is out of date, and `codeflow update --help` prints the options without writing";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";
@@ -667,10 +667,10 @@ catalog! {
         "run `git config core.hooksPath {hooks}` so git runs the codeflow shims in each worktree";
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
-        "run `codeflow init` in the project root";
+        "the operator runs `codeflow init` in the project root";
     /// A project without the Outcome section's adoption marker (TSK-435).
     DOCTOR_OUTCOME_MARKER = Step::Codeflow("codeflow update"),
-        "run `codeflow update`, which writes `outcome_present_uids` to .codeflow/project.toml once, listing the task and epic records present now; those only warn without an `## Outcome` section, and later ones must state it";
+        "the operator runs `codeflow update`, which writes `outcome_present_uids` to .codeflow/project.toml once, listing the task and epic records present now; those only warn without an `## Outcome` section, and later ones must state it";
     /// A tool doctor looks for on PATH and does not find.
     DOCTOR_TOOL_MISSING = Step::Codeflow("codeflow doctor"),
         "install {tool} on PATH, then `codeflow doctor --check {check}` confirms it";
@@ -701,23 +701,23 @@ catalog! {
     /// manages, or a grok shell guard that does not refuse the doctor
     /// canary.
     DOCTOR_GROK_HOOKS = Step::Codeflow("codeflow update"),
-        "install the current CodeFlow binary when `codeflow doctor --check hooks` reports it missing or older, then run `codeflow update` so the CodeFlow hook commands in {path} match the shipped ones, which carry no `$`. It keeps your own edits: Claude settings by merging their hook entries, other files by a 3-way merge that applies on its own when your edit does not overlap the shipped change. Where it overlaps, update leaves the file as it is and writes a `.new` file beside it holding the merge: resolve its conflict markers in favour of the shipped CodeFlow hook commands, keeping your own changes, replace your file with it and delete the `.new` file. Then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+        "the operator installs the current CodeFlow binary when `codeflow doctor --check hooks` reports it missing or older, then runs `codeflow update` so the CodeFlow hook commands in {path} match the shipped ones, which carry no `$`. It keeps your own edits: Claude settings by merging their hook entries, other files by a 3-way merge that applies on its own when your edit does not overlap the shipped change. Where it overlaps, update leaves the file as it is and writes a `.new` file beside it holding the merge: resolve its conflict markers in favour of the shipped CodeFlow hook commands, keeping your own changes, replace your file with it and delete the `.new` file. Then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
     /// Stale `CodeFlow` hook commands in a hook file grok reads that
     /// `codeflow update` does not rewrite: one it does not manage, such as
     /// `.claude/settings.local.json`, one it skips, or an edit it keeps.
     DOCTOR_GROK_UNMANAGED_HOOKS = Step::Edit("{path}"),
-        "`codeflow update` does not rewrite {path}: in it, replace each CodeFlow hook command that carries a `$` with the matching command from the shipped hook file (.grok/hooks/codeflow.json, or .claude/settings.json for Claude settings), or remove it where that file already runs that hook; then `codeflow doctor --check grok` confirms it, and a dangerous shell command in a live grok session should be refused";
+        "the operator's `codeflow update` does not rewrite {path}: in it, replace each CodeFlow hook command that carries a `$` with the matching command from the shipped hook file (.grok/hooks/codeflow.json, or .claude/settings.json for Claude settings), or remove it where that file already runs that hook; then `codeflow doctor --check grok` confirms it, and a dangerous shell command in a live grok session should be refused";
     /// No `CodeFlow` exec-guard is bound where grok's shell tool hits it,
     /// and `codeflow update` would not bind it again in any file it
     /// manages.
     DOCTOR_GROK_MISSING_GUARD = Step::Edit("{path}"),
-        "`codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+        "the operator's `codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
     /// A `CodeFlow` guard hook entry a harness reads without the shipped
     /// `timeout`, or a Claude one without `"onFailure": "block"`, so a
     /// guard that does not answer in time can let the tool call through
     /// (TSK-1082).
     DOCTOR_GUARD_TIMEOUTS = Step::Codeflow("codeflow update"),
-        "run `codeflow update`, which gives the CodeFlow guard entries in `.claude/settings.json` the shipped fields and moves `.grok/hooks/codeflow.json` and `.codex/hooks.json` to them by a 3-way merge (where your edit overlaps, it writes a `.new` file beside the file: resolve it in favour of the shipped fields and delete it). In a file update does not manage, such as `.claude/settings.local.json`, set each named entry's `timeout` to {timeout}, and in Claude settings its `onFailure` to `block`, by hand. Codex asks you to approve a changed hook again in `/hooks`. Then `codeflow doctor --check guard-timeouts` confirms it";
+        "the operator runs `codeflow update`, which gives the CodeFlow guard entries in `.claude/settings.json` the shipped fields and moves `.grok/hooks/codeflow.json` and `.codex/hooks.json` to them by a 3-way merge (where your edit overlaps, it writes a `.new` file beside the file: resolve it in favour of the shipped fields and delete it). In a file update does not manage, such as `.claude/settings.local.json`, set each named entry's `timeout` to {timeout}, and in Claude settings its `onFailure` to `block`, by hand. Codex asks you to approve a changed hook again in `/hooks`. Then `codeflow doctor --check guard-timeouts` confirms it";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";
@@ -757,13 +757,13 @@ catalog! {
         "set scaffold_version in .codeflow/project.toml back to {pin}, the version {target} pins";
     /// An upgrade that carries `codeflow update` before its raised pin lands.
     DOCTOR_CI_PIN_ORDER = Step::Edit(".codeflow/project.toml"),
-        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml (`codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch";
+        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml (the operator's `codeflow update --pin <version>` also pins its release digests) and land it; then the operator runs `codeflow update` on a new branch";
     /// A pinned release digest table the CI installers refuse.
     DOCTOR_CI_DIGEST = Step::Codeflow("codeflow update"),
-        "run `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
+        "the operator runs `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
     /// A project state line the CI installers refuse to read.
     DOCTOR_CI_DIGEST_LINE = Step::Edit(".codeflow/project.toml"),
-        "rewrite or remove line {line} of .codeflow/project.toml, which the CI installers refuse (a name outside printable ASCII, a control character, or a table written another way than `codeflow update --pin` writes it)";
+        "rewrite or remove line {line} of .codeflow/project.toml, which the CI installers refuse (a name outside printable ASCII, a control character, or a table written another way than the operator's `codeflow update --pin` writes it)";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";
@@ -782,13 +782,13 @@ catalog! {
         "read the host rules for the default branch in the host's settings and confirm they require every check in git.required_checks on an up-to-date branch; `codeflow doctor` cannot verify them here";
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
-        "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";
+        "move the hand edits outside the codeflow markers (or accept losing them), then the operator runs `codeflow update`, which rewrites the blocks";
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";
     /// Harness settings without the shell startup class (TSK-242).
     DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
-        "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+        "the operator runs `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
     /// The text rule the exec guard applies (TSK-397, H-6).
     DOCTOR_TEXT_RULE_UNSEEN = Step::Edit(".codeflow/policy.json"),
         "nothing is needed for the strict rule; to relax it, the operator sets `security.text_guard` to `relaxed` in .codeflow/policy.json and lands it on every protected ref the hook reads, accepting that no sandbox is verified";

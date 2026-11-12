@@ -24,7 +24,7 @@ pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
                     .and_then(|value| value["schema_version"].as_u64());
                 if schema.is_some_and(|version| version < 5) {
                     format!(
-                        "{}: installed model catalog predates schema 5; run `codeflow update`",
+                        "{}: installed model catalog predates schema 5; the operator runs `codeflow update`",
                         path.display()
                     )
                 } else {

@@ -47,7 +47,7 @@ pub enum PresentError {
     },
     #[error(
         "the cf-present state directory {path} is missing and could not be created ({source}); \
-         run `codeflow update` once outside the agent sandbox to create it"
+         the operator runs `codeflow update` once outside the agent sandbox to create it"
     )]
     StateRootUnavailable {
         path: PathBuf,

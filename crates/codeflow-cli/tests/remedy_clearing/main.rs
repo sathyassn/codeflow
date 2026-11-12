@@ -95,7 +95,10 @@ const ROWS: &[(&str, Proof)] = &[
     ("TASK_DELIVERABLES", Runs),
     ("RECORD_OUTCOME", Runs),
     ("EPIC_DELIVERABLES", Runs),
-    ("DOCS_LAYER_ABSENT", Runs),
+    // A row whose step is the install verbs is the operator's: an agent's
+    // run of them is refused (TSK-1476). Its `clears_` test, where one
+    // exists, still shows the operator's step clears the finding.
+    ("DOCS_LAYER_ABSENT", Excluded(HumanAuthority)),
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
     ("DOCS_ADRS_UNCHECKED", Runs),
@@ -129,7 +132,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("JOURNEY_CRITERION", Runs),
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),
-    ("POLICY_DEPRECATED", Runs),
+    ("POLICY_DEPRECATED", Excluded(HumanAuthority)),
     ("POLICY_UNSUPPORTED", Runs),
     ("PROTECTED_BRANCH", Runs),
     ("PROTECTED_DELETE", Runs),
@@ -139,8 +142,9 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_MERGE_PROTECTED", Runs),
     ("BRANCH_NAME", Runs),
     ("ROOT_CHECKOUT_COMMIT", Runs),
-    ("HOOK_INTEGRITY", Runs),
-    ("INTERPRETER_ARGUMENT", Runs),
+    ("HOOK_INTEGRITY", Excluded(HumanAuthority)),
+    ("INTERPRETER_ARGUMENT", Excluded(HumanAuthority)),
+    ("INSTALL_RUN", Excluded(HumanAuthority)),
     ("WORKTREE_DELETE", Runs),
     ("JUDGE_SOURCE_DRIFT", Excluded(HumanAuthority)),
     ("COMMIT_TYPE", Runs),
@@ -196,8 +200,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("RELEASE_PREFLIGHT_UNRUN", Runs),
     ("RELEASE_PREFLIGHT", Runs),
     ("DOCTOR_HOOKS_PATH", Runs),
-    ("DOCTOR_INIT", Runs),
-    ("DOCTOR_OUTCOME_MARKER", Runs),
+    ("DOCTOR_INIT", Excluded(HumanAuthority)),
+    ("DOCTOR_OUTCOME_MARKER", Excluded(HumanAuthority)),
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
@@ -206,10 +210,10 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_GATE_DIRS", Excluded(HumanAuthority)),
     ("DOCTOR_GATE_DIRS_CODEX", Excluded(HumanAuthority)),
     ("DOCTOR_SANDBOX_UNSEEN", Excluded(HumanAuthority)),
-    ("DOCTOR_GROK_HOOKS", Runs),
+    ("DOCTOR_GROK_HOOKS", Excluded(HumanAuthority)),
     ("DOCTOR_GROK_UNMANAGED_HOOKS", Runs),
     ("DOCTOR_GROK_MISSING_GUARD", Runs),
-    ("DOCTOR_GUARD_TIMEOUTS", Runs),
+    ("DOCTOR_GUARD_TIMEOUTS", Excluded(HumanAuthority)),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -223,14 +227,14 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_CI_PIN_TARGET", Runs),
     ("DOCTOR_CI_PIN_LOWERED", Runs),
     ("DOCTOR_CI_PIN_ORDER", Runs),
-    ("DOCTOR_CI_DIGEST", Runs),
+    ("DOCTOR_CI_DIGEST", Excluded(HumanAuthority)),
     ("DOCTOR_CI_DIGEST_LINE", Runs),
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
-    ("DOCTOR_MANAGED_DRIFT", Runs),
+    ("DOCTOR_MANAGED_DRIFT", Excluded(HumanAuthority)),
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
@@ -238,7 +242,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_DESCRIPTION", Runs),
     ("DOCTOR_ROOT_CHECKOUT", Runs),
     ("DOCTOR_TEST_CONFIG", Runs),
-    ("DOCTOR_STARTUP_PRESETS", Runs),
+    ("DOCTOR_STARTUP_PRESETS", Excluded(HumanAuthority)),
     ("DOCTOR_STARTUP_SOURCED", Runs),
     ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
     // The operator decides which configuration inputs to repair or remove.
@@ -2428,7 +2432,7 @@ fn the_grok_update_remedy_follows_what_update_repairs() {
     let mut hand_edit = |case: &str, root: &Path, path: &str, why: &str| {
         let said = doctor(root, "grok");
         if !said.contains(&format!("`codeflow update` does not rewrite {path}"))
-            || said.contains("run `codeflow update`")
+            || said.contains("runs `codeflow update`")
             || !said.contains(why)
         {
             failures.push(format!("{case}: {said}"));
@@ -2552,7 +2556,7 @@ fn clears_doctor_grok_unmanaged_hooks() {
         "grok skips the CodeFlow hook commands in .claude/settings.local.json",
         || doctor(&root, "grok"),
         |printed| {
-            assert!(!printed.contains("run `codeflow update`"), "{printed}");
+            assert!(!printed.contains("runs `codeflow update`"), "{printed}");
             let settings: serde_json::Value =
                 serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
             let shipped = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].clone();
@@ -2613,7 +2617,7 @@ fn clears_doctor_grok_missing_guard() {
     let finding = "no CodeFlow exec-guard is bound to PreToolUse";
     let before = doctor(&root, "grok");
     assert!(before.contains(finding), "{before}");
-    assert!(!before.contains("run `codeflow update`"), "{before}");
+    assert!(!before.contains("runs `codeflow update`"), "{before}");
     assert!(
         before.contains("`codeflow update` skips .grok/hooks/codeflow.json: ignored"),
         "{before}"
@@ -2653,7 +2657,7 @@ fn clears_doctor_grok_missing_guard() {
     assert!(before.contains(finding), "{before}");
     assert!(
         before.contains(
-            "run `codeflow update` so the CodeFlow hook commands in .claude/settings.json"
+            "runs `codeflow update` so the CodeFlow hook commands in .claude/settings.json"
         ),
         "{before}"
     );
@@ -2691,7 +2695,7 @@ fn clears_doctor_grok_hooks_with_an_unmanaged_file_too() {
     assert!(before.contains(finding), "{before}");
     assert!(
         before.contains(
-            "run `codeflow update` so the CodeFlow hook commands in .grok/hooks/codeflow.json match"
+            "runs `codeflow update` so the CodeFlow hook commands in .grok/hooks/codeflow.json match"
         ),
         "{before}"
     );

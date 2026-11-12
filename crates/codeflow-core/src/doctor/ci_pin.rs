@@ -308,7 +308,7 @@ pub(super) fn report(root: &Path) -> PinReport {
         return PinReport {
             status: Status::Pass,
             message: format!(
-                "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and nothing else, upgrade step one: codeflow {target_pin}, verified against {target_verified}, judges it and CI tests {head_pin} alongside; after it lands, run `codeflow update` on a new branch"
+                "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and nothing else, upgrade step one: codeflow {target_pin}, verified against {target_verified}, judges it and CI tests {head_pin} alongside; after it lands, the operator runs `codeflow update` on a new branch"
             ),
         };
     }
@@ -330,7 +330,7 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
             "the [{TABLE}] table in {STATE} {reason}, so the CI install fails closed"
         )),
         PinnedDigests::Absent => Ok(format!(
-            "its sha256.sum only: no release digest is pinned beside it (`codeflow update --pin {version}` pins one)"
+            "its sha256.sum only: no release digest is pinned beside it (the operator's `codeflow update --pin {version}` pins one)"
         )),
         PinnedDigests::Table { version: None, .. } => Err(format!(
             "the [{TABLE}] table in {STATE} names no version the CI installers can read (they read `version = \"<version>\"`), so the CI install fails closed"
@@ -783,7 +783,7 @@ mod tests {
         };
         for part in [
             "two pull requests, in order",
-            "run `codeflow update` on a new branch",
+            "the operator runs `codeflow update` on a new branch",
         ] {
             assert!(remedy.contains(part), "{part}: {remedy}");
         }

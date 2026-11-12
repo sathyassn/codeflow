@@ -585,11 +585,13 @@ fn install_entry(
                         report.file(&entry.dest, Action::Unchanged);
                         return Ok(());
                     }
-                    Shown::fixed("newer shipped version available — run `codeflow update`")
+                    Shown::fixed(
+                        "newer shipped version available — the operator runs `codeflow update`",
+                    )
                 }
-                (_, Some(_)) => {
-                    Shown::fixed("locally modified — run `codeflow update` to 3-way merge")
-                }
+                (_, Some(_)) => Shown::fixed(
+                    "locally modified — the operator runs `codeflow update` to 3-way merge",
+                ),
                 (_, None) => {
                     if current == rendered {
                         // Identical content, no installed record. Two distinct

@@ -328,7 +328,9 @@ fn clears_hook_integrity() {
 }
 
 /// TSK-302: the interpreter argument refusal names the read route, which
-/// passes, and the update step, which runs.
+/// passes, and the update step. That step is the operator's: exec-guard
+/// refuses it from an agent (TSK-1476), and it clears the finding when the
+/// operator runs it.
 #[test]
 fn clears_interpreter_argument() {
     let dir = scaffolded("--standard");
@@ -350,7 +352,11 @@ fn clears_interpreter_argument() {
         "python3 tool.py < .codeflow/policy.json",
     );
     let step = printed_command(&printed, "INTERPRETER_ARGUMENT", None);
-    assert_passes(&root, "exec-guard", &step);
+    let refused = guard(&root, "exec-guard", &step);
+    assert!(
+        refused.contains("install run") && refused.contains("only the operator"),
+        "an agent's run of the operator's step is refused:\n{refused}"
+    );
     run_printed(&root, &step, &[], &[]);
 }
 

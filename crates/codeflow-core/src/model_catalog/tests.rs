@@ -1140,9 +1140,9 @@ fn schema_four_is_rejected_after_the_managed_switch() {
         .join(".agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(load_catalog(dir.path())
-        .unwrap_err()
-        .ends_with("installed model catalog predates schema 5; run `codeflow update`"));
+    assert!(load_catalog(dir.path()).unwrap_err().ends_with(
+        "installed model catalog predates schema 5; the operator runs `codeflow update`"
+    ));
 }
 
 #[test]
