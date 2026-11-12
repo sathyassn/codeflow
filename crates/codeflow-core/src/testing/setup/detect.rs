@@ -57,6 +57,25 @@ pub fn detect_stacks(repo_root: &Path) -> std::io::Result<Vec<DetectedTarget>> {
     Ok(targets)
 }
 
+/// Detect stacks for a config `codeflow test setup` is about to write: each
+/// detected target runs its stack's coverage producer in full mode and names
+/// the artifact in a coverage block with no rules (TSK-1014). Only setup
+/// writes these, once, when it creates the config; the gate's own detection
+/// for a project with no config uses [`detect_stacks`], whose plain commands
+/// need no producer installed.
+///
+/// # Errors
+///
+/// Returns an error when an existing stack manifest cannot be read or parsed.
+pub fn detect_stacks_with_coverage(repo_root: &Path) -> std::io::Result<Vec<DetectedTarget>> {
+    Ok(detect_stacks(repo_root)?
+        .into_iter()
+        .map(|detected| DetectedTarget {
+            config: crate::testing::coverage::producer::with_producer(detected.config),
+        })
+        .collect())
+}
+
 fn detect_rust(repo_root: &Path) -> std::io::Result<bool> {
     let path = repo_root.join("Cargo.toml");
     if !path.try_exists()? {
