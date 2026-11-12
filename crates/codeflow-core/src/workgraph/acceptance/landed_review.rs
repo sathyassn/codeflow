@@ -328,12 +328,95 @@ mod tests {
     #[test]
     fn a_same_lineage_review_passes_only_with_the_reduced_assurance_statement() {
         let review = "Claude Opus 5.5 subagent at medium, whole unit";
-        let stated = "Codex and Grok probed live at 16:24 on 2026-11-05, both unavailable";
-        assert_eq!(judge(Some("claude"), review, Some(stated)), None);
-        let found = judge(Some("claude"), review, Some("Codex was out")).expect("one named");
-        assert!(found.contains("does not name grok as probed"), "{found}");
+        for stated in [
+            "codex unavailable, weekly limit 1% at 14:32; grok unavailable, no seat at 14:33",
+            "grok unavailable;codex unavailable",
+            "  codex   unavailable.  ;  grok unavailable: probed live  ",
+        ] {
+            assert_eq!(judge(Some("claude"), review, Some(stated)), None, "{stated}");
+        }
         let found = judge(Some("claude"), review, None).expect("no statement");
-        assert!(found.contains("does not name codex, grok"), "{found}");
+        assert!(found.contains("it has no `reduced_assurance`"), "{found}");
+        assert!(
+            found.contains("one item per other lineage (codex, grok), separated by `;`"),
+            "{found}"
+        );
+        assert!(
+            found.contains("for example `codex unavailable, <why and when>; grok unavailable, <why and when>`"),
+            "{found}"
+        );
+        let found = judge(Some("codex"), "GPT-6 Astra, whole unit", None).expect("codex");
+        assert!(
+            found.contains("one item per other lineage (claude, grok)"),
+            "{found}"
+        );
+    }
+
+    #[test]
+    fn a_reduced_assurance_statement_out_of_form_is_refused() {
+        let review = "Claude Opus 5.5 subagent at medium, whole unit";
+        for (stated, why) in [
+            // Names only: the other lineages are named, never recorded as
+            // unavailable (Codex security review R1).
+            (
+                "Codex and Grok are available; neither was probed",
+                "the item `Codex and Grok are available` does not start with a lineage id",
+            ),
+            (
+                "Codex and Grok probed live at 16:24 on 2026-11-05, both unavailable",
+                "does not start with a lineage id",
+            ),
+            (
+                "codex available; grok unavailable",
+                "the item `codex available` does not have `unavailable` as its second word",
+            ),
+            (
+                "codex; grok unavailable",
+                "the item `codex` does not have `unavailable` as its second word",
+            ),
+            (
+                "codex Unavailable; grok unavailable",
+                "does not have `unavailable` as its second word",
+            ),
+            (
+                "codex unavailableish; grok unavailable",
+                "does not have `unavailable` as its second word",
+            ),
+            ("codex unavailable", "no item records grok as unavailable"),
+            (
+                "codex unavailable; codex unavailable again; grok unavailable",
+                "codex has more than one item",
+            ),
+            (
+                "claude unavailable; codex unavailable; grok unavailable",
+                "the item `claude unavailable` names claude, the builder's own lineage",
+            ),
+            (
+                "gemini unavailable; codex unavailable; grok unavailable",
+                "the item `gemini unavailable` does not start with a lineage id",
+            ),
+            // A lineage id is exact, as `built_by`'s is.
+            (
+                "Codex unavailable; grok unavailable",
+                "the item `Codex unavailable` does not start with a lineage id",
+            ),
+            (
+                "gpt unavailable; grok unavailable",
+                "the item `gpt unavailable` does not start with a lineage id",
+            ),
+            (
+                "codex unavailable; grok unavailable;",
+                "the item `` does not start with a lineage id",
+            ),
+        ] {
+            let found = judge(Some("claude"), review, Some(stated)).expect(stated);
+            assert!(found.contains(why), "{stated}: {found}");
+            assert!(found.contains(LANDED_REVIEW), "{found}");
+            assert!(
+                found.contains("needs `reduced_assurance` recording each other lineage as unavailable"),
+                "{found}"
+            );
+        }
     }
 
     #[test]

@@ -127,7 +127,41 @@ fn push_with(landing: &Landing, extra: &[&str]) -> (i32, String) {
 
 /// The epic's pull request: `codeflow ci` from `main` to the line's tip.
 fn epic_form(landing: &Landing) -> (i32, String) {
-    ci_on(landing.dir.path(), "main", LINE, "Task: EPC-001")
+    epic_with(landing, &[])
+}
+
+/// [`epic_form`] with `extra` arguments.
+fn epic_with(landing: &Landing, extra: &[&str]) -> (i32, String) {
+    let root = landing.dir.path();
+    let body = with_reviews(
+        root,
+        "HEAD",
+        "## Summary\nA change.\n\n- one change\n\nTask: EPC-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+    );
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            LINE,
+            "--pr-body",
+            &body,
+        ])
+        .args(extra)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
 }
 
 /// Both forms pass `landing`, and neither prints this check's findings.
@@ -302,6 +336,46 @@ fn a_malformed_marker_is_refused_in_both_forms() {
     }
 }
 
+/// AC-6: a marker the run cannot read because the epic record at the
+/// default branch's commit is no record (here it has no id) refuses in both
+/// forms, naming the field and the values it accepts. The commit is the one
+/// `--policy-from` names, so `main`, the epic pull request's base, stays
+/// readable and only the marker read meets the unreadable record.
+#[test]
+fn an_unreadable_marker_is_refused_in_both_forms() {
+    let landed = reviewed_by(
+        WHOLE_EPIC,
+        CODEX_REVIEW,
+        "  built_by: claude\n",
+        "approved",
+    );
+    let root = landed.dir.path();
+    git(root, &["switch", "-C", "authority", "main"]);
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        &EPIC.replacen("id: EPC-001\n", "", 1),
+    );
+    let authority = commit(root, "docs(records): an epic record with no id");
+    git(root, &["switch", LINE]);
+    for (form, result) in [
+        ("push", push_with(&landed, &["--policy-from", &authority])),
+        ("epic PR", epic_with(&landed, &["--policy-from", &authority])),
+    ] {
+        assert_blocks(
+            &result,
+            &format!("an unreadable marker ({form})"),
+            &[
+                "work.acceptance_binding",
+                "cannot read its epic's `main_landing` marker",
+                &format!("the records at {authority} cannot be read"),
+                "record has no supported id",
+                "accepts `whole-epic` or `checkpoint-prs`",
+            ],
+        );
+    }
+}
+
 /// Batch 1 item 2: on a marked line, a block with no `built_by`, or one
 /// that names other than exactly one lineage id, is refused in both forms.
 /// An empty `built_by` is refused by the block's parser, as every empty
@@ -333,8 +407,9 @@ fn a_missing_or_multi_valued_built_by_is_refused_in_both_forms() {
     refused_in_both_forms("empty built_by", &landed, &["built_by is empty"]);
 }
 
-/// AC-3, AC-4: a task merged onto its line with no completion has no
-/// review row; the product work it carries is refused in both forms.
+/// AC-3, AC-4: a task merged onto its line with no completion brings
+/// adopter-facing paths onto the line outside every reviewed task head; it
+/// is refused in both forms, with the cause and the fix for each form.
 #[test]
 fn a_landing_with_no_review_row_is_refused_in_both_forms() {
     let landed = landing(WHOLE_EPIC, |_, _| None);
@@ -344,7 +419,9 @@ fn a_landing_with_no_review_row_is_refused_in_both_forms() {
         &[
             "work.acceptance_binding",
             "introduces src/work.rs through merge",
-            "outside its verified source and reviewed task heads",
+            "an adopter-facing path brought onto the line outside its verified source and every reviewed task head",
+            "land it on the line only from a task head whose completion records an approving review at that head",
+            "where a task's pull request into the line carries the merge, carry the work through that receiving task's pull request",
         ],
     );
 }
@@ -372,26 +449,21 @@ fn a_review_of_another_commit_is_refused_in_both_forms() {
     );
 }
 
-/// AC-3, AC-4, batch 1 item 3: a reviewer of the lineage `built_by` names,
-/// with no reduced-assurance statement naming each other lineage, is
-/// refused in both forms, with the remedy for this landing.
+/// AC-3, AC-4, AC-8, batch 1 item 3: a reviewer of the lineage `built_by`
+/// names, with no reduced-assurance statement, is refused in both forms,
+/// with the remedy for this landing.
 #[test]
 fn a_reviewer_of_the_builders_lineage_is_refused_in_both_forms() {
-    for (review, fields, missing) in [
+    for (review, fields, others) in [
         (CLAUDE_REVIEW, "  built_by: claude\n", "codex, grok"),
         (
             "Codex GPT-6 Astra at high; whole unit",
             "  built_by: codex\n",
             "claude, grok",
         ),
-        (
-            CLAUDE_REVIEW,
-            "  built_by: claude\n  reduced_assurance: Codex was out at 16:24\n",
-            "grok",
-        ),
     ] {
         let landed = reviewed_by(WHOLE_EPIC, review, fields, "approved");
-        let named = format!("does not name {missing} as probed and unavailable");
+        let form = format!("one item per other lineage ({others}), separated by `;`");
         refused_in_both_forms(
             fields,
             &landed,
@@ -399,21 +471,79 @@ fn a_reviewer_of_the_builders_lineage_is_refused_in_both_forms() {
                 "work.acceptance_binding",
                 "lands on its marked epic's line with no pull request",
                 "is of the lineage `built_by` names",
-                &named,
+                "needs `reduced_assurance` recording each other lineage as unavailable",
+                &form,
+                "it has no `reduced_assurance`",
                 "have a reviewer of another lineage",
             ],
         );
     }
 }
 
-/// Batch 1 item 3: a same-lineage review passes when the completion
-/// records the reduced-assurance statement naming each other lineage.
+/// AC-8: a reduced-assurance statement that does not record each other
+/// lineage as unavailable in the fixed form is refused in both forms,
+/// naming the field, the form and the offending item. A statement that
+/// only names the other lineages, or says one is available, is no record
+/// that they were probed and unavailable (Codex security review R1).
+#[test]
+fn a_reduced_assurance_statement_out_of_form_is_refused_in_both_forms() {
+    for (statement, why) in [
+        (
+            "Codex and Grok are available; neither was probed",
+            "the item `Codex and Grok are available` does not start with a lineage id",
+        ),
+        (
+            "codex available; grok unavailable",
+            "the item `codex available` does not have `unavailable` as its second word",
+        ),
+        (
+            "codex unavailable, weekly limit 1% at 14:32",
+            "no item records grok as unavailable",
+        ),
+        (
+            "codex unavailable, at 14:32; codex unavailable, at 14:40; grok unavailable",
+            "codex has more than one item",
+        ),
+        (
+            "claude unavailable; codex unavailable; grok unavailable",
+            "the item `claude unavailable` names claude, the builder's own lineage",
+        ),
+        (
+            "gemini unavailable; codex unavailable; grok unavailable",
+            "the item `gemini unavailable` does not start with a lineage id",
+        ),
+        (
+            "Codex was out at 16:24",
+            "the item `Codex was out at 16:24` does not start with a lineage id",
+        ),
+    ] {
+        let fields = format!("  built_by: claude\n  reduced_assurance: {statement}\n");
+        let landed = landing(WHOLE_EPIC, |_, head| {
+            Some(completion(head, CLAUDE_REVIEW, &fields, "approved"))
+        });
+        refused_in_both_forms(
+            statement,
+            &landed,
+            &[
+                "work.acceptance_binding",
+                "lands on its marked epic's line with no pull request",
+                "needs `reduced_assurance` recording each other lineage as unavailable",
+                "one item per other lineage (codex, grok), separated by `;`",
+                why,
+                "have a reviewer of another lineage",
+            ],
+        );
+    }
+}
+
+/// AC-8, batch 1 item 3: a same-lineage review passes when the completion
+/// records each other lineage as unavailable in the fixed form.
 #[test]
 fn a_same_lineage_review_with_the_reduced_assurance_statement_passes() {
     let landed = reviewed_by(
         WHOLE_EPIC,
         CLAUDE_REVIEW,
-        "  built_by: claude\n  reduced_assurance: Codex and Grok probed live at 16:24 on 2026-11-05, both unavailable\n",
+        "  built_by: claude\n  reduced_assurance: grok unavailable, probed live at 16:25 on 2026-11-05; codex unavailable, weekly limit at 16:24\n",
         "approved",
     );
     passes_in_both_forms("reduced assurance", &landed);
