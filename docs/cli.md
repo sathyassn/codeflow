@@ -78,14 +78,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 
 | Command | Argument or flag | What it does |
 |---|---|---|
-| `codeflow init` | | Scaffold this project (idempotent, non-destructive, offline) |
+| `codeflow init` | | Scaffold this project (idempotent, non-destructive, offline); the operator runs it, and the guards refuse an agent's run |
 | | `--minimal` | The discipline floor: full git-discipline enforcement (all hooks + CI + in-session guards + armed policy) and a lean agent contract, for any repo. |
 | | `--standard` | A code project (default): everything in minimal, plus the develop-loop skills, reviewer agents, the traceability spine (product/capabilities/architecture/ADRs), and harness integration. |
 | | `--full` | A program: everything in standard, plus project-management (epics, tasks, specs). |
 | | `--yes` | No prompts; sane defaults (standard tier). |
 | | `--force` | Overwrite existing files (never the default). |
 | | `--workspace` | Set up an umbrella workspace: put the root checkout on its root branch (created from the default branch if missing), write `git.root_branch`, and ignore every nested git repository. Refuses over uncommitted changes. |
-| `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers) |
+| `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers); the operator runs it, and the guards refuse an agent's run |
 | | `--diff <FILE>` | Write the report plus each applied change to a file. The export never shows a value, key name or line from the project's files or the recorded baseline: JSON, TOML and YAML list the changed key paths with the shipped value and a marker for the project's side; text shows the shipped lines written and counts the rest; any other format, or a file that does not parse, is withheld. |
 | | `--force` | Replace user-modified managed files instead of merging. |
 | | `--pin <VERSION>` | Only pin this codeflow release for CI: download its archives, check them against its sha256.sum and write `scaffold_version` and their digests (`[scaffold_sha256]`) to .codeflow/project.toml. Nothing else changes. The version must read as MAJOR.MINOR.PATCH with an optional -prerelease and +build; any other is refused before a download. Upgrade step one; land it before the update. |

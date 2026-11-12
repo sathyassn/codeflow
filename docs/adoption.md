@@ -135,8 +135,10 @@ Linux-native tooling or Claude sandboxing.
 
 ### Adopt a new or existing repository
 
-Run `codeflow init` from the project root at the lowest tier whose conventions
-the project accepts.
+The operator runs `codeflow init` in their own terminal, from the project root,
+at the lowest tier whose conventions the project accepts. The guards refuse an
+agent's run of `init` or `update`, since both write the files the guards
+enforce from; an agent prepares the change and the operator runs the verb.
 
 1. Change to the intended project root. `init` and `update` act on the current
    directory and do not look for a Git root.
@@ -328,20 +330,22 @@ the table below gives the commands.
 
 ### Update
 
-Upgrade the binary once, then run `codeflow update` in each repository.
+Upgrade the binary once, then the operator runs `codeflow update` in each
+repository, in their own terminal. The guards refuse an agent's run of it.
 
 | Motion | How | Effect |
 |---|---|---|
 | Upgrade the binary | Re-run an install path: the `curl \| sh` installer again, or `git pull` then `cargo install --locked --path crates/codeflow-cli`, or download the newer archive (see Install). There is no self-updater (`install-updater = false`) | Improves every repo at once, because hooks call `codeflow` from `PATH` |
-| `codeflow update` per repo | Run it in the repository | Refreshes scaffold files. Until you do, every command prints a version-skew warning |
+| `codeflow update` per repo | The operator runs it in the repository | Refreshes scaffold files. Until you do, every command prints a version-skew warning |
 
 1. Upgrade the `codeflow` on `PATH` first. The hooks run that binary. A binary
    older than a [new policy key](policy-reference.md#where-a-new-key-goes)
    rejects the policy file, which blocks every commit until you upgrade (for
    example `git.policy_characters`, ADR-0067).
-2. Run `codeflow update` in the repository. Add `--diff <FILE>` to export the
-   changes without project values (`docs/cli.md`).
-3. Resolve each `<name>.new`, move it over the live file, then rerun `codeflow update`.
+2. The operator runs `codeflow update` in the repository. Add `--diff <FILE>`
+   to export the changes without project values (`docs/cli.md`).
+3. Resolve each `<name>.new`, move it over the live file, then the operator
+   reruns `codeflow update`.
 
 | Case | What `update` does |
 |---|---|
@@ -378,11 +382,12 @@ unverified.
 
 An upgrade therefore takes two pull requests, in order:
 
-1. Install the new binary locally, run `codeflow update --pin <version>`,
-   and land the pin it raises. The target's current binary judges it, and
-   the `candidate codeflow` job tests the new one.
-2. On a new branch, run `codeflow update` and land its new keys and files;
-   the new binary judges them.
+1. The operator installs the new binary locally, runs
+   `codeflow update --pin <version>`, and lands the pin it raises. The
+   target's current binary judges it, and the `candidate codeflow` job tests
+   the new one.
+2. On a new branch, the operator runs `codeflow update`, and the new keys and
+   files land; the new binary judges them.
 
 | Case | What happens |
 |---|---|

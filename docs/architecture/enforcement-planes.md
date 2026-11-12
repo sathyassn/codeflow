@@ -185,8 +185,7 @@ route.
   their own shell startup files.
 - An agent's run of `codeflow update` or `codeflow init` refuses under
   `git.hook_integrity`; only the operator runs them. A renamed or copied
-  binary is bounded by the native edit denies on worktree copies and the OS
-  sandbox.
+  binary, and words written to a file and run later, are a named residual.
 
 **Hook wrappers.**
 
