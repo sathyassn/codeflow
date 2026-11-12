@@ -434,6 +434,115 @@ fn path_text(path: &Path) -> Result<String, EditError> {
     Ok(crate::portable_path::slashed(path))
 }
 
+/// The entries of one directory: each name and its case-folded, normalized
+/// spelling (`None` for a name that is not UTF-8).
+#[cfg(target_os = "macos")]
+type FoldedEntries = std::rc::Rc<Vec<(std::ffi::OsString, Option<String>)>>;
+
+/// A directory's identity and change times (device, inode, modification and
+/// status change seconds and nanoseconds), read before its listing.
+#[cfg(target_os = "macos")]
+type DirectoryStamp = (u64, u64, i64, i64, i64, i64);
+
+/// A listing is kept only when its directory last changed more than this
+/// many seconds before it was read, which covers every timestamp granularity
+/// the guard meets (1 s on HFS+ and network volumes, 2 s on FAT).
+#[cfg(target_os = "macos")]
+const KEPT_LISTING_MARGIN_SECS: i64 = 3;
+
+#[cfg(target_os = "macos")]
+type DirectoryListings = std::collections::HashMap<PathBuf, (DirectoryStamp, FoldedEntries)>;
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// Directory listings read for case recovery (TSK-1275), present only
+    /// while a [`RepoFactsScope`] is open and dropped with it. Every sibling
+    /// checkout under one `.worktrees/` folder resolves through the same
+    /// parent, so listing it once per lookup made one guard call quadratic in
+    /// the number of checkouts. Outside a scope every lookup lists afresh.
+    static DIRECTORY_ENTRIES: std::cell::RefCell<Option<DirectoryListings>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, target_os = "macos"))]
+thread_local! {
+    /// How many times [`directory_entries`] read a directory.
+    static DIRECTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(target_os = "macos")]
+fn fold_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    name.nfc().collect::<String>().to_lowercase()
+}
+
+/// The entries of `parent`. With `fresh` false, a listing kept in this
+/// [`RepoFactsScope`] answers while the directory's identity and change
+/// times read the same as when it was listed. A listing is kept only once
+/// the directory has settled (see [`KEPT_LISTING_MARGIN_SECS`]), a failed
+/// listing is never kept, and nothing is kept between invocations.
+#[cfg(target_os = "macos")]
+fn directory_entries(parent: &Path, fresh: bool) -> Result<FoldedEntries, String> {
+    use std::os::unix::fs::MetadataExt;
+    // Taken before the listing: an entry added, removed or renamed afterwards
+    // changes the directory's times, so the kept listing is not used again.
+    let now = std::fs::symlink_metadata(parent)
+        .map(|m| {
+            (
+                m.dev(),
+                m.ino(),
+                m.mtime(),
+                m.mtime_nsec(),
+                m.ctime(),
+                m.ctime_nsec(),
+            )
+        })
+        .map_err(|e| format!("cannot inspect directory {}: {e}", parent.display()))?;
+    if !fresh {
+        let kept = DIRECTORY_ENTRIES.with(|cache| {
+            cache
+                .borrow()
+                .as_ref()
+                .and_then(|listings| listings.get(parent).cloned())
+        });
+        if let Some((stamp, entries)) = kept {
+            if stamp == now {
+                return Ok(entries);
+            }
+        }
+    }
+    // Racy timestamps, as git treats them: a directory changed within the
+    // timestamp granularity before this read could change again under the
+    // same stamp. Such a listing is used once and never kept, so a kept
+    // listing always predates the directory's last change by more than a
+    // tick, and any later change moves the stamp.
+    let settled = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .is_some_and(|secs| secs - now.2.max(now.4) > KEPT_LISTING_MARGIN_SECS);
+    #[cfg(test)]
+    DIRECTORY_READS.with(|reads| reads.set(reads.get() + 1));
+    let mut listed = Vec::new();
+    for entry in std::fs::read_dir(parent)
+        .map_err(|e| format!("cannot read directory {}: {e}", parent.display()))?
+    {
+        let entry = entry.map_err(|e| format!("cannot read directory entry: {e}"))?;
+        let name = entry.file_name();
+        let folded = name.to_str().map(fold_name);
+        listed.push((name, folded));
+    }
+    let listed = std::rc::Rc::new(listed);
+    if settled {
+        DIRECTORY_ENTRIES.with(|cache| {
+            if let Some(listings) = cache.borrow_mut().as_mut() {
+                listings.insert(parent.to_path_buf(), (now, listed.clone()));
+            }
+        });
+    }
+    Ok(listed)
+}
+
 // APFS realpath retains the caller's case. Recover the directory entry's
 // spelling only when its identity matches, so suffix rules stay precise.
 #[cfg(target_os = "macos")]
@@ -442,34 +551,39 @@ pub(crate) fn normalize_case(
     metadata: &std::fs::Metadata,
 ) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
-    use unicode_normalization::UnicodeNormalization as _;
     let Some(parent) = path.parent() else {
         return Ok(());
     };
     let Some(name) = path.file_name() else {
         return Ok(());
     };
-    let entries = std::fs::read_dir(parent)
-        .map_err(|e| format!("cannot read directory {}: {e}", parent.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read directory entry: {e}"))?;
-        let entry_name = entry.file_name();
-        let same_name = entry_name
-            .as_encoded_bytes()
-            .eq_ignore_ascii_case(name.as_encoded_bytes())
-            || entry_name
-                .to_str()
-                .zip(name.to_str())
-                .is_some_and(|(actual, requested)| {
-                    actual.nfc().collect::<String>().to_lowercase()
-                        == requested.nfc().collect::<String>().to_lowercase()
-                });
-        if same_name {
-            let candidate = std::fs::symlink_metadata(entry.path())
-                .map_err(|e| format!("cannot inspect {}: {e}", entry.path().display()))?;
-            if candidate.dev() == metadata.dev() && candidate.ino() == metadata.ino() {
-                *path = entry.path();
-                return Ok(());
+    // The requested name is folded once; a name that is not UTF-8 matches
+    // only by ASCII case, as before (TSK-1275).
+    let requested = name.to_str().map(fold_name);
+    // A kept listing that does not yield the entry is read again once, so a
+    // stale listing can only cost time, never change an answer.
+    for fresh in [false, true] {
+        let entries = directory_entries(parent, fresh)?;
+        for (entry_name, folded) in entries.iter() {
+            let same_name = entry_name
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(name.as_encoded_bytes())
+                || folded
+                    .as_ref()
+                    .zip(requested.as_ref())
+                    .is_some_and(|(actual, wanted)| actual == wanted);
+            if same_name {
+                let entry_path = parent.join(entry_name);
+                let candidate = match std::fs::symlink_metadata(&entry_path) {
+                    Ok(candidate) => candidate,
+                    // An entry gone since the kept listing was read: read again.
+                    Err(e) if !fresh && e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(format!("cannot inspect {}: {e}", entry_path.display())),
+                };
+                if candidate.dev() == metadata.dev() && candidate.ino() == metadata.ino() {
+                    *path = entry_path;
+                    return Ok(());
+                }
             }
         }
     }
@@ -1047,6 +1161,13 @@ impl RepoFactsScope {
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             super::repo::OWNERS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+            super::repo::LISTINGS
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+            super::repo::SIBLING_GATE
+                .with(|gate| *gate.borrow_mut() = Some(super::repo::SiblingGate::default()));
+            #[cfg(target_os = "macos")]
+            DIRECTORY_ENTRIES
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             super::git_guard::LINE_READS
                 .with(|cache| *cache.borrow_mut() = Some(super::git_guard::LineReads::default()));
             REGISTRATIONS
@@ -1063,6 +1184,10 @@ impl Drop for RepoFactsScope {
             NORMALIZED.with(|cache| *cache.borrow_mut() = None);
             super::repo::TARGET_ROOTS.with(|cache| *cache.borrow_mut() = None);
             super::repo::OWNERS.with(|cache| *cache.borrow_mut() = None);
+            super::repo::LISTINGS.with(|cache| *cache.borrow_mut() = None);
+            super::repo::SIBLING_GATE.with(|gate| *gate.borrow_mut() = None);
+            #[cfg(target_os = "macos")]
+            DIRECTORY_ENTRIES.with(|cache| *cache.borrow_mut() = None);
             super::git_guard::LINE_READS.with(|cache| *cache.borrow_mut() = None);
             REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
@@ -2276,6 +2401,74 @@ mod r22_tests {
         }
         let _next = RepoFactsScope::enter();
         assert_eq!(normalized(&target, true).unwrap(), second);
+    }
+
+    /// TSK-1275: case recovery lists a settled directory once per guard
+    /// evaluation, and a kept listing never answers differently from a fresh
+    /// read: a rename moves the directory's stamp, a replaced entry is
+    /// inspected live, and an identity that matches no entry is refused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_kept_listing_answers_only_what_a_fresh_read_would() {
+        use std::os::unix::fs::MetadataExt;
+        let reads = || DIRECTORY_READS.with(std::cell::Cell::get);
+        let lookup = |path: PathBuf, of: &Path| {
+            let mut path = path;
+            normalize_case(&mut path, &std::fs::symlink_metadata(of).unwrap()).map(|()| path)
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(temp.path(), true).unwrap();
+        let (one, two) = (root.join("One"), root.join("Two"));
+        std::fs::create_dir(&one).unwrap();
+        std::fs::create_dir(&two).unwrap();
+        {
+            // A directory changed within the margin is listed but not kept.
+            let _scope = RepoFactsScope::enter();
+            let before = reads();
+            assert_eq!(lookup(root.join("one"), &one).unwrap(), one);
+            assert_eq!(lookup(root.join("two"), &two).unwrap(), two);
+            assert_eq!(reads() - before, 2);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(
+            u64::try_from(KEPT_LISTING_MARGIN_SECS).unwrap() + 1,
+        ));
+        {
+            // Settled: one listing answers both lookups in one evaluation.
+            let _scope = RepoFactsScope::enter();
+            let before = reads();
+            assert_eq!(lookup(root.join("one"), &one).unwrap(), one);
+            assert_eq!(lookup(root.join("TWO"), &two).unwrap(), two);
+            assert_eq!(reads() - before, 1);
+            // A rename moves the stamp, so the kept spelling is not returned.
+            let renamed = root.join("ONE");
+            std::fs::rename(&one, &renamed).unwrap();
+            assert_eq!(lookup(root.join("one"), &renamed).unwrap(), renamed);
+            // A replaced entry is answered from the live directory.
+            std::fs::remove_dir(&two).unwrap();
+            let new = root.join("tWo");
+            std::fs::create_dir(&new).unwrap();
+            assert_eq!(lookup(root.join("two"), &new).unwrap(), new);
+            // An identity no entry carries is refused, as a fresh read would.
+            let stray = tempfile::tempdir().unwrap();
+            assert_ne!(
+                std::fs::metadata(stray.path()).unwrap().ino(),
+                std::fs::metadata(&new).unwrap().ino()
+            );
+            assert!(lookup(root.join("two"), stray.path()).is_err());
+        }
+        // Nothing crosses evaluations, and outside a scope nothing is kept.
+        let before = reads();
+        assert_eq!(
+            lookup(root.join("one"), &root.join("ONE")).unwrap(),
+            root.join("ONE")
+        );
+        assert_eq!(
+            lookup(root.join("one"), &root.join("ONE")).unwrap(),
+            root.join("ONE")
+        );
+        assert_eq!(reads() - before, 2);
+        let _next = RepoFactsScope::enter();
+        assert!(DIRECTORY_ENTRIES.with(|cache| cache.borrow().as_ref().unwrap().is_empty()));
     }
 
     #[test]

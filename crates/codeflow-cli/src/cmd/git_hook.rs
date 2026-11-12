@@ -62,6 +62,11 @@ pub fn run(args: &GitHookArgs) -> i32 {
         // Notifications cannot cancel a transaction and need no repository.
         return 0;
     }
+    // A prepared transaction finds its repository twice and changes nothing
+    // while it is judged, so it keeps one set of repository facts, as a
+    // guard call does (TSK-1275). Nothing is kept past this invocation.
+    let _facts = matches!(args.stage, StageName::ReferenceTransaction)
+        .then(codeflow_core::hooks::edit_guard::RepoFactsScope::enter);
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = match super::project_root(&cwd) {
         Ok(root) => root,

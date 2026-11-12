@@ -884,6 +884,12 @@ pub(super) fn configured_worktree_target(target: &Path, root: &Path) -> Result<b
 /// physically contains `worktrees/<name>`, regardless of commondir's text.
 fn check_common_directory(repo: &Repository) -> Result<(), String> {
     let admin = canonical(repo.path(), "worktree administrative directory")?;
+    check_common_paths(&admin, repo.commondir())
+}
+
+/// The comparison behind [`check_common_directory`], from the canonical
+/// administrative directory and the common directory the checkout names.
+fn check_common_paths(admin: &Path, commondir: &Path) -> Result<(), String> {
     let registrations = admin
         .parent()
         .ok_or("worktree has no registration directory")?;
@@ -894,7 +900,7 @@ fn check_common_directory(repo: &Repository) -> Result<(), String> {
         &expected.join("worktrees"),
         "worktree registration directory",
     )? != registrations
-        || canonical(repo.commondir(), "worktree common directory")? != expected
+        || canonical(commondir, "worktree common directory")? != expected
     {
         return Err("worktree common directory disagrees with its registration directory".into());
     }
@@ -1065,10 +1071,46 @@ pub(crate) fn shared_git_tree(project_dir: &Path) -> Result<crate::contained::Tr
     Ok(common)
 }
 
+type RegistrationListings = std::collections::HashMap<PathBuf, Result<Vec<PathBuf>, String>>;
+
+thread_local! {
+    /// The registration listing of each common directory, read once per guard
+    /// evaluation (TSK-1275), present only while a
+    /// [`super::edit_guard::RepoFactsScope`] is open and dropped with it. One
+    /// call lists the registrations for discovery, for the checkout roots and
+    /// for the protected paths; libgit2 reads the `worktrees` directory and
+    /// three files of every entry each time. A failed listing is kept for the
+    /// evaluation too, so every reader refuses alike. Nothing is kept between
+    /// evaluations.
+    pub(super) static LISTINGS: std::cell::RefCell<Option<RegistrationListings>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 // Inventory the administrative names before interpreting their pointers. A
 // relative missing leaf is prunable too; the generic worktree reader requires
 // a checkout parent in the raw text before it can represent that checkout.
 pub(super) fn registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
+    let key = repo.commondir().to_path_buf();
+    if let Some(kept) = LISTINGS.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .and_then(|listings| listings.get(&key).cloned())
+    }) {
+        return kept;
+    }
+    let listed = list_registrations(repo);
+    LISTINGS.with(|cache| {
+        if let Some(listings) = cache.borrow_mut().as_mut() {
+            listings.insert(key, listed.clone());
+        }
+    });
+    listed
+}
+
+fn list_registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
+    #[cfg(test)]
+    LISTING_READS.with(|reads| reads.set(reads.get() + 1));
     let names = repo
         .worktrees()
         .map_err(|error| error.message().to_string())?;
@@ -1119,6 +1161,8 @@ fn registered_marker_from(admin: &Path, text: &[u8]) -> Result<PathBuf, String> 
 #[cfg(test)]
 thread_local! {
     static VALIDATION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times [`list_registrations`] asked libgit2 for the listing.
+    static LISTING_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many times [`owner_common`] opened a discovered owner.
     static OWNER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1173,6 +1217,21 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
     if metadata.is_file() && registered_marker.parent() != Some(root.as_path()) {
         return Err("worktree registration disagrees with its marker's directory".into());
     }
+    // TSK-1275: a sibling skips its full open only when its own facts hold
+    // and an earlier full open of another sibling of the same physical common
+    // directory, in this evaluation, accepted the files they share.
+    let facts = gated_sibling_facts(admin, &root);
+    if facts
+        .as_ref()
+        .is_some_and(|common| common_is_proven(common))
+    {
+        #[cfg(test)]
+        SKIPPED_OPENS.with(|skips| skips.set(skips.get() + 1));
+        return Ok(CheckedRegistration {
+            marker: registered,
+            checkout: Some(root),
+        });
+    }
     let checkout = open_checkout(&root)
         .map_err(|error| format!("cannot open registered checkout: {error}"))?;
     if !checkout.is_worktree()
@@ -1182,10 +1241,222 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
         return Err("worktree registration disagrees with its checkout marker".into());
     }
     check_common_directory(&checkout)?;
+    if let Some(common) = facts {
+        judge_shared_files(admin, common);
+    }
     Ok(CheckedRegistration {
         marker: registered,
         checkout: Some(root),
     })
+}
+
+/// What one guard evaluation has learned about the files linked checkouts
+/// share (TSK-1275), present only while a
+/// [`super::edit_guard::RepoFactsScope`] is open and dropped with it.
+#[derive(Default)]
+pub(super) struct SiblingGate {
+    /// Physical common directories one full sibling open accepted, whose
+    /// shared configuration is the same for every sibling.
+    proven: std::collections::HashSet<PathBuf>,
+    /// Common directories, spelled as their registrations are listed, whose
+    /// shared configuration can differ between siblings, so every sibling
+    /// keeps its full open and no facts are read for them.
+    doubtful: std::collections::HashSet<PathBuf>,
+}
+
+thread_local! {
+    pub(super) static SIBLING_GATE: std::cell::RefCell<Option<SiblingGate>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many sibling opens [`read_registration`] skipped.
+    static SKIPPED_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn common_is_proven(common: &Path) -> bool {
+    SIBLING_GATE.with(|gate| {
+        gate.borrow()
+            .as_ref()
+            .is_some_and(|gate| gate.proven.contains(common))
+    })
+}
+
+/// The registration's common directory as the listing spelled it.
+fn listed_common(admin: &Path) -> Option<&Path> {
+    admin.parent().and_then(Path::parent)
+}
+
+/// The sibling's facts, read only inside a guard evaluation and only for a
+/// common directory not already known to be doubtful.
+fn gated_sibling_facts(admin: &Path, root: &Path) -> Option<PathBuf> {
+    let wanted = SIBLING_GATE.with(|gate| {
+        gate.borrow().as_ref().is_some_and(|gate| {
+            listed_common(admin).is_some_and(|common| !gate.doubtful.contains(common))
+        })
+    });
+    if !wanted {
+        return None;
+    }
+    sibling_facts(admin, root)
+}
+
+/// After a full open of a sibling whose own facts held succeeded, judge
+/// once per evaluation whether the files siblings share read the same for
+/// every sibling, and record the answer for the rest of this evaluation.
+fn judge_shared_files(admin: &Path, common: PathBuf) {
+    let independent = shared_config_is_sibling_independent(&common);
+    SIBLING_GATE.with(|gate| {
+        if let Some(gate) = gate.borrow_mut().as_mut() {
+            if independent {
+                gate.proven.insert(common);
+            } else if let Some(listed) = listed_common(admin) {
+                gate.doubtful.insert(listed.to_path_buf());
+            }
+        }
+    });
+}
+
+/// TSK-1275: the per-sibling facts that, with an earlier full open of
+/// another sibling of the same physical common directory in this
+/// evaluation, prove this sibling's `Repository::open` would succeed (the
+/// equivalence table in the task record, against libgit2 1.9.6
+/// `git_repository_open_ext`). Returns that canonical common directory.
+/// Any doubt, error or unsupported host returns `None`, and the caller keeps
+/// the full open, so a rejection keeps its cause. Computed for this
+/// registration in this call and never stored.
+fn sibling_facts(admin: &Path, root: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        sibling_facts_unix(admin, root)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (admin, root);
+        None
+    }
+}
+
+#[cfg(unix)]
+fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    // No link is followed and no special file is read: a symlink, a fifo or
+    // a device in any of these places keeps the full open.
+    let regular = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .ok()
+            .filter(|meta| meta.file_type().is_file())
+    };
+    let directory = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .ok()
+            .filter(|meta| meta.file_type().is_dir())
+    };
+    // Proven absent, never merely unreadable.
+    let absent = |path: &Path| matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    // The checkout marker is a gitfile of exactly `gitdir: <absolute path>`
+    // naming this administrative directory.
+    let marker = root.join(".git");
+    let text = crate::bounded_file::read_bounded_regular(&marker, 4096).ok()?;
+    let target = text.strip_prefix(b"gitdir: ")?.trim_ascii_end();
+    if target.is_empty() || target.contains(&0) || target.contains(&b'\n') {
+        return None;
+    }
+    let target = Path::new(std::ffi::OsStr::from_bytes(target));
+    if !target.is_absolute() {
+        return None;
+    }
+    let admin = admin.canonicalize().ok()?;
+    if target.canonicalize().ok()? != admin {
+        return None;
+    }
+    // A linked worktree's registration: its `gitdir` and `HEAD` files, no
+    // configuration or shallow file of its own (libgit2 reads both from the
+    // sibling's own git directory), and a `commondir` naming the physical
+    // parent of the registration directory.
+    regular(&admin.join("gitdir"))?;
+    regular(&admin.join("HEAD"))?;
+    if !absent(&admin.join("config.worktree")) || !absent(&admin.join("shallow")) {
+        return None;
+    }
+    let named = crate::bounded_file::read_bounded_regular(&admin.join("commondir"), 4096).ok()?;
+    let named = named.trim_ascii_end();
+    if named.is_empty() || named.contains(&0) || named.contains(&b'\n') {
+        return None;
+    }
+    let common = admin
+        .join(Path::new(std::ffi::OsStr::from_bytes(named)))
+        .canonicalize()
+        .ok()?;
+    check_common_paths(&admin, &common).ok()?;
+    regular(&common.join("HEAD"))?;
+    directory(&common.join("objects"))?;
+    directory(&common.join("refs"))?;
+    // Ownership: only a checkout whose work directory, gitfile and git
+    // directory all belong to the effective user qualifies; any other owner
+    // keeps libgit2's `safe.directory` handling.
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let user = unsafe { libc::geteuid() };
+    for path in [root, marker.as_path(), admin.as_path()] {
+        if std::fs::symlink_metadata(path).ok()?.uid() != user {
+            return None;
+        }
+    }
+    Some(common)
+}
+
+/// Whether one configuration file, as libgit2 itself parses it, reads the
+/// same for every sibling: no include of any kind (a conditional include
+/// reads the sibling's own git directory or branch), no `core.worktree`,
+/// and `core.bare` only false. `extensions.worktreeConfig` is allowed: it
+/// adds a sibling's own `config.worktree`, and a sibling with one never
+/// qualifies. A file that cannot be parsed is doubtful.
+fn config_is_sibling_independent(path: &Path) -> bool {
+    let Ok(config) = git2::Config::open(path) else {
+        return false;
+    };
+    let Ok(mut entries) = config.entries(None) else {
+        return false;
+    };
+    let mut independent = true;
+    while let Some(entry) = entries.next() {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let Ok(name) = entry.name().map(str::to_ascii_lowercase) else {
+            return false;
+        };
+        if name.starts_with("include.") || name.starts_with("includeif.") || name == "core.worktree"
+        {
+            independent = false;
+        } else if name == "core.bare"
+            && !entry
+                .value()
+                .is_ok_and(|value| matches!(git2::Config::parse_bool(value), Ok(false)))
+        {
+            independent = false;
+        }
+    }
+    independent
+}
+
+/// The shared configuration of one physical common directory: its local
+/// file and the global, XDG and system files every sibling also reads must
+/// each be sibling independent. Judged once per evaluation.
+fn shared_config_is_sibling_independent(common: &Path) -> bool {
+    let local = common.join("config");
+    std::fs::symlink_metadata(&local).is_ok_and(|meta| meta.file_type().is_file())
+        && config_is_sibling_independent(&local)
+        && [
+            git2::Config::find_global(),
+            git2::Config::find_xdg(),
+            git2::Config::find_system(),
+        ]
+        .into_iter()
+        .flatten()
+        .all(|path| config_is_sibling_independent(&path))
 }
 
 // A directory marker can be a symlink to either ordinary or linked
@@ -1607,6 +1878,333 @@ mod tests {
             }
             assert_eq!(super::VALIDATION_READS.with(std::cell::Cell::get), 2);
         }
+    }
+
+    /// TSK-1275: discovery, the checkout roots and the protected paths all list
+    /// the registrations; one guard evaluation asks libgit2 once per common
+    /// directory, and the next evaluation asks again.
+    #[test]
+    fn registrations_are_listed_once_per_guard_invocation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        for name in ["one", "two"] {
+            git(dir.path(), &["worktree", "add", "-b", name, name]);
+        }
+        let listings = || super::LISTING_READS.with(std::cell::Cell::get);
+        for _ in 0..2 {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            super::LISTING_READS.with(|reads| reads.set(0));
+            for cwd in [dir.path().to_path_buf(), dir.path().join("one")] {
+                super::RepoInfo::discover(&cwd).unwrap().unwrap();
+                let repo = super::open(&cwd).unwrap().unwrap();
+                crate::hooks::edit_guard::checkout_roots(&repo).unwrap();
+                crate::hooks::edit_guard::holds_enforcement_files(&cwd.join("build"), &cwd)
+                    .unwrap();
+            }
+            assert_eq!(listings(), 1);
+        }
+        // Outside a scope nothing is kept.
+        super::LISTING_READS.with(|reads| reads.set(0));
+        let repo = super::open(dir.path()).unwrap().unwrap();
+        super::registrations(&repo).unwrap();
+        super::registrations(&repo).unwrap();
+        assert_eq!(listings(), 2);
+    }
+
+    /// The canonical administrative directory and checkout root of a new
+    /// linked worktree `name`.
+    fn sibling(dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+        git(dir, &["worktree", "add", "-b", name, name]);
+        let root = dir.join(name).canonicalize().unwrap();
+        let admin = dir
+            .join(".git")
+            .join("worktrees")
+            .join(name)
+            .canonicalize()
+            .unwrap();
+        (admin, root)
+    }
+
+    fn skipped() -> usize {
+        super::SKIPPED_OPENS.with(std::cell::Cell::get)
+    }
+
+    /// Validate `admins` in one guard evaluation; returns the skipped opens.
+    fn validate_in_one_scope(admins: &[&Path]) -> usize {
+        let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+        let before = skipped();
+        for admin in admins {
+            super::read_registration(admin).unwrap();
+        }
+        skipped() - before
+    }
+
+    /// TSK-1275: after one full sibling open in an evaluation, a sibling of
+    /// the same common directory whose own facts hold skips its open; the
+    /// first sibling never skips, nothing is skipped outside an evaluation,
+    /// and the next evaluation starts again (AC-6).
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_skips_its_open_only_after_a_full_open_in_the_same_evaluation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, _) = sibling(dir.path(), "two");
+        let (three, _) = sibling(dir.path(), "three");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        // The host's own global and system files decide whether any skip is
+        // allowed; a host whose files could differ per sibling skips none.
+        let expected = if super::shared_config_is_sibling_independent(&common) {
+            2
+        } else {
+            0
+        };
+        let before = skipped();
+        for admin in [&one, &two, &three] {
+            super::read_registration(admin).unwrap();
+        }
+        assert_eq!(
+            skipped(),
+            before,
+            "outside an evaluation every sibling opens"
+        );
+        assert_eq!(validate_in_one_scope(&[&one, &two, &three]), expected);
+        assert_eq!(validate_in_one_scope(&[&two, &three]), expected / 2);
+        assert!(super::SIBLING_GATE.with(|gate| gate.borrow().is_none()));
+    }
+
+    /// TSK-1275: each condition of the equivalence table keeps the full open
+    /// for the sibling it concerns, and a shared file that could differ per
+    /// sibling keeps it for all of them. Every case is judged as the files
+    /// are now; no answer carries over from the evaluation before (AC-6).
+    #[cfg(unix)]
+    #[test]
+    fn every_unproven_condition_keeps_the_full_open() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, two_root) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
+        let marker = two_root.join(".git");
+        let original = std::fs::read(&marker).unwrap();
+        let per_sibling: [(&str, Box<dyn Fn()>, Box<dyn Fn()>); 6] = [
+            (
+                "own config.worktree",
+                Box::new(|| std::fs::write(two.join("config.worktree"), "[core]\n").unwrap()),
+                Box::new(|| std::fs::remove_file(two.join("config.worktree")).unwrap()),
+            ),
+            (
+                "own shallow file",
+                Box::new(|| std::fs::write(two.join("shallow"), "not an object id\n").unwrap()),
+                Box::new(|| std::fs::remove_file(two.join("shallow")).unwrap()),
+            ),
+            (
+                "relative gitfile",
+                Box::new(|| std::fs::write(&marker, "gitdir: ../.git/worktrees/two\n").unwrap()),
+                Box::new(|| std::fs::write(&marker, &original).unwrap()),
+            ),
+            (
+                "gitfile without the space",
+                Box::new(|| {
+                    std::fs::write(&marker, format!("gitdir:{}\n", two.display())).unwrap();
+                }),
+                Box::new(|| std::fs::write(&marker, &original).unwrap()),
+            ),
+            (
+                "symlinked HEAD",
+                Box::new(|| {
+                    std::fs::rename(two.join("HEAD"), two.join("HEAD.real")).unwrap();
+                    std::os::unix::fs::symlink(two.join("HEAD.real"), two.join("HEAD")).unwrap();
+                }),
+                Box::new(|| {
+                    std::fs::remove_file(two.join("HEAD")).unwrap();
+                    std::fs::rename(two.join("HEAD.real"), two.join("HEAD")).unwrap();
+                }),
+            ),
+            (
+                "symlinked gitfile",
+                Box::new(|| {
+                    std::fs::rename(&marker, two_root.join("marker.real")).unwrap();
+                    std::os::unix::fs::symlink(two_root.join("marker.real"), &marker).unwrap();
+                }),
+                Box::new(|| {
+                    std::fs::remove_file(&marker).unwrap();
+                    std::fs::rename(two_root.join("marker.real"), &marker).unwrap();
+                }),
+            ),
+        ];
+        for (case, break_it, mend) in &per_sibling {
+            break_it();
+            assert!(super::sibling_facts(&two, &two_root).is_none(), "{case}");
+            // The full open decides: a sibling libgit2 accepts still passes,
+            // and one it refuses keeps today's refusal.
+            let skips = {
+                let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+                let before = skipped();
+                super::read_registration(&one).unwrap();
+                let _ = super::read_registration(&two);
+                skipped() - before
+            };
+            assert_eq!(skips, 0, "{case}");
+            mend();
+            assert_eq!(validate_in_one_scope(&[&one, &two]), 1, "{case} mended");
+        }
+        // Shared files: an include, a conditional include, a core.worktree
+        // or a bare repository flag in the common configuration keeps every
+        // full open; worktreeConfig alone does not.
+        let config = common.join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        for (added, independent) in [
+            ("[include]\n\tpath = other\n", false),
+            ("[includeIf \"gitdir:/nowhere/\"]\n\tpath = other\n", false),
+            ("[core]\n\tworktree = /elsewhere\n", false),
+            ("[core]\n\tbare = true\n", false),
+            ("[extensions]\n\tworktreeConfig = true\n", true),
+        ] {
+            std::fs::write(&config, format!("{text}{added}")).unwrap();
+            assert_eq!(
+                super::shared_config_is_sibling_independent(&common),
+                independent,
+                "{added}"
+            );
+            std::fs::write(&config, &text).unwrap();
+        }
+    }
+
+    /// TSK-1275 AC-6: a change between two guard evaluations is judged by
+    /// the second one even when a skip was allowed in the first: a
+    /// same-length config edit with its time restored, a sibling-specific
+    /// `config.worktree`, and a broken registration.
+    #[cfg(unix)]
+    #[test]
+    fn a_skip_never_carries_a_verdict_into_the_next_evaluation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, two_root) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return;
+        }
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
+        // A same-length edit that adds an include, with the time restored.
+        let config = common.join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let stamp = std::fs::metadata(&config).unwrap().modified().unwrap();
+        let head = "[core]\n\trepositoryformatversion = 0";
+        assert!(text.starts_with(head), "{text}");
+        let mut swap = String::from("[include]\n\tpath = ");
+        while swap.len() < head.len() {
+            swap.push('z');
+        }
+        let edited = text.replacen(head, &swap, 1);
+        assert_eq!(edited.len(), text.len());
+        std::fs::write(&config, &edited).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&config)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 0);
+        std::fs::write(&config, &text).unwrap();
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
+        // A registration whose checkout now names another administrative
+        // directory is refused by the next evaluation, skip or not.
+        std::fs::write(
+            two_root.join(".git"),
+            format!("gitdir: {}\n", one.display()),
+        )
+        .unwrap();
+        let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+        super::read_registration(&one).unwrap();
+        assert!(super::read_registration(&two).is_err());
+    }
+
+    /// TSK-1275 AC-6: an included file and a sibling's own `config.worktree`
+    /// changed between two guard evaluations are judged by the second one.
+    /// An unsupported repository format version is a change libgit2 refuses.
+    #[cfg(unix)]
+    #[test]
+    fn included_and_worktree_config_changes_are_judged_by_the_next_evaluation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, _) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        let config = common.join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let refused = "[core]\n\trepositoryformatversion = 99\n";
+        // An included file: the include keeps every full open, and the next
+        // evaluation reads the included file as it is then.
+        let included = common.join("included");
+        std::fs::write(&included, "[user]\n\tname = x\n").unwrap();
+        std::fs::write(&config, format!("{text}[include]\n\tpath = included\n")).unwrap();
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 0);
+        std::fs::write(&included, refused).unwrap();
+        {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            assert!(super::read_registration(&two).is_err());
+        }
+        std::fs::write(&config, &text).unwrap();
+        // A sibling's own config.worktree, read with worktreeConfig enabled.
+        std::fs::write(
+            &config,
+            format!("{text}[extensions]\n\tworktreeConfig = true\n"),
+        )
+        .unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
+        std::fs::write(two.join("config.worktree"), refused).unwrap();
+        let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+        super::read_registration(&one).unwrap();
+        assert!(super::read_registration(&two).is_err());
+    }
+
+    /// TSK-1275 AC-6: a registration added or broken between two guard
+    /// evaluations is judged by the second one; no listing crosses calls.
+    #[test]
+    fn a_registration_changed_between_guard_calls_is_judged_by_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        git(dir.path(), &["worktree", "add", "-b", "one", "one"]);
+        {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            let repo = super::open(dir.path()).unwrap().unwrap();
+            assert_eq!(super::registrations(&repo).unwrap().len(), 1);
+            super::RepoInfo::discover(dir.path()).unwrap().unwrap();
+        }
+        git(dir.path(), &["worktree", "add", "-b", "two", "two"]);
+        {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            let repo = super::open(dir.path()).unwrap().unwrap();
+            assert_eq!(super::registrations(&repo).unwrap().len(), 2);
+        }
+        // A third registration whose pointer names another checkout's marker
+        // is refused by the next evaluation's discovery.
+        let admin = dir.path().join(".git").join("worktrees").join("rogue");
+        std::fs::create_dir(&admin).unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", dir.path().join("one").join(".git").display()),
+        )
+        .unwrap();
+        let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+        let Err(refused) = super::RepoInfo::discover(dir.path()) else {
+            panic!("a registration naming another checkout's marker is refused");
+        };
+        assert!(
+            refused.contains("worktree registration"),
+            "unexpected refusal: {refused}"
+        );
     }
 
     #[test]
