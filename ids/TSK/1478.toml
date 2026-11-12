@@ -1,0 +1,11 @@
+id = "TSK-1478"
+uid = "36e05e35-b29f-4867-bdbc-0e5ac2f142dd"
+kind = "TSK"
+title = "A planning landing may carry decision documents alongside task records"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T17:45:09Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
