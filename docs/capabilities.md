@@ -319,7 +319,7 @@ The duo develop flow includes a mandatory security and red-team stage
 | Control | Behaviour |
 |---|---|
 | CI `security-review` job | audits all lockfile ecosystems with `osv-scanner`. Advisory verdicts follow the severity table at the stricter of `security_review` and `dep_audit`; the shipped default is warn. Scan errors and invalid exceptions fail at warn and block. Both off skips the audit |
-| gitleaks secret scan | always blocks, with exemptions read from the trusted commit |
+| gitleaks secret scan | findings always block, with exemptions read from the trusted commit |
 | `cf-security-reviewer` agent | runs a two-vendor adversarial review. Its findings warn locally and force bounded rework, with the human merger as the backstop (ADR-0007) |
 
 Detail: [enforcement planes](architecture/enforcement-planes.md).
