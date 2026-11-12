@@ -242,3 +242,35 @@ the pull request into `main` that removes the job cannot satisfy a
 `release impact` requirement either. Until then the head-built job's weaker
 trust stays on that name. The rest of the enablement order is unchanged.
 The accepted text above is unchanged.
+
+## Note, 2026-11-07: the old names have producers again, and 24379074 and 25435656 stay
+
+TSK-1368 (PR 682, merged into `main` as 172d5f22c on 2026-11-06) renamed the
+policy verdict job back to `commit standards`, the name rulesets 24379074
+(`main`) and 25435656 (`integration/**`) require. The head-built
+`secret scan` job is still in `codeflow-ci.yml`, and `release impact` is
+still posted by `codeflow-release.yml`. Three passages above no longer hold:
+
+- The Decision's Mode B paragraph (lines 97 to 99): "The head-run `secret
+  scan` and `release impact` jobs are removed, so the old names have no
+  producer (TSK-336)." The verdict job is named `commit standards`, and both
+  head-built jobs remain.
+- The Enablement order (lines 144 to 150): "From that merge the old check
+  names have no producer, so every pull request into the default branch and
+  the lines is unmergeable, fail closed, until the operator runs `remote
+  protect` to write A, B and C and retires the foreign rulesets that require
+  the old names (here 24379074 and 25435656)." Those names have producers,
+  so pull requests stay mergeable under those rulesets, and nothing requires
+  retiring them.
+- The 2026-11-03 Note (lines 240 to 244): "At that step the operator also
+  edits ruleset 24379074 ... The rest of the enablement order is
+  unchanged." The head-built `release impact` job was not removed before
+  `main`, so 24379074 needs no edit for it, and the enablement order is the
+  one this note gives.
+
+Rulesets 24379074 and 25435656 are the only branch rulesets on this
+repository (read through the GitHub API on 2026-11-07); retiring them would remove the protection of `main` and
+`integration/**`. They stay. Retire a foreign ruleset only when `codeflow
+doctor --check remote-perimeter` names it for requiring a name no workflow
+on the default branch produces. `docs/policy-reference.md` "Enablement
+order" states the current steps. The accepted text above is unchanged.
