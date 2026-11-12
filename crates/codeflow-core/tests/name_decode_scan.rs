@@ -4941,6 +4941,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         11,
         "display",
     ),
+    // Finds the record's `## Execution contract` heading and its `- Builder:` item in human-authored prose; the value only selects lineage words and never becomes an identity, path or revision.
+    (
+        "crates/codeflow-core/src/workgraph/acceptance/landed_review.rs",
+        "builder",
+        "lines",
+        1,
+        "prose",
+    ),
+    // Removes ASCII spaces, tabs and quotes around the reviewer a review field names in prose; the text only selects lineage words and is shown in a refusal, never used as an identity.
+    (
+        "crates/codeflow-core/src/workgraph/acceptance/landed_review.rs",
+        "reviewer",
+        "trim_matches",
+        1,
+        "prose",
+    ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
     (
         "crates/codeflow-core/src/workgraph/allocate.rs",
