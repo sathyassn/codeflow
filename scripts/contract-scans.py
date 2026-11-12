@@ -17,14 +17,14 @@ import time
 
 # These are behavioral fixtures, not repository scans. Essential runs them
 # through rust-workspace; full runs them through rust-coverage, except the
-# explicitly qualified managed-secret-scan journey noted below.
+# explicitly qualified managed-leak-scan journey noted below.
 OUTSIDE_SCANS = {
     "doctor_trust_probes": "doctor trust fixtures (essential/full)",
     "history_overlays": "synthetic history fixtures (essential/full)",
     "id_registry": "local remote and registry journeys (essential/full)",
     "integrate_merge": "merge and gate lifecycle fixtures (essential/full)",
     "integration_testing_setup": "test setup and runner fixtures (essential/full)",
-    "managed_secret_scan": "ignored tool-backed journey (CI scaffold secret scan)",
+    "managed_leak_scan": "ignored tool-backed journey (CI scaffold secret scan)",
     "model_catalog_surfaces": "fictional model catalogue fixtures (essential/full)",
     "permission_presets_update": "older-preset update fixtures (essential/full)",
     "prose_differential": "prose differential corpus (essential/full; prose-exhaustive)",

@@ -37,7 +37,7 @@
 //! Not seen, and so left to review: a URL built at run time (`format!`, a
 //! function result, `concat!`, a variable defined in another file), a remote
 //! added by a helper in another crate, and the files named in [`UNREAD`],
-//! which the lint never opens because their names say they hold secrets;
+//! which the lint never opens because their names said they hold secrets;
 //! the run prints them and fails on any other unreadable file or any other
 //! file with `secret` in its name. A passing lint says these forms were not
 //! found, nothing more.
@@ -113,12 +113,13 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Test sources the lint never opens, relative to `crates/`: their names say
-/// they hold secrets, so no agent or lint run reads them.
+/// Test sources the lint never opens, relative to `crates/`. Until TSK-1481
+/// renamed them, their names said they hold secrets, so no agent or lint run
+/// has read them.
 const UNREAD: &[&str] = &[
-    "codeflow-cli/tests/ci_cli/secret_scan_exemption.rs",
-    "codeflow-cli/tests/refusal_journey/secret_paths.rs",
-    "codeflow-core/tests/managed_secret_scan.rs",
+    "codeflow-cli/tests/ci_cli/leak_scan_exemption.rs",
+    "codeflow-cli/tests/refusal_journey/guarded_read_paths.rs",
+    "codeflow-core/tests/managed_leak_scan.rs",
 ];
 
 const LOOPBACK: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
