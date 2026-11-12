@@ -1,22 +1,34 @@
 //! TSK-1456 AC-9: every expansion the shell applies to the word in the
 //! program position is read exactly by the guards or refused. Each row is a
 //! hook payload string given to the built binary; nothing in it runs.
-use super::{codeflow, guard_payload, init_repo, line_allows, run_with_stdin};
+use super::{codeflow, guard_payload, init_repo, line_allows, run_with_stdin, write_agent_policy};
 use std::path::Path;
 use std::process::Output;
 
-fn hook(root: &Path, name: &str, command: &str) -> Output {
+fn hook(root: &Path, name: &str, command: &str, env: &[(&str, &str)]) -> Output {
     run_with_stdin(
-        codeflow().args(["hook", name]).current_dir(root),
+        codeflow()
+            .args(["hook", name])
+            .envs(env.iter().copied())
+            .current_dir(root),
         &guard_payload(command, root),
     )
 }
 
 /// Every row whose verdict is wrong, with the hook and what it printed.
 fn check(root: &Path, rows: &[(&str, &str, Option<&str>)]) -> Vec<String> {
+    check_with(root, rows, &[])
+}
+
+/// [`check`] with the hooks given `env`.
+fn check_with(
+    root: &Path,
+    rows: &[(&str, &str, Option<&str>)],
+    env: &[(&str, &str)],
+) -> Vec<String> {
     let mut wrong = Vec::new();
     for (name, command, rule) in rows {
-        let out = hook(root, name, command);
+        let out = hook(root, name, command, env);
         let stderr = String::from_utf8_lossy(&out.stderr);
         let right = match rule {
             // Refused by this rule and by no other.
@@ -126,6 +138,48 @@ fn ordinary_expanded_program_words_stay_allowed() {
         rows.push(("exec-guard", command, exec));
     }
     let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Ordinary lines where a reading of the program word meets another
+/// reader keep main's verdicts: a git reading of a command that runs Git's
+/// own programs (a pager, a diff driver, hooks), and the shell and `eval`
+/// readings of a quoted argument. The policy is the measured fixture's:
+/// main allows each row at both guards there. The scratch repository is a
+/// root checkout on a task branch, so the root-checkout rule is off: under
+/// it a git reading of `commit` is refused there, as `git commit` is.
+#[test]
+fn readings_of_ordinary_program_words_keep_main_verdicts() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"root_checkout_commits":"off","hook_integrity":"block"},"security":{"secret_reads":"off","outward_actions":"off","headless_peer_runs":"block"}}"#,
+    );
+    let mut rows = Vec::new();
+    for command in [
+        "$GIT diff",
+        "$GIT log --oneline",
+        "$GIT commit -m msg",
+        "$DOCKER commit c img",
+        "$DOCKER tag a b",
+        "$KUBECTL diff -f x.yaml",
+        "$PYTHON -c 'print(1)'",
+        "$NODE -e 'console.log(1)'",
+        "$RUBY -e 'puts 1'",
+        "$SHELL -c 'echo hi'",
+    ] {
+        rows.push(("git-guard", command, None));
+        rows.push(("exec-guard", command, None));
+    }
+    // A pager or an editor makes Git run a program it chooses (`git diff`,
+    // `git log`, `git commit`), which the guard reads from the directory
+    // the command runs in.
+    let wrong = check_with(
+        dir.path(),
+        &rows,
+        &[("PAGER", "less"), ("EDITOR", "nvim"), ("VISUAL", "nvim")],
+    );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 

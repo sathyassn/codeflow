@@ -7274,6 +7274,16 @@ pub(crate) struct Expanded {
     /// the order the line runs them. The closed rule of TSK-242 refuses one
     /// on a line that names a protected target.
     pub(crate) unread_commands: Vec<String>,
+    /// Which segments are other readings of a command (TSK-1456).
+    pub(crate) readings: Vec<Reading>,
+}
+
+/// The segments in `within` are other readings of the command at index
+/// `of` ([`Expanded::segments`]): each runs in its place, not beside it.
+#[derive(Debug)]
+pub(crate) struct Reading {
+    pub(crate) within: std::ops::Range<usize>,
+    pub(crate) of: usize,
 }
 
 /// [`expand_commands`], with the command words it could not fill in. A
@@ -7332,6 +7342,9 @@ fn expand_segments(
         let mut words = toks;
         strip_reserved_words(&mut words);
         let mut unreadable = false;
+        // Other readings of this command (TSK-1456): each runs in its place,
+        // not after it.
+        let mut alternatives: Vec<String> = Vec::new();
         if let Some((at, taker)) = launched_at(&words) {
             let program = words[at].as_str();
             if expands(program) {
@@ -7342,40 +7355,65 @@ fn expand_segments(
                 }
             } else if leading_word(program, taker) != LeadingWord::Unplaced {
                 match program_readings(&words, at, &seg) {
-                    Some(readings) => bodies.extend(readings),
+                    Some(readings) => alternatives.extend(readings),
                     None => unreadable = true,
                 }
             }
             if leading_word(program, taker) == LeadingWord::Unplaced {
                 match other_readings(&words, at) {
-                    Some(readings) => bodies.extend(readings),
+                    Some(readings) => alternatives.extend(readings),
                     None => out.unread_commands.push(program.to_string()),
                 }
             }
         }
+        // A reading goes before the command it reads, so a reader that
+        // walks the line in order (the directories it runs in, TSK-216)
+        // gives it the directory the command starts in, never one the
+        // command itself may have moved to.
+        let first = out.segments.len();
+        expand_bodies(alternatives, out, depth, literals, git_bodies);
+        let within = first..out.segments.len();
         // Only the line's own top level: an assignment inside a body or a
         // subshell may not outlive it.
         if depth == 1 {
             literals.note(&words);
         }
         out.segments.push(seg);
+        if !within.is_empty() {
+            out.readings.push(Reading {
+                within,
+                of: out.segments.len() - 1,
+            });
+        }
         if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
             out.segments.push(PROGRAM_UNREAD.to_string());
         }
-        if bodies.is_empty() {
-            continue;
+        expand_bodies(bodies, out, depth, literals, git_bodies);
+    }
+}
+
+/// Expand each body one level deeper than the segment that carries it; past
+/// [`NESTING_LIMIT`], the [`NESTING_UNREAD`] marker.
+fn expand_bodies(
+    bodies: Vec<String>,
+    out: &mut Expanded,
+    depth: usize,
+    literals: &mut Literals,
+    git_bodies: bool,
+) {
+    if bodies.is_empty() {
+        return;
+    }
+    if depth > NESTING_LIMIT {
+        if !out.segments.iter().any(|s| s == NESTING_UNREAD) {
+            out.segments.push(NESTING_UNREAD.to_string());
         }
-        if depth > NESTING_LIMIT {
-            if !out.segments.iter().any(|s| s == NESTING_UNREAD) {
-                out.segments.push(NESTING_UNREAD.to_string());
-            }
-            continue;
-        }
-        for body in bodies {
-            let mut inner = Vec::new();
-            split_into_segments(&body, &mut inner, depth, false);
-            expand_segments(inner, out, depth + 1, literals, git_bodies);
-        }
+        return;
+    }
+    for body in bodies {
+        let mut inner = Vec::new();
+        split_into_segments(&body, &mut inner, depth, false);
+        expand_segments(inner, out, depth + 1, literals, git_bodies);
     }
 }
 
@@ -17032,10 +17070,12 @@ mod tests {
                 ],
             ),
         ] {
+            // Each reading comes before the command it reads.
             let segments = read(line);
-            assert_eq!(segments[0], words(line), "{line}");
+            let at = segments.iter().position(|s| s == &words(line));
             for reading in readings {
-                assert!(segments.contains(&words(reading)), "{line}: {segments:?}");
+                let found = segments.iter().position(|s| s == &words(reading));
+                assert!(found < at && found.is_some(), "{line}: {segments:?}");
             }
         }
         for line in [
@@ -17073,8 +17113,9 @@ mod tests {
             ("python{3..3} x.py", "python3 x.py"),
         ] {
             let segments = read(line);
-            assert_eq!(segments[0], words(line), "{line}");
-            assert!(segments.contains(&words(reading)), "{line}: {segments:?}");
+            let at = segments.iter().position(|s| s == &words(line));
+            let found = segments.iter().position(|s| s == &words(reading));
+            assert!(found < at && found.is_some(), "{line}: {segments:?}");
         }
         for line in [
             "<(echo git) push origin main",

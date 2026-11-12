@@ -5,8 +5,8 @@ use super::{
     expand_shell_commands, expands, git_subcommand, inherited_locations, integrity_shell_path,
     launcher_effects, launcher_env, may_change_discard_state, parse_options, quote_words,
     redirect_writes, run_dirs, same_path, shown_word, split_alias, strip_launchers,
-    strip_reserved_words, unresolved_word, Arity, Literals, OptionSpec, ParsedOptions, Seen,
-    Violation, GIT_BUILTINS, GIT_LOCATION_VARS, GIT_PUSH_OPTIONS, GIT_REBASE_OPTIONS,
+    strip_reserved_words, unresolved_word, Arity, Literals, OptionSpec, ParsedOptions, Reading,
+    Seen, Violation, GIT_BUILTINS, GIT_LOCATION_VARS, GIT_PUSH_OPTIONS, GIT_REBASE_OPTIONS,
     MAX_ALIAS_DEPTH, NESTING_LIMIT, NESTING_UNREAD, RUN_DIR_LIMIT,
 };
 use std::collections::BTreeMap;
@@ -2175,6 +2175,7 @@ fn collect(
     }
     let segments = literal_segments(&expanded.segments);
     let run = run_dirs(&segments, cwd);
+    let every = segments.clone();
     let locations = segment_directories(command, &expanded.segments, cwd, &run.dirs);
     let mut literals = Literals::default();
     let mut changed_sources = false;
@@ -2258,7 +2259,9 @@ fn collect(
             if commands.is_empty() && configured.is_empty() {
                 continue;
             }
-            if let Some(reason) = run.unknown.as_ref().or(uncertain.as_ref()) {
+            let unknown = reading_unknown(&every, &expanded.readings, index, cwd)
+                .unwrap_or_else(|| run.unknown.clone());
+            if let Some(reason) = unknown.as_ref().or(uncertain.as_ref()) {
                 return Err(reason.clone());
             }
             if changed_checkouts && !commands.is_empty() && runs_in_checkouts(&args) {
@@ -2270,6 +2273,33 @@ fn collect(
         changed_checkouts = true;
     }
     Ok(())
+}
+
+/// For a segment that is a reading of other commands ([`Reading`]), why
+/// the directories it runs in may be missed: the line's directories are
+/// read without the commands it reads, since it runs in their place
+/// (TSK-1456). `None` for any other segment, which keeps the line's own.
+fn reading_unknown(
+    segments: &[String],
+    readings: &[Reading],
+    index: usize,
+    cwd: &Path,
+) -> Option<Option<String>> {
+    let read: Vec<usize> = readings
+        .iter()
+        .filter(|reading| reading.within.contains(&index))
+        .map(|reading| reading.of)
+        .collect();
+    if read.is_empty() {
+        return None;
+    }
+    let kept: Vec<String> = segments
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !read.contains(at))
+        .map(|(_, segment)| segment.clone())
+        .collect();
+    Some(run_dirs(&kept, cwd).unknown)
 }
 
 /// Whether a Git call runs its command in a set of checkouts it reads when
