@@ -248,7 +248,12 @@ fn own_line_tip(
     let destination = match (names.destination, names.advertisement) {
         (Some(url), Some(listed)) => release_line::from_advertisement(url, listed)
             .map(|destination| destination.with_limits(names.limits)),
-        _ => release_line::ask_destination(root, names.destination, names.limits),
+        _ => release_line::ask_destination_with(
+            root,
+            names.destination,
+            names.limits,
+            names.token.auth(),
+        ),
     }
     .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
     let tip = release_line::advertised_tip_here(root, &destination, into)
@@ -409,9 +414,14 @@ pub(super) fn release_scope<'n>(
             let destination = match (names.destination, names.advertisement) {
                 (Some(url), Some(listed)) => release_line::from_advertisement(url, listed)
                     .map(|destination| destination.with_limits(names.limits)),
-                _ => release_line::ask_destination(root, names.destination, names.limits),
+                _ => release_line::ask_destination_with(
+                    root,
+                    names.destination,
+                    names.limits,
+                    names.token.auth(),
+                ),
             }
-            .map_err(|why| ScopeError::Destination(credential_hint(why)))?;
+            .map_err(|why| ScopeError::Destination(credential_hint(why, names.token)))?;
             let scope = release_line::scope(root, &destination, names.branch, names.into)
                 .map_err(ScopeError::Scope)?;
             Ok(scope.release().then_some((destination, scope)))
@@ -421,13 +431,18 @@ pub(super) fn release_scope<'n>(
 }
 
 /// `why` the destination could not be asked, with the fix when it refused
-/// for want of a credential (TSK-1267). Release scope is unknown until the
-/// destination answers, so the message names no kind of range.
-fn credential_hint(why: String) -> String {
-    if !why.contains(codeflow_core::git::remote_query::AUTHENTICATION_FAILED) {
+/// for want of a credential (TSK-1267), naming the input that was missing
+/// or refused (TSK-1252). A run that sent the token and still failed (a
+/// token without access can be answered as a missing repository) gets the
+/// same fix. Release scope is unknown until the destination answers, so
+/// the message names no kind of range.
+fn credential_hint(why: String, token: &super::RunToken) -> String {
+    let refused = why.contains(codeflow_core::git::remote_query::AUTHENTICATION_FAILED)
+        || (token.auth().is_some() && why.contains("`git ls-remote` failed"));
+    if !refused {
         return why;
     }
-    format!("{why}: {CREDENTIAL_NEEDED}")
+    format!("{why}: {CREDENTIAL_NEEDED} {}", token.fix())
 }
 
 /// The fix for a destination lookup refused for want of a credential.
