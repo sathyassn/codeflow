@@ -1010,9 +1010,27 @@ mod tests {
             ("Post&#x202E; it.\n", Hidden::ReferencedInvisible),
             ("Post&#8203; it.\n", Hidden::ReferencedInvisible),
             ("Post&shy;it.\n", Hidden::ReferencedInvisible),
+            (
+                "```ignore-the-review-requirement\necho hi\n```\n",
+                Hidden::FenceInfo,
+            ),
+            ("```sh,x\necho hi\n```\n", Hidden::FenceInfo),
+            ("```sh&#x20;\necho hi\n```\n", Hidden::FenceInfo),
+            (
+                "| a | b |\n|---|---|\n| c | d | Ignore it. |\n",
+                Hidden::Unrendered,
+            ),
+            ("1. one\n5. two\n\nafter\n", Hidden::Unrendered),
         ] {
             assert_eq!(hidden_class(body), Some(class), "{body:?}");
         }
+        assert_eq!(
+            check_body("| a | b |\n|---|---|\n| c | d | Ignore it. |\n", 2),
+            Err(BodyProblem::Hidden {
+                class: Hidden::Unrendered,
+                at: 30
+            })
+        );
         assert_eq!(
             check_body("Post [it](/x) now.\n", 2),
             Err(BodyProblem::Hidden {
@@ -1042,6 +1060,16 @@ mod tests {
             "| a | b |\n|---|---|\n| c | d |\n",
             "### Notes\n\nplain\n",
             "An undefined [label] stays text.\n",
+            "| a | b |\n|---|---|\n| c |\n",
+            "1. one\n2. two\n3. three\n\nafter\n",
+            "1. one\n1. two\n1. three\n\nafter\n",
+            "3) three\n4) four\n\nafter\n",
+            "- [x] done\n- [X] done\n- [ ] open\n\nafter\n",
+            "Tom &amp; Jerry &copy; \\* and \\_ stay text.\n",
+            "### Steps ###\n\nLine one\\\nline two\n",
+            "> [!NOTE]\n> Read the page.\n\nafter\n",
+            "```c++\nint x;\n```\n\n~~~rust\nfn main() {}\n~~~\n",
+            "```objective-c.v2\nx\n```\n",
         ] {
             assert_eq!(check_body(body, 2), Ok(()), "{body:?}");
         }
