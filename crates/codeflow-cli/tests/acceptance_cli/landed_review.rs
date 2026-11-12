@@ -343,12 +343,7 @@ fn a_malformed_marker_is_refused_in_both_forms() {
 /// readable and only the marker read meets the unreadable record.
 #[test]
 fn an_unreadable_marker_is_refused_in_both_forms() {
-    let landed = reviewed_by(
-        WHOLE_EPIC,
-        CODEX_REVIEW,
-        "  built_by: claude\n",
-        "approved",
-    );
+    let landed = reviewed_by(WHOLE_EPIC, CODEX_REVIEW, "  built_by: claude\n", "approved");
     let root = landed.dir.path();
     git(root, &["switch", "-C", "authority", "main"]);
     write(
@@ -360,7 +355,10 @@ fn an_unreadable_marker_is_refused_in_both_forms() {
     git(root, &["switch", LINE]);
     for (form, result) in [
         ("push", push_with(&landed, &["--policy-from", &authority])),
-        ("epic PR", epic_with(&landed, &["--policy-from", &authority])),
+        (
+            "epic PR",
+            epic_with(&landed, &["--policy-from", &authority]),
+        ),
     ] {
         assert_blocks(
             &result,

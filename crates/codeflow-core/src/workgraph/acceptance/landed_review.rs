@@ -11,14 +11,20 @@
 //! - the block names the one lineage that built the task in `built_by`;
 //! - the reviewer named first in `review` is of another lineage;
 //! - or, when it is of the same lineage, the block carries the recorded
-//!   `reduced_assurance` statement, which names each other lineage as
-//!   probed and unavailable.
+//!   `reduced_assurance` statement in its fixed form: items separated by
+//!   `;`, each a lineage id (`claude`, `codex`, `grok`), then the word
+//!   `unavailable`, then any text, with exactly one item for each lineage
+//!   other than the builder's and none for the builder's, for example
+//!   `codex unavailable, weekly limit at 14:32; grok unavailable, no seat`.
 //!
-//! What it is and is not: both fields are written by the agents under
+//! What it is and is not: all three fields are written by the agents under
 //! review, so the check catches a mistake or drift between what a
-//! completion says about its builder and its reviewer. It does not catch a
-//! forged claim, and it is no proof that the review was independent or took
-//! place (see [`super::SCOPE_NOTE`]). It reads only the completion in the
+//! completion says about its builder and its reviewer, and the fixed form
+//! makes a careless or mistaken reduced-assurance statement refuse, such as
+//! one that only names the other lineages or says one is available. It does
+//! not catch a forged claim: it does not show that any lineage was probed,
+//! and it is no proof that the review was independent or took place (see
+//! [`super::SCOPE_NOTE`]). It reads only the completion in the
 //! tree: never a verdict file and never the path the `review` field cites.
 //! Checking a completion against its verdict file is the adopter's own
 //! landing process.
@@ -167,21 +173,73 @@ pub(super) fn problem(
         return Ok(None);
     }
     let others: BTreeSet<&str> = known.iter().copied().filter(|l| *l != built).collect();
-    let probed = block
-        .reduced_assurance
-        .as_deref()
-        .map(|statement| lineages(words, statement))
-        .unwrap_or_default();
-    let missing: BTreeSet<&str> = others.difference(&probed).copied().collect();
-    if missing.is_empty() {
+    let Some(reason) =
+        reduced_assurance_problem(block.reduced_assurance.as_deref(), built, &known, &others)
+    else {
         return Ok(None);
-    }
+    };
+    let example = others
+        .iter()
+        .map(|lineage| format!("{lineage} {UNAVAILABLE}, <why and when>"))
+        .collect::<Vec<_>>()
+        .join("; ");
     Ok(Some(format!(
-        "{}: {LANDED_REVIEW}, and its reviewer `{}` is of the lineage `built_by` names ({built}), while its acceptance block's `reduced_assurance` does not name {} as probed and unavailable, so it records neither a review by another lineage nor why none was possible",
+        "{}: {LANDED_REVIEW}, and its reviewer `{}` is of the lineage `built_by` names ({built}), so its acceptance block needs `reduced_assurance` recording each other lineage as unavailable: one item per other lineage ({}), separated by `;`, each its lineage id, then `{UNAVAILABLE}`, then any text, for example `{example}`; {reason}",
         task.id,
         crate::git::display_text(seat),
-        named(&missing)
+        named(&others)
     )))
+}
+
+/// The second word of each `reduced_assurance` item.
+const UNAVAILABLE: &str = "unavailable";
+
+/// Why `statement`, a block's `reduced_assurance`, does not record each
+/// lineage in `others` as unavailable in the fixed form, or `None` when it
+/// does. The form: items separated by `;`, each a lineage id of `known`
+/// (exact, as `built_by` is), then the word `unavailable` (a trailing `,`,
+/// `.` or `:` allowed), then any text; exactly one item for each lineage in
+/// `others` and none for `built`. The form makes a careless or mistaken
+/// statement refuse; it does not show that the probe took place.
+fn reduced_assurance_problem(
+    statement: Option<&str>,
+    built: &str,
+    known: &BTreeSet<&str>,
+    others: &BTreeSet<&str>,
+) -> Option<String> {
+    let Some(statement) = statement else {
+        return Some("it has no `reduced_assurance`".into());
+    };
+    let mut recorded = BTreeSet::new();
+    for item in statement.split(';').map(str::trim) {
+        let shown = crate::git::display_text(item);
+        let mut words = item.split_whitespace();
+        let Some(lineage) = words.next().and_then(|word| known.get(word)).copied() else {
+            return Some(format!(
+                "the item `{shown}` does not start with a lineage id"
+            ));
+        };
+        if words
+            .next()
+            .map(|word| word.trim_end_matches([',', '.', ':']))
+            != Some(UNAVAILABLE)
+        {
+            return Some(format!(
+                "the item `{shown}` does not have `{UNAVAILABLE}` as its second word"
+            ));
+        }
+        if lineage == built {
+            return Some(format!(
+                "the item `{shown}` names {built}, the builder's own lineage"
+            ));
+        }
+        if !recorded.insert(lineage) {
+            return Some(format!("{lineage} has more than one item"));
+        }
+    }
+    let missing: Vec<&str> = others.difference(&recorded).copied().collect();
+    (!missing.is_empty())
+        .then(|| format!("no item records {} as {UNAVAILABLE}", missing.join(", ")))
 }
 
 /// The reviewer a `review` field names: its text before the first comma or
@@ -333,7 +391,11 @@ mod tests {
             "grok unavailable;codex unavailable",
             "  codex   unavailable.  ;  grok unavailable: probed live  ",
         ] {
-            assert_eq!(judge(Some("claude"), review, Some(stated)), None, "{stated}");
+            assert_eq!(
+                judge(Some("claude"), review, Some(stated)),
+                None,
+                "{stated}"
+            );
         }
         let found = judge(Some("claude"), review, None).expect("no statement");
         assert!(found.contains("it has no `reduced_assurance`"), "{found}");
@@ -342,7 +404,9 @@ mod tests {
             "{found}"
         );
         assert!(
-            found.contains("for example `codex unavailable, <why and when>; grok unavailable, <why and when>`"),
+            found.contains(
+                "for example `codex unavailable, <why and when>; grok unavailable, <why and when>`"
+            ),
             "{found}"
         );
         let found = judge(Some("codex"), "GPT-6 Astra, whole unit", None).expect("codex");
@@ -413,7 +477,9 @@ mod tests {
             assert!(found.contains(why), "{stated}: {found}");
             assert!(found.contains(LANDED_REVIEW), "{found}");
             assert!(
-                found.contains("needs `reduced_assurance` recording each other lineage as unavailable"),
+                found.contains(
+                    "needs `reduced_assurance` recording each other lineage as unavailable"
+                ),
                 "{found}"
             );
         }
