@@ -287,7 +287,7 @@ fn an_invalid_block_rejects_the_whole_file() {
         ("unknown field", &|v| {
             v["design_authority"]["lines"]["orchid-support"]["command"] = json!("x");
         }),
-        ("standing-pair seat", &|v| {
+        ("standing duo seat", &|v| {
             v["standing_reviews"][0]["seat"] = json!("quartz-seat");
         }),
         ("unknown variant", &|v| {
