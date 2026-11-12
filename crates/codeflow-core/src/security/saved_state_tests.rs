@@ -947,7 +947,7 @@ fn a_non_default_claude_configuration_folder_is_saved_state() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// The five locations below the home and the four variables, each written
+/// The five locations below the home and the five variables, each written
 /// by a redirect, `tee`, `cp`, `mv` and `ln`, refuse through exec-guard and
 /// git-guard; with the pass turned off, neither hook refuses them.
 #[test]
@@ -996,6 +996,11 @@ fn saved_state_writes_refuse_through_both_hooks() {
         var("CODEX_HOME", elsewhere.join("codex")),
         slashed(&elsewhere.join("codex/shell_snapshots/s.sh")),
         "$CODEX_HOME/shell_snapshots".into(),
+    ));
+    rows.push((
+        var("XDG_CONFIG_HOME", elsewhere.join("xdg")),
+        slashed(&elsewhere.join("xdg/herdr-core/templates/build.toml")),
+        "$XDG_CONFIG_HOME/herdr-core/templates".into(),
     ));
     rows.push((
         var("CLAUDE_ENV_FILE", elsewhere.join("env/hook-1.sh")),
@@ -1065,7 +1070,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
     // The text rule names the location by its full path, as it compares it.
     let needle = key(&lexical(&conf.join("session-env")));
     let near = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
-    let cd_way = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
+    let cd_way = "run `cd` alone with a plain unquoted path, or give the full path to a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, instead of changing into the folder";
     let forms: Vec<(String, String)> = vec![
         (
             format!("echo x > {l}/h"),
@@ -1282,7 +1287,7 @@ fn links_and_unread_sources_refuse_through_both_hooks() {
         ),
         (
             "mytool lnk/h".to_string(),
-            vec!["`mytool` targets the saved shell state location `~/.claude/session-env`".to_string()],
+            vec!["`mytool` targets the saved shell state location `~/.claude/session-env`; to read it, use a reader the guard lists, such as `cat`, `head`, `grep` or `ls`".to_string()],
         ),
     ] {
         both_hooks(&f, &linked, &command, &messages, &mut wrong);
@@ -1383,7 +1388,7 @@ fn a_directory_change_refuses_only_into_a_location() {
         },
         &f.project,
     );
-    let cd_way = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
+    let cd_way = "run `cd` alone with a plain unquoted path, or give the full path to a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, instead of changing into the folder";
     let mut wrong = Vec::new();
     for (dir, label) in &located {
         let d = slashed(dir);
@@ -1395,9 +1400,11 @@ fn a_directory_change_refuses_only_into_a_location() {
         both_hooks(&f, &places, &format!("cd '{d}'"), &refusal, &mut wrong);
     }
     // The text rule names the location by its full path, as it compares it.
+    // A path with a space cannot be written unquoted, so the way through is
+    // a listed reader given the full path.
     let spaced = profile.join("session-env");
     let refusal = [format!(
-        "`cd` is given text that names the saved shell state location `{}`, which it can write",
+        "`cd` is given text that names the saved shell state location `{}`, where a harness keeps the shell state it runs before later commands; give the full path to a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, instead of changing into the folder",
         key(&lexical(&spaced))
     )];
     let d = slashed(&spaced);
@@ -1452,15 +1459,11 @@ fn both_hooks(
     }
 }
 
-/// The lead in Director ruling C: main's judge returns the first finding a
-/// segment gives, so with `git.hook_integrity` at warn, a warn-level git
-/// finding in an earlier segment is all it returns, and a write to a shell
-/// startup file later on the line gives no finding of its own. This row
-/// only reads main's judge, with main's class, and changes nothing.
-/// Settled: confirmed. The startup write is hidden behind the warn
-/// finding; fixing that is main's, outside this unit.
+/// The startup check's own judge, with its own class and `git.hook_integrity`
+/// at warn, returns the first finding of a line as it did before this unit.
+/// The row only reads that judge and changes nothing (Director ruling C).
 #[test]
-fn a_warn_level_git_finding_comes_before_a_later_startup_write() {
+fn the_startup_judge_keeps_its_finding_order_at_warn() {
     let f = Fixture::new();
     let env = StartupEnv {
         home: Some(f.home.clone()),
@@ -1501,3 +1504,6 @@ fn the_hooks_append_saved_state_findings_last() {
     }
     assert!(saved(&without(|| f.exec(&command, &f.places()))).is_empty());
 }
+
+#[path = "saved_state_forms_tests.rs"]
+mod forms;
