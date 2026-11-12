@@ -2158,6 +2158,114 @@ mod tests {
         }
     }
 
+    /// TSK-1275: a sibling's own `config.worktree` or `shallow` keeps the
+    /// full open unless it is proven absent: present but unreadable, a link
+    /// (dangling or not), a directory, or a case variant of its name on a
+    /// volume that folds case. Configuration names are judged as bytes, so
+    /// an include, `core.worktree` or `core.bare` in any letter case, or
+    /// under a section name that is not UTF-8, keeps every full open.
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_file_not_proven_absent_keeps_the_full_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, two_root) = sibling(dir.path(), "two");
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        assert_eq!(validate_in_one_scope(&[&one, &two]), 1);
+        // Whether this volume folds case decides what a case variant names.
+        let probe = two.join("CASE-PROBE");
+        std::fs::write(&probe, "").unwrap();
+        let folds_case = std::fs::symlink_metadata(two.join("case-probe")).is_ok();
+        std::fs::remove_file(&probe).unwrap();
+        let target = two.join("link-target");
+        std::fs::write(&target, "[core]\n").unwrap();
+        for name in ["config.worktree", "shallow"] {
+            let path = two.join(name);
+            let variant = two.join(name.to_ascii_uppercase());
+            let mut cases: Vec<Case> = vec![
+                (
+                    "present and unreadable",
+                    Box::new(|| {
+                        std::fs::write(&path, "[core]\n").unwrap();
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+                            .unwrap();
+                    }),
+                    Box::new(|| std::fs::remove_file(&path).unwrap()),
+                ),
+                (
+                    "a dangling link",
+                    Box::new(|| {
+                        std::os::unix::fs::symlink(two.join("missing"), &path).unwrap();
+                    }),
+                    Box::new(|| std::fs::remove_file(&path).unwrap()),
+                ),
+                (
+                    "a link to a file",
+                    Box::new(|| std::os::unix::fs::symlink(&target, &path).unwrap()),
+                    Box::new(|| std::fs::remove_file(&path).unwrap()),
+                ),
+                (
+                    "a directory",
+                    Box::new(|| std::fs::create_dir(&path).unwrap()),
+                    Box::new(|| std::fs::remove_dir(&path).unwrap()),
+                ),
+            ];
+            if folds_case {
+                cases.push((
+                    "a case variant of its name",
+                    Box::new(|| std::fs::write(&variant, "[core]\n").unwrap()),
+                    Box::new(|| std::fs::remove_file(&variant).unwrap()),
+                ));
+            }
+            for (case, break_it, mend) in &cases {
+                break_it();
+                assert!(
+                    super::sibling_facts(&two, &two_root).is_none(),
+                    "{name}: {case}"
+                );
+                let skips = {
+                    let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+                    let before = skipped();
+                    super::read_registration(&one).unwrap();
+                    let _ = super::read_registration(&two);
+                    skipped() - before
+                };
+                assert_eq!(skips, 0, "{name}: {case}");
+                mend();
+                assert_eq!(
+                    validate_in_one_scope(&[&one, &two]),
+                    1,
+                    "{name}: {case} mended"
+                );
+            }
+        }
+        let config = common.join("config");
+        let text = std::fs::read(&config).unwrap();
+        for added in [
+            &b"[Include]\n\tPath = other\n"[..],
+            b"[INCLUDEIF \"gitdir:/nowhere/\"]\n\tpath = other\n",
+            b"[includeIf \"gitdir:/no\xffwhere/\"]\n\tpath = other\n",
+            b"[Core]\n\tWorkTree = /elsewhere\n",
+            b"[CORE]\n\tBARE = TRUE\n",
+        ] {
+            let mut edited = text.clone();
+            edited.extend_from_slice(added);
+            std::fs::write(&config, &edited).unwrap();
+            assert!(
+                !super::shared_config_is_sibling_independent(&common),
+                "{}",
+                added.escape_ascii()
+            );
+            std::fs::write(&config, &text).unwrap();
+        }
+        assert!(super::shared_config_is_sibling_independent(&common));
+    }
+
     /// TSK-1275 AC-6: a change between two guard evaluations is judged by
     /// the second one even when a skip was allowed in the first: a
     /// same-length config edit with its time restored, a sibling-specific
