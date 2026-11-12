@@ -2005,17 +2005,15 @@ fn saved_state_line(line: &str) -> bool {
 /// reads only the project.
 fn run_in_home(root: &Path, home: &Path, args: &[&str]) -> String {
     let mut command = codeflow_command(root, home, args);
-    command.env("HOME", home).env("USERPROFILE", home);
-    for name in [
-        "ZDOTDIR",
-        "XDG_CONFIG_HOME",
-        "CLAUDE_CONFIG_DIR",
-        "CODEX_HOME",
-        "APPDATA",
-        "CLAUDE_ENV_FILE",
-    ] {
-        command.env_remove(name);
-    }
+    command
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("ZDOTDIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("APPDATA")
+        .env_remove("CLAUDE_ENV_FILE");
     succeeded(
         &command.output().expect("codeflow runs"),
         args.join(" ").as_str(),
