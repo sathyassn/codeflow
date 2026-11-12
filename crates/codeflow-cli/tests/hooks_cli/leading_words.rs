@@ -1,7 +1,7 @@
 //! TSK-1456: the guards find the program a command line runs behind the
 //! words in front of it. Each row is a hook payload string given to the
 //! built binary; nothing in it runs.
-use super::{codeflow, guard_payload, init_repo, line_allows, run_with_stdin};
+use super::{codeflow, guard_payload, init_repo, line_allows, run_with_stdin, write_agent_policy};
 use std::path::Path;
 use std::process::Output;
 
@@ -19,6 +19,12 @@ fn check(root: &Path, rows: &[(&str, &str, Option<&str>)]) -> Vec<String> {
         let out = hook(root, name, command);
         let stderr = String::from_utf8_lossy(&out.stderr);
         let right = match rule {
+            // Refused by this rule and by no other.
+            Some(rule) if rule.starts_with("only ") => {
+                out.status.code() == Some(2)
+                    && stderr.matches("policy rule ").count() == 1
+                    && stderr.contains(&rule["only ".len()..])
+            }
             Some(rule) => out.status.code() == Some(2) && stderr.contains(rule),
             None if *name == "exec-guard" => line_allows(&out),
             None => out.status.code() == Some(0),
@@ -57,6 +63,89 @@ fn the_program_behind_unplaced_words_is_judged() {
         ("exec-guard", "env X[0]=1 claude -p x", headless),
         ("exec-guard", "env {X=1,claude} -p x", headless),
         ("exec-guard", "sudo X+=1 claude -p x", headless),
+    ];
+    let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// `env` reads every operand before its command that holds `=` as an
+/// assignment, whatever stands before the `=`, so the program after such
+/// operands is judged. The secret-read rule is off, so each row is refused
+/// by the headless rule alone.
+#[test]
+fn every_env_operand_before_the_command_is_read_as_env_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"root_checkout_commits":"off","hook_integrity":"block"},"security":{"secret_reads":"off","outward_actions":"off","headless_peer_runs":"block"}}"#,
+    );
+    let only_headless = Some("only policy rule security.headless_peer_runs");
+    let rows = [
+        ("exec-guard", "env '=x' claude -p x", only_headless),
+        ("exec-guard", "env =x claude -p x", only_headless),
+        ("exec-guard", "env = claude -p x", only_headless),
+        ("exec-guard", "env -i '=x' codex exec y", only_headless),
+        (
+            "exec-guard",
+            "sudo '=x' claude -p x",
+            Some("policy rule security.headless_peer_runs"),
+        ),
+        (
+            "git-guard",
+            "env '=x' git push --force origin main",
+            Some("git.force_push_protected"),
+        ),
+        // A shell word with nothing before its `=` is the program.
+        ("exec-guard", "'=x' claude -p x", None),
+    ];
+    let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A word the text reads as an assignment but the shell runs as the
+/// program, because a quote or escape stands in its name or its `=`, is
+/// judged as the program as well; the same word written plainly stays an
+/// assignment.
+#[test]
+fn words_the_shell_runs_as_the_program_are_judged_as_the_program() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    let force = Some("git.force_push_protected");
+    let headless = Some("security.headless_peer_runs");
+    let rows = [
+        (
+            "git-guard",
+            "'X=/usr/bin/git' push --force origin main",
+            force,
+        ),
+        (
+            "git-guard",
+            "\"X\"=/usr/bin/git push --force origin main",
+            force,
+        ),
+        (
+            "git-guard",
+            "X\\=/usr/bin/git push --force origin main",
+            force,
+        ),
+        (
+            "git-guard",
+            "nohup 'X=/usr/bin/git' push --force origin main",
+            force,
+        ),
+        (
+            "git-guard",
+            "X+=/usr/bin/git push --force origin main",
+            force,
+        ),
+        ("exec-guard", "'X=/usr/local/bin/claude' -p x", headless),
+        ("exec-guard", "X+=/usr/local/bin/claude -p x", headless),
+        // Controls.
+        ("git-guard", "'X=1' git status", None),
+        ("exec-guard", "'X=1' git status", None),
+        ("git-guard", "X=/usr/bin/git git status", None),
+        ("git-guard", "X+=1 git status", None),
     ];
     let wrong = check(dir.path(), &rows);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
