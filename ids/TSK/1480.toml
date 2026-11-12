@@ -1,0 +1,11 @@
+id = "TSK-1480"
+uid = "ec1e005e-9aa6-455d-860c-4c772b77e26d"
+kind = "TSK"
+title = "Only an admin creates release tags and integration lines"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T17:45:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
