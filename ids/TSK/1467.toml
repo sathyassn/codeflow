@@ -1,0 +1,11 @@
+id = "TSK-1467"
+uid = "8ecac2c6-6d3c-4abc-ac1d-2553b36c48ef"
+kind = "TSK"
+title = "A line can take main's move of a task's home when the line never changed that task"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T06:46:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
