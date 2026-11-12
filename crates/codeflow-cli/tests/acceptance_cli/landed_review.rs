@@ -469,7 +469,7 @@ fn a_reviewer_of_the_builders_lineage_is_refused_in_both_forms() {
                 "work.acceptance_binding",
                 "lands on its marked epic's line with no pull request",
                 "is of the lineage `built_by` names",
-                "needs `reduced_assurance` recording each other lineage as unavailable",
+                "needs `reduced_assurance` recording each other lineage as probed and unavailable",
                 &form,
                 "it has no `reduced_assurance`",
                 "have a reviewer of another lineage",
@@ -479,10 +479,11 @@ fn a_reviewer_of_the_builders_lineage_is_refused_in_both_forms() {
 }
 
 /// AC-8: a reduced-assurance statement that does not record each other
-/// lineage as unavailable in the fixed form is refused in both forms,
-/// naming the field, the form and the offending item. A statement that
-/// only names the other lineages, or says one is available, is no record
-/// that they were probed and unavailable (Codex security review R1).
+/// lineage as probed and unavailable in the fixed form is refused in both
+/// forms, naming the field, the form and the offending item. A statement
+/// that only names the other lineages, says one is available, leaves out
+/// the probe or adds words after the fixed assertion records no probe
+/// (Codex security review R1, and its confirm at 594c804fe).
 #[test]
 fn a_reduced_assurance_statement_out_of_form_is_refused_in_both_forms() {
     for (statement, why) in [
@@ -491,24 +492,44 @@ fn a_reduced_assurance_statement_out_of_form_is_refused_in_both_forms() {
             "the item `Codex and Grok are available` does not start with a lineage id",
         ),
         (
-            "codex available; grok unavailable",
-            "the item `codex available` does not have `unavailable` as its second word",
+            "codex available; grok probed unavailable",
+            "the item `codex available` is not exactly `codex probed unavailable`",
         ),
         (
-            "codex unavailable, weekly limit 1% at 14:32",
-            "no item records grok as unavailable",
+            "codex unavailable; grok unavailable",
+            "the item `codex unavailable` is not exactly `codex probed unavailable`",
         ),
         (
-            "codex unavailable, at 14:32; codex unavailable, at 14:40; grok unavailable",
+            "codex probed unavailable, not probed; grok probed unavailable",
+            "the item `codex probed unavailable, not probed` is not exactly `codex probed unavailable`",
+        ),
+        (
+            "codex unavailable, not probed; grok unavailable, not probed",
+            "the item `codex unavailable, not probed` is not exactly `codex probed unavailable`",
+        ),
+        (
+            "codex probed unavailable at 14:32; grok probed unavailable",
+            "the item `codex probed unavailable at 14:32` is not exactly `codex probed unavailable`",
+        ),
+        (
+            "codex probed unavailable",
+            "no item records grok as probed and unavailable",
+        ),
+        (
+            "codex probed unavailable; codex probed unavailable; grok probed unavailable",
             "codex has more than one item",
         ),
         (
-            "claude unavailable; codex unavailable; grok unavailable",
-            "the item `claude unavailable` names claude, the builder's own lineage",
+            "claude probed unavailable; codex probed unavailable; grok probed unavailable",
+            "the item `claude probed unavailable` names claude, the builder's own lineage",
         ),
         (
-            "gemini unavailable; codex unavailable; grok unavailable",
-            "the item `gemini unavailable` does not start with a lineage id",
+            "gemini probed unavailable; codex probed unavailable; grok probed unavailable",
+            "the item `gemini probed unavailable` does not start with a lineage id",
+        ),
+        (
+            "codex\u{a0}probed unavailable; grok probed unavailable",
+            "probed unavailable` does not start with a lineage id",
         ),
         (
             "Codex was out at 16:24",
@@ -525,7 +546,7 @@ fn a_reduced_assurance_statement_out_of_form_is_refused_in_both_forms() {
             &[
                 "work.acceptance_binding",
                 "lands on its marked epic's line with no pull request",
-                "needs `reduced_assurance` recording each other lineage as unavailable",
+                "needs `reduced_assurance` recording each other lineage as probed and unavailable",
                 "one item per other lineage (codex, grok), separated by `;`",
                 why,
                 "have a reviewer of another lineage",
@@ -535,13 +556,13 @@ fn a_reduced_assurance_statement_out_of_form_is_refused_in_both_forms() {
 }
 
 /// AC-8, batch 1 item 3: a same-lineage review passes when the completion
-/// records each other lineage as unavailable in the fixed form.
+/// records each other lineage as probed and unavailable in the fixed form.
 #[test]
 fn a_same_lineage_review_with_the_reduced_assurance_statement_passes() {
     let landed = reviewed_by(
         WHOLE_EPIC,
         CLAUDE_REVIEW,
-        "  built_by: claude\n  reduced_assurance: grok unavailable, probed live at 16:25 on 2026-11-05; codex unavailable, weekly limit at 16:24\n",
+        "  built_by: claude\n  reduced_assurance: grok probed unavailable; codex probed unavailable\n",
         "approved",
     );
     passes_in_both_forms("reduced assurance", &landed);

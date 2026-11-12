@@ -392,9 +392,9 @@ mod tests {
     fn a_same_lineage_review_passes_only_with_the_reduced_assurance_statement() {
         let review = "Claude Opus 5.5 subagent at medium, whole unit";
         for stated in [
-            "codex unavailable, weekly limit 1% at 14:32; grok unavailable, no seat at 14:33",
-            "grok unavailable;codex unavailable",
-            "  codex   unavailable.  ;  grok unavailable: probed live  ",
+            "codex probed unavailable; grok probed unavailable",
+            "grok probed unavailable;codex probed unavailable",
+            "  codex\tprobed   unavailable  ;  grok probed unavailable  ",
         ] {
             assert_eq!(
                 judge(Some("claude"), review, Some(stated)),
@@ -410,7 +410,7 @@ mod tests {
         );
         assert!(
             found.contains(
-                "for example `codex unavailable, <why and when>; grok unavailable, <why and when>`"
+                "each exactly `<lineage id> probed unavailable`, for example `codex probed unavailable; grok probed unavailable`"
             ),
             "{found}"
         );
@@ -436,51 +436,81 @@ mod tests {
                 "does not start with a lineage id",
             ),
             (
-                "codex available; grok unavailable",
-                "the item `codex available` does not have `unavailable` as its second word",
+                "codex available; grok probed unavailable",
+                "the item `codex available` is not exactly `codex probed unavailable`",
             ),
             (
-                "codex; grok unavailable",
-                "the item `codex` does not have `unavailable` as its second word",
+                "codex; grok probed unavailable",
+                "the item `codex` is not exactly `codex probed unavailable`",
+            ),
+            // The probe left out (Codex confirm R1 at 594c804fe).
+            (
+                "codex unavailable; grok unavailable",
+                "the item `codex unavailable` is not exactly `codex probed unavailable`",
+            ),
+            // A valid prefix, then words that deny the probe.
+            (
+                "codex probed unavailable, not probed; grok probed unavailable",
+                "the item `codex probed unavailable, not probed` is not exactly `codex probed unavailable`",
             ),
             (
-                "codex Unavailable; grok unavailable",
-                "does not have `unavailable` as its second word",
+                "codex unavailable, not probed; grok unavailable, not probed",
+                "the item `codex unavailable, not probed` is not exactly `codex probed unavailable`",
+            ),
+            // Any trailing word.
+            (
+                "codex probed unavailable today; grok probed unavailable",
+                "the item `codex probed unavailable today` is not exactly `codex probed unavailable`",
             ),
             (
-                "codex unavailableish; grok unavailable",
-                "does not have `unavailable` as its second word",
+                "codex probed unavailable.; grok probed unavailable",
+                "is not exactly `codex probed unavailable`",
             ),
-            ("codex unavailable", "no item records grok as unavailable"),
             (
-                "codex unavailable; codex unavailable again; grok unavailable",
+                "codex Probed unavailable; grok probed unavailable",
+                "is not exactly `codex probed unavailable`",
+            ),
+            (
+                "codex unavailable probed; grok probed unavailable",
+                "is not exactly `codex probed unavailable`",
+            ),
+            (
+                "codex probed; grok probed unavailable",
+                "is not exactly `codex probed unavailable`",
+            ),
+            (
+                "codex probed unavailable",
+                "no item records grok as probed and unavailable",
+            ),
+            (
+                "codex probed unavailable; codex probed unavailable; grok probed unavailable",
                 "codex has more than one item",
             ),
             (
-                "claude unavailable; codex unavailable; grok unavailable",
-                "the item `claude unavailable` names claude, the builder's own lineage",
+                "claude probed unavailable; codex probed unavailable; grok probed unavailable",
+                "the item `claude probed unavailable` names claude, the builder's own lineage",
             ),
             (
-                "gemini unavailable; codex unavailable; grok unavailable",
-                "the item `gemini unavailable` does not start with a lineage id",
+                "gemini probed unavailable; codex probed unavailable; grok probed unavailable",
+                "the item `gemini probed unavailable` does not start with a lineage id",
             ),
             // A lineage id is exact, as `built_by`'s is.
             (
-                "Codex unavailable; grok unavailable",
-                "the item `Codex unavailable` does not start with a lineage id",
+                "Codex probed unavailable; grok probed unavailable",
+                "the item `Codex probed unavailable` does not start with a lineage id",
             ),
             (
-                "gpt unavailable; grok unavailable",
-                "the item `gpt unavailable` does not start with a lineage id",
+                "gpt probed unavailable; grok probed unavailable",
+                "the item `gpt probed unavailable` does not start with a lineage id",
             ),
             (
-                "codex unavailable; grok unavailable;",
+                "codex probed unavailable; grok probed unavailable;",
                 "the item `` does not start with a lineage id",
             ),
             // Only ASCII space and tab separate words: a non-breaking space
-            // leaves `codex\u{a0}unavailable` one word, which is no lineage id.
+            // leaves `codex\u{a0}probed` one word, which is no lineage id.
             (
-                "codex\u{a0}unavailable; grok unavailable",
+                "codex\u{a0}probed unavailable; grok probed unavailable",
                 "does not start with a lineage id",
             ),
         ] {
@@ -489,7 +519,7 @@ mod tests {
             assert!(found.contains(LANDED_REVIEW), "{found}");
             assert!(
                 found.contains(
-                    "needs `reduced_assurance` recording each other lineage as unavailable"
+                    "needs `reduced_assurance` recording each other lineage as probed and unavailable"
                 ),
                 "{found}"
             );
