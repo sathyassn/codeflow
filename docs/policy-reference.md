@@ -2205,7 +2205,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     whatever other variables the same word changes. A variable read
     anywhere inside such an expansion, at any depth, counts as changed,
     and a changed expansion the guard cannot read to the end fails closed
-    too.
+    too. A default, assignment or alternate-value form is judged by each
+    value it can give, as its own path, so a default that gives an
+    ordinary path in the home runs.
   - A second run adds what the first did not find. It judges a target in
     the directory its command runs in and compares it with each location
     by the node it reaches on disk, links and `..` included. A folder of
