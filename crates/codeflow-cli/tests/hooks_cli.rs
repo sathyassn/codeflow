@@ -16,6 +16,9 @@ mod checkout_identity;
 mod host_isolation;
 use host_isolation::{git_command, isolate_clone, isolate_git};
 
+#[path = "hooks_cli/path_writers.rs"]
+mod path_writers;
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
@@ -2242,6 +2245,38 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
         "dangerous command must block with exit 2"
     );
     assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
+}
+
+/// The guard stops at a bound and must refuse, whatever the project's policy
+/// lowers. The text is judged and never run.
+#[test]
+fn exec_guard_refuses_a_command_it_cannot_finish_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.path().join(".codeflow/policy.json"),
+        r#"{"git":{"hook_integrity":"warn"}}"#,
+    )
+    .unwrap();
+    let chain = (1..40).fold("f0() { true; }".to_string(), |line, at| {
+        format!("{line}; f{at}() {{ f{}; }}", at - 1)
+    });
+    let nested = (0..40).fold("true".to_string(), |text, _| format!("{{ {text}; }}"));
+    for line in [format!("{chain}; f39"), nested] {
+        let out = exec_guard_tool(dir.path(), "Bash", &line);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{line}: {stderr}");
+        assert!(stderr.contains("security.dangerous_commands"), "{stderr}");
+        assert!(stderr.contains("could not finish reading"), "{stderr}");
+    }
+    let out = exec_guard_tool(dir.path(), "Bash", "sh -c 'bash -lc \"echo nested\"'");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

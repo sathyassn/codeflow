@@ -486,7 +486,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
     ));
     // TSK-452: the same-family fallback is stated once, in "Review verdicts".
     assert!(discipline.contains(
-        "Only when no other-lineage seat exists does the same-family fallback give it: `cf-reviewer` in Claude Code"
+        "Only when no other-family seat is available does the same-family fallback give it: `cf-reviewer` in Claude Code"
     ));
     assert!(discipline.contains("This is the one statement of when `cf-reviewer` runs."));
     // Issue 121: the kernel's land row names the hand-resolved hunk, and the

@@ -725,6 +725,12 @@ impl SecurityModule for DangerousModule {
 /// each message says why.
 fn composed_verdict(found: &super::deletion::Found) -> Verdict {
     let reason = match &found.unproven {
+        Some(unproven) if found.unfinished => format!(
+            "Command the guard could not finish reading: it holds {}, so the guard cannot \
+             show it deletes nothing protected; run the inner command directly, with less \
+             nesting",
+            unproven.reason
+        ),
         Some(unproven) if unproven.cwd => format!(
             "Recursive deletion whose target cannot be proven: it runs in a working \
              directory that depends on {}, which the guard does not follow exactly; \

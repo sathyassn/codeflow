@@ -129,6 +129,30 @@ fn relaxed_keeps_a_retry_strict() {
     );
 }
 
+/// The relaxed rule adds no refusal of its own, so everyday nested commands
+/// reach the deletion reader alone and must stay allowed there.
+#[test]
+fn relaxed_allows_everyday_nested_commands() {
+    if cfg!(windows) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    published(dir.path(), RELAXED);
+    for line in [
+        "sh -c 'make test'",
+        "bash -lc 'cargo fmt --all -- --check && cargo clippy --workspace'",
+        "bash -lc \"sh -c 'echo one; echo two'\"",
+        "timeout 60 bash -lc 'make -C sub all'",
+        "find . -type f -exec sh -c 'echo \"$1\"' _ {} \\;",
+        "for a in 1 2 3; do for b in 1 2 3; do echo $a $b; done; done",
+        "f() { echo hi; }; g() { f; }; h() { g; }; h",
+        "rm -rf ./build && make",
+    ] {
+        let out = exec_guard(dir.path(), line, false);
+        assert!(out.status.success(), "{line}: {out:?}");
+    }
+}
+
 /// `published` with `json` as the remote's policy, where `level` is
 /// `git.hook_integrity`.
 fn policy_at(level: &str, relaxed: bool) -> String {
@@ -449,5 +473,53 @@ fn git_operand_bodies_take_the_rule_of_the_call() {
     if !cfg!(windows) {
         let out = exec_guard(relaxed.path(), ASSIGNED, false);
         assert!(out.status.success(), "{out:?}");
+    }
+}
+
+/// TSK-1375: a deletion in any reading of text a shell may read more than
+/// one way is refused by the built exec guard under
+/// `security.dangerous_commands`, on the default rule and under relaxed,
+/// and real arithmetic stays allowed by the line's rules. The text is
+/// judged and never run.
+#[test]
+fn a_deletion_in_any_reading_of_ambiguous_text_refuses() {
+    const REFUSED: &[&str] = &[
+        "((rm -rf ~) )",
+        "true && ((rm -rf ~))",
+        "X=$((rm -rf ~) )",
+        "X=$((echo /) ); rm -rf \"$X\"",
+    ];
+    const ALLOWED: &[&str] = &[
+        "i=0; while (( i < 3 )); do i=$((i + 1)); done; rm -rf ./build",
+        "(( n % 2 == 0 )) && echo even",
+    ];
+    for policy in [DEFAULT, RELAXED] {
+        let dir = tempfile::tempdir().unwrap();
+        published(dir.path(), policy);
+        for line in REFUSED {
+            let out = exec_guard(dir.path(), line, false);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{line}: {stderr}");
+            assert!(
+                stderr.contains("security.dangerous_commands"),
+                "{line}: {stderr}"
+            );
+        }
+        for line in ALLOWED {
+            let out = exec_guard(dir.path(), line, false);
+            assert!(super::line_allows(&out), "{line}: {out:?}");
+        }
+        // git-guard judges what reaches the repository's own files, here
+        // its Git directory, in either reading.
+        for line in ["((rm -rf .git) )", "X=$((rm -rf .git) )"] {
+            let out = run_with_stdin(
+                codeflow()
+                    .args(["hook", "git-guard"])
+                    .current_dir(dir.path())
+                    .env_remove("CLAUDE_PROJECT_DIR"),
+                &super::guard_payload(line, dir.path()),
+            );
+            assert_eq!(out.status.code(), Some(2), "git-guard {line}: {out:?}");
+        }
     }
 }

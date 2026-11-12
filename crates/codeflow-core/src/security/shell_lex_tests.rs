@@ -58,6 +58,41 @@ fn unmodeled_constructs_are_opaque() {
     }
 }
 
+/// Expansions nested past what the lexer reads leave the line opaque, and
+/// the lexer stops there without exhausting the stack (TSK-1374).
+#[test]
+fn deep_expansions_are_opaque_without_exhausting_the_stack() {
+    for levels in [1000, 20000, 100_000] {
+        for (open, close) in [("${x:-", "}"), ("$(echo ", ")"), ("\"${x:-", "}\"")] {
+            let line = format!("x {}y{}", open.repeat(levels), close.repeat(levels));
+            assert!(lex(&line).opaque, "{open} {levels} times");
+        }
+    }
+    assert!(!lex("x ${a:-${b:-${c:-./d}}}").opaque);
+}
+
+/// A backquote body is one expansion deeper than its line, so expansions
+/// spread over nested backquotes count toward the same depth (TSK-1374).
+#[test]
+fn expansions_inside_nested_backquotes_share_the_depth() {
+    let tower = |levels: usize, dollars: usize| {
+        let mut code = "echo y".to_string();
+        for _ in 0..levels {
+            let body = format!("{}{code}{}", "$(".repeat(dollars), ")".repeat(dollars));
+            code = format!("echo `{}`", body.replace('\\', "\\\\").replace('`', "\\`"));
+        }
+        code
+    };
+    assert!(!lex(&tower(1, 40)).opaque);
+    assert!(!lex(&tower(4, 2)).opaque);
+    for (levels, dollars) in [(2, 40), (12, 8)] {
+        assert!(
+            lex(&tower(levels, dollars)).opaque,
+            "{levels} backquotes of {dollars}"
+        );
+    }
+}
+
 /// SR5-1, SR5-2: once the directory is unknown, every value filled in at
 /// run time is derived, through any assignment form.
 #[test]

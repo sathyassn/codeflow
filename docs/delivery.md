@@ -355,7 +355,7 @@ ADR-0084 records the redaction exception to the frozen-record rule.
 | The batch gate is red | Diagnose first. When evidence attributes the failure to a member, drop it and its dependents, fix in that task's pull request and regate the rest; a runner or environment defect is fixed at its owner and the same candidate regated |
 | Repairs stop producing relevant evidence | Diagnose the stalled mechanism, the invalid assumption or the changed scope; split, redesign or take the intent question to the operator |
 | Blocked by something outside the task | Mark it blocked; escalate an external dependency or an operator-owned choice with evidence, options and a recommendation |
-| A reviewer seat is unavailable | Bounded recovery first; then recorded as reduced assurance naming the missing review, never faked or silently waived |
+| A reviewer seat is unavailable | Bounded recovery first; then another model family's seat takes the review; only when none is available, recorded as reduced assurance naming the missing review, never faked or silently waived |
 | A nit or preference in review | Recorded with the surface and the event that revisits it; it never blocks and never becomes a task |
 
 ### Related guides

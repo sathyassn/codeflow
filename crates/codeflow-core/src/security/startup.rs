@@ -286,7 +286,7 @@ impl Class {
         let mut needles = Vec::new();
         let mut add = |label: String, path: PathBuf, dir: bool| {
             let mut readings = vec![key(&lexical(&path))];
-            if let Some(real) = resolve(&path) {
+            if let Ok(real) = resolve(&path) {
                 let real = key(&real);
                 if !readings.contains(&real) {
                     readings.push(real);
@@ -354,12 +354,16 @@ impl Class {
     }
 
     /// The class entry `path` is or lies in, read lexically and through
-    /// symbolic links. A path whose links cannot be followed is judged by
-    /// its lexical reading and by the link text it holds.
+    /// symbolic links. A path with a component that cannot be inspected is
+    /// judged by its lexical reading and by the link text it holds; one past
+    /// [`LINK_LIMIT`] may lead anywhere, so it counts as an entry.
     #[must_use]
     pub(crate) fn target(&self, path: &Path) -> Option<String> {
         let mut readings = vec![key(&lexical(path))];
-        let real = resolve(path);
+        let real = match resolve(path) {
+            Err(Unfollowed::PastLinkLimit) => return Some(past_link_limit(path)),
+            real => real.ok(),
+        };
         if let Some(real) = &real {
             readings.push(key(real));
         }
@@ -419,8 +423,10 @@ impl Class {
     #[must_use]
     pub(crate) fn placement(&self, path: &Path) -> Option<String> {
         let mut readings = vec![key(&lexical(path))];
-        if let Some(real) = resolve(path) {
-            readings.push(key(&real));
+        match resolve(path) {
+            Ok(real) => readings.push(key(&real)),
+            Err(Unfollowed::PastLinkLimit) => return Some(past_link_limit(path)),
+            Err(Unfollowed::Uninspected) => {}
         }
         if cfg!(windows) && shell_etc(&lexical(path)) {
             return Some(shown(path));
@@ -652,11 +658,26 @@ fn lexical(path: &Path) -> PathBuf {
     out
 }
 
+/// Why [`resolve`] gave no reading.
+enum Unfollowed {
+    /// More than [`LINK_LIMIT`] links: the path may lead anywhere.
+    PastLinkLimit,
+    /// A component could not be inspected, so a write cannot pass it either.
+    Uninspected,
+}
+
+/// How a refusal names a path the guard stopped following.
+fn past_link_limit(path: &Path) -> String {
+    format!(
+        "{} (it may be one: it sits behind more symbolic links than the guard follows)",
+        shown(path)
+    )
+}
+
 /// `path` with each symbolic link followed, one component at a time, a
 /// broken link included (its target is where a write lands). Missing
-/// components are kept. `None` past [`LINK_LIMIT`] links or when a
-/// component cannot be inspected.
-fn resolve(path: &Path) -> Option<PathBuf> {
+/// components are kept.
+fn resolve(path: &Path) -> Result<PathBuf, Unfollowed> {
     let mut pending: Vec<std::ffi::OsString> = path
         .components()
         .rev()
@@ -683,9 +704,9 @@ fn resolve(path: &Path) -> Option<PathBuf> {
             Ok(meta) if meta.file_type().is_symlink() => {
                 links += 1;
                 if links > LINK_LIMIT {
-                    return None;
+                    return Err(Unfollowed::PastLinkLimit);
                 }
-                let target = std::fs::read_link(&next).ok()?;
+                let target = std::fs::read_link(&next).map_err(|_| Unfollowed::Uninspected)?;
                 if target.is_absolute() {
                     out = PathBuf::new();
                 }
@@ -698,10 +719,10 @@ fn resolve(path: &Path) -> Option<PathBuf> {
             }
             Ok(_) => out = next,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => out = next,
-            Err(_) => return None,
+            Err(_) => return Err(Unfollowed::Uninspected),
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 /// A glob a word spells: a literal directory the shell does not expand,

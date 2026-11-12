@@ -477,15 +477,21 @@ fn restored_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
                 "cannot establish the paths `git {verb}` writes from a file"
             ));
         }
-        if valued.contains(&word.as_str()) {
+        let abbreviated_source =
+            verb == "restore" && word.len() >= 4 && "--source".starts_with(word.as_str());
+        if valued.contains(&word.as_str()) || abbreviated_source {
             branch |= verb == "checkout" && word != "--conflict";
             words.next();
             continue;
         }
         if let Some(letters) = word.strip_prefix('-') {
+            // Git accepts any unambiguous prefix of a long option: `--work`
+            // is `--worktree` and `--st` is `--staged` (`--s` is ambiguous
+            // with `--source`, which Git refuses) (TSK-1390).
+            let long = word.split('=').next().unwrap_or(word);
             match word.as_str() {
-                "--staged" => staged = true,
-                "--worktree" => worktree = true,
+                _ if long.len() >= 3 && "--worktree".starts_with(long) => worktree = true,
+                _ if long.len() >= 4 && "--staged".starts_with(long) => staged = true,
                 _ if verb == "restore" && !letters.starts_with('-') => {
                     // A short bundle ends at `s`, whose value follows.
                     let letters = letters.split('s').next().unwrap_or("");

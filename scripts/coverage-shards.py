@@ -22,8 +22,12 @@ days):
 
 A shard's job takes the test run plus about 6 minutes of build and setup, so
 `check` fails a shard whose test minutes pass 18 (24 job minutes, the margin
-of the 30 minute limit), and a plan that puts a shard past 14 test minutes
-fails `plan` and `drift` (TSK-1063). The shards cannot read a test list
+of the 30 minute limit), and a plan that puts a shard past 16 test minutes
+fails `plan` and `drift` (TSK-1063). The plan bound is a sizing target, not a
+correctness check: 16 planned minutes plus setup is 22 of the 24 minute
+margin. It was 14 until the suite grew to about 122 summed minutes on two
+shards (TSK-1387); it returns to 14 or lower when coverage moves to three
+hash shards (TSK-1321). The shards cannot read a test list
 before they build, so a binary the data does not know runs in the rest shard;
 `drift` bounds how much of the suite that can be.
 
@@ -49,7 +53,7 @@ SOURCE = "on ubuntu-24.04 under cargo llvm-cov from the coverage-shard results"
 REFRESH = "scripts/coverage-shards.py measure"
 # Minutes of a shard's job outside the test run, and the longest planned run.
 SETUP_MINUTES = 6
-PLAN_MINUTES = 14
+PLAN_MINUTES = 16
 
 if __name__ == "__main__":
     sys.exit(planner.main(DATA, RESULTS, SOURCE, REFRESH, __doc__, SETUP_MINUTES, PLAN_MINUTES, spread=False))

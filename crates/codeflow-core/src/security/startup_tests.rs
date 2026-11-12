@@ -807,6 +807,45 @@ fn symbolic_links_are_followed() {
     assert!(class_target(&f.project.join("notes.md"), &f.startup_env()).is_none());
 }
 
+/// `count` links in `folder`, each to the one before and the first to `end`;
+/// returns the last.
+#[cfg(unix)]
+fn link_chain(folder: &Path, end: &Path, count: usize) -> std::path::PathBuf {
+    std::fs::create_dir_all(folder).unwrap();
+    let mut target = end.to_path_buf();
+    for at in 0..count {
+        let link = folder.join(format!("l{at}"));
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        target = link;
+    }
+    target
+}
+
+/// A path the guard stops following may lead anywhere, so it refuses. Steps
+/// that each stay short still add up, since the guard reads the joined path.
+#[cfg(unix)]
+#[test]
+fn a_path_past_the_link_bound_is_refused() {
+    let f = Fixture::new();
+    let long = link_chain(&f.project.join("long"), &f.home.join(".zshrc"), 100);
+    assert!(class_target(&long, &f.startup_env()).is_some());
+    let word = long.strip_prefix(&f.project).unwrap().display().to_string();
+    for command in [format!("echo x >> {word}"), format!("cp evil {word}")] {
+        assert!(refused(&f.judge(&command)), "{command}");
+    }
+
+    let middle = f.project.join("middle");
+    let steps = 30;
+    link_chain(&f.project.join("first"), &middle, steps);
+    link_chain(&middle.join("second"), &f.home, steps);
+    let last = steps - 1;
+    let command = format!("cd first/l{last} && cd second/l{last} && echo x >> .zshrc");
+    assert!(refused(&f.judge(&command)), "{command}");
+
+    let short = link_chain(&f.project.join("short"), &f.project.join("notes.md"), 3);
+    assert!(class_target(&short, &f.startup_env()).is_none());
+}
+
 /// `ZDOTDIR` and `XDG_CONFIG_HOME` move the class with them.
 #[test]
 fn effective_locations_follow_the_environment() {
