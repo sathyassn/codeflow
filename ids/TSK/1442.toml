@@ -1,0 +1,11 @@
+id = "TSK-1442"
+uid = "58d77d0a-d892-4c8a-afa4-4999dccfc4f5"
+kind = "TSK"
+title = "A report judges open epics for re-cutting and orders ready epics for landing"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:59:09Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
