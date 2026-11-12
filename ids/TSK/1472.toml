@@ -1,0 +1,11 @@
+id = "TSK-1472"
+uid = "1f13c354-d1ca-47b0-b20c-59ba3aade8e7"
+kind = "TSK"
+title = "Guard calls stay bounded when a sibling worktree's admin file is not a regular file"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T14:50:53Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
