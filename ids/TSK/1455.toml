@@ -1,0 +1,11 @@
+id = "TSK-1455"
+uid = "f509dad8-9416-4d21-b153-b985f8045287"
+kind = "TSK"
+title = "The guards read Windows spellings of paths, programs and variable names as Windows does"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:02:58Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
