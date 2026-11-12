@@ -40,60 +40,6 @@ impl Drop for RunnerBody {
     }
 }
 
-thread_local! {
-    /// The saved-state findings of the call being judged, its nested
-    /// commands' included, held until every other finding is in (TSK-1461).
-    static SAVED_STATE: std::cell::RefCell<Option<Vec<Violation>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Holds the saved-state findings of the outermost evaluation until
-/// dropped.
-struct SavedStateFindings;
-
-impl SavedStateFindings {
-    /// Start holding findings; `None` inside an evaluation that already
-    /// holds them, whose findings join the outer ones.
-    fn enter() -> Option<Self> {
-        SAVED_STATE.with(|held| {
-            let mut held = held.borrow_mut();
-            if held.is_some() {
-                return None;
-            }
-            *held = Some(Vec::new());
-            Some(Self)
-        })
-    }
-
-    /// Add `findings` to the held ones.
-    fn hold(findings: Vec<Violation>) {
-        SAVED_STATE.with(|held| {
-            if let Some(held) = held.borrow_mut().as_mut() {
-                held.extend(findings);
-            }
-        });
-    }
-
-    /// Append the held findings after `violations`, each once.
-    fn append(self, violations: &mut Vec<Violation>) {
-        let held = SAVED_STATE.with(|held| held.borrow_mut().take().unwrap_or_default());
-        for finding in held {
-            let duplicate = violations
-                .iter()
-                .any(|v| v.rule == finding.rule && v.message == finding.message);
-            if !duplicate {
-                violations.push(finding);
-            }
-        }
-    }
-}
-
-impl Drop for SavedStateFindings {
-    fn drop(&mut self) {
-        SAVED_STATE.with(|held| held.borrow_mut().take());
-    }
-}
-
 /// Evaluate a Bash command against the `security` policy section.
 ///
 /// Returns all violations found (at most one per module); the caller maps
@@ -245,8 +191,11 @@ pub fn evaluate_ruled(
         return violations;
     }
     // Saved shell state is judged in a pass of its own, whose findings come
-    // after every other finding of the call (TSK-1461).
-    let saved_state = SavedStateFindings::enter();
+    // after every other finding of the call, its nested commands' included
+    // (TSK-1461).
+    let saved_state = crate::security::startup::saved_state::Held::enter(
+        crate::security::startup::saved_state::Hook::Exec,
+    );
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);
     let _home = super::git_guard::line_home::Scope::enter(command, &line_home);
@@ -266,11 +215,14 @@ pub fn evaluate_ruled(
         ));
     }
     if saved_state_runs {
-        SavedStateFindings::hold(crate::security::startup::saved_state::evaluate(
-            command,
-            cwd,
-            &crate::security::startup::StartupEnv::from_process_at(cwd),
-        ));
+        crate::security::startup::saved_state::Held::hold(
+            crate::security::startup::saved_state::Hook::Exec,
+            crate::security::startup::saved_state::evaluate(
+                command,
+                cwd,
+                &crate::security::startup::saved_state::Places::from_process_at(cwd),
+            ),
+        );
     }
     if violations.is_empty() {
         if let Some(finding) = super::git_guard::line_home::unread_violation(&line_home, integrity)

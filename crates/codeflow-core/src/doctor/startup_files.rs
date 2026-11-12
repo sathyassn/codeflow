@@ -15,6 +15,7 @@ use std::time::Instant;
 use super::{CheckResult, Options, Status};
 use crate::remedy;
 use crate::security::actions;
+use crate::security::startup::saved_state::Places;
 use crate::security::startup::{class_target, StartupEnv};
 
 /// The home startup files read for `source` lines.
@@ -155,11 +156,13 @@ fn literal(word: &str, home: &Path) -> Option<PathBuf> {
 }
 
 /// The protected classes the presets carry, with the words a finding uses:
-/// the shell startup class and the default git configuration files.
-fn classes() -> [(&'static str, &'static actions::StartupPaths); 2] {
+/// the shell startup class, the saved shell state (TSK-1461) and the
+/// default git configuration files.
+fn classes() -> [(&'static str, &'static actions::StartupPaths); 3] {
     let table = actions::table();
     [
         ("shell startup", &table.startup_paths),
+        ("saved shell state", &table.saved_state_paths),
         ("git configuration", &table.git_config_paths),
     ]
 }
@@ -447,7 +450,8 @@ fn profile_grants(
 /// `APPDATA` set away from the defaults the generated rules name, so the
 /// relocated startup files and saved shell state have no native deny; the
 /// guards still follow them.
-fn relocated(env: &StartupEnv) -> Vec<String> {
+fn relocated(places: &Places) -> Vec<String> {
+    let env = &places.startup;
     let Some(home) = env.home.as_deref() else {
         return Vec::new();
     };
@@ -457,9 +461,9 @@ fn relocated(env: &StartupEnv) -> Vec<String> {
     }
     for (name, value, default) in [
         ("XDG_CONFIG_HOME", &env.xdg_config, ".config"),
-        ("CLAUDE_CONFIG_DIR", &env.claude_config, ".claude"),
-        ("CODEX_HOME", &env.codex_home, ".codex"),
-        ("APPDATA", &env.appdata, "AppData/Roaming"),
+        ("CLAUDE_CONFIG_DIR", &places.claude_config, ".claude"),
+        ("CODEX_HOME", &places.codex_home, ".codex"),
+        ("APPDATA", &places.appdata, "AppData/Roaming"),
     ] {
         if let Some(moved) = value.as_deref().filter(|v| *v != home.join(default)) {
             out.push(format!("{name} is {}", crate::git::display_path(moved)));
@@ -471,10 +475,10 @@ fn relocated(env: &StartupEnv) -> Vec<String> {
 pub(super) fn check(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let env = StartupEnv::from_process();
+    let places = Places::from_process();
     let missing = missing_rules(&root);
-    let moved = relocated(&env);
-    let sourced = sourced_files(&env);
+    let moved = relocated(&places);
+    let sourced = sourced_files(&places.startup);
     // Every finding is reported together; the remedy is the first one's.
     let mut parts = Vec::new();
     let mut remedy = None;
@@ -558,10 +562,6 @@ mod tests {
             zdotdir: None,
             xdg_config: None,
             etc_roots: Vec::new(),
-            claude_config: None,
-            codex_home: None,
-            appdata: None,
-            claude_env_file: None,
         };
         let found = sourced_files(&env);
         assert_eq!(
@@ -591,10 +591,6 @@ mod tests {
             zdotdir: None,
             xdg_config: None,
             etc_roots: Vec::new(),
-            claude_config: None,
-            codex_home: None,
-            appdata: None,
-            claude_env_file: None,
         };
         let found = sourced_files(&env);
         assert!(found.unprotected.is_empty(), "{:?}", found.unprotected);
@@ -734,24 +730,28 @@ mod tests {
     #[test]
     fn relocated_startup_directories_are_reported() {
         let home = PathBuf::from("/fixture/home");
-        let at_defaults = StartupEnv {
-            home: Some(home.clone()),
-            other_homes: Vec::new(),
-            zdotdir: Some(home.clone()),
-            xdg_config: Some(home.join(".config")),
-            etc_roots: Vec::new(),
+        let at_defaults = Places {
+            startup: StartupEnv {
+                home: Some(home.clone()),
+                other_homes: Vec::new(),
+                zdotdir: Some(home.clone()),
+                xdg_config: Some(home.join(".config")),
+                etc_roots: Vec::new(),
+            },
             claude_config: Some(home.join(".claude")),
             codex_home: Some(home.join(".codex")),
             appdata: Some(home.join("AppData/Roaming")),
             claude_env_file: None,
         };
         assert!(relocated(&at_defaults).is_empty());
-        let moved = StartupEnv {
-            home: Some(home),
-            other_homes: Vec::new(),
-            zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
-            xdg_config: Some(PathBuf::from("/fixture/xdg")),
-            etc_roots: Vec::new(),
+        let moved = Places {
+            startup: StartupEnv {
+                home: Some(home),
+                other_homes: Vec::new(),
+                zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
+                xdg_config: Some(PathBuf::from("/fixture/xdg")),
+                etc_roots: Vec::new(),
+            },
             claude_config: Some(PathBuf::from("/fixture/claude")),
             codex_home: Some(PathBuf::from("/fixture/codex")),
             appdata: None,

@@ -3,18 +3,27 @@
 //! folders and the file `CLAUDE_ENV_FILE` names, Codex's `shell_snapshots`
 //! folder, and herdr-core's template folder.
 //!
-//! Two parts. The inventory joins the startup class ([`extend_class`]), so
-//! the class's own readers refuse a write to one of these locations as they
-//! refuse a write to a startup file: in their default places, where
-//! `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `APPDATA` move them, and by folder
-//! name wherever such a folder is.
+//! The locations are the action table's `saved_state_paths` below each
+//! home, the same entries where `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+//! `XDG_CONFIG_HOME` or `APPDATA` move them, and the file `CLAUDE_ENV_FILE`
+//! names: the variables the hook inherits from the session that runs it.
+//! They are not part of the startup class, whose readers stay as they were.
 //!
-//! The pass ([`evaluate`]) judges what those readers do not: a removal,
-//! move, copy or extraction whose target holds, lies above or is saved
-//! state without naming it. It reads the line once with the deletion
-//! check's reader ([`crate::security::deletion::bound_commands_in`]), which
-//! keeps the working directory per command (a subshell's `cd` stays in the
-//! subshell), and refuses only a target that reader binds exactly:
+//! The pass ([`evaluate`]) reads the line once with the deletion check's
+//! reader ([`crate::security::deletion::bound_commands_in`]), which keeps
+//! the working directory per command (a subshell's `cd` stays in the
+//! subshell), and judges what each command does to a location: a removal or
+//! move of it or of a folder above it, a copy, move, link or extraction
+//! into it, a redirect or a program that writes it, and an extraction into a
+//! folder above it, whose members the guard cannot see.
+//!
+//! A target is compared with each location by file identity (device and
+//! inode) along the walk the kernel makes to it, links and `..` included,
+//! so a link before the last component, a case variant or a folder reached
+//! through `cd` to a link is the same node. A node that does not exist yet,
+//! and every node on a system without these identities, is compared by its
+//! readings: as written and as reached through links. A location the guard
+//! cannot read is compared by its readings too, so it fails closed.
 //!
 //! - every reading of the command (each directory it may run in, each
 //!   program a variable may name) must refuse, or the pass adds nothing;
@@ -25,58 +34,37 @@
 //! Its findings come after every other finding of the call, so they never
 //! change what another rule reports.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::cell::{OnceCell, RefCell};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
-use super::{key, lexical, resolve, shown, Class, Entry, StartupEnv};
-use crate::hooks::git_guard::{has_glob, startup_glob_paths};
+use super::{key, lexical, reads_only, shown, Class, StartupEnv, LINK_LIMIT};
+use crate::hooks::git_guard::{has_glob, is_shell, startup_glob_paths};
 use crate::hooks::Violation;
 use crate::security::dangerous::{program_name, recursive_rm_operands};
 use crate::security::deletion::{bound_commands_in, bound_path, find_removals, Bound};
-use crate::security::unresolved::{writer_effects, writer_name, DirOrder};
-
-/// The folder names a harness keeps its saved shell state in, protected
-/// wherever such a folder is: a configuration folder moved by a variable
-/// the guard does not hold, or another profile's, is covered too.
-pub(crate) const SAVED_STATE_FOLDERS: &[&str] = &[
-    "session-env",
-    "shell-snapshots",
-    "shell_snapshots",
-    "herdr-core/templates",
-];
-
-/// How many levels below a target the scan reads for a saved-state folder.
-const SCAN_DEPTH: usize = 4;
-/// A directory at the depth cutoff is not read, so the scan cannot show
-/// what is below it: the target then refuses with the narrower-target
-/// message.
-const REFUSE_AT_DEPTH_CUTOFF: bool = true;
-/// The directory budget of the scans of one call: directories queued, the
-/// target's metadata, location checks and link resolutions. It is the
-/// guard's one budget for recursive reads.
-const SCAN_DIR_LIMIT: usize = crate::hooks::git_guard::SECRET_ENTRY_LIMIT;
-/// The entry ceiling of the scans of one call.
-const SCAN_ENTRY_LIMIT: usize = 1 << 20;
+use crate::security::unresolved::{has_writer_entry, writer_effects, writer_name, DirOrder};
 
 #[cfg(test)]
 thread_local! {
     static OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static READINGS_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Whether the saved-state inventory and pass run. Always outside tests;
-/// a test turns both off to compare with the guard as it stood before.
+/// Whether the pass runs. Always outside tests; a test turns it off to
+/// compare with the guard as it stood before.
 #[cfg(not(test))]
 pub(crate) fn enabled() -> bool {
     true
 }
 
-/// Whether the saved-state inventory and pass run.
+/// Whether the pass runs.
 #[cfg(test)]
 pub(crate) fn enabled() -> bool {
     !OFF.with(std::cell::Cell::get)
 }
 
-/// Run `f` with the saved-state inventory and pass turned off.
+/// Run `f` with the pass turned off.
 #[cfg(test)]
 pub(crate) fn without<R>(f: impl FnOnce() -> R) -> R {
     struct Restore(bool);
@@ -89,183 +77,441 @@ pub(crate) fn without<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Whether `reading` (a lower-case, slash-separated path) has the folder
-/// names of `name` (`a` or `a/b`) as consecutive components.
-pub(crate) fn dir_named(reading: &str, name: &str) -> bool {
-    let want: Vec<&str> = name.split('/').collect();
-    let parts: Vec<&str> = reading.split('/').collect();
-    parts
-        .windows(want.len())
-        .any(|window| window == want.as_slice())
-}
-
-/// Whether `text`, a class label, needle or table entry, names saved state.
-fn names_saved_state(text: &str) -> bool {
-    let text = text.to_lowercase();
-    SAVED_STATE_FOLDERS
-        .iter()
-        .any(|name| dir_named(&text, name))
-}
-
-/// The home folders a variable moves, with the variable and its value.
-fn moved(env: &StartupEnv) -> [(&'static str, &'static str, Option<&PathBuf>); 4] {
-    [
-        (".config/", "XDG_CONFIG_HOME", env.xdg_config.as_ref()),
-        (".claude/", "CLAUDE_CONFIG_DIR", env.claude_config.as_ref()),
-        (".codex/", "CODEX_HOME", env.codex_home.as_ref()),
-        ("AppData/Roaming/", "APPDATA", env.appdata.as_ref()),
-    ]
-}
-
-/// The comparison readings of `path`: as written and through links.
-fn readings_of(path: &Path) -> Vec<String> {
-    let mut readings = vec![key(&lexical(path))];
-    if let Ok(real) = resolve(path) {
-        let real = key(&real);
-        if !readings.contains(&real) {
-            readings.push(real);
+/// Run `f` with every comparison made by readings, as on a system without
+/// file identities.
+#[cfg(test)]
+pub(crate) fn by_readings<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            READINGS_ONLY.with(|off| off.set(self.0));
         }
     }
-    readings
+    let _restore = Restore(READINGS_ONLY.with(|off| off.replace(true)));
+    f()
 }
 
-/// Add the saved shell state to the startup class: the locations the
-/// variables the class does not already follow move, the file
-/// `CLAUDE_ENV_FILE` names, the folder names protected wherever they are,
-/// and their names for the text floor. With the pass off (a test), the
-/// class is left as it stood before saved state joined it.
-pub(super) fn extend_class(class: &mut Class, env: &StartupEnv) {
-    if !enabled() {
-        class.entries.retain(|entry| match entry {
-            Entry::At { label, .. } => !names_saved_state(label),
-            Entry::Name(_) | Entry::Dir(_) => true,
-        });
-        class.needles.retain(|needle| !names_saved_state(needle));
-        return;
-    }
-    // `XDG_CONFIG_HOME` is followed by the class itself.
-    let table = &crate::security::actions::table().startup_paths;
-    for entry in &table.home {
-        let dir = entry.ends_with('/');
-        let rel = entry.trim_end_matches('/');
-        if !names_saved_state(rel) {
-            continue;
-        }
-        for (prefix, variable, root) in moved(env).into_iter().skip(1) {
-            if let (Some(rest), Some(root)) = (rel.strip_prefix(prefix), root) {
-                class.entries.push(Entry::At {
-                    label: format!("${variable}/{rest}"),
-                    readings: readings_of(&root.join(rest)),
-                    dir,
-                });
-            }
+#[cfg(test)]
+thread_local! {
+    static FIXED: RefCell<Option<Places>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with the hooks reading `places` in place of this process's
+/// environment, so a test judges a call through a hook against fixture
+/// locations.
+#[cfg(test)]
+pub(crate) fn fixed<R>(places: Places, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Places>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXED.with(|fixed| *fixed.borrow_mut() = self.0.take());
         }
     }
-    if let Some(file) = &env.claude_env_file {
-        class.entries.push(Entry::At {
-            label: "$CLAUDE_ENV_FILE".to_string(),
-            readings: readings_of(file),
-            dir: false,
-        });
+    let _restore = Restore(FIXED.with(|fixed| fixed.borrow_mut().replace(places)));
+    f()
+}
+
+#[cfg(test)]
+fn identities() -> bool {
+    !READINGS_ONLY.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn identities() -> bool {
+    true
+}
+
+/// Where the saved shell state is for this guard: the startup class's
+/// homes and `XDG_CONFIG_HOME`, and the variables that move a harness's own
+/// folders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Places {
+    /// The homes and the startup variables, as the startup class reads them.
+    pub(crate) startup: StartupEnv,
+    /// `CLAUDE_CONFIG_DIR`, when set: Claude Code keeps the shell state it
+    /// runs before each Bash command there instead of in `~/.claude`.
+    pub(crate) claude_config: Option<PathBuf>,
+    /// `CODEX_HOME`, when set: Codex keeps its shell snapshots there
+    /// instead of in `~/.codex`.
+    pub(crate) codex_home: Option<PathBuf>,
+    /// `APPDATA`, when set on Windows: herdr-core reads its templates there
+    /// instead of in `~/AppData/Roaming`.
+    pub(crate) appdata: Option<PathBuf>,
+    /// `CLAUDE_ENV_FILE`, when set: the file Claude Code runs before each
+    /// later Bash command.
+    pub(crate) claude_env_file: Option<PathBuf>,
+}
+
+impl Places {
+    /// The locations from the variables `var` reads. A relative value is
+    /// read from `base`, the directory the command runs in, as the harness
+    /// or tool that reads it would from there.
+    #[must_use]
+    pub(crate) fn from_vars(var: &dyn Fn(&str) -> Option<OsString>, base: &Path) -> Self {
+        let placed = |name: &str| {
+            var(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+                .map(|x| if x.is_absolute() { x } else { base.join(&x) })
+        };
+        Self {
+            startup: StartupEnv::from_vars(var, base),
+            claude_config: placed("CLAUDE_CONFIG_DIR"),
+            codex_home: placed("CODEX_HOME"),
+            appdata: if cfg!(windows) {
+                placed("APPDATA")
+            } else {
+                None
+            },
+            claude_env_file: placed("CLAUDE_ENV_FILE"),
+        }
     }
-    class.entries.extend(
-        SAVED_STATE_FOLDERS
-            .iter()
-            .map(|name| Entry::Dir((*name).to_string())),
-    );
-    class.needles.extend(
-        SAVED_STATE_FOLDERS
-            .iter()
-            .chain(&["claude_env_file"])
-            .map(|name| (*name).to_string()),
-    );
+
+    /// The locations from this process's environment, relative values read
+    /// from `base`.
+    #[must_use]
+    pub(crate) fn from_process_at(base: &Path) -> Self {
+        #[cfg(test)]
+        if let Some(fixed) = FIXED.with(|fixed| fixed.borrow().clone()) {
+            return fixed;
+        }
+        Self::from_vars(&|name| std::env::var_os(name), base)
+    }
+
+    /// The locations from this process's environment, relative values read
+    /// from its working directory.
+    #[must_use]
+    pub(crate) fn from_process() -> Self {
+        Self::from_process_at(&std::env::current_dir().unwrap_or_default())
+    }
+
+    /// The same locations with another home ([`StartupEnv::with_home_at`]).
+    #[must_use]
+    pub(crate) fn with_home_at(home: &Path, base: &Path) -> Self {
+        Self {
+            startup: StartupEnv::with_home_at(home, base),
+            ..Self::from_process_at(base)
+        }
+    }
+
+    /// The home folders a variable moves, with the variable and its value.
+    fn moved(&self) -> [(&'static str, &'static str, Option<&PathBuf>); 4] {
+        [
+            (".claude/", "CLAUDE_CONFIG_DIR", self.claude_config.as_ref()),
+            (".codex/", "CODEX_HOME", self.codex_home.as_ref()),
+            (
+                ".config/",
+                "XDG_CONFIG_HOME",
+                self.startup.xdg_config.as_ref(),
+            ),
+            ("AppData/Roaming/", "APPDATA", self.appdata.as_ref()),
+        ]
+    }
+
+    /// The variables the guard has values for, which the line may expand
+    /// in a target.
+    fn held(&self) -> Vec<(String, String)> {
+        [
+            ("XDG_CONFIG_HOME", &self.startup.xdg_config),
+            ("ZDOTDIR", &self.startup.zdotdir),
+            ("CLAUDE_CONFIG_DIR", &self.claude_config),
+            ("CODEX_HOME", &self.codex_home),
+            ("APPDATA", &self.appdata),
+            ("CLAUDE_ENV_FILE", &self.claude_env_file),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let value = value.as_ref()?.to_str()?;
+            Some((name.to_string(), value.to_string()))
+        })
+        .collect()
+    }
 }
 
 /// One saved-state location at a known path.
 struct Location {
     label: String,
-    path: PathBuf,
-    readings: Vec<String>,
+    /// Whether the location is a folder and everything below it.
     dir: bool,
+    seen: Seen,
 }
 
-/// The saved-state locations at known paths: the defaults below each home,
-/// the ones a variable the guard holds moves, and the file
-/// `CLAUDE_ENV_FILE` names.
-fn locations(env: &StartupEnv) -> Vec<Location> {
+/// The saved-state locations: the table's entries below each home, the
+/// ones a variable the guard holds moves, and the file `CLAUDE_ENV_FILE`
+/// names.
+fn locations(env: &Places) -> Vec<Location> {
     let mut out = Vec::new();
-    let mut add = |label: String, path: PathBuf, dir: bool| {
-        let path = lexical(&path);
+    let mut add = |label: String, path: &Path, dir: bool| {
         out.push(Location {
             label,
-            readings: readings_of(&path),
-            path,
             dir,
+            seen: walk(path, true),
         });
     };
-    let table = &crate::security::actions::table().startup_paths;
+    let table = &crate::security::actions::table().saved_state_paths;
     for entry in &table.home {
         let dir = entry.ends_with('/');
         let rel = entry.trim_end_matches('/');
-        if !names_saved_state(rel) {
-            continue;
+        for home in env.startup.home.iter().chain(&env.startup.other_homes) {
+            add(format!("~/{rel}"), &home.join(rel), dir);
         }
-        for home in env.home.iter().chain(&env.other_homes) {
-            add(format!("~/{rel}"), home.join(rel), dir);
-        }
-        for (prefix, variable, root) in moved(env) {
+        for (prefix, variable, root) in env.moved() {
             if let (Some(rest), Some(root)) = (rel.strip_prefix(prefix), root) {
-                add(format!("${variable}/{rest}"), root.join(rest), dir);
+                add(format!("${variable}/{rest}"), &root.join(rest), dir);
             }
         }
     }
+    for entry in &table.absolute {
+        let dir = entry.ends_with('/');
+        let rel = entry.trim_end_matches('/');
+        add(rel.to_string(), Path::new(rel), dir);
+    }
     if let Some(file) = &env.claude_env_file {
-        add("$CLAUDE_ENV_FILE".to_string(), file.clone(), false);
+        add("$CLAUDE_ENV_FILE".to_string(), file, false);
     }
     out
 }
 
-/// The variables the guard has values for, which the line may expand in a
-/// target.
-fn held(env: &StartupEnv) -> Vec<(String, String)> {
-    [
-        ("XDG_CONFIG_HOME", &env.xdg_config),
-        ("ZDOTDIR", &env.zdotdir),
-        ("CLAUDE_CONFIG_DIR", &env.claude_config),
-        ("CODEX_HOME", &env.codex_home),
-        ("APPDATA", &env.appdata),
-        ("CLAUDE_ENV_FILE", &env.claude_env_file),
-    ]
-    .into_iter()
-    .filter_map(|(name, value)| {
-        let value = value.as_ref()?.to_str()?;
-        Some((name.to_string(), value.to_string()))
-    })
-    .collect()
+/// A node's identity: its device and inode.
+type Id = (u64, u64);
+
+#[cfg(unix)]
+fn id_of(meta: &std::fs::Metadata) -> Option<Id> {
+    use std::os::unix::fs::MetadataExt;
+    identities().then(|| (meta.dev(), meta.ino()))
 }
 
-/// Judge `command`, run in `cwd`, for removals, moves, copies and
-/// extractions over saved shell state that the startup class's readers do
-/// not name. Every finding is `security.shell_startup`, always blocking.
+/// No identity the guard can compare on this system: every comparison is
+/// made by readings.
+#[cfg(not(unix))]
+fn id_of(_meta: &std::fs::Metadata) -> Option<Id> {
+    None
+}
+
+/// What the guard read of a path on disk ([`walk`]).
+#[derive(Debug, Default)]
+struct Seen {
+    /// The folders the path is reached through, root first, and the path's
+    /// own node when it exists: each component of the physical path the
+    /// walk reached, after every link and `..`. Empty without identities.
+    chain: Vec<Id>,
+    /// Every link node the walk passed through: removing one takes the way
+    /// to the path with it.
+    links: Vec<Id>,
+    /// The path's own node, when it exists and has an identity.
+    end: Option<Id>,
+    /// Whether the path exists.
+    exists: bool,
+    /// Set when a component, a link or a type could not be read, or the
+    /// walk passed more links than the guard follows: the path is then
+    /// compared by readings, and a location fails closed.
+    unread: bool,
+    /// The readings, lower case: as written, with `.` and `..` folded, and
+    /// as reached, the part that exists through its links and the rest as
+    /// written.
+    readings: Vec<String>,
+}
+
+/// Walk `path` as the kernel resolves it: each component in turn, a link
+/// followed where it stands and `..` taken from the folder actually
+/// reached. With `follow_last` false, a link at the last component is the
+/// node itself, as a removal sees it.
+fn walk(path: &Path, follow_last: bool) -> Seen {
+    let mut seen = Seen::default();
+    let mut pending: Vec<OsString> = path
+        .components()
+        .rev()
+        .map(|c| c.as_os_str().to_os_string())
+        .collect();
+    // The physical path reached so far, with one identity per component
+    // (`None` for a component that does not exist).
+    let mut current = PathBuf::new();
+    let mut stack: Vec<Option<Id>> = Vec::new();
+    let mut absent = false;
+    let mut is_dir = true;
+    let mut links = 0;
+    let mut last_kept = false;
+    while let Some(part) = pending.pop() {
+        let component = Path::new(&part);
+        last_kept = false;
+        match component.components().next() {
+            Some(Component::CurDir) | None => continue,
+            Some(Component::ParentDir) => {
+                if stack.len() > 1 || !current.has_root() {
+                    stack.pop();
+                }
+                current.pop();
+                continue;
+            }
+            Some(Component::Prefix(_)) => {
+                current.push(component);
+                continue;
+            }
+            Some(Component::RootDir) => {
+                current.push(component);
+                stack.clear();
+                stack.push(
+                    std::fs::metadata(&current)
+                        .ok()
+                        .and_then(|meta| id_of(&meta)),
+                );
+                continue;
+            }
+            Some(Component::Normal(_)) => {}
+        }
+        let next = current.join(component);
+        if absent || !is_dir {
+            absent = true;
+            current = next;
+            stack.push(None);
+            continue;
+        }
+        let last = pending.is_empty();
+        match std::fs::symlink_metadata(&next) {
+            Ok(meta) if meta.file_type().is_symlink() && (!last || follow_last) => {
+                seen.links.extend(id_of(&meta));
+                links += 1;
+                let Ok(target) = std::fs::read_link(&next) else {
+                    seen.unread = true;
+                    break;
+                };
+                if links > LINK_LIMIT {
+                    seen.unread = true;
+                    break;
+                }
+                if target.has_root() {
+                    current = PathBuf::new();
+                    stack.clear();
+                }
+                pending.extend(
+                    target
+                        .components()
+                        .rev()
+                        .map(|c| c.as_os_str().to_os_string()),
+                );
+            }
+            Ok(meta) => {
+                stack.push(id_of(&meta));
+                is_dir = meta.is_dir();
+                current = next;
+                last_kept = true;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                absent = true;
+                current = next;
+                stack.push(None);
+            }
+            Err(_) => {
+                seen.unread = true;
+                break;
+            }
+        }
+    }
+    if !seen.unread && !absent {
+        if last_kept {
+            seen.exists = true;
+            seen.end = stack.last().copied().flatten();
+        } else {
+            // The path ends in `.` or `..`, or names a root: the folder
+            // reached.
+            match std::fs::metadata(&current) {
+                Ok(meta) => {
+                    seen.exists = true;
+                    seen.end = id_of(&meta);
+                    if let Some(top) = stack.last_mut() {
+                        *top = seen.end;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => seen.unread = true,
+            }
+        }
+    }
+    seen.readings.push(key(&lexical(path)));
+    if seen.unread {
+        seen.chain.clear();
+        seen.links.clear();
+        seen.end = None;
+    } else {
+        seen.chain = stack.into_iter().flatten().collect();
+        let reached = key(&lexical(&current));
+        if !seen.readings.contains(&reached) {
+            seen.readings.push(reached);
+        }
+    }
+    seen
+}
+
+/// Whether reading `inner` is `outer` or lies below it.
+fn reading_within(inner: &str, outer: &str) -> bool {
+    let inner = inner.trim_end_matches('/');
+    let outer = outer.trim_end_matches('/');
+    inner == outer
+        || inner
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether `target` is the location `at` or, for a folder, lies inside it:
+/// the location's node is on the target's physical path. By readings when
+/// either side has no identity to compare.
+fn within(target: &Seen, at: &Location) -> bool {
+    if let Some(end) = at.seen.end {
+        if !target.unread {
+            return if at.dir {
+                target.chain.contains(&end)
+            } else {
+                target.end == Some(end)
+            };
+        }
+    }
+    target.readings.iter().any(|t| {
+        at.seen.readings.iter().any(|a| {
+            if at.dir {
+                reading_within(t, a)
+            } else {
+                t.trim_end_matches('/') == a.trim_end_matches('/')
+            }
+        })
+    })
+}
+
+/// Whether `target` is the location `at`, a folder above it or a link on
+/// the way to it: the target's node is on the location's walk, which stops
+/// where the location does not exist yet. By readings when either side has
+/// no identity to compare.
+fn holds(target: &Seen, at: &Location) -> bool {
+    if let Some(end) = target.end {
+        if !at.seen.unread {
+            return at.seen.chain.contains(&end) || at.seen.links.contains(&end);
+        }
+    }
+    at.seen
+        .readings
+        .iter()
+        .any(|a| target.readings.iter().any(|t| reading_within(a, t)))
+}
+
+/// Judge `command`, run in `cwd`, for what it does to saved shell state.
+/// Every finding is `security.shell_startup`, always blocking.
 #[must_use]
-pub(crate) fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
+pub(crate) fn evaluate(command: &str, cwd: &Path, env: &Places) -> Vec<Violation> {
     if !enabled() {
         return Vec::new();
     }
-    let line = bound_commands_in(command, Some(cwd), &held(env));
-    if !line.whole || !line.commands.iter().any(|bound| operation(&bound.argv)) {
+    let line = bound_commands_in(command, Some(cwd), &env.held());
+    if !line.whole || line.commands.is_empty() {
         return Vec::new();
     }
     let lower = command.to_lowercase();
     let pass = Pass {
-        class: Class::new(env),
-        locations: locations(env),
         env,
         base: cwd,
+        class: OnceCell::new(),
+        locations: OnceCell::new(),
         dots: ["dotglob", "globdots", "globignore"]
             .iter()
             .any(|word| lower.contains(word)),
-        scans: std::cell::RefCell::new(ScanState::default()),
     };
     let mut calls: Vec<usize> = Vec::new();
     for bound in &line.commands {
@@ -284,11 +530,11 @@ pub(crate) fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Viola
             }
             for dir in &bound.dirs {
                 let member = pass.judge(bound, dir);
-                if member.found.is_empty() {
+                if member.is_empty() {
                     every = false;
                     break 'readings;
                 }
-                found.extend(member.found);
+                found.extend(member);
             }
         }
         if every {
@@ -305,145 +551,161 @@ pub(crate) fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Viola
         .collect()
 }
 
-/// Whether `argv` runs a program the pass judges.
-fn operation(argv: &[String]) -> bool {
-    argv.first().is_some_and(|first| {
-        matches!(
-            program_name(first).as_str(),
-            "rm" | "rmdir" | "unlink" | "find"
-        ) || matches!(
-            writer_name(first),
-            "mv" | "cp" | "ditto" | "rsync" | "tar" | "unzip"
-        )
-    })
+/// The saved-state finding for a native edit tool's target, `path`
+/// absolute: the file is a location or lies inside one.
+#[must_use]
+pub(crate) fn edit_target(path: &Path, env: &Places) -> Option<Violation> {
+    if !enabled() {
+        return None;
+    }
+    let seen = walk(path, true);
+    let label = locations(env)
+        .into_iter()
+        .find(|at| within(&seen, at))?
+        .label;
+    Some(Violation::always_blocking(
+        super::RULE,
+        format!("file edit targets the saved shell state `{label}`"),
+        super::SANCTIONED,
+    ))
 }
 
-/// What one reading of a command gives: its findings. A target the pass
-/// cannot resolve adds none, so the reading refuses only through another.
-#[derive(Default)]
-struct Member {
-    found: Vec<String>,
-}
-
-/// What a scan below a directory found.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Scan {
-    /// No saved-state folder within the bound.
-    Clear,
-    /// A saved-state folder.
-    Holds,
-    /// The tree cannot be shown clear: a budget ran out, the depth cutoff
-    /// left a subtree unread, or an entry, a directory or a listing could
-    /// not be read.
-    OutOfBudget,
-}
-
-/// What the scans of one call have read and found.
-#[derive(Default)]
-struct ScanState {
-    /// Resolved directory and whether traversal follows directory links.
-    known: HashMap<(PathBuf, bool), Scan>,
-    /// Directories queued or read and metadata calls made, against
-    /// [`SCAN_DIR_LIMIT`].
-    dirs: usize,
-    /// Entries listed, against [`SCAN_ENTRY_LIMIT`].
-    entries: usize,
-}
+/// The writers whose copy, move, sync or extraction the pass reads with the
+/// writer table.
+const PLACERS: &[&str] = &[
+    "mv", "cp", "ln", "install", "ditto", "rsync", "tar", "unzip",
+];
 
 struct Pass<'a> {
-    class: Class,
-    locations: Vec<Location>,
-    env: &'a StartupEnv,
+    env: &'a Places,
     base: &'a Path,
+    /// The startup class, for listing a glob the way its reader does.
+    class: OnceCell<Class>,
+    /// The locations, walked once on first use.
+    locations: OnceCell<Vec<Location>>,
     /// Whether the line may make a glob match names that start with `.`.
     dots: bool,
-    scans: std::cell::RefCell<ScanState>,
+}
+
+/// How a placement is judged: the files it lands are named, or it places
+/// a tree whose names the guard does not know.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lands {
+    /// One file or link at the path.
+    File,
+    /// A tree at the path, its names known by the copy.
+    Tree,
+    /// An archive's members below the path, whose names the guard cannot
+    /// see.
+    Archive,
 }
 
 impl Pass<'_> {
+    fn locations(&self) -> &[Location] {
+        self.locations.get_or_init(|| locations(self.env))
+    }
+
+    fn class(&self) -> &Class {
+        self.class.get_or_init(|| Class::new(&self.env.startup))
+    }
+
     /// One reading of a command: its program and arguments, run in `dir`.
-    fn judge(&self, bound: &Bound, dir: &str) -> Member {
-        let mut member = Member::default();
+    /// The messages it gives; none when it touches no saved state or the
+    /// pass cannot resolve what it touches.
+    fn judge(&self, bound: &Bound, dir: &str) -> Vec<String> {
+        let mut found = Vec::new();
         let Some(first) = bound.argv.first() else {
-            return member;
+            return found;
         };
+        if bound.redirect {
+            for path in self.paths(first, bound, dir).unwrap_or_default() {
+                if let Some(label) = self.written(&walk(&path, true)) {
+                    found.push(format!(
+                        "a redirect writes `{first}`, which is saved shell state: `{label}`"
+                    ));
+                }
+            }
+            return found;
+        }
         let args = &bound.argv[1..];
         match program_name(first).as_str() {
             "rm" => match recursive_rm_operands(args) {
                 Some(operands) => {
                     for operand in operands {
-                        self.removal(&mut member, "rm", "removes", operand, bound, dir);
+                        self.removal(&mut found, "rm", "removes", operand, bound, dir);
                     }
                 }
                 None => {
                     for operand in plain_operands(args) {
-                        self.named(&mut member, "rm", operand, bound, dir);
+                        self.named(&mut found, "rm", operand, bound, dir);
                     }
                 }
             },
             name @ ("rmdir" | "unlink") => {
                 for operand in plain_operands(args) {
-                    self.named(&mut member, name, operand, bound, dir);
+                    self.named(&mut found, name, operand, bound, dir);
                 }
             }
             "find" => {
                 for start in find_removals(args).unwrap_or_default() {
-                    self.removal(&mut member, "find", "removes", &start, bound, dir);
+                    self.removal(&mut found, "find", "removes", &start, bound, dir);
                 }
             }
-            _ => self.writer(&mut member, first, args, bound, dir),
+            _ => self.writer(&mut found, first, args, bound, dir),
         }
-        member
+        found
     }
 
-    /// A move, copy, sync or extraction, read with the writer table.
-    fn writer(&self, member: &mut Member, first: &str, args: &[String], bound: &Bound, dir: &str) {
+    /// A program other than a remover: a copy, move, link, sync or
+    /// extraction read with the writer table, a file its options write, and
+    /// the operands of any other program that may write them.
+    fn writer(
+        &self,
+        found: &mut Vec<String>,
+        first: &str,
+        args: &[String],
+        bound: &Bound,
+        dir: &str,
+    ) {
         let name = writer_name(first);
-        if !matches!(name, "mv" | "cp" | "ditto" | "rsync" | "tar" | "unzip") {
+        if reads_only(name, args) || is_shell(name) || name == "eval" {
+            return;
+        }
+        if !has_writer_entry(name) {
+            for word in args {
+                for path_word in operand_paths(word) {
+                    self.write(found, name, path_word, bound, dir);
+                }
+            }
             return;
         }
         let Some(effects) = writer_effects(first, args, &[]) else {
             return;
         };
         if effects.read.unknown.is_some() {
-            // Unresolved: no finding.
+            // An option the table does not list: its arity is unknown, so
+            // the targets are unresolved.
             return;
         }
-        let flagged = |names: &[&str]| {
-            effects
-                .read
-                .flags
-                .iter()
-                .any(|flag| names.contains(&flag.as_str()))
-        };
+        for path in &effects.writes {
+            self.write(found, name, path, bound, dir);
+        }
+        // An extraction's operands name archive members, not files on disk.
+        let extracts = matches!(name, "tar" | "unzip");
         if let Some(copy) = &effects.copy {
-            let remote = |path: &str| {
-                name == "rsync"
-                    && (path.starts_with("rsync://")
-                        || path.split('/').next().unwrap_or("").contains(':'))
-            };
-            if name == "mv" {
-                for source in &copy.sources {
-                    self.removal(member, "mv", "moves", source, bound, dir);
+            if PLACERS.contains(&name) && !copy.directories {
+                self.copy(found, name, copy, &effects.read.flags, bound, dir);
+            } else {
+                for word in copy.sources.iter().chain(&copy.dest) {
+                    self.write(found, name, word, bound, dir);
                 }
             }
-            let recursive = match name {
-                "mv" | "ditto" => true,
-                "cp" => flagged(&["-r", "-R", "-a", "--recursive", "--archive"]),
-                "rsync" => flagged(&["-r", "-a", "--recursive", "--archive"]),
-                _ => false,
-            };
-            if let Some(dest) = copy.dest.as_deref().filter(|dest| !remote(dest)) {
-                let tree = recursive
-                    && copy
-                        .sources
-                        .iter()
-                        .filter(|source| !remote(source))
-                        .any(|source| self.may_be_tree(source, bound, dir));
-                self.placement(member, name, dest, tree, bound, dir);
+        } else if !extracts {
+            for word in &effects.read.operands {
+                self.write(found, name, word, bound, dir);
             }
         }
-        if matches!(name, "tar" | "unzip") {
+        if extracts {
             if let Some(places) = &effects.places {
                 let target = match places.order {
                     DirOrder::Sequential => places.dirs.iter().fold(None::<String>, |at, next| {
@@ -457,19 +719,83 @@ impl Pass<'_> {
                     DirOrder::Last | DirOrder::Each => places.dirs.last().cloned(),
                 };
                 let target = target.unwrap_or_else(|| ".".to_string());
-                self.placement(member, name, &target, true, bound, dir);
+                self.placement(found, name, &target, None, Lands::Archive, bound, dir);
             }
         }
     }
 
+    /// A copy, move, link or sync: each source removed by a move, and the
+    /// path each source lands at.
+    fn copy(
+        &self,
+        found: &mut Vec<String>,
+        name: &str,
+        copy: &crate::security::unresolved::CopyRead,
+        flags: &[String],
+        bound: &Bound,
+        dir: &str,
+    ) {
+        let remote = |path: &str| {
+            matches!(name, "rsync" | "scp")
+                && (path.starts_with("rsync://")
+                    || path.split('/').next().unwrap_or("").contains(':'))
+        };
+        if name == "mv" {
+            for source in &copy.sources {
+                self.removal(found, "mv", "moves", source, bound, dir);
+            }
+        }
+        let Some(dest) = copy.dest.as_deref().filter(|dest| !remote(dest)) else {
+            return;
+        };
+        let flagged = |names: &[&str]| flags.iter().any(|flag| names.contains(&flag.as_str()));
+        let recursive = match name {
+            "mv" | "ditto" => true,
+            "cp" => flagged(&["-r", "-R", "-a", "--recursive", "--archive"]),
+            "rsync" => flagged(&["-r", "-a", "--recursive", "--archive"]),
+            _ => false,
+        };
+        let Some(dests) = self.paths(dest, bound, dir) else {
+            // Unresolved: no finding.
+            return;
+        };
+        // The destination is a folder each source lands in: a target
+        // directory, more than one source, a trailing `/`, or a folder now.
+        let into = copy.target
+            || copy.sources.len() > 1
+            || dest.ends_with('/')
+            || dests
+                .iter()
+                .any(|d| std::fs::metadata(d).is_ok_and(|m| m.is_dir()));
+        for source in copy.sources.iter().filter(|source| !remote(source)) {
+            let tree = recursive && self.may_be_tree(source, bound, dir);
+            let lands = if tree { Lands::Tree } else { Lands::File };
+            // `ditto`, a source ending in `/` (rsync, BSD cp) or `/.` places
+            // what the source holds: the names below the destination are the
+            // source's own, so the destination itself is compared.
+            let contents = name == "ditto"
+                || source.ends_with('/')
+                || source.ends_with("/.")
+                || matches!(source.as_str(), "." | "..");
+            let placed: Option<String> = if into && !contents {
+                last_name(source)
+            } else {
+                None
+            };
+            self.placement(found, name, dest, placed.as_deref(), lands, bound, dir);
+        }
+    }
+
     /// The absolute paths `operand` names from `dir`, each match of a glob
-    /// included; `None` when the pass cannot resolve it.
+    /// included; `None` when the pass cannot resolve it. A path without a
+    /// glob keeps its `..` components, for the walk to take from the folder
+    /// actually reached.
     fn paths(&self, operand: &str, bound: &Bound, dir: &str) -> Option<Vec<PathBuf>> {
         let text = bound_path(dir, operand)?;
-        let path = self.absolute(&text, bound.home_assigned)?;
         if !has_glob(&text) {
-            return Some(vec![path]);
+            return Some(vec![self.raw(operand, bound, dir)?]);
         }
+        let path = self.absolute(&text, bound.home_assigned)?;
         let mut base = PathBuf::new();
         let mut rest = PathBuf::new();
         for component in path.components() {
@@ -479,13 +805,27 @@ impl Pass<'_> {
                 rest.push(component);
             }
         }
-        let matches = startup_glob_paths(&base, &rest, self.dots, &self.class)?;
+        let matches = startup_glob_paths(&base, &rest, self.dots, self.class())?;
         // A word that matches nothing stays as written.
         Some(if matches.is_empty() {
             vec![path]
         } else {
             matches
         })
+    }
+
+    /// `operand` joined, as written, to the directory `dir` the command
+    /// runs in: the walk then takes each link and `..` as the kernel does.
+    fn raw(&self, operand: &str, bound: &Bound, dir: &str) -> Option<PathBuf> {
+        if operand.starts_with(['/', '~']) {
+            return self.absolute(operand, bound.home_assigned);
+        }
+        let dir = if dir.is_empty() {
+            self.base.to_path_buf()
+        } else {
+            self.absolute(dir, bound.home_assigned)?
+        };
+        Some(dir.join(operand))
     }
 
     /// A path the reader resolved, made absolute: from the home the class
@@ -495,14 +835,14 @@ impl Pass<'_> {
             if home_assigned || !(rest.is_empty() || rest.starts_with('/')) {
                 return None;
             }
-            let home = self.env.home.as_ref()?;
-            return Some(lexical(&home.join(rest.trim_start_matches('/'))));
+            let home = self.env.startup.home.as_ref()?;
+            return Some(home.join(rest.trim_start_matches('/')));
         }
         if text.starts_with('/') {
             // A `/`-rooted path names no fixed place on Windows.
-            return (!cfg!(windows)).then(|| lexical(Path::new(text)));
+            return (!cfg!(windows)).then(|| PathBuf::from(text));
         }
-        Some(lexical(&self.base.join(text)))
+        Some(self.base.join(text))
     }
 
     /// Whether a copy's source may be a directory tree: a directory that is
@@ -511,19 +851,42 @@ impl Pass<'_> {
         let Some(paths) = self.paths(source, bound, dir) else {
             return true;
         };
-        paths.iter().any(
-            |path| match crate::absence::symlink_metadata_optional(path) {
-                Ok(Some(metadata)) => metadata.is_dir(),
-                Ok(None) => false,
-                Err(_) => true,
-            },
-        )
+        paths
+            .iter()
+            .any(|path| match std::fs::symlink_metadata(path) {
+                Ok(metadata) => metadata.is_dir(),
+                Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+            })
     }
 
-    /// A tree removed (`rm -r`, `find -delete`) or moved away (`mv`).
+    /// The location a written path is or lies in.
+    fn written(&self, seen: &Seen) -> Option<String> {
+        self.locations()
+            .iter()
+            .find(|at| within(seen, at))
+            .map(|at| at.label.clone())
+    }
+
+    /// A file a program writes: refused when it is or lies in a location.
+    fn write(&self, found: &mut Vec<String>, name: &str, word: &str, bound: &Bound, dir: &str) {
+        if word.contains("{}") {
+            return;
+        }
+        for path in self.paths(word, bound, dir).unwrap_or_default() {
+            if let Some(label) = self.written(&walk(&path, true)) {
+                found.push(format!(
+                    "`{name}` writes `{word}`, which is saved shell state: `{label}`"
+                ));
+            }
+        }
+    }
+
+    /// A tree removed (`rm -r`, `find -delete`) or moved away (`mv`):
+    /// refused when it is or lies in a location, or is a folder above one
+    /// that exists.
     fn removal(
         &self,
-        member: &mut Member,
+        found: &mut Vec<String>,
         name: &str,
         verb: &str,
         operand: &str,
@@ -537,62 +900,26 @@ impl Pass<'_> {
         // A trailing `/` makes the call follow a link to the tree it names.
         let follow = operand.ends_with('/');
         for path in paths {
-            let path = if follow {
-                resolve(&path).unwrap_or(path)
-            } else {
-                path
-            };
-            match self.removal_of(&path) {
-                Some(Scan::Holds) => member.found.push(format!(
+            let seen = walk(&path, follow);
+            if !seen.exists && !seen.unread {
+                // Nothing there to remove.
+                continue;
+            }
+            let hit = self.locations().iter().any(|at| {
+                within(&seen, at) || ((at.seen.exists || at.seen.unread) && holds(&seen, at))
+            });
+            if hit {
+                found.push(format!(
                     "`{name}` {verb} `{operand}`, which is or holds saved shell state: `{}`",
                     shown(&path)
-                )),
-                Some(Scan::OutOfBudget) => member.found.push(format!(
-                    "`{name}` {verb} `{operand}`, which the guard cannot show is clear of saved shell state: {}",
-                    out_of_budget(&path)
-                )),
-                Some(Scan::Clear) => {}
-                None => {}
+                ));
             }
         }
-    }
-
-    /// Whether a removal of `path` takes saved state with it. The node
-    /// itself is checked, then, for a directory that is not a link, the tree
-    /// below it without following links. `None` for a spelling the guard
-    /// cannot map.
-    fn removal_of(&self, path: &Path) -> Option<Scan> {
-        let mapped = crate::portable_path::guard_path(path).ok()?;
-        if !self.spend_directory() {
-            return Some(Scan::OutOfBudget);
-        }
-        let metadata = match crate::absence::symlink_metadata_optional(&mapped) {
-            Ok(None) => return Some(Scan::Clear),
-            Ok(Some(metadata)) => metadata,
-            Err(_) => return Some(Scan::OutOfBudget),
-        };
-        match self.existing_state_related(&mapped) {
-            Scan::Clear => {}
-            other => return Some(other),
-        }
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Some(Scan::Clear);
-        }
-        let Ok(real) = resolve(&mapped) else {
-            return Some(Scan::OutOfBudget);
-        };
-        if real != mapped {
-            match self.existing_state_related(&real) {
-                Scan::Clear => {}
-                other => return Some(other),
-            }
-        }
-        Some(self.scan_below(&real, false))
     }
 
     /// `rmdir`, `unlink` or a plain `rm`: refused when the path is a
-    /// saved-state location or lies in one and something is there.
-    fn named(&self, member: &mut Member, name: &str, operand: &str, bound: &Bound, dir: &str) {
+    /// location or lies in one and something is there.
+    fn named(&self, found: &mut Vec<String>, name: &str, operand: &str, bound: &Bound, dir: &str) {
         let Some(paths) = self.paths(operand, bound, dir) else {
             // Unresolved: no finding.
             return;
@@ -600,37 +927,32 @@ impl Pass<'_> {
         for path in paths {
             // The last component is removed itself, so only the folders
             // above it are followed.
-            let mut readings = vec![key(&lexical(&path))];
-            if let (Some(parent), Some(file)) = (path.parent(), path.file_name()) {
-                if let Ok(real) = resolve(parent) {
-                    let real = key(&real.join(file));
-                    if !readings.contains(&real) {
-                        readings.push(real);
-                    }
-                }
-            }
-            let Some(label) = readings.iter().find_map(|r| self.location_of(r)) else {
+            let seen = walk(&path, false);
+            if !seen.exists && !seen.unread {
                 continue;
-            };
-            match crate::absence::symlink_metadata_optional(&path) {
-                Ok(None) => {}
-                Ok(Some(_)) | Err(_) => member.found.push(format!(
-                    "`{name}` removes `{operand}`, which is saved shell state: `{label}`"
-                )),
+            }
+            if let Some(at) = self.locations().iter().find(|at| within(&seen, at)) {
+                found.push(format!(
+                    "`{name}` removes `{operand}`, which is saved shell state: `{}`",
+                    at.label
+                ));
             }
         }
     }
 
-    /// Files placed into `target`: a copy's or move's destination, or an
-    /// extraction's directory. A location by path refuses for any
-    /// placement; a tree placed also refuses into a directory above one, and
-    /// into a directory whose tree holds one or cannot be read in full.
+    /// Files placed at `target`, or at `target/placed` when the call lands
+    /// a source of that name in the folder: a copy's, move's or link's
+    /// destination, or an extraction's folder. A path that is or lies in a
+    /// location refuses for any placement; a tree or an archive also
+    /// refuses at a folder above a location, which it can create.
+    #[allow(clippy::too_many_arguments)]
     fn placement(
         &self,
-        member: &mut Member,
+        found: &mut Vec<String>,
         name: &str,
         target: &str,
-        tree: bool,
+        placed: Option<&str>,
+        lands: Lands,
         bound: &Bound,
         dir: &str,
     ) {
@@ -639,247 +961,88 @@ impl Pass<'_> {
             return;
         };
         for path in paths {
-            let readings = readings_of(&path);
-            let at = readings
-                .iter()
-                .find_map(|r| self.location_of(r))
-                .or_else(|| {
-                    tree.then(|| readings.iter().find_map(|r| self.location_below(r)))
-                        .flatten()
-                });
-            if let Some(label) = at {
-                member.found.push(format!(
-                    "`{name}` places files into `{target}`, which is, holds or lies in saved shell state: `{label}`"
-                ));
-                continue;
-            }
-            if !tree {
-                continue;
-            }
-            match self.scan_below(&path, true) {
-                Scan::Clear => {}
-                Scan::Holds => member.found.push(format!(
-                    "`{name}` places files into `{target}`, which holds saved shell state below it: `{}`",
-                    shown(&path)
-                )),
-                Scan::OutOfBudget => member.found.push(format!(
-                    "`{name}` places files into `{target}`, which the guard cannot show is clear of saved shell state: {}",
-                    out_of_budget(&path)
-                )),
-            }
-        }
-    }
-
-    /// The location a reading is or lies in, or the folder name it has.
-    fn location_of(&self, reading: &str) -> Option<String> {
-        let reading = reading.trim_end_matches('/');
-        self.locations
-            .iter()
-            .find(|location| {
-                location.readings.iter().any(|at| {
-                    reading == at
-                        || (location.dir
-                            && reading
-                                .strip_prefix(at.as_str())
-                                .is_some_and(|rest| rest.starts_with('/')))
-                })
-            })
-            .map(|location| location.label.clone())
-            .or_else(|| {
-                SAVED_STATE_FOLDERS
-                    .iter()
-                    .find(|name| dir_named(reading, name))
-                    .map(|name| (*name).to_string())
-            })
-    }
-
-    /// The location below a reading: the reading is a directory above it.
-    fn location_below(&self, reading: &str) -> Option<String> {
-        let below = format!("{}/", reading.trim_end_matches('/'));
-        self.locations
-            .iter()
-            .find(|location| location.readings.iter().any(|at| at.starts_with(&below)))
-            .map(|location| location.label.clone())
-    }
-
-    fn spend_directory(&self) -> bool {
-        let mut state = self.scans.borrow_mut();
-        state.dirs += 1;
-        state.dirs <= SCAN_DIR_LIMIT
-    }
-
-    /// Whether `path` is, holds or lies in a saved-state location that
-    /// exists now, or has a saved-state folder name and exists.
-    fn existing_state_related(&self, path: &Path) -> Scan {
-        let reading = key(&lexical(path));
-        let reading = reading.trim_end_matches('/');
-        let below = format!("{reading}/");
-        for location in &self.locations {
-            let related = location.readings.iter().any(|at| {
-                reading == at
-                    || at.starts_with(&below)
-                    || (location.dir
-                        && reading
-                            .strip_prefix(at.as_str())
-                            .is_some_and(|rest| rest.starts_with('/')))
-            });
-            if !related {
-                continue;
-            }
-            if !self.spend_directory() {
-                return Scan::OutOfBudget;
-            }
-            match crate::absence::symlink_metadata_optional(&location.path) {
-                Ok(Some(_)) => return Scan::Holds,
-                Ok(None) => {}
-                Err(_) => return Scan::OutOfBudget,
-            }
-        }
-        if dir_run_at(path) {
-            Scan::Holds
-        } else {
-            Scan::Clear
-        }
-    }
-
-    /// Whether a resolved path is equal to, above or inside a saved-state
-    /// location, or has a saved-state folder name.
-    fn saved_state_path(&self, path: &Path) -> bool {
-        let reading = key(&lexical(path));
-        let reading = reading.trim_end_matches('/');
-        self.location_of(reading).is_some() || self.location_below(reading).is_some()
-    }
-
-    /// Whether a saved-state folder exists in `dir` or a few levels below
-    /// it. Fail closed: a budget spent, a subtree past the depth cutoff, or
-    /// an entry, a directory or a listing that cannot be read is
-    /// [`Scan::OutOfBudget`], never clear.
-    fn scan_below(&self, dir: &Path, follow_links: bool) -> Scan {
-        let Ok(real) = resolve(dir)
-            .map_err(|_| ())
-            .and_then(|path| crate::portable_path::guard_path(&path).map_err(|_| ()))
-        else {
-            return Scan::OutOfBudget;
-        };
-        let real = match crate::portable_path::canonicalize(&real) {
-            Ok(canonical) => canonical,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => real,
-            Err(_) => return Scan::OutOfBudget,
-        };
-        let mut state = self.scans.borrow_mut();
-        if let Some(known) = state.known.get(&(real.clone(), follow_links)) {
-            return *known;
-        }
-        let found = self.scan_for_saved_state(&real, &mut state, follow_links);
-        state.known.insert((real, follow_links), found);
-        found
-    }
-
-    fn scan_for_saved_state(&self, dir: &Path, state: &mut ScanState, follow_links: bool) -> Scan {
-        state.dirs += 1;
-        if state.dirs > SCAN_DIR_LIMIT {
-            return Scan::OutOfBudget;
-        }
-        match crate::absence::metadata_optional(dir) {
-            Ok(None) => return Scan::Clear,
-            Ok(Some(metadata)) if !metadata.is_dir() => return Scan::Clear,
-            Ok(Some(_)) => {}
-            Err(_) => return Scan::OutOfBudget,
-        }
-        // Breadth first, so the shallow levels are read before the bound.
-        // A repository's own administrative tree is read without a depth
-        // cutoff; other trees keep it.
-        let admin = own_git_directory(dir).then(|| dir.to_path_buf());
-        let mut pending = VecDeque::from([(dir.to_path_buf(), 0_usize, admin)]);
-        let mut visited = HashSet::from([dir.to_path_buf()]);
-        state.dirs += 1;
-        if state.dirs > SCAN_DIR_LIMIT {
-            return Scan::OutOfBudget;
-        }
-        while let Some((current, depth, admin)) = pending.pop_front() {
-            let Ok(entries) = std::fs::read_dir(&current) else {
-                return Scan::OutOfBudget;
+            let path = match placed {
+                Some(placed) => path.join(placed),
+                None => path,
             };
-            for entry in entries {
-                state.entries += 1;
-                if state.entries > SCAN_ENTRY_LIMIT {
-                    return Scan::OutOfBudget;
-                }
-                let Ok(entry) = entry else {
-                    return Scan::OutOfBudget;
-                };
-                let Ok(kind) = entry.file_type() else {
-                    return Scan::OutOfBudget;
-                };
-                if (kind.is_dir() || (!follow_links && kind.is_symlink()))
-                    && dir_run_at(&entry.path())
-                {
-                    return Scan::Holds;
-                }
-                let next = if kind.is_symlink() {
-                    if !follow_links {
-                        continue;
-                    }
-                    state.dirs += 1;
-                    if state.dirs > SCAN_DIR_LIMIT {
-                        return Scan::OutOfBudget;
-                    }
-                    let Ok(real) = resolve(&entry.path())
-                        .map_err(|_| ())
-                        .and_then(|path| crate::portable_path::guard_path(&path).map_err(|_| ()))
-                    else {
-                        return Scan::OutOfBudget;
-                    };
-                    if self.saved_state_path(&real) {
-                        return Scan::Holds;
-                    }
-                    match crate::absence::metadata_optional(&real) {
-                        Ok(Some(metadata)) if metadata.is_dir() => {
-                            let Ok(canonical) = crate::portable_path::canonicalize(&real) else {
-                                return Scan::OutOfBudget;
-                            };
-                            canonical
-                        }
-                        Ok(Some(_)) => continue,
-                        Ok(None) | Err(_) => return Scan::OutOfBudget,
-                    }
-                } else if kind.is_dir() {
-                    entry.path()
-                } else {
-                    continue;
-                };
-                let next_admin = admin
-                    .as_ref()
-                    .filter(|root| next.starts_with(root))
-                    .cloned()
-                    .or_else(|| own_git_directory(&entry.path()).then(|| next.clone()));
-                if let Some(known) = state.known.get(&(next.clone(), follow_links)) {
-                    match known {
-                        Scan::Clear => continue,
-                        other => return *other,
-                    }
-                }
-                if !visited.insert(next.clone()) {
-                    continue;
-                }
-                if next_admin.is_none() && depth + 1 >= SCAN_DEPTH {
-                    if REFUSE_AT_DEPTH_CUTOFF {
-                        return Scan::OutOfBudget;
-                    }
-                    continue;
-                }
-                state.dirs += 1;
-                if state.dirs > SCAN_DIR_LIMIT {
-                    return Scan::OutOfBudget;
-                }
-                pending.push_back((next, depth + 1, next_admin));
+            let seen = walk(&path, true);
+            if let Some(at) = self.locations().iter().find(|at| within(&seen, at)) {
+                found.push(match lands {
+                    Lands::File => format!(
+                        "`{name}` writes `{target}`, which is saved shell state: `{}`",
+                        at.label
+                    ),
+                    Lands::Tree | Lands::Archive => format!(
+                        "`{name}` places files into `{target}`, which is, holds or lies in saved shell state: `{}`",
+                        at.label
+                    ),
+                });
+                continue;
+            }
+            if lands == Lands::File {
+                continue;
+            }
+            let Some(at) = self.locations().iter().find(|at| holds(&seen, at)) else {
+                continue;
+            };
+            found.push(match lands {
+                Lands::Archive => format!(
+                    "`{name}` extracts into `{}`, a folder above the saved shell state `{}`, and the guard cannot see what the archive holds: extract into a named sub-folder that is not above saved shell state (`{}`)",
+                    shown(&lexical(&path)),
+                    at.label,
+                    if name == "unzip" { "-d <dir>" } else { "-C <dir>" },
+                ),
+                Lands::Tree | Lands::File => format!(
+                    "`{name}` places files into `{target}`, which is, holds or lies in saved shell state: `{}`",
+                    at.label
+                ),
+            });
+        }
+    }
+}
+
+/// The last name of a source operand, as a copy names what it lands in a
+/// folder; `None` when it has none the guard can read.
+fn last_name(source: &str) -> Option<String> {
+    let name = source.trim_end_matches('/').rsplit('/').next()?;
+    (!name.is_empty() && !matches!(name, "." | "..") && !has_glob(name) && !name.contains('$'))
+        .then(|| name.to_string())
+}
+
+/// The words in `word` that may name a path a program writes, as the
+/// startup check reads a writing program's arguments: the value of a
+/// `key=value` operand (`dd of=FILE`), every tail of a short option that
+/// can start a path (`-o~/x`), and the word or a long option's value.
+fn operand_paths(word: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    if !word.starts_with('-') {
+        if let Some((key, value)) = word.split_once('=') {
+            if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                out.push(value);
             }
         }
-        for path in visited {
-            state.known.insert((path, follow_links), Scan::Clear);
-        }
-        Scan::Clear
     }
+    if word.starts_with('-') && !word.starts_with("--") {
+        for (at, c) in word.char_indices().skip(2) {
+            if matches!(c, '~' | '/' | '.') {
+                out.push(&word[at..]);
+            }
+        }
+    }
+    let value = if word.starts_with('-') {
+        word.split_once('=').map(|(_, v)| v)
+    } else {
+        Some(word)
+    };
+    out.extend(value);
+    out.retain(|w| {
+        !w.is_empty()
+            && !w.contains(|c: char| {
+                crate::hooks::git_guard::shell_blank(c)
+                    || matches!(c, '\'' | '"' | '(' | ')' | ';' | '<' | '>' | '|' | '&')
+            })
+    });
+    out
 }
 
 /// The operands of a call that reads `-` words as options until `--`.
@@ -896,44 +1059,64 @@ fn plain_operands(args: &[String]) -> Vec<&str> {
     operands
 }
 
-/// Whether `path` ends in a saved-state folder name and may be a directory.
-fn dir_run_at(path: &Path) -> bool {
-    let reading = key(&lexical(path));
-    SAVED_STATE_FOLDERS
-        .iter()
-        .any(|name| dir_named(&reading, name))
-        && crate::absence::is_kind(path, true) != Some(false)
+/// Holds the saved-state findings of the outermost evaluation of one hook
+/// until it ends, so they follow every other finding of the call, the
+/// findings of its nested commands included.
+pub(crate) struct Held(usize);
+
+thread_local! {
+    static HELD: RefCell<[Option<Vec<Violation>>; 2]> = const { RefCell::new([None, None]) };
 }
 
-/// Only the administrative directory of its parent repository is read
-/// without the depth cutoff. A folder merely named `.git` keeps the
-/// ordinary rules.
-fn own_git_directory(path: &Path) -> bool {
-    if path.file_name().is_none_or(|name| name != ".git") {
-        return false;
+/// The hooks that hold findings, each in a slot of its own.
+#[derive(Clone, Copy)]
+pub(crate) enum Hook {
+    Exec = 0,
+    Git = 1,
+}
+
+impl Held {
+    /// Start holding findings for `hook`; `None` inside an evaluation that
+    /// already holds them, whose findings join the outer ones.
+    pub(crate) fn enter(hook: Hook) -> Option<Self> {
+        HELD.with(|held| {
+            let mut held = held.borrow_mut();
+            let slot = &mut held[hook as usize];
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(Vec::new());
+            Some(Self(hook as usize))
+        })
     }
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    let Ok(repo) = git2::Repository::open(parent) else {
-        return false;
-    };
-    match (
-        crate::portable_path::canonicalize(path),
-        crate::portable_path::canonicalize(repo.path()),
-    ) {
-        (Ok(candidate), Ok(actual)) => candidate == actual,
-        _ => false,
+
+    /// Add `findings` to the ones `hook` holds.
+    pub(crate) fn hold(hook: Hook, findings: Vec<Violation>) {
+        HELD.with(|held| {
+            if let Some(slot) = held.borrow_mut()[hook as usize].as_mut() {
+                slot.extend(findings);
+            }
+        });
+    }
+
+    /// Append the held findings after `violations`, each once.
+    pub(crate) fn append(self, violations: &mut Vec<Violation>) {
+        let held = HELD.with(|held| held.borrow_mut()[self.0].take().unwrap_or_default());
+        for finding in held {
+            let duplicate = violations
+                .iter()
+                .any(|v| v.rule == finding.rule && v.message == finding.message);
+            if !duplicate {
+                violations.push(finding);
+            }
+        }
     }
 }
 
-/// How a refusal names a target the scan cannot show clear, with the form
-/// that passes.
-fn out_of_budget(path: &Path) -> String {
-    format!(
-        "`{}` (the guard cannot read this target in full to check for saved shell state; name a narrower target directory that the guard can read)",
-        shown(path)
-    )
+impl Drop for Held {
+    fn drop(&mut self) {
+        HELD.with(|held| held.borrow_mut()[self.0].take());
+    }
 }
 
 #[cfg(test)]

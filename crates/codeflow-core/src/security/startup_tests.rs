@@ -41,10 +41,6 @@ impl Fixture {
             other_homes: Vec::new(),
             zdotdir: None,
             xdg_config: None,
-            claude_config: None,
-            codex_home: None,
-            appdata: None,
-            claude_env_file: None,
             etc_roots: Vec::new(),
         }
     }

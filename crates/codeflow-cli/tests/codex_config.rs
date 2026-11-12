@@ -224,8 +224,9 @@ fn cf_guard_keeps_the_saved_shell_state_read_only() {
     }
 }
 
-/// TSK-242: every shell startup path and default git configuration path in
-/// the action table is read only in `cf-guard`, which `cf-builder` extends
+/// TSK-242: every shell startup path, saved shell state path (TSK-1461) and
+/// default git configuration path in the action table is read only in
+/// `cf-guard`, which `cf-builder` extends
 /// without reopening any of them, and the workspace root's `.envrc` is read
 /// only.
 #[test]
@@ -234,7 +235,7 @@ fn cf_guard_and_cf_builder_keep_shell_startup_files_read_only() {
     let fs = cf_guard(&cfg, "filesystem");
     let actions = codeflow_core::security::actions::table();
     let table = &actions.startup_paths;
-    let expected: Vec<String> = [table, &actions.git_config_paths]
+    let expected: Vec<String> = [table, &actions.saved_state_paths, &actions.git_config_paths]
         .iter()
         .flat_map(|class| {
             class

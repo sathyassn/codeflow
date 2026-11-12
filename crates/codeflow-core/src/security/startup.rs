@@ -66,21 +66,9 @@ pub struct StartupEnv {
     pub other_homes: Vec<PathBuf>,
     /// `ZDOTDIR`, when set: zsh reads its startup files there.
     pub zdotdir: Option<PathBuf>,
-    /// `XDG_CONFIG_HOME`, when set: fish, `PowerShell`, tmux, direnv and
-    /// herdr-core read their configuration there.
+    /// `XDG_CONFIG_HOME`, when set: fish, `PowerShell`, tmux and direnv read
+    /// their configuration there.
     pub xdg_config: Option<PathBuf>,
-    /// `CLAUDE_CONFIG_DIR`, when set: Claude Code keeps the shell state it
-    /// runs before each Bash command there instead of in `~/.claude`.
-    pub claude_config: Option<PathBuf>,
-    /// `CODEX_HOME`, when set: Codex keeps its shell snapshots there
-    /// instead of in `~/.codex`.
-    pub codex_home: Option<PathBuf>,
-    /// `APPDATA`, when set on Windows: herdr-core reads its templates there
-    /// instead of in `~/AppData/Roaming`.
-    pub appdata: Option<PathBuf>,
-    /// `CLAUDE_ENV_FILE`, when set: the file Claude Code runs before each
-    /// later Bash command.
-    pub claude_env_file: Option<PathBuf>,
     /// On Windows, the install roots of Unix-like shells (Git for Windows,
     /// MSYS2, Cygwin) whose `etc` folder the shell reads as `/etc`, from
     /// `shell_roots`; empty elsewhere.
@@ -114,10 +102,6 @@ impl StartupEnv {
     #[must_use]
     pub fn from_vars(var: &dyn Fn(&str) -> Option<OsString>, base: &Path) -> Self {
         let set = |name: &str| var(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-        // A relative location is read from the directory the command runs
-        // in, as the harness or tool that reads it would from there.
-        let placed =
-            |name: &str| set(name).map(|x| if x.is_absolute() { x } else { base.join(&x) });
         let mut homes =
             crate::portable_path::homes_from(var("HOME"), var("USERPROFILE"), cfg!(windows))
                 .into_iter();
@@ -134,14 +118,6 @@ impl StartupEnv {
                     }
                 },
             ),
-            claude_config: placed("CLAUDE_CONFIG_DIR"),
-            codex_home: placed("CODEX_HOME"),
-            appdata: if cfg!(windows) {
-                placed("APPDATA")
-            } else {
-                None
-            },
-            claude_env_file: placed("CLAUDE_ENV_FILE"),
             etc_roots: if cfg!(windows) {
                 shell_roots(var)
             } else {
@@ -266,12 +242,6 @@ enum Entry {
     },
     /// A file name protected in every directory.
     Name(String),
-    /// A folder name, or a short run of folder names (`a/b`), protected
-    /// wherever the folder is, with everything in it: the folders a harness
-    /// keeps its saved shell state in, so another profile's folder, or one
-    /// moved by a variable the guard holds no value for, is covered. Lower
-    /// case.
-    Dir(String),
 }
 
 /// The class, resolved once for one evaluation.
@@ -288,13 +258,11 @@ impl Class {
     #[must_use]
     pub(crate) fn new(env: &StartupEnv) -> Self {
         // Names a reader of the code may meet without the directory part.
-        let mut class = Self::from_paths(
+        Self::from_paths(
             &actions::table().startup_paths,
             env,
             &["config.fish", "profile.ps1"],
-        );
-        saved_state::extend_class(&mut class, env);
-        class
+        )
     }
 
     /// The default user and system git configuration files
@@ -446,7 +414,6 @@ impl Class {
             Entry::Name(name) => {
                 (reading.rsplit('/').next() == Some(name.as_str())).then(|| name.clone())
             }
-            Entry::Dir(name) => saved_state::dir_named(reading, name).then(|| name.clone()),
         })
     }
 
@@ -474,7 +441,7 @@ impl Class {
                 .iter()
                 .any(|entry| match entry {
                     Entry::At { readings, .. } => readings.iter().any(|p| p.starts_with(&below)),
-                    Entry::Name(_) | Entry::Dir(_) => false,
+                    Entry::Name(_) => false,
                 })
                 .then(|| shown(path))
         })
@@ -492,8 +459,7 @@ impl Class {
             .iter()
             .filter_map(|entry| match entry {
                 Entry::Name(name) => Some(name.as_str()),
-                Entry::Dir(name) if !name.contains('/') => Some(name.as_str()),
-                Entry::At { .. } | Entry::Dir(_) => None,
+                Entry::At { .. } => None,
             })
             .collect();
         let named = |name: &std::ffi::OsStr| {
@@ -556,7 +522,6 @@ impl Class {
                 .iter()
                 .any(|p| p.trim_end_matches('/').rsplit('/').next() == Some(name.as_str())),
             Entry::Name(n) => n.to_lowercase() == name,
-            Entry::Dir(n) => !n.contains('/') && n.to_lowercase() == name,
         })
     }
 
@@ -3518,8 +3483,8 @@ pub fn class_target(path: &Path, env: &StartupEnv) -> Option<String> {
     Class::new(env).target(path)
 }
 
-/// The saved shell state's removals, copies, moves and extractions, judged
-/// in a pass of their own after every other finding (TSK-1461).
+/// The saved shell state's removals, copies, moves, extractions and writes,
+/// judged in a pass of their own after every other finding (TSK-1461).
 #[path = "saved_state.rs"]
 pub(crate) mod saved_state;
 

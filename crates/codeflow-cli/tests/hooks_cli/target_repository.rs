@@ -2805,6 +2805,73 @@ fn shell_reading_levels_keep_guard_verdicts() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+// TSK-1461: the built hooks read the saved shell state's locations from the
+// environment the harness gives them, and both refuse a write there.
+#[cfg(unix)]
+#[test]
+fn saved_shell_state_writes_refuse_from_the_hook_environment() {
+    let f = Fixture::new();
+    let home = f.temp.path();
+    let elsewhere = home.join("elsewhere");
+    let rows: Vec<(Option<(&str, PathBuf)>, String)> = vec![
+        (None, "~/.claude/session-env/abc/hook.sh".to_string()),
+        (None, "~/.codex/shell_snapshots/s.sh".to_string()),
+        (
+            Some(("CLAUDE_CONFIG_DIR", elsewhere.join("claude"))),
+            "\"$CLAUDE_CONFIG_DIR/shell-snapshots/snapshot-zsh-1.sh\"".to_string(),
+        ),
+        (
+            Some(("CODEX_HOME", elsewhere.join("codex"))),
+            shell_path(&elsewhere.join("codex/shell_snapshots/s.sh")),
+        ),
+        (
+            Some(("CLAUDE_ENV_FILE", elsewhere.join("env/hook-1.sh"))),
+            "\"$CLAUDE_ENV_FILE\"".to_string(),
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (var, target) in &rows {
+        for command in [
+            format!("echo 'export PATH=/tmp/x:$PATH' >> {target}"),
+            format!("cp evil.sh {target}"),
+        ] {
+            for hook in ["exec-guard", "git-guard"] {
+                let mut cmd = f.guard_command(&f.linked, hook);
+                for name in [
+                    "CLAUDE_CONFIG_DIR",
+                    "CODEX_HOME",
+                    "CLAUDE_ENV_FILE",
+                    "XDG_CONFIG_HOME",
+                ] {
+                    cmd.env_remove(name);
+                }
+                if let Some((name, value)) = var {
+                    cmd.env(name, value);
+                }
+                let out = run_with_stdin(&mut cmd, &guard_payload(&command, &f.linked));
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2)
+                    || !err.contains("security.shell_startup")
+                    || !err.contains("saved shell state")
+                {
+                    wrong.push(format!("{hook} {var:?} {command}: {err}"));
+                }
+            }
+        }
+    }
+    // The configuration folder beside the saved state stays ordinary.
+    for hook in ["exec-guard", "git-guard"] {
+        let mut cmd = f.guard_command(&f.linked, hook);
+        cmd.env("CLAUDE_CONFIG_DIR", elsewhere.join("claude"));
+        let command = "printf x > \"$CLAUDE_CONFIG_DIR/notes.md\"";
+        let out = run_with_stdin(&mut cmd, &guard_payload(command, &f.linked));
+        if String::from_utf8_lossy(&out.stderr).contains("saved shell state") {
+            wrong.push(format!("{hook} refused: {command}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn repair2_separate_git_directory_container() {
     let f = Fixture::new();

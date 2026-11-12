@@ -214,6 +214,9 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
 /// command it came from. Values are the reader's own: a directory of `""`
 /// is where the line started, a relative one is below it, and a value the
 /// reader cannot prove carries its marker ([`bound_path`] reads them).
+///
+/// An output redirection is a record of its own, with `redirect` set and the
+/// file it writes as the only word of `argv`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Bound {
     pub argv: Vec<String>,
@@ -225,6 +228,8 @@ pub(super) struct Bound {
     /// Set when the line assigns `HOME` before the run, so `~` names a
     /// home the check does not hold.
     pub home_assigned: bool,
+    /// Set for an output redirection: `argv` holds the one file it writes.
+    pub redirect: bool,
 }
 
 /// Every command a line runs, read once ([`bound_commands_in`]).
@@ -334,6 +339,20 @@ pub(super) fn bound_path(cwd: &str, operand: &str) -> Option<String> {
     }
     let path = resolve(cwd, operand).ok()?;
     (unproven(&path).is_none() && !path.contains(['$', '`'])).then_some(path)
+}
+
+/// Whether a redirection with operator `op` and target `target` writes a
+/// file: `>`, `>>`, `>|`, `<>`, `&>` and `&>>`, and `>&` with a target that
+/// is not a descriptor (`2>&1`, `>&-`).
+fn writes_file(op: &str, target: &Word) -> bool {
+    match op {
+        ">" | ">>" | ">|" | "<>" | "&>" | "&>>" => true,
+        ">&" => !matches!(
+            target.parts.as_slice(),
+            [Part::Lit { text, .. }] if text == "-" || text.chars().all(|c| c.is_ascii_digit())
+        ),
+        _ => false,
+    }
 }
 
 /// The start points a `find` call removes: each start, or `.`, when its
@@ -4786,6 +4805,7 @@ impl Reader<'_> {
     /// A redirection's target is expanded in this shell, and so is an
     /// unquoted heredoc's body.
     fn redirect_effects(&mut self, redirs: &[Redir], st: &mut State) {
+        self.collect_redirects(redirs, st);
         for redir in redirs {
             if let Some(target) = &redir.target {
                 self.part_effects(&target.parts, st);
@@ -4793,6 +4813,56 @@ impl Reader<'_> {
             if let (Some(body), true) = (&redir.body, redir.expand) {
                 self.part_effects(&heredoc_word(body).parts, st);
             }
+        }
+    }
+
+    /// For a collection ([`bound_commands_in`]), the files the output
+    /// redirections in `redirs` write, each redirection its own call: every
+    /// value its target may take, in every directory the line may be in. A
+    /// target with a substitution, or one that splits into several words, is
+    /// recorded as a value the reader cannot prove, so it binds nothing.
+    fn collect_redirects(&mut self, redirs: &[Redir], st: &State) {
+        if !collecting() {
+            return;
+        }
+        for redir in redirs {
+            let Some(target) = &redir.target else {
+                continue;
+            };
+            if !writes_file(&redir.op, target) {
+                continue;
+            }
+            let plain = target.parts.iter().all(|part| match part {
+                Part::Lit { .. } | Part::Tilde(_) | Part::Opaque { .. } => true,
+                Part::Param { op, index, .. } => op.is_none() && index.is_none(),
+                _ => false,
+            });
+            let values: Vec<String> = if plain {
+                self.fields(target, st)
+                    .into_iter()
+                    .map(|fields| match fields.as_slice() {
+                        [one] => one.clone(),
+                        _ => taint(why::MANY),
+                    })
+                    .collect()
+            } else {
+                vec![taint(why::OUTPUT)]
+            };
+            COLLECT.with(|c| {
+                if let Some(collect) = c.borrow_mut().as_mut() {
+                    collect.calls += 1;
+                    let call = collect.calls;
+                    for value in values {
+                        collect.commands.push(Bound {
+                            argv: vec![value],
+                            dirs: st.cwd.iter().cloned().collect(),
+                            call,
+                            home_assigned: st.vars.contains_key("HOME"),
+                            redirect: true,
+                        });
+                    }
+                }
+            });
         }
     }
 
@@ -5097,6 +5167,7 @@ impl Reader<'_> {
                     dirs: st.cwd.iter().cloned().collect(),
                     call: collect.call,
                     home_assigned: st.vars.contains_key("HOME"),
+                    redirect: false,
                 });
             }
         });

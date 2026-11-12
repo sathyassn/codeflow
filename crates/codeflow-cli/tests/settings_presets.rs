@@ -606,12 +606,13 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             "{name}: the sandbox may add only the cf-present state directory and the gate's lock directory as write roots"
         );
         // The write denies are the enforcement paths (TSK-397 design D,
-        // H-4), the shell startup class and the default git configuration
-        // files (TSK-242).
+        // H-4), the shell startup class, the saved shell state (TSK-1461)
+        // and the default git configuration files (TSK-242).
         let table = actions::table();
         // The generator appends what a preset lacks, so the entries the
         // presets already carried come first.
         let mut denied = table.startup_paths.sandbox_write_denies();
+        denied.extend(table.saved_state_paths.sandbox_write_denies());
         denied.extend(table.git_config_paths.sandbox_write_denies());
         denied.extend(
             table
@@ -622,7 +623,7 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
         assert_eq!(
             value["sandbox"]["filesystem"]["denyWrite"],
             serde_json::json!(denied),
-            "{name}: the sandbox denies writes only to the enforcement paths, the shell startup class and the default git configuration files"
+            "{name}: the sandbox denies writes only to the enforcement paths, the shell startup class, the saved shell state and the default git configuration files"
         );
     }
 }
@@ -1192,6 +1193,7 @@ fn the_generator_reproduces_the_reference_samples() {
         let mut generated = read_json(&evidence(&format!("current/{name}")));
         table.apply_to_claude_preset(&mut generated);
         let mut startup = table.startup_paths.claude_edit_denies();
+        startup.extend(table.saved_state_paths.claude_edit_denies());
         startup.extend(table.git_config_paths.claude_edit_denies());
         let deny = generated["permissions"]["deny"].as_array_mut().unwrap();
         deny.retain(|rule| !startup.iter().any(|s| rule == s));
