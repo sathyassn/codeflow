@@ -1,0 +1,11 @@
+id = "SPC-016"
+uid = "5e33d9cd-40df-41d9-8de2-851bfeada033"
+kind = "SPC"
+title = "Delivery system for parallel agents"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T18:53:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
