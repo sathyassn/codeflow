@@ -1,0 +1,11 @@
+id = "TSK-1447"
+uid = "4cf44315-a124-4270-b024-88c77016f387"
+kind = "TSK"
+title = "Tests give the same results when cargo runs from outside the repository"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:00:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
