@@ -9,30 +9,34 @@
 //! names: the variables the hook inherits from the session that runs it.
 //! They are not part of the startup class, whose readers stay as they were.
 //!
-//! The pass ([`evaluate`]) reads the line once with the deletion check's
-//! reader ([`crate::security::deletion::bound_commands_in`]), which keeps
-//! the working directory per command (a subshell's `cd` stays in the
-//! subshell), and judges what each command does to a location: a removal or
-//! move of it or of a folder above it, a copy, move, link or extraction
-//! into it, a redirect or a program that writes it, and an extraction into a
-//! folder above it, whose members the guard cannot see.
+//! Two runs judge a line. The first ([`readings`]) is the startup check's
+//! own judge run a second time, over a class built from the locations: it
+//! reads every form that check reads a write by, and where it cannot tell
+//! what a command writes it refuses when the command names a location or
+//! runs in a folder that holds one, so it fails closed. The startup check's
+//! own class is judged as before.
 //!
-//! A target is compared with each location by file identity (device and
-//! inode) along the walk the kernel makes to it, links and `..` included,
-//! so a link before the last component, a case variant or a folder reached
-//! through `cd` to a link is the same node. A node that does not exist yet,
-//! and every node on a system without these identities, is compared by its
-//! readings: as written and as reached through links. A location the guard
-//! cannot read is compared by its readings too, so it fails closed.
+//! The second ([`evaluate`]) adds only what the first did not find. It
+//! reads the line with the deletion check's reader
+//! ([`crate::security::deletion::bound_commands_in`]), which keeps the
+//! working directory per command (a subshell's `cd` stays in the subshell),
+//! and judges what each command does to a location: a removal or move of
+//! it, of a folder above it or of a link on the way to it, a copy, move,
+//! link or extraction into it, a link made to it, a redirect or a program
+//! that writes it, and an extraction into a folder above it, whose members
+//! the guard cannot see.
 //!
-//! - every reading of the command (each directory it may run in, each
-//!   program a variable may name) must refuse, or the pass adds nothing;
-//! - a target it cannot resolve (an unknown directory, a variable it does
-//!   not hold, a glob it cannot list, a line it did not read to the end)
-//!   adds nothing, and the other checks' judgment stands.
+//! The second run compares a target with each location by file identity
+//! (device and inode) along the walk the kernel makes to it, links and `..`
+//! included, so a link before the last component, a case variant or a
+//! folder reached through `cd` to a link is the same node. A node that does
+//! not exist yet, and every node on a system without these identities, is
+//! compared by its readings: as written and as reached through links. A
+//! location the guard cannot read is compared by its readings too, so it
+//! fails closed.
 //!
-//! Its findings come after every other finding of the call, so they never
-//! change what another rule reports.
+//! The findings of both runs come after every other finding of the call,
+//! so they never change what another rule reports.
 
 use std::cell::{OnceCell, RefCell};
 use std::ffi::OsString;
@@ -342,6 +346,40 @@ const COPY_WAY: &str = "copy into a named sub-folder that holds no saved shell s
 /// plain, unquoted paths.
 const CD_WAY: &str = "run `cd` alone with a plain unquoted path, or name the file in a call that does not run other programs there";
 
+/// Phrases of the startup check that name a location rather than say what
+/// is written or placed there; in them a folder is called a location.
+const NAMING_PHRASES: &[&str] = &[
+    "targets the saved shell state file `",
+    "names the saved shell state file `",
+    "could name the saved shell state file `",
+    "searches the saved shell state file `",
+];
+
+/// `message` with a location that is a folder called a location where the
+/// message names it, `files` being the labels and spellings of the
+/// locations that are files. What is written or placed stays a file.
+fn located(message: &str, files: &[String]) -> String {
+    let mut out = message.to_string();
+    for phrase in NAMING_PHRASES {
+        let Some(at) = out.find(phrase) else {
+            continue;
+        };
+        let named = out[at + phrase.len()..].split('`').next().unwrap_or("");
+        if !files.iter().any(|file| file == named) {
+            let fixed = phrase.replace(" file `", " location `");
+            out.replace_range(at..at + phrase.len(), &fixed);
+        }
+    }
+    out.replace(
+        "names a saved shell state file",
+        "names a saved shell state location",
+    )
+    .replace(
+        "above saved shell state files",
+        "above saved shell state locations",
+    )
+}
+
 /// Words of a refusal of the startup check that mean the command acts
 /// near saved state rather than on a location it names.
 const NEAR_MARKS: &[&str] = &[
@@ -364,6 +402,11 @@ pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
     let line = plain_redirects(command);
     let expanded = expand_commands_read(&line);
     let class = readings_class(env);
+    let files: Vec<String> = spots(env)
+        .into_iter()
+        .filter(|(_, _, dir)| !dir)
+        .flat_map(|(label, path, _)| [label, key(&lexical(&path))])
+        .collect();
     judge_class(
         &line,
         cwd,
@@ -375,6 +418,7 @@ pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
     )
     .into_iter()
     .map(|mut finding| {
+        finding.message = located(&finding.message, &files);
         let message = &finding.message;
         let way = if message.contains(" copies the contents of ")
             || message.contains(" puts the tree ")

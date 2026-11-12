@@ -1012,26 +1012,32 @@ fn saved_state_writes_refuse_through_both_hooks() {
     std::fs::write(f.project.join("evil.sh"), "x").unwrap();
     let mut wrong = Vec::new();
     for (places, target, label) in &rows {
+        // A message that names a folder calls it a location.
+        let named = if label == "$CLAUDE_ENV_FILE" {
+            "file"
+        } else {
+            "location"
+        };
         for (command, message) in [
             (
                 format!("echo 'export PATH=/tmp/x:$PATH' >> {target}"),
-                format!("a redirect writes the saved shell state location `{label}`"),
+                format!("a redirect writes the saved shell state file `{label}`"),
             ),
             (
                 format!("tee -a {target} < /dev/null"),
-                format!("`tee` targets the saved shell state location `{label}`"),
+                format!("`tee` targets the saved shell state {named} `{label}`"),
             ),
             (
                 format!("cp evil.sh {target}"),
-                format!("`cp` writes the saved shell state location `{label}`"),
+                format!("`cp` writes the saved shell state file `{label}`"),
             ),
             (
                 format!("mv evil.sh {target}"),
-                format!("`mv` writes the saved shell state location `{label}`"),
+                format!("`mv` writes the saved shell state file `{label}`"),
             ),
             (
                 format!("ln -sf /tmp/evil.sh {target}"),
-                format!("`ln` writes the saved shell state location `{label}`"),
+                format!("`ln` writes the saved shell state file `{label}`"),
             ),
         ] {
             both_hooks(&f, places, &command, &[message], &mut wrong);
@@ -1063,7 +1069,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
     let forms: Vec<(String, String)> = vec![
         (
             format!("echo x > {l}/h"),
-            format!("a redirect writes the saved shell state location `{label}`"),
+            format!("a redirect writes the saved shell state file `{label}`"),
         ),
         (
             format!("dd of={l}/h"),
@@ -1075,7 +1081,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("cp e {l}/h"),
-            format!("`cp` writes the saved shell state location `{label}`"),
+            format!("`cp` writes the saved shell state file `{label}`"),
         ),
         (
             format!("ln {l}/h a"),
@@ -1083,7 +1089,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("cp --parents e {l}/h"),
-            format!("`cp` writes the saved shell state location `{label}`"),
+            format!("`cp` writes the saved shell state file `{label}`"),
         ),
         (
             format!("find . -fprint {l}/h"),
@@ -1099,12 +1105,12 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("wget -P {l} https://example.test/x"),
-            format!("`wget` runs in `{l}`, where it can place a saved shell state location it does not name; {near}"),
+            format!("`wget` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
         ),
         // The working directory alone, with no `cd` on the line.
         (
             format!("env -C {l} curl -O https://example.test/x"),
-            format!("`curl` runs in `{l}`, where it can place a saved shell state location it does not name; {near}"),
+            format!("`curl` runs in `{l}`, where it can place a saved shell state file it does not name; {near}"),
         ),
         (
             format!("cd {l} && ls"),
@@ -1120,7 +1126,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("cp e {p}/*/h"),
-            format!("`cp` writes the saved shell state location `{label}`"),
+            format!("`cp` writes the saved shell state file `{label}`"),
         ),
         // The program the variable names is judged as a command of its
         // own too, so this row gives two findings.
@@ -1134,15 +1140,15 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("echo x >! {l}/h"),
-            format!("a redirect writes the saved shell state location `{label}`"),
+            format!("a redirect writes the saved shell state file `{label}`"),
         ),
         (
             format!("echo x >>! {l}/h"),
-            format!("a redirect writes the saved shell state location `{label}`"),
+            format!("a redirect writes the saved shell state file `{label}`"),
         ),
         (
             format!("echo x >>| {l}/h"),
-            format!("a redirect writes the saved shell state location `{label}`"),
+            format!("a redirect writes the saved shell state file `{label}`"),
         ),
         (
             format!("rm -rf {p}"),
@@ -1154,23 +1160,23 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("cp -r s/. {p}/"),
-            format!("`cp` copies the contents of `s/.` into `{p}/`, where saved shell state locations live; copy into a named sub-folder that holds no saved shell state"),
+            format!("`cp` copies the contents of `s/.` into `{p}/`, where saved shell state files live; copy into a named sub-folder that holds no saved shell state"),
         ),
         (
             format!("wget -P {p} https://example.test/x"),
-            format!("`wget` writes into `{p}`, where it can place a saved shell state location it does not name; {near}"),
+            format!("`wget` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
         ),
         (
             format!("cd {p} && tar xf a.tar"),
-            format!("`tar` runs in `{p}`, where it can place a saved shell state location it does not name; {near}"),
+            format!("`tar` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
         ),
         (
             format!("cd {p} && patch -p1 < fix.diff"),
-            format!("`patch` runs in `{p}`, where it can place a saved shell state location it does not name; {near}"),
+            format!("`patch` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
         ),
         (
             format!("find {p} -name x -exec chmod 600 {{}} +"),
-            format!("`find` writes into `{p}`, where it can place a saved shell state location it does not name; {near}"),
+            format!("`find` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
         ),
     ];
     // A row with no command adds a finding to the row before it.
@@ -1197,7 +1203,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
         &places,
         "echo x > $CLAUDE_CONFIG_DIR/session-env/h",
         &[
-            "a redirect writes the saved shell state location `$CLAUDE_CONFIG_DIR/session-env`"
+            "a redirect writes the saved shell state file `$CLAUDE_CONFIG_DIR/session-env`"
                 .to_string(),
         ],
         &mut wrong,
@@ -1272,7 +1278,7 @@ fn links_and_unread_sources_refuse_through_both_hooks() {
         ),
         (
             format!("mkdir -p s2/x && cp -r s2/. {p}/"),
-            vec![format!("`cp` copies the contents of `s2/.` into `{p}/`, where saved shell state locations live; copy into a named sub-folder that holds no saved shell state")],
+            vec![format!("`cp` copies the contents of `s2/.` into `{p}/`, where saved shell state files live; copy into a named sub-folder that holds no saved shell state")],
         ),
         (
             "mytool lnk/h".to_string(),
