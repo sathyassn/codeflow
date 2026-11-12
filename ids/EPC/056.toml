@@ -1,0 +1,11 @@
+id = "EPC-056"
+uid = "2ba00cbe-914c-48b5-8311-85470d7fb017"
+kind = "EPC"
+title = "Planning derives the epic graph and states what each landing leaves on main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:56:08Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
