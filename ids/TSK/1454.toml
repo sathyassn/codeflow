@@ -1,0 +1,11 @@
+id = "TSK-1454"
+uid = "912bf4da-9db9-4aff-b64d-ca8f68f08a81"
+kind = "TSK"
+title = "The guards place a Windows shell's folders where the shell opens them"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:02:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
