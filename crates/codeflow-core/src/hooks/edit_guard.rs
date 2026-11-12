@@ -63,9 +63,10 @@ pub fn parse_payload(input: &str) -> Result<Option<EditRequest>, EditError> {
         .and_then(Value::as_str)
         .ok_or_else(|| EditError("tool_name must be a string".into()))?;
     // `MultiEdit` and `NotebookEdit` are the other Claude Code tools that
-    // write a file. The shipped hook entries do not send them to this guard
-    // (they match `Edit` and `Write` only); a settings file that does gets the
-    // same check as `Edit`, as defence in depth.
+    // write a file. The shipped hook entries send all four Claude tools
+    // (`Edit`, `MultiEdit`, `Write` and `NotebookEdit`) to this guard; an
+    // older settings file that sends fewer is reported by doctor, and a call
+    // that reaches the guard under any of the four names gets the same check.
     if !matches!(
         tool,
         "apply_patch"
