@@ -16,6 +16,9 @@ mod checkout_identity;
 mod host_isolation;
 use host_isolation::{git_command, isolate_clone, isolate_git};
 
+#[path = "hooks_cli/install_path.rs"]
+mod install_path;
+
 #[path = "hooks_cli/path_writers.rs"]
 mod path_writers;
 
