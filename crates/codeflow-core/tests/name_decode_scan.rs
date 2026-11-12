@@ -132,6 +132,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // Each component of an operand path is decoded only to test it for the ASCII glob characters, which a replaced byte never adds or removes; the components themselves are kept as bytes.
+    (
+        "codeflow-core/src/security/saved_state.rs",
+        "Pass::paths",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
     // The file name of a Path made from a command word, which is valid UTF-8 text, so the decode never replaces a byte; it is joined back onto the destination word to judge where the copy lands.
     (
         "codeflow-core/src/security/startup.rs",
@@ -1924,6 +1932,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_start_matches",
         2,
         "grammar:sed-script",
+    ),
+    // The root's metadata only adds the root's identity to a walked chain, and no location is the root, so a failure leaves each folder below with its own identity; the end of a path ending in `.` or `..` is unread on any error other than not found, and a path with no identity is compared by its readings.
+    (
+        "crates/codeflow-core/src/security/saved_state.rs",
+        "walk",
+        "obtain-absent:metadata",
+        2,
+        "unproven",
     ),
     // A stat line that is not text returns None, and linux_group_holds_only_exited_members returns Ok(false), so it never proves the browser group exited.
     (
@@ -7064,6 +7080,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/bounded_file/confined/windows.rs", "check", "is_file", 1, "Type check on a held handle's metadata, obtained with its error propagated; a non-file non-directory returns invalid()."),
     ("crates/codeflow-core/src/delegate.rs", "inspect_continuations", "ErrorKind::NotFound", 1, "The turn directory is validated as a real private directory before this call, so a leaf that is not found is proven absence."),
     ("crates/codeflow-core/src/security/startup.rs", "Class::reaches_below", "is_dir", 2, "Type checks on metadata from metadata_optional, whose error refuses and whose proven absence alone reaches nothing, and on a directory entry's file_type, whose error refuses; they only choose between judging a file root by name and walking a directory (TSK-380)."),
+    ("crates/codeflow-core/src/security/saved_state.rs", "walk", "is_dir", 1, "Type check on symlink_metadata that succeeded; below a non-directory the rest of the path is kept as written and compared by its readings, and every other error marks the path unread."),
+    ("crates/codeflow-core/src/security/saved_state.rs", "walk", "ErrorKind::NotFound", 2, "The walk stats each component in order from the root, so a component that is not found lies beneath one that resolved as a directory; the missing suffix is kept as written and compared by its readings. A path ending in `.` or `..` whose folder is not found has no identity and is compared by its readings. Every other error marks the path unread."),
+    ("crates/codeflow-core/src/security/saved_state.rs", "Pass::copy", "is_dir", 1, "Only chooses whether a copy's destination is a folder the source lands in; an error reads as not a folder, so the destination itself is compared. The hook stats as the user the command runs as, so a destination it cannot stat is one the copy cannot place a name below either."),
+    ("crates/codeflow-core/src/security/saved_state.rs", "Pass::may_be_tree", "is_dir", 1, "Type check on symlink_metadata of a copy source; a directory, and any error other than not found, reads as a tree, the reading that also compares the folders above saved shell state."),
+    ("crates/codeflow-core/src/security/saved_state.rs", "Pass::may_be_tree", "ErrorKind::NotFound", 1, "A copy source that is not found is judged as a file, compared where it lands; any other error reads as a tree, the reading that also compares the folders above saved shell state."),
     ("crates/codeflow-core/src/security/arguments.rs", "execdir_dirs", "is_dir", 1, "Type check on a directory entry's file_type obtained with its error read as not-a-directory; it only decides whether the walk descends, and a name it cannot read already keeps the directory as a run location, so a mis-read never clears one (TSK-302)."),
     ("crates/codeflow-core/src/security/arguments.rs", "passes", "is_dir", 1, "Type check on an entry's file_type that only answers a find -type test; the type is None when it could not be read, and the test then passes, so the entry stays a candidate (TSK-302)."),
     ("crates/codeflow-core/src/security/arguments.rs", "passes", "is_file", 1, "Type check on an entry's file_type that only answers a find -type test; the type is None when it could not be read, and the test then passes, so the entry stays a candidate (TSK-302)."),
