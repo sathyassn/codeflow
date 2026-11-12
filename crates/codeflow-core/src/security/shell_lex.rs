@@ -163,25 +163,6 @@ pub(crate) fn skip_leading(words: &[String], taker: Taker) -> usize {
         .count()
 }
 
-/// The words a brace list in `word` becomes, for a word with one list of
-/// two or more items and no other brace: `a{b,c}d` is `abd` and `acd`.
-/// `None` for any other word.
-pub(crate) fn brace_words(word: &str) -> Option<Vec<String>> {
-    let open = word.find('{')?;
-    let close = open + word[open..].find('}')?;
-    let (before, inner, after) = (&word[..open], &word[open + 1..close], &word[close + 1..]);
-    if !inner.contains(',') || inner.contains('{') || after.contains(['{', '}']) || before.contains('}')
-    {
-        return None;
-    }
-    Some(
-        inner
-            .split(',')
-            .map(|item| format!("{before}{item}{after}"))
-            .collect(),
-    )
-}
-
 /// A lexed line.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Lexed {

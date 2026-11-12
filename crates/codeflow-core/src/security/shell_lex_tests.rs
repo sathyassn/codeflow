@@ -3,7 +3,7 @@
 //! where another guard check would still refuse the whole line (security
 //! review SR6-4).
 
-use super::{brace_words, leading_word, lex, skip_leading, LeadingWord, Taker, Token};
+use super::{leading_word, lex, skip_leading, LeadingWord, Taker, Token};
 use crate::security::outward::{read_line, LEXER_LAUNCHERS, MODELED_LAUNCHERS};
 
 /// TSK-1456: the one decision on a word in front of a command. Only an
@@ -41,23 +41,6 @@ fn leading_words_skip_only_assignments() {
     assert_eq!(skip_leading(&words, Taker::Shell), 2);
     assert_eq!(skip_leading(&words, Taker::Env), 2);
     assert_eq!(skip_leading(&words[2..], Taker::Shell), 0);
-}
-
-/// TSK-1456: a word with one brace list reads as its words; any other
-/// brace shape is not read.
-#[test]
-fn brace_words_read_one_list() {
-    assert_eq!(
-        brace_words("{X=1,git}"),
-        Some(vec!["X=1".to_string(), "git".to_string()])
-    );
-    assert_eq!(
-        brace_words("a{b,,c}d"),
-        Some(vec!["abd".to_string(), "ad".to_string(), "acd".to_string()])
-    );
-    for word in ["{a}", "{a,{b,c}}", "{a,b}{c,d}", "}{a,b}", "a=b", "{a..c}"] {
-        assert_eq!(brace_words(word), None, "{word}");
-    }
 }
 
 fn word(line: &str, command: usize, at: usize) -> Token {

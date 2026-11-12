@@ -7320,12 +7320,19 @@ fn expand_segments(
         bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
         let mut words = toks;
         strip_reserved_words(&mut words);
-        if let Some((program, _)) = strip_launchers(&words) {
+        if let Some((at, taker)) = launched_at(&words) {
+            let program = words[at].as_str();
             if expands(program) {
                 if literals.resolves(program) {
                     bodies.push(literals.fill_words(&words));
                 } else {
                     out.unread_commands.push(program.to_string());
+                }
+            }
+            if leading_word(program, taker) == LeadingWord::Unplaced {
+                match other_readings(&words, at) {
+                    Some(readings) => bodies.extend(readings),
+                    None => out.unread_commands.push(program.to_string()),
                 }
             }
         }
@@ -7350,6 +7357,29 @@ fn expand_segments(
             expand_segments(inner, out, depth + 1, literals, git_bodies);
         }
     }
+}
+
+/// The other readings of a command whose word at `at` is
+/// [`LeadingWord::Unplaced`], as shell text (TSK-1456): the command with
+/// that word read as an assignment, so left out, and, when the word holds
+/// braces, with the word read as the words brace expansion makes of it
+/// ([`brace_expand`]). The reading with the word as the program is the
+/// segment itself, so every reading is judged. `None` when the braces are
+/// past what the guard reads, so the word stays unread.
+pub(crate) fn other_readings(words: &[String], at: usize) -> Option<Vec<String>> {
+    let mut without = words.to_vec();
+    let word = without.remove(at);
+    let mut readings = vec![quote_words(&without)];
+    if word.contains('{') {
+        let list = brace_expand(&word)?;
+        if list.len() > 1 {
+            let mut listed = words[..at].to_vec();
+            listed.extend(list);
+            listed.extend_from_slice(&words[at + 1..]);
+            readings.push(quote_words(&listed));
+        }
+    }
+    Some(readings)
 }
 
 /// Whether the shell fills in part of `word` at run time: a `$`, a
@@ -16888,6 +16918,61 @@ mod tests {
             Some("tee")
         );
         assert_eq!(launcher_effects(&tokens), (vec![".git"], None));
+    }
+
+    /// TSK-1456: a word in front of the program that may be read either way
+    /// stays the program of its own segment, and each other reading is a
+    /// segment of its own; an assignment adds none.
+    #[test]
+    fn leading_words_add_every_reading_as_a_command() {
+        let read = |line: &str| -> Vec<Vec<String>> {
+            expand_commands(line)
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        };
+        let words = |line: &str| command_argv(line);
+        for (line, readings) in [
+            (
+                "X+=1 git push --force origin main",
+                vec!["git push --force origin main"],
+            ),
+            (
+                "A=1 a[0]=1 claude -p x",
+                vec!["A=1 claude -p x"],
+            ),
+            (
+                "env X[0]=1 git push",
+                vec!["env git push"],
+            ),
+            (
+                "nohup X+=1 Y+=2 claude -p x",
+                vec!["nohup Y+=2 claude -p x", "nohup claude -p x"],
+            ),
+            (
+                "env {X=1,git} push --force origin main",
+                vec![
+                    "env push --force origin main",
+                    "env X=1 git push --force origin main",
+                ],
+            ),
+        ] {
+            let segments = read(line);
+            assert_eq!(segments[0], words(line), "{line}");
+            for reading in readings {
+                assert!(segments.contains(&words(reading)), "{line}: {segments:?}");
+            }
+        }
+        for line in [
+            "FOO=1 git status",
+            "A=b=c git status",
+            "/tmp/a=b/git push origin task/x",
+            "'=git' x",
+            "git commit -m a=b",
+            "make CC=gcc",
+        ] {
+            assert_eq!(read(line), vec![words(line)], "{line}");
+        }
     }
 
     /// TSK-1002 review 02: env's split string is read by env's grammar into
