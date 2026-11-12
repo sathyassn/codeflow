@@ -32,7 +32,7 @@
 use super::headless::{basename, shell_command_string};
 use super::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SHELLS, SUPPLIERS};
 use crate::hooks::git_guard::{
-    command_argv_literal, expand_commands, strip_launchers, strip_reserved_words,
+    command_argv_literal, expand_commands, shell_blank, strip_launchers, strip_reserved_words,
 };
 
 /// The binary's program name.
@@ -308,7 +308,7 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
                 in_argument: false,
             });
         }
-        if at > 0 && word.contains(char::is_whitespace) {
+        if at > 0 && word.contains(shell_blank) {
             if let Some(run) = in_value(word, depth) {
                 return Found::Run(run);
             }
@@ -335,7 +335,10 @@ fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool) -> Foun
                 None => continue,
             },
         };
-        let first = value.split_whitespace().next().unwrap_or(value);
+        let first = value
+            .split(shell_blank)
+            .find(|part| !part.is_empty())
+            .unwrap_or(value);
         if !written(value_at) || basename(first) == BINARY {
             return Found::Run(InstallRun {
                 form: "codeflow with a supplied verb",
