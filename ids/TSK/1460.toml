@@ -1,0 +1,11 @@
+id = "TSK-1460"
+uid = "dfff602a-2265-4556-b436-e374ae2a96f4"
+kind = "TSK"
+title = "The guards judge every command a started program can be sent"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:04:38Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
