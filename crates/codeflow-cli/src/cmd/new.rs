@@ -99,7 +99,11 @@ pub struct StatusDetails {
     /// `journey`, `not_verified`, `follow_ups` and `verdict`. A task that
     /// lands on a `whole-epic` epic's line with no pull request also needs
     /// `built_by` (the one lineage that built it), and `reduced_assurance`
-    /// when its reviewer is of that lineage.
+    /// when its reviewer is of that lineage: one item for each other
+    /// lineage, separated by `;`, each its lineage id, then `unavailable`,
+    /// then any text, for example `codex unavailable, weekly limit at
+    /// 14:32; grok unavailable, no seat`. The form is checked; its truth is
+    /// not, since the agents under review write it.
     #[arg(long, value_name = "FILE")]
     pub acceptance: Option<PathBuf>,
 }
