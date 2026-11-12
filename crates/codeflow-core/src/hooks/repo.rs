@@ -1349,8 +1349,8 @@ fn sibling_facts(admin: &Path, root: &Path) -> Option<PathBuf> {
 fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
-    // No link is followed and no special file is read: a symlink, a fifo or
-    // a device in any of these places keeps the full open.
+    // Only regular files and directories are read here, and no link is
+    // followed; anything else keeps the full open.
     let regular = |path: &Path| {
         std::fs::symlink_metadata(path)
             .ok()
