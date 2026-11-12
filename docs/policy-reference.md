@@ -2201,7 +2201,8 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     here too. Where it cannot tell what a command writes, it refuses when
     the command names a location or runs in a folder that holds one. A
     zsh flag, modifier or subscript on a variable whose value is or holds
-    a location fails closed, since the guard does not compute the result.
+    a location fails closed, since the guard does not compute the result,
+    whatever other variables the same word changes.
   - A second run adds what the first did not find. It judges a target in
     the directory its command runs in and compares it with each location
     by the node it reaches on disk, links and `..` included. A folder of
@@ -2245,8 +2246,8 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     that can change the work tree, such as `checkout`, `pull`, `merge`,
     `switch`, `rebase`, `reset`, `restore`, `stash`, `cherry-pick` and
     `clone`; `git` commands that only read, or that keep the work tree, run.
-    So do `find -exec` and a redirect to a name the guard cannot resolve.
-    A project's own `.claude/` folder never counts. No policy key relaxes
+    `find -exec` and a redirect to a name the guard cannot resolve refuse
+    there too. A project's own `.claude/` folder never counts. No policy key relaxes
     this rule. Keep a harness's configuration folder outside the projects
     it works on; `codeflow doctor` says when it is not.
   - An extraction (`tar -x`, `unzip`) refuses when its folder is a

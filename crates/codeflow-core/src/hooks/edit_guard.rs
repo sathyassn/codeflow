@@ -1921,9 +1921,9 @@ mod tests {
     }
 
     /// Saved shell state at its known locations below the home refuses
-    /// through every edit tool that names a file, including the two Claude
-    /// Code tools the shipped hook entries do not send here, whatever the
-    /// integrity level, for a file that does not exist yet too. A folder of
+    /// through every edit tool that names a file, all four Claude Code tools
+    /// the shipped hook entries send here included, whatever the integrity
+    /// level, for a file that does not exist yet too. A folder of
     /// the user's own named like a saved-state folder is not one.
     #[test]
     fn saved_state_edits_refuse_through_every_edit_tool() {
