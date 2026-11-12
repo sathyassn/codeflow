@@ -83,7 +83,7 @@ impl Fixture {
             "---\nid: TSK-001\nuid: 7ac5fb7c-f6b2-4bd6-ad39-b8741dd1d31d\ntitle: Selection fixture\nepic_id: null\nstandalone_reason: Gate selection fixture\nstatus: todo\nwork_type: test\nspecs: []\ndepends_on: []\nintegration_target: integration/checks\ncreated: 2026-10-19\n---\n\n# Selection fixture\n\n## Description\n\nVerify the gate against `src/input`.\n\n## Deliverables\n\n- check: `src/input`\n\n## Acceptance Criteria\n\n- AC-1 (journey) The check reads its declared input.\n",
         )
         .unwrap();
-        std::fs::write(dir.join("check.py"), "import pathlib,sys,os\nassert 'broken' not in pathlib.Path(sys.argv[1]).read_text()\nprint('checked '+sys.argv[1])\nif sys.argv[1] == 'src/input': pathlib.Path('target/check-output').write_text(pathlib.Path(sys.argv[1]).read_text())\nif 'SELECTION_MARKER' in os.environ:\n print('Summary '+os.environ['SELECTION_MARKER'])\n print('Summary '+os.environ['SELECTION_MARKER'],file=sys.stderr)\n pathlib.Path('target/secret-report.xml').write_text('<testsuites><testsuite><testcase name=\"'+os.environ['SELECTION_MARKER']+'\"/></testsuite></testsuites>')\n").unwrap();
+        std::fs::write(dir.join("check.py"), "import pathlib,sys,os\nassert 'broken' not in pathlib.Path(sys.argv[1]).read_text()\nprint('checked '+sys.argv[1])\nif sys.argv[1] == 'src/input': pathlib.Path('target/check-output').write_bytes(pathlib.Path(sys.argv[1]).read_bytes())\nif 'SELECTION_MARKER' in os.environ:\n print('Summary '+os.environ['SELECTION_MARKER'])\n print('Summary '+os.environ['SELECTION_MARKER'],file=sys.stderr)\n pathlib.Path('target/secret-report.xml').write_text('<testsuites><testsuite><testcase name=\"'+os.environ['SELECTION_MARKER']+'\"/></testsuite></testsuites>')\n").unwrap();
         std::fs::write(
             dir.join("probe.py"),
             "import pathlib,sys\nprint(pathlib.Path(sys.argv[1]).read_text())\n",
@@ -1024,4 +1024,143 @@ fn an_explicit_full_comparison_runs_every_target() {
         .unwrap();
     let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(record["complete"], true);
+}
+
+/// TSK-355 AC-1, AC-7 and AC-10 under credit row B (TSK-1044 adopted
+/// no protected recorder): beside the fixture's seeded green full record,
+/// three explicit quick runs at three commits of one tree (the shape of the
+/// recorded `dec65cb133e4` and `d37e55ed86be` pair, chained once more) each
+/// execute every target, name the reason and cite no earlier run. Then a
+/// fourth, after a check starts failing on the same tree, executes it and
+/// fails: a reused passing result would have hidden it.
+#[test]
+fn quick_runs_of_one_tree_reuse_no_earlier_result() {
+    let fixture = Fixture::new(|c| {
+        let command = c["targets"][0]["modes"]["quick"]["command"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        c["targets"][0]["modes"]["quick"]["command"] =
+            json!(format!("{command} && test ! -f target/fail-check"));
+    });
+    let dir = fixture.root.path();
+    let mut runs: Vec<Value> = Vec::new();
+    for round in 0..3 {
+        if round > 0 {
+            git(dir, &["commit", "--allow-empty", "-qm", "test: same tree"]);
+        }
+        let (text, record) = fixture.quick();
+        for target in ["rust-check", "record-check"] {
+            assert!(
+                text.contains(&format!("starting target '{target}'")),
+                "{text}"
+            );
+        }
+        assert!(
+            text.contains("no local run record earns selection credit"),
+            "{text}"
+        );
+        assert_eq!(record["results"].as_array().unwrap().len(), 2);
+        let raw = serde_json::to_string(&record).unwrap();
+        for earlier in &runs {
+            assert_eq!(record["git_tree"], earlier["git_tree"], "one tree");
+            assert_ne!(record["revision"], earlier["revision"], "two commits");
+            let id = earlier["run_id"].as_str().unwrap();
+            assert!(!raw.contains(id), "run {round} names earlier run {id}");
+        }
+        assert!(!raw.contains("reused"), "{raw}");
+        assert_eq!(record["selection"]["skipped"], json!([]));
+        runs.push(record);
+    }
+    // The same tree again, with earlier passing quick records beside it;
+    // the check now fails, and the run executes it and fails.
+    std::fs::write(dir.join("target/fail-check"), "failure").unwrap();
+    git(dir, &["commit", "--allow-empty", "-qm", "test: same tree"]);
+    let output = run(dir, fixture.home.path(), &["test", "--mode", "quick"]);
+    let text = stderr(&output);
+    assert!(
+        !output.status.success(),
+        "a passing result was reused: {text}"
+    );
+    assert!(
+        text.contains("completed target 'rust-check': FAILED"),
+        "{text}"
+    );
+    assert!(
+        text.contains("no local run record earns selection credit"),
+        "{text}"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+}
+
+#[test]
+fn deleted_or_corrupt_producer_output_is_regenerated_before_its_consumer() {
+    let fixture = Fixture::new(|c| {
+        c["execution"]["parallel"] = json!(true);
+        c["execution"]["max_parallel"] = json!(2);
+        c["targets"][0]["outputs"] = json!(["target/check-output"]);
+        c["targets"][1]["requires"] = json!(["rust-check"]);
+        for mode in ["full", "quick"] {
+            let command = c["targets"][1]["modes"][mode]["command"]
+                .as_str()
+                .unwrap()
+                .replace("project-management/tasks/TSK-001.md", "target/check-output");
+            c["targets"][1]["modes"][mode]["command"] = json!(command);
+        }
+        // Listing the consumer first makes the dependency enforce ordering.
+        c["targets"].as_array_mut().unwrap().swap(0, 1);
+    });
+    let output_path = fixture.root.path().join("target/check-output");
+    for corrupt in [false, true] {
+        if corrupt {
+            std::fs::write(&output_path, "broken\n").unwrap();
+        } else {
+            std::fs::remove_file(&output_path).unwrap();
+        }
+        let (text, record) = fixture.quick();
+        let producer = text.find("completed target 'rust-check': passed").unwrap();
+        let consumer = text.find("starting target 'record-check'").unwrap();
+        assert!(producer < consumer, "{text}");
+        assert_eq!(std::fs::read_to_string(&output_path).unwrap(), "good\n");
+        assert_eq!(record["results"].as_array().unwrap().len(), 2);
+        assert_eq!(record["selection"]["skipped"], json!([]));
+    }
+}
+
+#[test]
+fn same_tree_runs_non_content_targets_and_record_only_changes_run_record_checks() {
+    for class in ["history", "remote", "time", "external"] {
+        let fixture = Fixture::new(|c| c["targets"][0]["input_class"] = json!(class));
+        let dir = fixture.root.path();
+        let (_, before) = fixture.quick();
+        git(dir, &["commit", "--allow-empty", "-qm", "test: same tree"]);
+        let (text, after) = fixture.quick();
+        assert_eq!(before["git_tree"], after["git_tree"], "{class}");
+        assert_ne!(before["revision"], after["revision"], "{class}");
+        for target in ["rust-check", "record-check"] {
+            assert!(
+                text.contains(&format!("starting target '{target}'")),
+                "{text}"
+            );
+        }
+        assert_eq!(after["results"].as_array().unwrap().len(), 2);
+        assert_eq!(after["selection"]["skipped"], json!([]));
+
+        // Only the tracked record changes. Its reader must execute and
+        // report the new failure instead of retaining the earlier pass.
+        let path = dir.join("project-management/tasks/TSK-001.md");
+        let mut record = std::fs::read_to_string(&path).unwrap();
+        record.push_str("\nbroken\n");
+        std::fs::write(&path, record).unwrap();
+        git(dir, &["add", "project-management/tasks/TSK-001.md"]);
+        git(dir, &["commit", "-qm", "test: change only the record"]);
+        let output = run(dir, fixture.home.path(), &["test", "--mode", "quick"]);
+        let text = stderr(&output);
+        assert!(!output.status.success(), "{class}: {text}");
+        assert!(
+            text.contains("completed target 'record-check': FAILED"),
+            "{text}"
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+    }
 }

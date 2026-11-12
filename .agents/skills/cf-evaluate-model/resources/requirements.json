@@ -300,7 +300,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "applies `cf-design`, settles",
-            "Codex challenges feasibility"
+            "The cross-family seat challenges feasibility"
           ]
         },
         {
@@ -965,7 +965,7 @@
             "research, analyze, and identify risks in parallel and return their findings before seeing the other's conclusions",
             "Give both seats the same immutable brief; its scope is where each starts.",
             "each seat independently returns its findings",
-            "Codex challenges that plan against its own findings",
+            "challenges that plan against its own findings",
             "There is no second plan and no reconciliation round"
           ]
         }
@@ -989,7 +989,7 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve one named version of the plan and its task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest. A change of responsible primary or reviewer seat or lineage is a reassignment: it is recorded and reviewed by one other-lineage seat (in the batched epic amendment for epic tasks) before the affected work continues and never carries an old approval, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
+      "statement": "The Claude primary and the cross-family seat (Codex preferred; any other family counts) approve one named version of the plan and its task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest. A change of responsible primary or reviewer seat or lineage is a reassignment: it is recorded and reviewed by one other-lineage seat (in the batched epic amendment for epic tasks) before the affected work continues and never carries an old approval, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/plan.md",
@@ -1044,7 +1044,7 @@
           "markers": [
             "**Review is author-relative.**",
             "**The Claude judgment primary owns integrated Claude judgment.**",
-            "Codex supplies independent review",
+            "The cross-family seat supplies independent review",
             "never report that the selected Claude judgment primary reviewed the work",
             "Each actual executor first-verifies its unit",
             "responsible primary inspects, integrates and accepts",
@@ -1150,7 +1150,7 @@
     {
       "id": "CF-MM-015",
       "level": "hard",
-      "statement": "The standing pair is the default floor, not a two-model cap. When a routing-policy extra-family trigger fires and the catalog family is available, the host names it in the plan; its output is evidence, never a silent third vote, and never replaces either standing primary. Unavailable extra family is a recorded limitation.",
+      "statement": "The Claude primary and one cross-family seat, Codex preferred and any other family counting, are the default floor, not a two-model cap. When a routing-policy extra-family trigger fires and the catalog family is available, the host names it in the plan; its output is evidence, never a silent third vote, and never replaces the Claude primary or the cross-family seat. Unavailable extra family is a recorded limitation.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -2417,7 +2417,7 @@
     {
       "id": "CF-SEC-001",
       "level": "hard",
-      "statement": "Security review unions a Claude defender and Codex attacker lens and preserves divergence; the deterministic floor is always mandatory, and loss of the second vendor after its bounded recovery is recorded as reduced assurance naming the missing attacker review, never as a finding or severity, never faked and never silently waived.",
+      "statement": "Security review unions a Claude defender and another family's attacker lens (Codex preferred) and preserves divergence; the deterministic floor is always mandatory, and loss of every other vendor after bounded recovery is recorded as reduced assurance naming the missing attacker review, never as a finding or severity, never faked and never silently waived.",
       "sources": [
         {
           "path": ".claude/agents/cf-security-reviewer.md",
