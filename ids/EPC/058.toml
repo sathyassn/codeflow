@@ -1,0 +1,11 @@
+id = "EPC-058"
+uid = "aad6be23-99af-4c9a-a342-e6ae3f371b1d"
+kind = "EPC"
+title = "Host-state tools work through narrow routes in every shipped preset"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T20:14:54Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
