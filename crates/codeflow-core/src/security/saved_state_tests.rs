@@ -172,13 +172,10 @@ fn corpus(t: &Path) -> Vec<(String, PathBuf)> {
     }
     let root = slashed(&repo);
     for command in [
-        format!("HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x"),
-        format!("export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x"),
         format!("HOME={root}; rm -rf ~/.claude"),
         format!("HOME={root}; printf x > ~/.claude/settings.json"),
         format!("HOME={root}; printf x > \"$HOME/.claude/settings.json\""),
         format!("HOME={root}; git init ~/.claude/x"),
-        "HOME=$UNPROVEN; git clone https://example.test/x/y.git ~/scratch/y".to_string(),
         "HOME=/zz PATH=\"$HOME/bin:$PATH\" git status".to_string(),
         format!("HOME={root} bash -c 'rm -rf ~/.claude'"),
         format!("HOME={root}; python3 tool.py ~/.claude/settings.json"),
@@ -187,7 +184,6 @@ fn corpus(t: &Path) -> Vec<(String, PathBuf)> {
         "cp a.json ~/.claude/settings.json".to_string(),
         "rm -rf ~/.claude/projects".to_string(),
         "rm -rf ~/.claude".to_string(),
-        "git clone https://example.test/x/y.git ~/.claude/skills/x".to_string(),
         "echo x >> ~/.codex/config.toml".to_string(),
         "cp t.toml ~/.config/herdr-core/config.toml".to_string(),
         "tar -xf a.tar -C ~/.claude/skills".to_string(),

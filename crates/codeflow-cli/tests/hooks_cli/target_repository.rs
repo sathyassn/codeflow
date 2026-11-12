@@ -2837,17 +2837,17 @@ fn saved_shell_state_writes_refuse_from_the_hook_environment() {
         ] {
             for hook in ["exec-guard", "git-guard"] {
                 let mut cmd = f.guard_command(&f.linked, hook);
-                for name in [
-                    "CLAUDE_CONFIG_DIR",
-                    "CODEX_HOME",
-                    "CLAUDE_ENV_FILE",
-                    "XDG_CONFIG_HOME",
-                ] {
-                    cmd.env_remove(name);
-                }
-                if let Some((name, value)) = var {
-                    cmd.env(name, value);
-                }
+                cmd.env_remove("CLAUDE_CONFIG_DIR")
+                    .env_remove("CODEX_HOME")
+                    .env_remove("CLAUDE_ENV_FILE")
+                    .env_remove("XDG_CONFIG_HOME");
+                match var {
+                    Some(("CLAUDE_CONFIG_DIR", value)) => cmd.env("CLAUDE_CONFIG_DIR", value),
+                    Some(("CODEX_HOME", value)) => cmd.env("CODEX_HOME", value),
+                    Some(("CLAUDE_ENV_FILE", value)) => cmd.env("CLAUDE_ENV_FILE", value),
+                    Some((other, _)) => panic!("no row sets {other}"),
+                    None => &mut cmd,
+                };
                 let out = run_with_stdin(&mut cmd, &guard_payload(&command, &f.linked));
                 let err = String::from_utf8_lossy(&out.stderr);
                 if out.status.code() != Some(2)
