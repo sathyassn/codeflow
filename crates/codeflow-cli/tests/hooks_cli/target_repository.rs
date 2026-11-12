@@ -2743,6 +2743,68 @@ fn repair2_git_directory_parents() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn shell_reading_levels_keep_guard_verdicts() {
+    let f = Fixture::new();
+    super::write_policy(
+        &f.root,
+        r#"{"git":{"protected_branches":["main","master"],"root_checkout_commits":"off"},"security":{"text_guard":"relaxed"}}"#,
+    );
+    git(&f.root, &["add", ".codeflow/policy.json"]);
+    git(
+        &f.root,
+        &["commit", "-m", "chore: fixture published text policy"],
+    );
+    git(
+        &f.root,
+        &["remote", "add", "origin", "file:///nonexistent/levels.git"],
+    );
+    git(&f.root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        &f.root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    git(&f.root, &["checkout", "-b", "task/levels"]);
+    let rows = [
+        (
+            "F=$HOME/.zshrc git -c core.fsmonitor='echo pwned >> $F' status",
+            false,
+        ),
+        ("F=$HOME/.zshrc; git -c core.pager='cat >> $F' log", false),
+        (
+            "F=$HOME/.zshrc FSM='echo >> $F' git --config-env=core.fsmonitor=FSM status",
+            false,
+        ),
+        ("sed -n -e 1p -e '$p' ~/.zshrc", true),
+        ("sed -ne '1,20p;$=' ~/.zshrc", true),
+        (
+            "F=$HOME/.zshrc; git -c core.pager='sh -c \"cat > $F\"' log",
+            false,
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (command, allowed) in rows {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = f.command(&f.root, hook, command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            let correct = if allowed {
+                out.status.success()
+            } else {
+                refused(&out) && (hook != "exec-guard" || err.contains("security.shell_startup"))
+            };
+            if !correct {
+                wrong.push(format!("{hook}: allowed={allowed}: {command}: {err}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn repair2_separate_git_directory_container() {
     let f = Fixture::new();

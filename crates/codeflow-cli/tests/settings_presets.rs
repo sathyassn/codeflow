@@ -627,6 +627,65 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
     }
 }
 
+/// The shell state a harness or terminal tool saves for its later commands,
+/// by hand and not from the action table, so a dropped table entry fails
+/// here: Claude Code's `session-env` and `shell-snapshots`, Codex's
+/// `shell_snapshots` and herdr-core's templates.
+const SAVED_STATE_PATHS: [&str; 5] = [
+    "~/.claude/session-env",
+    "~/.claude/shell-snapshots",
+    "~/.codex/shell_snapshots",
+    "~/.config/herdr-core/templates",
+    "~/AppData/Roaming/herdr-core/templates",
+];
+
+fn assert_saved_state_denied(name: &str, value: &serde_json::Value) {
+    let deny = perm_array(value, "deny");
+    let sandbox: Vec<&str> = value["sandbox"]["filesystem"]["denyWrite"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{name}: sandbox.filesystem.denyWrite missing"))
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    for path in SAVED_STATE_PATHS {
+        let rule = format!("Edit({path}/**)");
+        assert!(deny.contains(&rule), "{name}: no `{rule}` deny");
+        assert!(
+            sandbox.contains(&path),
+            "{name}: the sandbox does not deny writes to {path}"
+        );
+    }
+}
+
+/// Every shipped preset denies the native edit tools and sandboxed Bash a
+/// write to the saved shell state, in every permission mode its `Edit`
+/// denies hold in (a deny rule holds in `bypassPermissions` too).
+#[test]
+fn every_preset_denies_writes_to_the_saved_shell_state() {
+    for name in preset_files() {
+        assert_saved_state_denied(&name, &load(&name));
+    }
+}
+
+/// What `codeflow init` writes carries the same denies, so a new project
+/// is covered from its first session.
+#[test]
+fn init_writes_the_saved_shell_state_denies() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    succeeded(
+        &run_codeflow(&root, &home, &["init", "--yes", "--minimal"]),
+        "init --minimal",
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert_saved_state_denied("init --minimal", &written);
+}
+
 /// TSK-1044 AC-4, decided by the operator on 2026-10-30: no Claude preset
 /// grants the gate evidence folder, so a sandboxed session cannot plant or
 /// replace durable evidence; full gates run outside the sandbox. Checked in

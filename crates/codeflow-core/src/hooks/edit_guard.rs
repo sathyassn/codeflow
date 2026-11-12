@@ -62,9 +62,19 @@ pub fn parse_payload(input: &str) -> Result<Option<EditRequest>, EditError> {
     let tool = alias(object, &["tool_name", "toolName"])?
         .and_then(Value::as_str)
         .ok_or_else(|| EditError("tool_name must be a string".into()))?;
+    // `MultiEdit` and `NotebookEdit` are the other Claude Code tools that
+    // write a file. The shipped hook entries do not send them to this guard
+    // (they match `Edit` and `Write` only); a settings file that does gets the
+    // same check as `Edit`, as defence in depth.
     if !matches!(
         tool,
-        "apply_patch" | "write" | "search_replace" | "Write" | "Edit"
+        "apply_patch"
+            | "write"
+            | "search_replace"
+            | "Write"
+            | "Edit"
+            | "MultiEdit"
+            | "NotebookEdit"
     ) {
         return Ok(None);
     }
@@ -96,7 +106,7 @@ pub fn parse_payload(input: &str) -> Result<Option<EditRequest>, EditError> {
         let fields = input
             .as_object()
             .ok_or_else(|| EditError("file edit input must be an object".into()))?;
-        let path = alias(fields, &["file_path", "filePath", "path"])?
+        let path = alias(fields, &["file_path", "filePath", "path", "notebook_path"])?
             .and_then(Value::as_str)
             .ok_or_else(|| EditError("file edit input must name its path".into()))?;
         vec![checked_path(path)?]
@@ -1897,6 +1907,59 @@ mod tests {
                 evaluate(&request, &f.ctx()).unwrap().is_empty(),
                 "{ordinary}"
             );
+        }
+    }
+
+    /// Saved shell state in a folder the hook holds no variable for (another
+    /// profile's, or a relocated herdr-core templates folder) refuses through
+    /// every edit tool that names a file, including the two Claude Code tools
+    /// the shipped hook entries do not send here, whatever the integrity
+    /// level, for a file that does not exist yet too.
+    #[test]
+    fn saved_state_edits_refuse_through_every_edit_tool() {
+        let f = Fixture::new();
+        let other = f.temp.path().join("other-profile");
+        std::fs::create_dir_all(other.join("session-env/abc")).unwrap();
+        std::fs::create_dir_all(other.join("herdr-core/templates")).unwrap();
+        let refused = |request: &EditRequest, level: PolicyLevel| {
+            let ctx = EditContext { level, ..f.ctx() };
+            evaluate(request, &ctx)
+                .unwrap()
+                .iter()
+                .any(|v| v.rule == "security.shell_startup" && v.level_fixed)
+        };
+        for target in [
+            "session-env/abc/hook.sh",
+            "session-env/new.sh",
+            "shell_snapshots/s.sh",
+            "shell-snapshots/snapshot-zsh-1.sh",
+            "herdr-core/templates/build.md",
+        ] {
+            let path = other.join(target).to_str().unwrap().to_string();
+            let request_text =
+                format!("*** Begin Patch\n*** Add File: {path}\n+x\n*** End Patch\n");
+            for request in [
+                synthetic("Write", json!({"file_path": path})),
+                synthetic("Edit", json!({"file_path": path})),
+                synthetic("MultiEdit", json!({"file_path": path, "edits": []})),
+                synthetic("NotebookEdit", json!({"notebook_path": path})),
+                synthetic("write", json!({"path": path})),
+                synthetic("search_replace", json!({"path": path})),
+                synthetic("apply_patch", json!(request_text)),
+            ] {
+                for level in [PolicyLevel::Block, PolicyLevel::Off] {
+                    assert!(refused(&request, level), "{path}");
+                }
+            }
+        }
+        for target in ["notes.md", "herdr-core/config.toml", "session.log"] {
+            let path = other.join(target).to_str().unwrap().to_string();
+            for request in [
+                synthetic("MultiEdit", json!({"file_path": path, "edits": []})),
+                synthetic("NotebookEdit", json!({"notebook_path": path})),
+            ] {
+                assert!(!refused(&request, PolicyLevel::Block), "{path}");
+            }
         }
     }
 
