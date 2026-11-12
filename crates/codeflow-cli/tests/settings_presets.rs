@@ -1775,12 +1775,21 @@ fn rule_matcher_follows_the_documented_bash_rule_syntax() {
 /// the scaffold installs run it too, with an isolated home and host git
 /// configuration neutralized.
 fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    codeflow_command(root, home, args)
+        .output()
+        .expect("codeflow runs")
+}
+
+/// The command [`run_codeflow`] runs, for a caller that sets more of its
+/// environment.
+fn codeflow_command(root: &Path, home: &Path, args: &[&str]) -> std::process::Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    std::process::Command::new(&exe)
+    let mut command = std::process::Command::new(&exe);
+    command
         .args(args)
         .current_dir(root)
         .env("CODEFLOW_HOME", home)
@@ -1795,9 +1804,8 @@ fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .output()
-        .expect("codeflow runs")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    command
 }
 
 fn succeeded(out: &std::process::Output, what: &str) -> String {
@@ -1976,6 +1984,137 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
             "{case}: validate is not clean:\n{validate}"
         );
     }
+}
+
+// --- The upgrade from 4.0.0: saved shell state denies (TSK-1461) ---------
+
+/// Whether a line of a shipped preset or Codex profile is one of the saved
+/// shell state entries 4.0.0 did not ship: an `Edit` deny, a sandbox
+/// `denyWrite` path or a read-only profile path.
+fn saved_state_line(line: &str) -> bool {
+    let line = line.trim().trim_end_matches(',');
+    SAVED_STATE_PATHS.iter().any(|path| {
+        line == format!("\"Edit({path}/**)\"")
+            || line == format!("\"{path}\"")
+            || line == format!("\"{path}\" = \"read\"")
+    })
+}
+
+/// A doctor or update run as an adopter would make it, with an isolated
+/// home and none of the variables that move the locations, so the report
+/// reads only the project.
+fn run_in_home(root: &Path, home: &Path, args: &[&str]) -> String {
+    let mut command = codeflow_command(root, home, args);
+    command.env("HOME", home).env("USERPROFILE", home);
+    for name in [
+        "ZDOTDIR",
+        "XDG_CONFIG_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "APPDATA",
+        "CLAUDE_ENV_FILE",
+    ] {
+        command.env_remove(name);
+    }
+    succeeded(
+        &command.output().expect("codeflow runs"),
+        args.join(" ").as_str(),
+    )
+}
+
+/// AC-3 and AC-4 journey: a project whose Claude settings, Codex profile and
+/// their baselines hold what 4.0.0 shipped, without the saved shell state
+/// entries, plus a deny of the adopter's own. Doctor warns; update adds the
+/// entries, keeps the adopter's deny and changes no other file; doctor is
+/// then clean, and a second update changes nothing.
+#[test]
+fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    run_in_home(&root, &home, &["init", "--yes"]);
+    let managed = [
+        ".claude/settings.json",
+        ".codex/config.toml",
+        ".codeflow/.baseline/.claude/settings.json",
+        ".codeflow/.baseline/.codex/config.toml",
+    ];
+    for rel in managed {
+        let path = root.join(rel);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let kept: String = text
+            .split_inclusive('\n')
+            .filter(|line| !saved_state_line(line))
+            .collect();
+        assert_ne!(kept, text, "{rel}: no saved shell state entry to remove");
+        std::fs::write(&path, kept).unwrap();
+    }
+    let settings = root.join(".claude/settings.json");
+    let mut project: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    project["permissions"]["deny"]
+        .as_array_mut()
+        .unwrap()
+        .push(ADOPTER_DENIES[0].into());
+    std::fs::write(
+        &settings,
+        serde_json::to_string_pretty(&project).unwrap() + "\n",
+    )
+    .unwrap();
+
+    let before = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
+    assert!(
+        before.contains("warn") && before.contains("saved shell state"),
+        "doctor does not report the missing entries:\n{before}"
+    );
+    let planted = snapshot(&root);
+    let first = run_in_home(&root, &home, &["update"]);
+    let updated = snapshot(&root);
+    let changed: BTreeSet<String> = planted
+        .iter()
+        .chain(&updated)
+        .map(|(path, _)| path)
+        .filter(|path| {
+            planted.iter().find(|(p, _)| p == *path) != updated.iter().find(|(p, _)| p == *path)
+        })
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    // Besides the four files, update writes only its own docs-portal lock.
+    let allowed: BTreeSet<String> = managed
+        .iter()
+        .chain(&[".codeflow/.docs-portal.lock"])
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        changed.is_subset(&allowed),
+        "update changed files beyond the settings and profile: {changed:?}\n{first}"
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_saved_state_denied("updated settings", &written);
+    assert!(
+        perm_array(&written, "deny").contains(&ADOPTER_DENIES[0].to_string()),
+        "update dropped the adopter's own deny"
+    );
+    let profile = std::fs::read_to_string(root.join(".codex/config.toml")).unwrap();
+    for path in SAVED_STATE_PATHS {
+        assert!(
+            profile.contains(&format!("\"{path}\" = \"read\"")),
+            "the Codex profile does not keep {path} read only"
+        );
+    }
+    let after = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
+    assert!(
+        !after.contains("saved shell state") && after.contains("ok"),
+        "doctor still reports after the update:\n{after}"
+    );
+    run_in_home(&root, &home, &["update"]);
+    assert!(
+        snapshot(&root) == updated,
+        "the second update changed a file"
+    );
 }
 
 // ---- The shipped status line (TSK-1028, issue 351) ----------------------
