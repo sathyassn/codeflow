@@ -39,7 +39,7 @@ The release chain is the longest. Some records in these chains still read
 
 ## Technical
 
-70 decisions, 3 with `status: superseded`. A
+71 decisions, 3 with `status: superseded`. A
 decision is proposed, then accepted, and may later be superseded; its
 content is never rewritten, and only `superseded_by` or a dated note is added.
 
@@ -62,6 +62,7 @@ Two pages link back to the decisions:
 | Git, merge, and CI policy | [ADR-0017](decisions/ADR-0017-codeflow-ci-portable-verification.md) | codeflow ci: CI portable, binary sourced verification | accepted | none |
 | Git, merge, and CI policy | [ADR-0020](decisions/ADR-0020-restore-original-commit-standard.md) | restore the original commit standard: 50/72 subject, bullet only body, block enforced | accepted | none |
 | Git, merge, and CI policy | [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md) | CI suite placement by event | accepted | none |
+| Git, merge, and CI policy | [ADR-0102](decisions/ADR-0102-a-marked-epic-reaches-main-once-and-complete-and.md) | A marked epic reaches main once and complete, and line pushes start no hosted run | proposed | none |
 | Scaffold lifecycle and tiers | [ADR-0011](decisions/ADR-0011-update-orphan-reconciliation.md) | update reconciles orphaned managed files (prune on upstream rename/removal) | accepted | none |
 | Scaffold lifecycle and tiers | [ADR-0019](decisions/ADR-0019-enforcement-is-the-floor.md) | enforcement is the floor: tiers scale project management, not discipline | accepted | none |
 | Scaffold lifecycle and tiers | [ADR-0090](decisions/ADR-0090-retained-release-bases-and-a-sparse-pack-replace.md) | Retained release bases and a sparse pack replace the baseline tree and the manifest digest | accepted | none |
