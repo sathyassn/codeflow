@@ -1,0 +1,11 @@
+id = "TSK-1479"
+uid = "408a0597-5f9b-413c-8315-8a95df2a6d66"
+kind = "TSK"
+title = "Agents fetch and push their own task branches; main, lines, tags and releases stay with the operator"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T17:45:22Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
