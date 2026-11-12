@@ -208,6 +208,167 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
     reader.found
 }
 
+/// One command the reader ran, as the saved-state check
+/// ([`super::startup::saved_state`]) reads it: the argument vector with its
+/// launchers removed, every working directory it may run in, and the simple
+/// command it came from. Values are the reader's own: a directory of `""`
+/// is where the line started, a relative one is below it, and a value the
+/// reader cannot prove carries its marker ([`bound_path`] reads them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Bound {
+    pub argv: Vec<String>,
+    pub dirs: Vec<String>,
+    /// The simple command this run came from. Runs of one simple command
+    /// are the readings it may take; the check refuses only when every one
+    /// of them is refused.
+    pub call: usize,
+    /// Set when the line assigns `HOME` before the run, so `~` names a
+    /// home the check does not hold.
+    pub home_assigned: bool,
+}
+
+/// Every command a line runs, read once ([`bound_commands_in`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BoundLine {
+    pub commands: Vec<Bound>,
+    /// Set when the reader read the whole line; a line it stopped in may
+    /// run anything after the stop.
+    pub whole: bool,
+}
+
+/// The collection a [`bound_commands_in`] read fills. The deletion check
+/// never sets it, so its readings are unchanged.
+struct Collect {
+    commands: Vec<Bound>,
+    calls: usize,
+    call: usize,
+}
+
+thread_local! {
+    static COLLECT: std::cell::RefCell<Option<Collect>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Whether the reader runs for [`bound_commands_in`]: it then records each
+/// command and judges none.
+fn collecting() -> bool {
+    COLLECT.with(|c| c.borrow().is_some())
+}
+
+/// Ends a collection when the read ends, a panic included.
+struct CollectScope;
+
+impl Drop for CollectScope {
+    fn drop(&mut self) {
+        COLLECT.with(|c| c.borrow_mut().take());
+    }
+}
+
+/// Every command `command` runs when it starts in `base`, with the
+/// directories each may run in. `held` gives the variables the guard has
+/// values for; any other variable read from the environment stays spelled
+/// as `$NAME`. The read judges no deletion.
+pub(super) fn bound_commands_in(
+    command: &str,
+    base: Option<&Path>,
+    held: &[(String, String)],
+) -> BoundLine {
+    COLLECT.with(|c| {
+        *c.borrow_mut() = Some(Collect {
+            commands: Vec::new(),
+            calls: 0,
+            call: 0,
+        });
+    });
+    let scope = CollectScope;
+    let mut reader = Reader {
+        base,
+        rooted_unplaced: cfg!(windows),
+        found: None,
+        depth: 0,
+        nesting: 0,
+        pipe_input: None,
+        jumps: Vec::new(),
+        expanding: Vec::new(),
+        traps: Vec::new(),
+        in_trap: false,
+        status: None,
+        script_states: Vec::new(),
+    };
+    let mut state = State::start();
+    // Inserted as values, not assigned: an assignment to some of them
+    // (`ZDOTDIR`) would make the state unknown.
+    for (name, value) in held {
+        state
+            .vars
+            .insert(name.clone(), [value.clone()].into_iter().collect());
+    }
+    reader.script(command, &mut state);
+    state.dead = false;
+    reader.in_trap = true;
+    for action in reader.live_traps(&state) {
+        let mut end = state.clone();
+        reader.child_run(&action, &mut end);
+    }
+    let commands = COLLECT
+        .with(|c| c.borrow_mut().take())
+        .map(|collect| collect.commands)
+        .unwrap_or_default();
+    drop(scope);
+    BoundLine {
+        commands,
+        whole: !reader.found.as_ref().is_some_and(|f| f.unfinished),
+    }
+}
+
+/// `operand` as the line reaches it from the directory `cwd`, both reader
+/// values: absolute, from `~` (`~` or `~/…`), or relative to where the line
+/// started. `None` when either holds a value the reader cannot prove or a
+/// variable it does not hold.
+pub(super) fn bound_path(cwd: &str, operand: &str) -> Option<String> {
+    if unproven(operand).is_some() || operand.contains(['$', '`']) {
+        return None;
+    }
+    let relative = !operand.starts_with(['/', '~']);
+    if relative && (unproven(cwd).is_some() || cwd.contains(['$', '`'])) {
+        return None;
+    }
+    let path = resolve(cwd, operand).ok()?;
+    (unproven(&path).is_none() && !path.contains(['$', '`'])).then_some(path)
+}
+
+/// The start points a `find` call removes: each start, or `.`, when its
+/// expression deletes (`-delete`, or a remover it runs). `None` when it
+/// removes nothing.
+pub(super) fn find_removals(args: &[String]) -> Option<Vec<String>> {
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        match arg.as_str() {
+            "-H" | "-L" | "-P" => at += 1,
+            "-D" => at += 2,
+            _ if arg.starts_with("-O") => at += 1,
+            _ => break,
+        }
+    }
+    let rest = args.get(at..).unwrap_or_default();
+    let starts_end = rest
+        .iter()
+        .position(|a| a.starts_with('-') || matches!(a.as_str(), "(" | "!" | ","))
+        .unwrap_or(rest.len());
+    let (starts, expression) = rest.split_at(starts_end);
+    let deletes = expression.iter().any(|a| a == "-delete")
+        || exec_bodies(expression)
+            .iter()
+            .any(|body| runs_remover(body, 0));
+    if !deletes {
+        return None;
+    }
+    Some(if starts.is_empty() {
+        vec![".".to_string()]
+    } else {
+        starts.to_vec()
+    })
+}
+
 /// Values kept per variable and for the working directory; past this, the
 /// values that are already protected are kept first.
 const MAX_VALUES: usize = 64;
@@ -3726,6 +3887,24 @@ impl Reader<'_> {
     }
 
     fn simple_plain(&mut self, words: &[Word], redirs: &[Redir], st: &mut State) {
+        // Each reading of a simple command is one call of the collection.
+        let outer = COLLECT.with(|c| {
+            c.borrow_mut().as_mut().map(|collect| {
+                collect.calls += 1;
+                std::mem::replace(&mut collect.call, collect.calls)
+            })
+        });
+        self.simple_read(words, redirs, st);
+        if let Some(outer) = outer {
+            COLLECT.with(|c| {
+                if let Some(collect) = c.borrow_mut().as_mut() {
+                    collect.call = outer;
+                }
+            });
+        }
+    }
+
+    fn simple_read(&mut self, words: &[Word], redirs: &[Redir], st: &mut State) {
         let assigned = words
             .iter()
             .take_while(|w| w.assignment().is_some())
@@ -4911,6 +5090,16 @@ impl Reader<'_> {
             return;
         }
         let ambiguous = ambiguous || st.cwd.len() > 1;
+        COLLECT.with(|c| {
+            if let Some(collect) = c.borrow_mut().as_mut() {
+                collect.commands.push(Bound {
+                    argv: argv.clone(),
+                    dirs: st.cwd.iter().cloned().collect(),
+                    call: collect.call,
+                    home_assigned: st.vars.contains_key("HOME"),
+                });
+            }
+        });
         match program_name(first).as_str() {
             name if crate::hooks::git_guard::is_shell(name) => {
                 // A new shell: its own arguments, no function calls.
@@ -4942,6 +5131,8 @@ impl Reader<'_> {
                 let mut child = st.clone();
                 self.child_script(&super::composed::paths::eval_body(&argv[1..]), &mut child);
             }
+            // A collection records the run above and judges nothing.
+            _ if collecting() => {}
             "rm" => self.judge_rm(&argv, &st, forced, ambiguous),
             "rmdir" | "unlink" | "shred" | "srm" if forced => {
                 self.judge_rm(&argv, &st, true, ambiguous);
