@@ -1,0 +1,11 @@
+id = "TSK-1452"
+uid = "07479f7d-d175-4a91-adb9-809295c218b4"
+kind = "TSK"
+title = "The rulesets follow the transition, and main's relaxed checks return on their conditions"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:02:04Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
