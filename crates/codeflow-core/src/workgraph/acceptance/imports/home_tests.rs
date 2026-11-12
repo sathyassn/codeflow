@@ -224,7 +224,11 @@ fn a_main_move_the_line_changed_since_stays_refused() {
     // the merge result is main's exact version.
     fixture.land(LINE, &[(&path, &moved("TSK-001", OTHER))]);
     fixture.sync();
-    refused(&fixture, "a line that changed its copy", &["TSK-001", MOVED]);
+    refused(
+        &fixture,
+        "a line that changed its copy",
+        &["TSK-001", MOVED],
+    );
 }
 
 /// AC-2: a home change made by a direct commit on the default branch.
@@ -259,7 +263,12 @@ fn a_local_main_holding_the_move_grants_nothing() {
     let published = fixture.oid("main");
     fixture.land("main", &[(&path_of("TSK-001"), &moved("TSK-001", "main"))]);
     // A remote whose `main` is the commit before the move; nothing is fetched.
-    fixture.git(&["remote", "add", "origin", "https://example.test/fixture.git"]);
+    fixture.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://example.test/fixture.git",
+    ]);
     fixture.git(&[
         "update-ref",
         "refs/remotes/origin/main",
@@ -320,7 +329,10 @@ fn a_main_move_outside_a_permitted_state_stays_refused() {
         ),
         (
             "malformed before",
-            vec![("TSK-001", task("TSK-001", OTHER, "todo", "Work.", MALFORMED))],
+            vec![(
+                "TSK-001",
+                task("TSK-001", OTHER, "todo", "Work.", MALFORMED),
+            )],
             task("TSK-001", "main", "todo", "Work moved.", MALFORMED),
         ),
         (
@@ -392,7 +404,10 @@ fn a_refused_move_then_a_reviewed_note_stays_refused() {
     fixture.direct("main", &[(&path, &moved("TSK-001", "main"))]);
     fixture.land(
         "main",
-        &[(&path, &task("TSK-001", "main", "todo", "Work noted.", "Pending."))],
+        &[(
+            &path,
+            &task("TSK-001", "main", "todo", "Work noted.", "Pending."),
+        )],
     );
     fixture.sync();
     refused(&fixture, "a note after a direct move", &["TSK-001", MOVED]);
@@ -408,7 +423,10 @@ fn a_second_refused_move_stays_refused() {
     fixture.direct("main", &[(&path, &moved("TSK-001", "main"))]);
     fixture.land(
         "main",
-        &[(&path, &task("TSK-001", "main", "todo", "Work noted.", "Pending."))],
+        &[(
+            &path,
+            &task("TSK-001", "main", "todo", "Work noted.", "Pending."),
+        )],
     );
     fixture.sync();
     refused(&fixture, "a direct second move", &["TSK-001", MOVED]);
@@ -429,7 +447,11 @@ fn a_move_and_its_revert() {
     fixture.direct("main", &[(&path, &todo("TSK-001", OTHER))]);
     fixture.land("main", &[(&path, &moved("TSK-001", "main"))]);
     fixture.sync();
-    refused(&fixture, "a direct move and its revert", &["TSK-001", MOVED]);
+    refused(
+        &fixture,
+        "a direct move and its revert",
+        &["TSK-001", MOVED],
+    );
 }
 
 /// AC-10: a move before the last one must be in a permitted state at both
@@ -439,10 +461,19 @@ fn a_move_while_complete_before_the_last_move_is_refused() {
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
     let path = path_of("TSK-001");
     fixture.land("main", &[(&path, &complete("TSK-001", THIRD, "Work."))]);
-    fixture.land("main", &[(&path, &complete("TSK-001", "main", "Work moved."))]);
-    fixture.land(LINE, &[(&path, &todo("TSK-001", "main"))]);
+    fixture.land(
+        "main",
+        &[(&path, &complete("TSK-001", "main", "Work moved."))],
+    );
+    // The line names the final home and matches main's status and closeout
+    // lines, so git merges the note change on its own.
+    fixture.land(LINE, &[(&path, &complete("TSK-001", "main", "Work."))]);
     fixture.sync();
-    refused(&fixture, "a complete intermediate move", &["TSK-001", MOVED]);
+    refused(
+        &fixture,
+        "a complete intermediate move",
+        &["TSK-001", MOVED],
+    );
 }
 
 /// AC-12: a record homed on the receiving line that the line never held
@@ -542,7 +573,11 @@ fn an_introduction_used_as_an_adoption_is_refused() {
     );
     fixture.land(LINE, &[(&path, &after)]);
     fixture.sync();
-    refused(&fixture, "an introduction claimed as an adoption", &["TSK-006"]);
+    refused(
+        &fixture,
+        "an introduction claimed as an adoption",
+        &["TSK-006"],
+    );
 }
 
 /// AC-13 (7): after an adoption, a later unauthorized move on `main` is
@@ -555,9 +590,14 @@ fn a_later_unauthorized_move_after_an_adoption_is_refused() {
     docs_move(&fixture, &after);
     fixture.land(LINE, &[(&path, &after)]);
     fixture.direct("main", &[(&path, &moved("TSK-001", THIRD))]);
+    // The later note goes in the closeout, so the sync merges cleanly over
+    // the line's adopted note.
     fixture.land(
         "main",
-        &[(&path, &task("TSK-001", "main", "todo", "Work noted.", "Pending."))],
+        &[(
+            &path,
+            &task("TSK-001", "main", "todo", "Work moved.", "Noted."),
+        )],
     );
     fixture.sync();
     refused(&fixture, "a later direct move", &["TSK-001", MOVED]);
@@ -575,7 +615,11 @@ fn a_same_destination_own_move_still_judges_mains_moves() {
     fixture.direct("main", &[(&path, &todo("TSK-001", "main"))]);
     fixture.land(LINE, &[(&path, &own)]);
     fixture.sync();
-    refused(&fixture, "a direct move beside the line's own", &["TSK-001", MOVED]);
+    refused(
+        &fixture,
+        "a direct move beside the line's own",
+        &["TSK-001", MOVED],
+    );
 
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
     fixture.land("main", &[(&path, &todo("TSK-001", "main"))]);

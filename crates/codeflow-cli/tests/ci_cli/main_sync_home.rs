@@ -47,7 +47,10 @@ fn a_main_planning_move_the_line_already_names_passes() {
     write(root, "changelog.d/TSK-001.md", FRAGMENT);
     commit(root, "docs: complete TSK-001");
     super::git(root, &["switch", "-q", "main"]);
-    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "task/TSK-001-work"]);
+    super::git(
+        root,
+        &["merge", "--no-ff", "-q", "--no-edit", "task/TSK-001-work"],
+    );
     land(
         root,
         "main",
@@ -81,7 +84,10 @@ fn a_line_homed_todo_task_moved_by_main_stays_frozen() {
         root,
         "main",
         "plan/move",
-        &[(RECORD, &task("TSK-001", "main").replace("Work.", "Other work."))],
+        &[(
+            RECORD,
+            &task("TSK-001", "main").replace("Work.", "Other work."),
+        )],
     );
     sync_branch(root);
     let refused = ci(root, "Task: EPC-001", None);
@@ -101,7 +107,11 @@ fn two_refused_records_are_both_named() {
     super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
     super::git(root, &["switch", "-q", "main"]);
     for (path, id) in [(RECORD, "TSK-001"), (second, "TSK-004")] {
-        write(root, path, &task(id, "main").replace("Work.", "Other work."));
+        write(
+            root,
+            path,
+            &task(id, "main").replace("Work.", "Other work."),
+        );
     }
     commit(root, "docs: main re-homes two line tasks");
     sync_branch(root);

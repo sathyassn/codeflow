@@ -105,8 +105,8 @@ fn compute_imports(
     // receiver forked. Search imports since the shared anchor, while the
     // actual target base still judges competing criteria below.
     let unenumerated = |error: String| format!("{UNENUMERATED}: {error}");
-    let anchor = history::merge_base(repo, base, head)
-        .map_err(|error| unenumerated(error.to_string()))?;
+    let anchor =
+        history::merge_base(repo, base, head).map_err(|error| unenumerated(error.to_string()))?;
     let changed = merged_records(repo, anchor, head, graph).map_err(unenumerated)?;
     let root = repo.workdir().unwrap_or_else(|| repo.path());
     // A range that changes no record by a merge reads the default target
@@ -196,7 +196,16 @@ fn compute_imports(
             refusals.push(format!("{}: blocks come from target history on unverified home `{home}`: {reason}; repair the home through its classified pull requests, then merge its reviewed result", record.id));
             continue;
         }
-        match home_source(repo, record, home, &default.name, default_tip, anchor, head, syncs) {
+        match home_source(
+            repo,
+            record,
+            home,
+            &default.name,
+            default_tip,
+            anchor,
+            head,
+            syncs,
+        ) {
             Ok(HomeSource::Line(tip)) => {
                 homes.insert(home.to_string(), tip);
             }
@@ -271,25 +280,42 @@ fn compute_imports(
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(reason) => {
-                    refusals.push(refuse(&record.id, &format!("`{home}` at {landed}"), &reason));
+                    refusals.push(refuse(
+                        &record.id,
+                        &format!("`{home}` at {landed}"),
+                        &reason,
+                    ));
                     continue;
                 }
             }
             // The default branch's home moves are walked from the line's
             // merge base with it, for a task homed there (TSK-1378).
-            let walk = (home == default.name
-                && tip == default_tip
-                && !retired.contains_key(&record.id))
-            .then_some(Walk {
-                receiver: anchor,
+            let walk =
+                (home == default.name && tip == default_tip && !retired.contains_key(&record.id))
+                    .then_some(Walk {
+                        receiver: anchor,
+                        default_tip,
+                    });
+            match prove_record(
+                repo,
+                record,
+                &home,
+                tip,
                 default_tip,
-            });
-            match prove_record(repo, record, &home, tip, default_tip, landed, base, head, walk) {
+                landed,
+                base,
+                head,
+                walk,
+            ) {
                 Ok(result) => {
                     imported.insert(record.id.clone(), result);
                 }
                 Err(reason) => {
-                    refusals.push(refuse(&record.id, &format!("`{home}` at {landed}"), &reason));
+                    refusals.push(refuse(
+                        &record.id,
+                        &format!("`{home}` at {landed}"),
+                        &reason,
+                    ));
                 }
             }
         }
@@ -359,7 +385,8 @@ fn home_source(
     syncs: bool,
 ) -> Result<HomeSource, HomeRefusal> {
     let root = repo.workdir().unwrap_or_else(|| repo.path());
-    let unread = |reason: String| HomeRefusal::Record(format!("{}: {UNENUMERATED}: {reason}", record.id));
+    let unread =
+        |reason: String| HomeRefusal::Record(format!("{}: {UNENUMERATED}: {reason}", record.id));
     let Some(tip) = home_tip(repo, home).map_err(unread)? else {
         // A retired line's exact record can still be proved at its
         // published default-target landing. The proof below judges the
@@ -637,7 +664,8 @@ fn admissible_planning_landing_with(
             let name = crate::git::GitName::from_bytes(file.path_bytes().unwrap_or_default());
             let path = name.rule_text().map_err(|odd| odd.display().to_string())?;
             let regular = i32::from(file.mode()) == 0o100_644;
-            let admits = amendment_path(path, &project).is_some_and(|kind| admitted.contains(&kind));
+            let admits =
+                amendment_path(path, &project).is_some_and(|kind| admitted.contains(&kind));
             if !regular || !admits {
                 return Ok(None);
             }

@@ -36,7 +36,12 @@ fn planning_landing_paths_narrow_and_aligned() {
             false,
             true,
         ),
-        ("instructions", Some(("AGENTS.md", "# Agents\n")), false, false),
+        (
+            "instructions",
+            Some(("AGENTS.md", "# Agents\n")),
+            false,
+            false,
+        ),
         (
             "product",
             Some(("src/planned.rs", "pub fn planned() {}\n")),
@@ -116,9 +121,14 @@ fn a_line_adoption_then_a_sync_leaves_the_records_unchanged() {
     let found = passes(&fixture, "a sync after the adoption");
     assert!(!found.contains_key("TSK-001"), "{found:?}");
 
+    // The note goes in the closeout, so the sync merges cleanly over the
+    // line's adopted copy.
     fixture.land(
         "main",
-        &[(&path, &task("TSK-001", "main", "todo", "Work noted.", "Pending."))],
+        &[(
+            &path,
+            &task("TSK-001", "main", "todo", "Work moved.", "Noted."),
+        )],
     );
     fixture.sync();
     let found = passes(&fixture, "a note after the adoption");

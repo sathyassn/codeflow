@@ -13,8 +13,7 @@
 use super::super::super::classify::AmendmentPath;
 use super::super::super::work_start::logical_target;
 use super::super::{
-    common_base, first_parent, history, is_ancestor_or_same, is_same_task, record_uid,
-    task_entries,
+    common_base, first_parent, history, is_ancestor_or_same, is_same_task, record_uid, task_entries,
 };
 use super::{
     admissible_planning_landing_with, is_shared_planning, permitted_at, Oid, RecordKind,
@@ -128,9 +127,14 @@ fn ambiguous(at: Oid) -> String {
 ///
 /// # Errors
 /// Several merge bases, none, or unreadable history.
-pub(super) fn start_point(repo: &Repository, receiver: Oid, default_tip: Oid) -> Result<Oid, String> {
-    let bases = history::merge_bases(repo, receiver, default_tip)
-        .map_err(|error| format!("{MOVED}: cannot read the merge base of the line and the default branch: {error}"))?;
+pub(super) fn start_point(
+    repo: &Repository,
+    receiver: Oid,
+    default_tip: Oid,
+) -> Result<Oid, String> {
+    let bases = history::merge_bases(repo, receiver, default_tip).map_err(|error| {
+        format!("{MOVED}: cannot read the merge base of the line and the default branch: {error}")
+    })?;
     match bases.as_slice() {
         [one] => Ok(*one),
         [] => Err(format!(
@@ -405,8 +409,9 @@ pub(super) fn judge_home(
         return Err(ambiguous(receiver));
     }
     let anchor = adoption_anchor(repo, &who, &line, receiver, start, default_tip, head)?;
-    let (since, line_since) =
-        anchor.map_or((start, start), |anchor| (anchor.source_version, anchor.line_landing));
+    let (since, line_since) = anchor.map_or((start, start), |anchor| {
+        (anchor.source_version, anchor.line_landing)
+    });
     let found = moves_of(repo, &who, default_tip, since, head)?;
     judge_moves(repo, &who, &line, &found.moves, receiver, line_since)?;
     Ok(anchor)
@@ -445,7 +450,14 @@ pub(super) fn judge_unchanged(
     }
     if let Some(anchor) = adoption_anchor(repo, &who, &line, receiver, start, default_tip, head)? {
         let after = moves_of(repo, &who, default_tip, anchor.source_version, head)?;
-        return judge_moves(repo, &who, &line, &after.moves, receiver, anchor.line_landing);
+        return judge_moves(
+            repo,
+            &who,
+            &line,
+            &after.moves,
+            receiver,
+            anchor.line_landing,
+        );
     }
     own_change(repo, &who, receiver, start, head)?;
     judge_moves(repo, &who, &line, &found.moves, receiver, start)
