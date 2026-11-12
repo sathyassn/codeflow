@@ -1,0 +1,11 @@
+id = "TSK-1457"
+uid = "3f169b19-86b9-4d2c-92e3-8ff1f83012e5"
+kind = "TSK"
+title = "The guards read every way a command line sets a variable"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:03:26Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
