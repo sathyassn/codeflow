@@ -470,19 +470,22 @@ fn exec_guard_wired_in_every_preset() {
     }
 }
 
-/// The `PreToolUse` group of a hook file whose hooks run edit-guard.
+/// Whether a hook group runs edit-guard.
+fn runs_edit_guard(group: &serde_json::Value) -> bool {
+    let mut commands = Vec::new();
+    collect_hook_commands(&group["hooks"], &mut commands);
+    commands
+        .iter()
+        .any(|c| c.starts_with("codeflow hook edit-guard --contract 3"))
+}
+
+/// The `PreToolUse` groups of a hook file whose hooks run edit-guard.
 fn edit_guard_groups(value: &serde_json::Value) -> Vec<&serde_json::Value> {
     value["hooks"]["PreToolUse"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|group| {
-            let mut commands = Vec::new();
-            collect_hook_commands(&group["hooks"], &mut commands);
-            commands
-                .iter()
-                .any(|c| c.starts_with("codeflow hook edit-guard --contract 3"))
-        })
+        .filter(|group| runs_edit_guard(group))
         .collect()
 }
 
@@ -2092,11 +2095,12 @@ fn run_in_home(root: &Path, home: &Path, args: &[&str]) -> String {
     )
 }
 
-/// AC-3 and AC-4 journey: a project whose Claude settings, Codex profile and
-/// their baselines hold what 4.0.0 shipped, without the saved shell state
-/// entries, plus a deny of the adopter's own. Doctor warns; update adds the
-/// entries, keeps the adopter's deny and changes no other file; doctor is
-/// then clean, and a second update changes nothing.
+/// AC-3, AC-4 and AC-11 journey: a project whose Claude settings, Codex
+/// profile and their baselines hold what 4.0.0 shipped, without the saved
+/// shell state entries and without the edit-guard group, plus a deny and an
+/// edit hook of the adopter's own. Doctor warns about both; update adds the
+/// entries and the group, keeps the adopter's deny and hook and changes no
+/// other file; doctor is then clean, and a second update changes nothing.
 #[test]
 fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
     let dir = tempfile::tempdir().unwrap();
@@ -2121,6 +2125,20 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         assert_ne!(kept, text, "{rel}: no saved shell state entry to remove");
         std::fs::write(&path, kept).unwrap();
     }
+    // 4.0.0 shipped no edit-guard group in the Claude presets.
+    for rel in managed {
+        if !rel.ends_with("settings.json") {
+            continue;
+        }
+        let path = root.join(rel);
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let groups = value["hooks"]["PreToolUse"].as_array_mut().unwrap();
+        let before = groups.len();
+        groups.retain(|group| !runs_edit_guard(group));
+        assert_eq!(groups.len() + 1, before, "{rel}: no edit-guard group to remove");
+        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap() + "\n").unwrap();
+    }
     let settings = root.join(".claude/settings.json");
     let mut project: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
@@ -2128,6 +2146,13 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         .as_array_mut()
         .unwrap()
         .push(ADOPTER_DENIES[0].into());
+    let own_hook = serde_json::json!({"matcher": "Edit", "hooks": [
+        {"type": "command", "command": "./scripts/check-edit.sh"}
+    ]});
+    project["hooks"]["PreToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .push(own_hook.clone());
     std::fs::write(
         &settings,
         serde_json::to_string_pretty(&project).unwrap() + "\n",
@@ -2138,6 +2163,10 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
     assert!(
         before.contains("warn") && before.contains("saved shell state"),
         "doctor does not report the missing entries:\n{before}"
+    );
+    assert!(
+        before.contains(".claude/settings.json") && before.contains("edit-guard"),
+        "doctor does not report the missing edit-guard group:\n{before}"
     );
     let planted = snapshot(&root);
     let first = run_in_home(&root, &home, &["update"]);
@@ -2168,6 +2197,18 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         perm_array(&written, "deny").contains(&ADOPTER_DENIES[0].to_string()),
         "update dropped the adopter's own deny"
     );
+    assert_eq!(
+        edit_guard_groups(&written).len(),
+        1,
+        "update did not add the edit-guard group"
+    );
+    assert!(
+        written["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .contains(&own_hook),
+        "update dropped the adopter's own hook"
+    );
     let profile = std::fs::read_to_string(root.join(".codex/config.toml")).unwrap();
     for path in SAVED_STATE_PATHS {
         assert!(
@@ -2177,7 +2218,7 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
     }
     let after = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
     assert!(
-        !after.contains("saved shell state") && after.contains("ok"),
+        !after.contains("saved shell state") && !after.contains("edit-guard") && after.contains("ok"),
         "doctor still reports after the update:\n{after}"
     );
     run_in_home(&root, &home, &["update"]);
