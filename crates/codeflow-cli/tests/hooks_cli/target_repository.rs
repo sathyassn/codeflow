@@ -2872,11 +2872,15 @@ fn saved_shell_state_writes_refuse_from_the_hook_environment() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-// TSK-1461 AC-2: Claude Code's native `Edit` and `Write` calls, which the
-// presets now send to edit-guard, refuse below a Claude configuration folder
-// that `CLAUDE_CONFIG_DIR` moves out of the home, and at the file
-// `CLAUDE_ENV_FILE` names, where no preset deny reaches. A file of the moved
-// folder that is not saved state stays ordinary.
+/// Claude Code's native tools that write a file.
+const NATIVE_EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+
+// TSK-1461 AC-2: Claude Code's native `Edit`, `MultiEdit`, `Write` and
+// `NotebookEdit` calls, which every preset sends to edit-guard, refuse below
+// a Claude configuration folder that `CLAUDE_CONFIG_DIR` moves out of the
+// home, and at the file `CLAUDE_ENV_FILE` names, where no preset deny
+// reaches. A file of the moved folder that is not saved state stays
+// ordinary.
 #[cfg(unix)]
 #[test]
 fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
@@ -2892,10 +2896,15 @@ fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
             .env_remove("XDG_CONFIG_HOME")
             .env("CLAUDE_CONFIG_DIR", &moved)
             .env("CLAUDE_ENV_FILE", &env_file);
-        let input = if tool == "Edit" {
-            serde_json::json!({"file_path": target, "old_string": "a", "new_string": "b"})
-        } else {
-            serde_json::json!({"file_path": target, "content": "export PATH=/tmp/x:$PATH\n"})
+        let input = match tool {
+            "Edit" => serde_json::json!({"file_path": target, "old_string": "a", "new_string": "b"}),
+            "MultiEdit" => serde_json::json!({"file_path": target, "edits": [
+                {"old_string": "a", "new_string": "b"}
+            ]}),
+            "NotebookEdit" => serde_json::json!({
+                "notebook_path": target, "new_source": "x", "edit_mode": "replace"
+            }),
+            _ => serde_json::json!({"file_path": target, "content": "export PATH=/tmp/x:$PATH\n"}),
         };
         run_with_stdin(
             &mut cmd,
@@ -2904,13 +2913,43 @@ fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
         )
     };
     let mut wrong = Vec::new();
+    // Each Claude preset sends every native edit tool to edit-guard: the
+    // matcher of its edit-guard group matches the whole tool name.
+    let presets =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
+    for preset in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(presets.join(preset)).unwrap())
+                .unwrap();
+        let matchers: Vec<regex::Regex> = value["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|group| {
+                group["hooks"].as_array().is_some_and(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook["command"]
+                            .as_str()
+                            .is_some_and(|c| c.starts_with("codeflow hook edit-guard "))
+                    })
+                })
+            })
+            .filter_map(|group| group["matcher"].as_str())
+            .map(|m| regex::Regex::new(&format!("^(?:{m})$")).unwrap())
+            .collect();
+        for tool in NATIVE_EDIT_TOOLS {
+            if !matchers.iter().any(|m| m.is_match(tool)) {
+                wrong.push(format!("{preset} does not send {tool} to edit-guard"));
+            }
+        }
+    }
     for target in [
         moved.join("session-env/abc/hook-2.sh"),
         moved.join("session-env/new.sh"),
         moved.join("shell-snapshots/snapshot-zsh-1.sh"),
         env_file.clone(),
     ] {
-        for tool in ["Edit", "Write"] {
+        for tool in NATIVE_EDIT_TOOLS {
             let out = edit(tool, &target);
             let err = String::from_utf8_lossy(&out.stderr);
             if out.status.code() != Some(2)
@@ -2921,7 +2960,7 @@ fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
             }
         }
     }
-    for tool in ["Edit", "Write"] {
+    for tool in NATIVE_EDIT_TOOLS {
         let out = edit(tool, &moved.join("notes.md"));
         if String::from_utf8_lossy(&out.stderr).contains("saved shell state") {
             wrong.push(format!("{tool} refused the folder's own notes: {out:?}"));

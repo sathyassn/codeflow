@@ -258,7 +258,7 @@ fn missing_rules(root: &Path) -> Vec<String> {
 
 /// The native edit tools of Claude Code that the shipped presets send to
 /// edit-guard (TSK-1461 AC-11).
-const CLAUDE_EDIT_TOOLS: [&str; 2] = ["Edit", "Write"];
+const CLAUDE_EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 /// The Claude Code native edit tools that the project's
 /// `.claude/settings.json` sends to no edit-guard hook, as a finding that
@@ -299,12 +299,15 @@ fn claude_edit_guard_gap(root: &Path) -> Option<String> {
         .filter(|tool| !groups.is_some_and(|g| g.iter().any(|group| takes(group, tool))))
         .map(|tool| format!("`{tool}`"))
         .collect();
-    (!open.is_empty()).then(|| {
-        format!(
-            "{claude_file} sends Claude Code's native {} calls to no edit-guard hook",
-            open.join(" and ")
-        )
-    })
+    let (last, rest) = open.split_last()?;
+    let tools = if rest.is_empty() {
+        last.clone()
+    } else {
+        format!("{} and {last}", rest.join(", "))
+    };
+    Some(format!(
+        "{claude_file} sends Claude Code's native {tools} calls to no edit-guard hook"
+    ))
 }
 
 /// The class paths the selected Codex profile leaves writable, read
@@ -602,7 +605,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Some(remedy) => (Status::Warn(remedy), parts.join("; ")),
         None => (
             Status::Pass,
-            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), the Claude settings send native `Edit` and `Write` calls to edit-guard, and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
+            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), the Claude settings send native `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard, and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
         ),
     };
     CheckResult {
@@ -806,7 +809,7 @@ mod tests {
 
     /// TSK-1461 AC-11: Claude settings that send a native edit tool to no
     /// edit-guard hook are named, tool by tool; the shipped presets and the
-    /// matchers that take both tools pass.
+    /// matchers that take all four tools pass.
     #[test]
     fn claude_settings_without_the_edit_hook_are_named() {
         let dir = tempfile::tempdir().unwrap();
@@ -836,7 +839,7 @@ mod tests {
             group
         };
         let both = Some(
-            ".claude/settings.json sends Claude Code's native `Edit` and `Write` calls to no edit-guard hook"
+            ".claude/settings.json sends Claude Code's native `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to no edit-guard hook"
                 .to_string(),
         );
         assert_eq!(settings(serde_json::json!([])), both);
@@ -861,7 +864,15 @@ mod tests {
         assert_eq!(
             settings(serde_json::json!([group("Edit".into(), guard)])),
             Some(
-                ".claude/settings.json sends Claude Code's native `Write` calls to no edit-guard hook"
+                ".claude/settings.json sends Claude Code's native `MultiEdit`, `Write` and `NotebookEdit` calls to no edit-guard hook"
+                    .to_string()
+            )
+        );
+        // The matcher part 5 first shipped leaves two tools out.
+        assert_eq!(
+            settings(serde_json::json!([group("^(Edit|Write)$".into(), guard)])),
+            Some(
+                ".claude/settings.json sends Claude Code's native `MultiEdit` and `NotebookEdit` calls to no edit-guard hook"
                     .to_string()
             )
         );
@@ -878,8 +889,8 @@ mod tests {
             serde_json::Value::Null,
             "".into(),
             "*".into(),
-            "Edit|Write".into(),
-            "Edit|MultiEdit|Write".into(),
+            "^(Edit|MultiEdit|Write|NotebookEdit)$".into(),
+            "NotebookEdit|Write|MultiEdit|Edit".into(),
             ".*".into(),
         ] {
             assert_eq!(
@@ -888,11 +899,11 @@ mod tests {
                 "{matcher}"
             );
         }
-        // Two groups that together take both tools pass.
+        // Two groups that together take every tool pass.
         assert_eq!(
             settings(serde_json::json!([
-                group("Edit".into(), guard),
-                group("Write".into(), guard)
+                group("Edit|MultiEdit".into(), guard),
+                group("Write|NotebookEdit".into(), guard)
             ])),
             None
         );

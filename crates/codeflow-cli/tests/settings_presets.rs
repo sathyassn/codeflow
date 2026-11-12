@@ -489,8 +489,9 @@ fn edit_guard_groups(value: &serde_json::Value) -> Vec<&serde_json::Value> {
         .collect()
 }
 
-/// TSK-1461 part 5: every Claude preset sends Claude Code's native `Edit`
-/// and `Write` calls to edit-guard, as the Codex and Grok hook files send
+/// TSK-1461 part 5: every Claude preset sends Claude Code's native `Edit`,
+/// `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard, as the Codex
+/// and Grok hook files send
 /// theirs: one group, its own matcher, and the same command and bounds as
 /// the shipped shell guards.
 #[test]
@@ -521,7 +522,7 @@ fn edit_guard_wired_in_every_preset() {
         let group = groups[0];
         assert_eq!(
             group["matcher"].as_str(),
-            Some("^(Edit|Write)$"),
+            Some("^(Edit|MultiEdit|Write|NotebookEdit)$"),
             "{name}: edit-guard takes Claude Code's native edit tools"
         );
         let hooks = group["hooks"].as_array().unwrap();
@@ -2233,11 +2234,22 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
             "the Codex profile does not keep {path} read only"
         );
     }
+    assert_eq!(
+        edit_guard_groups(&written)[0]["matcher"].as_str(),
+        Some("^(Edit|MultiEdit|Write|NotebookEdit)$"),
+        "update did not add the matcher for every native edit tool"
+    );
     let after = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
+    // The check's own line passes and says the edit hook takes every tool.
+    let passed = after.lines().any(|line| {
+        line.contains("startup-files")
+            && line.contains("ok")
+            && line.contains(
+                "send native `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard",
+            )
+    });
     assert!(
-        !after.contains("saved shell state")
-            && !after.contains("no edit-guard hook")
-            && after.contains("ok"),
+        passed && !after.contains("saved shell state") && !after.contains("no edit-guard hook"),
         "doctor still reports after the update:\n{after}"
     );
     run_in_home(&root, &home, &["update"]);

@@ -10,8 +10,9 @@
   - Where the guard cannot tell what a command writes, it refuses when
     the command names that state or runs in a folder that holds it.
   - The guards refuse a native edit that writes that state, in Claude
-    Code, Codex and Grok. The Claude presets now send native edits to
-    edit-guard, as the Codex and Grok hook files already do.
+    Code, Codex and Grok. The Claude presets now send Claude Code's
+    `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard,
+    as the Codex and Grok hook files already send theirs.
   - The presets deny the same writes, `codeflow update` adds the entries
     and the edit hook to an existing project, and `codeflow doctor`
     reports settings that lack them.

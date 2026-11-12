@@ -2354,7 +2354,8 @@ fn clears_doctor_guard_timeouts() {
                 }
             }
         }
-        assert_eq!(stripped, 2, "{text}");
+        // The two shell guards and the native edit guard.
+        assert_eq!(stripped, 3, "{text}");
         serde_json::to_string_pretty(&value).unwrap()
     };
     write(
@@ -2389,6 +2390,7 @@ fn clears_doctor_guard_timeouts() {
     let before = doctor(&root, "guard-timeouts");
     for named in [
         ".claude/settings.json: git-guard has no `timeout` and no `\"onFailure\": \"block\"`",
+        ".claude/settings.json: edit-guard has no `timeout` and no `\"onFailure\": \"block\"`",
         ".grok/hooks/codeflow.json: edit-guard has `timeout` 10, not the shipped 30",
         ".codex/hooks.json: exec-guard has `timeout` 10, not the shipped 30",
     ] {
