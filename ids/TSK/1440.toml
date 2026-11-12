@@ -1,0 +1,11 @@
+id = "TSK-1440"
+uid = "01e1ed78-bb58-4117-815e-188a386f4559"
+kind = "TSK"
+title = "The epic graph is derived from task dependencies, with explicit links, and a circle is refused"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:58:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
