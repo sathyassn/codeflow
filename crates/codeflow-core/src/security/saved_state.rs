@@ -537,19 +537,22 @@ fn plain_redirects(command: &str) -> String {
     out
 }
 
-/// The first variable of `vars` that `word` changes with a zsh flag,
-/// modifier or subscript, with its value: `$NAME:a`, `$NAME[1,-1]`, a
-/// braced form with anything after the name (`${NAME:a}`, `${NAME[1]}`,
-/// `${NAME:-x}`), zsh's `(flags)`, `=`, `~` and `^` before the name, braced
-/// or not, and a braced expansion that holds another one. The guard does
-/// not compute the result, so the startup check reads such a word as
-/// filled in at run time.
+/// Every variable of `vars` that `word` changes with a zsh flag, modifier
+/// or subscript, each once with its value, in the order the word names
+/// them: `$NAME:a`, `$NAME[1,-1]`, a braced form with anything after the
+/// name (`${NAME:a}`, `${NAME[1]}`, `${NAME:-x}`), zsh's `(flags)`, `=`,
+/// `~` and `^` before the name, braced or not, and a braced expansion that
+/// holds another one. The guard does not compute the result, so the
+/// startup check reads such a word as filled in at run time, and judges
+/// each changed variable: one aimed at an ordinary folder never hides
+/// another in the same word.
 ///
 /// The word is read as the command reader hands it over, with its quotes
 /// and backslashes removed, so a quote or backslash left in it is a
 /// literal character and hides nothing: every `$` counts, as the
 /// substitution that fills the word counts it.
-pub(super) fn modified_variable(word: &str, vars: &[(String, String)]) -> Option<(String, String)> {
+pub(super) fn modified_variables(word: &str, vars: &[(String, String)]) -> Vec<(String, String)> {
+    let mut changed_vars: Vec<(String, String)> = Vec::new();
     let chars: Vec<char> = word.chars().collect();
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let flags = |mut at: usize| {
@@ -607,11 +610,11 @@ pub(super) fn modified_variable(word: &str, vars: &[(String, String)]) -> Option
                             .get(end + 1)
                             .is_some_and(|c| c.is_ascii_alphabetic() || *c == '&'))
             };
-        if modified {
-            return Some((name, value.clone()));
+        if modified && !changed_vars.iter().any(|(known, _)| *known == name) {
+            changed_vars.push((name, value.clone()));
         }
     }
-    None
+    changed_vars
 }
 
 /// A node's identity: its device and inode.

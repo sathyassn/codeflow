@@ -1019,7 +1019,7 @@ impl Line<'_> {
     /// on a variable the guard fills is filled in at run time too.
     fn expand(&self, word: &str, dir: &Path) -> Option<PathBuf> {
         if self.kind == Kind::SavedState
-            && saved_state::modified_variable(word, &self.vars()).is_some()
+            && !saved_state::modified_variables(word, &self.vars()).is_empty()
         {
             return None;
         }
@@ -1274,11 +1274,12 @@ impl Line<'_> {
     /// Whether an unresolved word may name a startup file: the line names
     /// one, or the literal directory before the part the shell fills in is
     /// the home, `/etc` or a startup directory. For saved state, a word
-    /// that changes a variable whose value is or holds a location with a
-    /// zsh modifier or subscript may name one too.
+    /// that changes any variable whose value is or holds a location with a
+    /// zsh flag, modifier or subscript may name one too, whatever other
+    /// variables the word changes before it.
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
         if self.kind == Kind::SavedState {
-            if let Some((name, value)) = saved_state::modified_variable(word, &self.vars()) {
+            for (name, value) in saved_state::modified_variables(word, &self.vars()) {
                 let near = dirs.iter().any(|dir| {
                     let path = dir.join(&value);
                     self.class
