@@ -1,0 +1,11 @@
+id = "TSK-1462"
+uid = "03fd94de-6975-470d-9400-d6b79e0f1c35"
+kind = "TSK"
+title = "Seat launches through the Herdr app pass the guards again once its dispatch is known"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:05:31Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
