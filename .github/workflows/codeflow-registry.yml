@@ -14,7 +14,13 @@
 # the pinned release, since CodeFlow is its own first consumer.
 #
 # Runs are never cancelled, so a registry run is never replaced by a newer
-# queued event. The token is read-only and no secret is used.
+# queued event. The token is read-only and no secret is used, except in
+# the job `cache-main-build` below.
+#
+# The job `cache-main-build` is the one writer of the policy-binary and
+# dependency caches that codeflow-policy.yml restores (TSK-1240). It runs
+# for a push to the default branch alone, and its extra permissions are
+# exactly the two that signing a build attestation needs.
 name: codeflow-registry
 
 on:
@@ -65,3 +71,107 @@ jobs:
 
       - name: codeflow ids check
         run: codeflow ids check
+
+  # The only writer of the default branch's policy-binary and dependency
+  # caches. It runs for a push to the default branch alone, holds read access
+  # to contents plus exactly the two permissions that signing a build
+  # attestation needs (id-token and attestations), shares no job with a token
+  # that can write anything else, and builds only the pushed commit. Pushes to integration branches, the
+  # schedule and manual runs skip it, so nothing a pull request or an
+  # integration branch built reaches the cache that the verdict jobs in
+  # codeflow-policy.yml restore. The binary is attested, and a verdict job
+  # runs a restored binary only when that attestation verifies. The
+  # attestation covers the bytes that run, not the act of restoring: the cache
+  # action extracts an archive before any check, so the verdict jobs restore
+  # into a fresh directory and delete it unless it verifies.
+  cache-main-build:
+    name: cache main build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # The cache key names the pushed commit and the build
+      # environment. It is computed from this checkout before any pull
+      # request data is fetched, so nothing a pull request controls reaches
+      # it.
+      - name: Identify the main build
+        id: main-build
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [ "$sha" = "$AUTHORITY_SHA" ]
+          git diff --quiet
+          git diff --cached --quiet
+          identity=$({
+            rustc -vV
+            cargo -V
+            cc --version
+            printf '%s\n' "${ImageOS:?}" "${ImageVersion:?}" "${RUNNER_ARCH:?}"
+            printf '%s\n' "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" "${CC-}" "${CFLAGS-}" "${LDFLAGS-}"
+          } | sha256sum | cut -d ' ' -f 1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "key=codeflow-policy-main-binary-v3-$sha-$identity" >> "$GITHUB_OUTPUT"
+
+      # Lookup only: an exact entry for this commit means the build is
+      # already saved, and nothing is downloaded or run.
+      - name: Look for the saved main binary
+        id: main-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/codeflow-main-binary
+          key: ${{ steps.main-build.outputs.key }}
+          lookup-only: true
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.main-cache.outputs.cache-hit != 'true'
+        with:
+          prefix-key: codeflow-policy-main-deps-v3
+          shared-key: authority
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Build and verify the main binary
+        id: main-binary
+        if: steps.main-cache.outputs.cache-hit != 'true'
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+          BINARY_DIR: ${{ runner.temp }}/codeflow-main-binary
+        run: |
+          set -euo pipefail
+          binary="$BINARY_DIR/codeflow"
+          cargo build --release --locked -p codeflow-cli
+          mkdir -p "$BINARY_DIR"
+          cp target/release/codeflow "$binary"
+          version=$("$binary" --version)
+          if ! [[ "$version" =~ ^codeflow\ [^[:space:]]+\ source=$AUTHORITY_SHA\ dirty=false\ inputs=[0-9a-f]+$ ]]; then
+            echo "::error::main binary source identity does not match $AUTHORITY_SHA"; exit 1
+          fi
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the verified main binary
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.main-binary.outputs.built == 'true' && steps.main-cache.outputs.cache-hit != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/codeflow-main-binary/codeflow
+
+      - name: Save the verified main binary
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.main-binary.outputs.built == 'true' && steps.main-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/codeflow-main-binary
+          key: ${{ steps.main-build.outputs.key }}
