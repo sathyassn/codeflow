@@ -1,9 +1,9 @@
 //! Parsed action-family checks shared by the execution guard.
 use super::actions::{table, PatternToken};
 use super::headless::{
-    after_runner_options, package_bin, shell_command_string, skip_assignments, skip_env,
-    skip_options,
+    after_runner_options, package_bin, shell_command_string, skip_env, skip_options,
 };
+use super::shell_lex::{skip_leading, Taker};
 use crate::hooks::git_guard::{
     command_argv, expand_commands, split_alias, strip_launchers, strip_reserved_words, AliasAnswer,
 };
@@ -669,12 +669,13 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         strip_reserved_words(&mut words);
         patterns.drain(..before - words.len());
         let trigger = crate::hooks::git_guard::configuration_environment_trigger(&words);
-        if skip_assignments(&words).is_empty() {
+        let leading = skip_leading(&words, Taker::Shell);
+        if leading == words.len() {
             persistent = trigger.clone().or(persistent);
         }
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
-        let mut assigned = skip_assignments(&words).to_vec();
+        let mut assigned = words[leading..].to_vec();
         let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
             .iter()
@@ -1614,7 +1615,7 @@ fn argv(
     if depth > 32 {
         return;
     }
-    let args = skip_assignments(args);
+    let args = &args[skip_leading(args, Taker::Shell)..];
     let patterns = pattern_tail(patterns, args.len());
     let possible_command = crate::hooks::git_guard::configuration_assignment_tail(args);
     if possible_command.len() < args.len() {

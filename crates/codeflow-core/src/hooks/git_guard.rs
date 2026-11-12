@@ -1322,7 +1322,7 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
         if let Some(var) = assigns(t) {
             return Some(var); // VAR=... as an env-prefix
         }
-        if t.contains('=') && is_identifier(t.split_once('=').map_or("", |(n, _)| n)) {
+        if leading_word(t, Taker::Shell) == LeadingWord::Assignment {
             idx += 1; // some other harmless assignment prefix — keep scanning
             continue;
         }
@@ -1413,7 +1413,7 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
     while idx < tokens.len() {
         let t = tokens[idx].as_str();
         if let Some((n, v)) = t.split_once('=') {
-            if is_identifier(n) {
+            if leading_word(t, Taker::Shell) == LeadingWord::Assignment {
                 out.push((n, v));
                 idx += 1;
                 continue;
@@ -1426,7 +1426,7 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
         if word == "env" || t == "export" || is_declare_builtin(t) || t == "command" {
             for a in &tokens[idx + 1..] {
                 if let Some((n, v)) = a.split_once('=') {
-                    if is_identifier(n) {
+                    if leading_word(a, Taker::Env) == LeadingWord::Assignment {
                         out.push((n, v));
                     }
                 }
@@ -1937,7 +1937,7 @@ fn hook_skip_env(tokens: &[String]) -> Option<&'static str> {
         if let Some(v) = matches_var(t) {
             return Some(v);
         }
-        if t.contains('=') && is_identifier(t.split_once('=').map_or("", |(n, _)| n)) {
+        if leading_word(t, Taker::Shell) == LeadingWord::Assignment {
             idx += 1;
             continue;
         }
@@ -8059,15 +8059,11 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// `-c`, so the text is expanded like any other command. `None` when no
 /// launcher in front uses `-S`.
 pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
     let mut idx = 0;
     loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             idx = skip_launcher_options(t, tokens, idx + 1)?;
@@ -8107,15 +8103,11 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
 /// launcher uses `-S`; an error when the string uses a form the guard does
 /// not read exactly.
 pub(crate) fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, String>> {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
     let mut idx = 0;
     loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             idx = skip_launcher_options(t, tokens, idx + 1)?;
@@ -8868,11 +8860,7 @@ fn substitution_output_runs(prefix: &str) -> bool {
         Some(_) => !reads_as_data(prefix),
         // No program: command position unless the words are all assignments.
         None => {
-            argv.is_empty()
-                || !argv.iter().all(|w| {
-                    w.split_once('=')
-                        .is_some_and(|(name, _)| is_identifier(name))
-                })
+            argv.is_empty() || skip_leading(&argv, Taker::Shell) < argv.len()
         }
     }
 }

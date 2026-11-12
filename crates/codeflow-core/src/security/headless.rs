@@ -448,11 +448,6 @@ pub(crate) fn skip_options<'a>(args: &'a [String], with_value: &[&str]) -> &'a [
     args.get(at..).unwrap_or_default()
 }
 
-/// Skip `NAME=value` words ([`skip_leading`]).
-pub(crate) fn skip_assignments(args: &[String]) -> &[String] {
-    &args[skip_leading(args, Taker::Shell)..]
-}
-
 /// Skip the `NAME=value` words a launcher such as `sudo` reads itself.
 fn skip_env_assignments(args: &[String]) -> &[String] {
     &args[skip_leading(args, Taker::Env)..]
