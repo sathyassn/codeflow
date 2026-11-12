@@ -854,6 +854,8 @@ pub fn imported_record_paths(
 }
 
 #[cfg(test)]
+mod home_set_tests;
+#[cfg(test)]
 mod home_tests;
 
 #[cfg(test)]
