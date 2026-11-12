@@ -1070,6 +1070,7 @@ fn saved_state_writes_refuse_through_both_hooks() {
     // The text rule names the location by its full path, as it compares it.
     let needle = key(&lexical(&conf.join("session-env")));
     let near = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
+    let place = "keep the harness configuration folder outside the project, or run the program in a folder that holds no saved shell state";
     let cd_way = "run `cd` alone with a plain unquoted path, or give the full path to a reader the guard lists, such as `cat`, `head`, `grep` or `ls`, instead of changing into the folder";
     let forms: Vec<(String, String)> = vec![
         (
@@ -1169,19 +1170,19 @@ fn saved_state_writes_refuse_through_both_hooks() {
         ),
         (
             format!("wget -P {p} https://example.test/x"),
-            format!("`wget` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`wget` writes into `{p}`, which holds the saved shell state location `{label}`, where it can place a saved shell state file it does not name; {near}"),
         ),
         (
             format!("cd {p} && tar xf a.tar"),
-            format!("`tar` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`tar` runs in `{p}`, which holds the saved shell state location `{label}`, where it can place a saved shell state file it does not name; {place}"),
         ),
         (
             format!("cd {p} && patch -p1 < fix.diff"),
-            format!("`patch` runs in `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`patch` runs in `{p}`, which holds the saved shell state location `{label}`, where it can place a saved shell state file it does not name; {place}"),
         ),
         (
             format!("find {p} -name x -exec chmod 600 {{}} +"),
-            format!("`find` writes into `{p}`, where it can place a saved shell state file it does not name; {near}"),
+            format!("`find` writes into `{p}`, which holds the saved shell state location `{label}`, where it can place a saved shell state file it does not name; {near}"),
         ),
     ];
     // A row with no command adds a finding to the row before it.
@@ -1416,6 +1417,10 @@ fn a_directory_change_refuses_only_into_a_location() {
         &mut wrong,
     );
     both_hooks(&f, &places, &format!("cd '{d}'"), &refusal, &mut wrong);
+    // That way through runs: a listed reader given the quoted full path.
+    for command in [format!("cat '{d}/x'"), format!("ls \"{d}\"")] {
+        both_hooks(&f, &places, &command, &[], &mut wrong);
+    }
     for dir in &parents {
         let d = slashed(dir);
         both_hooks(&f, &places, &format!("cd '{d}' && ls"), &[], &mut wrong);

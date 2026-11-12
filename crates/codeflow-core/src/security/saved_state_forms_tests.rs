@@ -13,6 +13,10 @@ const LABEL: &str = "$CLAUDE_CONFIG_DIR/session-env";
 /// The way through a refusal near saved state.
 const NEAR: &str = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
 
+/// The way through a program that places files in the folder it runs in,
+/// which holds saved state.
+const PLACE: &str = "keep the harness configuration folder outside the project, or run the program in a folder that holds no saved shell state";
+
 /// A Claude configuration folder the session moved outside the home, with
 /// a `session-env` location and a neighbour folder, and the locations for
 /// it.
@@ -81,11 +85,12 @@ fn every_redirect_spelling_refuses_through_both_hooks() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// A zsh modifier or subscript on a variable the guard fills (`$NAME:a`,
-/// `${NAME[1,-1]}`) changes the value in a way the guard does not compute,
-/// so where the value is or holds saved state the write fails closed, at
-/// the home and at a moved folder. The same forms on a variable aimed at an
-/// ordinary folder still run.
+/// A zsh flag, modifier or subscript on a variable the guard fills, braced,
+/// unbraced or nested, changes the value in a way the guard does not
+/// compute, so where the value is or holds saved state the write fails
+/// closed, at the home and at a moved folder, for a variable the line
+/// assigns too. The same forms on a variable aimed at an ordinary folder
+/// still run.
 #[test]
 fn a_changed_expansion_of_a_filled_variable_fails_closed() {
     let f = Fixture::new();
@@ -119,10 +124,16 @@ fn a_changed_expansion_of_a_filled_variable_fails_closed() {
             format!("${{{name}:a}}"),
             format!("${name}[1,-1]"),
             format!("${{{name}[1,-1]}}"),
+            format!("$={name}"),
+            format!("$~{name}"),
+            format!("$^{name}"),
+            format!("$=~{name}"),
+            format!("${{${{{name}}}:a}}"),
+            format!("${{${{{name}}}}}"),
         ] {
             let word = format!("{form}{rest}");
             let message = format!(
-                "a redirect writes `{word}`, which the guard cannot resolve, and it applies a modifier or subscript to `${name}`, whose value `{value}` is or holds saved shell state; {NEAR}"
+                "a redirect writes `{word}`, which the guard cannot resolve, and it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state; {NEAR}"
             );
             both_hooks(
                 &f,
@@ -133,13 +144,47 @@ fn a_changed_expansion_of_a_filled_variable_fails_closed() {
             );
         }
     }
+    // The command reader hands the pass words with their quotes removed,
+    // so a quote or backslash left in a word is a literal character and
+    // never hides a later change of a variable.
+    let p = slashed(&conf);
+    for (command, word) in [
+        (
+            "echo x >> \"it's\"/../../../../../../../..$CLAUDE_CONFIG_DIR:a/session-env/h",
+            "it's/../../../../../../../..$CLAUDE_CONFIG_DIR:a/session-env/h",
+        ),
+        (
+            "echo x >> ../../../../../../../\"x\\\\\"$CLAUDE_CONFIG_DIR:a/session-env/h",
+            "../../../../../../../x\\$CLAUDE_CONFIG_DIR:a/session-env/h",
+        ),
+    ] {
+        let message = format!(
+            "a redirect writes `{word}`, which the guard cannot resolve, and it changes `$CLAUDE_CONFIG_DIR` with a zsh flag, modifier or subscript, and its value `{p}` is or holds saved shell state; {NEAR}"
+        );
+        both_hooks(&f, &moved, command, &[message], &mut wrong);
+    }
+    // A variable the line assigns is filled the same way.
+    both_hooks(
+        &f,
+        &moved,
+        &format!("V={p}; echo x >> $V:a/session-env/h"),
+        &[format!(
+            "a redirect writes `$V:a/session-env/h`, which the guard cannot resolve, and it changes `$V` with a zsh flag, modifier or subscript, and its value `{p}` is or holds saved shell state; {NEAR}"
+        )],
+        &mut wrong,
+    );
     let out = slashed(&f.project.join("out"));
     for command in [
         format!("OUT={out}; echo x > $OUT:a/h"),
         format!("OUT={out}; echo x > ${{OUT[1,-1]}}/h"),
+        format!("OUT={out}; echo x > $=OUT/h"),
+        format!("OUT={out}; echo x > ${{${{OUT}}:a}}/h"),
         "echo x > $PROJ:a/h".to_string(),
         "echo x > ${PROJ[1,-1]}/h".to_string(),
+        "echo x > $~PROJ/h".to_string(),
         "ls $HOME:a/.claude/session-env".to_string(),
+        "ls $=HOME/.claude/session-env".to_string(),
+        "echo \"it's\" > notes.md".to_string(),
     ] {
         both_hooks(&f, &moved, &command, &[], &mut wrong);
     }
@@ -148,8 +193,10 @@ fn a_changed_expansion_of_a_filled_variable_fails_closed() {
 
 /// The kernel reads a symbolic link's relative text from the folder the
 /// link is in, so a link made in another folder than the command runs in
-/// is judged from there: a link to a location refuses in both runs, and a
-/// relative link to an ordinary folder still runs.
+/// is judged from there, and a destination is tried as a folder whatever
+/// it is now, unless `-T` makes it the link itself: a link to a location
+/// refuses in both runs, and a relative link to an ordinary folder still
+/// runs.
 #[cfg(unix)]
 #[test]
 fn link_text_is_read_from_the_link_s_folder() {
@@ -185,6 +232,12 @@ fn link_text_is_read_from_the_link_s_folder() {
                 .to_string(),
             "../../../../../conf/session-env",
         ),
+        // The folder is made earlier on the line, so it is absent when the
+        // guard reads the line: the link may still land in it.
+        (
+            format!("mkdir d && ln -s {text} d && echo x > d/session-env/h"),
+            text,
+        ),
     ] {
         both_hooks(&f, &places, &command, &first, &mut wrong);
         let found = f.pass_with(&command, &places);
@@ -196,6 +249,8 @@ fn link_text_is_read_from_the_link_s_folder() {
         "ln -s ../notes sub/lnk",
         "ln -s ../../../../conf/projects sub/lnk4",
         "cd sub && ln -s ../notes ../lnk5",
+        // `-T` makes the link the destination itself, never a name in it.
+        "ln -sT ../../../../conf/session-env e",
     ] {
         both_hooks(&f, &places, command, &[], &mut wrong);
     }
@@ -282,8 +337,21 @@ fn a_location_inside_a_project_makes_its_placements_refuse() {
     ];
     let mut refused = Vec::new();
     let mut wrong = Vec::new();
-    for (places, cwd) in [(&in_project, &f.project), (&in_scratch, &scratch)] {
+    for (places, cwd, label) in [
+        (&in_project, &f.project, "$CLAUDE_CONFIG_DIR/session-env"),
+        (&in_scratch, &scratch, "$CODEX_HOME/shell_snapshots"),
+    ] {
         for command in commands {
+            // A program that changes the folder it runs in names the
+            // location there and the way through it can use.
+            let program = command.split(' ').next().unwrap_or_default();
+            let runs = (command.starts_with("git ") || ["tar", "unzip"].contains(&program))
+                .then(|| {
+                    format!(
+                        "`{program}` runs in `{}`, which holds the saved shell state location `{label}`, where it can place a saved shell state file it does not name; {PLACE}",
+                        slashed(cwd)
+                    )
+                });
             for (hook, found) in [
                 (
                     "exec-guard",
@@ -297,6 +365,8 @@ fn a_location_inside_a_project_makes_its_placements_refuse() {
                 let messages = saved(&found);
                 if messages.is_empty() {
                     wrong.push(format!("{hook} {command}: runs"));
+                } else if runs.as_ref().is_some_and(|want| messages != [want.clone()]) {
+                    wrong.push(format!("{hook} {command}: {messages:?}"));
                 } else {
                     refused.push(format!("{hook} {command}: {}", messages[0]));
                 }
