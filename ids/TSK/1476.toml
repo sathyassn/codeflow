@@ -1,0 +1,11 @@
+id = "TSK-1476"
+uid = "9d4b2cda-8e44-41b4-baca-15242cd27875"
+kind = "TSK"
+title = "Guards hold the operator-only path for project install files"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T17:05:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
