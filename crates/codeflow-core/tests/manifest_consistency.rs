@@ -1232,8 +1232,8 @@ fn portal_state_matches_the_shipped_starter() {
     let problems = portal_pin_drift(&state, &manifest, &root.join("assets/docs-portal/starter"));
     assert!(
         problems.is_empty(),
-        "portal state drifted from the shipped starter; run `codeflow update` and commit \
-         .codeflow/docs-portal.json:\n  {}",
+        "portal state drifted from the shipped starter; the operator runs `codeflow update` \
+         and commits .codeflow/docs-portal.json:\n  {}",
         problems.join("\n  ")
     );
 }

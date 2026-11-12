@@ -811,8 +811,8 @@ fn delegate_source_live_and_baseline_copies_are_byte_identical() {
     problems.sort();
     assert!(
         problems.is_empty(),
-        "delegate skill source/live/baseline copies drifted (regenerate with \
-         `cargo run -p codeflow-cli -- update`):\n  {}",
+        "delegate skill source/live/baseline copies drifted (the operator \
+         regenerates them with `cargo run -p codeflow-cli -- update`):\n  {}",
         problems.join("\n  ")
     );
 }

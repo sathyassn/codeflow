@@ -138,9 +138,10 @@ fn codeflow_update_is_a_no_op_on_this_repository() {
     assert!(
         drift.is_empty(),
         "`codeflow update` is not a no-op on this repository: a shipped asset \
-         changed without resyncing CodeFlow's own install. Run `{RESYNC}` at \
-         the repository (or worktree) root, review what it changed and commit \
-         it with the asset change. Files update would change:\n  {}\n\n{report}",
+         changed without resyncing CodeFlow's own install. The operator runs \
+         `{RESYNC}` at the repository (or worktree) root, reviews what it \
+         changed and commits it with the asset change. Files update would \
+         change:\n  {}\n\n{report}",
         drift.join("\n  ")
     );
 }
