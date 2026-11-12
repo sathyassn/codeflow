@@ -115,10 +115,9 @@ fn corpus(t: &Path) -> Vec<(String, PathBuf)> {
     for (command, _) in forms::XARGS_OPTION_FORMS {
         add(command);
     }
-    let rows: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(invariant().join("rows.json")).unwrap(),
-    )
-    .unwrap();
+    let rows: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(invariant().join("rows.json")).unwrap())
+            .unwrap();
     let root = slashed(t);
     for row in rows.as_array().unwrap() {
         let command = row["command"].as_str().unwrap().replace("@T@", &root);
@@ -129,16 +128,16 @@ fn corpus(t: &Path) -> Vec<(String, PathBuf)> {
 }
 
 fn invariant() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../codeflow-cli/tests/fixtures/text-guard-invariant")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../codeflow-cli/tests/fixtures/text-guard-invariant")
 }
 
 /// Rebuild the invariant's fixture tree under `t`: its folders, files and
 /// links, without a repository.
 fn invariant_tree(t: &Path) {
-    let tree: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(invariant().join("tree.json")).unwrap(),
-    )
-    .unwrap();
+    let tree: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(invariant().join("tree.json")).unwrap())
+            .unwrap();
     std::fs::create_dir_all(t.join("repo")).unwrap();
     std::fs::create_dir_all(t.join("home")).unwrap();
     for item in tree.as_array().unwrap() {
@@ -180,7 +179,10 @@ fn saved_state_findings_follow_every_other_finding_unchanged() {
     assert!(rows.len() > 2500, "corpus has {} rows", rows.len());
     let levels = crate::hooks::policy::SecuritySection::default();
     let git_policy = crate::hooks::policy::GitPolicy::default();
-    let outcomes = [Outcome::Relaxed, Outcome::Strict("unsandboxed retry".into())];
+    let outcomes = [
+        Outcome::Relaxed,
+        Outcome::Strict("unsandboxed retry".into()),
+    ];
     let chunks: Vec<&[(String, PathBuf)]> = rows.chunks(rows.len().div_ceil(4)).collect();
     let problems: Vec<String> = std::thread::scope(|scope| {
         let handles: Vec<_> = chunks
@@ -384,7 +386,10 @@ fn a_target_the_reader_cannot_bind_exactly_adds_no_finding() {
     // Every reading refuses: both directories hold saved state at `x`.
     let e = f.home.join("E");
     f.mkdir(&e.join("x/session-env"));
-    let command = format!("if c; then cd {to_d}; else cd {}; fi; rm -rf x", slashed(&e));
+    let command = format!(
+        "if c; then cd {to_d}; else cd {}; fi; rm -rf x",
+        slashed(&e)
+    );
     assert_eq!(f.pass(&command).len(), 2, "{command}");
 }
 
@@ -426,7 +431,10 @@ fn ordinary_lines_after_a_directory_change_still_run() {
         "pushd /usr; popd; rm -rf build",
     ] {
         assert_eq!(f.pass(command), Vec::<String>::new(), "{command}");
-        for outcome in [Outcome::Relaxed, Outcome::Strict("unsandboxed retry".into())] {
+        for outcome in [
+            Outcome::Relaxed,
+            Outcome::Strict("unsandboxed retry".into()),
+        ] {
             let found = crate::hooks::exec_guard::evaluate_ruled(
                 command,
                 true,
@@ -504,11 +512,10 @@ fn saved_shell_state_writes_refuse() {
     }
     assert!(wrong.is_empty(), "not refused:\n{}", wrong.join("\n"));
     // With the work turned off, the same writes are not in the class.
-    assert!(without(|| class_target(
-        &f.home.join(".claude/session-env/new.sh"),
-        &f.locations()
-    ))
-    .is_none());
+    assert!(
+        without(|| class_target(&f.home.join(".claude/session-env/new.sh"), &f.locations()))
+            .is_none()
+    );
 }
 
 /// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move the saved state with them,
@@ -634,7 +641,9 @@ fn removing_or_moving_a_tree_that_holds_saved_state_refuses() {
     );
     assert_eq!(
         f.pass(&format!("mv {h} ../kept")),
-        [format!("`mv` moves `{h}`, which is or holds saved shell state: `{h}`")]
+        [format!(
+            "`mv` moves `{h}`, which is or holds saved shell state: `{h}`"
+        )]
     );
     assert_eq!(
         f.pass(&format!("find {h} -exec rm -rf {{}} +")),
@@ -764,7 +773,11 @@ fn placing_a_tree_over_saved_state_refuses() {
     // A known location by path, with no read below it: the home and the
     // configuration folder above the default saved state.
     let claude = f.home.join(".claude");
-    for command in ["cp -r src ~", "tar -xf a.tar -C ~/.claude", "ditto src ~/.claude/session-env/x"] {
+    for command in [
+        "cp -r src ~",
+        "tar -xf a.tar -C ~/.claude",
+        "ditto src ~/.claude/session-env/x",
+    ] {
         let found = f.pass(command);
         if found.len() != 1 {
             wrong.push(format!("{command}: {found:?}"));
@@ -807,7 +820,9 @@ fn the_scan_stops_at_its_depth_and_refuses_what_it_cannot_read() {
     );
     let shallow = f.home.join("shallow");
     f.mkdir(&shallow.join("a/b/c"));
-    assert!(f.pass(&format!("cp -r src {}", slashed(&shallow))).is_empty());
+    assert!(f
+        .pass(&format!("cp -r src {}", slashed(&shallow)))
+        .is_empty());
 }
 
 /// A link found in a placement's tree is judged by where it leads: to, above
@@ -834,7 +849,11 @@ fn a_link_in_a_placement_tree_is_judged_by_where_it_leads() {
         make("above", &f.home.join("profile")),
         make("broken", &f.home.join("does/not/exist")),
     ] {
-        assert_eq!(f.pass(&format!("tar -xf a.tar -C {tree}")).len(), 1, "{tree}");
+        assert_eq!(
+            f.pass(&format!("tar -xf a.tar -C {tree}")).len(),
+            1,
+            "{tree}"
+        );
     }
     let ordinary = make("ordinary", &f.home.join("ordinary"));
     assert!(f.pass(&format!("tar -xf a.tar -C {ordinary}")).is_empty());

@@ -511,13 +511,13 @@ impl Pass<'_> {
         let Some(paths) = self.paths(source, bound, dir) else {
             return true;
         };
-        paths.iter().any(|path| {
-            match crate::absence::symlink_metadata_optional(path) {
+        paths.iter().any(
+            |path| match crate::absence::symlink_metadata_optional(path) {
                 Ok(Some(metadata)) => metadata.is_dir(),
                 Ok(None) => false,
                 Err(_) => true,
-            }
-        })
+            },
+        )
     }
 
     /// A tree removed (`rm -r`, `find -delete`) or moved away (`mv`).
@@ -640,10 +640,13 @@ impl Pass<'_> {
         };
         for path in paths {
             let readings = readings_of(&path);
-            let at = readings.iter().find_map(|r| self.location_of(r)).or_else(|| {
-                tree.then(|| readings.iter().find_map(|r| self.location_below(r)))
-                    .flatten()
-            });
+            let at = readings
+                .iter()
+                .find_map(|r| self.location_of(r))
+                .or_else(|| {
+                    tree.then(|| readings.iter().find_map(|r| self.location_below(r)))
+                        .flatten()
+                });
             if let Some(label) = at {
                 member.found.push(format!(
                     "`{name}` places files into `{target}`, which is, holds or lies in saved shell state: `{label}`"
