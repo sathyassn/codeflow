@@ -751,6 +751,12 @@ fn init_writes_the_saved_shell_state_denies() {
         serde_json::from_str(&std::fs::read_to_string(root.join(".claude/settings.json")).unwrap())
             .unwrap();
     assert_saved_state_denied("init --minimal", &written);
+    // AC-11: the installed settings send native edits to edit-guard.
+    assert_eq!(
+        edit_guard_groups(&written).len(),
+        1,
+        "init --minimal: no edit-guard group"
+    );
 }
 
 /// TSK-1044 AC-4, decided by the operator on 2026-10-30: no Claude preset

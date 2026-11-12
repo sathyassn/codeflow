@@ -2872,6 +2872,64 @@ fn saved_shell_state_writes_refuse_from_the_hook_environment() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+// TSK-1461 AC-2: Claude Code's native `Edit` and `Write` calls, which the
+// presets now send to edit-guard, refuse below a Claude configuration folder
+// that `CLAUDE_CONFIG_DIR` moves out of the home, and at the file
+// `CLAUDE_ENV_FILE` names, where no preset deny reaches. A file of the moved
+// folder that is not saved state stays ordinary.
+#[cfg(unix)]
+#[test]
+fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
+    let f = Fixture::new();
+    let moved = f.temp.path().join("elsewhere/claude");
+    std::fs::create_dir_all(moved.join("session-env/abc")).unwrap();
+    std::fs::create_dir_all(moved.join("shell-snapshots")).unwrap();
+    let env_file = f.temp.path().join("elsewhere/env/hook-1.sh");
+    std::fs::create_dir_all(env_file.parent().unwrap()).unwrap();
+    let edit = |tool: &str, target: &Path| {
+        let mut cmd = f.guard_command(&f.linked, "edit-guard");
+        cmd.env_remove("CODEX_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .env("CLAUDE_CONFIG_DIR", &moved)
+            .env("CLAUDE_ENV_FILE", &env_file);
+        let input = if tool == "Edit" {
+            serde_json::json!({"file_path": target, "old_string": "a", "new_string": "b"})
+        } else {
+            serde_json::json!({"file_path": target, "content": "export PATH=/tmp/x:$PATH\n"})
+        };
+        run_with_stdin(
+            &mut cmd,
+            &serde_json::json!({"tool_name": tool, "cwd": f.linked, "tool_input": input})
+                .to_string(),
+        )
+    };
+    let mut wrong = Vec::new();
+    for target in [
+        moved.join("session-env/abc/hook-2.sh"),
+        moved.join("session-env/new.sh"),
+        moved.join("shell-snapshots/snapshot-zsh-1.sh"),
+        env_file.clone(),
+    ] {
+        for tool in ["Edit", "Write"] {
+            let out = edit(tool, &target);
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2)
+                || !err.contains("security.shell_startup")
+                || !err.contains("saved shell state")
+            {
+                wrong.push(format!("{tool} {}: {err}", target.display()));
+            }
+        }
+    }
+    for tool in ["Edit", "Write"] {
+        let out = edit(tool, &moved.join("notes.md"));
+        if String::from_utf8_lossy(&out.stderr).contains("saved shell state") {
+            wrong.push(format!("{tool} refused the folder's own notes: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn repair2_separate_git_directory_container() {
     let f = Fixture::new();
