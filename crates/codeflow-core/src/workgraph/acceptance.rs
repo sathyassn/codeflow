@@ -471,8 +471,9 @@ pub use imports::{
 
 /// One import-authority finding per refused record (TSK-1378 AC-8).
 fn import_findings(reason: &str) -> Vec<Finding> {
+    // The import check joins its refusals with '\n' alone.
     reason
-        .lines()
+        .split('\n')
         .map(|line| finding(IMPORT_RULE, line.to_string()))
         .collect()
 }
