@@ -12,11 +12,15 @@
 //!
 //! The budget is the 32 KiB default, lowered by a smaller
 //! `project_doc_max_bytes` in the project's `.codex/config.toml` or the
-//! user's Codex config, never raised by either: Codex ignores an untrusted
-//! project's config, and a command line flag, a profile, cloud-managed or
-//! system config, or a nested project config outranks both files, so a
-//! value above the default proves nothing about the limit a session runs
-//! under. Those sources are not read; that is the named limit of this check.
+//! user's Codex config, never raised by either. Codex's order, highest
+//! first, is command line flags, project config, profile, user config,
+//! cloud-managed config, system config; it skips an untrusted project's
+//! config, and a nested project config can set its own value. So a flag or
+//! a nested project config can replace the project value, a profile can
+//! replace the user value, and an untrusted project's value does not apply:
+//! a value above the default proves nothing about the limit a session runs
+//! under. Flags, profiles, nested project configs, cloud-managed and system
+//! config are not read; that is the named limit of this check.
 //!
 //! The check fails closed. When a config that could lower the budget cannot
 //! be read, or the block's place in the file cannot be found, the override is
@@ -86,17 +90,21 @@ fn check_with(
     if loaded <= limit {
         return Ok(());
     }
-    let source = Shown::fixed(match source {
-        BudgetSource::Default => "Codex's default",
-        BudgetSource::ProjectConfig => "project_doc_max_bytes in .codex/config.toml",
-        BudgetSource::UserConfig => "project_doc_max_bytes in the Codex user config",
-    });
+    let (source, raised) = match source {
+        BudgetSource::Default => (
+            "Codex's default",
+            "; a configured project_doc_max_bytes above the default is not honoured, because it may not be the limit a session runs under",
+        ),
+        BudgetSource::ProjectConfig => ("project_doc_max_bytes in .codex/config.toml", ""),
+        BudgetSource::UserConfig => ("project_doc_max_bytes in the Codex user config", ""),
+    };
     Err(file_refused(shown!(
-        "the overrides would put the end of the managed instructions of {} at byte {}, past the {}-byte instruction limit ({}); Codex would cut the review and git rules that follow the overridden text, so shorten the replacements",
+        "the overrides would put the end of the managed instructions of {} at byte {}, past the {}-byte instruction limit ({}){}; Codex would cut the review and git rules that follow the overridden text, so shorten the replacements",
         dest_shown(dest),
         Shown::count(loaded),
         Shown::count(limit),
-        source
+        Shown::fixed(source),
+        Shown::fixed(raised)
     )))
 }
 

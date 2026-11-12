@@ -331,20 +331,50 @@ pub fn agents_tier(src: &str) -> Option<Tier> {
         .map(|output| output.tier)
 }
 
-/// What a value of a row field may hold: one non-empty line, no marker text,
-/// no HTML comment, no raw HTML as an independent Markdown parser reads it (a
-/// tag in a code span is text) and no character a reader of the rendered text
-/// cannot see ([`sections::is_invisible`]).
+/// What a value of a row field may hold: one plain line
+/// ([`row_value_plain`]) holding no form whose source the rendered page does
+/// not show, as an independent Markdown parser reads it (a form in a code
+/// span is text; [`sections::Hidden`]).
 fn row_value_ok(value: &str, table_cell: bool) -> bool {
+    row_value_plain(value, table_cell) && oracle::first_hidden(value).is_none()
+}
+
+/// One non-empty line, no marker text, no HTML comment, no `|` in a table
+/// cell and no character a reader of the rendered text cannot see
+/// ([`sections::is_invisible`]).
+fn row_value_plain(value: &str, table_cell: bool) -> bool {
     let refused = value.trim().is_empty()
         || value.contains(['\n', '\r'])
         || value.contains("<!--")
         || value.contains("-->")
         || value.chars().any(sections::is_invisible)
-        || oracle::has_raw_html(value)
         || value.to_ascii_lowercase().contains("codeflow:")
         || (table_cell && value.contains('|'));
     !refused
+}
+
+/// The refusal of override `index` when one of its row `fields` is a plain
+/// line holding a form the rendered page does not show: the field, the
+/// form's class and the byte of the value it starts at.
+fn hidden_row_value(
+    index: usize,
+    fields: &[(&'static str, Option<&str>)],
+    table_cell: bool,
+) -> Option<ScaffoldError> {
+    fields.iter().find_map(|(field, value)| {
+        let value = (*value).filter(|value| row_value_plain(value, table_cell))?;
+        let (class, at) = oracle::first_hidden(value)?;
+        Some(refused(
+            index,
+            shown!(
+                "its `{}` value holds {} at byte {}, {}",
+                Shown::fixed(*field),
+                Shown::fixed(class.what()),
+                Shown::count(at),
+                Shown::fixed(sections::HIDDEN_WHY)
+            ),
+        ))
+    })
 }
 
 /// A checked override: its index, entry and target.
@@ -483,6 +513,21 @@ pub fn check(
                 if fields_ok || !matches!(class, Some(UnitClass::Overridable)) {
                     (*class, reason)
                 } else {
+                    let hidden = if is_rule {
+                        hidden_row_value(
+                            index,
+                            &[
+                                ("text", entry.text.as_deref()),
+                                ("title", entry.title.as_deref()),
+                            ],
+                            false,
+                        )
+                    } else {
+                        hidden_row_value(index, &[("action", entry.action.as_deref())], true)
+                    };
+                    if let Some(refusal) = hidden {
+                        return Err(refusal);
+                    }
                     return Err(refused(
                         index,
                         if is_rule {
@@ -530,7 +575,7 @@ pub fn check(
                     }
                     let body = entry.body.as_deref().unwrap_or_default();
                     if let Err(problem) = sections::check_body(body, section.level) {
-                        return Err(refused(index, Shown::fixed(problem.what())));
+                        return Err(refused(index, problem.shown()));
                     }
                 }
                 (section.class, None)

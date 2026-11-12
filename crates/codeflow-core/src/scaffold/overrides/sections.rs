@@ -22,6 +22,8 @@
 //! another is an error, never a guess.
 
 use crate::scaffold::rule_map::UnitClass;
+use crate::scaffold::Shown;
+use crate::shown;
 
 /// What makes a skill's section markers unusable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -470,14 +472,91 @@ pub enum BodyProblem {
     /// raw file: an HTML comment, a raw HTML block that renders nothing, or
     /// a control, bidirectional, zero-width or other invisible character.
     Concealed,
-    /// Raw HTML as `CommonMark` reads it: a tag with attributes such as
-    /// `hidden` or `style`, an element a reader does not see, or any other
-    /// inline or block HTML. A tag inside a code span or a code fence is
-    /// text and stays allowed.
-    RawHtml,
+    /// A Markdown form whose source holds text the rendered page does not
+    /// show, starting at byte `at` of the body ([`Hidden`]).
+    Hidden { class: Hidden, at: usize },
 }
 
+/// A Markdown form in override text whose source holds text a reviewer of
+/// the rendered page does not see while an agent reads it (TSK-1302).
+/// Override text may hold only forms whose source renders as visible text,
+/// or plain structure; the override check's one visibility rule refuses
+/// every other form as one of these classes. A form inside a code span or a
+/// code fence is shown as written and stays allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hidden {
+    /// Raw HTML, block or inline: an attribute, a style or an element can
+    /// hide its text.
+    RawHtml,
+    /// A link reference definition, which renders nothing and can turn
+    /// shipped text elsewhere in the file into a link.
+    ReferenceDefinition,
+    /// A footnote definition or reference, whose label and text a renderer
+    /// moves, numbers or drops.
+    Footnote,
+    /// A metadata block, which renders nothing.
+    Metadata,
+    /// A heading with an id, classes or attributes, which render nothing.
+    HeadingAttributes,
+    /// A fence info string of more than one word; a renderer shows only the
+    /// code.
+    FenceInfo,
+    /// A link or image title, shown only on hover if at all.
+    LinkTitle,
+    /// A link or image with no visible text.
+    EmptyLinkText,
+    /// A link other than an autolink: the page shows its text, not its
+    /// destination. An autolink shows its destination and stays allowed.
+    Link,
+    /// An image, whose source and alternative text the page does not show.
+    Image,
+    /// Math, which a renderer typesets from its source or drops.
+    Math,
+    /// A character reference that decodes to a character a reader does not
+    /// see ([`is_invisible`]).
+    ReferencedInvisible,
+}
+
+impl Hidden {
+    /// The form, in compiled-in words.
+    #[must_use]
+    pub const fn what(self) -> &'static str {
+        match self {
+            Self::RawHtml => "raw HTML",
+            Self::ReferenceDefinition => "a link reference definition",
+            Self::Footnote => "a footnote",
+            Self::Metadata => "a metadata block",
+            Self::HeadingAttributes => "a heading with attributes",
+            Self::FenceInfo => "a code fence info string of more than one word",
+            Self::LinkTitle => "a link or image title",
+            Self::EmptyLinkText => "a link or image with no text",
+            Self::Link => "a link whose destination the rendered page does not show",
+            Self::Image => "an image",
+            Self::Math => "math",
+            Self::ReferencedInvisible => "a character reference to an invisible character",
+        }
+    }
+}
+
+/// Why a form in [`Hidden`] is refused, after its class and offset.
+pub const HIDDEN_WHY: &str = "which a reviewer of the rendered page does not see in full while an agent reads its source; \
+     write visible text only, use an autolink (<https://...>) for an address, and put any other form in a code span or code fence";
+
 impl BodyProblem {
+    /// The refusal, in compiled-in words with the offset of a hidden form.
+    #[must_use]
+    pub fn shown(self) -> Shown {
+        match self {
+            Self::Hidden { class, at } => shown!(
+                "the replacement holds {} at byte {}, {}",
+                Shown::fixed(class.what()),
+                Shown::count(at),
+                Shown::fixed(HIDDEN_WHY)
+            ),
+            other => Shown::fixed(other.what()),
+        }
+    }
+
     /// What is wrong, in compiled-in words.
     #[must_use]
     pub const fn what(self) -> &'static str {
@@ -511,9 +590,7 @@ impl BodyProblem {
             Self::Concealed => {
                 "the replacement holds text a reviewer would not see in rendered Markdown: an HTML comment, a script, style, declaration or processing-instruction block, or a control, bidirectional, zero-width or other invisible character; write visible text only"
             }
-            Self::RawHtml => {
-                "the replacement holds raw HTML, whose hidden, style and similar attributes can keep text from a reviewer of the rendered page while an agent reads it; write Markdown only, and put any tag in a code span or code fence"
-            }
+            Self::Hidden { class, .. } => class.what(),
         }
     }
 }
@@ -660,10 +737,11 @@ pub fn check_body(body: &str, level: usize) -> Result<(), BodyProblem> {
     if container {
         return Err(BodyProblem::OpenContainer);
     }
-    // The line checks above name the specific hazards; any raw HTML left,
-    // block or inline, is refused here, as an independent parser reads it.
-    if super::oracle::has_raw_html(body) {
-        return Err(BodyProblem::RawHtml);
+    // The line checks above name the specific hazards; any form left whose
+    // source the rendered page does not show, raw HTML included, is refused
+    // here, as an independent parser reads it.
+    if let Some((class, at)) = super::oracle::first_hidden(body) {
+        return Err(BodyProblem::Hidden { class, at });
     }
     Ok(())
 }

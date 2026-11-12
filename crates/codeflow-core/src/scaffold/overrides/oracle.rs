@@ -10,13 +10,15 @@
 //! targeted units, headings and raw HTML blocks such as section markers
 //! included, to be the same block at the same place. Inside a targeted
 //! moment row it requires every cell but the action cell to read the same.
-//! It also requires that no raw HTML starts inside a replaced unit, since a
-//! hidden element or style would show a reviewer less than an agent reads.
+//! It also requires that no form whose source the rendered page does not
+//! show touches a replaced unit ([`hidden_forms`]), since such a form would
+//! show a reviewer less than an agent reads.
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd};
 
+use super::sections::{is_invisible, Hidden};
 use super::{unit_ranges, AppliedUnit, Target};
 
 /// Where a block boundary sits, in the shipped text's coordinates: at a
@@ -138,36 +140,171 @@ pub fn same_structure(pristine: &str, effective: &str, units: &[AppliedUnit]) ->
         !matches!(Target::parse(&unit.entry.target), Some(Target::Moment(_)))
             || kept_cells(&cells(pristine, &before[n]), &cells(effective, &after[n]))
     });
-    // No raw HTML starts inside a unit: the project's text is Markdown a
-    // reviewer sees as written.
-    let html_free = html_starts(effective)
-        .all(|at| !after.iter().any(|span| span.start <= at && at < span.end));
+    // No form the rendered page does not show touches a unit: the project's
+    // text is Markdown a reviewer sees as written. A form that starts in
+    // shipped text and runs into a unit counts too.
+    let visible = hidden_forms(effective).iter().all(|(_, range)| {
+        !after
+            .iter()
+            .any(|span| range.start < span.end && span.start < range.end.max(range.start + 1))
+    });
     rows_kept
-        && html_free
+        && visible
         && outside(pristine, &before, in_pristine) == outside(effective, &after, in_effective)
 }
 
-/// The byte offset of every raw HTML construct in `text` as `CommonMark`
-/// reads it: an HTML block or an inline tag, comment, declaration or
-/// processing instruction. A tag in a code span or a code block is text, not
-/// HTML.
-fn html_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
-    Parser::new_ext(text, Options::ENABLE_TABLES)
-        .into_offset_iter()
-        .filter_map(|(event, range)| match event {
-            Event::Start(Tag::HtmlBlock) | Event::Html(_) | Event::InlineHtml(_) => {
-                Some(range.start)
-            }
-            _ => None,
-        })
+/// Every extension the parser supports, so that a form any renderer reads
+/// is seen. Smart punctuation is left out: it changes visible text and
+/// hides none. Old-style footnotes replace the default footnote syntax, so
+/// [`hidden_forms`] parses a second time with them.
+fn every_extension() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_HEADING_ATTRIBUTES
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+        | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
+        | Options::ENABLE_MATH
+        | Options::ENABLE_GFM
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_SUPERSCRIPT
+        | Options::ENABLE_SUBSCRIPT
+        | Options::ENABLE_WIKILINKS
 }
 
-/// Whether `text` holds raw HTML, which can hide text from a reviewer of the
-/// rendered page by attribute, style, element or comment while an agent
-/// reads it from the raw file. Override text may hold none (TSK-1302).
-#[must_use]
-pub(super) fn has_raw_html(text: &str) -> bool {
-    html_starts(text).next().is_some()
+/// Every form in `text` whose source the rendered page does not show in
+/// full, with its byte range, in order of position (TSK-1302).
+///
+/// This is the one visibility rule for override text: section bodies, row
+/// values, each unit of an override result and persisted records all reach
+/// it. It is an allow-list. A form is accepted only when all of its source
+/// renders as visible text, or it is plain structure: paragraphs, headings
+/// without attributes, emphasis, strong, strikethrough, superscript,
+/// subscript, lists, task markers, tables, block quotes (with or without a
+/// GitHub alert label), definition lists, breaks, rules, code spans, fenced
+/// code with at most a one-word info string, indented code and autolinks.
+/// Every other form is returned as its [`Hidden`] class, and so is text
+/// that decodes to an invisible character. A form inside a code span or a
+/// code fence is text, shown as written.
+pub(super) fn hidden_forms(text: &str) -> Vec<(Hidden, Range<usize>)> {
+    let mut out = Vec::new();
+    let all = every_extension();
+    for options in [all, all | Options::ENABLE_OLD_FOOTNOTES] {
+        hidden_with(text, options, &mut out);
+    }
+    out.sort_by_key(|(_, range)| range.start);
+    out
+}
+
+/// The first form [`hidden_forms`] finds in `text`, and the byte it starts
+/// at.
+pub(super) fn first_hidden(text: &str) -> Option<(Hidden, usize)> {
+    hidden_forms(text)
+        .first()
+        .map(|(class, range)| (*class, range.start))
+}
+
+/// [`hidden_forms`] under one set of parser options, appended to `out`.
+fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>)>) {
+    let parser = Parser::new_ext(text, options);
+    // A reference definition is read before the events and emits none.
+    out.extend(
+        parser
+            .reference_definitions()
+            .iter()
+            .map(|(_, definition)| (Hidden::ReferenceDefinition, definition.span.clone())),
+    );
+    // The links and images open at this point: the class each takes when it
+    // closes (none for an autolink, or when a title was already refused),
+    // where it starts, and whether visible text has shown inside it.
+    let mut open: Vec<(Option<Hidden>, Range<usize>, bool)> = Vec::new();
+    for (event, range) in parser.into_offset_iter() {
+        let found = match &event {
+            Event::Start(tag) => match tag {
+                Tag::Paragraph
+                | Tag::BlockQuote(_)
+                | Tag::CodeBlock(CodeBlockKind::Indented)
+                | Tag::List(_)
+                | Tag::Item
+                | Tag::DefinitionList
+                | Tag::DefinitionListTitle
+                | Tag::DefinitionListDefinition
+                | Tag::Table(_)
+                | Tag::TableHead
+                | Tag::TableRow
+                | Tag::TableCell
+                | Tag::Emphasis
+                | Tag::Strong
+                | Tag::Strikethrough
+                | Tag::Superscript
+                | Tag::Subscript => None,
+                Tag::Heading {
+                    id, classes, attrs, ..
+                } => (id.is_some() || !classes.is_empty() || !attrs.is_empty())
+                    .then_some(Hidden::HeadingAttributes),
+                Tag::CodeBlock(CodeBlockKind::Fenced(info)) => info
+                    .split_whitespace()
+                    .nth(1)
+                    .map(|_| Hidden::FenceInfo),
+                Tag::Link {
+                    link_type, title, ..
+                }
+                | Tag::Image {
+                    link_type, title, ..
+                } => {
+                    if title.is_empty() {
+                        let class = if matches!(tag, Tag::Image { .. }) {
+                            Some(Hidden::Image)
+                        } else if matches!(link_type, LinkType::Autolink | LinkType::Email) {
+                            None
+                        } else {
+                            Some(Hidden::Link)
+                        };
+                        open.push((class, range.clone(), false));
+                        None
+                    } else {
+                        open.push((None, range.clone(), true));
+                        Some(Hidden::LinkTitle)
+                    }
+                }
+                Tag::HtmlBlock => Some(Hidden::RawHtml),
+                Tag::FootnoteDefinition(_) => Some(Hidden::Footnote),
+                Tag::MetadataBlock(_) => Some(Hidden::Metadata),
+            },
+            Event::End(TagEnd::Link | TagEnd::Image) => {
+                if let Some((class, start, shown)) = open.pop() {
+                    if !shown {
+                        out.push((Hidden::EmptyLinkText, start));
+                    } else if let Some(class) = class {
+                        out.push((class, start));
+                    }
+                }
+                None
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if !text.trim().is_empty() {
+                    for (_, _, shown) in &mut open {
+                        *shown = true;
+                    }
+                }
+                text.chars()
+                    .any(is_invisible)
+                    .then_some(Hidden::ReferencedInvisible)
+            }
+            Event::InlineMath(_) | Event::DisplayMath(_) => Some(Hidden::Math),
+            Event::Html(_) | Event::InlineHtml(_) => Some(Hidden::RawHtml),
+            Event::FootnoteReference(_) => Some(Hidden::Footnote),
+            Event::End(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::Rule
+            | Event::TaskListMarker(_) => None,
+        };
+        if let Some(class) = found {
+            out.push((class, range));
+        }
+    }
 }
 
 /// The bytes of every table cell that starts inside `span`, as Markdown

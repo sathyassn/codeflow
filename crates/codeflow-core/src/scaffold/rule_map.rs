@@ -195,11 +195,15 @@ fn strict_config_limit(
 /// project under `root`: [`CODEX_INSTRUCTION_LIMIT_BYTES`], lowered by a
 /// smaller `project_doc_max_bytes` in the project's `.codex/config.toml` or
 /// in `codex_home`'s `config.toml`. A configured value never raises the
-/// budget: Codex ignores an untrusted project's config and lets a command
-/// line flag, a profile, cloud-managed or system config, or a nested
-/// project config beat these two files, and an override must hold under
-/// every one of them, not under the most generous. Those sources are not
-/// read, so a limit lower than the budget that only they set is not seen.
+/// budget. Codex's order, highest first, is command line flags, project
+/// config, profile, user config, cloud-managed config, system config; it
+/// skips an untrusted project's config, and a nested project config can set
+/// its own value. A flag or nested project config can replace the project
+/// value and a profile the user value, so an override must hold under every
+/// value a session may run with, not under the most generous. Flags,
+/// profiles, nested project configs, cloud-managed and system config are
+/// not read, so a limit lower than the budget that only they set is not
+/// seen.
 ///
 /// Fails closed: a config that is not a regular, readable, parseable file,
 /// or whose `project_doc_max_bytes` is not a positive integer, leaves the
