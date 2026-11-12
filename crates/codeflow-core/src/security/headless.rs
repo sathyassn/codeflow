@@ -30,7 +30,7 @@
 //! the message says the line was not fully parsed, and a project that needs
 //! such a run sets `security.headless_peer_runs` to `warn`.
 
-use crate::hooks::git_guard::{other_readings, simple_commands};
+use crate::hooks::git_guard::{assumed_marks, other_readings, simple_commands};
 use crate::security::shell_lex::{leading_word, skip_leading, LeadingWord, Taker};
 
 /// A headless peer run found in a command.
@@ -68,11 +68,11 @@ fn find(command: &str, depth: usize) -> Option<HeadlessRun> {
         return raw_run(command);
     }
     let mut unresolved = command.contains("<<<");
-    for (argv, unread) in simple_commands(command) {
-        match classify(&argv, depth) {
+    for simple in simple_commands(command) {
+        match classify_written(&simple.words, Some(&simple.marks), depth) {
             Found::Run(mut run) => {
                 if run.unread.is_empty() {
-                    run.unread = unread;
+                    run.unread = simple.unread;
                 }
                 return Some(run);
             }
@@ -89,6 +89,13 @@ fn find(command: &str, depth: usize) -> Option<HeadlessRun> {
 
 /// Classify one simple command's argument vector, unwrapping launchers.
 fn classify(argv: &[String], depth: usize) -> Found {
+    classify_written(argv, None, depth)
+}
+
+/// [`classify`] with the words as written ([`simple_commands`]), parallel
+/// to `argv`, when the caller has them (TSK-1456).
+fn classify_written(argv: &[String], marks: Option<&[String]>, depth: usize) -> Found {
+    let written = argv.len();
     let mut argv = argv;
     // Who reads the words in front of the next program (TSK-1456).
     let mut taker = Taker::Shell;
@@ -104,7 +111,13 @@ fn classify(argv: &[String], depth: usize) -> Found {
         // A word that may be an assignment or the program: each other
         // reading is judged here, and the word as the program below.
         if leading_word(program, taker) == LeadingWord::Unplaced {
-            let Some(readings) = other_readings(argv, 0) else {
+            // Each launcher below leaves a tail of the words, so the same
+            // tail of the words as written stays parallel to them.
+            let marks = match marks {
+                Some(marks) if marks.len() == written => marks[written - argv.len()..].to_vec(),
+                _ => assumed_marks(argv),
+            };
+            let Some(readings) = other_readings(&marks, 0) else {
                 return Found::Unresolved;
             };
             if let Some(run) = readings.iter().find_map(|reading| find(reading, depth + 1)) {

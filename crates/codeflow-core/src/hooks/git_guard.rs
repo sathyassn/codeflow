@@ -1246,24 +1246,39 @@ fn evaluate_report_with_runners(
 /// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
 /// `command`, `builtin` and `exec` launchers stripped. The first element is
 /// the program as written, which may still hold a substitution. Each comes
-/// with the program words the guard could not fill in that it is a reading
-/// of ([`unread_words`], TSK-1456).
-pub(crate) fn simple_commands(command: &str) -> Vec<(Vec<String>, Vec<String>)> {
+/// with the same words as written ([`ShellWord::marked`]) and the program
+/// words the guard could not fill in that it is a reading of
+/// ([`unread_words`], TSK-1456).
+pub(crate) fn simple_commands(command: &str) -> Vec<SimpleCommand> {
     let expanded = expand_commands_read(command);
     expanded
         .segments
         .iter()
         .enumerate()
         .filter_map(|(index, segment)| {
-            let mut words = command_argv(segment);
+            let (mut words, mut marks) = command_argv_marked(segment);
+            let written = words.len();
             strip_reserved_words(&mut words);
-            let (program, args) = strip_launchers(&words)?;
-            let mut command = Vec::with_capacity(args.len() + 1);
-            command.push(program.to_string());
-            command.extend(args.iter().cloned());
-            Some((command, unread_words(&expanded.readings, index)))
+            marks.drain(..written - words.len());
+            let (at, _) = launched_at(&words)?;
+            Some(SimpleCommand {
+                words: words.split_off(at),
+                marks: marks.split_off(at),
+                unread: unread_words(&expanded.readings, index),
+            })
         })
         .collect()
+}
+
+/// One simple command [`simple_commands`] reads.
+pub(crate) struct SimpleCommand {
+    /// The program and its arguments, quotes removed.
+    pub(crate) words: Vec<String>,
+    /// The same words as written ([`ShellWord::marked`]).
+    pub(crate) marks: Vec<String>,
+    /// The program words the guard could not fill in that this command is
+    /// a reading of.
+    pub(crate) unread: Vec<String>,
 }
 
 /// Shell reserved words that can open a segment of a control structure
@@ -7385,8 +7400,11 @@ fn expand_segments(
     git_bodies: bool,
 ) {
     for seg in segments {
-        let mut toks = command_argv(&seg);
+        // Each word as written too, for the readings below (TSK-1456).
+        let (mut toks, mut marks) = command_argv_marked(&seg);
+        let written = toks.len();
         strip_reserved_words(&mut toks);
+        marks.drain(..written - toks.len());
         let carries_git = strip_launchers(&toks)
             .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
         let carried = if !git_bodies && carries_git {
@@ -7396,8 +7414,7 @@ fn expand_segments(
         };
         let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
         bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
-        let mut words = toks;
-        strip_reserved_words(&mut words);
+        let words = toks;
         let mut unreadable = false;
         // Other readings of this command (TSK-1456): each runs in its place,
         // not after it.
@@ -7405,10 +7422,11 @@ fn expand_segments(
         let mut unread = None;
         if let Some((at, taker)) = launched_at(&words) {
             let program = words[at].as_str();
+            let marked = marks[at].as_str();
             // A program word the guard cannot fill in is judged under each
             // program it could be (TSK-1456 AC-9).
             let mut read_unread = |alternatives: &mut Vec<String>| {
-                match unread_program_readings(&words, at) {
+                match unread_program_readings(&marks, at) {
                     Some(readings) => alternatives.extend(readings),
                     None => unreadable = true,
                 }
@@ -7419,8 +7437,9 @@ fn expand_segments(
                     bodies.push(literals.fill_words(&words));
                 } else {
                     out.unread_commands.push(program.to_string());
-                    // A substitution keeps git-guard's own refusal.
-                    if !program.contains(['`', '\u{1}', '\u{2}']) {
+                    // A substitution keeps git-guard's own refusal, and a
+                    // `$` a quote made literal fills in nothing.
+                    if !program.contains(['`', '\u{1}', '\u{2}']) && expands_marked(marked) {
                         read_unread(&mut alternatives);
                     }
                 }
@@ -7428,9 +7447,9 @@ fn expand_segments(
                 // A word `env` reads as an assignment may still be one zsh
                 // rewrites first (`env =name`), so its readings stand too.
                 let unplaced = leading_word(program, taker) == LeadingWord::Unplaced;
-                match program_readings(&words, at, &seg) {
+                match program_readings(&marks, at) {
                     Some(readings) if !readings.is_empty() => alternatives.extend(readings),
-                    Some(_) if !unplaced && unread_pattern(program) => {
+                    Some(_) if !unplaced && unread_pattern(marked) => {
                         read_unread(&mut alternatives);
                     }
                     Some(_) => {}
@@ -7438,7 +7457,7 @@ fn expand_segments(
                 }
             }
             if leading_word(program, taker) == LeadingWord::Unplaced {
-                match other_readings(&words, at) {
+                match other_readings(&marks, at) {
                     Some(readings) => {
                         for reading in readings {
                             if !alternatives.contains(&reading) {
@@ -7507,66 +7526,76 @@ fn expand_bodies(
 /// that word read as an assignment, so left out, and, when the word holds
 /// braces, with the word read as the words brace expansion makes of it
 /// ([`brace_expand`]). The reading with the word as the program is the
-/// segment itself, so every reading is judged. `None` when the braces are
-/// past what the guard reads, so the word stays unread.
-pub(crate) fn other_readings(words: &[String], at: usize) -> Option<Vec<String>> {
-    let mut without = words.to_vec();
+/// segment itself, so every reading is judged. `marks` are the command's
+/// words as written ([`ShellWord::marked`]), so only braces the shell reads
+/// unquoted expand. `None` when the braces are past what the guard reads,
+/// so the word stays unread.
+pub(crate) fn other_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
+    let mut without = marks.to_vec();
     let word = without.remove(at);
-    let mut readings = vec![quote_words(&without)];
+    let mut readings = vec![requote_words(&without)];
     if word.contains('{') {
         let list = brace_expand(&word)?;
         if list.len() > 1 {
-            let mut listed = words[..at].to_vec();
-            listed.extend(list);
-            listed.extend_from_slice(&words[at + 1..]);
-            readings.push(quote_words(&listed));
+            readings.push(replaced_word(marks, at, list));
         }
     }
     Some(readings)
+}
+
+/// Words as written ([`ShellWord::marked`]) with the word at `at` replaced
+/// by `list`, as shell text ([`requote`]).
+fn replaced_word(marks: &[String], at: usize, list: Vec<String>) -> String {
+    let mut listed = marks[..at].to_vec();
+    listed.extend(list);
+    listed.extend_from_slice(&marks[at + 1..]);
+    requote_words(&listed)
+}
+
+/// The name zsh's `=name` gives the path of, for a word as written
+/// ([`ShellWord::marked`]) whose `=` is unquoted: `Some(None)` for any
+/// other word, and `None` for `=(…)`, which runs a file the guard cannot
+/// read.
+fn zsh_path_name(marked: &str) -> Option<Option<String>> {
+    match marked.strip_prefix('=') {
+        Some(name) if name.starts_with('(') => None,
+        Some(name) if !name.is_empty() => Some(Some(name.to_string())),
+        _ => Some(None),
+    }
 }
 
 /// The other commands a segment runs when the shell rewrites its program
 /// word at `at` before it looks the program up (TSK-1456 AC-9), as shell
 /// text: a brace list (Bash, zsh) is the words it expands to
-/// ([`brace_expand`]), and zsh's `=name`, written unquoted in `segment`, is
-/// the path of `name`, so it is judged as `name`. The segment as written
-/// stays judged too, for a shell that reads the word literally. `None` for
-/// zsh's `=(…)`, which runs a file the guard cannot read, so the caller
-/// refuses the line.
-pub(crate) fn program_readings(words: &[String], at: usize, segment: &str) -> Option<Vec<String>> {
-    let word = words[at].as_str();
-    let with = |list: Vec<String>| {
-        let mut listed = words[..at].to_vec();
-        listed.extend(list);
-        listed.extend_from_slice(&words[at + 1..]);
-        quote_words(&listed)
-    };
+/// ([`brace_expand`]), and zsh's `=name`, the `=` unquoted, is the path of
+/// `name`, so it is judged as `name`; zsh reads a `=` that brace expansion
+/// leaves at the front the same way. `marks` are the words as written
+/// ([`ShellWord::marked`]), so a quoted brace or `=` is text. The segment
+/// as written stays judged too, for a shell that reads the word literally.
+/// `None` for zsh's `=(…)`, so the caller refuses the line.
+pub(crate) fn program_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
+    let word = marks[at].as_str();
     let mut readings = Vec::new();
-    // The `=` starts a word of the segment as written, so no quote or
-    // escape stands before it.
-    let unquoted = segment
-        .match_indices(word)
-        .any(|(i, _)| i == 0 || segment[..i].ends_with(shell_blank));
-    if let Some(name) = word
-        .strip_prefix('=')
-        .filter(|name| unquoted && !name.is_empty())
-    {
-        if name.starts_with('(') {
-            return None;
-        }
-        readings.push(with(vec![name.to_string()]));
+    if let Some(name) = zsh_path_name(word)? {
+        readings.push(replaced_word(marks, at, vec![name]));
     }
     if word.contains('{') {
         if let Some(list) = brace_expand(word).filter(|list| list != &[word.to_string()]) {
-            readings.push(with(list));
+            if let Some(name) = zsh_path_name(&list[0])? {
+                let mut named = list.clone();
+                named[0] = name;
+                readings.push(replaced_word(marks, at, named));
+            }
+            readings.push(replaced_word(marks, at, list));
         }
     }
     Some(readings)
 }
 
-/// Whether a program word is a pattern the guard cannot fill in: a glob
-/// (other than the `[` and `[[` test commands) or braces past what
-/// [`brace_expand`] reads (TSK-1456 AC-9).
+/// Whether a program word as written ([`ShellWord::marked`]) is a pattern
+/// the guard cannot fill in: an unquoted glob (other than the `[` and `[[`
+/// test commands) or unquoted braces past what [`brace_expand`] reads
+/// (TSK-1456 AC-9).
 fn unread_pattern(word: &str) -> bool {
     (has_glob(word) && !matches!(word, "[" | "[["))
         || (word.contains('{') && brace_expand(word).is_none())
@@ -7587,18 +7616,20 @@ const GUARDED_NAMES: &[&str] = &["gh", "claude", "codex", "grok"];
 /// the first word that is itself unread, whose own readings go on from
 /// there, each also under `eval` when its words hold a blank or shell
 /// syntax that `eval` parses again (`eval` takes no options, so its words
-/// start where the launcher's do). `None` past [`UNREAD_ARGS_LIMIT`]
-/// arguments.
-pub(crate) fn unread_program_readings(words: &[String], at: usize) -> Option<Vec<String>> {
-    let args = &words[at + 1..];
-    if args.len() > UNREAD_ARGS_LIMIT {
+/// start where the launcher's do). `marks` are the words as written
+/// ([`ShellWord::marked`]), so each reading keeps their quoting. `None`
+/// past [`UNREAD_ARGS_LIMIT`] arguments.
+pub(crate) fn unread_program_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
+    let marked_args = &marks[at + 1..];
+    if marked_args.len() > UNREAD_ARGS_LIMIT {
         return None;
     }
+    let args: Vec<String> = marked_args.iter().map(|arg| unmarked(arg)).collect();
     let with = |name: &str| {
-        let mut named = words[..at].to_vec();
+        let mut named = marks[..at].to_vec();
         named.push(name.to_string());
-        named.extend_from_slice(args);
-        quote_words(&named)
+        named.extend_from_slice(marked_args);
+        requote_words(&named)
     };
     let mut readings: Vec<String> = GUARDED_NAMES.iter().map(|name| with(name)).collect();
     if args.iter().any(|arg| GIT_BUILTINS.contains(&arg.as_str())) {
@@ -7627,16 +7658,16 @@ pub(crate) fn unread_program_readings(words: &[String], at: usize) -> Option<Vec
         if arg.starts_with('-') {
             continue;
         }
-        let mut launched = words[..at].to_vec();
-        launched.extend_from_slice(&args[k..]);
-        readings.push(quote_words(&launched));
+        let mut launched = marks[..at].to_vec();
+        launched.extend_from_slice(&marked_args[k..]);
+        readings.push(requote_words(&launched));
         if parsed_again(&args[k..]) {
-            let mut evaluated = words[..at].to_vec();
+            let mut evaluated = marks[..at].to_vec();
             evaluated.push("eval".to_string());
-            evaluated.extend_from_slice(&args[k..]);
-            readings.push(quote_words(&evaluated));
+            evaluated.extend_from_slice(&marked_args[k..]);
+            readings.push(requote_words(&evaluated));
         }
-        if expands(arg) || unread_pattern(arg) {
+        if expands_marked(&marked_args[k]) || unread_pattern(&marked_args[k]) {
             break;
         }
     }
@@ -13747,6 +13778,156 @@ struct ShellWord {
     /// Whether such an expansion stands outside double quotes too, where
     /// the shell may split its value into several words or glob it.
     splits: bool,
+    /// The word with its expansion provenance (TSK-1456): `text` with each
+    /// ASCII character a quote or escape made literal replaced by its
+    /// [`literal_mark`], and each `$` or backquote inside double quotes,
+    /// which stays an expansion, by its [`quoted_live_mark`]. Every other
+    /// character is as the shell reads it unquoted, so a brace, pattern or
+    /// `=` reading of this form applies only to unquoted text.
+    marked: String,
+}
+
+/// The first stand-in for an ASCII character a quote or escape makes
+/// literal ([`ShellWord::marked`]): this code plus the character's own.
+const LITERAL_MARK: u32 = 0xF_0000;
+
+/// The first stand-in for a `$` or backquote inside double quotes, which
+/// stays an expansion ([`ShellWord::marked`]).
+const QUOTED_LIVE_MARK: u32 = 0xF_0080;
+
+/// The stand-in for `c` made literal by a quote or escape; a character
+/// past ASCII is never shell syntax, so it stays as written ([`unmarked_as`]).
+fn literal_mark(c: char) -> char {
+    if c.is_ascii() {
+        char::from_u32(LITERAL_MARK + u32::from(c)).unwrap_or(c)
+    } else {
+        unmarked_as(c)
+    }
+}
+
+/// `c`, read unquoted, in a marked word ([`ShellWord::marked`]). A written
+/// character that falls among the stand-ins becomes U+FFFD, so no text a
+/// command carries reads back as a quote mark or as the ASCII character a
+/// stand-in names; like the character it replaces, U+FFFD is never shell
+/// syntax.
+fn unmarked_as(c: char) -> char {
+    if (LITERAL_MARK..QUOTED_LIVE_MARK + 0x80).contains(&u32::from(c)) {
+        char::REPLACEMENT_CHARACTER
+    } else {
+        c
+    }
+}
+
+/// The stand-in for a `$` or backquote inside double quotes.
+fn quoted_live_mark(c: char) -> char {
+    char::from_u32(QUOTED_LIVE_MARK + u32::from(c)).unwrap_or(c)
+}
+
+/// The character a stand-in stands for, and whether it is a live `$` or
+/// backquote inside double quotes; `None` for a character the shell reads
+/// unquoted.
+fn marked_char(c: char) -> Option<(char, bool)> {
+    let n = u32::from(c);
+    let ascii = |code: u32| char::from_u32(code).filter(char::is_ascii);
+    if (QUOTED_LIVE_MARK..QUOTED_LIVE_MARK + 0x80).contains(&n) {
+        ascii(n - QUOTED_LIVE_MARK).map(|c| (c, true))
+    } else if (LITERAL_MARK..QUOTED_LIVE_MARK).contains(&n) {
+        ascii(n - LITERAL_MARK).map(|c| (c, false))
+    } else {
+        None
+    }
+}
+
+/// The text of a marked word ([`ShellWord::marked`]): every stand-in back
+/// to its character.
+pub(crate) fn unmarked(word: &str) -> String {
+    word.chars()
+        .map(|c| marked_char(c).map_or(c, |(c, _)| c))
+        .collect()
+}
+
+/// Whether a marked word holds an expansion the shell fills in when the
+/// command runs: an unquoted `$` or backquote, one inside double quotes,
+/// or a substitution the segmenter lifted out. A `$` a quote or escape
+/// made literal is text.
+pub(crate) fn expands_marked(word: &str) -> bool {
+    word.chars().any(|c| {
+        matches!(c, '$' | '`' | '\u{1}' | '\u{2}') || marked_char(c).is_some_and(|(_, live)| live)
+    })
+}
+
+/// A marked word as shell text that reads back as the same marked word
+/// (TSK-1456): unquoted characters stay unquoted, so a brace, pattern or
+/// `=` reading still applies to them, and each stand-in goes back inside
+/// double quotes, escaped when it was literal. A reading built from words
+/// as written keeps their provenance this way.
+pub(crate) fn requote(word: &str) -> String {
+    let mut out = String::new();
+    let mut open = false;
+    for c in word.chars() {
+        match marked_char(c) {
+            // A quote straight after an unquoted `$` would make `$"…"`,
+            // which drops the `$`; a backslash keeps the character literal.
+            Some((c, false)) if !open && out.ends_with('$') && c != '\n' => {
+                out.push('\\');
+                out.push(c);
+            }
+            Some((c, live)) => {
+                if !open {
+                    out.push('"');
+                    open = true;
+                }
+                if !live && matches!(c, '$' | '`' | '"' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            None => {
+                if open {
+                    out.push('"');
+                    open = false;
+                }
+                out.push(c);
+            }
+        }
+    }
+    if open || out.is_empty() {
+        if out.is_empty() {
+            out.push('"');
+        }
+        out.push('"');
+    }
+    out
+}
+
+/// Words whose writing is not known, as marked words
+/// ([`ShellWord::marked`]): every brace and comma read unquoted, as the
+/// guard read them before it kept the writing (so a reading can only be
+/// added), and every other character literal.
+pub(crate) fn assumed_marks(words: &[String]) -> Vec<String> {
+    words
+        .iter()
+        .map(|word| {
+            word.chars()
+                .map(|c| {
+                    if matches!(c, '{' | '}' | ',') {
+                        c
+                    } else {
+                        literal_mark(c)
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Marked words ([`ShellWord::marked`]) as shell text ([`requote`]).
+fn requote_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| requote(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl ShellWord {
@@ -13861,6 +14042,8 @@ fn pattern_character(c: char) -> bool {
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
+    // `cur` with its provenance ([`ShellWord::marked`]).
+    let mut marked = String::new();
     let mut in_single = false;
     let mut in_double = false;
     let mut started = false;
@@ -13879,16 +14062,20 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         match c {
             '\'' if dollar && !in_single && !in_double => {
                 cur.pop();
+                marked.pop();
                 unquoted_expansions = unquoted_expansions.saturating_sub(1);
                 if prefix_open {
                     unquoted_prefix = unquoted_prefix.saturating_sub(1);
                 }
-                cur.push_str(&ansi_c_text(&mut chars));
+                let text = ansi_c_text(&mut chars);
+                marked.extend(text.chars().map(literal_mark));
+                cur.push_str(&text);
                 started = true;
                 prefix_open = false;
             }
             '"' if dollar && !in_single && !in_double => {
                 cur.pop();
+                marked.pop();
                 unquoted_expansions = unquoted_expansions.saturating_sub(1);
                 if prefix_open {
                     unquoted_prefix = unquoted_prefix.saturating_sub(1);
@@ -13918,8 +14105,10 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     Some(next) => {
                         if in_double && !matches!(next, '$' | '`' | '"' | '\\') {
                             cur.push('\\');
+                            marked.push(literal_mark('\\'));
                         }
                         cur.push(next);
+                        marked.push(literal_mark(next));
                         started = true;
                         prefix_open = false;
                     }
@@ -13930,6 +14119,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 // per element. Preserve it for the configuration diagnostic.
                 let array = capture_array_initializer(&mut chars);
                 cur.push_str(&array);
+                marked.extend(array.chars().map(unmarked_as));
                 expands |= array.contains(['$', '`']);
                 unquoted_expansions += usize::from(array.contains(['$', '`']));
                 if prefix_open {
@@ -13950,6 +14140,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
                         splits: std::mem::take(&mut unquoted_expansions) > 0,
+                        marked: std::mem::take(&mut marked),
                     });
                     started = false;
                 }
@@ -13958,6 +14149,13 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             }
             c => {
                 cur.push(c);
+                marked.push(if in_single || (in_double && !matches!(c, '$' | '`')) {
+                    literal_mark(c)
+                } else if in_double {
+                    quoted_live_mark(c)
+                } else {
+                    unmarked_as(c)
+                });
                 started = true;
                 pattern |= !in_single && !in_double && pattern_character(c);
                 if prefix_open && !in_single && !in_double {
@@ -13977,6 +14175,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             pattern,
             expands,
             splits: unquoted_expansions > 0,
+            marked,
         });
     }
     words
@@ -14058,6 +14257,15 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
             let literal = word.literal();
             (word.text, literal)
         })
+        .unzip()
+}
+
+/// The same argument vector with each word's expansion provenance
+/// ([`ShellWord::marked`], TSK-1456), parallel to the words.
+pub(crate) fn command_argv_marked(segment: &str) -> (Vec<String>, Vec<String>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| (word.text, word.marked))
         .unzip()
 }
 
@@ -17280,6 +17488,11 @@ mod tests {
             ("=git push origin main", "git push origin main"),
             ("A=1 =git push origin main", "A=1 git push origin main"),
             ("python{3..3} x.py", "python3 x.py"),
+            (
+                "{=git,push} --force origin main",
+                "git push --force origin main",
+            ),
+            ("{'gi't,push} --force", "git push --force"),
         ] {
             let segments = read(line);
             let at = segments.iter().position(|s| s == &words(line));
@@ -17314,6 +17527,52 @@ mod tests {
         }
         assert_eq!(read("echo {a"), vec![words("echo {a")]);
         assert_eq!(read("git status"), vec![words("git status")]);
+        // A brace, pattern, `=` or `$` a quote or escape made literal is
+        // text, so the word is read as written and adds no command.
+        for line in [
+            "'{git,push}' --force origin main",
+            "\"{git,push}\" --force origin main",
+            "\\{git,push\\} --force origin main",
+            "{git\\,push} --force origin main",
+            "'gi*' status",
+            "gi\\* status",
+            "\"/usr/bin/gi?\" status",
+            "'$G' push origin main",
+            "'=git' push origin main",
+            "\\=git push origin main",
+        ] {
+            assert_eq!(read(line), vec![words(line)], "{line}");
+        }
+    }
+
+    /// TSK-1456: shell text built from words as written reads back as the
+    /// same words, with the same quoting.
+    #[test]
+    fn words_as_written_read_back_unchanged() {
+        for line in [
+            "git push --force origin main",
+            "'{git,push}' x {a,b} 'it''s' \"a b\"",
+            "\"$G\" '$G' $G \\$G $\\G a\\ b",
+            "$'a\\'b' $\"x\" \"\\\\\" \"\\\"\" '\\'",
+            "=git '=git' gi* 'gi*' \"\" ''",
+            "~/x '~'/x \"${G:-git}\" ${G:-git}",
+        ] {
+            let (_, marks) = command_argv_marked(line);
+            let text = requote_words(&marks);
+            assert_eq!(command_argv_marked(&text).1, marks, "{line}: {text}");
+            assert_eq!(command_argv(&text), command_argv(line), "{line}: {text}");
+        }
+        // A written character among the stand-ins is never read as one.
+        let stand_in = char::from_u32(LITERAL_MARK + u32::from('=')).unwrap();
+        for line in [
+            format!("X{stand_in}1 git status"),
+            format!("'X{stand_in}1' git status"),
+            format!("$'X\\U000F003D1' git status"),
+        ] {
+            let (_, marks) = command_argv_marked(&line);
+            assert_eq!(unmarked(&marks[0]), "X\u{FFFD}1", "{line}");
+            assert!(!expands_marked(&marks[0]), "{line}");
+        }
     }
 
     /// TSK-1456 AC-9: a program word the guard cannot fill in adds the
