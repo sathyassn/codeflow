@@ -106,14 +106,10 @@ Dispatch:
 - First dispatch with `--ref main` and `tag=dry-run`. It builds every artifact
   and publishes nothing. Wait for it, and for current main's push runs of
   `codeflow-ci` and `codeflow-release`, to pass.
-- The operator then creates the `vX.Y.Z` tag at the exact commit `main`
-  points to, the commit the dry run passed on, and pushes it. Only a
-  repository admin can create a `v*` tag, so the workflow's token cannot
-  create it. A run dispatched without the tag fails when it tries to publish
-  the draft, because publishing would create the tag.
-- Then dispatch with `--ref main` and the same `vX.Y.Z` tag. The authority job
-  finds the tag at the dispatched commit and resumes on it; a tag at any other
-  commit refuses the run.
+- The operator then creates and pushes the `vX.Y.Z` tag at the exact `main`
+  commit the dry run passed on; only an admin can create one.
+- Then dispatch with `--ref main` and that tag. The authority job resumes on it
+  and refuses a tag at any other commit.
 - The actor and any rerunning actor must both be GitHub Users with effective
   permission.
 - `GITHUB_SHA` must still equal current main and be the result of an ordinary
@@ -178,8 +174,8 @@ Concurrency:
   must match it.
 - Conventional markers are conservative mismatch tripwires. They do not
   calculate a second version.
-- The operator creates the release tag, as the Dispatch steps describe.
-  cargo-dist is the only release and artifact publisher. It builds four
+- cargo-dist is the only release and artifact publisher; the operator creates
+  the tag. It builds four
   target binaries: macOS arm64 and x86-64, Linux x86-64 and Windows x86-64. It
   also builds shell and PowerShell installers. 3.0.0 published no Windows
   target.
@@ -572,10 +568,8 @@ change.
    Read them twice, as a new user (what the release does) and as a user
    upgrading from the last release (what to do, in order). Record both reads in
    the release checklist.
-4. When the evidence is complete, the operator creates the `vX.Y.Z` tag at
-   the exact `main` commit, and then a human dispatches cargo-dist's generated
-   Release workflow with that tag, as the Dispatch row describes. The workflow
-   resumes on the tag.
+4. When the evidence is complete, the operator tags and a human dispatches
+   cargo-dist's generated Release workflow, as the Dispatch row describes.
 5. The authority job, the recheck, and cargo-dist's upload, announcement and
    verification run as the remaining Architecture rows describe.
 
@@ -622,15 +616,13 @@ assets.
 | Public release whose post-announce verification failed | Rerun only the failed job in the same run, which still holds the built files; never edit the release or its tag |
 | Tag with another source | Leave the tag as it is; the operator decides the recovery |
 
-A draft is not public, so it can be deleted; its tag, when the operator
-created one, stays:
+A draft is not public, so it can be deleted:
 
 1. Confirm `gh api repos/sathyassn/codeflow/git/ref/tags/vX.Y.Z` answers 404,
-   or that the tag points to the dispatched source.
+   or points to the dispatched source.
 2. Delete the draft with `gh release delete vX.Y.Z --yes`, without
    `--cleanup-tag`.
-3. Reverify current main and redispatch. With the tag in place, the run
-   resumes on it only while `main` is still that commit.
+3. Reverify current main and redispatch.
 
 - A public version is spent forever. No tag or version is repurposed.
 - Material work and withdrawals stay blocked while an attempt is unresolved.

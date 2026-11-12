@@ -206,7 +206,7 @@ Runbook: [re-verification before tagging](releasing.md#re-verification-before-ta
 Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication), [public version baseline](releasing.md#public-version-baseline). Details: [publish and rollback details](#publish-and-rollback-details).
 
 - [ ] 5.1 A human approves and merges the normal work PR after its release-state check is fresh, and no agent merges or tags it. Evidence: the merged PR and fresh check.
-- [ ] 5.2 The operator creates the pending `vX.Y.Z` tag at the exact current `main` commit, then a human dispatches the generated workflow for that commit and tag, and the workflow resumes on the tag and publishes only after the guarded build succeeds. Evidence: the tag's commit and the run link.
+- [ ] 5.2 The operator tags current `main` as `vX.Y.Z`, then a human dispatches; the workflow publishes only after the guarded build succeeds. Evidence: the tag and run link.
 - [ ] 5.3 Archives, installers, checksums and attestations from the pinned workflow, and the release notes, are complete and consistent before announcement. Evidence: the release page.
 - [ ] 5.4 Fresh public-network install canaries pass without private credentials or repository access. Evidence: canary output.
 - [ ] 5.5 Rollback is ready, with the prior release still installable, the bad release withdrawable without rewriting tags, and a corrective release owner named. Evidence: the rollback record.
