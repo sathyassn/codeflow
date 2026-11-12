@@ -119,8 +119,7 @@ pub(crate) fn evaluate_at(
             })
         })
         .collect::<Vec<_>>());
-    violations
-        .extend(unresolved.and_then(|(what, remedy)| unresolved_violation(&what, remedy, levels)));
+    violations.extend(unresolved_violation(unresolved, levels));
     violations
 }
 
@@ -148,13 +147,13 @@ fn read_data_operands(
     })
 }
 
-/// The outward-action finding for an unresolved git word, when that rule
-/// is active.
+/// The outward-action finding for an unresolved git word, when there is one
+/// and that rule is active.
 fn unresolved_violation(
-    what: &str,
-    remedy: &'static crate::remedy::Clearing,
+    unresolved: Option<(String, &'static crate::remedy::Clearing)>,
     levels: &SecuritySection,
 ) -> Option<Violation> {
+    let (what, remedy) = unresolved?;
     levels.outward_actions.is_active().then(|| {
         Violation::new(
             "security.outward_actions",
