@@ -2160,9 +2160,10 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   A dotfile-manager symlink can be backed up with `cp -a ~/.zshrc backup`;
   its preservation semantics are left to the sandbox.
 - **Claude Code.** The generated denies name the default locations. A
-  `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
-  Claude's file tools do not run edit-guard, so a native `Write` there is
-  not refused. On macOS Claude merges the `Edit` denies into the sandbox
+  `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny. The
+  presets send Claude's native `Edit` and `Write` calls to edit-guard,
+  which reads the moved folders from the hook's environment, so a native
+  write there is refused by the guard. On macOS Claude merges the `Edit` denies into the sandbox
   write deny, so a nested `.envrc` written from Bash is held there too. On
   Linux and WSL2 a wildcard `denyWrite` entry is skipped, so `.envrc` in an
   arbitrary directory is an `Edit` deny only and a nested one written from
@@ -2234,13 +2235,18 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
     not above saved shell state, with `tar -C <dir>` or `unzip -d <dir>`.
     An extraction in a project, or in a folder of the home above no
     location, runs.
-  - edit-guard refuses a native edit of a file in a location. Creating a
+  - edit-guard refuses a native edit of a file in a location, wherever
+    the harness keeps it. The Claude presets send native `Edit` and
+    `Write` calls to it, as the Codex and Grok hook files send theirs, and
+    `codeflow doctor` reports Claude settings that do not. Creating a
     herdr-core template is the operator's step.
-  - Not covered: a hard link made earlier to a file inside a folder
-    location; a path that interpreter code builds at run time; a rename
-    pattern that spells a moved folder by its variable; archive options
-    that write outside the folder the extraction names; and paths fed to
-    `xargs` or `parallel` as input.
+  - Two limits come from the design. The guard cannot see what an archive
+    holds, so it judges an extraction by the folder it writes into. Where
+    a file system gives no file identity, the second run compares paths
+    as written and as reached through links, not by the node on disk.
+  - Some command shapes that can reach saved state are not yet judged;
+    TSK-1471 tracks them, and this page lists them once each fix is on
+    main.
 - **Windows.** A PowerShell profile under a redirected `Documents` folder,
   such as one in OneDrive, is outside the class. On native Windows Claude
   Code has no Bash sandbox, so the class rests on the `Edit` denies for its

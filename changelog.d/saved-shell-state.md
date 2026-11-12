@@ -9,12 +9,14 @@
     including a configuration folder its own setting moves.
   - Where the guard cannot tell what a command writes, it refuses when
     the command names that state or runs in a folder that holds it.
-  - edit-guard refuses a native edit of that state in Codex and Grok. In
-    Claude Code the presets deny native edits at the default folders
-    only, so a native edit below a moved configuration folder is not
-    refused.
+  - The guards refuse a native edit that writes that state, in Claude
+    Code, Codex and Grok. The Claude presets now send native edits to
+    edit-guard, as the Codex and Grok hook files already do.
   - The presets deny the same writes, `codeflow update` adds the entries
-    to an existing project, and `codeflow doctor` reports settings that
-    lack them.
+    and the edit hook to an existing project, and `codeflow doctor`
+    reports settings that lack them.
   - Removals and extractions in a project folder, and a folder of your
     own with a similar name, run as before.
+  - The operator accepted the new refusals near that state, including a
+    lone `cd` into one of its folders when the path is quoted, which
+    includes any such path that holds a space.
