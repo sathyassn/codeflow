@@ -6,8 +6,8 @@
 the evidence for it already exists.**
 
 Humans merge the normal work PR that carries the release state, create the
-release tag and dispatch the publishing workflow, and no agent merges, tags or
-publishes.
+release tag and dispatch
+the publishing workflow, and no agent merges, tags or publishes.
 
 This runbook covers two things:
 
