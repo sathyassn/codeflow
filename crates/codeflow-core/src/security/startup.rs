@@ -251,6 +251,14 @@ pub(crate) struct Class {
     homes: Vec<String>,
     /// The text floor's needles: each entry's spelling below its anchor.
     needles: Vec<String>,
+    /// Variables the guard holds values for besides the startup ones,
+    /// which a word may expand ([`Line::vars`]); empty for the startup and
+    /// git configuration classes.
+    held: Vec<(String, String)>,
+    /// Whether a class folder itself, and every folder inside it, is a
+    /// place a placing program could fill ([`Class::placement`]); false for
+    /// the startup and git configuration classes.
+    folders_place: bool,
 }
 
 impl Class {
@@ -350,6 +358,8 @@ impl Class {
                 .map(|h| key(&lexical(h)))
                 .collect(),
             needles,
+            held: Vec::new(),
+            folders_place: false,
         }
     }
 
@@ -434,6 +444,9 @@ impl Class {
         readings.iter().find_map(|reading| {
             let reading = reading.trim_end_matches('/');
             if reading.is_empty() || self.homes.iter().any(|h| h == reading) || reading == "/etc" {
+                return Some(shown(path));
+            }
+            if self.folders_place && self.entry_of(reading).is_some() {
                 return Some(shown(path));
             }
             let below = format!("{reading}/");
@@ -791,6 +804,9 @@ enum Judged {
 enum Kind {
     Startup,
     GitConfig,
+    /// The shell state a harness saves for its later commands, judged in a
+    /// run of its own after every other check (TSK-1461).
+    SavedState,
 }
 
 impl Kind {
@@ -799,6 +815,7 @@ impl Kind {
         match self {
             Self::Startup => "shell startup file",
             Self::GitConfig => "user or system git config file",
+            Self::SavedState => "saved shell state file",
         }
     }
 
@@ -807,6 +824,7 @@ impl Kind {
         match self {
             Self::Startup => "shell startup files",
             Self::GitConfig => "user or system git config files",
+            Self::SavedState => "saved shell state files",
         }
     }
 }
@@ -856,7 +874,7 @@ impl Line<'_> {
     /// `git config --global` write of a code-running key refuses under.
     fn finding(&self, message: String) -> Violation {
         match self.kind {
-            Kind::Startup => finding(message),
+            Kind::Startup | Kind::SavedState => finding(message),
             Kind::GitConfig => Violation::new(
                 "git.hook_integrity",
                 self.integrity,
@@ -1025,6 +1043,11 @@ impl Line<'_> {
                 if !self.assigned.contains_key(name) {
                     vars.push((name.to_string(), value));
                 }
+            }
+        }
+        for (name, value) in &self.class.held {
+            if !vars.iter().any(|(known, _)| known == name) {
+                vars.push((name.clone(), value.clone()));
             }
         }
         // Longer names first, so `$HOMEDIR` is never read as `$HOME`.
