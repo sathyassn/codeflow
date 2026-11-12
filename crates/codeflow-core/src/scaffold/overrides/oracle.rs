@@ -187,8 +187,8 @@ fn every_extension() -> Options {
 ///   without attributes, emphasis, strong, strikethrough, superscript,
 ///   subscript, lists, task markers, tables, block quotes (with or without a
 ///   GitHub alert label), definition lists, breaks, rules, code spans, fenced
-///   code whose info string is empty or one short language token, indented
-///   code and autolinks. Every other form is returned as its [`Hidden`]
+///   code with no label or a label from [`FENCE_LANGUAGES`], indented code
+///   and autolinks. Every other form is returned as its [`Hidden`]
 ///   class, and so is text that decodes to an invisible character.
 /// - A coverage check of the source. The parser keeps no visible place for
 ///   some source text and emits no event for it, so a rule over events alone
@@ -257,7 +257,7 @@ fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>
                 } => (id.is_some() || !classes.is_empty() || !attrs.is_empty())
                     .then_some(Hidden::HeadingAttributes),
                 Tag::CodeBlock(CodeBlockKind::Fenced(info)) => {
-                    (!language_token(text, &range, info)).then_some(Hidden::FenceInfo)
+                    (!listed_fence_label(text, &range, info)).then_some(Hidden::FenceInfo)
                 }
                 Tag::Link {
                     link_type, title, ..
@@ -320,20 +320,105 @@ fn hidden_with(text: &str, options: Options, out: &mut Vec<(Hidden, Range<usize>
     out.extend(places.unshown());
 }
 
-/// The longest fence info string accepted, in bytes.
-const LANGUAGE_TOKEN_MAX: usize = 20;
+/// The fence labels override text may use: code and text languages whose
+/// fence GitHub shows as highlighted source, by their GitHub Linguist names
+/// and aliases (TSK-1302).
+///
+/// It is an allow-list because a renderer draws some labelled fences, as a
+/// diagram, a map, a model or an expression, instead of showing their
+/// source, and renderers add such labels over time. A label matches in any
+/// ASCII letter case; an empty label is accepted too. `docs/model-upgrades.md`
+/// lists the same names, which a test checks.
+pub(super) const FENCE_LANGUAGES: &[&str] = &[
+    "bash",
+    "bat",
+    "batch",
+    "c",
+    "c#",
+    "c++",
+    "cmd",
+    "console",
+    "cpp",
+    "cs",
+    "csharp",
+    "css",
+    "diff",
+    "dockerfile",
+    "dotenv",
+    "elixir",
+    "erlang",
+    "go",
+    "golang",
+    "graphql",
+    "groovy",
+    "haskell",
+    "hcl",
+    "html",
+    "ini",
+    "java",
+    "javascript",
+    "js",
+    "json",
+    "json5",
+    "jsonc",
+    "jsx",
+    "kotlin",
+    "kt",
+    "lua",
+    "make",
+    "makefile",
+    "markdown",
+    "md",
+    "nix",
+    "patch",
+    "perl",
+    "php",
+    "plaintext",
+    "powershell",
+    "ps1",
+    "pwsh",
+    "py",
+    "python",
+    "rb",
+    "ruby",
+    "rs",
+    "rust",
+    "scala",
+    "scss",
+    "sh",
+    "shell",
+    "shellsession",
+    "sql",
+    "swift",
+    "terraform",
+    "text",
+    "toml",
+    "ts",
+    "tsx",
+    "txt",
+    "typescript",
+    "xml",
+    "yaml",
+    "yml",
+    "zig",
+    "zsh",
+];
 
 /// Whether the fence that opens at `range` of `text`, with the decoded info
-/// string `info`, carries no info string or one short language token: ASCII
-/// letters, digits, `+`, `#`, `-` and `.`, at most [`LANGUAGE_TOKEN_MAX`]
-/// bytes, written as it decodes (no escape or character reference). A
-/// renderer shows no part of the info string as text.
-fn language_token(text: &str, range: &Range<usize>, info: &str) -> bool {
+/// string `info`, carries no label or one label from [`FENCE_LANGUAGES`],
+/// written as it decodes (no escape or character reference). The label is
+/// first held to ASCII letters, digits, `+`, `#`, `-` and `.`, so the
+/// letter-case match never reaches another character. A renderer shows no
+/// part of the info string as text.
+fn listed_fence_label(text: &str, range: &Range<usize>, info: &str) -> bool {
     fence_info_source(text, range) == info
-        && info.len() <= LANGUAGE_TOKEN_MAX
         && info
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'#' | b'-' | b'.'))
+        && (info.is_empty()
+            || FENCE_LANGUAGES
+                .iter()
+                .any(|label| label.eq_ignore_ascii_case(info)))
 }
 
 /// The info string of the fence that opens at `range` of `text`, as written:
@@ -402,13 +487,14 @@ impl<'a> Places<'a> {
     ///   escape included.
     /// - A task marker shows as a checkbox; its only letter is `x` or `X`.
     /// - A fence shows its opening line's info string as no text, so the
-    ///   line has a place only when the string is a language token
-    ///   ([`language_token`]); any other is refused as
+    ///   line has a place only when the label is listed
+    ///   ([`listed_fence_label`]); any other is refused as
     ///   [`Hidden::FenceInfo`].
-    /// - An ordered list item's number has a place when it is the number the
-    ///   page shows (the start plus the item's place) or the list's start
-    ///   repeated, the two usual ways to number a list; either carries
-    ///   nothing the page does not show.
+    /// - An ordered list item's number, after any indentation the item
+    ///   starts with, has a place when it is the number the page shows (the
+    ///   start plus the item's place) or the list's start repeated, the two
+    ///   usual ways to number a list; either carries nothing the page does
+    ///   not show.
     /// - A GitHub alert label is one of five fixed words, which the page
     ///   shows as the alert's title.
     ///
@@ -420,7 +506,7 @@ impl<'a> Places<'a> {
                 self.show(range.clone());
             }
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-                if language_token(self.text, range, info) {
+                if listed_fence_label(self.text, range, info) {
                     let line = first_line(self.text, range).len();
                     self.show(range.start..range.start + line);
                 }
@@ -433,11 +519,11 @@ impl<'a> Places<'a> {
                 if let Some(Some((start, count))) = self.lists.last_mut() {
                     let (start, place) = (*start, start.checked_add(*count));
                     *count += 1;
-                    if let Some(len) = item_number(self.text, range.start)
+                    if let Some(digits) = item_number(self.text, range.start)
                         .filter(|(number, _)| *number == start || Some(*number) == place)
-                        .map(|(_, len)| len)
+                        .map(|(_, digits)| digits)
                     {
-                        self.show(range.start..range.start + len);
+                        self.show(digits);
                     }
                 }
             }
@@ -469,14 +555,21 @@ impl<'a> Places<'a> {
 }
 
 /// The number an ordered list item that starts at byte `at` of `text` is
-/// written with, and the length of its digits.
-fn item_number(text: &str, at: usize) -> Option<(u64, usize)> {
-    let rest = text.get(at..)?;
+/// written with, and the bytes of its digits. The parser starts an item at
+/// its indentation, so spaces and tabs before the digits are skipped.
+fn item_number(text: &str, at: usize) -> Option<(u64, Range<usize>)> {
+    let indent = text
+        .get(at..)?
+        .bytes()
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count();
+    let start = at + indent;
+    let rest = text.get(start..)?;
     let len = rest.bytes().take_while(u8::is_ascii_digit).count();
     if !(1..=9).contains(&len) || !rest[len..].starts_with(['.', ')']) {
         return None;
     }
-    Some((rest[..len].parse().ok()?, len))
+    Some((rest[..len].parse().ok()?, start..start + len))
 }
 
 /// The bytes of the GitHub alert label `[!WORD]` on the first line of the

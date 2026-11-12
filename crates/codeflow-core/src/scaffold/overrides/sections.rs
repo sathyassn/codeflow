@@ -498,8 +498,9 @@ pub enum Hidden {
     Metadata,
     /// A heading with an id, classes or attributes, which render nothing.
     HeadingAttributes,
-    /// A fence info string that is not empty or one short language token; a
-    /// renderer shows only the code.
+    /// A fence label that is neither empty nor one of the accepted code
+    /// languages (`oracle::FENCE_LANGUAGES`): a renderer shows no label, and
+    /// draws some labelled fences instead of showing their source.
     FenceInfo,
     /// A link or image title, shown only on hover if at all.
     LinkTitle,
@@ -531,7 +532,9 @@ impl Hidden {
             Self::Footnote => "a footnote",
             Self::Metadata => "a metadata block",
             Self::HeadingAttributes => "a heading with attributes",
-            Self::FenceInfo => "a code fence info string that is not one short language token",
+            Self::FenceInfo => {
+                "a code fence label that is not one of the accepted code languages listed in docs/model-upgrades.md"
+            }
             Self::LinkTitle => "a link or image title",
             Self::EmptyLinkText => "a link or image with no text",
             Self::Link => "a link whose destination the rendered page does not show",
