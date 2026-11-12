@@ -427,6 +427,29 @@ impl Class {
         })
     }
 
+    /// The label of the first location that lies below `folder`, read as
+    /// written and as the kernel reaches it.
+    fn holds(&self, folder: &Path) -> Option<String> {
+        let mut readings = vec![key(&lexical(folder))];
+        if let Ok(real) = resolve(folder) {
+            readings.push(key(&real));
+        }
+        self.entries.iter().find_map(|entry| match entry {
+            Entry::At {
+                label,
+                readings: at,
+                ..
+            } => readings
+                .iter()
+                .any(|reading| {
+                    let below = format!("{}/", reading.trim_end_matches('/'));
+                    at.iter().any(|p| p.starts_with(&below))
+                })
+                .then(|| label.clone()),
+            Entry::Name(_) => None,
+        })
+    }
+
     /// Whether `path` is a directory a placing program could fill with a
     /// startup file it does not name: the home, `/etc`, the root, or any
     /// directory above a class entry.
@@ -917,6 +940,20 @@ impl Line<'_> {
         self.kind.noun()
     }
 
+    /// For saved state, the clause that names the location a folder holds
+    /// below it (` which holds the saved shell state location `L`,`), so a
+    /// refusal of a program that places files there says what makes the
+    /// folder one. Empty for the other classes, whose refusals keep their
+    /// words, and for a folder that is a location itself.
+    fn holds(&self, folder: &Path) -> String {
+        if self.kind != Kind::SavedState {
+            return String::new();
+        }
+        self.class.holds(folder).map_or_else(String::new, |label| {
+            format!(" which holds the saved shell state location `{label}`,")
+        })
+    }
+
     /// The protected file `text` names, read as written and with the line's
     /// literal assignments filled in: a body that spells `$p` after
     /// `p=src/.envrc` names the file the shell hands it (review of
@@ -1251,7 +1288,7 @@ impl Line<'_> {
                 });
                 if near {
                     return Some(format!(
-                        "it applies a modifier or subscript to `${name}`, whose value `{value}` is or holds saved shell state"
+                        "it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state"
                     ));
                 }
             }
@@ -3221,14 +3258,14 @@ impl super::unresolved::WriterGuard for ExecWriter<'_> {
 }
 
 /// The folders a symbolic link made at `dest` can be in, from which the
-/// kernel reads its relative text: `dest` when it may be a folder, and the
-/// folder that holds it.
-fn link_folders(dest: &str, line: &Line<'_>, dirs: &[PathBuf]) -> Vec<PathBuf> {
+/// kernel reads its relative text: `dest` whatever it is now, since an
+/// earlier command on the line may make it a folder, unless `-T` makes it
+/// the link itself, and the folder that holds it.
+fn link_folders(dest: &str, whole: bool, line: &Line<'_>, dirs: &[PathBuf]) -> Vec<PathBuf> {
     dirs.iter()
         .filter_map(|d| line.expand(dest, d))
         .flat_map(|path| {
-            let folder =
-                (crate::absence::is_kind(&path, true) != Some(false)).then(|| path.clone());
+            let folder = (!whole).then(|| path.clone());
             folder
                 .into_iter()
                 .chain(path.parent().map(Path::to_path_buf))
@@ -3258,11 +3295,12 @@ fn copy_judgment(
         name == "ln" || (name == "cp" && flagged(&["-s", "-l", "--symbolic-link", "--link"]));
     // For saved state, relative symbolic link text is read from the folder
     // the link is made in, as the kernel reads it: the destination when it
-    // may be a folder, and the folder that holds it.
+    // may be a folder whatever it is now, unless `-T` makes it the link
+    // itself, and the folder that holds it.
     let symbolic_from_its_folder =
         line.kind == Kind::SavedState && name == "ln" && flagged(&["-s", "--symbolic"]);
     let text_folders = if symbolic_from_its_folder {
-        link_folders(dest, line, dirs)
+        link_folders(dest, flagged(&["-T", "--no-target-directory"]), line, dirs)
     } else {
         Vec::new()
     };
@@ -3436,15 +3474,17 @@ fn placement_violation(
             continue;
         }
         if let Judged::Placement(dir) = line.judge(value, placed) {
+            let holds = line.holds(Path::new(&dir));
             return Some(line.finding(format!(
-                "`{name}` writes into `{dir}`, where it can place a {noun} it does not name"
+                "`{name}` writes into `{dir}`,{holds} where it can place a {noun} it does not name"
             )));
         }
     }
     for dir in placed {
         if let Some(p) = line.class.placement(dir) {
+            let holds = line.holds(dir);
             return Some(line.finding(format!(
-                "`{name}` runs in `{p}`, where it can place a {noun} it does not name"
+                "`{name}` runs in `{p}`,{holds} where it can place a {noun} it does not name"
             )));
         }
     }

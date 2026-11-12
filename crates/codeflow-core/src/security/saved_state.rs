@@ -342,6 +342,11 @@ pub(crate) const STATE_SANCTIONED: &str = "a harness runs its saved shell state 
 /// folder that holds it, or a write the guard cannot resolve there.
 const NEAR_WAY: &str = "aim the program at a named sub-folder that holds no saved shell state, or name the file it writes";
 
+/// The way through a program that changes the files of the folder it runs
+/// in (`git checkout`, `tar`, `patch`), which a program cannot aim at a
+/// sub-folder: the harness configuration folder stays outside the project.
+const PLACE_WAY: &str = "keep the harness configuration folder outside the project, or run the program in a folder that holds no saved shell state";
+
 /// The way through a copy of a folder's contents or a tree into a folder
 /// that holds saved state.
 const COPY_WAY: &str = "copy into a named sub-folder that holds no saved shell state";
@@ -470,6 +475,10 @@ pub(crate) fn readings(command: &str, cwd: &Path, env: &Places) -> Vec<Violation
             .any(|start| message.starts_with(start))
         {
             Some(CD_WAY)
+        } else if message.contains("` runs in `")
+            && message.contains(", which holds the saved shell state location `")
+        {
+            Some(PLACE_WAY)
         } else if NEAR_MARKS.iter().any(|mark| message.contains(mark)) {
             Some(NEAR_WAY)
         } else {
@@ -528,62 +537,78 @@ fn plain_redirects(command: &str) -> String {
     out
 }
 
-/// The first variable of `vars` that `word` changes with a zsh modifier or
-/// subscript, with its value: `$NAME:a`, `$NAME[1,-1]`, or a braced form
-/// with anything after the name (`${NAME:a}`, `${NAME[1]}`, `${NAME:-x}`),
-/// zsh's `(flags)`, `=`, `~` and `^` before the name included. The guard
-/// does not compute the result, so the startup check reads such a word as
-/// filled in at run time. Text in single quotes is data.
+/// The first variable of `vars` that `word` changes with a zsh flag,
+/// modifier or subscript, with its value: `$NAME:a`, `$NAME[1,-1]`, a
+/// braced form with anything after the name (`${NAME:a}`, `${NAME[1]}`,
+/// `${NAME:-x}`), zsh's `(flags)`, `=`, `~` and `^` before the name, braced
+/// or not, and a braced expansion that holds another one. The guard does
+/// not compute the result, so the startup check reads such a word as
+/// filled in at run time.
+///
+/// The word is read as the command reader hands it over, with its quotes
+/// and backslashes removed, so a quote or backslash left in it is a
+/// literal character and hides nothing: every `$` counts, as the
+/// substitution that fills the word counts it.
 pub(super) fn modified_variable(word: &str, vars: &[(String, String)]) -> Option<(String, String)> {
     let chars: Vec<char> = word.chars().collect();
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let (mut single, mut at) = (false, 0);
+    let flags = |mut at: usize| {
+        while chars.get(at).is_some_and(|c| matches!(c, '=' | '~' | '^')) {
+            at += 1;
+        }
+        at
+    };
+    let mut at = 0;
     while let Some(&c) = chars.get(at) {
         at += 1;
-        match c {
-            '\\' if !single => at += 1,
-            '\'' => single = !single,
-            '$' if !single => {
-                let braced = chars.get(at) == Some(&'{');
-                let mut start = at + usize::from(braced);
-                if braced {
-                    if chars.get(start) == Some(&'(') {
-                        while chars.get(start).is_some_and(|c| *c != ')') {
-                            start += 1;
-                        }
-                        start += 1;
-                    }
-                    while chars
-                        .get(start)
-                        .is_some_and(|c| matches!(c, '=' | '~' | '^'))
-                    {
-                        start += 1;
-                    }
-                }
-                let start = start.min(chars.len());
-                let mut end = start;
-                while chars.get(end).copied().is_some_and(ident) {
-                    end += 1;
-                }
-                let name: String = chars[start..end].iter().collect();
-                let Some((_, value)) = vars.iter().find(|(known, _)| *known == name) else {
-                    continue;
-                };
-                let next = chars.get(end).copied();
-                let modified = if braced {
-                    next != Some('}') || start != at + 1
-                } else {
-                    next == Some('[')
-                        || (next == Some(':')
-                            && chars
-                                .get(end + 1)
-                                .is_some_and(|c| c.is_ascii_alphabetic() || *c == '&'))
-                };
-                if modified {
-                    return Some((name, value.clone()));
-                }
+        if c != '$' {
+            continue;
+        }
+        let braced = chars.get(at) == Some(&'{');
+        let mut start = at + usize::from(braced);
+        // Whether a flag or an inner expansion changes the name's value.
+        let mut changed = false;
+        if braced && chars.get(start) == Some(&'(') {
+            while chars.get(start).is_some_and(|c| *c != ')') {
+                start += 1;
             }
-            _ => {}
+            start += 1;
+            changed = true;
+        }
+        let after = flags(start);
+        changed |= after != start;
+        start = after;
+        if braced && chars.get(start) == Some(&'$') {
+            // The outer braces hold an expansion of their own.
+            start += 1;
+            if chars.get(start) == Some(&'{') {
+                start += 1;
+            }
+            start = flags(start);
+            changed = true;
+        }
+        let start = start.min(chars.len());
+        let mut end = start;
+        while chars.get(end).copied().is_some_and(ident) {
+            end += 1;
+        }
+        let name: String = chars[start..end].iter().collect();
+        let Some((_, value)) = vars.iter().find(|(known, _)| *known == name) else {
+            continue;
+        };
+        let next = chars.get(end).copied();
+        let modified = changed
+            || if braced {
+                next != Some('}')
+            } else {
+                next == Some('[')
+                    || (next == Some(':')
+                        && chars
+                            .get(end + 1)
+                            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '&'))
+            };
+        if modified {
+            return Some((name, value.clone()));
         }
     }
     None
@@ -633,6 +658,9 @@ struct Seen {
 /// followed where it stands and `..` taken from the folder actually
 /// reached. With `follow_last` false, a link at the last component is the
 /// node itself, as a removal sees it.
+///
+/// A `..` that leaves a folder that does not exist yet returns to the folder
+/// above it, as it does once an earlier command on the line has made it.
 // One loop over the components, as the kernel takes them, kept whole.
 #[allow(clippy::too_many_lines)]
 fn walk(path: &Path, follow_last: bool) -> Seen {
@@ -647,6 +675,9 @@ fn walk(path: &Path, follow_last: bool) -> Seen {
     let mut current = PathBuf::new();
     let mut stack: Vec<Option<Id>> = Vec::new();
     let mut absent = false;
+    // How many of the components walked since the first missing one are
+    // missing too.
+    let mut missing = 0usize;
     let mut is_dir = true;
     let mut links = 0;
     let mut last_kept = false;
@@ -660,6 +691,12 @@ fn walk(path: &Path, follow_last: bool) -> Seen {
                     stack.pop();
                 }
                 current.pop();
+                if absent && missing > 0 {
+                    missing -= 1;
+                    if missing == 0 {
+                        absent = false;
+                    }
+                }
                 continue;
             }
             Some(Component::Prefix(_)) => {
@@ -680,6 +717,9 @@ fn walk(path: &Path, follow_last: bool) -> Seen {
         }
         let next = current.join(component);
         if absent || !is_dir {
+            if absent {
+                missing += 1;
+            }
             absent = true;
             current = next;
             stack.push(None);
@@ -717,6 +757,7 @@ fn walk(path: &Path, follow_last: bool) -> Seen {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 absent = true;
+                missing += 1;
                 current = next;
                 stack.push(None);
             }
@@ -1119,9 +1160,23 @@ impl Pass<'_> {
         // The kernel reads relative symbolic link text from the folder the
         // link is in, not from where the command runs.
         if name == "ln" && flagged(&["-s", "--symbolic"]) {
+            // The destination may be a folder an earlier command on the
+            // line makes, so it is tried as one whatever it is now, and as
+            // the link's own name, unless `-T` or what the line shows
+            // settles which.
             let folders: Vec<String> = dests
                 .iter()
-                .filter_map(|d| if into { Some(d.as_path()) } else { d.parent() })
+                .flat_map(|d| {
+                    let folder = Some(d.as_path());
+                    if into {
+                        vec![folder]
+                    } else if whole {
+                        vec![d.parent()]
+                    } else {
+                        vec![folder, d.parent()]
+                    }
+                })
+                .flatten()
                 .filter_map(|folder| folder.to_str().map(str::to_string))
                 .collect();
             for source in copy.sources.iter().filter(|s| !s.starts_with(['/', '~'])) {
