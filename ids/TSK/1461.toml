@@ -1,0 +1,11 @@
+id = "TSK-1461"
+uid = "ee3c9d66-0e99-4e17-bf2a-f5fafcbce7f4"
+kind = "TSK"
+title = "The guards and presets protect the harness's saved shell state"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:05:04Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
