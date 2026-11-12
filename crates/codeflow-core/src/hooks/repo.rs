@@ -1361,8 +1361,9 @@ fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
             .ok()
             .filter(|meta| meta.file_type().is_dir())
     };
-    // Proven absent, never merely unreadable.
-    let absent = |path: &Path| matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    // Proven absent, never merely unreadable: an entry of any kind, a read
+    // error or a doubtful ancestor keeps the full open.
+    let absent = |path: &Path| matches!(crate::absence::proven_absent(path), Ok(true));
     // The checkout marker is a gitfile of exactly `gitdir: <absolute path>`
     // naming this administrative directory.
     let marker = root.join(".git");
@@ -1441,16 +1442,16 @@ fn config_is_sibling_independent(path: &Path) -> bool {
         let Ok(entry) = entry else {
             return false;
         };
-        let Ok(name) = entry.name().map(str::to_ascii_lowercase) else {
-            return false;
-        };
-        let bare_not_false = name == "core.bare"
+        // Names are compared as bytes, folded as ASCII as git folds section
+        // and key names, so a name that is not UTF-8 is still judged.
+        let name = entry.name_bytes().to_ascii_lowercase();
+        let bare_not_false = name == b"core.bare"
             && !entry
                 .value()
                 .is_ok_and(|value| matches!(git2::Config::parse_bool(value), Ok(false)));
-        if name.starts_with("include.")
-            || name.starts_with("includeif.")
-            || name == "core.worktree"
+        if name.starts_with(b"include.")
+            || name.starts_with(b"includeif.")
+            || name == b"core.worktree"
             || bare_not_false
         {
             return false;
