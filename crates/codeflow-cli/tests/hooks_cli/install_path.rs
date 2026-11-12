@@ -248,8 +248,56 @@ fn the_install_verbs_refuse_in_every_form_the_guards_read() {
         "cargo run -- update".to_string(),
         "cargo run -p codeflow-cli -- init --yes".to_string(),
         "cargo r --bin codeflow -- update --force".to_string(),
+        "cargo run update".to_string(),
+        "cargo r init --yes".to_string(),
+        "cargo run --bin codeflow update --force".to_string(),
+        "cargo +stable run -- init".to_string(),
         format!("B={build}; $B update"),
         format!("$(printf {build}) update"),
+        "codeflow $V".to_string(),
+        r#"codeflow "$@""#.to_string(),
+        "codeflow $(printf update)".to_string(),
+        format!("{build} ${{VERB}} --force"),
+        "CODEFLOW update".to_string(),
+        "CodeFlow init --yes".to_string(),
+        "codeflow.exe update".to_string(),
+        "./target/debug/CodeFlow.EXE update".to_string(),
+    ];
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    tally.finish();
+}
+
+/// AC-1 and AC-2 through programs that start the command after their own
+/// options or hand it the words they read, each of which keeps its own
+/// grammar. The run is refused whichever of them starts it.
+#[test]
+fn the_install_verbs_refuse_through_any_launcher() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let build = "./target/debug/codeflow";
+    let rows = [
+        "sudo codeflow update".to_string(),
+        format!("sudo -u root {build} init --yes"),
+        "doas codeflow update".to_string(),
+        "chrt -o 0 codeflow update".to_string(),
+        format!("taskset -c 0 {build} update"),
+        "parallel codeflow ::: update".to_string(),
+        format!("echo update | parallel {build}"),
+        "watch -n 60 codeflow update".to_string(),
+        "watch 'codeflow update'".to_string(),
+        "busybox env codeflow update".to_string(),
+        "gsudo codeflow update".to_string(),
+        "pkexec codeflow init --yes".to_string(),
+        "npx codeflow update".to_string(),
+        "npm exec -- codeflow update".to_string(),
+        "npm exec codeflow init --yes".to_string(),
+        "pnpm exec codeflow update".to_string(),
+        format!("yarn exec {build} update"),
+        "bun x codeflow update".to_string(),
+        "pn exec codeflow update".to_string(),
+        "xargs -n 1 codeflow < verbs.txt".to_string(),
+        "echo update | xargs -I{} codeflow {}".to_string(),
     ];
     let mut tally = Tally::default();
     tally.shell_refused(&rows, &root, operator_refusal);
@@ -267,6 +315,9 @@ fn the_install_verbs_refuse_with_the_installed_binary() {
         "codeflow update --force",
         "codeflow update --pin 4.0.0",
         "codeflow update --diff update-report.txt",
+        "codeflow update --diff=--help",
+        "codeflow update --help --force",
+        "codeflow init -h --yes",
         "codeflow init --yes",
         "codeflow init --minimal --yes",
         "codeflow init --workspace --yes",
@@ -284,11 +335,10 @@ fn the_install_verbs_refuse_with_the_installed_binary() {
     tally.finish();
 }
 
-/// AC-1 and AC-2 by location (the Director's D1 ruling of 2026-11-12: no
-/// exemption by location): a run in a linked worktree, in a separate
-/// scratch repository under the temporary folder, reached from the project
-/// by a directory change, or in a folder that is no repository yet, is
-/// refused like a run in the project.
+/// AC-1 and AC-2 by location, with no exemption by location: a run in a
+/// linked worktree, in a separate scratch repository under the temporary
+/// folder, reached from the project by a directory change, or in a folder
+/// that is no repository yet, is refused like a run in the project.
 #[test]
 fn the_install_verbs_refuse_in_every_folder() {
     let temp = tempfile::tempdir().unwrap();
@@ -350,18 +400,23 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "codeflow update --help",
         "codeflow update -h",
         "codeflow init --help",
+        "codeflow init -h",
         "codeflow help update",
         "codeflow help init",
         "codeflow --version",
+        "codeflow -V",
         "codeflow --help",
         "./target/debug/codeflow update --help",
-        // Other codeflow verbs.
+        // Other codeflow verbs, and names of the binary as data.
         "codeflow doctor",
         "codeflow orient",
         "codeflow test --mode quick",
         "codeflow validate --docs",
+        "command -v codeflow",
+        "which codeflow",
         "cargo run -- doctor",
         "cargo build",
+        "cargo test update",
         // Other programs' verbs of the same name.
         "cargo init --vcs none --name scratch scratch",
         "npm init -y",
@@ -372,6 +427,7 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "printf 'codeflow update\\n' > notes.txt",
         "grep -rn 'codeflow update' docs",
         "git commit -m 'docs: say the operator runs codeflow update'",
+        "git commit -F - <<'EOF'\ndocs: say the operator runs codeflow update\nEOF",
     ]
     .iter()
     .map(ToString::to_string)
@@ -416,9 +472,8 @@ fn worktree_copies_refuse_every_shell_write_route() {
 
 /// AC-3: a write to a linked worktree's copy through a native file tool is
 /// refused by the edit guard, for the Claude, Grok and Codex tool forms.
-/// Codex seats keep these copies guarded by the hooks alone (the Director's
-/// D3 ruling of 2026-11-12, option (ii)), so the Codex rows are their
-/// protection.
+/// Codex seats keep these copies guarded by the hooks alone, so the Codex
+/// rows are their protection.
 #[test]
 fn worktree_copies_refuse_native_file_tools() {
     let temp = tempfile::tempdir().unwrap();
@@ -467,9 +522,9 @@ fn worktree_copies_refuse_native_file_tools() {
 
 /// AC-3: every shipped Claude preset denies the native edit tools each
 /// worktree's copy of every enforcement file the root checkout's denies
-/// name. Git's own files are left out: a linked worktree keeps its
-/// configuration and hooks in the common directory the root's denies
-/// already cover.
+/// name, wherever the project sits under the session's folder. Git's own
+/// files are left out: a linked worktree keeps its configuration and hooks
+/// in the common directory the root's denies already cover.
 #[test]
 fn every_shipped_claude_preset_denies_the_worktree_copies() {
     let expected: Vec<String> = codeflow_core::security::actions::table()
@@ -480,7 +535,7 @@ fn every_shipped_claude_preset_denies_the_worktree_copies() {
         .flat_map(|relative| {
             WORKTREE_FOLDERS
                 .iter()
-                .map(move |folder| format!("Edit(/{folder}/*/{relative})"))
+                .map(move |folder| format!("Edit(//**/{folder}/*/{relative})"))
         })
         .collect();
     assert!(!expected.is_empty(), "the action table names no root denies");
@@ -509,8 +564,8 @@ fn every_shipped_claude_preset_denies_the_worktree_copies() {
     );
 }
 
-/// The Director's D3 ruling of 2026-11-12, option (ii): the shipped Codex
-/// profiles name no worktree path, since a pattern with a wildcard folder
+/// The shipped Codex profiles name no worktree path, since a pattern with a
+/// wildcard folder
 /// makes Codex refuse to delete every folder it reaches, worktrees
 /// included. The edit guard rows above are the protection of those copies.
 #[test]
