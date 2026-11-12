@@ -1,0 +1,11 @@
+id = "TSK-1437"
+uid = "d6ce407d-2e94-4205-9cb1-5e6a175674fc"
+kind = "TSK"
+title = "A marked epic's line reaches the default branch only when the epic is complete"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:57:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
