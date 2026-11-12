@@ -3397,7 +3397,11 @@ fn clears_doctor_startup_presets_for_the_edit_hook() {
     let before = groups.len();
     groups.retain(|group| !group.to_string().contains("codeflow hook edit-guard"));
     assert_eq!(groups.len() + 1, before, "no edit-guard group to remove");
-    std::fs::write(&path, serde_json::to_string_pretty(&settings).unwrap() + "\n").unwrap();
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&settings).unwrap() + "\n",
+    )
+    .unwrap();
     prove(
         "DOCTOR_STARTUP_PRESETS",
         "calls to no edit-guard hook",

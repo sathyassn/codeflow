@@ -528,10 +528,11 @@ fn edit_guard_wired_in_every_preset() {
         assert_eq!(hooks.len(), 1, "{name}: edit-guard alone in its group");
         // The same entry as the shell guards, with the guard's name.
         let mut expected = shell_guard(&value);
-        let command = expected["command"]
-            .as_str()
-            .unwrap()
-            .replacen("hook exec-guard", "hook edit-guard", 1);
+        let command =
+            expected["command"]
+                .as_str()
+                .unwrap()
+                .replacen("hook exec-guard", "hook edit-guard", 1);
         expected["command"] = command.into();
         assert_eq!(hooks[0], expected, "{name}");
     }
@@ -2095,27 +2096,20 @@ fn run_in_home(root: &Path, home: &Path, args: &[&str]) -> String {
     )
 }
 
-/// AC-3, AC-4 and AC-11 journey: a project whose Claude settings, Codex
-/// profile and their baselines hold what 4.0.0 shipped, without the saved
-/// shell state entries and without the edit-guard group, plus a deny and an
-/// edit hook of the adopter's own. Doctor warns about both; update adds the
-/// entries and the group, keeps the adopter's deny and hook and changes no
-/// other file; doctor is then clean, and a second update changes nothing.
-#[test]
-fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("proj");
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::create_dir_all(&home).unwrap();
-    run_in_home(&root, &home, &["init", "--yes"]);
-    let managed = [
-        ".claude/settings.json",
-        ".codex/config.toml",
-        ".codeflow/.baseline/.claude/settings.json",
-        ".codeflow/.baseline/.codex/config.toml",
-    ];
-    for rel in managed {
+/// The Claude settings, Codex profile and their baselines of an install.
+const MANAGED_SETTINGS: [&str; 4] = [
+    ".claude/settings.json",
+    ".codex/config.toml",
+    ".codeflow/.baseline/.claude/settings.json",
+    ".codeflow/.baseline/.codex/config.toml",
+];
+
+/// Turn a fresh install in `root` into what 4.0.0 shipped: the saved shell
+/// state entries and the edit-guard group removed from the settings, the
+/// profile and their baselines. Then add a deny and an edit hook of the
+/// adopter's own to the settings, and return that hook.
+fn plant_a_4_0_0_install(root: &Path) -> serde_json::Value {
+    for rel in MANAGED_SETTINGS {
         let path = root.join(rel);
         let text = std::fs::read_to_string(&path).unwrap();
         let kept: String = text
@@ -2126,7 +2120,7 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         std::fs::write(&path, kept).unwrap();
     }
     // 4.0.0 shipped no edit-guard group in the Claude presets.
-    for rel in managed {
+    for rel in MANAGED_SETTINGS {
         if !rel.ends_with("settings.json") {
             continue;
         }
@@ -2136,7 +2130,11 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         let groups = value["hooks"]["PreToolUse"].as_array_mut().unwrap();
         let before = groups.len();
         groups.retain(|group| !runs_edit_guard(group));
-        assert_eq!(groups.len() + 1, before, "{rel}: no edit-guard group to remove");
+        assert_eq!(
+            groups.len() + 1,
+            before,
+            "{rel}: no edit-guard group to remove"
+        );
         std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap() + "\n").unwrap();
     }
     let settings = root.join(".claude/settings.json");
@@ -2158,6 +2156,25 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         serde_json::to_string_pretty(&project).unwrap() + "\n",
     )
     .unwrap();
+    own_hook
+}
+
+/// AC-3, AC-4 and AC-11 journey: a project whose Claude settings, Codex
+/// profile and their baselines hold what 4.0.0 shipped, without the saved
+/// shell state entries and without the edit-guard group, plus a deny and an
+/// edit hook of the adopter's own. Doctor warns about both; update adds the
+/// entries and the group, keeps the adopter's deny and hook and changes no
+/// other file; doctor is then clean, and a second update changes nothing.
+#[test]
+fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    run_in_home(&root, &home, &["init", "--yes"]);
+    let own_hook = plant_a_4_0_0_install(&root);
+    let settings = root.join(".claude/settings.json");
 
     let before = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
     assert!(
@@ -2181,7 +2198,7 @@ fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .collect();
     // Besides the four files, update writes only its own docs-portal lock.
-    let allowed: BTreeSet<String> = managed
+    let allowed: BTreeSet<String> = MANAGED_SETTINGS
         .iter()
         .chain(&[".codeflow/.docs-portal.lock"])
         .map(ToString::to_string)

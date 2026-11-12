@@ -287,8 +287,9 @@ fn claude_edit_guard_gap(root: &Path) -> Option<String> {
         let matches = match group.get("matcher") {
             None | Some(serde_json::Value::Null) => true,
             Some(serde_json::Value::String(m)) if m.is_empty() || m == "*" => true,
-            Some(serde_json::Value::String(m)) => regex::Regex::new(&format!("^(?:{m})$"))
-                .is_ok_and(|pattern| pattern.is_match(tool)),
+            Some(serde_json::Value::String(m)) => {
+                regex::Regex::new(&format!("^(?:{m})$")).is_ok_and(|pattern| pattern.is_match(tool))
+            }
             Some(_) => false,
         };
         runs_guard && matches
@@ -844,11 +845,17 @@ mod tests {
         // A guard under the shell tools' matcher, or another program under
         // the edit tools' matcher, takes no edit.
         assert_eq!(
-            settings(serde_json::json!([group("^(Bash|PowerShell)$".into(), guard)])),
+            settings(serde_json::json!([group(
+                "^(Bash|PowerShell)$".into(),
+                guard
+            )])),
             both
         );
         assert_eq!(
-            settings(serde_json::json!([group("^(Edit|Write)$".into(), "./check.sh")])),
+            settings(serde_json::json!([group(
+                "^(Edit|Write)$".into(),
+                "./check.sh"
+            )])),
             both
         );
         assert_eq!(
