@@ -8859,9 +8859,7 @@ fn substitution_output_runs(prefix: &str) -> bool {
     match strip_launchers(&argv) {
         Some(_) => !reads_as_data(prefix),
         // No program: command position unless the words are all assignments.
-        None => {
-            argv.is_empty() || skip_leading(&argv, Taker::Shell) < argv.len()
-        }
+        None => argv.is_empty() || skip_leading(&argv, Taker::Shell) < argv.len(),
     }
 }
 
@@ -13857,8 +13855,7 @@ pub(crate) fn launched_at(tokens: &[String]) -> Option<(usize, Taker)> {
                 Err(_) => {
                     idx += 1;
                     while tokens.get(idx).is_some_and(|a| {
-                        a.starts_with('-')
-                            || leading_word(a, Taker::Env) == LeadingWord::Assignment
+                        a.starts_with('-') || leading_word(a, Taker::Env) == LeadingWord::Assignment
                     }) {
                         idx += 1;
                     }
@@ -16925,14 +16922,8 @@ mod tests {
                 "X+=1 git push --force origin main",
                 vec!["git push --force origin main"],
             ),
-            (
-                "A=1 a[0]=1 claude -p x",
-                vec!["A=1 claude -p x"],
-            ),
-            (
-                "env X[0]=1 git push",
-                vec!["env git push"],
-            ),
+            ("A=1 a[0]=1 claude -p x", vec!["A=1 claude -p x"]),
+            ("env X[0]=1 git push", vec!["env git push"]),
             (
                 "nohup X+=1 Y+=2 claude -p x",
                 vec!["nohup Y+=2 claude -p x", "nohup claude -p x"],

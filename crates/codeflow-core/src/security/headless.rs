@@ -1102,6 +1102,9 @@ mod tests {
             "env X[0]=1 ls -p",
             "sudo X+=1 git status",
             "FOO=1 ls -p",
+            "env FOO=1 ls -p",
+            "env X=/bin/claude -p hello",
+            "doas X=/bin/claude -p hello",
         ] {
             assert_eq!(headless_peer_run(line), None, "{line}");
         }

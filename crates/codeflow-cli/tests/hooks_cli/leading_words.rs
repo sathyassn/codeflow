@@ -45,7 +45,11 @@ fn the_program_behind_unplaced_words_is_judged() {
     let rows = [
         ("git-guard", "X+=1 git push --force origin main", force),
         ("git-guard", "a[0]=1 git push --force origin main", force),
-        ("git-guard", "env X[0]=1 git push --force origin main", force),
+        (
+            "git-guard",
+            "env X[0]=1 git push --force origin main",
+            force,
+        ),
         ("git-guard", "env {X=1,git} push --force origin main", force),
         ("git-guard", "A=1 X+=1 git push --force origin main", force),
         ("exec-guard", "X+=1 claude -p x", headless),
@@ -79,8 +83,16 @@ fn main_verdicts_hold_for_leading_words() {
             "env --split-string='-i A=1' git push --force origin main",
             force,
         ),
-        ("git-guard", "env -S 'A=1' git push --force origin main", force),
-        ("git-guard", "env -u FOO git push --force origin main", force),
+        (
+            "git-guard",
+            "env -S 'A=1' git push --force origin main",
+            force,
+        ),
+        (
+            "git-guard",
+            "env -u FOO git push --force origin main",
+            force,
+        ),
         ("exec-guard", "env -u FOO claude -p x", headless),
         // Readings main makes.
         ("git-guard", "'=git' x", None),
