@@ -80,7 +80,11 @@ fn unread_program_words_are_judged_under_each_guarded_name() {
         ("exec-guard", "$C -p x", headless),
         ("git-guard", "gi* push --force origin main", force),
         ("git-guard", "/usr/bin/gi? push --force origin main", force),
-        ("git-guard", "/usr/bin/g[i]t push --force origin main", force),
+        (
+            "git-guard",
+            "/usr/bin/g[i]t push --force origin main",
+            force,
+        ),
         ("exec-guard", "/usr/local/bin/clau* -p x", headless),
         // As a launcher, a shell or `eval`.
         ("git-guard", "$N -n 5 git push --force origin main", force),
@@ -141,11 +145,7 @@ fn main_verdicts_hold_for_program_word_expansions() {
         ("git-guard", "~nobody/git push --force origin main", force),
         // A parameter set on the line, with field splitting.
         ("git-guard", "G=git; $G push --force origin main", force),
-        (
-            "git-guard",
-            "G='git push'; $G --force origin main",
-            force,
-        ),
+        ("git-guard", "G='git push'; $G --force origin main", force),
         // Command substitution and arithmetic.
         ("git-guard", "$(echo git) push --force origin main", refused),
         ("git-guard", "`echo git` push --force origin main", refused),
@@ -160,8 +160,16 @@ fn main_verdicts_hold_for_program_word_expansions() {
         ("git-guard", "$\"git\" push --force origin main", force),
         ("exec-guard", "c'laude' -p x", headless),
         // Alias.
-        ("git-guard", "alias g=git; g push --force origin main", integrity),
-        ("exec-guard", "alias g=git; g push --force origin main", integrity),
+        (
+            "git-guard",
+            "alias g=git; g push --force origin main",
+            integrity,
+        ),
+        (
+            "exec-guard",
+            "alias g=git; g push --force origin main",
+            integrity,
+        ),
     ];
     let wrong = check(dir.path(), &rows);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

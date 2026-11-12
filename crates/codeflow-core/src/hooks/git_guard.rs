@@ -1032,6 +1032,17 @@ fn evaluate_report_with_runners(
             }
             continue;
         }
+        // A file substitution in the program position runs a file whose
+        // text the guard cannot read, which could be git itself.
+        if segment == PROGRAM_UNREAD {
+            violations.extend(unclassifiable_violation(
+                ctx.policy,
+                None,
+                "a file substitution in the program position decides which program runs",
+                &crate::remedy::GUARD_UNCLASSIFIABLE,
+            ));
+            continue;
+        }
 
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
@@ -7320,6 +7331,7 @@ fn expand_segments(
         bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
         let mut words = toks;
         strip_reserved_words(&mut words);
+        let mut unreadable = false;
         if let Some((at, taker)) = launched_at(&words) {
             let program = words[at].as_str();
             if expands(program) {
@@ -7327,6 +7339,11 @@ fn expand_segments(
                     bodies.push(literals.fill_words(&words));
                 } else {
                     out.unread_commands.push(program.to_string());
+                }
+            } else if leading_word(program, taker) != LeadingWord::Unplaced {
+                match program_readings(&words, at, &seg) {
+                    Some(readings) => bodies.extend(readings),
+                    None => unreadable = true,
                 }
             }
             if leading_word(program, taker) == LeadingWord::Unplaced {
@@ -7342,6 +7359,9 @@ fn expand_segments(
             literals.note(&words);
         }
         out.segments.push(seg);
+        if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
+            out.segments.push(PROGRAM_UNREAD.to_string());
+        }
         if bodies.is_empty() {
             continue;
         }
@@ -7380,6 +7400,64 @@ pub(crate) fn other_readings(words: &[String], at: usize) -> Option<Vec<String>>
         }
     }
     Some(readings)
+}
+
+/// The other commands a segment runs when the shell rewrites its program
+/// word at `at` before it looks the program up (TSK-1456 AC-9), as shell
+/// text: a brace list (Bash, zsh) is the words it expands to
+/// ([`brace_expand`]), and zsh's `=name`, written unquoted in `segment`, is
+/// the path of `name`, so it is judged as `name`. The segment as written
+/// stays judged too, for a shell that reads the word literally. `None` for
+/// zsh's `=(…)`, which runs a file the guard cannot read, so the caller
+/// refuses the line.
+pub(crate) fn program_readings(words: &[String], at: usize, segment: &str) -> Option<Vec<String>> {
+    let word = words[at].as_str();
+    let with = |list: Vec<String>| {
+        let mut listed = words[..at].to_vec();
+        listed.extend(list);
+        listed.extend_from_slice(&words[at + 1..]);
+        quote_words(&listed)
+    };
+    let mut readings = Vec::new();
+    // The `=` starts a word of the segment as written, so no quote or
+    // escape stands before it.
+    let unquoted = segment
+        .match_indices(word)
+        .any(|(i, _)| i == 0 || segment[..i].ends_with(shell_blank));
+    if let Some(name) = word
+        .strip_prefix('=')
+        .filter(|name| unquoted && !name.is_empty())
+    {
+        if name.starts_with('(') {
+            return None;
+        }
+        readings.push(with(vec![name.to_string()]));
+    }
+    if word.contains('{') {
+        if let Some(list) = brace_expand(word).filter(|list| list != &[word.to_string()]) {
+            readings.push(with(list));
+        }
+    }
+    Some(readings)
+}
+
+/// Whether the text of a command before a `(` is a file substitution's `<`
+/// or `>` with nothing before it but keywords and assignments, so the file
+/// the substitution makes is the program (`<(…) args`).
+fn substitution_program(cur: &str) -> bool {
+    let Some(before) = cur.strip_suffix(['<', '>']) else {
+        return false;
+    };
+    if !(before.is_empty() || before.ends_with(shell_blank)) {
+        return false;
+    }
+    before
+        .split(shell_blank)
+        .filter(|word| !word.is_empty())
+        .all(|word| {
+            COMMAND_POSITION_WORDS.contains(&word)
+                || leading_word(word, Taker::Shell) == LeadingWord::Assignment
+        })
 }
 
 /// Whether the shell fills in part of `word` at run time: a `$`, a
@@ -8457,6 +8535,9 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     // inside it was judged by that call, so each character is read once per
     // nesting level, never once per enclosing group (TSK-216 round 19).
     let mut judged_until = 0usize;
+    // The pipeline a `)` last closed in: text after it with no separator
+    // between continues that command, so a `<(` there is an argument.
+    let mut closed_in: Option<usize> = None;
     // Heredocs opened on the current line; their bodies follow its newline.
     let mut heredocs: Vec<Heredoc> = Vec::new();
     let mut line = Line::default();
@@ -8629,12 +8710,21 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 if in_pipeline {
                     line.grouped.push(line.pipeline);
                 }
+                // A file substitution in the program position runs a file
+                // the guard cannot read (TSK-1456 AC-9).
+                if closed_in != Some(line.pipeline)
+                    && substitution_program(&cur)
+                    && !out.iter().any(|s| s == PROGRAM_UNREAD)
+                {
+                    out.push(PROGRAM_UNREAD.to_string());
+                }
                 line.end_segment(out, &mut cur, in_pipeline);
                 groups += 1;
                 i += 1;
             }
             ')' => {
                 line.end_segment(out, &mut cur, false);
+                closed_in = Some(line.pipeline);
                 groups = groups.saturating_sub(1);
                 i += 1;
             }
@@ -8870,6 +8960,12 @@ const NESTING_LIMIT: usize = 8;
 /// The segment that stands for text nested deeper than [`NESTING_LIMIT`].
 /// It is not a command any shell runs, and the integrity check refuses it.
 pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
+
+/// The segment that stands for a file substitution in the program position
+/// (`<(…)`, `>(…)`, zsh's `=(…)`; TSK-1456 AC-9): the shell runs the file
+/// it makes, whose text the guard cannot read. Git-guard refuses it as
+/// unclassifiable.
+pub(crate) const PROGRAM_UNREAD: &str = "\u{1}codeflow: a file substitution runs as the program";
 
 /// Words that leave the shell in command position, so a `(` after them
 /// opens a subshell or a `case` pattern.
@@ -16952,6 +17048,62 @@ mod tests {
         ] {
             assert_eq!(read(line), vec![words(line)], "{line}");
         }
+    }
+
+    /// TSK-1456 AC-9: a program word the shell rewrites before it looks the
+    /// program up adds each rewritten command; a file substitution in the
+    /// program position adds the marker that refuses the line.
+    #[test]
+    fn program_word_rewrites_add_their_commands() {
+        let read = |line: &str| -> Vec<Vec<String>> {
+            expand_commands(line)
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        };
+        let words = |line: &str| command_argv(line);
+        for (line, reading) in [
+            (
+                "{git,push} --force origin main",
+                "git push --force origin main",
+            ),
+            ("env {claude,-p} x", "env claude -p x"),
+            ("=git push origin main", "git push origin main"),
+            ("A=1 =git push origin main", "A=1 git push origin main"),
+            ("python{3..3} x.py", "python3 x.py"),
+        ] {
+            let segments = read(line);
+            assert_eq!(segments[0], words(line), "{line}");
+            assert!(segments.contains(&words(reading)), "{line}: {segments:?}");
+        }
+        for line in [
+            "<(echo git) push origin main",
+            ">(echo git) push origin main",
+            "X=1 <(echo git) x",
+            "=(echo git) push origin main",
+        ] {
+            assert!(
+                expand_commands(line).iter().any(|s| s == PROGRAM_UNREAD),
+                "{line}: {:?}",
+                expand_commands(line)
+            );
+        }
+        for line in [
+            "cat <(echo a) <(echo b)",
+            "diff < <(echo a) b",
+            "tee >(cat) < x",
+            "echo {a",
+            "git status",
+            "= x",
+        ] {
+            let segments = expand_commands(line);
+            assert!(
+                !segments.iter().any(|s| s == PROGRAM_UNREAD),
+                "{line}: {segments:?}"
+            );
+        }
+        assert_eq!(read("echo {a"), vec![words("echo {a")]);
+        assert_eq!(read("git status"), vec![words("git status")]);
     }
 
     /// TSK-1002 review 02: env's split string is read by env's grammar into
