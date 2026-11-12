@@ -237,7 +237,7 @@ impl StandingReview {
 /// Validate every standing review. Any error rejects the whole file.
 ///
 /// # Errors
-/// Names the first unknown seat, standing-pair seat, unrouted seat or record gap.
+/// Names the first unknown seat, standing duo seat, unrouted seat or record gap.
 pub fn validate_standing_reviews(
     reviews: &[StandingReview],
     catalog: &Catalog,
@@ -254,7 +254,7 @@ pub fn validate_standing_reviews(
             .ok_or_else(|| format!("standing review names unknown seat {}", review.seat))?;
         if catalog.standing_seats.contains(&seat.id) {
             return Err(format!(
-                "standing review seat {} is a standing-pair seat, not an extra family",
+                "standing review seat {} is a standing duo seat, not an extra family",
                 seat.id
             ));
         }
