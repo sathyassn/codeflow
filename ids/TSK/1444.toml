@@ -1,0 +1,11 @@
+id = "TSK-1444"
+uid = "76fa7837-0bee-4d8d-bf30-bfc058bef0f5"
+kind = "TSK"
+title = "A push to the default branch reuses its pull request's run only under strict equality"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T01:59:32Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
