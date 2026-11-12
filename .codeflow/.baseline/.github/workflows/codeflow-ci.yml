@@ -53,6 +53,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false # no token left for repository code (TSK-1175)
 
       - name: Install codeflow (target-pinned, checksum-verified)
         env:
@@ -211,6 +212,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false # no token left for repository code (TSK-1175)
 
       - name: Compare the target and head pins
         id: pins
@@ -350,6 +352,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false # no token left for repository code (TSK-1175)
 
       # Run the gitleaks binary directly (pinned) rather than the
       # gitleaks-action wrapper, which requires a GitHub token/license. The
@@ -951,6 +954,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false # no token left for repository code (TSK-1175)
 
       # Dependency / supply-chain audit — the deterministic floor the
       # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
