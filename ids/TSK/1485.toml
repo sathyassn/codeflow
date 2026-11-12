@@ -1,0 +1,11 @@
+id = "TSK-1485"
+uid = "6ee278de-9b1f-4d45-9fca-2937f456793c"
+kind = "TSK"
+title = "The EPC-024 line carries two advisory fixes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T20:18:29Z"
+target = "integration/EPC-024-quality-defaults-local-scan-parity-and-seat-capa"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
