@@ -1,0 +1,11 @@
+id = "TSK-1448"
+uid = "01df8579-06a9-4893-bb83-870c45fd7504"
+kind = "TSK"
+title = "The limits of the local hooks when a hook is skipped are stated and tested"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:01:00Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
