@@ -1,0 +1,11 @@
+id = "TSK-1481"
+uid = "3c149eb4-cb80-45a2-a8a8-c2b68d9024a4"
+kind = "TSK"
+title = "Test files the Claude sandbox hides get readable names"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T19:02:38Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
