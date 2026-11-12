@@ -293,6 +293,15 @@ TSK-242).
   directories in the home, the system ones under `/etc`, and `.envrc` in
   any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME` move the matching
   entries; a relative `ZDOTDIR` protects the zsh names in every directory.
+- **Saved shell state.** The class also holds the state a harness or
+  terminal tool runs before later commands: Claude Code's `session-env`
+  and `shell-snapshots` folders and the file `CLAUDE_ENV_FILE` names,
+  Codex's `shell_snapshots` folder, and herdr-core's template folder.
+  `$CLAUDE_CONFIG_DIR`, `$CODEX_HOME` and, on Windows, `$APPDATA` move
+  those entries. The three folder names and `herdr-core/templates` are
+  protected wherever they are. exec-guard judges removals and placements
+  of trees around them in a separate pass that runs after every other
+  check and only adds refusals.
 - **The git configuration files.** The table's `git_config_paths`: the
   default user and system files (`~/.gitconfig`, `~/.config/git/config`,
   `/etc/gitconfig` and the `/usr/local` and Homebrew ones), whose keys can
@@ -316,7 +325,8 @@ setting that can run a program in every repository. The
 forms, their cost and what stays open per harness.
 
 `codeflow doctor --check startup-files` reports settings that leave a class
-path writable, a moved `ZDOTDIR` or `XDG_CONFIG_HOME`, and files the home's
+path writable, a moved `ZDOTDIR`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` or `APPDATA`, and files the home's
 startup files source from outside the class; the
 [troubleshooting](../troubleshooting.md) table lists each warning.
 
