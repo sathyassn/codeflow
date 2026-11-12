@@ -1,0 +1,11 @@
+id = "TSK-1458"
+uid = "4d53d43c-f1d7-4ace-a96c-5ebe9ca10d20"
+kind = "TSK"
+title = "The guards judge a guarded line's arguments as every value they could take"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T02:03:50Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
