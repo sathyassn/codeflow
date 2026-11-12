@@ -1,0 +1,11 @@
+id = "TSK-1471"
+uid = "f776656a-969f-491e-be56-913890d385b2"
+kind = "TSK"
+title = "A second guard fix after TSK-1461"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-12T14:50:33Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
