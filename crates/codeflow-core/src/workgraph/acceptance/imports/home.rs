@@ -8,7 +8,10 @@
 //! with the last move's new home. A later change on `main` never clears an
 //! earlier move (AC-10). Only the line's own records-only adoption of an
 //! exact `main` version, on its first-parent history, moves the start of
-//! the walk (AC-13).
+//! the walk (AC-13). That adoption is the line's last change of the task's
+//! home, found by identity, and the walk then starts after the commit where
+//! the adopted version first stood on `main`, so neither a later edit on the
+//! line nor a later recurrence of the same bytes on `main` moves it.
 
 use super::super::super::classify::AmendmentPath;
 use super::super::super::work_start::logical_target;
@@ -33,9 +36,12 @@ pub(super) const NO_SOURCE: &str =
 /// for completions, criteria or later moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HomeAnchor {
-    /// The line's records-only planning merge that took the exact version.
+    /// The line's records-only planning merge that changed the task's home
+    /// to the exact version: its last home change, found by identity.
     pub line_landing: Oid,
-    /// The default-branch commit where that exact version first stood.
+    /// The default-branch commit where that exact version first stood since
+    /// the line's merge base with the default tip. A later commit holding
+    /// the same bytes never replaces it.
     pub source_version: Oid,
 }
 
@@ -226,9 +232,11 @@ fn moves_of(
     Ok(found)
 }
 
-/// The oldest commit of the newest run on `tip`'s first-parent history
-/// after `since`, held by `head`, whose record of the task is `content`.
-fn source_version(
+/// The oldest commit on `tip`'s first-parent history after `since`, held by
+/// `head`, whose record of the task is `content`: where that exact version
+/// first stood. A later commit holding the same bytes again never replaces
+/// it, so a move away and an exact restoration after it stay in the walk.
+fn first_source_version(
     repo: &Repository,
     who: &Identity<'_>,
     content: &str,
@@ -239,12 +247,10 @@ fn source_version(
     let mut found = None;
     let mut at = tip;
     while !is_ancestor_or_same(repo, at, since)? {
-        let holds = is_ancestor_or_same(repo, at, head)?
-            && matches!(held_at(repo, at, who), Held::One(record) if record.content == content);
-        if holds {
+        if is_ancestor_or_same(repo, at, head)?
+            && matches!(held_at(repo, at, who), Held::One(record) if record.content == content)
+        {
             found = Some(at);
-        } else if found.is_some() {
-            break;
         }
         let Some(parent) = first_parent(repo, at)? else {
             break;
@@ -252,6 +258,62 @@ fn source_version(
         at = parent;
     }
     Ok(found)
+}
+
+/// The line's last change of the task's home on its first-parent history
+/// after `start`, found by the task's identity.
+#[derive(Clone, Copy)]
+enum LineChange {
+    /// The commit that changed the declared home, and its first parent.
+    Moved(Oid, Oid),
+    /// The commit that introduced the task.
+    Introduced(Oid),
+}
+
+/// The line's last home change or introduction of the task after `start`,
+/// or `None` when its first-parent history since `start` holds neither.
+fn line_change(
+    repo: &Repository,
+    who: &Identity<'_>,
+    receiver: Oid,
+    start: Oid,
+) -> Result<Option<LineChange>, String> {
+    let mut at = receiver;
+    while at != start && is_ancestor_or_same(repo, start, at)? {
+        let Some(parent) = first_parent(repo, at)? else {
+            break;
+        };
+        match (held_at(repo, at, who), held_at(repo, parent, who)) {
+            (Held::One(_), Held::Absent) => return Ok(Some(LineChange::Introduced(at))),
+            (Held::One(now), Held::One(then)) if declared(&now) != declared(&then) => {
+                return Ok(Some(LineChange::Moved(at, parent)));
+            }
+            (Held::Ambiguous, _) | (_, Held::Ambiguous) => return Err(ambiguous(at)),
+            _ => at = parent,
+        }
+    }
+    Ok(None)
+}
+
+/// Whether the line's copy at `receiver` names another home than the task
+/// had at `start`, or the task was absent there.
+fn rehomed(
+    repo: &Repository,
+    who: &Identity<'_>,
+    line: &Held,
+    receiver: Oid,
+    start: Oid,
+) -> Result<bool, String> {
+    let copy = match line {
+        Held::One(copy) => copy,
+        Held::Absent => return Ok(false),
+        Held::Ambiguous => return Err(ambiguous(receiver)),
+    };
+    match held_at(repo, start, who) {
+        Held::Absent => Ok(true),
+        Held::One(then) => Ok(declared(&then) != declared(copy)),
+        Held::Ambiguous => Err(ambiguous(start)),
+    }
 }
 
 /// Whether the line's copy of the task at `receiver` is the copy at
@@ -334,59 +396,42 @@ fn judge_moves(
     Ok(())
 }
 
-/// The anchor the line's own adoption sets (AC-13), when the line's copy
-/// is a task it re-homed since `start` whose exact bytes are a default
-/// version. A claimed adoption that fails its proof refuses; a copy that is
-/// no default version, or a line introduction, sets no anchor.
+/// The anchor the line's own adoption sets (AC-13). The adoption is the
+/// line's last home change of the task, found by identity, never the
+/// latest commit that wrote the copy's bytes. It anchors only when it is a
+/// records-only planning merge with its exact first parent, made after the
+/// line last took the default branch, of the task while it was todo or
+/// blocked with no acceptance block on both sides, and its record there is
+/// exactly a default-branch version since `start`. The source is where that
+/// version first stood. Anything else sets no anchor, so every
+/// default-branch move since `start` stays in the walk.
 fn adoption_anchor(
     repo: &Repository,
     who: &Identity<'_>,
-    line: &Held,
-    receiver: Oid,
+    change: LineChange,
     start: Oid,
     default_tip: Oid,
     head: Oid,
 ) -> Result<Option<HomeAnchor>, String> {
-    let Held::One(copy) = line else {
-        return Ok(None);
-    };
-    match held_at(repo, start, who) {
-        Held::One(then) if declared(&then) == declared(copy) => return Ok(None),
-        Held::Ambiguous => return Err(ambiguous(start)),
-        _ => {}
-    }
-    let Some(source) = source_version(repo, who, &copy.content, default_tip, start, head)? else {
-        return Ok(None);
-    };
-    // The line landing that wrote these bytes: the oldest commit of the
-    // run on the line's first-parent history that holds them.
-    let mut landing = receiver;
-    while let Some(parent) = first_parent(repo, landing)? {
-        if parent == start
-            || !is_ancestor_or_same(repo, start, parent)?
-            || !matches!(held_at(repo, parent, who), Held::One(old) if old.content == copy.content)
-        {
-            break;
-        }
-        landing = parent;
-    }
-    let parent = first_parent(repo, landing)?;
-    let held_before = parent.map(|parent| held_at(repo, parent, who));
-    if matches!(held_before, Some(Held::Absent)) {
+    let LineChange::Moved(landing, parent) = change else {
         // An introduction is judged as shared planning, never as an adoption.
         return Ok(None);
+    };
+    let Held::One(adopted) = held_at(repo, landing, who) else {
+        return Err(ambiguous(landing));
+    };
+    let proved = is_ancestor_or_same(repo, start, parent)?
+        && admissible_planning_landing_with(repo, landing, &[AmendmentPath::Record])?
+            == Some(parent)
+        && permitted_at(repo, landing, &adopted)
+        && permitted_at(repo, parent, &adopted);
+    if !proved {
+        return Ok(None);
     }
-    let adopted = parent.is_some()
-        && matches!(held_before, Some(Held::One(_)))
-        && admissible_planning_landing_with(repo, landing, &[AmendmentPath::Record])? == parent
-        && permitted_at(repo, landing, copy)
-        && parent.is_some_and(|parent| permitted_at(repo, parent, copy));
-    if !adopted {
-        return Err(format!("{MOVED}: the line's copy is the default branch's version at {source}, but the line took it at {landing}, which is not a reviewed records-only planning merge of the task while it was todo or blocked"));
-    }
-    Ok(Some(HomeAnchor {
+    let source = first_source_version(repo, who, &adopted.content, default_tip, start, head)?;
+    Ok(source.map(|source_version| HomeAnchor {
         line_landing: landing,
-        source_version: source,
+        source_version,
     }))
 }
 
@@ -405,10 +450,12 @@ pub(super) fn judge_home(
     let who = Identity::of(record);
     let start = start_point(repo, receiver, default_tip)?;
     let line = held_at(repo, receiver, &who);
-    if matches!(line, Held::Ambiguous) {
-        return Err(ambiguous(receiver));
+    let mut anchor = None;
+    if rehomed(repo, &who, &line, receiver, start)? {
+        if let Some(change) = line_change(repo, &who, receiver, start)? {
+            anchor = adoption_anchor(repo, &who, change, start, default_tip, head)?;
+        }
     }
-    let anchor = adoption_anchor(repo, &who, &line, receiver, start, default_tip, head)?;
     let (since, line_since) = anchor.map_or((start, start), |anchor| {
         (anchor.source_version, anchor.line_landing)
     });
@@ -419,9 +466,10 @@ pub(super) fn judge_home(
 
 /// Judge a record the range leaves unchanged whose home the line changed,
 /// or which the line introduced, since `start`, when the default branch
-/// moved the same task in that span (AC-13). It passes as the line's
-/// exact adoption, from its anchor, or as the line's own admitted change
-/// with every default-branch move still judged.
+/// moved the same task in that span (AC-13). The line's last home change or
+/// introduction, found by identity, decides: an exact adoption passes from
+/// its anchor; otherwise the change must be the line's own admitted change,
+/// and every default-branch move is still judged.
 ///
 /// # Errors
 /// The refusal names the move and its cause.
@@ -439,16 +487,15 @@ pub(super) fn judge_unchanged(
         return Ok(());
     }
     let line = held_at(repo, receiver, &who);
-    let changed = match (held_at(repo, start, &who), &line) {
-        (Held::Absent, Held::One(_)) => true,
-        (Held::One(then), Held::One(copy)) => declared(&then) != declared(copy),
-        (Held::Ambiguous, _) | (_, Held::Ambiguous) => return Err(ambiguous(receiver)),
-        _ => false,
-    };
-    if !changed {
+    if !rehomed(repo, &who, &line, receiver, start)? {
         return Ok(());
     }
-    if let Some(anchor) = adoption_anchor(repo, &who, &line, receiver, start, default_tip, head)? {
+    let Some(change) = line_change(repo, &who, receiver, start)? else {
+        return Err(format!(
+            "{MOVED}: the line's own home change for the task is not on its first-parent history"
+        ));
+    };
+    if let Some(anchor) = adoption_anchor(repo, &who, change, start, default_tip, head)? {
         let after = moves_of(repo, &who, default_tip, anchor.source_version, head)?;
         return judge_moves(
             repo,
@@ -459,51 +506,34 @@ pub(super) fn judge_unchanged(
             anchor.line_landing,
         );
     }
-    own_change(repo, &who, receiver, start, head)?;
+    own_change(repo, &who, change, head)?;
     judge_moves(repo, &who, &line, &found.moves, receiver, start)
 }
 
-/// The line's own change to the task's home since `start` is admitted:
-/// its last home change on the line's first-parent history is the line's
-/// own planning move, or its introduction is shared planning. It grants no
-/// anchor and removes no default-branch move from the walk.
+/// The line's own change to the task's home is admitted: its last home
+/// change is a planning merge of the task while it was todo or blocked on
+/// both sides, or its introduction is shared planning. It grants no anchor
+/// and removes no default-branch move from the walk.
 fn own_change(
     repo: &Repository,
     who: &Identity<'_>,
-    receiver: Oid,
-    start: Oid,
+    change: LineChange,
     head: Oid,
 ) -> Result<(), String> {
-    let refused = |at: Oid| {
-        format!("{MOVED}: the line's own home change at {at} is not a reviewed planning merge of the task while it was todo or blocked")
+    let (at, admitted) = match change {
+        LineChange::Introduced(at) => (at, is_shared_planning(repo, who.record, at, head)?),
+        LineChange::Moved(at, parent) => (
+            at,
+            admissible_planning_landing_with(repo, at, PLANNING_LANDING_PATHS)? == Some(parent)
+                && permitted_at(repo, at, who.record)
+                && permitted_at(repo, parent, who.record),
+        ),
     };
-    let mut at = receiver;
-    while at != start && is_ancestor_or_same(repo, start, at)? {
-        let Some(parent) = first_parent(repo, at)? else {
-            break;
-        };
-        match (held_at(repo, at, who), held_at(repo, parent, who)) {
-            (Held::One(_), Held::Absent) => {
-                return if is_shared_planning(repo, who.record, at, head)? {
-                    Ok(())
-                } else {
-                    Err(refused(at))
-                };
-            }
-            (Held::One(now), Held::One(then)) if declared(&now) != declared(&then) => {
-                let admitted = admissible_planning_landing_with(repo, at, PLANNING_LANDING_PATHS)?
-                    == Some(parent)
-                    && permitted_at(repo, at, who.record)
-                    && permitted_at(repo, parent, who.record);
-                return if admitted { Ok(()) } else { Err(refused(at)) };
-            }
-            (Held::Ambiguous, _) | (_, Held::Ambiguous) => return Err(ambiguous(at)),
-            _ => at = parent,
-        }
+    if admitted {
+        Ok(())
+    } else {
+        Err(format!("{MOVED}: the line's own home change at {at} is not a reviewed planning merge of the task while it was todo or blocked"))
     }
-    Err(format!(
-        "{MOVED}: the line's own home change for the task is not on its first-parent history"
-    ))
 }
 
 /// Judge a record that names the receiving line as its home and that the
@@ -530,7 +560,7 @@ pub(super) fn judge_arrival(
         _ => {}
     }
     let start = start_point(repo, receiver, default_tip)?;
-    if source_version(repo, &who, &record.content, default_tip, start, head)?.is_none() {
+    if first_source_version(repo, &who, &record.content, default_tip, start, head)?.is_none() {
         return Err(format!(
             "{NO_SOURCE}: no commit on the default branch's first-parent history holds this version"
         ));
