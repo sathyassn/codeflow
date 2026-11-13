@@ -285,29 +285,31 @@ pub const SCHEMA: [KeySpec; 82] = [
                 fetch a missing \
                 object through a transport its configuration names. Every other line that \
                 names the binary with a verb refuses, whatever program reads it: in its text \
-                as written, in its words as the shell passes them, in what `printf`, \
-                `echo` and `print` write from them, or in a value the line builds from its \
-                own assignments, each alone and all of what the line writes joined in line \
-                order, whatever its redirections, separators, groups or loops. Off the \
-                listed forms, a `printf`, `echo`, `print` or \
-                `$'...'` word counts only as plain literal text; one that holds an escape (a \
-                `\\n` in a `printf` format excepted), a conversion other than a bare `%s`, a \
-                width, precision or flag, more arguments than conversions, an expansion \
-                `echo` or `print` may decode, or a value the line sets that the guard cannot \
-                resolve exactly (from a file, a program, a pattern or a construct it does \
-                not model) refuses whatever it names, since the guard does not model what it \
-                writes. So give \
-                such text to a listed program or leave the binary's name out of a search. A \
-                run whose program \
-                word or first operand the guard cannot resolve, and a run inside a quoted \
-                argument or an assigned value, refuse too (TSK-1476). A binary an agent \
-                renames or copies, the verb's words written to a file and run later, text \
-                that a program the guard does not model builds (a decoder, a character \
-                translator or an interpreter) and hands to a process already running that \
-                executes what it reads, and state the line does not show (an exported \
-                variable, a shell alias or function from a profile, a program put first on \
-                the path) are not named on the line; that is a named residual. Other layers \
-                hold against it in part: once a repository's remote has a default branch, \
+                as written, in its words as the shell passes them, in what `printf`, `echo` \
+                and `print` write from them where that is plain literal text, or in a value \
+                the line builds from its own assignments. So give such text to a listed \
+                program or leave the binary's name out of a search. Where the line itself \
+                hands text it produces to a shell or interpreter on the line (through a pipe, \
+                a here-string, a here-document it expands, a process substitution, `eval`, a \
+                `-c` or `-e` value it expands, a command word it fills in, or a supplier that \
+                runs a command built from what it reads), that text counts only as one \
+                `printf`, `echo` or `print` of plain literal text, or a literal here-string \
+                or here-document, and is judged as the executor reads it; a plain file the \
+                line does not otherwise name counts as that file run directly; any other \
+                such line refuses whatever it names. A run whose program word \
+                or first operand the guard cannot resolve, and a run inside a quoted argument \
+                or an assigned value, refuse too (TSK-1476). The guard's checks on printed \
+                text are partial. Text a line writes to a process started earlier that \
+                executes what it reads (a named pipe, a descriptor, a background shell) is a \
+                named residual, in the same class as the verb's words written to a file and \
+                run later. So are a binary an agent renames or copies, text a program on the \
+                line runs through its own command language when it is not a shell or \
+                interpreter reading code, and state the line does not show (a file's \
+                contents, output a program hands to a shell it starts itself such as a Git \
+                pager, an exported variable, a shell alias or function from a profile, a \
+                program put first on the path): none of them is named on the line. Other \
+                layers \
+                hold against these in part: once a repository's remote has a default branch, \
                 the session guards read policy from that branch's committed state (before \
                 then they read the current commit, which a local commit can change, or the \
                 working copy before the first commit); the hosted policy workflow judges a \
