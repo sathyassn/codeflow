@@ -1024,6 +1024,10 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
             .unwrap();
         assert!(made.success(), "mkfifo failed");
     }
+    let reused = format!(
+        "printf '%c' {}$'\\n' c o d e f l o w ' ' u p d a t e $'\\n' > commands.fifo",
+        "'#' ".repeat(16)
+    );
     let rows: Vec<String> = [
         r"printf cod\eflow' update\n' > commands.fifo",
         r"printf '\ncodeflow update' > commands.fifo",
@@ -1041,6 +1045,14 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"printf 'co%xflow update' 222 > commands.fifo",
         r#"printf '%xo%xflow update' "$a" "$b" > commands.fifo"#,
         r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
+        r"printf '\143odeflow%1supdate\n' '' > commands.fifo",
+        r"printf '#\c\n\143odeflow update\n' > commands.fifo",
+        reused.as_str(),
+        r"printf '%5s\n' notes > out.txt",
+        r"printf '%s\n' a b > out.txt",
+        r"echo -e 'a\tb' > notes.txt",
+        r"printf '\x63odeflow\n' > notes.txt",
+        r"printf '%x\n' 255 > notes.txt",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1051,11 +1063,11 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
     }
     let allowed: Vec<String> = [
         r"printf '%s\n' 'notes' > notes.txt",
-        r"echo -e 'a\tb' > notes.txt",
         r"printf 'codeflow\n' > notes.txt",
-        r"printf '\x63odeflow\n' > notes.txt",
-        r"printf '%x\n' 255 > notes.txt",
         r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
+        "printf '%s' notes > out.txt",
+        "echo notes > out.txt",
+        r"printf '%s\n' notes > out.txt",
     ]
     .iter()
     .map(ToString::to_string)

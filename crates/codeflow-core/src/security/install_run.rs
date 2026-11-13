@@ -1177,15 +1177,69 @@ mod tests {
         }
         for command in [
             r"printf '%s\n' 'notes' > notes.txt",
-            r"echo -e 'a\tb' > notes.txt",
             r"printf 'codeflow\n' > notes.txt",
             r"printf 'update\n' > notes.txt",
+            r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// Off the data forms, a `printf`, `echo`, `print` or `$'...'` word
+    /// settles only as plain literal text: no escape (a `\n` in a `printf`
+    /// format excepted), no conversion but a bare `%s`, no width,
+    /// precision or flag, and no more arguments than conversions. Any other
+    /// refuses, whatever it names, since what it writes is not settled.
+    #[test]
+    fn printed_text_the_guard_cannot_settle_refuses() {
+        let comments = "'#' ".repeat(16);
+        let spelled = "c o d e f l o w ' ' u p d a t e";
+        let reused = format!("printf '%c' {comments}$'\\n' {spelled} $'\\n' > commands.fifo");
+        for command in [
+            r"printf '\143odeflow%1supdate\n' '' > commands.fifo",
+            r"printf '#\c\n\143odeflow update\n' > commands.fifo",
+            reused.as_str(),
+            r"printf '%5s\n' notes > out.txt",
+            r"printf '%.3s\n' notes > out.txt",
+            r"printf '%-s\n' notes > out.txt",
+            r"printf '%s\n' a b > out.txt",
+            r"printf 'notes\n' a > out.txt",
+            r"printf '%d\n' 5 > out.txt",
+            r"printf '%b' notes > out.txt",
+            r"printf '100%%\n' > out.txt",
+            r"printf 'a\tb' > out.txt",
+            r"printf '%s\\n' notes > out.txt",
+            r"printf %s\n notes > out.txt",
+            r#"printf "$fmt" > out.txt"#,
+            r"printf -v x '%s' notes > out.txt",
+            r"printf > out.txt",
+            r"echo -e 'a\tb' > out.txt",
+            r"echo 'a\nb' > out.txt",
+            r#"echo "$x" > out.txt"#,
+            r"print 'notes\n' > out.txt",
+            r"print -P '%n' > out.txt",
+            r"echo $'notes' $'a\tb' > out.txt",
+            r"cat $'notes\x2etxt' > out.txt",
             r"echo -e 'codeflow\tversion' > notes.txt",
             r"printf '\x63odeflow\n' > notes.txt",
             r"printf '%x\n' 255 > notes.txt",
             r"printf 'codeflow %x\n' 10 > notes.txt",
-            r"printf 'size %x %x %x %x %x %x\n' $a $b $c $d $e $f > notes.txt",
-            r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
+            r"printf 'size %x %x\n' $a $b > notes.txt",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "printf '%s' notes > out.txt",
+            "echo notes > out.txt",
+            "echo -n notes > out.txt",
+            "print -r notes > out.txt",
+            r"printf '%s\n' notes > out.txt",
+            r#"printf "%s\n" notes > out.txt"#,
+            r"printf 'a %s b %s\n' x y > out.txt",
+            r"printf '%s %s\n' x > out.txt",
+            r#"printf '%s\n' "$a" > out.txt"#,
+            r"printf '%s\n' 'notes' > /dev/null",
+            "ls notes > out.txt",
         ] {
             assert!(!runs(command), "{command}");
         }
