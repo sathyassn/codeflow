@@ -23,7 +23,10 @@
 //! 3. Every other line is judged on its raw text ([`raw_run`]): the
 //!    binary's name followed, anywhere later, by a verb, or `cargo`
 //!    followed by `run` or `r` and then a verb. So any line outside the
-//!    subset that names the binary with a verb refuses.
+//!    subset that names the binary with a verb refuses. The same match is
+//!    made on the texts the line produces ([`produced`]): its words as the
+//!    shell passes them, and what `printf`, `echo` and `print` write from
+//!    them once their escapes are decoded.
 //!
 //! The reader of step 2 reads each simple command as git-guard reads it
 //! (`git_guard::simple_commands`), with the lexer's mark of whether the
@@ -44,11 +47,14 @@
 //! --eval`, a `+` word for vi or less) are read for the run they start.
 //!
 //! A program an agent builds, renames or copies, the verb's words written
-//! to a file and run later, and state the line does not show (an exported
-//! session variable, a shell alias or function from a profile, a program
-//! put first on the path) are not on the line. They are named residuals.
+//! to a file and run later, text built by a program this reader does not
+//! model and fed to a process already running that executes what it reads,
+//! and state the line does not show (an exported session variable, a shell
+//! alias or function from a profile, a program put first on the path) are
+//! not on the line. They are named residuals.
 
 mod admission;
+mod produced;
 
 use super::headless::basename;
 use super::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
@@ -351,6 +357,7 @@ pub fn install_run(command: &str, posix: bool) -> Option<InstallRun> {
         .or_else(|| slashed.as_deref().and_then(|text| find(text, 0)))
         .or_else(|| raw_run(command))
         .or_else(|| slashed.as_deref().and_then(raw_run))
+        .or_else(|| produced::produced_run(command))
 }
 
 /// One simple command: the argument vector from the program on, after
