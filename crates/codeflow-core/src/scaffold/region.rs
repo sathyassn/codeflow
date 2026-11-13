@@ -50,6 +50,13 @@ pub fn extract_block(content: &str, format: RegionFormat) -> Option<String> {
 /// text has no complete marker pair.
 #[must_use]
 pub fn managed_span(content: &str) -> Option<&str> {
+    managed_range(content).map(|range| &content[range])
+}
+
+/// The byte range [`managed_span`] covers: where the managed block starts and
+/// where its end marker line ends.
+#[must_use]
+pub fn managed_range(content: &str) -> Option<std::ops::Range<usize>> {
     let spans = line_spans(content);
     let line = |span: &LineSpan| &content[span.start..span.text_end];
     let begin = spans
@@ -59,7 +66,7 @@ pub fn managed_span(content: &str) -> Option<&str> {
         .iter()
         .position(|span| is_end(line(span), RegionFormat::Markdown))?
         + begin;
-    Some(&content[spans[begin].start..spans[end].text_end])
+    Some(spans[begin].start..spans[end].text_end)
 }
 
 /// Wraps `content` in fresh markers of the given format (used when an asset

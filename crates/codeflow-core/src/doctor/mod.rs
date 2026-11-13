@@ -27,6 +27,7 @@ mod codex_profile;
 mod git_config;
 mod grok_hooks;
 mod guard_timeouts;
+mod instruction_overrides;
 mod remote_perimeter;
 mod sandbox;
 mod startup_files;
@@ -111,6 +112,11 @@ type UpdatePlanFn =
         &str,
     ) -> Result<Option<crate::scaffold::update::Decision>, crate::scaffold::ScaffoldError>;
 
+/// Callback that says which project overrides `codeflow update` would apply
+/// to the project at a root, checked as update checks them (TSK-1302).
+type OverridePlanFn =
+    fn(&Path) -> Result<crate::scaffold::overrides::Plan, crate::scaffold::ScaffoldError>;
+
 /// How a run ended: its exit code (`None` when a signal ended it) and what
 /// it printed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,6 +154,10 @@ pub struct Options {
     /// embedded assets. `None` says no file is repaired, so each gets the
     /// hand edit.
     pub update_plan: Option<UpdatePlanFn>,
+    /// The project overrides `codeflow update` would apply, by update's own
+    /// check against the shipped kernel, floor list and skills; the CLI
+    /// supplies it from its embedded assets. `None` checks no overrides.
+    pub override_plan: Option<OverridePlanFn>,
     /// The path the running doctor was started from, only to report
     /// whether PATH resolves `codeflow` elsewhere; never executed.
     pub codeflow_exe: Option<PathBuf>,
@@ -317,6 +327,7 @@ const CHECK_NAMES: &[&str] = &[
     "ci-perimeter",
     "remote-perimeter",
     "managed-drift",
+    "overrides",
     "customization",
     "instructions",
     "reading",
@@ -357,6 +368,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("remote-perimeter", remote_perimeter::check);
     m.insert("managed-drift", check_managed_drift);
+    m.insert("overrides", instruction_overrides::check);
     m.insert("customization", check_customization);
     m.insert("instructions", check_instructions);
     m.insert("reading", check_reading);
@@ -3619,6 +3631,10 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
     };
 
     let mut drifted: Vec<String> = Vec::new();
+    // The project overrides as this binary computes them from its shipped
+    // text and `.codeflow/overrides.toml` (TSK-1302), read once when a block
+    // differs from the record. No digest the project wrote is evidence here.
+    let mut overridden: Option<Option<crate::scaffold::overrides::Plan>> = None;
     for (dest, file) in &installed.files {
         if file.ownership != Ownership::ManagedRegion {
             continue;
@@ -3641,7 +3657,21 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         else {
             continue;
         };
-        if sha256_hex(block.as_bytes()) != file.sha256 {
+        let block_sha = sha256_hex(block.as_bytes());
+        if block_sha == file.sha256 {
+            continue;
+        }
+        // A block with project overrides applied is not drift only when it
+        // is exactly the shipped block with the declared overrides, as this
+        // binary renders and checks them; a refused or unverified override
+        // state proves nothing.
+        let plan = overridden
+            .get_or_insert_with(|| opts.override_plan.and_then(|plan_of| plan_of(&root).ok()));
+        let expected = plan
+            .as_ref()
+            .and_then(|plan| plan.dests.get(dest))
+            .and_then(crate::scaffold::overrides::DestPlan::effective_unit);
+        if expected.as_deref() != Some(block.as_str()) {
             drifted.push(dest.clone());
         }
     }
@@ -4226,7 +4256,7 @@ fn instruction_chains(
 ) -> std::io::Result<()> {
     let dir = root.join(relative);
     let mut total = inherited;
-    if let Some((name, bytes)) = instruction_file(&dir)? {
+    if let Some((name, bytes)) = crate::scaffold::rule_map::instruction_file(&dir)? {
         total += bytes;
         chains.push((crate::portable_path::slashed(&relative.join(name)), total));
     }
@@ -4255,19 +4285,6 @@ fn instruction_chains(
         instruction_chains(root, &relative, depth + 1, total, chains)?;
     }
     Ok(())
-}
-fn instruction_file(dir: &Path) -> std::io::Result<Option<(&'static str, usize)>> {
-    for name in ["AGENTS.override.md", "AGENTS.md"] {
-        let path = dir.join(name);
-        if crate::absence::proven_absent(&path)? {
-            continue;
-        }
-        let bytes = std::fs::metadata(path)?.len();
-        if bytes > 0 {
-            return Ok(Some((name, usize::try_from(bytes).unwrap_or(usize::MAX))));
-        }
-    }
-    Ok(None)
 }
 
 fn chain_label(file: &str) -> String {
@@ -4524,7 +4541,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 26);
+        assert_eq!(check_names().len(), 27);
     }
 
     #[test]

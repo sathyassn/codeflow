@@ -79,8 +79,8 @@ nor the current ensemble promotes anything on its own.
 
 ## Technical
 
-Below are the qualification run, the kit's contracts, and the files and commands
-each step touches. Run `/cf-evaluate-model` from the orchestrated maintenance
+Below are the qualification run, the kit's contracts, the files and commands
+each step touches, and how a project overrides managed instructions. Run `/cf-evaluate-model` from the orchestrated maintenance
 flow (ADR-0027); each step produces the evidence the next one depends on.
 
 ### The qualification run
@@ -278,3 +278,75 @@ The paired governance cases separate persistence from assumption:
 - Missing product intent or a public contract still blocks for a well-framed
   operator decision.
 - Retry counts alone prove neither case.
+
+### Override managed instructions
+
+A project can replace a managed always rule, a row of the "When you are
+about to" table, or a declared skill section, and keep the replacement
+through later `codeflow update` runs. One case needs your action: when a new
+version renames an overridden rule's title or a moment's "About to" cell,
+update refuses the old override until you recover it (see the rename row
+below). Declare it in `.codeflow/overrides.toml`, which update never writes:
+
+```toml
+schema_version = 1
+
+[[override]]
+target = "rule:outcome"            # an always rule: `text` and/or `title`
+text = "Name the result and who uses it; our release notes are the evidence."
+
+[[override]]
+target = "moment:release"          # a table row: `action`
+action = "follow RELEASING.md; agents never publish or move tags"
+
+[[override]]
+target = "cf-present#completion"   # a declared skill section: `body`
+body = """
+Post the handoff line in the team channel and link the page.
+"""
+```
+
+Names come only from the shipped text of the binary you run: the rule and
+moment ids in the rule-map kernel, and the `<!-- codeflow:section id=...
+class=... -->` markers in the managed skills. Each unit declares a class:
+
+| Class | What an override of it does |
+|---|---|
+| `overridable` | Applied. A row override replaces fields, so the row's pointers stay shipped; a section override replaces the body, and the marker and heading stay shipped |
+| `fixed` | Refused with the unit's reason. The review rows, the delegation row and the planning row that requires an other-lineage review are fixed, so no override can drop review independence, other-lineage review or the rule against headless peers: review policy is configured in `.codeflow/model-selection.json`, never by rewriting review text |
+| `floor` | Refused with the floor's name. The git floor and the non-relaxable command class are never overridden |
+
+Update applies the file as follows:
+
+| Case | What update does |
+|---|---|
+| Any problem in the file | Refuses the whole update with nothing applied, naming the entry: a floor or fixed unit, a name this version does not declare (removed, renamed or never shipped), the same unit twice, a row value of more than one line or holding marker text, an override of any kind holding text a reviewer of the rendered page would not see (override text must render everything it carries: only Markdown whose whole source shows as visible text, or plain structure such as paragraphs, emphasis, lists, tables, quotes and autolinks, is accepted, and the refusal names the form and its byte offset; links and images are refused, because the page does not show where they point, so write an address as an autolink (`<https://...>`); every character of the source other than ASCII whitespace and punctuation must have a place on the rendered page, so text the parser drops without showing it is refused too; code spans show their source and are exempt, and so are code fences with no label or a label from "Code fence labels" below; any other fence label is refused, because a fence's label is not shown and some labels make the page draw the fence instead of showing its source), an overridden `AGENTS.md` whose managed block would end past Codex's instruction limit (32 KiB, lowered by a smaller `project_doc_max_bytes` in `.codex/config.toml` or in the Codex user config, never raised by either; the count includes the instruction files of the directories above it), or a config that could lower that limit and cannot be used (it does not parse, is not a regular file or sets a value that is not a positive integer), a section body that would end the section early (an ATX or setext heading at its level or higher), hold a codeflow marker, leave a code fence, raw HTML block, list item or block quote open, or use a form Markdown readers disagree on (a carriage return, a fence or HTML block inside a list or quote or under indentation, indented code), an unknown field, an unreadable file, or a result that would change any byte outside the targeted units or read as different Markdown blocks there. Retarget or remove the entry and rerun |
+| Where the instruction limit is not known | Update reads the limit from the project's `.codex/config.toml` and the Codex user config (under `CODEX_HOME`, else `~/.codex`), and holds an override to the lowest of those and 32 KiB. Codex also takes the limit from sources update does not read: a command line flag or `--config`, a `--profile`, a nested project config, cloud-managed config and system config (`/etc/codex/config.toml`). A limit lower than the budget that only those set is not seen, so a project that runs Codex with such a setting keeps its overrides short enough for it. Codex documents that it skips an untrusted project's `.codex/` layers (see Codex's [basic configuration](https://learn.chatgpt.com/docs/config-file/config-basic)), which is why a project value above 32 KiB never raises the budget |
+| Hand edits | Merged against the shipped text with your overrides applied, so an override is never read as a hand edit and a hand edit is never folded into the overrides. What each override replaced is recorded at `.codeflow/.baseline/<file>.overrides.json` |
+| An interrupted update | Each overridden write is journaled in `.codeflow/.pending-update/` first. The next update checks every journal and record before it writes anything: it finishes a write that landed only when the journaled baseline and record match their digests and are exactly what this update writes, drops a write that did not land, and refuses any other state without writing |
+| An entry removed | The shipped text returns on the next update |
+| An overridden rule's title or a moment's "About to" cell renamed in a new version | Update refuses the record of the old override, because the binary no longer finds that unit in the baseline the record was made from; it refuses even after the entry is removed, since the record remains. To recover, retarget, rewrite or remove the entry in `.codeflow/overrides.toml`, delete `.codeflow/.baseline/<file>.overrides.json` and run update: it regenerates the block from the new shipped text and applies the current entries |
+| `codeflow doctor --check overrides` | Lists each override with the shipped text it replaces, warns while one is not yet applied, and fails with update's refusal, on a journal left by an interrupted update, and on any text that is neither the shipped text with your overrides nor what update last wrote. Doctor computes the expected text from the binary's shipped text and `.codeflow/overrides.toml`. It uses update's record only after checking that each unit in it is one the binary lets a project override, at the place the binary finds that unit in the baseline, and that its replacement is that place rebuilt with only the entry's fields, the row's pointers and `MUST OPEN` marks unchanged; a record that fails fails the check |
+| `[scaffold] ignore` in `.codeflow/project.toml` | Not an override: it stops update from managing a whole file, names no unit, keeps no floor and takes no shipped change; update lists the file as ignored |
+| A new section in a shipped skill | Add the marker, with a class, on the line directly above its heading in `assets/base/agents/skills/`; the `instruction_overrides_contract` test refuses a marker without a class, a nested section, and an `overridable` section holding floor text |
+
+#### Code fence labels
+
+A code fence in override text may have no label, or one of the labels
+below, in any letter case. These are code and text languages whose fences
+GitHub shows as highlighted source; the names are GitHub Linguist names and
+aliases, which GitHub's "Creating and highlighting code blocks" page uses
+for fence labels. The list is fixed in the binary, because a renderer draws
+some labelled fences as a diagram, a map, a model or an expression instead
+of showing their source, and renderers add such labels over time. Any other
+label is refused.
+
+`bash`, `bat`, `batch`, `c`, `c#`, `c++`, `cmd`, `console`, `cpp`, `cs`,
+`csharp`, `css`, `diff`, `dockerfile`, `dotenv`, `elixir`, `erlang`, `go`,
+`golang`, `graphql`, `groovy`, `haskell`, `hcl`, `html`, `ini`, `java`,
+`javascript`, `js`, `json`, `json5`, `jsonc`, `jsx`, `kotlin`, `kt`, `lua`,
+`make`, `makefile`, `markdown`, `md`, `nix`, `patch`, `perl`, `php`,
+`plaintext`, `powershell`, `ps1`, `pwsh`, `py`, `python`, `rb`, `ruby`,
+`rs`, `rust`, `scala`, `scss`, `sh`, `shell`, `shellsession`, `sql`,
+`swift`, `terraform`, `text`, `toml`, `ts`, `tsx`, `txt`, `typescript`,
+`xml`, `yaml`, `yml`, `zig`, `zsh`

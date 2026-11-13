@@ -49,6 +49,7 @@ use std::path::{Path, PathBuf};
 use super::assets::Shipped;
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
+use super::overrides;
 use super::prior_release;
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
@@ -138,6 +139,7 @@ pub enum Decision {
 /// # Errors
 ///
 /// Returns an error when an input to the update decision cannot be read or parsed.
+#[allow(clippy::too_many_lines)] // update's own steps, in update's order
 pub fn decide(
     source: &dyn super::AssetSource,
     root: &Path,
@@ -184,6 +186,21 @@ pub fn decide(
     let Some(rendered) = render_entry(source, entry, &ctx, &mut scratch)? else {
         return Ok(None);
     };
+    // Project overrides (TSK-1302): update writes the effective rendering, so
+    // the decision is taken against it. A refused override file proves no
+    // repair.
+    let overridden = match overrides::prepare(
+        source,
+        root,
+        &manifest,
+        state.tier,
+        &state.permission_preset,
+        &ignore,
+        &mut |entry| render_entry(source, entry, &ctx, &mut scratch),
+    ) {
+        Ok(mut plan) => plan.dests.remove(dest),
+        Err(error) => return Ok(Some(Decision::Unproven(Shown::from(&error)))),
+    };
     let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
         // While the `.new` proposal is still beside the file, the conflict
@@ -204,14 +221,40 @@ pub fn decide(
             .as_ref()
             .map(|pending| pending.shipped.clone())
             .or(Baseline::read(root, dest)?);
+        let Some(overridden) = overridden else {
+            let step = managed_step(
+                current.as_deref(),
+                &rendered,
+                recorded,
+                base.as_deref(),
+                false,
+            );
+            return Ok(Some(step.decision(rendered)));
+        };
+        // With a record, the merge base is the pristine base with the
+        // recorded overrides, rebuilt and checked as update does.
+        let (recorded, base) = match overrides::Record::read(root, dest)? {
+            Some(record) => {
+                let rebuilt = base.as_deref().and_then(|base| {
+                    overrides::rebuild(&overridden.authority, &record, base, recorded)
+                });
+                let Some(rebuilt) = rebuilt else {
+                    return Ok(Some(Decision::Unproven(Shown::fixed(
+                        "the override record does not match the installed baseline and manifest",
+                    ))));
+                };
+                (Some(record.effective_sha256), Some(rebuilt))
+            }
+            None => (recorded.map(str::to_string), base),
+        };
         let step = managed_step(
             current.as_deref(),
-            &rendered,
-            recorded,
+            &overridden.effective,
+            recorded.as_deref(),
             base.as_deref(),
             false,
         );
-        return Ok(Some(step.decision(rendered)));
+        return Ok(Some(step.decision(overridden.effective)));
     }
     let format = entry.region.unwrap_or(RegionFormat::Markdown);
     let next = match (format, &current) {
@@ -229,21 +272,71 @@ pub fn decide(
         (format @ (RegionFormat::Markdown | RegionFormat::Hash), current) => {
             let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
             let extracted = region::extract_block(&rendered, format);
-            let block = extracted
-                .clone()
+            let target = overridden
+                .as_ref()
+                .map_or(&rendered, |overridden| &overridden.effective);
+            let block = region::extract_block(target, format)
                 .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
             match current {
                 Some(current) => region::upsert_block(current, &block, format).0,
-                None if extracted.is_some() => rendered.clone(),
+                None if extracted.is_some() => target.clone(),
                 None => format!("{block}\n"),
             }
         }
     };
+    let target = overridden.map_or(rendered, |overridden| overridden.effective);
     Ok(Some(match current {
-        Some(current) if next == current && current == rendered => Decision::Current,
+        Some(current) if next == current && current == target => Decision::Current,
         Some(current) if next == current => Decision::KeptUserModification,
         _ => Decision::Rewrite(next),
     }))
+}
+
+/// The project overrides `codeflow update` would apply, by destination,
+/// checked exactly as update checks them and writing nothing (TSK-1302).
+/// Each planned file carries its effective rendering from this binary's
+/// shipped text and `.codeflow/overrides.toml`, and the effective baseline
+/// update's own reconstruction rebuilds from its record. Empty when the
+/// project declares no override and holds no override record or journal.
+/// Doctor reads it.
+///
+/// # Errors
+///
+/// The refusal update would print for the override file or a record, a
+/// journal an interrupted update left (update finishes or refuses it first),
+/// or an input that cannot be read.
+pub fn override_plan(
+    source: &dyn super::AssetSource,
+    root: &Path,
+    binary_version: &str,
+) -> Result<overrides::Plan, ScaffoldError> {
+    let state = ProjectState::load(root)?;
+    let ignore = ScaffoldConfig::load(root)?;
+    let manifest = ScaffoldManifest::load(source)?;
+    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
+    let ctx = update_context(root, &state, binary_version);
+    let mut scratch = Report::new(Shown::default());
+    let mut plan = overrides::prepare(
+        source,
+        root,
+        &manifest,
+        state.tier,
+        &state.permission_preset,
+        &ignore,
+        &mut |entry| render_entry(source, entry, &ctx, &mut scratch),
+    )?;
+    for dest in plan.dests.keys() {
+        if overrides::record::Journal::read(root, dest)?.is_some() {
+            return Err(ScaffoldError::invalid(
+                shown!("override state of {}", overrides::dest_shown(dest)),
+                Shown::fixed(
+                    "an interrupted update left a journal for this file; `codeflow update` finishes the write or refuses it",
+                ),
+            ));
+        }
+    }
+    plan.load_old(root, &installed, &overrides::Projected::default())?;
+    Ok(plan)
 }
 
 /// Why update skips `entry` before reading it (`[scaffold] ignore`, the
@@ -327,10 +420,31 @@ fn update_writes(
         Shown::version(&opts.binary_version),
         Shown::fixed(state.tier.as_str())
     ));
+    // Project overrides (TSK-1302): check the whole override file and compute
+    // every overridden file's rendering before anything is written, so a
+    // refusal leaves the project exactly as it was.
+    let mut scratch = Report::new(Shown::default());
+    let mut plan = overrides::prepare(
+        source,
+        root,
+        &manifest,
+        state.tier,
+        &state.permission_preset,
+        &ignore,
+        &mut |entry| render_entry(source, entry, &ctx, &mut scratch),
+    )?;
+    // Then decide, still writing nothing, what an interrupted update left:
+    // roll a landed write forward, drop one that never landed, refuse any
+    // other state. Its metadata is projected in memory, so the resolutions
+    // and records below are checked against the state this update leaves.
+    let recovery = overrides::plan_recovery(root, &manifest, &installed, &plan)?;
+    let mut projected = overrides::Projected::default();
+    let mut next_installed = installed.clone();
+    recovery.project(&manifest, &mut next_installed, &mut projected);
     // Validate every outstanding resolution before writing anything, including
     // state, reports and files that precede the conflicted entry in the manifest.
     // Include old entries so pruning cannot discard an unresolved proposal.
-    let managed: std::collections::BTreeSet<_> = installed
+    let managed: std::collections::BTreeSet<_> = next_installed
         .files
         .iter()
         .filter(|(_, file)| file.ownership == Ownership::Managed)
@@ -349,25 +463,56 @@ fn update_writes(
         .collect();
     let mut resolved = Vec::new();
     for dest in managed {
-        if let Some(pending) = PendingResolution::read(root, dest, &installed)? {
+        let baseline = projected.baselines.get(dest).map(String::as_str);
+        if let Some(pending) =
+            PendingResolution::read_projected(root, dest, &next_installed, baseline)?
+        {
             resolved.push((dest.to_string(), pending));
         }
     }
     for (dest, pending) in &resolved {
-        Baseline::write(root, dest, &pending.shipped)?;
+        projected
+            .baselines
+            .insert(dest.clone(), pending.shipped.clone());
         // `read` requires a manifest entry with a known shipped hash.
-        if let Some(file) = installed.files.get_mut(dest) {
+        if let Some(file) = next_installed.files.get_mut(dest) {
             file.sha256 = hash::sha256_hex(pending.shipped.as_bytes());
         }
     }
-    if !resolved.is_empty() {
-        // Persist the accepted base before dropping its pending record. A retry
-        // accepts either old or new metadata after an interrupted write.
+    // Each overridden file's record must match the installed baseline it
+    // was applied to, as this update leaves both; the effective baseline is
+    // rebuilt from it. This is the last check before the first write.
+    plan.load_old(root, &next_installed, &projected)?;
+    // Every check passed: only now write the recovered and resolved
+    // metadata. The installed manifest is stored before any journal or
+    // pending record is dropped, so a retry after an interruption here
+    // accepts either old or new metadata.
+    recovery.commit(root)?;
+    for (dest, pending) in &resolved {
+        Baseline::write(root, dest, &pending.shipped)?;
+    }
+    installed = next_installed;
+    if !recovery.is_empty() || !resolved.is_empty() {
         installed.store(root)?;
+        recovery.finish(root)?;
         for (dest, _) in &resolved {
             remove_beneath_root(root, &pending::path(dest))?;
         }
     }
+    if !recovery.is_empty() {
+        report.notes.push(shown!(
+            "finished {} file write(s) an interrupted update had journaled",
+            Shown::count(recovery.len())
+        ));
+    }
+    if !plan.dests.is_empty() {
+        report.notes.push(shown!(
+            "project overrides from {} apply to {} file(s)",
+            Shown::fixed(overrides::OVERRIDES_FILE),
+            Shown::count(plan.dests.len())
+        ));
+    }
+    let mut journals = Vec::new();
     let mut diffs = Shown::default();
     let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
         .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
@@ -387,11 +532,12 @@ fn update_writes(
             root,
             entry,
             &ctx,
-            &state,
+            &plan,
             opts,
             &mut installed,
             &mut report,
             &mut diffs,
+            &mut journals,
         )?;
     }
 
@@ -425,6 +571,11 @@ fn update_writes(
 
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
+    // The installed manifest is the last metadata part of each journaled
+    // write; only now is every journal finished.
+    for dest in &journals {
+        overrides::record::remove_journal(root, dest)?;
+    }
     state.scaffold_version.clone_from(&opts.binary_version);
     // The release rule's adoption marker (SPC-013 R-120): written once by
     // the release that brings the rule, never rewritten; never a table.
@@ -902,11 +1053,12 @@ fn update_entry(
     root: &Path,
     entry: &ManifestEntry,
     ctx: &super::template::TemplateContext,
-    _state: &ProjectState,
+    plan: &overrides::Plan,
     opts: &UpdateOptions,
     installed: &mut InstalledManifest,
     report: &mut Report,
     diffs: &mut Shown,
+    journals: &mut Vec<String>,
 ) -> Result<(), ScaffoldError> {
     // Refuse to touch an entry whose on-disk dest traverses a symlink (leaf or
     // ancestor): a pre-planted link would otherwise let the write below escape
@@ -937,40 +1089,78 @@ fn update_entry(
                 None
             };
             let old = current.as_deref().unwrap_or_default();
-            let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
-            let base = Baseline::read(root, &entry.dest)?;
-            match managed_step(
+            // With project overrides (TSK-1302) update writes the effective
+            // rendering, and merges against the effective baseline: the
+            // pristine baseline with the previously applied overrides and
+            // nothing else. Without them both are the shipped text.
+            let overridden = plan.dests.get(&entry.dest);
+            let target = overridden.map_or(rendered.as_str(), |dest| dest.effective.as_str());
+            let pristine_base = Baseline::read(root, &entry.dest)?;
+            let (recorded, base) = match overridden.and_then(|dest| dest.old.as_ref()) {
+                Some((record, effective)) => (
+                    Some(record.effective_sha256.clone()),
+                    Some(effective.clone()),
+                ),
+                None => (
+                    installed.files.get(&entry.dest).map(|f| f.sha256.clone()),
+                    pristine_base.clone(),
+                ),
+            };
+            let step = managed_step(
                 current.as_deref(),
-                &rendered,
+                target,
                 recorded.as_deref(),
                 base.as_deref(),
                 opts.force,
-            ) {
+            );
+            // What this step writes to the file, when it settles the file.
+            let written = match &step {
+                ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => Some(target),
+                ManagedStep::Adopt => Some(old),
+                ManagedStep::Merge(merged) => Some(merged.as_str()),
+                ManagedStep::NoBaseline | ManagedStep::Kept | ManagedStep::Conflict(_) => None,
+            };
+            let override_record = match (overridden, written) {
+                (Some(dest), Some(written)) => journal_override(
+                    root,
+                    &entry.dest,
+                    dest,
+                    &rendered,
+                    target,
+                    written,
+                    installed,
+                    journals,
+                )?,
+                _ => None,
+            };
+            match step {
                 ManagedStep::Add => {
                     // New manifest entry (or deleted file): install it.
-                    write_dest(root, entry, &rendered)?;
+                    write_dest(root, entry, target)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
                     report.file(&entry.dest, Action::Added);
                 }
                 ManagedStep::Adopt => {
                     // Already at the new version (however it got there): adopt.
-                    record(installed, entry, hash::sha256_hex(old.as_bytes()));
+                    // The record is the pristine shipped hash, which equals
+                    // the file's own hash unless overrides apply.
+                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
                     report.file(&entry.dest, Action::Unchanged);
                 }
                 ManagedStep::Replace => {
-                    write_dest(root, entry, &rendered)?;
+                    write_dest(root, entry, target)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &rendered, &rendered, raw);
+                    push_diff(diffs, &entry.dest, old, target, &rendered, raw);
                     report.file(&entry.dest, Action::Changed);
                 }
                 ManagedStep::Force => {
-                    write_dest(root, entry, &rendered)?;
+                    write_dest(root, entry, target)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &rendered, &rendered, raw);
+                    push_diff(diffs, &entry.dest, old, target, &rendered, raw);
                     report.file_with_notes(
                         &entry.dest,
                         Action::Forced,
@@ -979,7 +1169,7 @@ fn update_entry(
                 }
                 ManagedStep::NoBaseline => {
                     let new_path = format!("{}.new", entry.dest);
-                    write_beneath_root(root, &new_path, rendered.as_bytes())?;
+                    write_beneath_root(root, &new_path, target.as_bytes())?;
                     report.file_with_notes(
                         &entry.dest,
                         Action::Conflicted,
@@ -1023,12 +1213,25 @@ fn update_entry(
                     // overlapping hunks wait for you.
                     let new_path = format!("{}.new", entry.dest);
                     write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                    // The pending record holds the pristine texts: the
+                    // baseline the resolution accepts is always the shipped
+                    // text, never one with overrides.
                     PendingResolution::write(
                         root,
                         &entry.dest,
-                        base.as_deref().expect("conflict requires a baseline"),
+                        pristine_base
+                            .as_deref()
+                            .or(base.as_deref())
+                            .expect("conflict requires a baseline"),
                         &rendered,
                     )?;
+                    if let Some(dest) = overridden {
+                        // The resolution accepts the new pristine baseline, so
+                        // the override record moves with it: its effective
+                        // baseline is the new shipped text with the current
+                        // overrides, the base of the next merge.
+                        conflict_override_record(root, &entry.dest, dest, &rendered, old)?;
+                    }
                     let proposal = Shown::path(&new_path);
                     let mut notes = vec![shown!(
                         "your modifications conflict with the new shipped version; file untouched. \
@@ -1046,6 +1249,9 @@ fn update_entry(
                     }
                     report.file_with_notes(&entry.dest, Action::Conflicted, notes);
                 }
+            }
+            if let Some(override_record) = override_record {
+                write_override_record(root, &entry.dest, override_record.as_ref())?;
             }
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
@@ -1078,28 +1284,74 @@ fn update_entry(
                 }
             }
             format @ (RegionFormat::Markdown | RegionFormat::Hash) => {
-                let block = region::extract_block(&rendered, format)
+                let pristine_block = region::extract_block(&rendered, format)
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
-                record(installed, entry, hash::sha256_hex(block.as_bytes()));
-                Baseline::write(root, &entry.dest, &block)?;
+                // With project overrides (TSK-1302) the block written is the
+                // effective one; the baseline and the installed hash stay the
+                // pristine block. `prepare` proved both blocks exist.
+                let overridden = plan.dests.get(&entry.dest);
+                let block = overridden
+                    .and_then(|dest| region::extract_block(&dest.effective, format))
+                    .unwrap_or_else(|| pristine_block.clone());
                 if !exists {
                     let content = if region::extract_block(&rendered, format).is_some() {
-                        rendered.clone()
+                        overridden.map_or_else(|| rendered.clone(), |dest| dest.effective.clone())
                     } else {
                         format!("{block}\n")
                     };
+                    let override_record = overridden
+                        .map(|dest| {
+                            journal_override(
+                                root,
+                                &entry.dest,
+                                dest,
+                                &pristine_block,
+                                &block,
+                                &content,
+                                installed,
+                                journals,
+                            )
+                        })
+                        .transpose()?
+                        .flatten();
                     write_dest(root, entry, &content)?;
+                    record(
+                        installed,
+                        entry,
+                        hash::sha256_hex(pristine_block.as_bytes()),
+                    );
+                    Baseline::write(root, &entry.dest, &pristine_block)?;
+                    if let Some(override_record) = override_record {
+                        write_override_record(root, &entry.dest, override_record.as_ref())?;
+                    }
                     report.file(&entry.dest, Action::Added);
                     return Ok(());
                 }
                 let current = std::fs::read_to_string(&dest_path)
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
                 let (next, outcome) = region::upsert_block(&current, &block, format);
+                let override_record = overridden
+                    .map(|dest| {
+                        journal_override(
+                            root,
+                            &entry.dest,
+                            dest,
+                            &pristine_block,
+                            &block,
+                            &next,
+                            installed,
+                            journals,
+                        )
+                    })
+                    .transpose()?
+                    .flatten();
+                // The file first, then its metadata: a journaled write that
+                // stops between the two is rolled forward by the next update.
                 match outcome {
                     BlockOutcome::Unchanged => report.file(&entry.dest, Action::Unchanged),
                     BlockOutcome::Replaced => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next, &block, raw);
+                        push_diff(diffs, &entry.dest, &current, &next, &pristine_block, raw);
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
@@ -1110,7 +1362,7 @@ fn update_entry(
                     }
                     BlockOutcome::Appended => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next, &block, raw);
+                        push_diff(diffs, &entry.dest, &current, &next, &pristine_block, raw);
                         report.file_with_notes(
                             &entry.dest,
                             Action::Merged,
@@ -1119,6 +1371,15 @@ fn update_entry(
                             )],
                         );
                     }
+                }
+                record(
+                    installed,
+                    entry,
+                    hash::sha256_hex(pristine_block.as_bytes()),
+                );
+                Baseline::write(root, &entry.dest, &pristine_block)?;
+                if let Some(override_record) = override_record {
+                    write_override_record(root, &entry.dest, override_record.as_ref())?;
                 }
             }
         },
@@ -1153,6 +1414,106 @@ fn update_entry(
         }
     }
     Ok(())
+}
+
+/// What one write of an overridden file does to its override record:
+/// nothing (`None`), or write the inner record, or remove the record when the
+/// inner value is `None` (no override applies any more).
+type OverrideWrite = Option<Option<overrides::record::Record>>;
+
+/// Journal one write of an overridden file before the file is touched, and
+/// return the record to write after it. `pristine` is the shipped text (the
+/// managed block for a managed-region file), `effective` the same text with
+/// the applied overrides and `written` the whole file update writes. A file
+/// whose record, baseline and installed hash already match writes no journal.
+#[allow(clippy::too_many_arguments)]
+fn journal_override(
+    root: &Path,
+    dest: &str,
+    plan: &overrides::DestPlan,
+    pristine: &str,
+    effective: &str,
+    written: &str,
+    installed: &InstalledManifest,
+    journals: &mut Vec<String>,
+) -> Result<OverrideWrite, ScaffoldError> {
+    use overrides::record::{Journal, Record};
+    let old_record = plan.old.as_ref().map(|(record, _)| record);
+    let generation = old_record.map_or(0, |record| record.generation);
+    let installed_sha = installed.files.get(dest).map(|file| file.sha256.as_str());
+    let pristine_sha = hash::sha256_hex(pristine.as_bytes());
+    let unchanged_record = |generation| {
+        (!plan.applied.is_empty()).then(|| {
+            Record::new(
+                generation,
+                pristine,
+                plan.applied.clone(),
+                effective,
+                written,
+            )
+        })
+    };
+    if old_record.cloned() == unchanged_record(generation)
+        && installed_sha == Some(pristine_sha.as_str())
+        && Baseline::read(root, dest)?.as_deref() == Some(pristine)
+        && super::state::read_beneath_root(root, dest)?.as_deref() == Some(written)
+    {
+        return Ok(None);
+    }
+    let record = unchanged_record(next_generation(dest, generation)?);
+    let observed = Journal::observe(root, dest, installed_sha)?;
+    Journal::new(observed, written, pristine, record.clone(), &pristine_sha).write(root, dest)?;
+    journals.push(dest.to_string());
+    Ok(Some(record))
+}
+
+/// The generation after `generation` for the record of `dest`. The record
+/// was refused before any write when it has none
+/// ([`overrides::rebuild`]); this refusal keeps the increment fail-closed
+/// if a caller ever skips that check.
+fn next_generation(dest: &str, generation: u64) -> Result<u64, ScaffoldError> {
+    generation.checked_add(1).ok_or_else(|| {
+        ScaffoldError::invalid(
+            shown!("override state of {}", overrides::dest_shown(dest)),
+            Shown::fixed("the override record's generation cannot advance"),
+        )
+    })
+}
+
+/// Write or remove the override record of `dest` after its file is written.
+fn write_override_record(
+    root: &Path,
+    dest: &str,
+    record: Option<&overrides::record::Record>,
+) -> Result<(), ScaffoldError> {
+    match record {
+        Some(record) => record.write(root, dest),
+        None => overrides::record::remove_record(root, dest),
+    }
+}
+
+/// The override record of a file whose update conflicted: the file stays as
+/// it is, and the record names the new pristine text the resolution will
+/// accept, so the next update merges against the new effective baseline.
+fn conflict_override_record(
+    root: &Path,
+    dest: &str,
+    plan: &overrides::DestPlan,
+    pristine: &str,
+    current: &str,
+) -> Result<(), ScaffoldError> {
+    let generation = plan.old.as_ref().map_or(0, |(record, _)| record.generation);
+    let generation = next_generation(dest, generation)?;
+    let record = (!plan.applied.is_empty()).then(|| {
+        overrides::record::Record::new(
+            generation,
+            pristine,
+            plan.applied.clone(),
+            &plan.effective,
+            current,
+        )
+    });
+    write_override_record(root, dest, record.as_ref())
 }
 
 /// Additive key sync for schema-versioned, user-owned JSON (policy.json):

@@ -119,6 +119,13 @@ pub fn run(args: &DoctorArgs) -> i32 {
                 env!("CARGO_PKG_VERSION"),
             )
         }),
+        override_plan: Some(|root| {
+            codeflow_core::scaffold::update::override_plan(
+                &crate::embedded::EmbeddedAssets,
+                root,
+                env!("CARGO_PKG_VERSION"),
+            )
+        }),
         // Only reported beside where PATH resolves codeflow; never run.
         codeflow_exe: std::env::current_exe().ok(),
         remote_profile: args.profile.clone(),
@@ -732,6 +739,7 @@ mod tests {
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
             guard_canary: None,
             update_plan: None,
+            override_plan: None,
             codeflow_exe: None,
             codeflow_home: None,
             qualification_dir: None,

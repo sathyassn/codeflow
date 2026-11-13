@@ -4218,10 +4218,113 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // TSK-1302: doctor's overrides check quotes the shipped text an override
+    // replaces; the clipped, trimmed and counted text is message wording only
+    // and decides no status.
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "clip",
+        "trim",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "clip",
+        "trim_end",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "describe",
+        "lines",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/instruction_overrides.rs",
+        "describe",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-1302: a missing override record means the file has no override
+    // state, and the merge base stays the pristine baseline the installed hash
+    // proves. A missing pristine baseline beside a record reads as empty,
+    // whose hash never equals both the record's pristine hash and the
+    // installed hash, so update refuses; absence grants nothing.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "Plan::load_old",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    // TSK-1302: strips only LF and CR line endings to read a heading line;
+    // no other character is removed.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "heading_level",
+        "trim_end_matches",
+        1,
+        "grammar:lf-crlf-line-endings",
+    ),
+    // TSK-1302: an override value or section body that is empty after a
+    // Unicode trim is refused; Unicode trimming only widens the refusal.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/mod.rs",
+        "row_value_plain",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1302: link text that is empty after a Unicode trim counts as not
+    // shown, which refuses the link; Unicode trimming only widens the
+    // refusal, and invisible characters are refused separately.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/oracle.rs",
+        "hidden_with",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "check_body",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1302: marker detection with a Unicode trim treats more lines as
+    // marker lines, which an override body refuses and the shipped text's
+    // contract test pins; a marker that does not parse refuses the file.
+    // Names come from the binary's shipped markers only.
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "is_marker_line",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "parse_marker",
+        "split_whitespace",
+        1,
+        "schema-reject-only",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/overrides/sections.rs",
+        "parse_marker",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
     // LF/CRLF framing only rejects unresolved conflict markers; accepted file bytes are never normalized or used as names.
     (
         "crates/codeflow-core/src/scaffold/update/pending.rs",
-        "PendingResolution::read",
+        "PendingResolution::read_projected",
         "split_terminator",
         1,
         "schema-reject-only",
@@ -7202,6 +7305,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; a dangling link exists, so it and every other error propagate."),
     ("crates/codeflow-core/src/doctor/startup_files.rs", "sourced_files", "is_file", 1, "Type check on metadata from metadata_optional, whose errors are reported as unresolved; a startup path that is not a regular file is not one the shell sources as a file."),
+    ("crates/codeflow-core/src/scaffold/rule_map.rs", "strict_config_limit", "is_file", 1, "Type check reached only after proven_absent has ruled out absence; a metadata error or anything but a regular file returns the not-a-readable-regular-file reason, which leaves the instruction budget undetermined and refuses the override, so nothing is read as an absent config (TSK-1302)."),
     ("crates/codeflow-core/src/security/startup.rs", "resolve", "ErrorKind::NotFound", 1, "The walk stats each component in order from the root, so a component that is not found lies beneath one that resolved as a directory or was itself not found; the missing suffix is kept as written, which is where a write lands, and any other error returns None."),
     ("crates/codeflow-cli/src/cmd/ids.rs", "run_admit", "exists", 1, "False only sends a rev:path spec to git show, which refuses on error; a literal path whose metadata fails also fails the read that follows, so no unread input becomes a default."),
     ("crates/codeflow-cli/src/cmd/new.rs", "run_adr", "ErrorKind::NotFound", 1, "NotFound only picks the shipped template text for a new ADR, which check_adr then validates; any other read error refuses, and a dangling ancestor fails create_dir_all."),
