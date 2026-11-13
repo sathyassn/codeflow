@@ -8,15 +8,18 @@
 //! (`git_guard::simple_commands`), with the lexer's mark of whether the
 //! shell passes each word as written. A word that names the binary is
 //! judged with the words after it when it can be the program that runs: the
-//! first word, a word after a launcher, supplier or package runner, or any
-//! word of a program this reader does not know. A program known never to
-//! run its operands (`cp`, `make` and the like) gives no such word; `npm`
-//! is read that way except after a subcommand that runs a command.
+//! first word, a word after a launcher, supplier, package runner or package
+//! manager, or any word of a program this reader does not know. A program
+//! known never to run its operands (`cp`, `make` and the like) gives no
+//! such word; `npm` is read that way only after one of its own commands
+//! that never runs a program, written in full or as a documented alias.
 //! `cargo run` and `cargo r` are judged by the words cargo passes to the
 //! program it builds. A word the shell expands (a variable, a substitution,
-//! a pattern, braces or a leading `=`) in the program position or as the
-//! first operand refuses where the verb could follow. Only the exact help
-//! and version shapes are allowed.
+//! a pattern, braces or a leading `=`) in a program position or as the
+//! first operand refuses where the verb could follow, and one among the
+//! words of a program this reader does not know refuses when its raw text,
+//! with the words after it, names the binary with a verb. Only the exact
+//! help and version shapes are allowed.
 //!
 //! A quoted argument holding a space is read again as a command line,
 //! except for programs that only print, search or record the words they are
@@ -78,12 +81,163 @@ const RECORD_VERBS: &[&str] = &["adr", "epic", "feedback", "recall", "spec", "ta
 /// Programs known never to run one of their operands as a program, so a
 /// folder or file named like the binary among their words is data. A
 /// quoted argument holding a space is still read as a command line, since
-/// a value such as a `make` variable can be. `npm` runs a command only
-/// after a word in [`STARTS_A_COMMAND`]; package managers that run a
-/// package's binary by name, such as `yarn` and `pnpm`, are not listed.
+/// a value such as a `make` variable can be. `npm` is read this way only
+/// after one of [`NPM_OWN_COMMANDS`]; after any other word it runs a
+/// package's binary, as [`PACKAGE_MANAGERS`] do.
 const NOT_LAUNCHERS: &[&str] = &[
     "chmod", "chown", "cmp", "cp", "cut", "diff", "du", "file", "ln", "make", "mkdir", "mv", "npm",
     "rm", "rmdir", "sort", "stat", "tar", "tee", "touch", "tr", "uniq",
+];
+
+/// Package and tool managers that run a package's or a tool's binary by
+/// name with the words after it, with or without a subcommand such as
+/// `run`, `exec`, `dlx` or `x` (`yarn <name>`, `pnpm run <name>`,
+/// `bun x <name>`, `corepack <manager>`, `volta run <name>`, `uv run
+/// <name>`, `uvx <name>`). Every word after one is read as a program
+/// position, whatever subcommand comes first, so no alias or abbreviation
+/// of a subcommand moves a word out of it. `pn` is pnpm's short name.
+const PACKAGE_MANAGERS: &[&str] = &[
+    "bun", "corepack", "deno", "pn", "pnpm", "uv", "uvx", "volta", "yarn",
+];
+
+/// npm's own commands, in their exact names and documented aliases, that
+/// never run a program named on the command line: they install, list,
+/// show, publish or configure packages. The names are npm's `commands` and
+/// `aliases` (`lib/utils/cmd-list.js` in the npm/cli repository). npm also
+/// accepts any unambiguous abbreviation of a name (`deref` there, through
+/// `abbrev`), so `exe` runs `exec`; this list holds exact words only, and
+/// any other word, an abbreviation included, leaves npm read as a package
+/// runner. Left out: the commands that run a program, a package's binary
+/// or a script (`exec`, `explore`, `init`, `run`, `start`, `stop`,
+/// `restart`, `test`, `install-test`, `install-ci-test`), those that open
+/// an editor, browser or viewer (`edit`, `config` and its alias `c`, whose
+/// `edit` opens one, `docs`, `bugs`, `repo`, `help`, `fund`), and those
+/// whose effect this reader has not established
+/// (`approve-scripts`, `deny-scripts`, `install-scripts`, `patch`,
+/// `stage`, `trust`, `help-search`).
+const NPM_OWN_COMMANDS: &[&str] = &[
+    // Commands.
+    "access",
+    "audit",
+    "cache",
+    "ci",
+    "completion",
+    "dedupe",
+    "deprecate",
+    "diff",
+    "dist-tag",
+    "doctor",
+    "explain",
+    "find-dupes",
+    "get",
+    "install",
+    "link",
+    "ll",
+    "login",
+    "logout",
+    "ls",
+    "org",
+    "outdated",
+    "owner",
+    "pack",
+    "ping",
+    "pkg",
+    "prefix",
+    "profile",
+    "prune",
+    "publish",
+    "query",
+    "rebuild",
+    "root",
+    "sbom",
+    "search",
+    "set",
+    "team",
+    "token",
+    "undeprecate",
+    "uninstall",
+    "unpublish",
+    "update",
+    "version",
+    "view",
+    "whoami",
+    // Their aliases.
+    "add",
+    "author",
+    "clean-install",
+    "ddp",
+    "dist-tags",
+    "find",
+    "i",
+    "ic",
+    "in",
+    "info",
+    "ins",
+    "inst",
+    "insta",
+    "instal",
+    "install-clean",
+    "isnt",
+    "isnta",
+    "isntal",
+    "isntall",
+    "isntall-clean",
+    "la",
+    "list",
+    "ln",
+    "ogr",
+    "r",
+    "rb",
+    "remove",
+    "rm",
+    "s",
+    "se",
+    "show",
+    "u",
+    "udpate",
+    "un",
+    "unlink",
+    "up",
+    "upgrade",
+    "v",
+    "verison",
+    "why",
+];
+
+/// npm options before its command that take the next word as their value.
+const NPM_VALUE_OPTIONS: &[&str] = &[
+    "-C",
+    "-w",
+    "--cache",
+    "--globalconfig",
+    "--loglevel",
+    "--prefix",
+    "--registry",
+    "--userconfig",
+    "--workspace",
+];
+
+/// npm options before its command that take no value.
+const NPM_FLAGS: &[&str] = &[
+    "-d",
+    "-f",
+    "-g",
+    "-q",
+    "-s",
+    "-ws",
+    "-y",
+    "--dry-run",
+    "--force",
+    "--global",
+    "--json",
+    "--no-audit",
+    "--no-fund",
+    "--offline",
+    "--quiet",
+    "--silent",
+    "--verbose",
+    "--workspaces",
+    "--yes",
 ];
 
 /// Shell builtins that set variables from their operands.
@@ -285,11 +439,13 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
         return Found::Nothing;
     }
     let known = NOT_LAUNCHERS.contains(&name.as_str());
+    let runner_from = package_manager_runs_from(argv, &written);
     let mut found = Found::Nothing;
     for (at, word) in argv.iter().enumerate() {
         let after = &argv[at + 1..];
         let before = &argv[..at];
-        let in_program_position = at == 0 || starts_a_command(before);
+        let in_program_position =
+            at == 0 || starts_a_command(before) || runner_from.is_some_and(|from| at >= from);
         if in_program_position
             && (!written(at)
                 || matches!(
@@ -319,6 +475,17 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
         if let Some(form) = run {
             return Found::Run(InstallRun {
                 form,
+                parsed: true,
+                in_argument: false,
+            });
+        }
+        // A word the shell expands where a program this reader does not
+        // know may run it: judged with the words after it on their raw
+        // text, as a literal name there would be.
+        if may_run && !in_program_position && !written(at) && raw_run(&argv[at..].join(" ")).is_some()
+        {
+            return Found::Run(InstallRun {
+                form: "an expanded word naming the binary with an install verb",
                 parsed: true,
                 in_argument: false,
             });
@@ -506,6 +673,56 @@ fn supplied(before: &[String]) -> bool {
     before
         .iter()
         .any(|word| APPENDING.contains(&basename(word).as_str()))
+}
+
+/// The index from which every word of `argv` is in a program position
+/// because a package manager in a program position before it runs a
+/// binary by name: one of [`PACKAGE_MANAGERS`], or `npm` with any command
+/// other than [`NPM_OWN_COMMANDS`].
+fn package_manager_runs_from(argv: &[String], written: &dyn Fn(usize) -> bool) -> Option<usize> {
+    (0..argv.len()).find_map(|at| {
+        if at > 0 && !starts_a_command(&argv[..at]) {
+            return None;
+        }
+        let name = basename(&argv[at]);
+        let runs = PACKAGE_MANAGERS.contains(&name.as_str())
+            || (name == "npm"
+                && !npm_runs_its_own_command(&argv[at + 1..], &|word| written(at + 1 + word)));
+        runs.then_some(at + 1)
+    })
+}
+
+/// Whether npm, given `args`, runs one of [`NPM_OWN_COMMANDS`]: its command
+/// is the first word after its options, as npm's option parser leaves it
+/// (the first word of `remain`). Fail closed: an option this reader does
+/// not know, a value that starts with `-`, or a word the shell expands
+/// before the command means the command is not established.
+fn npm_runs_its_own_command(args: &[String], written: &dyn Fn(usize) -> bool) -> bool {
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        if !written(at) {
+            return false;
+        }
+        if word == "--" {
+            return written(at + 1)
+                && args
+                    .get(at + 1)
+                    .is_some_and(|command| NPM_OWN_COMMANDS.contains(&command.as_str()));
+        }
+        if NPM_VALUE_OPTIONS.contains(&word.as_str()) {
+            match args.get(at + 1) {
+                Some(value) if written(at + 1) && !value.starts_with('-') => at += 2,
+                _ => return false,
+            }
+        } else if NPM_FLAGS.contains(&word.as_str())
+            || (word.starts_with("--") && word.contains('='))
+        {
+            at += 1;
+        } else {
+            return !word.starts_with('-') && NPM_OWN_COMMANDS.contains(&word.as_str());
+        }
+    }
+    false
 }
 
 /// Whether the word after `before` is in a program position: the first

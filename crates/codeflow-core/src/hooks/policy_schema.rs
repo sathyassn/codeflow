@@ -271,15 +271,21 @@ pub const SCHEMA: [KeySpec; 82] = [
         notes: "Agent guards (ADR-0009). Only the operator runs `codeflow update` and \
                 `codeflow init`, which write the files the guards enforce from: exec-guard \
                 refuses a run of either verb in every folder, whichever launcher, supplier, \
-                package runner, shell, interpreter, Git runner or `cargo run` starts it and \
-                however the binary's path is written, and a run whose program word or first \
-                operand it cannot resolve; only the exact help and version forms, which write \
-                nothing, stay allowed (TSK-1476). Words that only name the verbs stay data: the \
-                binary's own record verbs, test operands, a search program's pattern, an \
-                assigned value no later command on the line reads, and a folder of that name \
-                given to a program that never runs its operands. A binary an agent renames or \
-                copies, and the verb's words written to a file and run later, are not named on \
-                the line; that is a named residual. The guards hold each worktree's copies of \
+                package runner or package manager, shell, interpreter, Git runner or `cargo \
+                run` starts it and however the binary's path is written, and a run whose \
+                program word or first operand it cannot resolve. Every word after a package \
+                manager is read as a program it may run; `npm` is read that way after any word \
+                but its own commands that run no program, written in full or as a documented \
+                alias. A word the shell expands among the words of a program the guard does \
+                not know refuses when its text spells the binary with a verb. Only the exact \
+                help and version forms, which write nothing, stay allowed (TSK-1476). Words \
+                that only name the verbs stay data: the binary's own record verbs, test \
+                operands, a search program's pattern, an assigned value no later command on \
+                the line reads, and a folder of that name given to a program that never runs \
+                its operands. A binary an agent renames or copies, the verb's words written \
+                to a file and run later, and a variable or pattern that only a program the \
+                guard does not know runs as the binary, are not named on the line; that is a \
+                named residual. The guards hold each worktree's copies of \
                 the enforcement files as they hold the root checkout's, against shell writes \
                 and against the file tools edit-guard is bound to. The shipped presets name no \
                 worktree path, since a deny there also stops Git's own writes in a sandboxed \
