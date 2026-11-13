@@ -406,6 +406,23 @@ jobs:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
         run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
 
+      # This part's run record, target/codeflow-gate/<run id>/run.json,
+      # lists each target's name, state and duration under `outcomes`,
+      # failed and skipped ones included, with each target's captured
+      # output. Kept as an artifact, it can be read through the GitHub API
+      # (TSK-1305, issue 546). It runs whether the part passed or failed and
+      # never changes the job's result; the name is unique per job, part and
+      # attempt.
+      - name: Keep the gate part's run record
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-gate-${{ github.job }}-${{ matrix.part }}-attempt-${{ github.run_attempt }}
+          path: target/codeflow-gate/*/run.json
+          retention-days: 7
+          if-no-files-found: warn
+
   # The release-tier parts of the full gate (TSK-449): the exhaustive
   # prose oracle, the read benchmark and the present browser and
   # binary-delta checks. They run on ready pull requests into main or
@@ -565,6 +582,23 @@ jobs:
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
         run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+
+      # This part's run record, target/codeflow-gate/<run id>/run.json,
+      # lists each target's name, state and duration under `outcomes`,
+      # failed and skipped ones included, with each target's captured
+      # output. Kept as an artifact, it can be read through the GitHub API
+      # (TSK-1305, issue 546). It runs whether the part passed or failed and
+      # never changes the job's result; the name is unique per job, part and
+      # attempt.
+      - name: Keep the gate part's run record
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-gate-${{ github.job }}-${{ matrix.part }}-attempt-${{ github.run_attempt }}
+          path: target/codeflow-gate/*/run.json
+          retention-days: 7
+          if-no-files-found: warn
 
   # The instrumented suite owns Linux test and coverage evidence and was the
   # longest part of the gate (13.8 to 19.8 minutes), so it runs as shards on
