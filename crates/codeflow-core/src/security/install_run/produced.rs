@@ -298,7 +298,15 @@ fn integer_text(conversion: char, value: &str) -> String {
 /// gives the next character's code, `0x` is hex, a leading `0` octal,
 /// else decimal, with an optional sign.
 fn integer(text: &str) -> Option<i64> {
-    let text = text.trim();
+    // strtol skips the C locale's blanks; bash also reads past trailing ones.
+    let blank = |c: char| matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r');
+    let start = text.find(|c| !blank(c)).unwrap_or(text.len());
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !blank(*c))
+        .map_or(start, |(at, c)| at + c.len_utf8());
+    let text = &text[start..end];
     if text.is_empty() {
         return Some(0);
     }
@@ -520,6 +528,7 @@ mod tests {
             ),
             (r"[%.0x]", &["0"][..], "[]", false),
             (r"%d %x", &["$n", "$n"][..], "0 \u{e000}", false),
+            (r"%d|%d", &[" 7 ", "\u{a0}7"][..], "7|0", false),
         ] {
             let args: Vec<String> = words.iter().map(ToString::to_string).collect();
             assert_eq!(
