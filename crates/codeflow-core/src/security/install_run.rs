@@ -1198,21 +1198,81 @@ mod tests {
         }
     }
 
-    /// The words after `--` that `gh` passes to the `git` it runs are read
-    /// as a quoted argument is: a setting or option value holding a command
-    /// line. Its other words stay data.
+    /// A pager, editor or browser variable naming a shell that reads its
+    /// input gives that shell the program's output, so the line is judged
+    /// on its raw text, as the same option is: set before the program or
+    /// earlier on the line, for each variable a data program runs and for
+    /// one a program the reader does not know runs. A variable no program
+    /// runs, and an ordinary pager, stay data.
+    #[test]
+    fn a_command_variable_naming_a_stdin_shell_judges_the_line() {
+        for (variables, line) in [
+            (
+                &["ACK_PAGER", "ACK_PAGER_COLOR", "PAGER"][..],
+                "ack --nocolor -h 'codeflow update' notes.txt",
+            ),
+            (
+                &[
+                    "GH_PAGER",
+                    "PAGER",
+                    "GH_EDITOR",
+                    "GIT_EDITOR",
+                    "EDITOR",
+                    "VISUAL",
+                    "GH_BROWSER",
+                    "BROWSER",
+                ][..],
+                "gh search issues 'codeflow update'",
+            ),
+            (&["PAGER", "MANPAGER"][..], "man -k 'codeflow init'"),
+        ] {
+            for variable in variables {
+                for form in [
+                    format!("{variable}=sh {line}"),
+                    format!("{variable}='bash -s' {line}"),
+                    format!("export {variable}=sh; {line}"),
+                    format!("{variable}=zsh; {line}"),
+                ] {
+                    assert!(runs(&form), "{form}");
+                }
+            }
+        }
+        for command in [
+            "ACK_PAGER=less ack 'codeflow update' docs",
+            "export ACK_PAGER='less -R'; ack 'codeflow update' docs",
+            "PAGER='less -R' gh search issues 'codeflow update'",
+            "GH_PAGER=cat gh search issues 'codeflow update'",
+            "NOTE=sh; ack 'codeflow update' docs",
+            "NOTE=sh codeflow task new --title 'codeflow update docs'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// The words after `--` that `gh repo clone`, `gh repo fork` and `gh
+    /// gist clone` pass to the `git clone` they run are read as a quoted
+    /// argument is: a setting or option value holding a command line. The
+    /// words after `--` of any other gh command are its data.
     #[test]
     fn words_gh_passes_to_git_are_read() {
         for command in [
             "gh repo clone owner/repo -- -c core.sshCommand='env codeflow update'",
             "gh repo clone owner/repo -- --upload-pack='codeflow update'",
             "gh repo fork owner/repo --clone -- -c core.fsmonitor='nice codeflow init'",
+            "gh gist clone abc123 -- -c core.sshCommand='env codeflow update'",
+            "gh repo clone -u upstream owner/repo dir -- -c core.sshCommand='codeflow init'",
         ] {
             assert!(runs(command), "{command}");
         }
         for command in [
             "gh repo clone owner/repo -- --depth 1",
             "gh issue create --title 'codeflow update fails' --body 'run codeflow update'",
+            "gh search issues -- 'codeflow update'",
+            "gh search prs -- 'codeflow init --yes'",
+            "gh search code -- 'codeflow update'",
+            "gh issue list -- 'codeflow update'",
+            "gh pr list --search x -- 'codeflow update'",
+            "gh repo list -- 'codeflow update'",
         ] {
             assert!(!runs(command), "{command}");
         }

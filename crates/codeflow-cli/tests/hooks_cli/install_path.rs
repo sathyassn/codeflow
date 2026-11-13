@@ -463,6 +463,9 @@ fn command_valued_options_refuse_through_launchers() {
         "ssh -o ProxyCommand='env codeflow update' host",
         "sed '1e env codeflow update' notes.txt",
         "gh repo clone owner/repo -- -c core.sshCommand='env codeflow update'",
+        "gh gist clone abc123 -- -c core.sshCommand='env codeflow update'",
+        "ACK_PAGER=sh ack --nocolor -h 'codeflow update' notes.txt",
+        "export GH_PAGER='bash -s'; gh search issues 'codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
@@ -485,6 +488,10 @@ fn command_valued_options_refuse_through_launchers() {
         "vim -c 'set nu' notes.txt",
         "man -P less ls",
         "gh repo clone owner/repo -- --depth 1",
+        "gh search issues -- 'codeflow update'",
+        "gh pr list --search x -- 'codeflow update'",
+        "ACK_PAGER=less ack 'codeflow update' docs",
+        "PAGER='less -R' gh search issues 'codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
