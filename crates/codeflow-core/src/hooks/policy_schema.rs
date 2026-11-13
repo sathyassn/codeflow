@@ -287,12 +287,16 @@ pub const SCHEMA: [KeySpec; 82] = [
                 names the binary with a verb refuses, whatever program reads it: in its text \
                 as written, in its words as the shell passes them, in what `printf`, \
                 `echo` and `print` write from them, or in a value the line builds from its \
-                own assignments. Off the listed forms, a `printf`, `echo`, `print` or \
+                own assignments, each alone and all of what the line writes joined in line \
+                order, whatever its redirections, separators, groups or loops. Off the \
+                listed forms, a `printf`, `echo`, `print` or \
                 `$'...'` word counts only as plain literal text; one that holds an escape (a \
                 `\\n` in a `printf` format excepted), a conversion other than a bare `%s`, a \
-                width, precision or flag, more arguments than conversions, or an expansion \
-                `echo` or `print` may decode refuses whatever it names, since the guard does \
-                not model what it writes. So give \
+                width, precision or flag, more arguments than conversions, an expansion \
+                `echo` or `print` may decode, or a value the line sets that the guard cannot \
+                resolve exactly (from a file, a program, a pattern or a construct it does \
+                not model) refuses whatever it names, since the guard does not model what it \
+                writes. So give \
                 such text to a listed program or leave the binary's name out of a search. A \
                 run whose program \
                 word or first operand the guard cannot resolve, and a run inside a quoted \
