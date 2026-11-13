@@ -1162,6 +1162,16 @@ mod tests {
             r#"printf '%s\n' "\$'\\x63'odeflow update" > commands.fifo"#,
             r#"sh -c "printf '\\143odeflow update' > commands.fifo""#,
             r#"eval "printf '\\143odeflow update'" > commands.fifo"#,
+            r"printf 'codeflow upd%xte' 10 > commands.fifo",
+            r"printf '%xodeflow update' 12 > commands.fifo",
+            r"printf 'co%xflow update' 222 > commands.fifo",
+            r"printf 'co%Xflow update' 0xde > commands.fifo",
+            r"printf 'co%xflow update' 0336 > commands.fifo",
+            r"printf 'co%xflow update' $((222)) > commands.fifo",
+            r"printf 'codeflow upd%.0xate' 0 > commands.fifo",
+            r#"printf '%xo%xflow update' "$a" "$b" > commands.fifo"#,
+            r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
+            r#"a=cod; echo "${a}eflow update" > commands.fifo"#,
         ] {
             assert!(runs(command), "{command}");
         }
@@ -1172,6 +1182,10 @@ mod tests {
             r"printf 'update\n' > notes.txt",
             r"echo -e 'codeflow\tversion' > notes.txt",
             r"printf '\x63odeflow\n' > notes.txt",
+            r"printf '%x\n' 255 > notes.txt",
+            r"printf 'codeflow %x\n' 10 > notes.txt",
+            r"printf 'size %x %x %x %x %x %x\n' $a $b $c $d $e $f > notes.txt",
+            r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
         ] {
             assert!(!runs(command), "{command}");
         }

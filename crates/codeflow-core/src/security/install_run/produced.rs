@@ -9,19 +9,25 @@
 //!    guard's shell lexer: quotes and backslashes removed and `$'...'`
 //!    decoded;
 //! 2. what a printing program writes from those words: `printf` with its
-//!    format, its `%s`, `%b`, `%c` and numeric conversions, precision and
-//!    escapes, and `echo` and `print` with the escapes bash, zsh and sh
-//!    decode, with `-e`, `-E` or each shell's default alike. Octal is read
-//!    both as `\NNN` and as `\0NNN`, and a NUL both as a break and as
-//!    dropped, as a shell reading the text drops it. Where a format holds a
-//!    conversion this reader does not model, the format and each argument
-//!    are also judged alone and joined.
+//!    format, its `%s`, `%b`, `%c` and integer conversions (the digits
+//!    `%o`, `%x` and `%X` write included), precision and escapes, and
+//!    `echo` and `print` with the escapes bash, zsh and sh decode, with
+//!    `-e`, `-E` or each shell's default alike. Octal is read both as
+//!    `\NNN` and as `\0NNN`, and a NUL both as a break and as dropped, as a
+//!    shell reading the text drops it. Where a format holds a conversion
+//!    this reader does not model (the floating ones), the format and each
+//!    argument are also judged alone and joined;
+//! 3. the texts the guard's shell composer resolves for bash and zsh: a
+//!    word built from a value the line assigns, a substitution over the
+//!    builtins it models, arithmetic, `eval` and `sh -c` bodies.
 //!
 //! A printed text is judged as written, decoded once more (a later printer
 //! may decode it again) and read again as a command line, as a shell
 //! reading a pipe or a FIFO would read it. A word that holds a blank is
 //! read again as a command line (`sh -c '...'`). Each text is matched as
 //! the raw text is ([`raw_run`]): the binary as a whole word, then a verb.
+//! Hex digits a `%x` writes from an argument this reader cannot read stand
+//! for any run of the hex letters the binary's name and the verbs hold.
 //!
 //! Text built by a program this reader does not model (a decoder, a
 //! character translator, an interpreter) is not on the line. That is a
@@ -32,6 +38,7 @@ use std::str::Chars;
 
 use super::{raw_run, InstallRun};
 use crate::hooks::git_guard::{command_argv_literal, expand_commands, shell_blank};
+use crate::security::composed::{composed_texts, Composed};
 use crate::security::headless::basename;
 
 /// Programs whose output this reader decodes.
@@ -43,6 +50,21 @@ const DEPTH: usize = 3;
 
 /// The most times `printf` reuses its format for the arguments left.
 const PASSES: usize = 16;
+
+/// Stands for the hex digits a `%x` writes from an argument this reader
+/// cannot read as an integer.
+const HEX: char = '\u{e000}';
+
+/// What a [`HEX`] may stand for when it matters to a match: nothing (a
+/// zero precision), `0` (any digits), or a run of the hex letters in the
+/// binary's name, the verbs and `cargo`.
+const HEX_FILLS: &[&str] = &[
+    "", "0", "a", "c", "d", "e", "f", "ca", "da", "de", "ef", "def",
+];
+
+/// The most [`HEX`] markers a text is searched with; past it, it counts as
+/// naming a run.
+const MARKERS: usize = 4;
 
 const FORM: &str =
     "text the shell or a printing program produces, naming the binary with an install verb";
@@ -80,10 +102,24 @@ const READINGS: [Reading; 4] = [
 /// verb in its words as the shell passes them or in what a printing
 /// program writes from them.
 pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
-    read(command, 0).then_some(InstallRun {
+    (read(command, 0) || composed(command)).then_some(InstallRun {
         form: FORM,
         parsed: false,
         in_argument: false,
+    })
+}
+
+/// Whether a text the guard's shell composer resolves on the line, as bash
+/// and as zsh build it, names the binary with a verb: what `printf`,
+/// `echo` and `print` write, a word built from a value the line assigns, a
+/// substitution over those builtins, arithmetic. Outside text is read as
+/// written (`$`) and as empty.
+fn composed(command: &str) -> bool {
+    composed_texts(command).iter().any(|text| match text {
+        Composed::Resolved(value) => {
+            judged(&value.render(), 1) || judged(&value.without_open().render(), 1)
+        }
+        Composed::Unresolved(_) => false,
     })
 }
 
@@ -94,7 +130,7 @@ fn read(command: &str, depth: usize) -> bool {
     }
     expand_commands(command).iter().any(|segment| {
         let (words, _) = command_argv_literal(segment);
-        raw_run(&words.join(" ")).is_some()
+        names(&words.join(" "))
             || words
                 .iter()
                 .skip(1)
@@ -111,10 +147,10 @@ fn read(command: &str, depth: usize) -> bool {
 /// A printed text, judged as written, decoded once more, and read again
 /// as a command line.
 fn judged(text: &str, depth: usize) -> bool {
-    raw_run(text).is_some()
+    names(text)
         || READINGS.iter().any(|reading| {
             let (decoded, _) = decode(text, *reading);
-            decoded != text && raw_run(&decoded).is_some()
+            decoded != text && names(&decoded)
         })
         || read(text, depth + 1)
 }
@@ -215,7 +251,11 @@ fn printf_text(format: &str, args: &[String], reading: Reading) -> (String, bool
                     }
                 }
                 Some('c') => out.extend(value.chars().next()),
-                Some(numeric) if "diouxXeEfFgGaA".contains(numeric) => out.push_str(value),
+                Some(conversion @ ('d' | 'i' | 'u' | 'o' | 'x' | 'X')) => {
+                    if !(precision == Some(0) && integer(value) == Some(0)) {
+                        out.push_str(&integer_text(conversion, value));
+                    }
+                }
                 _ => {
                     unmodelled = true;
                     out.push_str(value);
@@ -227,6 +267,111 @@ fn printf_text(format: &str, args: &[String], reading: Reading) -> (String, bool
         }
     }
     (out, unmodelled)
+}
+
+/// What an integer conversion writes for `value`. An argument this reader
+/// cannot read as an integer (an arithmetic expression zsh evaluates, a
+/// name) writes [`HEX`] under `%x` and `%X`, any hex digits (the binary's
+/// name is matched in any case), and `0` under the others, whose digits
+/// never spell a letter. Width and
+/// precision only pad, so they are left out: a match they would break is
+/// an over-refusal, never a miss.
+fn integer_text(conversion: char, value: &str) -> String {
+    let Some(number) = integer(value) else {
+        return if matches!(conversion, 'x' | 'X') {
+            HEX.to_string()
+        } else {
+            "0".to_string()
+        };
+    };
+    let wrapped = u64::from_ne_bytes(number.to_ne_bytes());
+    match conversion {
+        'o' => format!("{wrapped:o}"),
+        'x' => format!("{wrapped:x}"),
+        'X' => format!("{wrapped:X}"),
+        'u' => wrapped.to_string(),
+        _ => number.to_string(),
+    }
+}
+
+/// An integer argument as `printf` reads it: empty is 0, a leading quote
+/// gives the next character's code, `0x` is hex, a leading `0` octal,
+/// else decimal, with an optional sign.
+fn integer(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(0);
+    }
+    if let Some(rest) = text.strip_prefix(['\'', '"']) {
+        return Some(rest.chars().next().map_or(0, |c| i64::from(u32::from(c))));
+    }
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    if !digits.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let value = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        i64::from_str_radix(hex, 16).ok()?
+    } else if digits.len() > 1 && digits.starts_with('0') {
+        i64::from_str_radix(&digits[1..], 8).ok()?
+    } else {
+        digits.parse().ok()?
+    };
+    Some(if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    })
+}
+
+/// Whether `text` names the binary with a verb, as [`raw_run`] reads it.
+/// Each [`HEX`] stands for any hex digits a `%x` may write: `0`, or a run
+/// of the hex letters the binary's name and the verbs hold. Past
+/// [`MARKERS`] of them the text is taken as naming one.
+fn names(text: &str) -> bool {
+    let text = &alone_as_digits(text);
+    let markers = text.matches(HEX).count();
+    if markers == 0 {
+        return raw_run(text).is_some();
+    }
+    if markers > MARKERS {
+        return true;
+    }
+    let Some((head, tail)) = text.split_once(HEX) else {
+        return false;
+    };
+    HEX_FILLS
+        .iter()
+        .any(|fill| names(&format!("{head}{fill}{tail}")))
+}
+
+/// `text` with each [`HEX`] that stands alone as a word written as `0`:
+/// hex letters alone never spell the binary's name, a verb or `cargo`, so
+/// only a marker that joins other word characters can matter.
+fn alone_as_digits(text: &str) -> String {
+    let joins = |c: Option<&char>| {
+        c.is_some_and(|c| *c == HEX || c.is_ascii_alphanumeric() || "_./+-\\'\"".contains(*c))
+    };
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .map(|(at, c)| {
+            let alone = *c == HEX
+                && !joins(at.checked_sub(1).and_then(|before| chars.get(before)))
+                && !joins(chars.get(at + 1));
+            if alone {
+                '0'
+            } else {
+                *c
+            }
+        })
+        .collect()
 }
 
 /// `text` cut to `precision` characters.
@@ -365,6 +510,16 @@ mod tests {
             (r"100%% %d", &["5"][..], "100% 5", false),
             (r"%*s", &["3", "x"][..], "x", false),
             (r"%q", &["x"][..], "x", true),
+            (r"%f", &["1"][..], "1", true),
+            (r"upd%xte", &["10"][..], "update", false),
+            (
+                r"%x %X %o %u %d",
+                &["222", "0xde", "8", "-1", "'a"][..],
+                "de DE 10 18446744073709551615 97",
+                false,
+            ),
+            (r"[%.0x]", &["0"][..], "[]", false),
+            (r"%d %x", &["$n", "$n"][..], "0 \u{e000}", false),
         ] {
             let args: Vec<String> = words.iter().map(ToString::to_string).collect();
             assert_eq!(
@@ -373,5 +528,18 @@ mod tests {
                 "{format}"
             );
         }
+    }
+
+    /// Hex digits from an unreadable argument stand for the hex letters a
+    /// match needs; a marker alone as a word cannot spell one.
+    #[test]
+    fn unreadable_hex_digits_stand_for_the_letters_a_match_needs() {
+        let hex = HEX.to_string();
+        assert!(names(&format!("co{hex}flow update")));
+        assert!(names(&format!("{hex}o{hex}flow update")));
+        assert!(names(&format!("codeflow upd{hex}te")));
+        assert!(!names(&format!("codeflow {hex} {hex}")));
+        assert!(!names(&format!("size {hex} {hex} {hex} {hex} {hex} {hex}")));
+        assert!(names(&hex.repeat(MARKERS + 1)));
     }
 }

@@ -1037,6 +1037,10 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"printf '%s\n' $'\x63odeflow update' > commands.fifo",
         r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
         r#"sh -c "printf '\\143odeflow update' > commands.fifo""#,
+        r"printf 'codeflow upd%xte' 10 > commands.fifo",
+        r"printf 'co%xflow update' 222 > commands.fifo",
+        r#"printf '%xo%xflow update' "$a" "$b" > commands.fifo"#,
+        r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
     ]
     .iter()
     .map(ToString::to_string)
@@ -1050,6 +1054,8 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"echo -e 'a\tb' > notes.txt",
         r"printf 'codeflow\n' > notes.txt",
         r"printf '\x63odeflow\n' > notes.txt",
+        r"printf '%x\n' 255 > notes.txt",
+        r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
     ]
     .iter()
     .map(ToString::to_string)
