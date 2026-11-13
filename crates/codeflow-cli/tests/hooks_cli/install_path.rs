@@ -472,6 +472,9 @@ fn command_valued_options_refuse_through_launchers() {
         "export ACK_PAGER=sh; (unset ACK_PAGER); ack --nocolor -h 'codeflow update' notes.txt",
         "export GH_PAGER=sh; (GH_PAGER=less); gh search issues 'codeflow update'",
         "export GH_PAGER=sh; unset GH_PAGER | true; gh search issues 'codeflow update'",
+        "export ACK_PAGER=sh; builtin readonly ACK_PAGER; unset ACK_PAGER; ack -h 'codeflow update' notes.txt",
+        "export GH_PAGER=less; command -p read GH_PAGER < pager.txt; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; env unset GH_PAGER; gh search issues 'codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
@@ -502,6 +505,8 @@ fn command_valued_options_refuse_through_launchers() {
         "export GH_PAGER=sh; GH_PAGER=less; true; gh search issues 'codeflow update'",
         "export NOTE=sh; true; gh search issues 'codeflow update'",
         "export GH_PAGER=sh; { unset GH_PAGER; }; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
+        "builtin echo hello; gh search issues 'codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
