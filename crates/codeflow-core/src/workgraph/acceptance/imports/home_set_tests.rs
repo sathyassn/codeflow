@@ -563,12 +563,14 @@ fn a_home_kept_across_a_sync_binds_the_lines_own_move() {
 }
 
 /// AC-13: a line whose last sync kept a home that no commit of the line
-/// set, by resolving the sync against `main`'s move, binds no landing, and
-/// the next sync is refused rather than proving the sync itself.
+/// set, by resolving the sync against `main`'s move, binds no landing. A
+/// next sync that leaves the record unchanged is refused rather than
+/// proving the sync itself; one that imports a later note sets no anchor
+/// and judges every move `main` made, which pass here.
 #[test]
 fn a_kept_home_no_line_commit_set_is_refused() {
     let path = path_of("TSK-001");
-    let base = todo("TSK-001", OTHER);
+    let base = todo("TSK-001", "main");
     let fixture = Fixture::new(&[("TSK-001", base.clone())]);
     fixture.land("main", &[(&path, &moved("TSK-001", THIRD))]);
     fixture.git(&["switch", "-q", "-C", "sync", LINE]);
@@ -596,6 +598,16 @@ fn a_kept_home_no_line_commit_set_is_refused() {
             "no commit on the line's first-parent history changed it",
         ],
     ));
+    fixture.land(
+        "main",
+        &[(&path, &task("TSK-001", "main", "todo", "Work.", "Noted."))],
+    );
+    fixture.sync();
+    match fixture.judge() {
+        Ok(found) if found["TSK-001"].home_anchor.is_none() => {}
+        Ok(found) => failures.push(format!("a later note set an anchor: {found:?}")),
+        Err(said) => failures.push(format!("a later note: refused: {said}")),
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
