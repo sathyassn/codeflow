@@ -3243,8 +3243,7 @@ mod tests {
     /// when the operator refreshes the portal.
     #[test]
     fn runtime_script_list_fails_closed_like_the_starter_reader() {
-        let portal =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/docs-portal/starter");
+        let portal = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/docs-portal/starter");
         let list: serde_json::Value = serde_json::from_slice(
             &std::fs::read(portal.join("scripts/runtime-scripts.json")).unwrap(),
         )
