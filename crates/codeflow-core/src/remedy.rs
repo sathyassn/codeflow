@@ -373,6 +373,17 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target; see cf-method/references/project-organization.md#acceptance-waivers-and-redactions for its field and format, or the record-only redaction route ({note})";
+    /// A completion landed on its marked epic's line with no pull request
+    /// whose block does not record a builder lineage and a reviewer of
+    /// another lineage, or the reduced-assurance statement (ADR-0102,
+    /// TSK-1433).
+    LANDED_REVIEW = Step::Codeflow("codeflow task status"),
+        "have a reviewer of another lineage than the one that built the task review its head, then record that review: reopen the task (`codeflow task status <id> todo --reason \"review by another lineage\"`) and complete it again (`codeflow task status <id> complete --acceptance <file>`) with `built_by: <lineage>` naming the one lineage that built it and the reviewer named before the first comma or semicolon of `review`, for example `review: Codex GPT-6.1 Sol at medium, whole unit at <sha>`; a reviewer of the same lineage needs `reduced_assurance` with one item for each other lineage, separated by `;`, each exactly `<lineage id> probed unavailable` and nothing more, for example `reduced_assurance: codex probed unavailable; grok probed unavailable`, written only after each other lineage was probed and found unavailable; the form is checked, its truth is not; then land the task on its line again";
+    /// An epic line whose epic's `main_landing` marker the run cannot read
+    /// at the default branch's commit, or reads with an unknown value
+    /// (TSK-1433).
+    LANDING_MARKER = Step::Codeflow("codeflow ci"),
+        "set the epic record's `main_landing` on the default branch to `whole-epic` or `checkpoint-prs`, or remove it, through a pull request into the default branch that a human reviews and merges; make the default branch's tip readable here (fetch it); then rerun `codeflow ci`";
     /// A PR body whose Reviews row names another commit or verdict than the
     /// task's acceptance block, from which the row is derived (issue 121,
     /// TSK-451).
