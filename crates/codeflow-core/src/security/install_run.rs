@@ -1696,6 +1696,55 @@ mod tests {
         }
     }
 
+    /// Every variable check reads one view of a command: behind the
+    /// current-shell wrappers (`builtin`, `command`, `command -p`, `noglob`)
+    /// a builtin acts on this shell, and behind any other launcher (`env`,
+    /// `nice`, `timeout`) it does not run in this shell at all. A wrapper
+    /// the view cannot remove judges the line on its raw text.
+    #[test]
+    fn variable_checks_read_through_current_shell_wrappers() {
+        for (variable, line) in [
+            ("ACK_PAGER", "ack -h 'codeflow update' notes.txt"),
+            ("GH_PAGER", "gh search issues 'codeflow update'"),
+        ] {
+            for form in [
+                format!("export {variable}=sh; builtin readonly {variable}; unset {variable}; {line}"),
+                format!("export {variable}=sh; command readonly {variable}; unset {variable}; {line}"),
+                format!("export {variable}=sh; command -p readonly {variable}; {variable}=less; {line}"),
+                format!("export {variable}=sh; command -- declare -r {variable}; unset {variable}; {line}"),
+                format!("export {variable}=sh; builtin command typeset -r {variable}; unset {variable}; {line}"),
+                format!("export {variable}=sh; noglob readonly {variable}; unset {variable}; {line}"),
+                format!("export {variable}=less; builtin read {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; command -p read {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; command printf -v {variable} sh; {line}"),
+                format!("export {variable}=less; builtin mapfile -t {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; builtin declare -n r={variable}; r=sh; {line}"),
+                format!("export {variable}=less; noglob read {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; print -v {variable} sh; {line}"),
+                format!("export {variable}=less; vared {variable}; {line}"),
+                format!("export {variable}=sh; env unset {variable}; {line}"),
+                format!("export {variable}=sh; env {variable}=less; {line}"),
+                format!("export {variable}=sh; nice export {variable}=less; {line}"),
+                format!("export {variable}=sh; timeout 5 unset {variable}; {line}"),
+                format!("export {variable}=sh; command -x unset {variable}; {line}"),
+            ] {
+                assert!(runs(&form), "{form}");
+            }
+        }
+        for command in [
+            "builtin echo hello; gh search issues 'codeflow update'",
+            "command ls docs; gh search issues 'codeflow update'",
+            "command -v gh; gh search issues 'codeflow update'",
+            "export NOTE=1; builtin unset NOTE; gh search issues 'codeflow update'",
+            "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
+            "export GH_PAGER=sh; command -p unset GH_PAGER; gh search issues 'codeflow update'",
+            "export ACK_PAGER=sh; builtin unset ACK_PAGER; ack 'codeflow update' docs",
+            "export GH_PAGER=sh; builtin export GH_PAGER=less; gh search issues 'codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// A program another program runs, such as a Git pager setting, is
     /// unresolved when it is a shell reading its input.
     #[test]
