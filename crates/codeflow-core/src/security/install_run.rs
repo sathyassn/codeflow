@@ -29,6 +29,14 @@
 //! interpreter code, are judged on their raw text: the binary's name
 //! followed, anywhere later, by a verb.
 //!
+//! A search program's option that runs a program (`ack` and `ag`
+//! `--pager`, `rg --pre`, by any prefix of the option's name) is judged as
+//! the program runs its value: a command line, through this same reader,
+//! or one program given each searched path. A pager, editor or browser
+//! variable assigned earlier on the line is read when a program that runs
+//! it follows. An editor's own command (`vim -c`, `emacs --eval`, a `+`
+//! word for vi or less) is judged on its raw text, as interpreter code is.
+//!
 //! A program an agent builds, renames or copies, and the verb's words
 //! written to a file and run later, are not named on the line. They are a
 //! named residual.
@@ -69,10 +77,59 @@ const DATA_PROGRAMS: &[&str] = &[
     "tail", "test", "type", "wc", "which",
 ];
 
-/// Options of a [`DATA_PROGRAMS`] search program that run a program: with
-/// one of them the call is judged as any other command, and a value naming
-/// the binary refuses.
-const RUNS_THROUGH_OPTION: &[&str] = &["--pager", "--pre"];
+/// How a search program runs the value of an option that runs a program.
+#[derive(Clone, Copy)]
+enum OptionValue {
+    /// A command line, handed to a shell or a command pipe: `ack --pager`
+    /// (Perl's pipe `open`) and `ag --pager` (`popen`).
+    CommandLine,
+    /// One program path, run with each searched path as its argument and
+    /// the file's content on its input: `rg --pre`.
+    ProgramPath,
+}
+
+/// Options of a [`DATA_PROGRAMS`] search program that run a program, with
+/// how each runs its value. An option is matched by any prefix of its
+/// name, since `ack` (Perl's `Getopt::Long`) and `ag` (`getopt_long`)
+/// accept a unique abbreviation; the value is attached after `=` or is the
+/// next word.
+const RUNS_THROUGH_OPTION: &[(&str, OptionValue)] = &[
+    ("--pager", OptionValue::CommandLine),
+    ("--pre", OptionValue::ProgramPath),
+];
+
+/// Variables a [`DATA_PROGRAMS`] program runs as a command: a pager, an
+/// editor or a browser. An assignment of one earlier on the line is read
+/// when that program follows; Git's own are also read by its runner
+/// reader.
+const COMMAND_VARIABLES: &[(&str, &[&str])] = &[
+    ("ack", &["ACK_PAGER", "ACK_PAGER_COLOR", "PAGER"]),
+    (
+        "gh",
+        &[
+            "BROWSER",
+            "EDITOR",
+            "GH_BROWSER",
+            "GH_EDITOR",
+            "GH_PAGER",
+            "GIT_EDITOR",
+            "PAGER",
+            "VISUAL",
+        ],
+    ),
+];
+
+/// Editors and a pager whose own command language runs a shell command
+/// (`!` in vi and less, `shell-command` in emacs). Their command options'
+/// values and their `+` words are judged on their raw text, as
+/// interpreter code is.
+const EDITORS: &[&str] = &[
+    "emacs", "ex", "less", "nvim", "rview", "rvim", "vi", "view", "vim",
+];
+
+/// The options of [`EDITORS`] whose value is a command in the editor's
+/// own language.
+const EDITOR_COMMAND_OPTIONS: &[&str] = &["-c", "--cmd", "--eval", "-eval", "--execute"];
 
 /// The binary's own verbs that record or read the words they are given and
 /// never run one, so their free text is data.
@@ -303,17 +360,17 @@ pub fn install_run(command: &str, posix: bool) -> Option<InstallRun> {
 }
 
 /// One simple command: its argument vector from the program on, whether
-/// the shell passes each of those words as written, and the values of the
-/// assignments before the program.
+/// the shell passes each of those words as written, and the names and
+/// values of the assignments before the program.
 struct Simple {
     argv: Vec<String>,
     literal: Vec<bool>,
-    values: Vec<String>,
+    values: Vec<(String, String)>,
 }
 
 /// The simple commands of `command`, read as
 /// `git_guard::simple_commands` reads them, with each word's literal mark
-/// and the assignment values the launcher strip drops.
+/// and the assignments the launcher strip drops.
 fn simple(command: &str) -> Vec<Simple> {
     expand_commands(command)
         .iter()
@@ -337,15 +394,15 @@ fn simple(command: &str) -> Vec<Simple> {
         .collect()
 }
 
-/// The value of a `NAME=value` word.
-fn assigned(word: &str) -> Option<String> {
+/// The name and value of a `NAME=value` word.
+fn assigned(word: &str) -> Option<(String, String)> {
     let (name, value) = word.split_once('=')?;
     let mut chars = name.chars();
     let identifier = chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    identifier.then(|| value.to_string())
+    identifier.then(|| (name.to_string(), value.to_string()))
 }
 
 /// What one simple command is.
@@ -357,20 +414,30 @@ enum Found {
 }
 
 fn find(command: &str, depth: usize) -> Option<InstallRun> {
+    match read(command, depth) {
+        Found::Run(run) => Some(run),
+        Found::Unresolved => raw_run(command),
+        Found::Nothing => None,
+    }
+}
+
+/// What `command` is, read as a command line: a run, a command this reader
+/// cannot resolve, whose text is then judged raw, or nothing.
+fn read(command: &str, depth: usize) -> Found {
     if depth > 4 {
-        return raw_run(command);
+        return Found::Unresolved;
     }
     let mut unresolved = command.contains("<<<");
-    // Values assigned on the line, read once a later command can read them.
-    let mut pending: Vec<String> = Vec::new();
+    // Assignments on the line, read once a later command can read them.
+    let mut pending: Vec<(String, String)> = Vec::new();
     for command in simple(command) {
         let Some(program) = command.argv.first() else {
             pending.extend(command.values);
             continue;
         };
-        for value in &command.values {
+        for (_, value) in &command.values {
             if let Some(run) = in_value(value, depth) {
-                return Some(run);
+                return Found::Run(run);
             }
         }
         let name = basename(program);
@@ -378,23 +445,37 @@ fn find(command: &str, depth: usize) -> Option<InstallRun> {
             pending.extend(command.argv[1..].iter().filter_map(|word| assigned(word)));
             continue;
         }
-        if !DATA_PROGRAMS.contains(&name.as_str()) {
-            for value in pending.drain(..) {
+        if DATA_PROGRAMS.contains(&name.as_str()) {
+            // Only the variables this program runs as a command.
+            let runs = COMMAND_VARIABLES
+                .iter()
+                .find(|(data, _)| *data == name)
+                .map_or(&[][..], |(_, names)| *names);
+            for (_, value) in pending
+                .iter()
+                .filter(|(var, _)| runs.contains(&var.as_str()))
+            {
+                if let Some(run) = in_value(value, depth) {
+                    return Found::Run(run);
+                }
+            }
+        } else {
+            for (_, value) in pending.drain(..) {
                 if let Some(run) = in_value(&value, depth) {
-                    return Some(run);
+                    return Found::Run(run);
                 }
             }
         }
         match classify(&command.argv, &command.literal, depth) {
-            Found::Run(run) => return Some(run),
+            Found::Run(run) => return Found::Run(run),
             Found::Unresolved => unresolved = true,
             Found::Nothing => {}
         }
     }
     if unresolved {
-        raw_run(command)
+        Found::Unresolved
     } else {
-        None
+        Found::Nothing
     }
 }
 
@@ -426,7 +507,12 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
     let written = |at: usize| literal.get(at).copied().unwrap_or(false) && !unresolved(&argv[at]);
     let name = basename(program);
     if DATA_PROGRAMS.contains(&name.as_str()) {
-        return runs_through_option(argv, &written);
+        return runs_through_option(argv, &written, depth);
+    }
+    if EDITORS.contains(&name.as_str()) {
+        if let Some(run) = editor_command(argv) {
+            return Found::Run(run);
+        }
     }
     if name == BINARY
         && written(0)
@@ -502,37 +588,157 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
     found
 }
 
-/// A search program run with an option that runs a program: refused when
-/// the option's value names the binary or cannot be read, and otherwise
-/// judged no further.
-fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool) -> Found {
+/// A search program run with an option that runs a program
+/// ([`RUNS_THROUGH_OPTION`]): the option's value is judged as the program
+/// runs it, and refused when the shell expands it. A value this reader
+/// cannot resolve, or one a shell reading its input runs, leaves the line
+/// judged on its raw text. The program's other words are data.
+fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool, depth: usize) -> Found {
+    let mut found = Found::Nothing;
     for (at, word) in argv.iter().enumerate().skip(1) {
-        let Some(option) = RUNS_THROUGH_OPTION
-            .iter()
-            .find(|option| word == *option || word.starts_with(&format!("{option}=")))
-        else {
+        let Some(name) = word.strip_prefix("--") else {
             continue;
         };
-        let (value, value_at) = match word.strip_prefix(&format!("{option}=")) {
-            Some(value) => (value, at),
-            None => match argv.get(at + 1) {
-                Some(value) => (value.as_str(), at + 1),
-                None => continue,
-            },
+        let (name, attached) = match name.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (name, None),
         };
-        let first = value
-            .split(shell_blank)
-            .find(|part| !part.is_empty())
-            .unwrap_or(value);
-        if !written(value_at) || basename(first) == BINARY {
-            return Found::Run(InstallRun {
-                form: "codeflow with a supplied verb",
-                parsed: true,
-                in_argument: false,
-            });
+        if name.is_empty() {
+            continue;
+        }
+        for &(option, runs) in RUNS_THROUGH_OPTION {
+            if !option[2..].starts_with(name) {
+                continue;
+            }
+            let (value, value_at) = match (attached, argv.get(at + 1)) {
+                (Some(value), _) => (value, at),
+                (None, Some(value)) => (value.as_str(), at + 1),
+                (None, None) => continue,
+            };
+            if !written(value_at) {
+                return Found::Run(InstallRun {
+                    form: "codeflow with a supplied verb",
+                    parsed: true,
+                    in_argument: false,
+                });
+            }
+            let judged = match runs {
+                OptionValue::CommandLine => command_line_value(value, depth),
+                OptionValue::ProgramPath => {
+                    program_path_value(value, argv, value_at + 1, written, depth)
+                }
+            };
+            match judged {
+                Found::Run(run) => return Found::Run(run),
+                Found::Unresolved => found = Found::Unresolved,
+                Found::Nothing => {}
+            }
         }
     }
-    Found::Nothing
+    found
+}
+
+/// A command line an option's value holds, read with the recursive
+/// reader. A value whose quotes are left open, or whose command this
+/// reader cannot resolve (a shell reading its input, which for a pager is
+/// the program's output), is unresolved.
+fn command_line_value(value: &str, depth: usize) -> Found {
+    if let Some(run) = in_value(value, depth) {
+        return Found::Run(run);
+    }
+    if quotes_open(value) || matches!(read(value, depth + 1), Found::Unresolved) {
+        Found::Unresolved
+    } else {
+        Found::Nothing
+    }
+}
+
+/// A program path an option's value names, run with each word of `argv`
+/// from `from` on that is not an option as its argument and the searched
+/// file on its input, so a supplier there adds words of its own. A value
+/// naming the binary refuses whatever it is given. A value holding a blank
+/// names no program the search program can find, so it is also read as a
+/// command line, which fails closed.
+fn program_path_value(
+    value: &str,
+    argv: &[String],
+    from: usize,
+    written: &dyn Fn(usize) -> bool,
+    depth: usize,
+) -> Found {
+    let first = value
+        .split(shell_blank)
+        .find(|part| !part.is_empty())
+        .unwrap_or(value);
+    if basename(first) == BINARY {
+        return Found::Run(InstallRun {
+            form: "codeflow with a supplied verb",
+            parsed: true,
+            in_argument: false,
+        });
+    }
+    let mut found = if value.contains(shell_blank) {
+        command_line_value(value, depth)
+    } else {
+        Found::Nothing
+    };
+    if matches!(found, Found::Run(_)) {
+        return found;
+    }
+    for (at, operand) in argv.iter().enumerate().skip(from) {
+        if operand.starts_with('-') || operand.contains(shell_blank) {
+            continue;
+        }
+        let words = [value.to_string(), operand.clone()];
+        let marks = [true, written(at)];
+        match classify(&words, &marks, depth + 1) {
+            Found::Run(run) => return Found::Run(run),
+            Found::Unresolved => found = Found::Unresolved,
+            Found::Nothing => {}
+        }
+    }
+    found
+}
+
+/// Whether `text` ends inside a quote or after a lone backslash, so a shell
+/// could not read it as a command line.
+fn quotes_open(text: &str) -> bool {
+    let mut quote = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => {
+                if chars.next().is_none() {
+                    return true;
+                }
+            }
+            (None, '\'' | '"') => quote = Some(c),
+            _ => {}
+        }
+    }
+    quote.is_some()
+}
+
+/// A command in an editor's own language ([`EDITORS`]) that names the
+/// binary with a verb: an [`EDITOR_COMMAND_OPTIONS`] value, attached after
+/// `=` or as the next word, or a `+` word, judged on its raw text.
+fn editor_command(argv: &[String]) -> Option<InstallRun> {
+    argv.iter().enumerate().skip(1).find_map(|(at, word)| {
+        let command =
+            if word.starts_with('+') || EDITOR_COMMAND_OPTIONS.contains(&argv[at - 1].as_str()) {
+                Some(word.as_str())
+            } else {
+                word.split_once('=')
+                    .filter(|(option, _)| EDITOR_COMMAND_OPTIONS.contains(option))
+                    .map(|(_, value)| value)
+            };
+        command.and_then(raw_run).map(|run| InstallRun {
+            in_argument: true,
+            ..run
+        })
+    })
 }
 
 /// The name a program word runs as: its base name, with zsh's leading `=`
