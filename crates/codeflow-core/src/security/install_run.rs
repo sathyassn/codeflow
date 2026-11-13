@@ -36,6 +36,10 @@
 //! variable assigned before a program that runs it, or earlier on the
 //! line, is judged the same way; where that command cannot be resolved,
 //! such as a shell reading its input, the line is judged on its raw text.
+//! An assignment stays live for the rest of the line until `unset` or a new
+//! value, and any later program that can start another one (a shell, a
+//! Git alias, `find -exec`) judges every such variable, since the program
+//! it starts inherits them.
 //! The words `gh repo clone`, `gh repo fork` and `gh gist clone` pass to
 //! `git` after `--` are read as quoted arguments are. An editor's own
 //! command (`vim -c`, `emacs
@@ -80,6 +84,12 @@ const PRINTS_ONLY: &[&[&str]] = &[
 const DATA_PROGRAMS: &[&str] = &[
     "[", "ack", "ag", "cat", "echo", "gh", "git", "grep", "head", "jq", "ls", "printf", "rg",
     "tail", "test", "type", "wc", "which",
+];
+
+/// The data programs that start no other program, so no command variable
+/// they inherit runs.
+const STARTS_NO_PROGRAM: &[&str] = &[
+    "[", "cat", "echo", "grep", "head", "jq", "ls", "printf", "tail", "test", "type", "wc", "which",
 ];
 
 /// How a search program runs the value of an option that runs a program.
@@ -442,11 +452,20 @@ fn read(command: &str, depth: usize) -> Found {
         return Found::Unresolved;
     }
     let mut unresolved = command.contains("<<<");
-    // Assignments on the line, read once a later command can read them.
+    // Assignments on the line, live for every later command until `unset`
+    // or a new value: no separator, subshell or function body ends them
+    // here, which can only judge more. Each later program that can read
+    // one judges it.
     let mut pending: Vec<(String, String)> = Vec::new();
+    let set = |pending: &mut Vec<(String, String)>, values: Vec<(String, String)>| {
+        for (variable, value) in values {
+            pending.retain(|(name, _)| *name != variable);
+            pending.push((variable, value));
+        }
+    };
     for command in simple(command) {
         let Some(program) = command.argv.first() else {
-            pending.extend(command.values);
+            set(&mut pending, command.values);
             continue;
         };
         let name = basename(program);
@@ -465,24 +484,29 @@ fn read(command: &str, depth: usize) -> Found {
             }
         }
         if DECLARES.contains(&name.as_str()) {
-            pending.extend(command.argv[1..].iter().filter_map(|word| assigned(word)));
+            let values = command.argv[1..]
+                .iter()
+                .filter_map(|word| assigned(word))
+                .collect();
+            set(&mut pending, values);
             continue;
         }
-        if DATA_PROGRAMS.contains(&name.as_str()) {
-            // Only the variables this program runs as a command.
-            for (variable, value) in pending
-                .iter()
-                .filter(|(variable, _)| runs_variable(&name, variable))
-            {
-                if let Some(run) = judge(variable, value) {
-                    return Found::Run(run);
-                }
+        if name == "unset" {
+            // `unset -f` removes functions; any other form removes variables.
+            if !command.argv[1..].iter().any(|word| word == "-f") {
+                pending.retain(|(variable, _)| !command.argv[1..].contains(variable));
             }
-        } else {
-            for (variable, value) in pending.drain(..) {
-                if let Some(run) = judge(&variable, &value) {
-                    return Found::Run(run);
-                }
+            continue;
+        }
+        // A data program reads only the variables it runs as a command;
+        // any other program may also run any value as a command.
+        let data = DATA_PROGRAMS.contains(&name.as_str());
+        for (variable, value) in pending
+            .iter()
+            .filter(|(variable, _)| !data || runs_variable(&name, variable))
+        {
+            if let Some(run) = judge(variable, value) {
+                return Found::Run(run);
             }
         }
         match classify(&command.argv, &command.literal, depth) {
@@ -498,19 +522,19 @@ fn read(command: &str, depth: usize) -> Found {
     }
 }
 
-/// Whether `program` runs the value of `variable` as a command: a data
-/// program's own variables ([`COMMAND_VARIABLES`]), and for any other
-/// program the pager, editor and other command variables the startup check
-/// lists.
+/// Whether `program`, or a program it starts with its environment, may run
+/// the value of `variable` as a command. A data program that starts no
+/// program runs none. Any other program may start one that reads any
+/// command variable: a search program's pager, a Git alias or runner, a
+/// gh extension, a shell, `find -exec` or `xargs`. So every command
+/// variable a data program lists ([`COMMAND_VARIABLES`]) or the startup
+/// check lists counts for it.
 fn runs_variable(program: &str, variable: &str) -> bool {
-    if DATA_PROGRAMS.contains(&program) {
-        COMMAND_VARIABLES
-            .iter()
-            .find(|(data, _)| *data == program)
-            .is_some_and(|(_, names)| names.contains(&variable))
-    } else {
-        super::startup::COMMAND_VARIABLES.contains(&variable)
-    }
+    !STARTS_NO_PROGRAM.contains(&program)
+        && (super::startup::COMMAND_VARIABLES.contains(&variable)
+            || COMMAND_VARIABLES
+                .iter()
+                .any(|(_, names)| names.contains(&variable)))
 }
 
 /// An assignment's value, for the command `program` that may read it. A
@@ -1333,7 +1357,10 @@ mod tests {
                 ][..],
                 "gh search issues 'codeflow update'",
             ),
-            (&["GIT_PAGER", "PAGER"][..], "git log -1 --format='codeflow update'"),
+            (
+                &["GIT_PAGER", "PAGER"][..],
+                "git log -1 --format='codeflow update'",
+            ),
         ] {
             for variable in assignments {
                 for form in [
