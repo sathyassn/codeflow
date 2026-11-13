@@ -640,6 +640,10 @@ fn the_install_check_fires_through_a_git_runner() {
     let rows: Vec<String> = [
         "git -c core.pager='codeflow update' log -1",
         "git -c core.pager='./target/debug/codeflow init --yes' log -1",
+        // A shell reading its input as the program Git runs: the line is
+        // judged on its raw text.
+        "git -c core.pager=sh log -1 --format='codeflow update'",
+        "git -c core.pager='bash -s' log -1 --format='codeflow init --yes'",
     ]
     .iter()
     .map(ToString::to_string)
@@ -648,6 +652,14 @@ fn the_install_check_fires_through_a_git_runner() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
+    let controls: Vec<String> = [
+        "git -c core.pager=less log -1 --format='codeflow update'",
+        "git -c core.pager=sh log -1",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&controls, &root);
     // A shell alias was refused before the install check by the rule for
     // Git runners the guard cannot read, and still is.
     let alias = "git -c alias.u='!./target/debug/codeflow update' u";
