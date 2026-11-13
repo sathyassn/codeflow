@@ -734,6 +734,49 @@ fn the_install_check_fires_through_a_git_runner() {
     tally.finish();
 }
 
+/// AC-1 through a program handed output or a file to read: a Git pager,
+/// editor, sequence editor, text converter or `grep -O` program, and a
+/// pager or editor variable, is admitted only as a viewer with options on
+/// its own list; any other program judges the line on its raw text.
+#[test]
+fn programs_handed_output_refuse_outside_their_viewer_options() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "git -c core.pager=perl log -1 --format='system(\"codeflow update\");'",
+        "git -c pager.log=python3 log -1 --format='codeflow update'",
+        "git -c core.editor=ruby commit --allow-empty -e -m 'codeflow update'",
+        "git -c core.editor='awk -f /dev/stdin' commit --allow-empty -e -m 'codeflow update'",
+        "git -c sequence.editor=node rebase -i -x 'echo codeflow update' HEAD~1",
+        "git -c core.pager='emacs --script /dev/stdin' log -1 --format='codeflow update'",
+        "git -c core.pager='less -k keys' log -1 --format='codeflow update'",
+        "git grep -Operl 'codeflow update'",
+        "git -c diff.x.textconv=perl log -p -1 --grep='codeflow update'",
+        "ACK_PAGER='emacs --script /dev/stdin' ack -h 'codeflow update' notes.txt",
+        "GH_PAGER='vim -S keys.vim' gh search issues 'codeflow update'",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let controls: Vec<String> = [
+        "git -c core.pager='less -R' log -1 --format='codeflow update'",
+        "git -c core.pager='less -FRX' log --grep='codeflow update'",
+        "git -c core.editor=vim commit --allow-empty -e -m 'docs: codeflow update notes'",
+        "GIT_EDITOR='code --wait' git commit --allow-empty -e -m 'docs: codeflow update notes'",
+        "git -c sequence.editor=true rebase -i -x 'echo codeflow update' HEAD~1",
+        "GH_PAGER='less -R' gh search issues 'codeflow update'",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&controls, &root);
+    tally.finish();
+}
+
 /// AC-6: words that only name the verbs as data stay allowed: the binary's
 /// own verbs that record free text, test operands, other cargo
 /// subcommands, an assigned value no command on the line reads, a folder

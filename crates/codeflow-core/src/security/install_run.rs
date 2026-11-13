@@ -2966,6 +2966,57 @@ mod tests {
         }
     }
 
+    /// A program handed output or a file to read is admitted only as a
+    /// viewer with options on that viewer's own list and no operand but
+    /// `-`. Any other option or operand, a viewer whose ways of running
+    /// code are not listed, or a variable that makes an admitted viewer run
+    /// a program judges the line on its raw text.
+    #[test]
+    fn viewers_are_admitted_only_with_their_listed_options() {
+        for command in [
+            "export ACK_PAGER='emacs --script /dev/stdin'; ack -h 'codeflow update' notes.txt",
+            "ACK_PAGER='emacs -l /dev/stdin' ack -h 'codeflow update' notes.txt",
+            "ACK_PAGER=emacs ack -h 'codeflow update' notes.txt",
+            "ACK_PAGER='vim -S /dev/stdin' ack 'codeflow update' notes.txt",
+            "ACK_PAGER='vim -es' ack 'codeflow update' notes.txt",
+            "ACK_PAGER='nvim -u /dev/stdin' ack 'codeflow update' notes.txt",
+            "ACK_PAGER='vi -s /dev/stdin' ack 'codeflow update' notes.txt",
+            "ack --pager='emacs --script /dev/stdin' 'codeflow update' notes.txt",
+            "ag --pager 'vim -s /dev/stdin' 'codeflow update' notes.txt",
+            "GH_PAGER='less -k keys' gh search issues 'codeflow update'",
+            "GH_PAGER='less notes.txt' gh search issues 'codeflow update'",
+            "GH_PAGER='bat --pager perl' gh search issues 'codeflow update'",
+            "GH_PAGER=delta gh search issues 'codeflow update'",
+            "GH_EDITOR='kak -e nop' gh search issues 'codeflow update'",
+            "GH_EDITOR='emacsclient -a perl' gh search issues 'codeflow update'",
+            "BROWSER='lynx -cmd_script=/dev/stdin' gh search issues 'codeflow update'",
+            "BROWSER='open -a Terminal' gh search issues 'codeflow update'",
+            "LESSOPEN='|perl %s' gh search issues 'codeflow update'",
+            "BAT_PAGER=perl gh search issues 'codeflow update'",
+            "VIMINIT='so /dev/stdin' gh search issues 'codeflow update'",
+            "rg --pre='less -k keys' 'codeflow update' notes.txt",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "export ACK_PAGER='less -R'; ack 'codeflow update' notes.txt",
+            "GH_PAGER='less -FRX' gh search issues 'codeflow update'",
+            "GH_PAGER='less --tabs=4 -RFX' gh search issues 'codeflow update'",
+            "GH_PAGER='diff-so-fancy | less -R' gh search issues 'codeflow update'",
+            "GH_PAGER='bat -p --paging=always' gh search issues 'codeflow update'",
+            "GH_PAGER='' gh search issues 'codeflow update'",
+            "GH_EDITOR=vim gh search issues 'codeflow update'",
+            "GH_EDITOR='vim -R -' gh search issues 'codeflow update'",
+            "GH_EDITOR='code --wait' gh search issues 'codeflow update'",
+            "GH_EDITOR='subl -w' gh search issues 'codeflow update'",
+            "BROWSER=firefox gh search issues 'codeflow update'",
+            "ag --pager='less -R' 'codeflow update' docs",
+            "rg --pre=pdftotext 'codeflow update' docs",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// A program another program runs, such as a Git pager setting, is
     /// unresolved when it is a shell reading its input.
     #[test]
