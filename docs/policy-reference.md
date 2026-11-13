@@ -1344,8 +1344,13 @@ closed forms:
   short forms that push the current branch to its own name.
 
 The repository must have one remote, `origin`, with one URL that no rewrite
-changes, no plain `http://` or remote-helper URL, no push, mirror or
-submodule setting that widens the call, and no `.gitmodules`. A pushed name
+changes, no push, mirror or submodule setting that widens the call, and no
+`.gitmodules`. The URL must use a transport whose programs the guard
+accounts for: `https://`, served by the HTTPS helper Git ships, or a local
+absolute path. Any other URL keeps the finding, because Git starts a
+program named after its scheme (`ssh` for SSH, a remote helper for any
+other scheme, including `HTTPS://` spelled in capitals), and plain `http://`
+would send the token in the clear. A pushed name
 must sit under a `git.branch_prefixes` entry of the landed policy, and must
 not be protected, `origin`'s default branch, an integration line, a release
 branch (`git.release_branch_pattern`), the ID registry, `main` or `master`.
@@ -1382,6 +1387,9 @@ The guards also refuse:
   matching refspec `:`);
 - a push whose destination they do not read (`git send-pack`,
   `git http-push`, `git subtree push`, a remote helper run by hand);
+- a push into another repository (`git -C <path> push`) whose branch or
+  landed policy they cannot read, explicit refspecs included, since their
+  own policy does not hold that repository's default branch or list;
 - a push that leaves its destination to configuration they cannot read as
   the source's own name: `push.default` other than `simple` or `current`, a
   `remote.<name>.push` mapping, a configuration change earlier on the line,
