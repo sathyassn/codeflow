@@ -1,0 +1,11 @@
+id = "TSK-1486"
+uid = "703d7d36-2304-4c70-a1ca-a7c3189379c4"
+kind = "TSK"
+title = "A gate's wait also covers an older binary's gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-13T00:07:39Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
