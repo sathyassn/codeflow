@@ -643,7 +643,7 @@ fn command_variable(variable: &str) -> bool {
 
 /// Builtins that write the variable a word names without a `NAME=value`
 /// word (`printf` only with `-v`).
-const WRITES_NAMES: &[&str] = &["getopts", "mapfile", "printf", "read", "readarray"];
+const WRITES_NAMES: &[&str] = &["getopts", "mapfile", "printf", "read", "readarray", "wait"];
 
 /// What one simple command does to the variables this reader tracks
 /// beyond its `NAME=value` words.
@@ -690,35 +690,43 @@ fn untracked(words: &[String]) -> Untracked {
     } else {
         Vec::new()
     };
-    let writes_names = declares
-        || (WRITES_NAMES.contains(&program.as_str())
-            && (program != "printf" || args.iter().any(|word| word.starts_with("-v"))));
+    let builtin_writes = WRITES_NAMES.contains(&program.as_str())
+        && (program != "printf" || args.iter().any(|word| word.starts_with("-v")));
     let mut unseen = (declares
         && program != "export"
         && options
             .iter()
             .any(|option| option.starts_with('-') && option.contains('n')))
-        || (writes_names
+        || ((declares || builtin_writes)
             && args
                 .iter()
                 .any(|word| word.contains('$') || word.contains('`')));
-    for word in words {
-        unseen |= COMMAND_VARIABLES
+    let names = || {
+        COMMAND_VARIABLES
             .iter()
             .flat_map(|(_, names)| names.iter())
             .chain(super::startup::COMMAND_VARIABLES)
-            .any(|name| {
-                word.starts_with(&format!("{name}+="))
-                    || word.contains(&format!("{{{name}:="))
-                    || word.contains(&format!("{{{name}="))
-                    || (!declares
-                        && program != "unset"
-                        && (word == name
-                            || (word.starts_with('-')
-                                && word.len() > name.len()
-                                && word.ends_with(name))))
-            });
+    };
+    for word in words {
+        unseen |= names().any(|name| {
+            word.starts_with(&format!("{name}+="))
+                || word.contains(&format!("{{{name}:="))
+                || word.contains(&format!("{{{name}="))
+        });
     }
+    // A name the builtin writes, given alone or attached (`-vNAME`), the
+    // loop variable of `for` or `select`, and a name left in program
+    // position once the loop words are stripped.
+    let gives = |word: &String, name: &str| {
+        word == name || (word.starts_with('-') && word.len() > name.len() && word.ends_with(name))
+    };
+    unseen |= names().any(|name| {
+        (builtin_writes && args.iter().any(|word| gives(word, name)))
+            || program == *name
+            || words
+                .windows(2)
+                .any(|pair| matches!(pair[0].as_str(), "for" | "select") && pair[1] == *name)
+    });
     Untracked { unseen, read_only }
 }
 
@@ -1669,6 +1677,8 @@ mod tests {
                 format!("export {variable}=less; getopts a {variable}; {line}"),
                 format!("export {variable}=less; mapfile -t {variable} < pager.txt; {line}"),
                 format!("export {variable}=less; for {variable} in sh; do {line}; done"),
+                format!("export {variable}=less; select {variable} in sh; do {line}; done"),
+                format!("export {variable}=less; sleep 1 & wait -n -p {variable}; {line}"),
             ] {
                 assert!(runs(&form), "{form}");
             }
@@ -1678,6 +1688,9 @@ mod tests {
             "export ACK_PAGER=less; echo \"$ACK_PAGER\"; ack 'codeflow update' docs",
             "export GH_PAGER=less; read answer < notes.txt; gh search issues 'codeflow update'",
             "export ACK_PAGER; ack 'codeflow update' docs",
+            "env -u GH_PAGER gh search issues 'codeflow update'",
+            "echo GH_PAGER; gh search issues 'codeflow update'",
+            "printf '%s' GH_PAGER; gh search issues 'codeflow update'",
         ] {
             assert!(!runs(command), "{command}");
         }
