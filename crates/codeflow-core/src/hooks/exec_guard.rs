@@ -432,13 +432,15 @@ pub(crate) fn install_violation(
             if unsettled { "possible " } else { "" },
             run.form,
             if unsettled {
-                " (the line is outside the forms the guard reads as data, and a `printf`, \
-                 `echo`, `print` or `$'...'` word on it holds an escape, a conversion other \
-                 than a bare `%s`, a width, precision or flag, an expansion `echo` may decode, \
-                 a value the line sets that the guard cannot resolve exactly, or more \
-                 arguments than conversions, so the guard cannot tell whether what it \
-                 writes names the binary with an install verb; write the text literally, as \
-                 `printf '%s\\n' words` or `echo words`, or write the file with the file editor)"
+                " (the line hands text it produces to a shell or interpreter on the line, \
+                 through a pipe, a here-string, a here-document it expands, a process \
+                 substitution, `eval`, a `-c` or `-e` value it expands, a command word it \
+                 fills in or a supplier such as `xargs` running a command, and that text is \
+                 not one `printf`, `echo` or `print` of plain literal text, a literal \
+                 here-string or here-document, or a plain file the line does not otherwise \
+                 name, so the guard \
+                 cannot tell whether it runs the binary with an install verb; write the \
+                 commands literally, or put them in a file and run that file)"
             } else if !run.parsed {
                 " (the line is outside the forms the guard reads as data and its text names \
                  the binary with an install verb; give such text to `echo`, `printf '%s'`, \

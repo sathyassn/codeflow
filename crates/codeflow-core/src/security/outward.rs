@@ -3657,12 +3657,16 @@ pub(crate) fn here_string(segment: &str) -> Option<String> {
 
 /// Whether this program takes its executable code from stdin.
 pub(crate) fn reads_stdin_code(command: &str) -> bool {
-    let words = command_argv(command);
-    let Some((program, args)) = strip_launchers(&words) else {
+    reads_stdin_code_words(&command_argv(command))
+}
+
+/// [`reads_stdin_code`] on a command's words.
+pub(crate) fn reads_stdin_code_words(words: &[String]) -> bool {
+    let Some((program, args)) = strip_launchers(words) else {
         return false;
     };
     let name = program.rsplit('/').next().unwrap_or(program);
-    crate::hooks::git_guard::reads_shell_stdin(&words)
+    crate::hooks::git_guard::reads_shell_stdin(words)
         || interpreter_family(name)
             .is_some_and(|family| family_program(family, args) == Program::Stdin)
 }

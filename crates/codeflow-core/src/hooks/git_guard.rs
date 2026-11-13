@@ -7577,7 +7577,7 @@ pub(crate) fn reads_shell_stdin(words: &[String]) -> bool {
 
 /// The command texts a simple command carries: env -S, shell -c, eval,
 /// launcher strings, runner bodies, and commands supplied to xargs or find.
-fn carried_commands(toks: &[String]) -> Vec<String> {
+pub(crate) fn carried_commands(toks: &[String]) -> Vec<String> {
     let mut words = toks.to_vec();
     strip_reserved_words(&mut words);
     let toks = words.as_slice();
@@ -13817,6 +13817,20 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
         .map(|word| {
             let literal = word.literal();
             (word.text, literal)
+        })
+        .unzip()
+}
+
+/// The same argument vector with, for each word, whether the shell fills
+/// in part of it when the command runs: a `$` or a backtick outside single
+/// quotes and not escaped, or a substitution the segmenter lifted out
+/// (TSK-1476).
+pub(crate) fn command_argv_expanding(segment: &str) -> (Vec<String>, Vec<bool>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| {
+            let filled = word.expands || word.text.contains(['\u{1}', '\u{2}']);
+            (word.text, filled)
         })
         .unzip()
 }

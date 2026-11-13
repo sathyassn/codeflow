@@ -311,15 +311,322 @@ pub(crate) fn composed_texts(line: &str) -> Vec<Composed> {
     found
 }
 
-/// What each `printf`, `echo` and `print` on the line writes, read as
-/// `dialect` reads it, in the order the line runs them, at every depth,
-/// with whether the output is claimed exact (TSK-1476).
-pub(crate) fn outputs(line: &str, dialect: Dialect) -> Vec<(Composed, bool)> {
-    texts(line, dialect)
-        .into_iter()
-        .filter(|event| event.output)
-        .map(|event| (event.value, event.exact))
+/// One word of a simple command, as the install reader reads it
+/// (TSK-1476).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Spelt {
+    /// Text the shell passes exactly as written.
+    Plain(String),
+    /// A word that is one command substitution, with its body.
+    Output(String),
+    /// A process substitution, with its body.
+    Process(String),
+    /// Any other word the shell fills in, as written.
+    Open(String),
+}
+
+/// Where a redirection takes its text from, or writes it to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Source {
+    /// A literal here-string, or a here-document the shell does not expand.
+    Text(String),
+    /// A plain literal path.
+    Path(String),
+    /// A process substitution, with its body.
+    Process(String),
+    /// Anything else: a target the shell fills in, a descriptor copy, or a
+    /// here-document the shell expands.
+    Open,
+}
+
+/// One redirection of a simple command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Redirect {
+    /// The descriptor it sets.
+    pub(crate) fd: u32,
+    /// Whether the command reads from it.
+    pub(crate) input: bool,
+    /// What it reads or writes.
+    pub(crate) source: Source,
+}
+
+/// One simple command of a line, as the install reader reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Simple {
+    /// Its words, in order.
+    pub(crate) words: Vec<Spelt>,
+    /// Its words as written, joined by a blank.
+    pub(crate) raw: String,
+    /// Whether `|` hands the previous command's output to this one.
+    pub(crate) piped: bool,
+    /// Its redirections, in order.
+    pub(crate) redirects: Vec<Redirect>,
+}
+
+/// The simple commands `line` is made of, when it is a list of them joined
+/// by `|`, `;`, `&&`, `||` or a newline. `None` for anything else: grammar
+/// the composer does not read, a background job, a group, a subshell, a
+/// loop, a conditional, a function or an array (TSK-1476).
+pub(crate) fn simple_commands(line: &str) -> Option<Vec<Simple>> {
+    const COMPOUND: &[&str] = &[
+        "{", "}", "!", "for", "while", "until", "if", "then", "elif", "else", "fi", "do", "done",
+        "case", "esac", "select", "function", "coproc", "repeat", "foreach", "[[", "time",
+    ];
+    let (tokens, docs) = lex(line).ok()?;
+    let mut commands = Vec::new();
+    let mut current = Simple {
+        words: Vec::new(),
+        raw: String::new(),
+        piped: false,
+        redirects: Vec::new(),
+    };
+    let mut raw = Vec::new();
+    for tok in &tokens {
+        match tok {
+            Tok::Word(word) => {
+                if current.words.is_empty() && COMPOUND.contains(&word.raw.as_str()) {
+                    return None;
+                }
+                raw.push(word.raw.clone());
+                current.words.push(spelt(word));
+            }
+            Tok::Redir {
+                op,
+                target,
+                heredoc,
+            } => current
+                .redirects
+                .push(redirect(op, target.as_ref(), *heredoc, &docs)?),
+            Tok::Op(op @ ("|" | ";" | "&&" | "||" | "\n")) => {
+                if !current.words.is_empty() || !current.redirects.is_empty() {
+                    current.raw = std::mem::take(&mut raw).join(" ");
+                    let piped = *op == "|";
+                    commands.push(std::mem::replace(
+                        &mut current,
+                        Simple {
+                            words: Vec::new(),
+                            raw: String::new(),
+                            piped,
+                            redirects: Vec::new(),
+                        },
+                    ));
+                } else if *op == "|" {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    if !current.words.is_empty() || !current.redirects.is_empty() {
+        current.raw = raw.join(" ");
+        commands.push(current);
+    } else if current.piped {
+        return None;
+    }
+    Some(commands)
+}
+
+/// How the install reader reads one word.
+fn spelt(word: &Word) -> Spelt {
+    match word.parts.as_slice() {
+        [Part::Subst { body, .. }] => return Spelt::Output(body.clone()),
+        [Part::ProcSubst(body)] => return Spelt::Process(body.clone()),
+        _ => {}
+    }
+    let mut text = String::new();
+    for (at, part) in word.parts.iter().enumerate() {
+        match part {
+            Part::Lit { text: lit, quoted } => {
+                let expands = lit.contains(['*', '?', '[', ']', '{', '}', '~'])
+                    || (at == 0 && lit.starts_with('='));
+                if !quoted && expands {
+                    return Spelt::Open(word.raw.clone());
+                }
+                text.push_str(lit);
+            }
+            Part::Ansi(body) if !body.contains('\\') => text.push_str(body),
+            _ => return Spelt::Open(word.raw.clone()),
+        }
+    }
+    Spelt::Plain(text)
+}
+
+/// How the install reader reads one redirection; `None` when its heredoc
+/// is missing.
+fn redirect(
+    op: &str,
+    target: Option<&Word>,
+    heredoc: Option<usize>,
+    docs: &[Heredoc],
+) -> Option<Redirect> {
+    let digits = op.bytes().take_while(u8::is_ascii_digit).count();
+    let (fd, op) = op.split_at(digits);
+    let input = op.starts_with('<');
+    let fd = if fd.is_empty() {
+        u32::from(!input)
+    } else {
+        fd.parse().unwrap_or(u32::MAX)
+    };
+    let source = if let Some(index) = heredoc {
+        let doc = docs.get(index)?;
+        match body_text(&doc.body) {
+            Some(text) => Source::Text(text),
+            None if doc.quoted => Source::Text(doc.body.raw.clone()),
+            None => Source::Open,
+        }
+    } else {
+        match target.map(spelt) {
+            Some(Spelt::Process(body)) => Source::Process(body),
+            Some(Spelt::Plain(text)) if op == "<<<" => Source::Text(text),
+            Some(Spelt::Plain(text))
+                if matches!(op, "<" | "<>" | ">" | ">>" | ">|" | "&>" | "&>>")
+                    && !crate::hooks::git_guard::expands(&text) =>
+            {
+                Source::Path(text)
+            }
+            _ => Source::Open,
+        }
+    };
+    Some(Redirect { fd, input, source })
+}
+
+/// The commands on `line`, at every depth, that take a here-document the
+/// shell expands (an unquoted delimiter and a body with an expansion), as
+/// their words are written; `None` when the line, or text nested in it, is
+/// outside the shell grammar the composer reads (TSK-1476).
+pub(crate) fn expanding_heredoc_readers(line: &str) -> Option<Vec<String>> {
+    let mut found = Vec::new();
+    heredoc_readers(line, 0, &mut found)?;
+    Some(found)
+}
+
+fn heredoc_readers(line: &str, depth: usize, found: &mut Vec<String>) -> Option<()> {
+    if depth > 8 {
+        return None;
+    }
+    let (tokens, docs) = lex(line).ok()?;
+    let mut nested = Vec::new();
+    let mut substitutions = |word: &Word| {
+        for part in &word.parts {
+            if let Part::Subst { body, .. } | Part::ProcSubst(body) = part {
+                nested.push(body.clone());
+            }
+        }
+    };
+    let mut words = Vec::new();
+    let mut expanding = false;
+    for (at, tok) in tokens.iter().enumerate() {
+        match tok {
+            Tok::Word(word) => {
+                substitutions(word);
+                words.push(word.raw.clone());
+            }
+            Tok::Redir {
+                heredoc: Some(index),
+                ..
+            } => {
+                let doc = docs.get(*index)?;
+                substitutions(&doc.body);
+                expanding |= !doc.quoted && body_text(&doc.body).is_none();
+            }
+            Tok::Redir {
+                target: Some(word), ..
+            } => substitutions(word),
+            _ => {}
+        }
+        let ends = matches!(tok, Tok::Op(_)) || at + 1 == tokens.len();
+        if ends {
+            if std::mem::take(&mut expanding) {
+                found.push(words.join(" "));
+            }
+            words.clear();
+        }
+    }
+    for body in nested {
+        heredoc_readers(&body, depth + 1, found)?;
+    }
+    Some(())
+}
+
+/// The text of `word` when the shell passes it exactly as written: only
+/// literal parts, and no pattern, brace, tilde or leading `=` outside
+/// quotes.
+fn literal_text(word: &Word) -> Option<String> {
+    let mut text = String::new();
+    for (at, part) in word.parts.iter().enumerate() {
+        let Part::Lit { text: lit, quoted } = part else {
+            return None;
+        };
+        let expands =
+            lit.contains(['*', '?', '[', ']', '{', '}', '~']) || (at == 0 && lit.starts_with('='));
+        if !quoted && expands {
+            return None;
+        }
+        text.push_str(lit);
+    }
+    Some(text)
+}
+
+/// The text of a here-document body with no expansion in it.
+fn body_text(body: &Word) -> Option<String> {
+    body.parts
+        .iter()
+        .map(|part| match part {
+            Part::Lit { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
         .collect()
+}
+
+/// Where a simple command takes its standard input from, by its last
+/// input redirection (TSK-1476).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Input {
+    /// No input redirection: a pipe, or what the line itself reads.
+    Inherited,
+    /// A file named by plain literal text.
+    File,
+    /// Text written on the line: a literal here-string, or a here-document
+    /// whose body this text does not hold or the shell does not expand.
+    Literal,
+    /// Anything else: a process substitution, a descriptor, a target the
+    /// shell expands, or a command the composer cannot read.
+    Produced,
+}
+
+/// Where `segment`, one simple command, takes its standard input from.
+pub(crate) fn input_of(segment: &str) -> Input {
+    let Ok((tokens, docs)) = lex(segment) else {
+        return Input::Produced;
+    };
+    let plain =
+        |word: &Word| literal_text(word).is_some() && !crate::hooks::git_guard::expands(&word.raw);
+    let mut input = Input::Inherited;
+    for tok in &tokens {
+        let Tok::Redir {
+            op,
+            target,
+            heredoc,
+        } = tok
+        else {
+            continue;
+        };
+        let digits = op.bytes().take_while(u8::is_ascii_digit).count();
+        let (fd, op) = op.split_at(digits);
+        if !fd.bytes().all(|byte| byte == b'0') || !op.starts_with('<') {
+            continue;
+        }
+        input = match (op, target, heredoc) {
+            (_, _, Some(index)) => match docs.get(*index) {
+                Some(doc) if doc.quoted || body_text(&doc.body).is_some() => Input::Literal,
+                _ => Input::Produced,
+            },
+            ("<<<", Some(word), _) if plain(word) => Input::Literal,
+            ("<" | "<>", Some(word), _) if plain(word) => Input::File,
+            _ => Input::Produced,
+        };
+    }
+    input
 }
 
 /// What the last top-level `printf`, `echo` or `print` on the line writes
