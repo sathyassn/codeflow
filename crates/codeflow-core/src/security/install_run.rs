@@ -482,7 +482,10 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
         // A word the shell expands where a program this reader does not
         // know may run it: judged with the words after it on their raw
         // text, as a literal name there would be.
-        if may_run && !in_program_position && !written(at) && raw_run(&argv[at..].join(" ")).is_some()
+        if may_run
+            && !in_program_position
+            && !written(at)
+            && raw_run(&argv[at..].join(" ")).is_some()
         {
             return Found::Run(InstallRun {
                 form: "an expanded word naming the binary with an install verb",

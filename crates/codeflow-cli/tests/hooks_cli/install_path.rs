@@ -848,11 +848,61 @@ fn every_guard_and_hook_message_names_the_operator() {
         catalogued >= 15,
         "the catalogued remedies naming a verb were not found: {catalogued}"
     );
-    // Messages outside the catalogue that tell the reader to run a verb, or
-    // offer it as the way through, in every production source file of the
-    // three crates. A file's test module, from its `mod tests {` line, and
-    // the `_tests.rs` files are test code.
+    // Messages outside the catalogue, in every production source file.
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    unnamed.extend(source_messages_without_the_operator(&workspace));
+    let mut hook_files: Vec<String> = [
+        "assets/base/settings/default.json",
+        "assets/base/settings/acceptEdits.json",
+        "assets/base/settings/bypass-sandboxed.json",
+        "assets/base/codex/hooks.json",
+        "assets/base/grok/hooks.json",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    for shim in [
+        "commit-msg",
+        "pre-commit",
+        "pre-merge-commit",
+        "pre-push",
+        "reference-transaction",
+    ] {
+        hook_files.push(format!("assets/base/git-hooks/{shim}"));
+    }
+    let mut fallbacks = 0;
+    for file in &hook_files {
+        let text = std::fs::read_to_string(workspace.join(file)).unwrap();
+        for line in text
+            .lines()
+            .filter(|line| line.contains("echo") && names_a_verb(line))
+        {
+            fallbacks += 1;
+            if !line.contains("the operator") {
+                unnamed.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        fallbacks >= 25,
+        "the shipped fallback lines were not found: {fallbacks}"
+    );
+    assert!(
+        unnamed.is_empty(),
+        "messages that name an install verb without the operator ({}):\n{}",
+        unnamed.len(),
+        unnamed.join("\n")
+    );
+}
+
+/// The lines of every production source file of the three crates that
+/// tell the reader to run an install verb, or offer it as the way through,
+/// without naming the operator. A file's test module, from its
+/// `mod tests {` line, and the `_tests.rs` files are test code.
+fn source_messages_without_the_operator(workspace: &Path) -> Vec<String> {
+    let names_a_verb =
+        |line: &str| line.contains("codeflow update") || line.contains("codeflow init");
+    let mut found = Vec::new();
     let tells_to_run = |line: &str| {
         [
             "run `codeflow update",
@@ -901,12 +951,15 @@ fn every_guard_and_hook_message_names_the_operator() {
     ];
     let mut sources = Vec::new();
     for krate in ["codeflow-core", "codeflow-cli", "codeflow-present"] {
-        rust_sources(&workspace.join("crates").join(krate).join("src"), &mut sources);
+        rust_sources(
+            &workspace.join("crates").join(krate).join("src"),
+            &mut sources,
+        );
     }
     assert!(sources.len() > 100, "sources found: {}", sources.len());
     for path in &sources {
         let source = path
-            .strip_prefix(&workspace)
+            .strip_prefix(workspace)
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
@@ -920,52 +973,11 @@ fn every_guard_and_hook_message_names_the_operator() {
                     .iter()
                     .any(|(file, phrase)| source.ends_with(file) && line.contains(phrase))
             {
-                unnamed.push(format!("{source}: {}", line.trim()));
+                found.push(format!("{source}: {}", line.trim()));
             }
         }
     }
-    let mut hook_files: Vec<String> = [
-        "assets/base/settings/default.json",
-        "assets/base/settings/acceptEdits.json",
-        "assets/base/settings/bypass-sandboxed.json",
-        "assets/base/codex/hooks.json",
-        "assets/base/grok/hooks.json",
-    ]
-    .iter()
-    .map(ToString::to_string)
-    .collect();
-    for shim in [
-        "commit-msg",
-        "pre-commit",
-        "pre-merge-commit",
-        "pre-push",
-        "reference-transaction",
-    ] {
-        hook_files.push(format!("assets/base/git-hooks/{shim}"));
-    }
-    let mut fallbacks = 0;
-    for file in &hook_files {
-        let text = std::fs::read_to_string(workspace.join(file)).unwrap();
-        for line in text
-            .lines()
-            .filter(|line| line.contains("echo") && names_a_verb(line))
-        {
-            fallbacks += 1;
-            if !line.contains("the operator") {
-                unnamed.push(format!("{file}: {}", line.trim()));
-            }
-        }
-    }
-    assert!(
-        fallbacks >= 25,
-        "the shipped fallback lines were not found: {fallbacks}"
-    );
-    assert!(
-        unnamed.is_empty(),
-        "messages that name an install verb without the operator ({}):\n{}",
-        unnamed.len(),
-        unnamed.join("\n")
-    );
+    found
 }
 
 /// The Rust source files under `dir`, test files named `*_tests.rs` left
