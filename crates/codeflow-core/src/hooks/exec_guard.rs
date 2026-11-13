@@ -243,9 +243,8 @@ pub fn evaluate_ruled(
     }
     // An install run writes the project's install files from any folder,
     // so it refuses wherever it runs, a certified prose line included
-    // (TSK-1476). A program a Git call on the line runs that the reader
-    // cannot resolve, such as a shell reading its input as the pager, may
-    // run the call's output, so the line is then judged on its raw text.
+    // (TSK-1476). Only a line in the install reader's closed subset is
+    // data; every other line naming the binary with a verb refuses.
     if integrity.is_active() {
         if let Some(run) = install_run_on_line(command, posix, cwd) {
             violations.push(install_violation(integrity, &run));
@@ -416,36 +415,29 @@ pub(crate) fn code_install_violation(level: PolicyLevel, code: &str) -> Option<V
     crate::security::install_run::raw_run(code).map(|run| install_violation(level, &run))
 }
 
-/// The install run on `command`. A line whose Git call runs a program the
-/// reader cannot resolve, such as a shell reading its input, or hands its
-/// output or a file to a program that is not an admitted viewer, such as
-/// an interpreter as the pager or editor, or runs a tool that reads its
-/// code from its input or a data operand, such as an interpreter as the
-/// ssh command or a filter, is judged on its raw text; a runner body is
-/// not read again for this (TSK-1476).
+/// The install run on `command` (TSK-1476). A line the install reader
+/// admits as data draws no finding there; when its raw text still names
+/// the binary with a verb, each program its Git call runs from its
+/// configuration or environment must be one of the audited Git LFS filter
+/// shapes, or the line is judged on its raw text, as it is when the runner
+/// reader cannot read them. A runner body is not read again for this.
 fn install_run_on_line(
     command: &str,
     posix: bool,
     cwd: &std::path::Path,
 ) -> Option<crate::security::install_run::InstallRun> {
-    use super::git_guard::RunnerKind;
-    use crate::security::install_run::{
-        unresolved_command, unresolved_fed_command, unresolved_tool_command,
-    };
-    crate::security::install_run::install_run(command, posix).or_else(|| {
+    use crate::security::install_run::{audited_git_runner, install_run, raw_run};
+    install_run(command, posix).or_else(|| {
         if RUNNER_BODY.get() {
             return None;
         }
-        let bodies = super::git_guard::git_runner_kinds(command, cwd).ok()?;
-        bodies
-            .iter()
-            .any(|(body, kind)| match kind {
-                RunnerKind::Fed => unresolved_fed_command(body),
-                RunnerKind::Tool => unresolved_tool_command(body),
-                RunnerKind::Command => unresolved_command(body),
-            })
-            .then(|| crate::security::install_run::raw_run(command))
-            .flatten()
+        // `install_run` judges every line outside the admitted subset on
+        // its raw text, so a raw match here is an admitted line.
+        let raw = raw_run(command)?;
+        match super::git_guard::git_runner_bodies(command, cwd) {
+            Ok(bodies) if bodies.iter().all(|(body, _)| audited_git_runner(body)) => None,
+            _ => Some(raw),
+        }
     })
 }
 
@@ -463,8 +455,9 @@ pub(crate) fn install_violation(
              policy and workflows), which only the operator installs or refreshes",
             run.form,
             if !run.parsed {
-                " (the line could not be fully parsed; its text names the binary with an \
-                 install verb, which inline text such as a heredoc or quoted message may not do)"
+                " (the line is outside the forms the guard reads as data and its text names \
+                 the binary with an install verb; give such text in a file, or to `echo`, \
+                 `printf`, `grep`, `rg --no-config` or `git --no-pager log` alone)"
             } else if run.in_argument {
                 " (found inside a quoted argument or an assigned value, which the guard read as \
                  a command line; give such text in a file, or to a program that only prints \

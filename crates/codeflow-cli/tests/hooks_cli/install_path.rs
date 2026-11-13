@@ -780,7 +780,7 @@ fn every_line_outside_the_closed_subset_that_names_the_verbs_refuses() {
         // Programs off the list.
         "ack 'codeflow update' docs",
         "gh search issues 'codeflow update'",
-        "sed -n '/codeflow update/p' notes.md",
+        "sed -n p 'codeflow update'",
         "less -R 'codeflow update'",
         // Options off a listed program's list.
         "grep -z 'codeflow update' notes.md",
@@ -910,7 +910,13 @@ fn only_the_git_lfs_filters_leave_a_listed_git_call_as_data() {
         ("core.fsmonitor", "perl"),
     ] {
         git(&root, &["config", key, value]);
-        tally.refused(&[EXEC], &line, &shell(&line, &root), &root, operator_refusal);
+        tally.refused(
+            &[EXEC],
+            &line,
+            &shell(&line, &root),
+            &root,
+            operator_refusal,
+        );
         git(&root, &["config", "--unset", key]);
     }
     tally.finish();

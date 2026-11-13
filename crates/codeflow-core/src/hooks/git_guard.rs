@@ -7648,39 +7648,6 @@ pub(crate) fn git_runner_bodies(
         .collect())
 }
 
-/// What a Git runner body is, for exec-guard's install check (TSK-1476).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RunnerKind {
-    /// A command line written on the line or in an alias: an alias body,
-    /// an option or operand command, an external `git-<name>` program, a
-    /// nested Git call or a saved instruction.
-    Command,
-    /// A program Git hands its output, a file or an address to read: a
-    /// pager, editor, browser, manual viewer, the interactive diff filter,
-    /// a text converter or the `grep -O` program. Judged as a viewer.
-    Fed,
-    /// Any other configured or environment program, a tool Git runs with
-    /// its own data: a filter, a diff or merge driver, a difftool or
-    /// mergetool, a credential helper, askpass, the ssh or proxy command,
-    /// a signing program, fsmonitor, a hook, trailer or sendemail command.
-    Tool,
-}
-
-/// [`git_runner_bodies`], each command with its [`RunnerKind`].
-///
-/// # Errors
-///
-/// Why a runner, its command or its directory cannot be read.
-pub(crate) fn git_runner_kinds(
-    command: &str,
-    cwd: &Path,
-) -> Result<Vec<(String, RunnerKind)>, String> {
-    Ok(runners::read(command, cwd)?
-        .into_iter()
-        .map(|body| (body.command, body.kind))
-        .collect())
-}
-
 /// The environment variables whose value is a program Git runs, as the
 /// runner catalog lists them.
 pub(crate) fn git_program_environment() -> impl Iterator<Item = &'static str> {

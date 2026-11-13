@@ -1,0 +1,818 @@
+//! The closed subset of POSIX shell lines the install check admits as data
+//! (TSK-1476). A line that names the binary with an install verb is judged
+//! on its raw text unless every part of it is in this subset, so this list
+//! decides what an agent may say about the verbs, never what it may run.
+//!
+//! A line is admitted only when all of these hold:
+//!
+//! - It reads with this module's own lexer: words of plain characters,
+//!   single-quoted text, double-quoted text with no `$`, backtick,
+//!   backslash or `!`, the separators `;`, newline, `&&`, `||` and `|`, and
+//!   redirections of a listed form. Any other character or form (an
+//!   expansion, a pattern, a substitution, a subshell or brace group, a
+//!   here-document or here-string, the background `&`, a comment) ends the
+//!   reading, and the line is not admitted.
+//! - Every simple command has a program word, written plainly, that is on
+//!   [`PROGRAMS`], with each option on that program's own list. No
+//!   assignment, declaration, alias, function, `eval`, `source`, `exec`,
+//!   `builtin`, `command` or other wrapper, and no supplier such as `xargs`
+//!   or `find -exec`, is on the list, so each of those leaves the line out.
+//! - Each program that reads state the guard cannot see, which could steer
+//!   it to run a program, is admitted only in a form that turns that state
+//!   off: `rg` with `--no-config`, `git` with `--no-pager` or `-P`. `grep`,
+//!   `cat`, `head`, `tail`, `wc`, `echo` and `printf` run no program
+//!   whatever their environment holds.
+//!
+//! There is no denylist in this path: a program, option or form is
+//! admitted only by being listed here.
+
+use super::PRINTS_ONLY;
+
+/// One word after quote removal, with whether any of it was quoted.
+struct Word {
+    text: String,
+    quoted: bool,
+}
+
+enum Token {
+    Word(Word),
+    /// `|` between two commands.
+    Pipe,
+    /// `;`, newline, `&&` or `||` after a command.
+    End,
+    /// `>`, `>>` or `<`, with an optional `1` or `2` before it: the next
+    /// word is its target.
+    Redirect,
+    /// `>&1` or `>&2`, with an optional `1` or `2` before it: no target.
+    Duplicate,
+}
+
+/// The characters a word may hold unquoted: none the shell expands or
+/// reads as syntax.
+fn plain(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '.' | '/' | ':' | ',' | '+' | '@' | '-' | '=' | '%')
+}
+
+/// Whether `line` is in the admitted subset.
+#[must_use]
+pub(super) fn admitted(line: &str) -> bool {
+    let Some(tokens) = lex(line) else {
+        return false;
+    };
+    let mut command: Vec<Word> = Vec::new();
+    // Whether the next word is a redirection's target.
+    let mut target = false;
+    // Whether the current command holds a redirection.
+    let mut redirected = false;
+    // The separator before the current command: `Some(true)` after `;`,
+    // a newline, `&&` or `||`, `Some(false)` after `|`.
+    let mut separator = None;
+    for token in tokens {
+        match token {
+            Token::Word(word) => {
+                if target {
+                    target = false;
+                } else {
+                    command.push(word);
+                }
+            }
+            Token::Redirect | Token::Duplicate => {
+                if target {
+                    return false;
+                }
+                target = matches!(token, Token::Redirect);
+                redirected = true;
+            }
+            Token::Pipe | Token::End => {
+                if target || !command_admitted(&command) {
+                    return false;
+                }
+                command.clear();
+                redirected = false;
+                separator = Some(matches!(token, Token::End));
+            }
+        }
+    }
+    if target {
+        return false;
+    }
+    if command.is_empty() {
+        // Only a trailing `;` or newline may leave the last command empty;
+        // a redirection with no program runs the shell's own reader.
+        return separator == Some(true) && !redirected;
+    }
+    command_admitted(&command)
+}
+
+/// The tokens of `line`, or `None` when it holds anything outside the
+/// subset.
+fn lex(line: &str) -> Option<Vec<Token>> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut tokens = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    let mut in_word = false;
+    let mut at = 0;
+    let flush =
+        |tokens: &mut Vec<Token>, word: &mut String, quoted: &mut bool, in_word: &mut bool| {
+            if *in_word {
+                tokens.push(Token::Word(Word {
+                    text: std::mem::take(word),
+                    quoted: *quoted,
+                }));
+            }
+            *quoted = false;
+            *in_word = false;
+        };
+    while let Some(&c) = chars.get(at) {
+        let next = chars.get(at + 1).copied();
+        match c {
+            ' ' | '\t' => {
+                flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
+                at += 1;
+            }
+            '\n' | ';' => {
+                if next == Some(';') && c == ';' {
+                    return None;
+                }
+                flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
+                tokens.push(Token::End);
+                at += 1;
+            }
+            '&' => {
+                if next != Some('&') {
+                    return None;
+                }
+                flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
+                tokens.push(Token::End);
+                at += 2;
+            }
+            '|' => {
+                flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
+                match next {
+                    Some('|') => {
+                        tokens.push(Token::End);
+                        at += 2;
+                    }
+                    Some('&') => return None,
+                    _ => {
+                        tokens.push(Token::Pipe);
+                        at += 1;
+                    }
+                }
+            }
+            '>' | '<' => {
+                // A `1` or `2` written right before the operator names the
+                // descriptor, and any other number there names one outside
+                // the subset; any other word before it ends there.
+                if in_word && !quoted && word.bytes().all(|b| b.is_ascii_digit()) {
+                    if word != "1" && word != "2" {
+                        return None;
+                    }
+                    word.clear();
+                    in_word = false;
+                } else {
+                    flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
+                }
+                let (token, length) = redirection(
+                    c,
+                    next,
+                    chars.get(at + 2).copied(),
+                    chars.get(at + 3).copied(),
+                )?;
+                tokens.push(token);
+                at += length;
+            }
+            '\'' | '"' => {
+                let (inside, length) = quote(&chars, at)?;
+                word.extend(inside);
+                quoted = true;
+                in_word = true;
+                at += length;
+            }
+            '=' if !in_word => return None,
+            c if plain(c) => {
+                word.push(c);
+                in_word = true;
+                at += 1;
+            }
+            _ => return None,
+        }
+    }
+    flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
+    Some(tokens)
+}
+
+/// The text of the quote that opens at `at` and its length with both
+/// quotes, or `None` when it is left open or a double quote holds a
+/// character the shell reads there (`$`, a backtick, a backslash or `!`).
+fn quote(chars: &[char], at: usize) -> Option<(&[char], usize)> {
+    let mark = chars[at];
+    let close = chars[at + 1..].iter().position(|&q| q == mark)?;
+    let inside = &chars[at + 1..at + 1 + close];
+    if mark == '"' && inside.iter().any(|&q| matches!(q, '$' | '`' | '\\' | '!')) {
+        return None;
+    }
+    Some((inside, close + 2))
+}
+
+/// The redirection that starts with `c`, followed by `next`, `third` and
+/// `fourth`, and its length: `>`, `>>`, `<`, or `>&1` and `>&2` ending
+/// there. Any other form (`<<`, `<<<`, `<>`, `<&`, `>|`, `>&` to a file
+/// or another descriptor, `<(` or `>(`) is outside the subset.
+fn redirection(
+    c: char,
+    next: Option<char>,
+    third: Option<char>,
+    fourth: Option<char>,
+) -> Option<(Token, usize)> {
+    let ends = |after: Option<char>| {
+        after.is_none_or(|after| matches!(after, ' ' | '\t' | '\n' | ';' | '|' | '&'))
+    };
+    match (c, next) {
+        ('>', Some('>')) => Some((Token::Redirect, 2)),
+        ('>', Some('&')) if matches!(third, Some('1' | '2')) && ends(fourth) => {
+            Some((Token::Duplicate, 3))
+        }
+        ('>' | '<', Some('>' | '<' | '&' | '|' | '(')) => None,
+        _ => Some((Token::Redirect, 1)),
+    }
+}
+
+/// How a program's options are written: letters that take no value,
+/// letters that take one (attached or the next word), long names of each
+/// kind, long names whose value must be attached after `=`, and whether a
+/// bare number (`-5`) is an option.
+struct Options {
+    flags: &'static str,
+    values: &'static str,
+    long_flags: &'static [&'static str],
+    long_values: &'static [&'static str],
+    attached: &'static [&'static str],
+    numbers: bool,
+}
+
+// The listed programs are the arms of [`command_admitted`], each with its
+// options below. Every program there runs no other program in the forms
+// its options allow; the sources are each program's manual, cited in the
+// TSK-1476 report.
+
+const CAT: Options = Options {
+    flags: "AbeEnstTuvl",
+    values: "",
+    long_flags: &[
+        "number",
+        "number-nonblank",
+        "squeeze-blank",
+        "show-all",
+        "show-ends",
+        "show-tabs",
+        "show-nonprinting",
+    ],
+    long_values: &[],
+    attached: &[],
+    numbers: false,
+};
+
+const HEAD: Options = Options {
+    flags: "qv",
+    values: "nc",
+    long_flags: &["quiet", "silent", "verbose"],
+    long_values: &["lines", "bytes"],
+    attached: &[],
+    numbers: true,
+};
+
+const TAIL: Options = Options {
+    flags: "qvr",
+    values: "nc",
+    long_flags: &["quiet", "silent", "verbose"],
+    long_values: &["lines", "bytes"],
+    attached: &[],
+    numbers: true,
+};
+
+const WC: Options = Options {
+    flags: "clmwL",
+    values: "",
+    long_flags: &["bytes", "chars", "lines", "words", "max-line-length"],
+    long_values: &[],
+    attached: &[],
+    numbers: false,
+};
+
+/// GNU grep and the BSD grep macOS ships. Left out: `-z`, `-Z`, `-J`,
+/// `-X`, `-M` and the long decompress options, whose meaning differs
+/// between the two.
+const GREP: Options = Options {
+    flags: "acEFGhHiIlLnoqrRsUvwxPV",
+    values: "ABCDdefm",
+    long_flags: &[
+        "count",
+        "extended-regexp",
+        "fixed-strings",
+        "basic-regexp",
+        "perl-regexp",
+        "no-filename",
+        "with-filename",
+        "ignore-case",
+        "no-ignore-case",
+        "files-with-matches",
+        "files-without-match",
+        "line-number",
+        "only-matching",
+        "quiet",
+        "silent",
+        "recursive",
+        "dereference-recursive",
+        "no-messages",
+        "invert-match",
+        "word-regexp",
+        "line-regexp",
+        "text",
+        "binary",
+        "null",
+        "color",
+        "colour",
+    ],
+    long_values: &[
+        "after-context",
+        "before-context",
+        "context",
+        "regexp",
+        "file",
+        "max-count",
+        "include",
+        "exclude",
+        "exclude-dir",
+        "include-dir",
+        "label",
+        "devices",
+        "directories",
+        "binary-files",
+    ],
+    attached: &["color", "colour"],
+    numbers: false,
+};
+
+/// ripgrep, always with `--no-config` so no configuration file adds an
+/// option. Left out: `--pre`, `--pre-glob`, `-z` and `--search-zip`,
+/// which run programs, and `--hostname-bin`, which runs one.
+const RG: Options = Options {
+    flags: "iSsFwxnNlcvoHIuULaPq0.bpVh",
+    values: "eftgTABCmjdErM",
+    long_flags: &[
+        "no-config",
+        "hidden",
+        "no-ignore",
+        "no-ignore-vcs",
+        "no-ignore-parent",
+        "ignore-case",
+        "smart-case",
+        "case-sensitive",
+        "fixed-strings",
+        "word-regexp",
+        "line-regexp",
+        "line-number",
+        "no-line-number",
+        "files-with-matches",
+        "files-without-match",
+        "count",
+        "count-matches",
+        "invert-match",
+        "only-matching",
+        "with-filename",
+        "no-filename",
+        "heading",
+        "no-heading",
+        "vimgrep",
+        "json",
+        "files",
+        "follow",
+        "multiline",
+        "multiline-dotall",
+        "pcre2",
+        "text",
+        "null",
+        "quiet",
+        "stats",
+        "trim",
+        "column",
+        "no-messages",
+        "type-list",
+        "unrestricted",
+        "pretty",
+        "byte-offset",
+        "crlf",
+        "passthru",
+        "include-zero",
+        "binary",
+        "one-file-system",
+        "no-require-git",
+    ],
+    long_values: &[
+        "glob",
+        "iglob",
+        "type",
+        "type-not",
+        "regexp",
+        "file",
+        "after-context",
+        "before-context",
+        "context",
+        "max-count",
+        "max-depth",
+        "threads",
+        "color",
+        "colors",
+        "sort",
+        "sortr",
+        "replace",
+        "encoding",
+        "max-columns",
+        "max-filesize",
+        "engine",
+        "context-separator",
+        "field-match-separator",
+    ],
+    attached: &[],
+    numbers: false,
+};
+
+/// `git log`, without the options that make a patch or a diff (which run
+/// configured diff programs and text converters) or check a signature
+/// (which runs the signing program). A format may not ask for a
+/// signature (`%G`) or a describe call.
+const GIT_LOG: Options = Options {
+    flags: "iEF",
+    values: "n",
+    long_flags: &[
+        "oneline",
+        "all",
+        "graph",
+        "reverse",
+        "first-parent",
+        "no-merges",
+        "merges",
+        "abbrev-commit",
+        "no-abbrev-commit",
+        "no-color",
+        "all-match",
+        "invert-grep",
+        "regexp-ignore-case",
+        "extended-regexp",
+        "fixed-strings",
+        "basic-regexp",
+        "date-order",
+        "topo-order",
+        "author-date-order",
+        "pretty",
+        "abbrev",
+        "decorate",
+        "no-decorate",
+        "source",
+        "branches",
+        "tags",
+        "remotes",
+    ],
+    long_values: &[
+        "grep",
+        "author",
+        "committer",
+        "since",
+        "until",
+        "after",
+        "before",
+        "max-count",
+        "skip",
+    ],
+    attached: &[
+        "format", "pretty", "date", "abbrev", "decorate", "branches", "tags", "remotes",
+    ],
+    numbers: true,
+};
+
+/// `git grep`, without `-O` (`--open-files-in-pager`), which runs a
+/// program, and `--textconv`, which runs configured text converters.
+const GIT_GREP: Options = Options {
+    flags: "iIvwnlLchHEFGPoqz",
+    values: "efABCm",
+    long_flags: &[
+        "cached",
+        "untracked",
+        "no-index",
+        "ignore-case",
+        "invert-match",
+        "word-regexp",
+        "line-number",
+        "column",
+        "files-with-matches",
+        "name-only",
+        "files-without-match",
+        "count",
+        "full-name",
+        "extended-regexp",
+        "basic-regexp",
+        "fixed-strings",
+        "perl-regexp",
+        "all-match",
+        "heading",
+        "break",
+        "null",
+        "and",
+        "or",
+        "not",
+        "no-textconv",
+    ],
+    long_values: &[
+        "max-depth",
+        "threads",
+        "context",
+        "after-context",
+        "before-context",
+        "max-count",
+    ],
+    attached: &[],
+    numbers: true,
+};
+
+/// Whether one simple command is a listed program in an admitted form.
+fn command_admitted(words: &[Word]) -> bool {
+    let Some((program, args)) = words.split_first() else {
+        return false;
+    };
+    if program.quoted || program.text.contains('=') {
+        return false;
+    }
+    let args: Vec<&str> = args.iter().map(|word| word.text.as_str()).collect();
+    match program.text.as_str() {
+        "echo" => true,
+        // `printf -v` writes a variable; a format is never an option.
+        "printf" => {
+            !matches!(args.first(), Some(first) if first.starts_with('-') && *first != "--")
+        }
+        "cat" => operands(&CAT, &args).is_some(),
+        "head" => operands(&HEAD, &args).is_some(),
+        "tail" => operands(&TAIL, &args).is_some(),
+        "wc" => operands(&WC, &args).is_some(),
+        "grep" => operands(&GREP, &args).is_some(),
+        "rg" => rg_admitted(&args),
+        "git" => git_admitted(&args),
+        // The binary itself, by name or path, only in the exact help and
+        // version shapes.
+        path if super::basename(path) == "codeflow" => PRINTS_ONLY
+            .iter()
+            .any(|shape| shape.len() == args.len() && shape.iter().zip(&args).all(|(a, b)| a == b)),
+        _ => false,
+    }
+}
+
+/// `rg` with `--no-config` before any `--`, and each option listed.
+fn rg_admitted(args: &[&str]) -> bool {
+    let end = args
+        .iter()
+        .position(|word| *word == "--")
+        .unwrap_or(args.len());
+    args[..end].contains(&"--no-config") && operands(&RG, args).is_some()
+}
+
+/// `git` with its pager turned off (`--no-pager` or `-P`), only `-C` with
+/// a path and `--no-optional-locks` among its other options, running `log`
+/// or `grep` with each option listed. `-c`, `--git-dir`, `--exec-path` and
+/// every other global option leave the call out.
+fn git_admitted(args: &[&str]) -> bool {
+    let mut pager_off = false;
+    let mut at = 0;
+    let verb = loop {
+        let Some(&word) = args.get(at) else {
+            return false;
+        };
+        at += 1;
+        match word {
+            "--no-pager" | "-P" => pager_off = true,
+            "--no-optional-locks" => {}
+            "-C" => {
+                if args.get(at).is_none() {
+                    return false;
+                }
+                at += 1;
+            }
+            _ if word.starts_with('-') => return false,
+            _ => break word,
+        }
+    };
+    let rest = &args[at..];
+    pager_off
+        && match verb {
+            "log" => {
+                operands(&GIT_LOG, rest).is_some()
+                    && rest.iter().take_while(|word| **word != "--").all(|word| {
+                        word.strip_prefix("--format=")
+                            .or_else(|| word.strip_prefix("--pretty="))
+                            .is_none_or(format_admitted)
+                    })
+            }
+            "grep" => operands(&GIT_GREP, rest).is_some(),
+            _ => false,
+        }
+}
+
+/// A `git log` format that runs nothing: one of Git's own named formats,
+/// or a format string (`format:`, `tformat:` or one holding `%`) with no
+/// signature placeholder (`%G`) and no `%(describe)`. A name Git would look
+/// up as a `pretty.<name>` setting is left out.
+fn format_admitted(value: &str) -> bool {
+    const NAMED: &[&str] = &[
+        "oneline",
+        "short",
+        "medium",
+        "full",
+        "fuller",
+        "reference",
+        "email",
+        "raw",
+        "mboxrd",
+    ];
+    if value.contains("%G") || value.contains("%(describe") {
+        return false;
+    }
+    NAMED.contains(&value)
+        || value.starts_with("format:")
+        || value.starts_with("tformat:")
+        || value.contains('%')
+}
+
+/// The operands of a call whose options are each on `options`, read as
+/// getopt reads them: every word before `--` that starts with `-` is an
+/// option, letters may be combined, and a letter that takes a value takes
+/// the rest of its word or the next word. `None` when any option is not
+/// listed.
+fn operands<'a>(options: &Options, args: &[&'a str]) -> Option<Vec<&'a str>> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(&word) = args.get(at) {
+        at += 1;
+        if word == "--" {
+            found.extend_from_slice(&args[at..]);
+            break;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            match long.split_once('=') {
+                Some((name, _)) => {
+                    if !options.long_values.contains(&name) && !options.attached.contains(&name) {
+                        return None;
+                    }
+                }
+                None if options.long_flags.contains(&long) => {}
+                None if options.long_values.contains(&long) => {
+                    args.get(at)?;
+                    at += 1;
+                }
+                None => return None,
+            }
+        } else if let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) {
+            if options.numbers && letters.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            for (index, letter) in letters.char_indices() {
+                if options.values.contains(letter) {
+                    if index + letter.len_utf8() == letters.len() {
+                        args.get(at)?;
+                        at += 1;
+                    }
+                    break;
+                }
+                if !options.flags.contains(letter) {
+                    return None;
+                }
+            }
+        } else {
+            found.push(word);
+        }
+    }
+    Some(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::admitted;
+
+    #[test]
+    fn the_listed_programs_are_admitted_in_their_listed_forms() {
+        for line in [
+            "grep -n 'codeflow update' notes.md",
+            "grep -rn 'codeflow update' docs | head -n 5",
+            "grep -e 'codeflow init' -A 2 notes.md",
+            "rg --no-config 'codeflow init' docs",
+            "rg --no-config -n -g '*.md' 'codeflow update' docs",
+            "git --no-pager log --grep='codeflow update'",
+            "git -P log -1 --format='%h %s' --grep='codeflow update'",
+            "git --no-pager log --oneline -n 5 --grep 'codeflow init'",
+            "git -C docs --no-pager log -5 --pretty=oneline --grep='codeflow update'",
+            "git --no-pager grep -n 'codeflow update' -- docs",
+            "echo 'run codeflow update'",
+            "echo the operator runs codeflow update",
+            "printf 'codeflow update\\n' > notes.txt",
+            "printf -- '%s\\n' 'codeflow update'",
+            "echo 'codeflow update' >> notes.txt",
+            "cat notes.md | grep -c 'codeflow update'",
+            "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
+            "grep -n 'codeflow update' notes.md 2> errors.txt",
+            "tail -n 20 notes.md && echo 'codeflow init done'",
+            "head -5 notes.md; echo \"codeflow update\"",
+            "echo 'codeflow update'\n",
+            "codeflow update --help",
+            "codeflow help init",
+            "./target/debug/codeflow update --help",
+        ] {
+            assert!(admitted(line), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn programs_options_and_forms_off_the_list_are_not_admitted() {
+        for line in [
+            // Programs not on the list.
+            "ack 'codeflow update' docs",
+            "gh search issues 'codeflow update'",
+            "sed -n p 'codeflow update'",
+            "jq '.x' plan.json",
+            "/usr/bin/grep 'codeflow update' notes.md",
+            "'grep' 'codeflow update' notes.md",
+            "codeflow update",
+            "codeflow task new --title 'codeflow update'",
+            // Options not on a program's list.
+            "grep -z 'codeflow update' notes.md",
+            "grep -nZ 'codeflow update' notes.md",
+            "grep --exclude-from=x 'codeflow update' docs",
+            "grep --colo 'codeflow update' docs",
+            "rg 'codeflow init' docs",
+            "rg --no-config --pre ./tools/pdftext 'codeflow update' docs",
+            "rg --no-config -z 'codeflow update' docs",
+            "rg --no-config --hostname-bin ./h 'codeflow update' docs",
+            "rg -- --no-config 'codeflow update'",
+            "printf -v x 'codeflow update'",
+            "cat -Q notes.md",
+            // Git outside its listed form.
+            "git log --grep='codeflow update'",
+            "git -c core.pager=less --no-pager log --grep='codeflow update'",
+            "git --no-pager --git-dir=other log --grep='codeflow update'",
+            "git --no-pager log -p --grep='codeflow update'",
+            "git --no-pager log --show-signature --grep='codeflow update'",
+            "git --no-pager log --format='%G? codeflow update'",
+            "git --no-pager log --format='%(describe) codeflow update'",
+            "git --no-pager log --pretty=custom --grep='codeflow update'",
+            "git --no-pager log --format 'x' --grep='codeflow update'",
+            "git --no-pager grep -O 'codeflow update'",
+            "git --no-pager grep --textconv 'codeflow update'",
+            "git --no-pager show HEAD",
+            "git --no-pager diff -- 'codeflow update'",
+            // Constructs outside the model.
+            "X=1 grep 'codeflow update' notes.md",
+            "X=1; grep 'codeflow update' notes.md",
+            "export X=1; grep 'codeflow update' notes.md",
+            "alias grep=sh; grep 'codeflow update' notes.md",
+            "grep() { sh; }; grep 'codeflow update' notes.md",
+            "eval \"echo 'codeflow update'\"",
+            "source ./x; echo 'codeflow update'",
+            ". ./x; echo 'codeflow update'",
+            "exec echo 'codeflow update'",
+            "builtin echo 'codeflow update'",
+            "command echo 'codeflow update'",
+            "echo \"$(cat f) codeflow update\"",
+            "echo `cat f` codeflow update",
+            "echo $HOME codeflow update",
+            "cat <(echo 'codeflow update')",
+            "(echo 'codeflow update')",
+            "{ echo 'codeflow update'; }",
+            "cat <<'EOF'\ncodeflow update\nEOF",
+            "cat <<< 'codeflow update'",
+            "echo 'codeflow update' > \"$F\"",
+            "echo 'codeflow update' >| notes.txt",
+            "echo 'codeflow update' 3> notes.txt",
+            "echo 'codeflow update' >&3",
+            "echo 'codeflow update' <> notes.txt",
+            "< notes.md",
+            "grep 'codeflow update' *.md",
+            "grep 'codeflow update' ~/notes.md",
+            "grep 'codeflow update' docs/{a,b}.md",
+            "echo =grep codeflow update",
+            "echo notes.md | xargs grep 'codeflow update'",
+            "find . -exec grep 'codeflow update' {} +",
+            "echo 'codeflow update' & wait",
+            "echo 'codeflow update' | sh",
+            "echo 'codeflow update' |& cat",
+            "echo ok # codeflow update",
+            "echo \\codeflow update",
+            "echo \"codeflow update\\\"",
+            "echo 'codeflow update",
+            "; echo 'codeflow update'",
+            "echo 'codeflow update' |",
+            "echo 'codeflow update' ;; echo x",
+            "",
+        ] {
+            assert!(!admitted(line), "{line:?}");
+        }
+    }
+}
