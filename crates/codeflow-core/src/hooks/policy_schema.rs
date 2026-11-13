@@ -286,9 +286,13 @@ pub const SCHEMA: [KeySpec; 82] = [
                 object through a transport its configuration names. Every other line that \
                 names the binary with a verb refuses, whatever program reads it: in its text \
                 as written, in its words as the shell passes them, in what `printf`, \
-                `echo` and `print` write from them once their escapes are decoded and their \
-                numbers formatted, or in a value the line builds from its own assignments. \
-                So give \
+                `echo` and `print` write from them, or in a value the line builds from its \
+                own assignments. Off the listed forms, a `printf`, `echo`, `print` or \
+                `$'...'` word counts only as plain literal text; one that holds an escape (a \
+                `\\n` in a `printf` format excepted), a conversion other than a bare `%s`, a \
+                width, precision or flag, more arguments than conversions, or an expansion \
+                `echo` or `print` may decode refuses whatever it names, since the guard does \
+                not model what it writes. So give \
                 such text to a listed program or leave the binary's name out of a search. A \
                 run whose program \
                 word or first operand the guard cannot resolve, and a run inside a quoted \
@@ -299,11 +303,14 @@ pub const SCHEMA: [KeySpec; 82] = [
                 executes what it reads, and state the line does not show (an exported \
                 variable, a shell alias or function from a profile, a program put first on \
                 the path) are not named on the line; that is a named residual. Other layers \
-                hold against it in part: the session guards read policy from the default \
-                branch's commit, never the working copy; a pull request is judged by its \
-                base's policy and workflows, not its own; a default branch that requires pull \
-                requests takes changed install files only as a reviewed diff; and an active \
-                harness sandbox (proven on native macOS) denies writes to the core hook, \
+                hold against it in part: once a repository's remote has a default branch, \
+                the session guards read policy from that branch's committed state (before \
+                then they read the current commit, which a local commit can change, or the \
+                working copy before the first commit); the hosted policy workflow judges a \
+                pull request with the default branch's policy; a default branch whose rules \
+                require a pull request takes changed install files only through one, though \
+                whether that pull request is reviewed depends on approval rules or on the \
+                operator reviewing it; and an active harness sandbox (proven on native macOS) denies writes to the core hook, \
                 policy, harness-settings and CI files. No layer catches the rest: the commit \
                 hooks read their levels from the working copy, and neither they nor the push \
                 hook refuse a change to the policy, hook or workflow files, so a rewritten \
