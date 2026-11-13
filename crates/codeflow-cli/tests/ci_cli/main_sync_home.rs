@@ -73,6 +73,55 @@ fn a_main_planning_move_the_line_already_names_passes() {
     );
 }
 
+/// AC-10: a todo task that `main` moves to another line by a planning
+/// merge, then completes there, then moves to the home the line names, is
+/// accepted: the first move was made while the task was todo, and the last
+/// one is a home the line already names, whatever the task's state.
+#[test]
+fn a_task_completed_between_two_planning_moves_passes() {
+    const OTHER: &str = "integration/EPC-002-other";
+    let dir = fixture();
+    let root = dir.path();
+    land(
+        root,
+        "main",
+        "plan/to-other",
+        &[(RECORD, &task("TSK-001", OTHER))],
+    );
+    super::git(root, &["switch", "-q", "-c", "task/TSK-001-work", "main"]);
+    write(root, "src/work.rs", "pub fn work() {}\n");
+    write(root, "changelog.d/TSK-001.md", FRAGMENT);
+    commit(root, "feat: the work");
+    let reviewed = stdout_of(root, &["rev-parse", "HEAD"]);
+    write(root, RECORD, &completed(OTHER, &reviewed));
+    commit(root, "docs: complete TSK-001");
+    super::git(root, &["switch", "-q", "main"]);
+    super::git(
+        root,
+        &["merge", "--no-ff", "-q", "--no-edit", "task/TSK-001-work"],
+    );
+    land(
+        root,
+        "main",
+        "plan/retarget",
+        &[(RECORD, &completed("main", &reviewed))],
+    );
+    land(
+        root,
+        LINE,
+        "plan/line-home",
+        &[(RECORD, &task("TSK-001", "main"))],
+    );
+    sync_branch(root);
+    let synced = ci(root, "Task: EPC-001", None);
+    passes(&synced, "a completion between two planning moves");
+    assert!(
+        !text(&synced).contains("work.import_authority"),
+        "{}",
+        text(&synced)
+    );
+}
+
 /// Decision 1 of 2026-11-12: a todo task homed on the line that `main`
 /// moves by a planning merge passes the import check (its line copy is
 /// unchanged), and the criteria freeze still refuses the sync.

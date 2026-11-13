@@ -3,7 +3,7 @@
 //! the home anchor that a line's own records-only adoption sets.
 
 use super::home_tests::{
-    docs_move, moved, passes, path_of, refused, task, todo, Fixture, LINE, MOVED, OTHER,
+    docs_move, moved, passes, path_of, refused, task, todo, Fixture, LINE, MOVED, OTHER, THIRD,
 };
 use super::{admissible_planning_landing_with, Repository, PLANNING_LANDING_PATHS};
 use crate::workgraph::classify::AmendmentPath;
@@ -167,4 +167,236 @@ fn a_copy_with_a_comment_in_a_docs_bearing_landing_gains_no_anchor() {
     } else {
         refused(&fixture, "a commented copy", &["TSK-001"]);
     }
+}
+
+/// The task as `main` notes it after its move, in the closeout, so a sync
+/// merges the note cleanly over a line copy that took `main`'s version.
+fn noted() -> String {
+    task("TSK-001", "main", "todo", "Work moved.", "Noted.")
+}
+
+/// Why an expected refusal did not happen, or `None` when the judgment
+/// refuses with every needle. Lets one test report each of its stages.
+fn not_refused(fixture: &Fixture, what: &str, needles: &[&str]) -> Option<String> {
+    match fixture.judge() {
+        Ok(found) => Some(format!(
+            "{what}: accepted, importing {:?}",
+            found.keys().collect::<Vec<_>>()
+        )),
+        Err(said) => needles
+            .iter()
+            .find(|needle| !said.contains(**needle))
+            .map(|needle| format!("{what}: missing {needle:?} in {said}")),
+    }
+}
+
+/// AC-13 and AC-10 (review finding 1 at bf25c232f): the anchor's source is
+/// the version the line adopted, where it first stood on `main`. A later
+/// move away and an exact restoration of those bytes on `main` stay in the
+/// walk, whether the sync leaves the record unchanged or imports a later
+/// note.
+#[test]
+fn an_exact_restoration_on_main_never_advances_the_anchor() {
+    let path = path_of("TSK-001");
+    let after = moved("TSK-001", "main");
+    let mut failures = Vec::new();
+    for note in [false, true] {
+        let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+        docs_move(&fixture, &after);
+        fixture.land(LINE, &[(&path, &after)]);
+        fixture.direct("main", &[(&path, &moved("TSK-001", THIRD))]);
+        let away = format!("the move at {}", fixture.oid("main"));
+        fixture.direct("main", &[(&path, &after)]);
+        if note {
+            fixture.land("main", &[(&path, &noted())]);
+        }
+        fixture.sync();
+        let what = if note {
+            "a restoration, then a note"
+        } else {
+            "a restoration the sync leaves unchanged"
+        };
+        failures.extend(not_refused(&fixture, what, &["TSK-001", MOVED, &away]));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// AC-13 (review finding 1): with a valid move away and back on `main`,
+/// the anchor stays at the version the line adopted, never the restoration.
+#[test]
+fn a_valid_move_away_and_back_keeps_the_anchor_at_the_adopted_version() {
+    let path = path_of("TSK-001");
+    let after = moved("TSK-001", "main");
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    let source = docs_move(&fixture, &after);
+    let adoption = fixture.land(LINE, &[(&path, &after)]);
+    fixture.land("main", &[(&path, &moved("TSK-001", THIRD))]);
+    let restored = fixture.land("main", &[(&path, &after)]);
+    fixture.land("main", &[(&path, &noted())]);
+    fixture.sync();
+    let found = passes(&fixture, "a valid move away and back, then a note");
+    let anchor = found["TSK-001"]
+        .home_anchor
+        .expect("the adoption sets the anchor");
+    assert_eq!(anchor.line_landing, adoption);
+    assert_eq!(anchor.source_version, source);
+    assert_ne!(anchor.source_version, restored);
+}
+
+/// AC-13 (review finding 2, history a): the line takes `main`'s home in a
+/// docs-bearing landing with one comment added, then removes the comment
+/// in a records-only landing. The anchor is bound to the landing that
+/// changed the home, so the later edit makes no anchor, and `main`'s
+/// docs-bearing move is judged whether the sync leaves the record
+/// unchanged or imports a later note.
+#[test]
+fn a_comment_removed_after_a_docs_bearing_adoption_gains_no_anchor() {
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    let path = path_of("TSK-001");
+    let after = moved("TSK-001", "main");
+    docs_move(&fixture, &after);
+    let copy = after.replace("Pending.", "Pending.\n\n<!-- copied from main -->");
+    let home_change = fixture.land(
+        LINE,
+        &[(&path, &copy), ("docs/line.md", "The line's note.\n")],
+    );
+    fixture.land(LINE, &[(&path, &after)]);
+    fixture.sync();
+    if docs_admitted() {
+        passes(&fixture, "an own docs-bearing move under the aligned set");
+        fixture.land("main", &[(&path, &noted())]);
+        fixture.sync();
+        let found = passes(&fixture, "a note under the aligned set");
+        assert_eq!(found["TSK-001"].home_anchor, None);
+        return;
+    }
+    let mut failures = Vec::new();
+    failures.extend(not_refused(
+        &fixture,
+        "a comment removed after a docs-bearing adoption",
+        &["TSK-001", MOVED, &home_change.to_string()],
+    ));
+    fixture.land("main", &[(&path, &noted())]);
+    fixture.sync();
+    failures.extend(not_refused(
+        &fixture,
+        "a note after a comment removed from a docs-bearing adoption",
+        &["TSK-001", MOVED],
+    ));
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// AC-13 (review finding 2, history b): the line moves the task's home by
+/// its own records-only planning merge, then a docs-and-records amendment
+/// makes its text `main`'s version without changing the home. The own move
+/// admits the record with no anchor, and every move `main` made is still
+/// judged: a planning move passes, a direct one refuses.
+#[test]
+fn an_own_move_then_an_amendment_matching_main_passes_without_an_anchor() {
+    let path = path_of("TSK-001");
+    let main_version = moved("TSK-001", "main");
+    let own = task("TSK-001", "main", "todo", "Work.", "Pending on the line.");
+    let amendment = [
+        (path.as_str(), main_version.as_str()),
+        ("docs/line.md", "The line's note.\n"),
+    ];
+
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.land("main", &[(&path, &main_version)]);
+    fixture.land(LINE, &[(&path, &own)]);
+    fixture.land(LINE, &amendment);
+    fixture.sync();
+    let found = passes(&fixture, "an own move, then an amendment matching main");
+    assert!(!found.contains_key("TSK-001"), "{found:?}");
+    fixture.land("main", &[(&path, &noted())]);
+    fixture.sync();
+    let found = passes(&fixture, "a note after the own move and the amendment");
+    assert_eq!(found["TSK-001"].home_anchor, None);
+
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.direct("main", &[(&path, &main_version)]);
+    let direct = fixture.oid("main");
+    fixture.land(LINE, &[(&path, &own)]);
+    fixture.land(LINE, &amendment);
+    fixture.sync();
+    refused(
+        &fixture,
+        "a direct move on main beside an own move",
+        &[
+            "TSK-001",
+            MOVED,
+            &format!("the move at {direct} is not a reviewed planning merge of records"),
+        ],
+    );
+}
+
+/// AC-13 negative (1): a reviewed records-only merge that adopts `main`'s
+/// exact version but never landed on the line sets no anchor, so `main`'s
+/// docs-bearing move is judged and refused.
+#[test]
+fn a_claimed_adoption_with_no_landing_is_refused() {
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    let path = path_of("TSK-001");
+    let after = moved("TSK-001", "main");
+    docs_move(&fixture, &after);
+    fixture.git(&["branch", "plan/unlanded", LINE]);
+    fixture.land("plan/unlanded", &[(&path, &after)]);
+    fixture.sync();
+    refused(
+        &fixture,
+        "an adoption that never landed on the line",
+        &["TSK-001", MOVED],
+    );
+}
+
+/// AC-13 negative (2) and AC-7: a records-only planning merge reachable
+/// only through another merge's second parent proves nothing. On the line
+/// it sets no anchor, and on `main` it is no move the walk accepts.
+#[test]
+fn an_adoption_or_move_reachable_only_by_a_second_parent_is_refused() {
+    let path = path_of("TSK-001");
+    let after = moved("TSK-001", "main");
+
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    docs_move(&fixture, &after);
+    fixture.git(&["branch", "plan/adopt", LINE]);
+    fixture.land("plan/adopt", &[(&path, &after)]);
+    fixture.direct("plan/adopt", &[("docs/line.md", "The line's note.\n")]);
+    fixture.git(&["switch", "-q", LINE]);
+    fixture.git(&[
+        "merge",
+        "--no-ff",
+        "-q",
+        "-m",
+        "chore: land the adoption",
+        "plan/adopt",
+    ]);
+    let landing = fixture.oid(LINE).to_string();
+    fixture.sync();
+    refused(
+        &fixture,
+        "an adoption behind a second parent",
+        &["TSK-001", MOVED, &landing],
+    );
+
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.git(&["branch", "feature", "main"]);
+    fixture.land("feature", &[(&path, &after)]);
+    fixture.direct("feature", &[("src/feature.rs", "pub fn feature() {}\n")]);
+    fixture.git(&["switch", "-q", "main"]);
+    fixture.git(&[
+        "merge",
+        "--no-ff",
+        "-q",
+        "-m",
+        "feat: land the feature",
+        "feature",
+    ]);
+    let landing = fixture.oid("main").to_string();
+    fixture.sync();
+    refused(
+        &fixture,
+        "a main move behind a second parent",
+        &["TSK-001", MOVED, &landing],
+    );
 }
