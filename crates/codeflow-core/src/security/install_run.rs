@@ -33,9 +33,12 @@
 //! `--pager`, `rg --pre`, by any prefix of the option's name) is judged as
 //! the program runs its value: a command line, through this same reader,
 //! or one program given each searched path. A pager, editor or browser
-//! variable assigned earlier on the line is read when a program that runs
-//! it follows. The words `gh` passes to `git` after `--` are read as
-//! quoted arguments are. An editor's own command (`vim -c`, `emacs
+//! variable assigned before a program that runs it, or earlier on the
+//! line, is judged the same way; where that command cannot be resolved,
+//! such as a shell reading its input, the line is judged on its raw text.
+//! The words `gh repo clone`, `gh repo fork` and `gh gist clone` pass to
+//! `git` after `--` are read as quoted arguments are. An editor's own
+//! command (`vim -c`, `emacs
 //! --eval`, a `+` word for vi or less) is judged on its raw text, as
 //! interpreter code is.
 //!
@@ -102,10 +105,11 @@ const RUNS_THROUGH_OPTION: &[(&str, OptionValue)] = &[
 
 /// Variables a [`DATA_PROGRAMS`] program runs as a command: a pager, an
 /// editor or a browser. An assignment of one earlier on the line is read
-/// when that program follows; Git's own are also read by its runner
-/// reader.
+/// when that program follows. Git runs the command variables the startup
+/// check lists; its runner reader also reads them.
 const COMMAND_VARIABLES: &[(&str, &[&str])] = &[
     ("ack", &["ACK_PAGER", "ACK_PAGER_COLOR", "PAGER"]),
+    ("git", super::startup::COMMAND_VARIABLES),
     (
         "gh",
         &[
@@ -120,6 +124,13 @@ const COMMAND_VARIABLES: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+/// The `gh` commands that pass the words after their `--` to the `git
+/// clone` they run, as gh's source declares them: `repo clone <repository>
+/// [<directory>] [-- <gitflags>...]`, `repo fork [<repository>] [--
+/// <gitflags>...]` (used when it clones) and `gist clone <gist>
+/// [<directory>] [-- <gitflags>...]`.
+const GH_GIT_COMMANDS: &[(&str, &str)] = &[("gist", "clone"), ("repo", "clone"), ("repo", "fork")];
 
 /// Editors and a pager whose own command language runs a shell command
 /// (`!` in vi and less, `shell-command` in emacs). Their command options'
@@ -437,33 +448,38 @@ fn read(command: &str, depth: usize) -> Found {
             pending.extend(command.values);
             continue;
         };
-        for (_, value) in &command.values {
-            if let Some(run) = in_value(value, depth) {
+        let name = basename(program);
+        let mut judge =
+            |variable: &str, value: &str| match assignment_value(&name, variable, value, depth) {
+                Found::Run(run) => Some(run),
+                Found::Unresolved => {
+                    unresolved = true;
+                    None
+                }
+                Found::Nothing => None,
+            };
+        for (variable, value) in &command.values {
+            if let Some(run) = judge(variable, value) {
                 return Found::Run(run);
             }
         }
-        let name = basename(program);
         if DECLARES.contains(&name.as_str()) {
             pending.extend(command.argv[1..].iter().filter_map(|word| assigned(word)));
             continue;
         }
         if DATA_PROGRAMS.contains(&name.as_str()) {
             // Only the variables this program runs as a command.
-            let runs = COMMAND_VARIABLES
+            for (variable, value) in pending
                 .iter()
-                .find(|(data, _)| *data == name)
-                .map_or(&[][..], |(_, names)| *names);
-            for (_, value) in pending
-                .iter()
-                .filter(|(var, _)| runs.contains(&var.as_str()))
+                .filter(|(variable, _)| runs_variable(&name, variable))
             {
-                if let Some(run) = in_value(value, depth) {
+                if let Some(run) = judge(variable, value) {
                     return Found::Run(run);
                 }
             }
         } else {
-            for (_, value) in pending.drain(..) {
-                if let Some(run) = in_value(&value, depth) {
+            for (variable, value) in pending.drain(..) {
+                if let Some(run) = judge(&variable, &value) {
                     return Found::Run(run);
                 }
             }
@@ -478,6 +494,34 @@ fn read(command: &str, depth: usize) -> Found {
         Found::Unresolved
     } else {
         Found::Nothing
+    }
+}
+
+/// Whether `program` runs the value of `variable` as a command: a data
+/// program's own variables ([`COMMAND_VARIABLES`]), and for any other
+/// program the pager, editor and other command variables the startup check
+/// lists.
+fn runs_variable(program: &str, variable: &str) -> bool {
+    if DATA_PROGRAMS.contains(&program) {
+        COMMAND_VARIABLES
+            .iter()
+            .find(|(data, _)| *data == program)
+            .is_some_and(|(_, names)| names.contains(&variable))
+    } else {
+        super::startup::COMMAND_VARIABLES.contains(&variable)
+    }
+}
+
+/// An assignment's value, for the command `program` that may read it. A
+/// value the program runs as a command is judged as an option's command
+/// line is ([`command_line_value`]), so a command this reader cannot
+/// resolve, such as a shell reading its input, leaves the line judged on
+/// its raw text. Any other value is read for a run only.
+fn assignment_value(program: &str, variable: &str, value: &str, depth: usize) -> Found {
+    if runs_variable(program, variable) {
+        command_line_value(value, depth)
+    } else {
+        in_value(value, depth).map_or(Found::Nothing, Found::Run)
     }
 }
 
@@ -645,12 +689,19 @@ fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool, depth: 
     found
 }
 
-/// The words after `--` that `gh` passes to the `git` it runs (`gh repo
-/// clone`, `gh repo fork --clone`): each one holding a blank, such as a
-/// `-c` setting or an `--upload-pack` value, is read as a quoted argument
-/// is. Its words before `--` are data.
+/// The words after `--` that a [`GH_GIT_COMMANDS`] command passes to the
+/// `git clone` it runs: each one holding a blank, such as a `-c` setting or
+/// an `--upload-pack` value, is read as a quoted argument is. The command
+/// is the first two words of `argv` after the program that are not
+/// options. Any other gh command's words after `--` are its data, such as
+/// a search query.
 fn gh_git_arguments(argv: &[String], depth: usize) -> Option<InstallRun> {
     let start = argv.iter().position(|word| word == "--")?;
+    let mut words = argv[1..start].iter().filter(|word| !word.starts_with('-'));
+    let command = (words.next()?.as_str(), words.next()?.as_str());
+    if !GH_GIT_COMMANDS.contains(&command) {
+        return None;
+    }
     argv[start + 1..]
         .iter()
         .filter(|word| word.contains(shell_blank))

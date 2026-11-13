@@ -1501,7 +1501,7 @@ fn judge_class(
 /// Variables whose value is a command that a reader or git runs: an editor,
 /// a pager, an ssh or askpass program, an external diff, a preview filter, or
 /// configuration passed in the environment.
-const COMMAND_VARIABLES: &[&str] = &[
+pub(crate) const COMMAND_VARIABLES: &[&str] = &[
     "EDITOR",
     "VISUAL",
     "FCEDIT",
