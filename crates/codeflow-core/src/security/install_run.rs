@@ -1484,7 +1484,7 @@ mod tests {
         for command in [
             "export ACK_PAGER='less -R'; ack pattern README.md",
             "export GH_PAGER='less -R'; gh pr list",
-            "NOTE='codeflow update'; ack \"$NOTE\" docs",
+            "NOTE='codeflow update'; ack -- \"$NOTE\" docs",
             "export NOTE='codeflow update'; gh pr list",
         ] {
             assert!(!runs(command), "{command}");
@@ -1919,8 +1919,9 @@ mod tests {
     /// A search or forge program is read as data only in the forms known
     /// to run nothing: each option on the program's list and each `gh`
     /// command on gh's list. Any other option (`--hostname-bin`,
-    /// `--ackrc`) or gh command (an alias, an extension, a setting) judges
-    /// the line on its raw text.
+    /// `--ackrc`), a word the shell expands where an option can stand, or
+    /// another gh command (an alias, an extension, a setting) judges the
+    /// line on its raw text.
     #[test]
     fn data_programs_are_read_only_in_known_forms() {
         for command in [
@@ -1934,6 +1935,10 @@ mod tests {
             "ack --ackrc=x.rc -h 'codeflow update' notes.txt",
             "ack --output=x 'codeflow update' docs",
             "ag --unknown 'codeflow update' docs",
+            "o=--pager=sh; ack \"$o\" -h 'codeflow update' notes.txt",
+            "rg \"$o\" 'codeflow update' notes.txt",
+            "NOTE='codeflow update'; ack \"$NOTE\" docs",
+            "gh repo clone owner/repo -- \"$flags\"; echo 'codeflow update'",
         ] {
             assert!(runs(command), "{command}");
         }
@@ -1948,6 +1953,7 @@ mod tests {
             "rg -g '*.md' -e 'codeflow update' docs",
             "rg -A3 --type md 'codeflow update' docs",
             "rg --no-config -- 'codeflow update' docs",
+            "ack -- \"$NOTE\" docs; echo 'codeflow update'",
             "ack -i --nocolor 'codeflow update' docs",
             "ag -Q --nogroup 'codeflow update' docs",
         ] {
