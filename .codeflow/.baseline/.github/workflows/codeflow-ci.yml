@@ -197,6 +197,25 @@ jobs:
           codeflow_gated=1
           "$codeflow_bin" test --strict --mode "$codeflow_mode"
 
+      # The gate's run record, target/codeflow-gate/<run id>/run.json, lists
+      # each target's name, state and duration under `outcomes`, failed and
+      # skipped ones included, and holds each target's captured output, which
+      # the job log shows only for a failed target. Keeping it as an artifact
+      # lets a person or tool read it through the GitHub API (issue 546).
+      # It runs whether the gate passed or failed, and never changes the
+      # job's result. The name is unique per job and attempt, so a re-run
+      # keeps the first attempt's record. A CARGO_TARGET_DIR that setup put
+      # in GITHUB_ENV moves the record with it.
+      - name: Keep the gate's run record
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-gate-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.CARGO_TARGET_DIR || 'target' }}/codeflow-gate/*/run.json
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: codeflow validate --docs
         run: codeflow validate --docs
 

@@ -13,8 +13,9 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_into, Criteria, Finding, OwnLine, Replaced, Scope,
-    AUTHORITY_NOTE, COPIES_NOTE, FROZEN_RULE, IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
+    is_correction, is_landed_review, is_landing_marker, pull_request_findings_into, Criteria,
+    Finding, OwnLine, Replaced, Scope, AUTHORITY_NOTE, COPIES_NOTE, FROZEN_RULE, IMPORT_RULE,
+    REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -677,6 +678,8 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
         let remedy = match &found.epic_record {
             Some(path) => codeflow_core::remedy::EPIC_ACCEPTANCE_BINDING
                 .with(&[("path", path), ("note", SCOPE_NOTE)]),
+            None if is_landed_review(&found) => codeflow_core::remedy::LANDED_REVIEW.remedy(),
+            None if is_landing_marker(&found) => codeflow_core::remedy::LANDING_MARKER.remedy(),
             None => codeflow_core::remedy::ACCEPTANCE_BINDING.with(&[("note", SCOPE_NOTE)]),
         };
         Violation::new(found.rule, git.work_records_level(), found.message, remedy)

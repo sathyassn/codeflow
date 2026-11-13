@@ -1231,17 +1231,18 @@ and reports B and C as not applied.
 
 1. TSK-336 reaches the default branch through the line's reviewed pull
    request, under the existing rules.
-2. From that merge, the old names (`commit standards`, `secret scan`,
-   `release impact`) have no producer, so every pull request into the
-   default branch and the lines is blocked by the rulesets that still
-   require them. This fails closed by design.
+2. `commit standards` keeps its producer: the policy verdict job is still
+   named `commit standards` (TSK-1368), and `secret scan` is the head-built
+   CI job. A ruleset that already requires those names stays satisfiable.
+   In this repository `release impact` is posted by `codeflow-release.yml`.
 3. In the same session, an administrator runs `codeflow remote protect`
    (with `--check-app <id>` in Mode A, and `--lines` for the line pattern),
    which writes A, B and C.
-4. The administrator retires, on the host, every foreign ruleset that
-   requires an old name. In this repository those are 24379074 (`main`)
-   and 25435656 (`integration/**`). `codeflow doctor --check
-   remote-perimeter` names each one, and is green only after.
+4. Do not retire a foreign ruleset because it requires `commit standards`.
+   In this repository 24379074 (`main`) and 25435656 (`integration/**`)
+   require it and stay in place. Retire only a ruleset that `codeflow
+   doctor --check remote-perimeter` names for requiring a name no workflow
+   on the default branch produces.
 
 ### Mode A setup (operator)
 
@@ -1260,9 +1261,10 @@ one session. Step 7 has no ordering dependency.
 5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
    file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
 6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
-   as the administrator; retire the foreign rulesets; run `codeflow doctor
-   --check remote-perimeter` and stop only when it is green with no
-   recovery window open.
+   as the administrator; run `codeflow doctor --check remote-perimeter`
+   and stop only when it is green with no recovery window open. Retire a
+   foreign ruleset only when that check names it for requiring a name no
+   workflow on the default branch produces.
 7. Create the agent principal: a non-administrator App installation or bot
    account with Contents and Pull requests write and Actions read, and no
    Workflows, Commit statuses, Checks, Administration, Environments or

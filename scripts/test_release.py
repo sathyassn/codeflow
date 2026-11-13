@@ -1517,6 +1517,46 @@ class PublicationTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(release.ReleaseError):
                 release.verify_host_state(args)
 
+    def test_a_tag_created_at_the_source_before_dispatch_resumes(self) -> None:
+        source = "c" * 40
+        notes = self.repo.root / "notes.md"
+        notes.write_text("reviewed\n")
+        state = self.repo.root / "state.json"
+        args = argparse.Namespace(state=state, source=source, tag="v3.0.0", notes=notes)
+        shapes = [
+            ({"tag_target": source, "release": None}, {"tag_target": "d" * 40, "release": None}),
+            (
+                {"schema_version": 1, "drafts_visible": True, "tags": {"v3.0.0": source}, "releases": []},
+                {"schema_version": 1, "drafts_visible": True, "tags": {"v3.0.0": "d" * 40}, "releases": []},
+            ),
+        ]
+        for at_source, elsewhere in shapes:
+            with self.subTest(state=at_source):
+                state.write_text(json.dumps(at_source))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    release.verify_host_state(args)
+                self.assertEqual(json.loads(output.getvalue()), {"status": "resume-tag"})
+                state.write_text(json.dumps(elsewhere))
+                with self.assertRaisesRegex(release.ReleaseError, "does not target selected source"):
+                    release.verify_host_state(args)
+
+    def test_publication_accepts_the_requested_tag_at_the_dispatched_main_commit(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "reviewed fix")])
+        head = self.repo.commit("fix: pending release")
+        args = self.repo.args(source=head, main_source=head, main_ref=None, tag="v2.0.1")
+        self.repo.write_host(tags={"v2.0.0": self.repo.baseline, "v2.0.1": head})
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.verify_publication(args)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"status": "authorized", "source": head, "tag": "v2.0.1"},
+        )
+        self.repo.write_host(tags={"v2.0.0": self.repo.baseline, "v2.0.1": self.repo.target})
+        with self.assertRaisesRegex(release.ReleaseError, "without a verified public release"):
+            release.verify_publication(args)
+
     def test_publication_attempt_uses_one_write_visible_paginated_inventory(self) -> None:
         source = "c" * 40
         notes = self.repo.root / "notes.md"
