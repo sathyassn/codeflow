@@ -278,7 +278,13 @@ pub const SCHEMA: [KeySpec; 82] = [
                 but its own commands that run no program, written in full or as a documented \
                 alias. A word the shell expands among the words of a program the guard does \
                 not know refuses when its text spells the binary with a verb. Only the exact \
-                help and version forms, which write nothing, stay allowed (TSK-1476). Words \
+                help and version forms, which write nothing, stay allowed (TSK-1476). A \
+                program another program hands its output, a file or an address to read (a \
+                pager, editor, browser or preprocessor, set by a variable, a search program's \
+                option or a Git setting) is judged by one check: it counts as data only when \
+                it is a viewer on the guard's list with each option on that viewer's own \
+                list, and any other program or option has the line judged on its raw text. \
+                Words \
                 that only name the verbs stay data: the binary's own record verbs, test \
                 operands, a search program's pattern, an assigned value no later command on \
                 the line reads, and a folder of that name given to a program that never runs \
