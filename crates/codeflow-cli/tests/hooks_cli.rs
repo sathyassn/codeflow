@@ -12778,3 +12778,39 @@ fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
     );
     assert_eq!(transports, Vec::<String>::new());
 }
+
+#[test]
+fn style_only_commit_messages_warn_and_exit_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
+    for (message, rule) in [
+        (
+            format!("feat: {}", "x".repeat(60)),
+            "git.commit_description",
+        ),
+        ("feat: x\n\nA prose body.".to_string(), "git.commit_body"),
+        (
+            "feat: x\n\n- one\n- two\n- three\n- four".into(),
+            "git.commit_body",
+        ),
+        ("feat: x\n\nRefs: TASK-1".into(), "git.commit_body"),
+        (
+            "feat: x\n\nA range 1\u{2013}3".into(),
+            "git.policy_characters",
+        ),
+    ] {
+        std::fs::write(&msg, message).unwrap();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+                .current_dir(dir.path()),
+            "",
+        );
+        assert!(out.status.success(), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(rule),
+            "{out:?}"
+        );
+    }
+}

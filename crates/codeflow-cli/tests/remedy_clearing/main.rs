@@ -735,7 +735,8 @@ fn clears_commit_required_footers() {
         r#"{"git": {"commit_required_footers": ["Signed-off-by"], "commit_footer_tokens": ["Signed-off-by"]}}"#,
         "feat: add x",
         "feat: add x\n\nSigned-off-by: Proof <proof@example.test>",
-        "git.commit_body",
+        // A missing required footer reports under its own key (TSK-450).
+        "git.commit_footer_required",
     );
 }
 

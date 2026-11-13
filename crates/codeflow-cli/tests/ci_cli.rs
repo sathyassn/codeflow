@@ -676,11 +676,11 @@ fn ci_full_body_on_code_range_is_clean() {
     );
 }
 
-/// The Summary shape (`git.pr_summary`, ADR-0071 note of 2026-10-03) blocks
+/// The Summary shape (`git.pr_summary`, ADR-0071 note of 2026-10-03) warns
 /// by default through the real binary, names what it found and clears once
-/// the Summary is a lead then bullets; a project lowers it to warn or off.
+/// the Summary is a lead then bullets; a project can select block or off.
 #[test]
-fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
+fn ci_summary_shape_warns_on_prose_only_and_follows_its_level() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
     let prose = FULL_BODY.replacen(
@@ -691,13 +691,13 @@ fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
     assert_ne!(prose, FULL_BODY, "the fixture names its Summary list");
     let out = ci_with_body(dir.path(), &prose);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("git.pr_summary (block)"), "{stderr}");
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("git.pr_summary (warn)"), "{stderr}");
     assert!(stderr.contains("(found: paragraph, paragraph)"), "{stderr}");
     assert!(stderr.contains("writing.md` \"Summaries\""), "{stderr}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("level pr_summary = block (shipped default)"),
+        stdout.contains("level pr_summary = warn (shipped default)"),
         "{stdout}"
     );
 
@@ -711,7 +711,7 @@ fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
 
     let cf = dir.path().join(".codeflow");
     std::fs::create_dir_all(&cf).unwrap();
-    for (level, code) in [("warn", 0), ("off", 0)] {
+    for (level, code) in [("block", 1), ("warn", 0), ("off", 0)] {
         std::fs::write(
             cf.join("policy.json"),
             format!(r#"{{"schema_version":1,"git":{{"pr_summary":"{level}"}}}}"#),
@@ -723,7 +723,7 @@ fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
         assert_eq!(out.status.code(), Some(code), "{level}: {stderr}");
         assert_eq!(
             stderr.contains("git.pr_summary"),
-            level == "warn",
+            level != "off",
             "{level}: {stderr}"
         );
         assert!(

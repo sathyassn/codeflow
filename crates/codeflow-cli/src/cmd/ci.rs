@@ -4185,18 +4185,21 @@ mod tests {
     }
 
     #[test]
-    fn story_body_and_long_description_block() {
+    fn story_body_and_long_description_warn() {
         // ADR-0020: the CI commit-range path inherits the restored standard
-        // because it reuses git_hook::commit_msg — a story body blocks at
-        // commit_body, an over-long description at commit_format.
+        // because it reuses git_hook::commit_msg — a story body warns at
+        // commit_body, an over-long description at commit_description.
         let story = "feat: add a thing\n\nA prose paragraph explaining the whole story here.";
         let v = evaluate_commits(&git(), &[commit("eeee7777", story)]);
         assert!(v.iter().any(|t| t.violation.rule == "git.commit_body"));
 
         let long = format!("fix: {}", "y".repeat(60));
         let v = evaluate_commits(&git(), &[commit("ffff8888", &long)]);
-        assert!(v.iter().any(|t| t.violation.rule == "git.commit_format"
-            && t.violation.message.contains("description")));
+        assert!(v
+            .iter()
+            .any(|t| t.violation.rule == "git.commit_description"
+                && t.violation.level == PolicyLevel::Warn
+                && t.violation.message.contains("description")));
     }
 
     #[test]

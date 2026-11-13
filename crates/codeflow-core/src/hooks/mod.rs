@@ -44,6 +44,7 @@ pub mod limits;
 pub mod orient;
 pub mod path_policy;
 pub mod policy;
+mod policy_compat;
 pub mod policy_schema;
 pub mod ref_authority;
 pub mod repo;
@@ -243,7 +244,9 @@ pub const LEVEL_KEYS: &[&str] = &[
     "hook_integrity",
     "root_checkout_commits",
     "commit_format",
+    "commit_description",
     "commit_body",
+    "commit_footer_required",
     "commit_ticket_required",
     "commit_ticket_merges",
     "ai_attribution",

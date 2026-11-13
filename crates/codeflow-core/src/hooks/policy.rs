@@ -380,16 +380,18 @@ pub struct GitPolicy {
     pub commit_types: Vec<String>,
     /// Max length of the commit *description* — the text after `type(scope): `.
     /// Integer characters; default 50 (the restored v1 subject budget, ADR-0020).
-    /// Enforced under `commit_format`.
+    /// Enforced under `commit_description`.
     pub commit_desc_max_len: u32,
+    /// Description length guidance; defaults to warn independently of format.
+    pub commit_description: PolicyLevel,
     /// Max length of the whole subject line (git's 72-column wrap). Integer
     /// characters; default 72 (ADR-0020). Enforced under `commit_format`.
     pub commit_subject_max_len: u32,
     /// Whether the commit-body shape is enforced (ADR-0020). Level
-    /// (off/warn/allow/block); default `block`. When active, the body is only
+    /// (off/warn/allow/block); default `warn`. When active, the body is only
     /// `- ` bullets (≤ `commit_body_max_bullets`, each ≤ `commit_body_bullet_max_len`
     /// chars), blank lines, an optional `BREAKING CHANGE:` footer, and any opted-in
-    /// footer trailers; a prose paragraph, numbered list, or story blocks.
+    /// footer trailers; a prose paragraph, numbered list, or story warns by default.
     /// Auto-generated subjects (merge/revert/fixup/squash) are exempt.
     pub commit_body: PolicyLevel,
     /// Max number of `- ` bullets allowed in a commit body. Integer; default 3
@@ -412,8 +414,11 @@ pub struct GitPolicy {
     /// `["Signed-off-by"]` for DCO). Default empty. A required token is implicitly
     /// allowed (no need to also list it in
     /// [`commit_footer_tokens`](GitPolicy::commit_footer_tokens)); a commit
-    /// missing one is blocked under `commit_body`.
+    /// missing one is judged under `commit_footer_required`.
     pub commit_required_footers: Vec<String>,
+    /// Level for missing required footer trailers, independent of body style.
+    /// Default `block`; an empty required-footer list imposes no requirement.
+    pub commit_footer_required: PolicyLevel,
     /// Ticket-reference footer tokens the project recognizes (e.g.
     /// `["Refs", "Closes"]`). Default empty = the ticket feature is off and a
     /// `Refs:` line is NOT auto-allowed (it blocks unless added to
@@ -481,7 +486,7 @@ pub struct GitPolicy {
     /// checks on a provided body: one prose paragraph that anchors the
     /// reader, then a list or table, then at most one closing paragraph
     /// (ADR-0071, note of 2026-10-03). Level (off/warn/allow/block); default
-    /// `block`, independent of `pr_sections`. It judges block shape, never a
+    /// `warn`, independent of `pr_sections`. It judges block shape, never a
     /// word or sentence count. Runs at most at `warn` while a kept PR
     /// template is diagnosed, and a trusted automation profile skips it.
     pub pr_summary: PolicyLevel,
@@ -592,9 +597,6 @@ pub struct GitPolicy {
     /// --hard`, `clean`, `stash drop`), judged by git-guard (TSK-172).
     /// Default `block`.
     pub discard_uncommitted: PolicyLevel,
-    /// Unsupported legacy key; discard checks do not read this list.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub clean_regenerable: Option<Vec<String>>,
 }
 
 thread_local! {
@@ -709,8 +711,9 @@ impl Default for GitPolicy {
             .map(ToString::to_string)
             .collect(),
             commit_desc_max_len: 50,
+            commit_description: PolicyLevel::Warn,
             commit_subject_max_len: 72,
-            commit_body: PolicyLevel::Block,
+            commit_body: PolicyLevel::Warn,
             commit_body_max_bullets: 3,
             commit_body_bullet_max_len: 72,
             // Strict baseline: no extra footer tokens are allowed by default —
@@ -719,6 +722,7 @@ impl Default for GitPolicy {
             // exactly what it needs (an agent fills every default-allowed slot).
             commit_footer_tokens: Vec::new(),
             commit_required_footers: Vec::new(),
+            commit_footer_required: PolicyLevel::Block,
             commit_ticket_keys: Vec::new(),
             commit_ticket_required: PolicyLevel::Off,
             commit_ticket_pattern: String::new(),
@@ -730,7 +734,7 @@ impl Default for GitPolicy {
             policy_characters: PolicyLevel::Warn,
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
-            pr_summary: PolicyLevel::Block,
+            pr_summary: PolicyLevel::Warn,
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
             pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
@@ -761,7 +765,6 @@ impl Default for GitPolicy {
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
             discard_uncommitted: PolicyLevel::Block,
-            clean_regenerable: None,
         }
     }
 }
@@ -981,30 +984,12 @@ pub struct SecuritySection {
     /// session or recheckable thread. Default `block` (D4, ADR-0075); a
     /// project can set `headless_peer_runs` to warn or off.
     pub headless_peer_runs: PolicyLevel,
-    /// Unsupported legacy key; accepted values have no effect.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub script_bypass: Option<PolicyLevel>,
     /// Outward actions the text rules cannot spell: publishing, releases,
     /// tag pushes and account changes behind flags or wrappers (TSK-172).
     /// Default `block`.
     pub outward_actions: PolicyLevel,
-    /// Unsupported legacy key; interpreter checks do not read this level.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interpreter_scan: Option<PolicyLevel>,
     /// Shell reads of the secret stores (TSK-172). Default `block`.
     pub secret_reads: PolicyLevel,
-    /// Unsupported legacy key; landed-policy checks do not read this level.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enforcement_baseline: Option<PolicyLevel>,
-    /// Unsupported legacy key; workflow push checks do not read this value.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workflow_pushes: Option<String>,
-    /// Unsupported legacy key; accepted values have no effect.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sandbox_retry: Option<String>,
-    /// Unsupported legacy entries; accepted values have no effect.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
     /// Which text rule the exec guard applies (TSK-397): `strict`, the
     /// default, adds the strict rule to every shell call; `relaxed`, the
     /// operator's choice, applies the line's rule and verifies nothing.
@@ -1047,14 +1032,8 @@ impl Default for SecuritySection {
             dangerous_commands: PolicyLevel::Block,
             privilege_escalation: PolicyLevel::Block,
             headless_peer_runs: PolicyLevel::Block,
-            script_bypass: None,
             outward_actions: PolicyLevel::Block,
-            interpreter_scan: None,
             secret_reads: PolicyLevel::Block,
-            enforcement_baseline: None,
-            workflow_pushes: None,
-            sandbox_retry: None,
-            sandbox_retry_allow: None,
             text_guard: TextGuard::Strict,
             trusted_client_configs: Vec::new(),
         }
@@ -1243,7 +1222,9 @@ impl GitPolicy {
         self.hook_integrity = PolicyLevel::Off;
         self.root_checkout_commits = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
+        self.commit_description = PolicyLevel::Off;
         self.commit_body = PolicyLevel::Off;
+        self.commit_footer_required = PolicyLevel::Off;
         // Neutralize the footer/ticket opt-ins so the scaffold commit is never
         // walled by a required trailer during the pre-first-commit grace window.
         self.commit_ticket_required = PolicyLevel::Off;
@@ -1372,7 +1353,7 @@ mod tests {
         // subject line, and a block-level body-shape rule (≤3 bullets, ≤72 each).
         assert_eq!(g.commit_desc_max_len, 50);
         assert_eq!(g.commit_subject_max_len, 72);
-        assert_eq!(g.commit_body, PolicyLevel::Block);
+        assert_eq!(g.commit_body, PolicyLevel::Warn);
         assert_eq!(g.commit_body_max_bullets, 3);
         assert_eq!(g.commit_body_bullet_max_len, 72);
         // Footer/ticket amendment (ADR-0020): strict baseline — every footer
@@ -1380,6 +1361,7 @@ mod tests {
         // the `BREAKING CHANGE:` footer are allowed until a project opts in.
         assert!(g.commit_footer_tokens.is_empty());
         assert!(g.commit_required_footers.is_empty());
+        assert_eq!(g.commit_footer_required, PolicyLevel::Block);
         assert!(g.commit_ticket_keys.is_empty());
         assert_eq!(g.commit_ticket_required, PolicyLevel::Off);
         assert!(g.commit_ticket_pattern.is_empty());
@@ -1400,7 +1382,7 @@ mod tests {
         assert_eq!(g.pr_release_impact, PolicyLevel::Warn);
         // The Summary shape blocks by default, by the operator's decision of
         // 2026-10-03 (ADR-0071 note); a project lowers it with this key.
-        assert_eq!(g.pr_summary, PolicyLevel::Block);
+        assert_eq!(g.pr_summary, PolicyLevel::Warn);
         assert_eq!(g.work_records, PolicyLevel::Block);
         assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
@@ -1530,15 +1512,9 @@ mod tests {
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
         assert_eq!(s.privilege_escalation, PolicyLevel::Block);
         assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
-        assert!(s.script_bypass.is_none());
         for level in [s.outward_actions, s.secret_reads] {
             assert_eq!(level, PolicyLevel::Block);
         }
-        assert!(s.interpreter_scan.is_none());
-        assert!(s.enforcement_baseline.is_none());
-        assert!(s.workflow_pushes.is_none());
-        assert!(s.sandbox_retry.is_none());
-        assert!(s.sandbox_retry_allow.is_none());
     }
 
     #[test]
@@ -1568,10 +1544,6 @@ mod tests {
             serde_json::to_value(SecuritySection::default()).unwrap()
         );
         assert_eq!(from_asset.git.discard_uncommitted, PolicyLevel::Block);
-        assert_eq!(
-            from_asset.git.clean_regenerable,
-            GitPolicy::default().clean_regenerable
-        );
         assert!(
             asset.contains("\"headless_peer_runs\": \"block\""),
             "the shipped policy states the headless peer level"
@@ -1770,6 +1742,7 @@ mod tests {
         assert_eq!(policy.git.local_ref_protection, PolicyLevel::Off);
         assert_eq!(policy.git.commit_format, PolicyLevel::Off);
         assert_eq!(policy.git.commit_body, PolicyLevel::Off);
+        assert_eq!(policy.git.commit_footer_required, PolicyLevel::Off);
         // The security / red-team gates are advisory (warn) defaults, so — like
         // test_gate_on_push — bootstrap grace suspends them (ADR-0016).
         assert_eq!(policy.git.security_review, PolicyLevel::Off);

@@ -40,15 +40,17 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree. | Default 200. A tree older than the depth is not found, so the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.branch_name_omit_words` | string list | `["secret","credentials"]` | an array of words of lower-case letters and digits | Words that work claim and epic new --integration leave out of a generated branch name. | A loose ref is a file named after its branch, and a sandbox can refuse to read a file by its name; git then reports that ref as broken. An entry matches anywhere inside a title word. The default holds the words the Claude Code sandbox was probed to refuse; set the list your harness needs, or an empty list to keep every word. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
+| `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs commit_types and commit_subject_max_len; off/allow disables both. |
 | `git.commit_types` | string list | `["feat","fix","docs","refactor","test","chore","ci","perf","build","revert"]` | an array of lower-case conventional commit types | The whitelist of commit types. | Enforced under commit_format. |
-| `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_format. |
+| `git.commit_description` | Level | `warn` | off \| warn \| allow \| block | The commit description length guideline. | Defaults to warn independently of commit_format. The subject length stays under commit_format. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_description. |
 | `git.commit_subject_max_len` | uint | `72` | a non-negative integer (character count) | Max length of the whole subject line (git's 72-column wrap). | Enforced under commit_format. |
-| `git.commit_body` | Level | `block` | off \| warn \| allow \| block | Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers. | Governs the whole body family: the bullet caps, footer tokens, required footers, and ticket trailers; off/allow disables them all. Merge/revert/fixup/squash commits are exempt. |
+| `git.commit_body` | Level | `warn` | off \| warn \| allow \| block | Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers. | Governs body shape and allowed trailer tokens. Required footers and tickets have separate levels. Merge/revert/fixup/squash commits are exempt. |
 | `git.commit_body_max_bullets` | uint | `3` | a non-negative integer | Max number of `- ` bullets allowed in a commit body. | Enforced under commit_body. |
 | `git.commit_body_bullet_max_len` | uint | `72` | a non-negative integer (character count, including the `- ` marker) | Max length of a single commit-body bullet line. | Enforced under commit_body. |
 | `git.commit_footer_tokens` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers ALLOWED (optional) beyond the always-allowed BREAKING CHANGE:. | Unioned with commit_required_footers and commit_ticket_keys into the sanctioned-footer set; enforced under commit_body. |
-| `git.commit_required_footers` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers that MUST appear on every non-exempt commit (e.g. DCO). | A required token is implicitly allowed; a commit missing one blocks under commit_body. |
+| `git.commit_required_footers` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers that MUST appear on every non-exempt commit (e.g. DCO). | A required token is implicitly allowed; a commit missing one is judged under commit_footer_required. |
+| `git.commit_footer_required` | Level | `block` | off \| warn \| allow \| block | Missing required footer trailers, independently of body style. | Default block. An empty commit_required_footers list imposes no requirement. |
 | `git.commit_ticket_keys` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Refs, Closes) | Ticket-reference trailer tokens the project recognizes. | EMPTY = the ticket feature is off and a `Refs:` line BLOCKS unless listed in commit_footer_tokens; non-empty allows these tokens and arms commit_ticket_required. |
 | `git.commit_ticket_required` | Level | `off` | off \| warn \| allow \| block | Whether a matching ticket-reference trailer is REQUIRED on every commit. | Only meaningful when commit_ticket_keys is non-empty; `allow` behaves like `off` here (inactive); use warn or block to require. Merge/revert/fixup/squash commits are exempt; commit_ticket_merges opts merges in. |
 | `git.commit_ticket_pattern` | string | `""` | a regular expression, e.g. ^PROJ-\d+$ (empty = no format check) | Regex a present ticket trailer's value must match. | Strictly validated: an unparseable pattern is a loud error at the commit-msg hook, `codeflow ci`, and `codeflow validate` (at enforcement time it would silently fail open). |
@@ -59,7 +61,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.policy_characters` | Level | `warn` | off \| warn \| allow \| block | En and em dashes (U+2013, U+2014) in commit messages, PR bodies, and lines a ci range adds under the written-content trees (ADR-0067). | Defaults to warn: a writing guideline review and evaluation judge; set block to enforce it. Judges new text only: `codeflow ci` checks lines the range adds under docs/, project-management/ and the skill trees, so existing bytes are grandfathered, and skips a file whose bytes are exactly the whole-file managed asset this binary ships for that path. |
 | `git.pr_sections` | Level | `block` | off \| warn \| allow \| block | Required sections in the PR/MR body: the structure check `codeflow ci` runs on a provided PR body. | Governs pr_required_sections and pr_code_sections; off/allow disables both. PR events require a non-empty body; local/push runs without one skip. Presentation and template-remnant checks always warn, never block. |
 | `git.pr_release_impact` | Level | `warn` | off \| warn \| allow \| block | Generic Release impact fields and breaking commit floor in PR bodies. | Defaults to warn independently of pr_sections. Extra project fields are allowed; this check does not calculate versions or require release automation. |
-| `git.pr_summary` | Level | `block` | off \| warn \| allow \| block | The shape of the PR body's Summary: one prose paragraph that anchors the reader, then a list or table, then at most one closing paragraph (ADR-0071). | Defaults to block independently of pr_sections. Judges the visible blocks of the one Summary section, never a word or sentence count; HTML comments and the `Task:` line are skipped, and a code block, quote, heading or HTML block in the Summary fails. Runs at most at warn while a kept PR template is diagnosed, and a trusted automation profile skips it. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.pr_summary` | Level | `warn` | off \| warn \| allow \| block | The shape of the PR body's Summary: one prose paragraph that anchors the reader, then a list or table, then at most one closing paragraph (ADR-0071). | Defaults to warn independently of pr_sections. Judges the visible blocks of the one Summary section, never a word or sentence count; HTML comments and the `Task:` line are skipped, and a code block, quote, heading or HTML block in the Summary fails. Runs at most at warn while a kept PR template is diagnosed, and a trusted automation profile skips it. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.pr_breaking_level` | enum | `major` | patch \| minor \| major | Minimum impact level permitted for Breaking: yes in the project's release policy. | Defaults to major. Pre-1.0 projects explicitly choose their level, commonly minor. Breaking commit markers floor Impact at this level. |
 | `git.pr_required_sections` | string list | `["Summary","Changes"]` | an array of heading names without the leading ## (e.g. Summary) | Headings every PR body must carry, matched case-insensitively at ##/### depth. | A present-but-empty section (only HTML comments and bare `-` bullets) counts as missing; enforced under pr_sections. Fresh installs also list Reviews and Release impact; without this key the built-in default stays Summary and Changes. |
 | `git.pr_code_sections` | string list | `["Testing"]` | an array of heading names without the leading ## (e.g. Testing) | Headings required only when the commit range touches non-docs files. | Docs-only = every changed path is *.md, *.txt, LICENSE*, docs/**, or a .github template; anything else, or a range whose files could not be resolved, counts as code. Enforced under pr_sections. |
@@ -87,7 +89,6 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.discard_uncommitted` | Level | `block` | off \| warn \| allow \| block | Commands in an agent session that discard locally unique uncommitted work (ADR-0075). | Default block. The in-session guard judges it; a human terminal and the git hooks are unaffected. |
-| `git.clean_regenerable` | string list | `absent` | an array of directory paths, each ending with `/` | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 
 ## Security keys
 
@@ -96,16 +97,10 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.dangerous_commands` | enum | `block` | block | Destructive commands the exec-guard catches (rm -rf on system paths, dd to devices, mkfs, fork bombs). | Non-relaxable safety floor: stale or hand-edited weaker values are ignored by enforcement and rejected by validation. |
 | `security.privilege_escalation` | Level | `block` | off \| warn \| allow \| block | Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection). | Default block (ADR-0075 D5): the presets deny the plain forms without a prompt, the guard refuses the wrapped ones, and the operator runs privileged commands. `codeflow update` moves a project still at the old warn default to block. |
 | `security.headless_peer_runs` | Level | `block` | off \| warn \| allow \| block | Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate). | Default block (ADR-0075 D4): a project that needs a headless run sets security.headless_peer_runs to warn or off. `codeflow update` moves a project still at the old warn default to block. |
-| `security.script_bypass` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 | `security.text_guard` | enum | `absent` | strict \| relaxed | Which text rule the exec-guard applies to shell calls (TSK-397): `strict` adds the strict rule to every call; `relaxed` applies the line's rule by the operator's choice and verifies no sandbox. | Default strict, also when the key is absent. `relaxed` is honoured only from the remote-tracking refs as last fetched (the remote's default branch, the one policy authority since TSK-1077): plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, and no ref file that is a symbolic link. It is never honoured from a working copy, a local branch or tag, or a repository without a remote; a Claude Code call also needs it in the session project's policy. Those refs are local state that a process able to write `.git` can set; the guard does not authenticate them. The strict rule's refusals block whatever `git.hook_integrity` says. Under `relaxed`, a recognized marked retry (`dangerouslyDisableSandbox`) and every call on native Windows still take the strict rule. `codeflow doctor --check sandbox` shows the rule and the ref it was read from. The shipped policy file does not list it, so an older binary never meets the key. |
 | `security.trusted_client_configs` | string list | `absent` | any of curl, wget, httpie, xh, gh_aliases | The HTTP clients whose config files the project trusts (TSK-1346). For a listed tool, exec-guard no longer refuses a call because a config file it reads may exist: `curl` without `-q`, `wget` without `--no-config`, `HTTPie` or xh beside a `config.json`, and, for `gh_aliases`, a gh config the guard cannot locate, read or parse, or an alias in it that is not text or names another alias. A gh alias the guard can read is still judged as its expansion, and a shell alias it can read is still refused. | Default empty: every config-file refusal stays on. Accepting a tool accepts this threat: a config file the requester can write can turn that tool's call into a GitHub write the guard does not see. The GitHub-destination checks stay for every tool: a write to a GitHub release route, an unknown option, an unparsed destination or a redirect is still refused. Read only from the committed policy authority (`landed_policy`, the remote-tracking refs as last fetched), never from the working tree or the environment. A tool is trusted only when every policy source the guard reads lists it: the call's repository and, for a Claude Code call made outside it, the session project; a source that cannot be read trusts none. An unknown name is a validation error and trusts nothing. |
 | `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
-| `security.interpreter_scan` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 | `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
-| `security.enforcement_baseline` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
-| `security.workflow_pushes` | enum | `absent` | queue \| allow | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
-| `security.sandbox_retry` | enum | `absent` | allowlist \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
-| `security.sandbox_retry_allow` | entry list | `absent` | an array of entry objects, each naming its `program` | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 
 ## Top-level keys
 
@@ -271,26 +266,13 @@ weights, datasets and fixtures, media, vendored binaries and installers
 belong in Git LFS, or in a release asset or package registry that the
 repository references by digest.
 
-## Unsupported policy keys
+## Retired policy controls
 
-`security.script_bypass`, `security.sandbox_retry` and
-`security.sandbox_retry_allow` have no enforcement reader. Setting `block`
-does not add protection. Hooks warn when these keys are present, and
-`codeflow doctor` reports them. Valid legacy values remain accepted;
-invalid types and values still fail policy validation.
-
-The shipped policy and built-in defaults omit these keys. `codeflow
-update` removes a value only when it matches the recorded shipped baseline.
-An edited value, or a value with no recorded baseline, stays and is warned
-about. The legacy retry entries have no effect, including their placeholder
-digests; they do not authorize an unsandboxed retry.
-
-The reader contract also identifies `git.clean_regenerable`,
-`security.interpreter_scan`, `security.enforcement_baseline` and
-`security.workflow_pushes` as unsupported. These four keys are also omitted
-from shipped and built-in defaults and follow the same update rules. Retained
-values do not configure the existing guards. Each key warns once per process.
-The table above labels every unsupported key.
+Older files can retain controls with no enforcement reader. They remain
+loadable and each retained key produces a notice; they do not configure a
+guard. The effective schema and shipped defaults omit them. Update removes
+a prior shipped value only when it still matches the recorded baseline;
+a project edit stays unchanged.
 
 ## Secret-path matching
 
@@ -2152,8 +2134,7 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   scope, which an allowed `git status` then runs; a workspace symbolic
   link to a protected file, which no sandbox was tested against; a seat
   with no sandbox; Claude's unsandboxed retry, since the presets set
-  `allowUnsandboxedCommands`; the `security.sandbox_retry` keys are
-  unsupported and have no effect; commands in `excludedCommands`; `sandbox.filesystem.disabled`
+  `allowUnsandboxedCommands`; retired retry policy controls have no effect; commands in `excludedCommands`; `sandbox.filesystem.disabled`
   set at user, managed or CLI scope; native Windows Claude; Grok's
   Windows stub; and a hard-linked repository `config` on a git that
   writes the file in place (git 2.53.0 replaces it and breaks the link).
@@ -2332,3 +2313,74 @@ allowed.
   `git status` and `git rev-parse` pass.
 - **Not changed:** the one-fetch recovery, and the verdicts once the
   authority resolves.
+
+## Dependency audit triage
+
+The audit takes the stricter of `git.security_review` and `git.dep_audit`
+from the base commit. Both `off` skips the audit. At `block`, a failing
+advisory row fails the job; at `warn`, it prints a warning. Failed or
+incomplete scans and invalid exception entries fail at both levels.
+
+An advisory is new when its `(id, package, ecosystem)` identity appears in
+the head scan and not the base scan. The first matching row applies:
+
+1. Failed or incomplete scan: fail at block and warn.
+2. Trusted suppression with an unexpired `ignoreUntil`: pass and report.
+3. New advisory, any severity: fail.
+4. Existing critical or high advisory: fail unless trusted triage states
+   not reachable with evidence.
+5. Existing medium advisory: fail unless trusted unexpired triage exists.
+6. Existing low or informational advisory: report and pass.
+
+Unknown severity is treated as high. Unknown or missing reachability is
+reachable. Dev-only lockfiles have no exemption. Suppressions use
+`[[IgnoredVulns]]` in the base commit's `osv-scanner.toml` beside the
+lockfile, with nonempty `id` and `reason` and a valid `ignoreUntil`.
+Migration: `reason` and `ignoreUntil` were previously optional. Add both
+fields on the base before adopting this workflow. Missing or malformed
+fields fail the job at warn and block. Expired suppressions do not apply. The scanner runs with an explicit empty configuration, so
+checkout configuration cannot hide findings before this table judges them.
+
+File-based triage lives in `.codeflow/audit-triage.json`, a JSON array of
+entries. The optional `.codeflow/audit-exceptions.sh` hook prints one JSON
+entry per line. Both come from the base commit and use the same validator:
+
+```json
+{"id":"GHSA-example","package":"demo","ecosystem":"crates.io","owner":"platform","rationale":"Reviewed call paths","expiry":"2099-01-01","reachability":"not-reachable","evidence":"No caller reaches the affected API"}
+```
+
+Every entry needs `id`, `package`, `ecosystem`, `owner`, `rationale` and
+`expiry` (UTC date, inclusive). High or critical entries also need
+`reachability: "not-reachable"` and nonempty `evidence`. A malformed or
+duplicate entry always fails the job. An expired entry fails at warn and
+block whenever its advisory is reported at head. If a complete, parsed
+head scan does not report it, a notice names the entry and expiry instead.
+A scan error or unparseable output fails; missing results never prove
+absence. A valid triage entry never waives a new advisory.
+
+The scanner version and checksum are parsed from the base workflow;
+missing or ambiguous pins fail closed. Both scans use one explicit empty
+scanner configuration, with suppressions and triage read separately from
+base. Only committed dependency inputs are exported for each scan. The
+input names in `scripts/dependency_audit.py` cover supported lockfiles and
+dependency manifests; head scripts, executables, ignore rules and scanner
+configuration never enter the scan directory. Dependency symlinks and
+submodules fail closed. Custom input names need a reviewed input-list
+update before adoption.
+
+Migration from the old hook contract: replace bare tab-separated finding
+lines with the JSON entries above. The hook still reads the tab-separated
+`CODEFLOW_AUDIT_FINDINGS` file and runs in `CODEFLOW_TRUSTED_ROOT` at
+`CODEFLOW_TRUSTED_SHA`. A bare output line now fails with migration advice;
+it cannot waive a finding without ownership, expiry or reachability evidence.
+Land the hook migration on the base before adopting this workflow.
+
+Recovery from live expired triage requires an operator merge of the
+renewal over the failing check: a PR renewing the entry is still judged by
+the expired base entry. The alternative is to fix or remove the vulnerable
+dependency so a complete head scan proves its advisory absent. Invalid
+entries always fail, even when their advisory is absent; their repair also
+requires an operator merge because the invalid base remains authoritative.
+
+Running `codeflow policy` without a subcommand prints the effective policy
+values and their sources, like `codeflow policy show`.

@@ -61,10 +61,11 @@ calls the API.
   line at most 72. A body, when present, is **only** `-` bullets, at most 3,
   each a single line of at most 72 chars, optionally followed by a
   `BREAKING CHANGE:` footer; no prose paragraphs. One logical change per
-  commit. Other git-trailer footers (`Refs:`, `Signed-off-by:` and the like)
-  are blocked unless the project opts them in: a team can allow specific
-  trailers, require a ticket reference, or require `Signed-off-by` (DCO) via
-  `policy.json`.
+  commit. By default the hooks warn on the description limit, body shape and
+  other git-trailer footers (`Refs:`, `Signed-off-by:` and the like) the
+  project has not opted in; an AI attribution trailer is always refused. A
+  team can allow specific trailers, require a ticket reference, or require
+  `Signed-off-by` (DCO) via `policy.json`.
 - **Breaking changes require compatibility judgment, every commit.** Assess
   API, CLI flags, config, formats, defaults and managed instructions against
   their accepted contract. An incompatible change requires `type!:` and a

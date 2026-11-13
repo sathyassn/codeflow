@@ -1493,9 +1493,7 @@ fn unsupported_policy_notes(value: &serde_json::Value) -> impl Iterator<Item = S
 fn key_change_note(key: &str, raw: Option<Shipped<'_>>) -> Shown {
     match key.strip_prefix('-') {
         Some(gone) => {
-            let kind = if crate::hooks::policy_schema::spec_for(gone)
-                .is_some_and(|spec| spec.is_unsupported())
-            {
+            let kind = if crate::hooks::policy_schema::UNSUPPORTED_KEYS.contains(&gone) {
                 "unsupported"
             } else {
                 "deprecated"
@@ -1517,24 +1515,22 @@ fn remove_unsupported_defaults(
     old: Option<&serde_json::Value>,
     new: &serde_json::Value,
 ) -> Vec<String> {
-    use crate::hooks::policy_schema::{lookup, schema};
+    use crate::hooks::policy_schema::{lookup, UNSUPPORTED_KEYS};
     let mut removed = Vec::new();
-    for spec in schema()
+    for path in UNSUPPORTED_KEYS
         .iter()
-        .filter(|spec| spec.path.contains('.') && spec.is_unsupported())
+        .copied()
+        .filter(|path| path.contains('.'))
     {
-        let previous = old.and_then(|value| lookup(value, spec.path));
-        if previous.is_some()
-            && lookup(user, spec.path) == previous
-            && lookup(new, spec.path).is_none()
-        {
-            let (section, key) = spec.path.split_once('.').expect("section key");
+        let previous = old.and_then(|value| lookup(value, path));
+        if previous.is_some() && lookup(user, path) == previous && lookup(new, path).is_none() {
+            let (section, key) = path.split_once('.').expect("section key");
             if let Some(object) = user
                 .get_mut(section)
                 .and_then(serde_json::Value::as_object_mut)
             {
                 object.remove(key);
-                removed.push(spec.path.to_string());
+                removed.push(path.to_string());
             }
         }
     }
