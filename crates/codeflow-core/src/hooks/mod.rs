@@ -239,6 +239,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "hard_reset_protected",
     "merge_to_protected",
     "pr_merge_to_protected",
+    "pr_review_approval",
     "local_ref_protection",
     "hook_integrity",
     "root_checkout_commits",

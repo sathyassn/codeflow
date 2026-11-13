@@ -137,6 +137,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("REMOTE_TRACKING_REF", Runs),
     ("FORCE_PUSH", Runs),
     ("PR_MERGE_PROTECTED", Runs),
+    ("PR_REVIEW_APPROVAL", Runs),
     ("BRANCH_NAME", Runs),
     ("ROOT_CHECKOUT_COMMIT", Runs),
     ("HOOK_INTEGRITY", Runs),

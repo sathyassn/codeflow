@@ -609,3 +609,176 @@ fn r22_startup_refuses_missing_current_directory() {
         .unwrap();
     assert!(!out.status.success(), "{}", stdout(&out));
 }
+
+/// These two commands reach this computer's real credential store. On macOS
+/// that is the login keychain, which a test must not touch, so they run where
+/// the store is the Secret Service or missing. The core tests cover the same
+/// paths on every platform with a store in memory.
+fn real_store_is_the_keychain() -> bool {
+    if cfg!(target_os = "macos") {
+        eprintln!("skipped: this test would reach the login keychain");
+        return true;
+    }
+    false
+}
+
+/// TSK-1348: a computer with no entry gets no token and no committer value,
+/// so a session's `TOKEN="$(...)" && ...` stops at the `&&`.
+#[test]
+fn agent_token_without_an_entry_prints_no_token() {
+    if real_store_is_the_keychain() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    let repo = "codeflow-test-none/never-an-entry";
+    for args in [
+        vec!["remote", "agent-token", "--repo", repo],
+        vec![
+            "remote",
+            "agent-token",
+            "--repo",
+            repo,
+            "--committer",
+            "name",
+        ],
+        vec![
+            "remote",
+            "agent-token",
+            "--repo",
+            repo,
+            "--committer",
+            "email",
+        ],
+    ] {
+        let out = run_in(dir.path(), home.path(), &args);
+        assert!(!out.status.success(), "{args:?}");
+        assert_eq!(stdout(&out), "", "{args:?}");
+    }
+}
+
+/// TSK-1348: a key file that is refused never reaches the output.
+#[cfg(unix)]
+#[test]
+fn import_agent_key_output_never_holds_the_key() {
+    use std::os::unix::fs::PermissionsExt;
+    if real_store_is_the_keychain() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    let key = dir.path().join("agent.pem");
+    // A made-up key: the header is split so no source line holds a key block.
+    let pem = concat!(
+        "-----BEGIN RSA PRIVATE",
+        " KEY-----\nsecretkeymaterial\n-----END RSA PRIVATE",
+        " KEY-----\n"
+    );
+    fs::write(&key, pem).unwrap();
+    for mode in [0o644, 0o600] {
+        fs::set_permissions(&key, fs::Permissions::from_mode(mode)).unwrap();
+        let out = run_in(
+            dir.path(),
+            home.path(),
+            &[
+                "remote",
+                "import-agent-key",
+                "--key-file",
+                key.to_str().unwrap(),
+                "--client-id",
+                "Iv1.none",
+                "--repo",
+                "codeflow-test-none/never-an-entry",
+            ],
+        );
+        let shown = format!("{}{}", stdout(&out), String::from_utf8_lossy(&out.stderr));
+        assert!(!out.status.success(), "{shown}");
+        assert!(
+            !shown.contains("secretkeymaterial") && !shown.contains("PRIVATE KEY"),
+            "{shown}"
+        );
+        assert_eq!(fs::read_to_string(&key).unwrap(), pem);
+    }
+}
+
+/// The flags are judged before any store is reached, on every platform.
+#[test]
+fn agent_token_committer_takes_only_name_or_email_and_never_a_credential_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    for args in [
+        vec!["remote", "agent-token", "--committer", "login"],
+        vec![
+            "remote",
+            "agent-token",
+            "--committer",
+            "name",
+            "--git-credential",
+            "get",
+        ],
+    ] {
+        let out = run_in(dir.path(), home.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert_eq!(stdout(&out), "", "{args:?}");
+    }
+}
+
+/// TSK-1348 design change (issue 696): the agent App issues no user access
+/// token, so `agent-token --user` and `agent-login` are gone, and the PR
+/// App's token never acts as a git credential helper. Each is refused by the
+/// argument parser before any store or lock is reached, on every platform.
+#[test]
+fn the_agent_app_user_token_route_is_gone_and_pr_token_never_pushes() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    for args in [
+        vec!["remote", "agent-token", "--user"],
+        vec!["remote", "agent-login"],
+        vec!["remote", "pr-token", "--git-credential", "get"],
+        // pr-login needs every id setup-apps printed.
+        vec!["remote", "pr-login", "--app", "codeflow-pr-r"],
+    ] {
+        let out = run_in(dir.path(), home.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert_eq!(stdout(&out), "", "{args:?}");
+    }
+    assert!(!home.path().join("locks").exists());
+}
+
+/// TSK-1348 AC-17: with no saved authorization, `pr-token` prints no token
+/// and names the command that authorizes.
+#[test]
+fn pr_token_without_a_login_names_pr_login() {
+    if real_store_is_the_keychain() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "demo");
+    let out = run_in(
+        dir.path(),
+        home.path(),
+        &[
+            "remote",
+            "pr-token",
+            "--repo",
+            "codeflow-test-none/never-an-entry",
+        ],
+    );
+    let error = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(!out.status.success(), "{error}");
+    assert_eq!(stdout(&out), "", "{error}");
+    // A Linux runner without `secret-tool` or curl stops earlier, naming it.
+    assert!(
+        error.contains("no PR App authorization for codeflow-test-none/never-an-entry")
+            && error.contains("codeflow remote pr-login")
+            || error.contains("secret-tool")
+            || error.contains("curl")
+            || error.contains("no credential store"),
+        "{error}"
+    );
+}

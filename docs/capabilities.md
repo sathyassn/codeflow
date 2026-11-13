@@ -286,6 +286,7 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
+- `setup-apps` creates up to three Apps.
 - `codeflow doctor` runs twenty-six health checks on the repository and the
   tools around it, including the default branch's host rules.
 

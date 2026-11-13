@@ -1,0 +1,16 @@
+{
+  "name": "",
+  "url": "",
+  "description": "The GitHub identity of this repository's agent sessions. Holds Contents and Pull requests write only. Created by codeflow remote setup-apps.",
+  "hook_attributes": {
+    "url": "",
+    "active": false
+  },
+  "redirect_url": "",
+  "public": false,
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write"
+  },
+  "default_events": []
+}

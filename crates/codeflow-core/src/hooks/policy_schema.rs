@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 82] = [
+pub const SCHEMA: [KeySpec; 83] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -247,6 +247,22 @@ pub const SCHEMA: [KeySpec; 82] = [
         valid: LEVEL_VALID,
         purpose: "A `gh pr merge` whose base branch is protected (git-guard only).",
         notes: "",
+    },
+    KeySpec {
+        path: "git.pr_review_approval",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "A pull request review approval or dismissal an agent session makes (git-guard only).",
+        notes: "Covers `gh pr review --approve`, and a `gh api` or `curl` request \
+                that approves or dismisses through a REST review endpoint or \
+                GraphQL, with `.` and `..` resolved, whatever token it carries; \
+                also a review or GraphQL request whose body the guard cannot \
+                read, a writing request to an address it cannot settle, and a \
+                `curl` command with `-K`, `--config`, `--variable` or \
+                `--expand-*`. Other clients, such as wget or Python, are not \
+                judged, and GitHub still accepts these calls from outside the \
+                guard (docs/github-apps.md). On when absent. The shipped policy \
+                file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.local_ref_protection",
