@@ -283,16 +283,33 @@ pub const SCHEMA: [KeySpec; 82] = [
                 output redirected only to `/dev/null`, since a target's name does not show \
                 what it is when the line runs. No Git call is data, since a Git search can \
                 fetch a missing \
-                object through a transport its configuration names. Every other line whose \
-                text names the binary with a verb refuses, whatever program reads it, so give \
+                object through a transport its configuration names. Every other line that \
+                names the binary with a verb refuses, whatever program reads it: in its text \
+                as written, in its words as the shell passes them, or in what `printf`, \
+                `echo` and `print` write from them once their escapes are decoded. So give \
                 such text to a listed program or leave the binary's name out of a search. A \
                 run whose program \
                 word or first operand the guard cannot resolve, and a run inside a quoted \
                 argument or an assigned value, refuse too (TSK-1476). A binary an agent \
-                renames or copies, the verb's words written to a file and run later, and state \
-                the line does not show (an exported variable, a shell alias or function from \
-                a profile, a program put first on the path) are not named on the line; that \
-                is a named residual. The guards hold each worktree's copies of \
+                renames or copies, the verb's words written to a file and run later, text \
+                that a program the guard does not model builds (a decoder, a character \
+                translator or an interpreter) and hands to a process already running that \
+                executes what it reads, and state the line does not show (an exported \
+                variable, a shell alias or function from a profile, a program put first on \
+                the path) are not named on the line; that is a named residual. Other layers \
+                hold against it in part: the session guards read policy from the default \
+                branch's commit, never the working copy; a pull request is judged by its \
+                base's policy and workflows, not its own; a default branch that requires pull \
+                requests takes changed install files only as a reviewed diff; and an active \
+                harness sandbox (proven on native macOS) denies writes to the core hook, \
+                policy, harness-settings and CI files. No layer catches the rest: the commit \
+                hooks read their levels from the working copy, and neither they nor the push \
+                hook refuse a change to the policy, hook or workflow files, so a rewritten \
+                policy or hook takes effect locally at once; instruction files, skills, \
+                agents and other workflows outside the sandbox's denies change without a \
+                refusal until review; the hook wiring written into a linked worktree's shared \
+                Git configuration lies outside the worktree; and on a host or seat without an \
+                active sandbox nothing contains the writes. The guards hold each worktree's copies of \
                 the enforcement files as they hold the root checkout's, against shell writes \
                 and against the file tools edit-guard is bound to. The shipped presets name no \
                 worktree path, since a deny there also stops Git's own writes in a sandboxed \
