@@ -1,5 +1,5 @@
 //! Source attribution for unchanged records imported by an ordinary merge.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     active_block, bind_completion_with_amendment, bind_epic_completion, commit_of,
@@ -320,8 +320,10 @@ fn unchanged_refusals(
     anchor: Oid,
     head: Oid,
 ) -> Vec<String> {
-    let start = match home::start_point(repo, anchor, default_tip) {
-        Ok(start) => start,
+    let paths = match home::start_point(repo, anchor, default_tip)
+        .and_then(|start| home::line_paths(repo, anchor, start))
+    {
+        Ok(paths) => paths,
         Err(reason) => return vec![format!("{UNENUMERATED}: {reason}")],
     };
     let mut refusals = Vec::new();
@@ -329,7 +331,7 @@ fn unchanged_refusals(
         if record.kind != RecordKind::Task || changed.iter().any(|old| old.id == record.id) {
             continue;
         }
-        let judged = match unchanged_and_rehomed(repo, record, anchor, head, start) {
+        let judged = match unchanged_line_candidate(repo, record, anchor, head, &paths) {
             Ok(false) => Ok(()),
             Ok(true) => home::judge_unchanged(repo, record, default_tip, anchor, head),
             Err(reason) => Err(reason),
@@ -360,21 +362,23 @@ fn finish(imported: Imports, refusals: &[String]) -> Result<Imports, String> {
 }
 
 /// Whether `record` is a task the range leaves as the receiving line holds
-/// it, and whose file the line changed since its merge base with the
-/// default tip: the candidates whose home the line may have re-homed or
-/// introduced (TSK-1378 AC-13). The record's own path is compared by blob.
-fn unchanged_and_rehomed(
+/// it, and whose file some commit of the line's first-parent history since
+/// its merge base with the default tip changed (`line_paths`), even when a
+/// later commit restored it: the candidates whose home the line may have
+/// re-homed or introduced (TSK-1378 AC-13). The identity walk in
+/// `judge_unchanged` then decides by the task's home history.
+fn unchanged_line_candidate(
     repo: &Repository,
     record: &RecordView,
     receiver: Oid,
     head: Oid,
-    start: Oid,
+    line_paths: &BTreeSet<String>,
 ) -> Result<bool, String> {
     let line_entry = home::entry_at(repo, receiver, &record.path)?;
     if line_entry.is_none() || line_entry != home::entry_at(repo, head, &record.path)? {
         return Ok(false);
     }
-    Ok(line_entry != home::entry_at(repo, start, &record.path)?)
+    Ok(line_paths.contains(&record.path))
 }
 
 /// Where a changed record's declared integration line supplies imports.
