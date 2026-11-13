@@ -8,7 +8,10 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::{PolicyLevel, Violation};
-use crate::security::{actions, pattern::matches_extended_glob};
+use crate::security::actions;
+use crate::security::pattern::{
+    match_extended_glob, GlobMatch, MAX_GLOB_PATH_BYTES, PATH_PAST_BOUND,
+};
 
 /// An input which the edit guard cannot safely interpret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +264,8 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
     for path in &request.paths {
         let absolute = absolute_target(path, cwd, ctx.home);
+        // First, so a path past the bound reads nothing on disk (TSK-1258).
+        let lexical = normalized(&absolute, false)?;
         // Shell startup files refuse whatever the integrity level (TSK-242).
         if let Some(file) = crate::security::startup::class_target(&absolute, &startup) {
             violations.push(Violation::always_blocking(
@@ -269,7 +274,6 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
                 crate::security::startup::SANCTIONED,
             ));
         }
-        let lexical = normalized(&absolute, false)?;
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
             let text = path_text(candidate)?;
@@ -277,9 +281,16 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
             let enforcement = ctx.level.is_active()
                 && !authority
                 && repository_enforcement_target(candidate, ctx.root, false).map_err(EditError)?;
-            if (authority
-                || (ctx.level.is_active()
-                    && (protected.iter().any(|pattern| covers(&text, pattern)) || enforcement)))
+            let mut covered = false;
+            if ctx.level.is_active() && !authority {
+                for pattern in &protected {
+                    if covers(&text, pattern)? {
+                        covered = true;
+                        break;
+                    }
+                }
+            }
+            if (authority || (ctx.level.is_active() && (covered || enforcement)))
                 && seen.insert(lexical.clone())
             {
                 violations.push(Violation::new(
@@ -398,11 +409,19 @@ fn resolved_pattern(base: &Path, relative: &str, resolve: bool) -> Result<String
     Ok(pattern)
 }
 
-fn covers(path: &str, pattern: &str) -> bool {
-    matches_extended_glob(path, pattern)
-        || pattern
+/// Whether `pattern` covers `path`. A match that cannot finish inside the
+/// glob matcher's bound is an error naming the bound, so the edit is refused
+/// with its cause (TSK-1258) and never allowed.
+fn covers(path: &str, pattern: &str) -> Result<bool, EditError> {
+    match match_extended_glob(path, pattern) {
+        GlobMatch::Match => Ok(true),
+        GlobMatch::Unbounded(cause) => Err(EditError(format!(
+            "cannot check the edit path against the protected paths: {cause}"
+        ))),
+        GlobMatch::NoMatch => Ok(pattern
             .strip_suffix("/**")
-            .is_some_and(|parent| path == parent)
+            .is_some_and(|parent| path == parent)),
+    }
 }
 
 // OS text rule (issue 79, `docs/architecture.md`): kept strict. The rules that
@@ -490,8 +509,40 @@ pub(crate) fn normalize_case(
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
 pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
-    let path = crate::portable_path::without_verbatim(path.to_path_buf());
+    let key = (path.to_path_buf(), resolve);
+    if let Some(cached) = NORMALIZED.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .and_then(|paths| paths.get(&key).cloned())
+    }) {
+        return cached;
+    }
+    let result = normalize_uncached(path, resolve);
+    NORMALIZED.with(|cache| {
+        if let Some(paths) = cache.borrow_mut().as_mut() {
+            paths.insert(key, result.clone());
+        }
+    });
+    result
+}
+
+fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    // Refused before any read, with the cause the glob matcher would give, so
+    // the host's path limit cannot change the verdict or its reason (TSK-1258).
+    if path.as_os_str().len() > MAX_GLOB_PATH_BYTES {
+        return Err(EditError(format!(
+            "cannot check the edit path against the protected paths: {PATH_PAST_BOUND}"
+        )));
+    }
+    let path = crate::portable_path::without_verbatim(
+        crate::portable_path::guard_path(path).map_err(EditError)?,
+    );
     let mut result = PathBuf::new();
+    // The length of `result` at the first name proven to hold nothing. Nothing
+    // can exist below it, so the names under it are kept without a read, until
+    // a `..` climbs back out of it. One walk per name was quadratic (TSK-1258).
+    let mut absent_at = None;
     for component in path.components() {
         match component {
             Component::Prefix(prefix) => result.push(prefix.as_os_str()),
@@ -499,8 +550,22 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
             Component::CurDir => {}
             Component::ParentDir => {
                 result.pop();
+                if absent_at.is_some_and(|length| result.as_os_str().len() < length) {
+                    absent_at = None;
+                }
             }
             Component::Normal(part) => {
+                let name = crate::git::GitName::from_os_str(part);
+                let spelling = if cfg!(windows) {
+                    Some(crate::portable_path::filesystem_spelling(
+                        name.rule_text().map_err(|_| {
+                            EditError("cannot normalize a Windows path component as text".into())
+                        })?,
+                    ))
+                } else {
+                    None
+                };
+                let part = spelling.as_deref().map_or(part, std::ffi::OsStr::new);
                 // A normal component can look like a drive prefix when read
                 // alone (`quoted/C:/tail` on Windows). Pushing it directly
                 // would discard the preceding path. Keep it relative, even
@@ -516,33 +581,58 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
                 } else {
                     result.push(part);
                 }
-                if resolve {
-                    if crate::absence::cannot_exist(&result).map_err(|e| {
-                        EditError(format!("cannot inspect {}: {e}", result.display()))
-                    })? {
-                        continue;
-                    }
-                    match std::fs::symlink_metadata(&result) {
-                        Ok(metadata) if metadata.file_type().is_symlink() => {
-                            result = crate::portable_path::canonicalize(&result).map_err(|e| {
-                                EditError(format!("cannot resolve {}: {e}", result.display()))
-                            })?;
-                        }
-                        Ok(metadata) => {
-                            normalize_case(&mut result, &metadata).map_err(EditError)?;
-                        }
-                        Err(e) => {
-                            return Err(EditError(format!(
-                                "cannot inspect {}: {e}",
-                                result.display()
-                            )))
-                        }
+                if resolve && absent_at.is_none() {
+                    let (resolved, absent) = resolved_component(result)?;
+                    result = resolved;
+                    if absent {
+                        absent_at = Some(result.as_os_str().len());
                     }
                 }
             }
         }
     }
     Ok(result)
+}
+
+/// Branch alternatives commonly share all but their last component. Resolve
+/// those prefixes once in the same invocation snapshot as complete operands.
+/// The flag says this read proved that nothing can exist at the path. A cached
+/// path gives `false`, which costs the caller one more read at most.
+fn resolved_component(mut path: PathBuf) -> Result<(PathBuf, bool), EditError> {
+    let key = (path.clone(), true);
+    if let Some(cached) = NORMALIZED.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .and_then(|paths| paths.get(&key).cloned())
+    }) {
+        return cached.map(|path| (path, false));
+    }
+    let result = (|| {
+        if crate::absence::cannot_exist(&path)
+            .map_err(|e| EditError(format!("cannot inspect {}: {e}", path.display())))?
+        {
+            return Ok((path, true));
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                crate::portable_path::canonicalize(&path)
+                    .map(|path| (path, false))
+                    .map_err(|e| EditError(format!("cannot resolve {}: {e}", path.display())))
+            }
+            Ok(metadata) => {
+                normalize_case(&mut path, &metadata).map_err(EditError)?;
+                Ok((path, false))
+            }
+            Err(e) => Err(EditError(format!("cannot inspect {}: {e}", path.display()))),
+        }
+    })();
+    NORMALIZED.with(|cache| {
+        if let Some(paths) = cache.borrow_mut().as_mut() {
+            paths.insert(key, result.clone().map(|(path, _)| path));
+        }
+    });
+    result
 }
 
 pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
@@ -851,6 +941,10 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         ("packed-refs", false),
         ("config", false),
         ("config.worktree", false),
+        // An alternate object store adds objects Git reads as its own, so a
+        // written list can make any content reachable (TSK-1002 Fable 13).
+        ("objects/info/alternates", false),
+        ("objects/info/http-alternates", false),
     ] {
         protected.push((
             repo.commondir().join(name),
@@ -912,7 +1006,11 @@ pub(super) fn registration_at(admin: &Path) -> Result<super::repo::CheckedRegist
     })
 }
 
+type NormalizedCache = std::collections::HashMap<(PathBuf, bool), Result<PathBuf, EditError>>;
+
 thread_local! {
+    static NORMALIZED: std::cell::RefCell<Option<NormalizedCache>> =
+        const { std::cell::RefCell::new(None) };
     static REGISTRATIONS: std::cell::RefCell<Option<RegistrationCache>> =
         const { std::cell::RefCell::new(None) };
     static PROTECTED: std::cell::RefCell<Option<ProtectedCache>> =
@@ -922,7 +1020,9 @@ thread_local! {
 }
 
 /// While alive, each repository's enforcement paths are read and resolved
-/// once on this thread. One guard evaluation judges many words against the
+/// once on this thread. Normalized operands share that snapshot too, including
+/// errors; dropping the outer scope discards it before the next command.
+/// One guard evaluation judges many words against the
 /// same repository, which the command being judged has not changed yet
 /// (TSK-216 round 16).
 pub struct RepoFactsScope {
@@ -942,8 +1042,13 @@ impl RepoFactsScope {
             outer
         });
         if outer {
+            NORMALIZED.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             super::repo::TARGET_ROOTS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+            super::repo::OWNERS
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+            super::git_guard::LINE_READS
+                .with(|cache| *cache.borrow_mut() = Some(super::git_guard::LineReads::default()));
             REGISTRATIONS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             CHECKOUTS.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
@@ -955,7 +1060,10 @@ impl RepoFactsScope {
 impl Drop for RepoFactsScope {
     fn drop(&mut self) {
         if self.outer {
+            NORMALIZED.with(|cache| *cache.borrow_mut() = None);
             super::repo::TARGET_ROOTS.with(|cache| *cache.borrow_mut() = None);
+            super::repo::OWNERS.with(|cache| *cache.borrow_mut() = None);
+            super::git_guard::LINE_READS.with(|cache| *cache.borrow_mut() = None);
             REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
             CHECKOUTS.with(|cache| *cache.borrow_mut() = None);
@@ -1476,6 +1584,141 @@ mod tests {
         for path in ["etc/gitconfig.example", "docs/gitconfig", "notes.md"] {
             assert!(!fixture.refused(path), "{path}");
         }
+    }
+
+    /// TSK-1258: a path the glob matcher cannot judge inside its bound is
+    /// refused with the bound named, not reported as an enforcement path and
+    /// never allowed, and before any read of the target, so a host's path
+    /// limit cannot stall it or change its cause. The short path shows that
+    /// the count sees an inspection. Many short components keep each one a
+    /// valid name.
+    #[test]
+    fn a_path_past_the_glob_bound_is_refused_with_its_cause() {
+        const TARGET: &str = "overlength-target";
+        let fixture = Fixture::new();
+        let judge = |path: String| {
+            crate::absence::reads_naming(TARGET, || {
+                evaluate(&synthetic("write", json!({"path": path})), &fixture.ctx())
+            })
+        };
+        let (short, inspected) = judge(format!("{TARGET}/a/a/"));
+        assert!(short.is_ok_and(|violations| violations.is_empty()));
+        assert!(inspected > 0, "the count sees the short target's reads");
+        let (long, inspected) = judge(format!("{TARGET}/{}", "a/".repeat(20_000)));
+        let error = long.expect_err("a path past the bound must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("longer than the glob matcher's bound"),
+            "{error}"
+        );
+        assert_eq!(inspected, 0, "the long target is refused unread");
+        assert!(!fixture.refused("notes.md"), "a normal path is unchanged");
+    }
+
+    /// TSK-1258: the reads one judgment spends do not grow with how deep a
+    /// path runs below its first missing name. One read per ancestor for
+    /// each name is quadratic, and it held a Windows test past 1200 seconds:
+    /// Windows reads a path of about 32 KiB where Unix refuses it near 1 or 4 KiB,
+    /// so this counts reads at a depth every host can reach.
+    #[test]
+    fn a_missing_path_costs_the_same_reads_at_any_depth() {
+        let reads_at = |depth: usize| {
+            let fixture = Fixture::new();
+            let path = format!("notes/{}", "a/".repeat(depth));
+            let before = crate::absence::reads();
+            let violations = evaluate(&synthetic("write", json!({"path": path})), &fixture.ctx())
+                .expect("an ordinary missing path is judged");
+            assert!(violations.is_empty());
+            crate::absence::reads() - before
+        };
+        let (shallow, deep) = (reads_at(100), reads_at(400));
+        assert!(deep < shallow * 2, "{shallow} reads at 100, {deep} at 400");
+    }
+
+    /// TSK-1258: a path as deep as the glob bound admits is judged on every
+    /// host, and a protected path keeps its refusal by rule at that depth. An
+    /// inspection error fails this test instead of reading as a refusal. On
+    /// Windows this path reaches the filesystem, so a walk that is not linear
+    /// stalls this test, and a bound past the Windows limit fails it.
+    #[test]
+    fn a_path_at_the_glob_bound_is_judged() {
+        let fixture = Fixture::new();
+        let root = normalized(&fixture.root, true).unwrap();
+        let space = crate::security::pattern::MAX_GLOB_PATH_BYTES
+            - root.as_os_str().len()
+            - "/notes/".len();
+        let deep = "a/".repeat(space / 2);
+        assert!(!fixture.refused(&format!("notes/{deep}")));
+        let protected = format!(".git/hooks/{}", &deep[..deep.len() - 8]);
+        let violations = evaluate(
+            &synthetic("write", json!({"path": protected})),
+            &fixture.ctx(),
+        )
+        .expect("a protected path inside the bound is judged");
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.rule == "git.hook_integrity"),
+            "{violations:?}"
+        );
+    }
+
+    /// TSK-1258: a `..` that leaves a missing name returns to a path that
+    /// exists, so the links beyond it are still followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_past_a_missing_name_is_still_resolved() {
+        let fixture = Fixture::new();
+        let root = normalized(&fixture.root, true).unwrap();
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("alias")).unwrap();
+        assert_eq!(
+            normalized(&root.join("missing/deeper/../../alias/file"), true).unwrap(),
+            real.join("file")
+        );
+        assert_eq!(
+            normalized(&root.join("missing/deeper/../alias/file"), true).unwrap(),
+            root.join("missing/alias/file")
+        );
+    }
+
+    /// TSK-1258 AC-3, reach of the cache-full condition: a guard call is one
+    /// process whose glob cache starts empty, and the only patterns it
+    /// compiles are the policy's own (the secret-read rules and the edit
+    /// enforcement patterns, with a Git common directory, the largest case).
+    /// While their distinct count stays under the cache size no guard call
+    /// can fill the cache, so the stall of AC-1 needs a longer-lived process.
+    #[test]
+    fn one_guard_call_compiles_fewer_globs_than_the_cache_holds() {
+        let fixture = Fixture::new();
+        let common = fixture.temp.path().join("common");
+        std::fs::create_dir_all(&common).unwrap();
+        let ctx = EditContext {
+            git_common_dir: Some(&common),
+            ..fixture.ctx()
+        };
+        let enforcement = enforcement_patterns(&ctx).unwrap();
+        let reads: BTreeSet<&str> = actions::table()
+            .claude_read_groups
+            .iter()
+            .filter(|group| group.carveouts.is_empty())
+            .flat_map(|group| group.denies.iter())
+            .filter_map(|rule| rule.strip_prefix("Read(")?.strip_suffix(')'))
+            .collect();
+        eprintln!(
+            "glob working set of one guard call: {} read patterns, {} edit patterns, cache holds {}",
+            reads.len(),
+            enforcement.len(),
+            crate::security::pattern::GLOB_CACHE_ENTRIES
+        );
+        assert!(
+            reads.len() + enforcement.len() < crate::security::pattern::GLOB_CACHE_ENTRIES,
+            "{} read and {} edit patterns no longer fit the glob cache",
+            reads.len(),
+            enforcement.len()
+        );
     }
 
     #[test]
@@ -2007,6 +2250,32 @@ mod r22_tests {
     fn r22_normalized_missing_optional_path_is_allowed() {
         let dir = tempfile::tempdir().unwrap();
         assert!(normalized(&dir.path().join("missing/new.txt"), true).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_snapshot_ends_with_the_guard_invocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(temp.path(), true).unwrap();
+        let target = root.join("alias");
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        std::os::unix::fs::symlink(&first, &target).unwrap();
+        {
+            let _outer = RepoFactsScope::enter();
+            {
+                let _nested = RepoFactsScope::enter();
+                assert_eq!(normalized(&target, true).unwrap(), first);
+            }
+            std::fs::remove_file(&target).unwrap();
+            std::os::unix::fs::symlink(&second, &target).unwrap();
+            // Nested checks share one snapshot, even if the filesystem changes.
+            assert_eq!(normalized(&target, true).unwrap(), first);
+        }
+        let _next = RepoFactsScope::enter();
+        assert_eq!(normalized(&target, true).unwrap(), second);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-29-outcome-first-autonomy-visual-doctrine-and-process-round-v2",
+  "requirements_version": "2026-11-02-batch-landing-ownership-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -300,7 +300,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "applies `cf-design`, settles",
-            "Codex challenges feasibility"
+            "The cross-family seat challenges feasibility"
           ]
         },
         {
@@ -746,7 +746,7 @@
             "**INTENT-MATCH:** confirm this is the worktree and branch *this task* was assigned",
             "stop and surface it; never silently adapt",
             "never accept name resemblance as a match",
-            "**CURRENCY:** fetch, then check the base against the repository's configured target branch",
+            "**CURRENCY:** `codeflow work claim <id>` fetches and selects the live",
             "assignment explicitly calls for creating a worktree",
             "Absence alone never authorizes repair",
             "rerun all three assertions inside the new worktree"
@@ -965,7 +965,7 @@
             "research, analyze, and identify risks in parallel and return their findings before seeing the other's conclusions",
             "Give both seats the same immutable brief; its scope is where each starts.",
             "each seat independently returns its findings",
-            "Codex challenges that plan against its own findings",
+            "challenges that plan against its own findings",
             "There is no second plan and no reconciliation round"
           ]
         }
@@ -989,7 +989,7 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve one named version of the plan and its task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest. A change of responsible primary or reviewer seat or lineage is a reassignment: it is recorded and reviewed by one other-lineage seat (in the batched epic amendment for epic tasks) before the affected work continues and never carries an old approval, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
+      "statement": "The Claude primary and the cross-family seat (Codex preferred; any other family counts) approve one named version of the plan and its task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest. A change of responsible primary or reviewer seat or lineage is a reassignment: it is recorded and reviewed by one other-lineage seat (in the batched epic amendment for epic tasks) before the affected work continues and never carries an old approval, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/plan.md",
@@ -1044,7 +1044,7 @@
           "markers": [
             "**Review is author-relative.**",
             "**The Claude judgment primary owns integrated Claude judgment.**",
-            "Codex supplies independent review",
+            "The cross-family seat supplies independent review",
             "never report that the selected Claude judgment primary reviewed the work",
             "Each actual executor first-verifies its unit",
             "responsible primary inspects, integrates and accepts",
@@ -1150,7 +1150,7 @@
     {
       "id": "CF-MM-015",
       "level": "hard",
-      "statement": "The standing pair is the default floor, not a two-model cap. When a routing-policy extra-family trigger fires and the catalog family is available, the host names it in the plan; its output is evidence, never a silent third vote, and never replaces either standing primary. Unavailable extra family is a recorded limitation.",
+      "statement": "The Claude primary and one cross-family seat, Codex preferred and any other family counting, are the default floor, not a two-model cap. When a routing-policy extra-family trigger fires and the catalog family is available, the host names it in the plan; its output is evidence, never a silent third vote, and never replaces the Claude primary or the cross-family seat. Unavailable extra family is a recorded limitation.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -1355,7 +1355,7 @@
     {
       "id": "CF-OUT-003",
       "level": "hard",
-      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use a diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow, structure, state, or comparison carries the figure itself, not only the recognition that one would help, in a form matched to its surface: an inline figure where the surface renders one, or a review or share page such as cf-present when people will open, comment on or share it; fenced ASCII in Markdown files, PR bodies and records, on a terminal or other plain-text surface, or when the surface is unknown; and never a Mermaid block; and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use a diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow, structure, state, or comparison carries the figure itself, not only the recognition that one would help, in a form matched to its surface: an inline figure where the surface renders one and the answer is short, cf-present by default beyond that, and the harness's page or widget only when the operator asks for it or the content must be shared; fenced ASCII in Markdown files, PR bodies and records, on a terminal or other plain-text surface, or when the surface is unknown; and never a Mermaid block; and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
       "sources": [
         {
           "path": ".codeflow/rules/writing.md",
@@ -1387,7 +1387,8 @@
           "markers": [
             "the reply or document carries a figure. Match the form to the surface",
             "an inline figure is the default, such as an inline HTML figure in a desktop harness",
-            "`cf-present` (standard and full tiers) when one coherent surface with anchored feedback materially helps",
+            "`cf-present` (standard and full tiers) by default",
+            "use it only when the operator asks for it or the content must",
             "say why you opened it",
             "Markdown files, PR bodies and records are ASCII surfaces",
             "or when unsure what the surface renders",
@@ -1462,15 +1463,20 @@
           "markers": [
             "bounded concurrency cap",
             "one owner, branch, and worktree",
-            "serialize each landing"
+            "one landing candidate at a time on a line tip"
           ]
         },
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/parallel.md",
           "markers": [
             "CONCURRENCY_CAP:",
-            "one writer, branch and worktree per task",
-            "one full gate runs on that exact candidate before the integration line moves"
+            "one writer, branch and worktree per task"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/SKILL.md",
+          "markers": [
+            "runs one full gate on that exact candidate"
           ]
         }
       ]
@@ -1682,7 +1688,7 @@
             "chooses this routine mechanism without an operator question",
             "cut and push `integration/<epic-id>-<slug>` off the current protected target",
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",
-            "assembles reviewed heads into a small batch candidate in dependency order",
+            "every PR reviewed and ready at that moment on one candidate in dependency order",
             "one full gate on that exact candidate",
             "does not reopen unit review",
             "Boundaries are unchanged",
@@ -1869,12 +1875,12 @@
     {
       "id": "CF-PRES-001",
       "level": "hard",
-      "statement": "Interactive presentation is proportional and user-invokable: use cf-present when a complex explanation or review materially benefits from one coherent visual surface or anchored feedback, keep short linear answers in the native conversation, and never confuse the utility with consuming-product UI or a durable documentation portal.",
+      "statement": "Interactive presentation is proportional and user-invokable: use cf-present, the default surface in a CodeFlow project, when a complex explanation or review needs more than an inline reply, keep short linear answers in the native conversation, and never confuse the utility with consuming-product UI or a durable documentation portal.",
       "sources": [
         {
           "path": ".agents/skills/cf-present/SKILL.md",
           "markers": [
-            "Keep short or linearly explained answers in the native conversation",
+            "Keep short answers in the native conversation",
             "do not use this skill to build product UI, a durable documentation portal",
             "Decide whether the surface earns its cost",
             "Stay in chat for a short answer",
@@ -2411,7 +2417,7 @@
     {
       "id": "CF-SEC-001",
       "level": "hard",
-      "statement": "Security review unions a Claude defender and Codex attacker lens and preserves divergence; the deterministic floor is always mandatory, and loss of the second vendor after its bounded recovery is recorded as reduced assurance naming the missing attacker review, never as a finding or severity, never faked and never silently waived.",
+      "statement": "Security review unions a Claude defender and another family's attacker lens (Codex preferred) and preserves divergence; the deterministic floor is always mandatory, and loss of every other vendor after bounded recovery is recorded as reduced assurance naming the missing attacker review, never as a finding or severity, never faked and never silently waived.",
       "sources": [
         {
           "path": ".claude/agents/cf-security-reviewer.md",
@@ -2890,7 +2896,7 @@
     {
       "id": "CF-AUTO-001",
       "level": "hard",
-      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own project or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
+      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own worktree or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/autonomy.md",
@@ -2959,7 +2965,7 @@
         {
           "path": ".agents/skills/cf-herdr/SKILL.md",
           "markers": [
-            "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`)."
+            "Trust this task's worktree or this run's sample; ask for others (`autonomy.md`)."
           ]
         }
       ]
@@ -3127,6 +3133,43 @@
           "path": ".agents/skills/cf-design/references/design-choice-audit.md",
           "markers": [
             "### Implied meaning the subject does not carry"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-011",
+      "level": "hard",
+      "statement": "Every PR reviewed and ready when an integration line lands joins one candidate in dependency order, with one full gate and one hosted run on that exact combined candidate. Later-ready PRs join the next candidate. Never serialize ready PRs behind each other's landing or hosted run; serialize candidates on a line, while different lines may land in parallel.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/SKILL.md",
+          "markers": [
+            "every PR",
+            "reviewed and ready at that moment on one candidate in dependency order",
+            "another PR's landing or hosted run",
+            "one full gate on that exact candidate"
+          ]
+        },
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "one full gate and one hosted run on the exact candidate"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-012",
+      "level": "hard",
+      "statement": "Repository changes belong to a task and are made by the session owning that work. A session finding a needed change in work another session owns tells that owner with evidence and leaves the edit to the owner; it does not make an ad hoc edit or silently take ownership.",
+      "sources": [
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "Change only work you own.",
+            "tells the owner,",
+            "the owner makes it in that task."
           ]
         }
       ]

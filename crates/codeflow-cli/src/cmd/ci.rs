@@ -20,14 +20,18 @@ use std::path::{Path, PathBuf};
 
 mod acceptance;
 mod adopter;
+mod authority_line;
 mod change_class;
 mod classification;
 mod conflict_markers;
 mod context;
 pub(super) use context::{judged_declared_target, Declared};
 mod id_registry;
+mod judging;
+mod line_tip;
 pub(crate) mod pr_body;
 mod work_records;
+mod workflow_change;
 
 use change_class::ChangeClass;
 use clap::Args;
@@ -43,6 +47,7 @@ use codeflow_core::workgraph::{
     durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
     task_id_from_branch_at,
 };
+use judging::{judging_policy, Authority};
 use pr_body::find_section;
 
 use crate::embedded::EmbeddedAssets;
@@ -149,7 +154,13 @@ pub struct CiArgs {
     /// or eligible epic line at the base commit, then the repository default).
     /// An ambiguous commit-ID base requires --into or --branch. A range whose head
     /// or target matches the release pattern is judged as a
-    /// release range (SPC-013 R-120).
+    /// release range (SPC-013 R-120). Deciding that asks the destination for
+    /// its default branch and that branch's policy, so on a private
+    /// repository the job running codeflow ci needs read access to it. On
+    /// GitHub Actions, pass the run's token to the codeflow ci step only
+    /// (`CODEFLOW_CI_TOKEN: ${{ github.token }}`, with `permissions:
+    /// contents: read`); it is sent only to this run's repository over
+    /// HTTPS, and the checkout keeps `persist-credentials: false`.
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
 
@@ -166,12 +177,56 @@ pub struct CiArgs {
     /// hosted CI never passes it.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
+
+    /// Judge the head as the next tip of this integration line, as a
+    /// landing candidate is: every commit on the head's first-parent chain
+    /// from the line's fetched tip (`origin/<LINE>`) must be a merge or a
+    /// direct commit a landed `line_adoptions` entry names, the rule the
+    /// pre-push hook applies to a push to the line (`work.epic_line`).
+    /// Without it, a run with no pull request and no push context whose
+    /// base is the fetched tip of exactly one epic line cannot tell how the
+    /// head reaches the line and refuses when the head would add a direct
+    /// commit; pass `--into <LINE>` or the body for a pull request head
+    /// that lands by merge.
+    #[arg(long, value_name = "LINE", conflicts_with_all = ["into", "pushed_ref"])]
+    pub line_tip: Option<String>,
+
+    /// The ref a push updates. The pre-push hook passes it: a push is not
+    /// a landing candidate, and the hook itself judges a push to a line.
+    #[arg(long, value_name = "REF", hide = true)]
+    pub pushed_ref: Option<String>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
-/// `--pr-body` nor `--pr-body-file` is given (the GitHub policy workflow sets
-/// it from the pull request's current body, read by its `body` step).
+/// `--pr-body` nor `--pr-body-file` is given. The GitHub policy workflow does
+/// not use it: the runner prints a step's environment, so that workflow writes
+/// the body to a file and passes `--pr-body-file` (TSK-1040).
 const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
+
+/// Whether the pull request is a draft (`true` or `false`), for a host
+/// whose event file does not say; GitHub's event payload is read otherwise.
+const PR_DRAFT_ENV: &str = "CODEFLOW_PR_DRAFT";
+
+/// Whether the pull request under check is a draft (TSK-451): the explicit
+/// `CODEFLOW_PR_DRAFT`, else GitHub's `pull_request.draft` in the event
+/// file. Unknown reads as ready, so a missing citation is reported.
+fn pr_is_draft(environment: &BTreeMap<String, String>) -> bool {
+    if let Some(value) = environment.get(PR_DRAFT_ENV) {
+        return value == "true";
+    }
+    let Some(path) = environment.get("GITHUB_EVENT_PATH") else {
+        return false;
+    };
+    // An event file that cannot be read or parsed proves no draft, so the
+    // pull request is judged as ready, the side that reports.
+    match std::fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(event) => event["pull_request"]["draft"] == serde_json::Value::Bool(true),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    }
+}
 
 /// A violation tagged with the commit it came from (`None` for branch-name and
 /// PR-body findings, which are not per-commit).
@@ -253,7 +308,10 @@ fn policy_verifiable(root: &Path) -> bool {
         report_invalid_policy(&errors);
         return false;
     }
-    for warning in policy_schema::deprecation_warnings(root) {
+    for warning in policy_schema::deprecation_warnings(root)
+        .into_iter()
+        .filter(|warning| policy_schema::first_unsupported_warning(&warning.text))
+    {
         eprintln!("{}", warning.line("codeflow ci", "warning"));
     }
     true
@@ -270,6 +328,7 @@ fn ci_environment(
         "GITHUB_HEAD_REF",
         "GITHUB_EVENT_NAME",
         "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
         "CI_COMMIT_SHA",
         "BITBUCKET_PR_DESTINATION_COMMIT",
         "BITBUCKET_COMMIT",
@@ -282,6 +341,8 @@ fn ci_environment(
         "CI_MERGE_REQUEST_IID",
         "BITBUCKET_PR_ID",
         "CI_PIPELINE_SOURCE",
+        "GITHUB_EVENT_PATH",
+        PR_DRAFT_ENV,
         PR_BODY_ENV,
     ] {
         if let Some(value) = env(key) {
@@ -294,12 +355,24 @@ fn ci_environment(
     Ok(values)
 }
 
-#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+/// Run `codeflow ci`, then print the hosted report's authority line when
+/// the policy workflow named its host-rules file (TSK-1177 AC-2). The line
+/// follows the content verdict on every exit and never changes the code.
 pub fn run(args: &CiArgs) -> i32 {
+    let code = run_checks(args);
+    authority_line::print_from_env();
+    code
+}
+
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
+fn run_checks(args: &CiArgs) -> i32 {
     let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
     }
+    // Taken out of the environment before anything starts, so no process
+    // this run starts inherits the token (TSK-1252).
+    let run_token = RunToken::take();
     let environment = match ci_environment(|key| std::env::var_os(key)) {
         Ok(environment) => environment,
         Err(error) => {
@@ -395,33 +468,13 @@ pub fn run(args: &CiArgs) -> i32 {
             return 2;
         }
     };
-    let authority = match &args.policy_from {
-        Some(rev) => {
-            let resolved = match rev_parse(&root, rev) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
-                    return 2;
-                }
-            };
-            let Some(sha) = resolved else {
-                eprintln!(
-                    "codeflow ci: error: --policy-from '{rev}' does not name a commit — nothing was verified"
-                );
-                return 2;
-            };
-            Some(Authority::Named(sha))
-        }
-        None => base_sha.clone().map(|sha| {
-            if split {
-                Authority::SplitBase(sha)
-            } else {
-                Authority::Base(sha)
-            }
-        }),
+    let Ok(authority) = judging::select(
+        &root,
+        args.policy_from.as_deref(),
+        base_sha.as_deref(),
+        split,
+    ) else {
+        return 2;
     };
     let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
         return 2;
@@ -516,6 +569,48 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut tagged,
         &mut ran,
     );
+    // What this change does to the workflows is base..head; the wider
+    // commit range `--commits-from` selects (pre-push) also holds commits
+    // the target already carries, whose workflow edits are not this one's.
+    workflow_change::dispatch(&root, base_sha.as_deref(), &head, &mut tagged, &mut ran);
+
+    match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
+        let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
+        codeflow_core::hooks::path_policy::range_with(
+            &root,
+            range.base_sha.as_deref(),
+            &head,
+            &paths,
+            Some(&size_and_ignore),
+        )
+    }) {
+        Ok(paths) => {
+            for note in paths.notes {
+                eprintln!("codeflow ci: {}", super::shown(&note));
+            }
+            tagged.extend(
+                paths
+                    .violations
+                    .into_iter()
+                    .map(|violation| TaggedViolation {
+                        sha: None,
+                        violation,
+                    }),
+            );
+            if configured.path_policy.is_active() {
+                ran.push("path-policy");
+            }
+            ran.push("size-and-ignore");
+        }
+        Err(error) => tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::always_blocking(
+                "git.path_policy",
+                format!("cannot verify introduced paths: {error}"),
+                "repair the named policy source or Git object, then retry",
+            ),
+        }),
+    }
 
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
@@ -530,6 +625,13 @@ pub fn run(args: &CiArgs) -> i32 {
             }
         },
     };
+    let run_token = run_token.bind(destination.as_deref(), |key| std::env::var(key).ok());
+    if let RunToken::Withheld(why) = &run_token {
+        eprintln!(
+            "codeflow ci: the run's token ({TOKEN_ENV}) is not sent: {}",
+            codeflow_core::git::display_message(why)
+        );
+    }
     let advertisement = if args.advertisement_stdin {
         let mut listed = String::new();
         if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
@@ -546,6 +648,7 @@ pub fn run(args: &CiArgs) -> i32 {
     let names = Names {
         branch: &branch,
         into: into.as_deref(),
+        into_flag: args.into.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
         candidate: match &authority {
@@ -553,6 +656,16 @@ pub fn run(args: &CiArgs) -> i32 {
             _ => None,
         },
         release: std::cell::OnceCell::new(),
+        token: &run_token,
+        // The destination lookup's limits come from the policy that judges
+        // the range, read at its authority; with no authority, from the
+        // local policy authority or the shipped defaults, never the working
+        // copy the range can write (TSK-1301).
+        limits: if authority.is_some() {
+            codeflow_core::git::remote_query::QueryLimits::from_git(configured)
+        } else {
+            codeflow_core::git::remote_query::QueryLimits::from_authority_or_default(&root)
+        },
     };
     // Resolve the shared scope before either dependent check. An unreadable
     // destination refuses once; records and acceptance cannot judge it.
@@ -573,6 +686,14 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
+    let target_tip = target_tip(
+        &root,
+        &line_target,
+        args.into.as_deref(),
+        &names,
+        &environment,
+    );
+    target_containment_warning(&root, &line_target, &head, &target_tip, &names, &mut tagged);
     if scope_ready {
         record_checks(
             &root,
@@ -591,6 +712,7 @@ pub fn run(args: &CiArgs) -> i32 {
             },
             &names,
             &line_target,
+            &target_tip,
             &mut tagged,
             &mut ran,
         );
@@ -622,10 +744,24 @@ pub fn run(args: &CiArgs) -> i32 {
     // That remains a push, not a landing. Hosted PR metadata always wins.
     let pr_context = (args.into.is_some() && !args.advertisement_stdin)
         || is_pr_event(|key| environment.get(key).cloned());
+    // A landing candidate's head judged as its line's next tip (TSK-1155):
+    // the rule the pre-push hook applies to a push to the line.
+    line_tip::check(
+        &root,
+        &line_tip::Run {
+            line_tip: args.line_tip.as_deref(),
+            base: base_sha.as_deref(),
+            head: &head,
+            merge_landing: pr_body.is_some() || pr_context,
+            pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
+        },
+        &mut tagged,
+        &mut ran,
+    );
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
-        stacked_pins(&root, &branch, &head)
+        stacked_pins(&root, git, &branch, &head)
     } else {
         Vec::new()
     };
@@ -669,7 +805,6 @@ pub fn run(args: &CiArgs) -> i32 {
             git,
             pr_body.as_deref(),
             pr_context,
-            change.is_some_and(|class| class.light),
             &names,
             &base_candidates,
             &head,
@@ -703,7 +838,7 @@ pub fn run(args: &CiArgs) -> i32 {
             .and_then(classification::Class::task_id)
             .is_some()
     {
-        visible_graph_check(&root, level, &mut tagged);
+        visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
 
     // --- PR-body check ----------------------------------------------------
@@ -745,6 +880,22 @@ pub fn run(args: &CiArgs) -> i32 {
             range.breaking_commit,
             protected,
         ));
+        // The quick run is owed only where `codeflow test` is configured.
+        // A test config that cannot be stat'ed for a reason other than its
+        // absence counts as configured, the side that reports.
+        let configured = !matches!(
+            std::fs::symlink_metadata(root.join(".codeflow/test-config.json")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        let owes_quick = configured && !pr_is_draft(&environment);
+        tagged.extend(
+            pr_body::quick_citation(git, &body, class, !owes_quick)
+                .into_iter()
+                .map(|violation| TaggedViolation {
+                    sha: None,
+                    violation,
+                }),
+        );
         ran.push("PR-body");
     }
 
@@ -861,17 +1012,16 @@ fn release_of(
 
 /// Pull request classification (TSK-104), which needs the body, and
 /// acceptance bound to the reviewed commit (TSK-105), which runs for any
-/// range: a completion is bound to the head it lands with. A tracked body
-/// also names that reviewed commit in an approving Reviews row (issue 121).
-/// `light` is the range's change class. Returns the validated work class
-/// for the visible-workgraph and own-branch checks.
+/// range: a completion is bound to the head it lands with. A completed
+/// task's Reviews row is derived from its block (issue 121, TSK-451).
+/// Returns the validated work class for the visible-workgraph and
+/// own-branch checks.
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 fn work_checks<'a>(
     root: &Path,
     git: &GitPolicy,
     pr_body: Option<&str>,
     pr_context: bool,
-    light: bool,
     names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
@@ -935,6 +1085,7 @@ fn work_checks<'a>(
             branch,
             range_parts.as_ref(),
             release.as_ref(),
+            names.candidate,
             tagged,
             ran,
         )
@@ -947,6 +1098,7 @@ fn work_checks<'a>(
         if pr_context && !release_range {
             classification::bodyless_line_check(root, branch, range_parts.as_ref(), tagged, ran);
         }
+        classification::cancellation_push_check(root, branch, range_parts.as_ref(), tagged);
         classification::branch_journey(
             root,
             git,
@@ -961,6 +1113,9 @@ fn work_checks<'a>(
     acceptance::dispatch(
         root,
         git,
+        // The pre-push hand-off: the hook's advertisement, no pull request.
+        names.advertisement.is_some() && !pr_context && pr_body.is_none(),
+        pr_body,
         range_parts.as_ref(),
         names,
         class.as_ref(),
@@ -975,7 +1130,6 @@ fn work_checks<'a>(
         class.as_ref(),
         range_parts.as_ref(),
         head,
-        light,
     ));
     class
 }
@@ -988,14 +1142,15 @@ fn range_tracks_work(root: &Path, range: &classification::Range<'_>) -> Result<b
     Ok(checkout_and_base || head)
 }
 
-/// A completed task's PR body approves the commit its acceptance block binds
-/// (issue 121): a review row naming an earlier head is the approval of a
-/// head the review did not cover. The record is read at `head`; no active
-/// block means the task is still in progress, and a light range may leave
-/// the Reviews section out or record none. The row check is the strict
-/// `review_names_revision` (the full commit, a verdict cell of exactly
-/// `approved` or `approve`); `work claim --on` reads its pin with the
-/// permissive `reviewed_revisions` (prose verdicts, abbreviations).
+/// A completed task's Reviews row is derived from its acceptance block, the
+/// one completion record (TSK-451): `codeflow ci` prints the row, passes a
+/// body whose Reviews section is left out or only points at the record, and
+/// warns when a row names another commit or verdict (issue 121). The record
+/// is read at `head`; no active block means the task is still in progress.
+/// A row agrees by the strict `review_names_revision` (the full commit, a
+/// verdict cell of exactly `approved` or `approve`); `work claim --on` reads
+/// its pin with the permissive `reviewed_revisions` (prose verdicts,
+/// abbreviations).
 fn tracked_review(
     root: &Path,
     git: &GitPolicy,
@@ -1003,7 +1158,6 @@ fn tracked_review(
     class: Option<&classification::Class>,
     range: Option<&classification::Range<'_>>,
     head: &str,
-    light: bool,
 ) -> Option<TaggedViolation> {
     let (Some(body), Some(task_id)) = (body, class.and_then(classification::Class::review_task))
     else {
@@ -1018,7 +1172,7 @@ fn tracked_review(
     if redaction {
         None
     } else {
-        review_row_check(root, git, body, head, task_id, light).map(|violation| TaggedViolation {
+        review_row_check(root, git, body, head, task_id).map(|violation| TaggedViolation {
             sha: None,
             violation,
         })
@@ -1031,7 +1185,6 @@ fn review_row_check(
     body: &str,
     head: &str,
     task_id: &str,
-    light: bool,
 ) -> Option<Violation> {
     use codeflow_core::workgraph::record_text::acceptance_blocks;
     let path = format!("project-management/tasks/{task_id}.md");
@@ -1050,26 +1203,44 @@ fn review_row_check(
             ))
         }
     };
-    let reviewed = acceptance_blocks(&record)
+    let block = acceptance_blocks(&record)
         .into_iter()
         .filter(|block| !block.is_superseded())
         .filter_map(|block| block.parsed.ok())
-        .next_back()?
-        .reviewed;
+        .next_back()?;
+    let reviewed = block.reviewed;
     let heading = adoption::mapped_sections(git, &["Reviews".into()]).remove(0);
-    // A light range may leave Reviews out or record `None: <reason>`; a row
-    // that names any other commit is still the wrong approval.
-    if light && pr_body::reviews_record_none(body, &heading) {
+    // TSK-451: the acceptance block is the completion record, so the row is
+    // derived from it and printed; the body need not repeat it.
+    let seat = block
+        .review
+        .split([',', ';'])
+        .next()
+        .unwrap_or_default()
+        .trim_matches([' ', '\t']);
+    println!(
+        "codeflow ci: {heading} row derived from {task_id}'s acceptance block: | {} | whole unit at {reviewed} | {} |",
+        codeflow_core::git::display_text(seat),
+        codeflow_core::git::display_text(&block.verdict)
+    );
+    // A section left out, or one that names no commit and approves nothing
+    // (a pointer to the record, or `None: <reason>`), defers to the block.
+    if pr_body::reviews_record_none(body, &heading)
+        || pr_body::review_names_revision(body, &heading, &reviewed)
+    {
         return None;
     }
-    if pr_body::review_names_revision(body, &heading, &reviewed) {
-        return None;
-    }
+    // A row naming another commit or verdict disagrees with the record: it
+    // is reported, never blocking, since the block is what binds.
+    let level = match git.work_records_level() {
+        PolicyLevel::Block => PolicyLevel::Warn,
+        other => other,
+    };
     Some(Violation::new(
         codeflow_core::workgraph::acceptance::BINDING_RULE,
-        git.work_records_level(),
+        level,
         format!(
-            "{task_id}'s acceptance block binds the reviewed commit {reviewed}, and the {heading} section has no row approving it"
+            "{task_id}'s acceptance block binds the reviewed commit {reviewed}, and the {heading} section has no row approving it; the row derived from the block is the record"
         ),
         codeflow_core::remedy::REVIEW_ROW_BINDING.with(&[("sha", &reviewed)]),
     ))
@@ -1086,6 +1257,7 @@ fn record_checks(
     on_line: bool,
     names: &Names<'_>,
     line_target: &str,
+    target_tip: &Result<String, NoTarget>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -1143,10 +1315,192 @@ fn record_checks(
         authority,
         on_line,
         brought.as_ref(),
+        target_tip,
         tagged,
         ran,
     );
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+}
+
+/// The tip of `target`, the branch the range lands on, which the Outcome
+/// adoption marker is judged against (TSK-435). It comes from an identity
+/// the change cannot choose, never from `--base`, which the pre-push hook
+/// sets to a merge-base and any caller can set to any commit, and never
+/// from a ref the change's author can write without a fetch:
+///
+/// - the destination's advertisement the pre-push hook hands over, for the
+///   target the hook names with `--into` (`handed`), by the same rule that
+///   bounds the push's range, else the destination's default branch; a
+///   declaration the range rejected never names it, and a destination with
+///   no branch holds no list, so it refuses;
+/// - the hosting platform's target commit (GitLab
+///   `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, Bitbucket
+///   `BITBUCKET_PR_DESTINATION_COMMIT`);
+/// - otherwise the target's remote-tracking ref, which GitHub's checkout
+///   and the shipped GitLab and Bitbucket jobs fetch, then its local
+///   branch; the git guard keeps agents from moving either for a
+///   protected branch.
+///
+/// A target with no tip from these sources is never treated as absent:
+/// without it the head's own list would decide its own exemptions. The
+/// error says what is missing and how to supply it, and the check refuses.
+fn target_tip(
+    root: &Path,
+    target: &str,
+    handed: Option<&str>,
+    names: &Names<'_>,
+    environment: &BTreeMap<String, String>,
+) -> Result<String, NoTarget> {
+    if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
+        let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
+            .map_err(NoTarget::read)?
+            .with_limits(names.limits);
+        let branch = match handed {
+            Some(handed) => named_branch(handed).unwrap_or_else(|| handed.to_string()),
+            None => match &destination.default {
+                Some((name, _)) => name.clone(),
+                None => {
+                    return Err(NoTarget {
+                        message: "the destination has no branch yet, so it holds no list to judge the marker against".into(),
+                        remedy: "push the branch this work lands on to the destination first, then push this branch".into(),
+                    })
+                }
+            },
+        };
+        let shown = codeflow_core::git::display_text(&branch);
+        let advertised = destination
+            .heads
+            .iter()
+            .chain(destination.default.iter())
+            .any(|(name, _)| *name == branch);
+        if !advertised {
+            return Err(NoTarget {
+                message: format!(
+                    "the destination does not advertise the target branch '{shown}', so it holds no list to judge the marker against"
+                ),
+                remedy: format!(
+                    "push '{shown}' to this destination before the work that lands on it (a new line goes first), or push to the destination that holds it; a fork fetches the upstream '{shown}' and pushes it to the fork first"
+                ),
+            });
+        }
+        return codeflow_core::workgraph::release_line::advertised_tip_here(
+            root,
+            &destination,
+            &branch,
+        )
+        .map(|tip| tip.to_string())
+        .map_err(NoTarget::read);
+    }
+    for key in [
+        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
+        "BITBUCKET_PR_DESTINATION_COMMIT",
+    ] {
+        if let Some(sha) = environment.get(key).filter(|sha| !sha.is_empty()) {
+            return rev_parse(root, sha)
+                .map_err(NoTarget::read)?
+                .ok_or_else(|| NoTarget {
+                    message: format!("{key} '{sha}' names no commit here"),
+                    remedy: "fetch the target commit the platform names into this clone, then rerun `codeflow ci`".into(),
+                });
+        }
+    }
+    let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+    let anchors = [
+        format!("refs/remotes/origin/{branch}"),
+        format!("refs/heads/{branch}"),
+    ];
+    if let Some(tip) = resolve_base(root, &anchors).map_err(NoTarget::read)? {
+        return Ok(tip);
+    }
+    let shown = codeflow_core::git::display_text(&branch);
+    let remedy = if origin_url(root).map_err(NoTarget::read)?.is_some() {
+        format!(
+            "fetch it (`git fetch origin {shown}`), or name the branch this work lands on with `--into <branch>`"
+        )
+    } else {
+        format!(
+            "a repository with no remote judges the marker against its local '{shown}': create that branch, or name the branch this work lands on with `--into <branch>`"
+        )
+    };
+    Err(NoTarget {
+        message: format!(
+            "the tip of the target branch '{shown}' cannot be resolved here, so no list exists to judge the marker against"
+        ),
+        remedy,
+    })
+}
+
+/// Why the target's tip, the Outcome marker's authority, is not available,
+/// and how the user supplies it.
+pub(super) struct NoTarget {
+    pub(super) message: String,
+    pub(super) remedy: String,
+}
+
+/// Review-time drift is advisory, independently of planning admission.
+fn target_containment_warning(
+    root: &Path,
+    target: &str,
+    head: &str,
+    tip: &Result<String, NoTarget>,
+    names: &Names<'_>,
+    tagged: &mut Vec<TaggedViolation>,
+) {
+    let result = (|| -> Result<Option<(String, String)>, String> {
+        // Reuse the live destination answer already obtained for the range.
+        // A failed remote read never makes an older tracking ref current.
+        let live = match names.release.get() {
+            Some(Err(_)) => return Err("the target's remote scope could not be verified".into()),
+            Some(Ok(Some((destination, _)))) if destination.url.is_some() => {
+                let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+                Some(
+                    codeflow_core::workgraph::release_line::advertised_tip_here(
+                        root,
+                        destination,
+                        &branch,
+                    )?
+                    .to_string(),
+                )
+            }
+            _ => None,
+        };
+        let tip = match live.as_ref() {
+            Some(tip) => tip,
+            None => tip.as_ref().map_err(|e| e.message.clone())?,
+        };
+        if codeflow_core::workgraph::claim_base::head_contains(root, head, tip)? {
+            return Ok(None);
+        }
+        Ok(Some((
+            format!("head does not contain target '{target}' at {tip}"),
+            tip.clone(),
+        )))
+    })();
+    let (message, remedy) = match result {
+        Ok(None) => return,
+        Ok(Some((message, tip))) => (
+            message,
+            codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
+        ),
+        Err(error) => (
+            format!("target '{target}' tip is unverified: {error}"),
+            codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
+        ),
+    };
+    tagged.push(TaggedViolation {
+        sha: None,
+        violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),
+    });
+}
+
+impl NoTarget {
+    /// A Git or advertisement read that failed.
+    fn read(error: String) -> Self {
+        Self {
+            message: error,
+            remedy: "repair the Git read the message names, then retry".into(),
+        }
+    }
 }
 
 /// The resolved target for the line proof, using the repository default
@@ -1477,7 +1831,16 @@ fn own_branch_preflight(
 
 /// The visible workgraph, checked once per run for tracked work at the
 /// `git.work_planning` level (TSK-133).
-fn visible_graph_check(root: &Path, level: PolicyLevel, tagged: &mut Vec<TaggedViolation>) {
+fn visible_graph_check(
+    root: &Path,
+    level: PolicyLevel,
+    tagged: &mut Vec<TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    // The one docs validation of a run (TSK-451), named once in `ran` and
+    // in the output.
+    ran.push("work.valid_graph");
+    println!("codeflow ci: work.valid_graph: the docs validation of this run");
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
         let findings = workgraph
@@ -1504,13 +1867,19 @@ fn visible_graph_check(root: &Path, level: PolicyLevel, tagged: &mut Vec<TaggedV
 /// as the claim honoured it, through the same review lookup, so a branch
 /// tip or another movable ref never stands in for review. A candidate that
 /// is not honoured is noted and the ordinary checks judge the range.
-fn stacked_pins(root: &Path, branch: &str, head: &str) -> Vec<ReviewedPin> {
+fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<ReviewedPin> {
     // A read that fails honours no pin, the strict side; the work-start
-    // check reads the same task and target and reports the failure.
-    let Ok(Some(task_id)) = branch_task_at(root, branch, head) else {
+    // check reads the same task and target and reports the failure. The
+    // task and its target come from the judged head under the run's
+    // policy, never the checkout, since an honoured pin changes how the
+    // criteria are judged (TSK-350 AC-2).
+    let Ok(Some(task_id)) =
+        codeflow_core::workgraph::judged_task_id(root, &git.branch_prefixes, branch, head)
+    else {
         return Vec::new();
     };
-    let Ok(declared) = work_target_at(root, branch, head, &task_id) else {
+    let Ok(declared) = codeflow_core::workgraph::task_target_at_revision(root, &task_id, head)
+    else {
         return Vec::new();
     };
     let Ok(Some(target)) = resolve_work_target_checked(root, declared.as_deref()) else {
@@ -1640,8 +2009,7 @@ fn evaluate_work_start(
                         "work.stable_planning_anchor",
                         level,
                         error.to_string(),
-                        codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                            .with(&[("target", &target), ("id", &task_id)]),
+                        error.admission_remedy(&target, &task_id),
                     )
                 },
             });
@@ -1659,41 +2027,6 @@ fn evaluate_work_start(
     }
 }
 
-/// The commit whose policy judges the range.
-enum Authority {
-    /// `--policy-from`: the target tip the pre-push hook established.
-    Named(String),
-    /// The resolved base, which the caller chose: the hosted templates pass
-    /// the pull request's target tip, but a local caller can name any commit.
-    Base(String),
-    /// The resolved base, with the commit checks run from another commit
-    /// (`--commits-from`): never the hosted verdict, whose commit checks
-    /// run from the base.
-    SplitBase(String),
-}
-
-impl Authority {
-    fn sha(&self) -> &str {
-        match self {
-            Self::Named(sha) | Self::Base(sha) | Self::SplitBase(sha) => sha,
-        }
-    }
-
-    fn describe(&self) -> String {
-        match self {
-            Self::Named(sha) => format!("{}, the commit --policy-from names", short(sha)),
-            Self::Base(sha) => format!(
-                "base {}, the commit this run was given; it is the hosted verdict only when that is the pull request's target tip, which the hosted jobs pass",
-                short(sha)
-            ),
-            Self::SplitBase(sha) => format!(
-                "base {}, the commit this run was given; the commit checks run from another commit (--commits-from), so this is not the hosted verdict",
-                short(sha)
-            ),
-        }
-    }
-}
-
 /// Whether `--commits-from` names a commit other than the resolved base,
 /// so the commit checks run over a range the other checks do not. A
 /// `--commits-from` that does not resolve differs from any base.
@@ -1705,95 +2038,6 @@ fn split_range(
     Ok(match commits_from {
         Some(from) => rev_parse(root, from)?.as_deref() != base,
         None => false,
-    })
-}
-
-/// The policy a run judges with, and its raw form for the level origins.
-struct Judging {
-    policy: Policy,
-    raw: Result<Option<serde_json::Value>, String>,
-    /// The trusted automation profiles: only those of a policy read at a
-    /// commit, never the working copy's, so a head cannot add one for
-    /// itself and a profile the authority revoked no longer applies.
-    profiles: Vec<codeflow_core::hooks::policy::AutomationProfile>,
-}
-
-/// The policy a range is judged with (sathyassn/codeflow#22): the one
-/// recorded at `authority`, read as git data, so a head that loosens its own
-/// policy cannot judge itself. The hosted templates run from a checkout of
-/// the target tip they pass as the base, so there the two are the same.
-/// Without an authority, or when it carries no policy yet (the adoption
-/// change itself), the working copy's. `None` (after naming each error) when
-/// the authority's policy is unreadable or invalid, which verifies nothing.
-///
-/// The policy judges the commit, branch, PR-body and work checks and their
-/// levels. Some inputs stay elsewhere, by design: the auto-detected range's
-/// protected branches come from the working copy (the range is found before
-/// any authority is known), the change class widens the authority's product
-/// and watched paths with the working copy's (neither side can narrow them),
-/// and the work-record baseline has its own source (`--baseline-from`).
-fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -> Option<Judging> {
-    let from_working = |working: Policy| {
-        print_source_banner(root);
-        Judging {
-            policy: working,
-            raw: codeflow_core::hooks::adoption::raw_policy(root),
-            profiles: Vec::new(),
-        }
-    };
-    let Some(authority) = authority else {
-        return Some(from_working(working));
-    };
-    let base = authority.sha();
-    let text = match codeflow_core::hooks::landed_policy::policy_text_at(root, base) {
-        Ok(Some(text)) => text,
-        Ok(None) => return Some(from_working(working)),
-        Err(error) => {
-            eprintln!(
-                "codeflow ci: error: cannot read .codeflow/policy.json at {}: {error} — nothing was verified",
-                short(base), error = crate::cmd::shown(&error)
-            );
-            return None;
-        }
-    };
-    if let Err(errors) = policy_schema::validate_policy_str(&text) {
-        eprintln!(
-            "codeflow ci: the range is judged with the policy at {}, which is invalid:",
-            short(base)
-        );
-        report_invalid_policy(&errors);
-        return None;
-    }
-    // The validator's strict deserialize already accepted the text.
-    let parsed = serde_json::from_str::<Policy>(&text)
-        .and_then(|policy| serde_json::from_str(&text).map(|raw| (policy, raw)));
-    let (policy, raw) = match parsed {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            eprintln!(
-                "codeflow ci: error: .codeflow/policy.json at {} cannot be read: {error} — nothing was verified",
-                short(base), error = crate::cmd::shown(&error)
-            );
-            return None;
-        }
-    };
-    println!(
-        "codeflow ci: verifying against .codeflow/policy.json at {}",
-        authority.describe()
-    );
-    if serde_json::to_value(&policy).ok()
-        != Policy::load(root)
-            .ok()
-            .and_then(|value| serde_json::to_value(value).ok())
-    {
-        println!(
-            "codeflow ci: the working copy's .codeflow/policy.json differs from the one judging; its rules judge commits once it lands on the target"
-        );
-    }
-    Some(Judging {
-        profiles: policy.git.automation_profiles.clone(),
-        policy,
-        raw: Ok(Some(raw)),
     })
 }
 
@@ -1951,7 +2195,9 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule.starts_with("work.") {
+        if t.violation.rule == workflow_change::RULE {
+            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        } else if t.violation.rule.starts_with("work.") {
             eprintln!(
                 "{}",
                 t.violation.render_invariant(
@@ -1992,7 +2238,10 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     } else if blocking {
         eprintln!("codeflow ci: FAILED — {blocks} blocking, {warnings} warning(s)");
     } else if skipped.is_empty() {
-        eprintln!("codeflow ci: {warnings} warning(s) only — proceeding");
+        eprintln!(
+            "codeflow ci: {warnings} warning(s) only; proceeding (checks run: {})",
+            ran.join(", ")
+        );
     } else {
         eprintln!(
             "codeflow ci: {warnings} warning(s); skipped: {}",
@@ -2088,21 +2337,19 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
             ));
         }
     }
-    if git.commit_emoji.is_active() {
-        if let Some(c) = standards::find_emoji(body) {
-            out.push(Violation::new(
-                "git.commit_emoji",
-                git.commit_emoji,
-                format!("PR body contains emoji ('{c}')"),
-                codeflow_core::remedy::PR_EMOJI.remedy(),
-            ));
-        }
+    if git.commit_emoji.is_active() && standards::find_emoji(body).is_some() {
+        out.push(Violation::new(
+            "git.commit_emoji",
+            git.commit_emoji,
+            "PR body contains an emoji".to_string(),
+            codeflow_core::remedy::PR_EMOJI.remedy(),
+        ));
     }
     out.extend(standards::pr_body_policy_character(git, body));
-    if let Some(id) = codeflow_core::validate::docs::ledger_citation(body) {
+    if codeflow_core::validate::docs::ledger_citation(body).is_some() {
         out.push(Violation::always_blocking(
             "coord.ledger_citation",
-            format!("PR body cites the coordination ledger id {id}"),
+            "PR body cites a coordination ledger id (an FU, LN or WS id)".to_string(),
             "name the task, pull request or commit instead; FU, LN and WS ids are local to one clone's coordination ledger (ADR-0086)",
         ));
     }
@@ -2229,11 +2476,11 @@ fn evaluate_pr_structure(
 
     // Template remnants: always warn-only — a nudge to finish the body, never
     // a block (mirrors the breaking_watch_paths tripwire convention).
-    for (line_no, line, what) in find_placeholders(&strip_html_comments(body, true)) {
+    for (line_no, what) in find_placeholders(&strip_html_comments(body, true)) {
         out.push(Violation::new(
             "git.pr_sections",
             PolicyLevel::Warn,
-            format!("PR body line {line_no} is a template remnant ({what}): '{line}'"),
+            format!("PR body line {line_no} is a template remnant ({what})"),
             codeflow_core::remedy::PR_TEMPLATE_REMNANT.remedy(),
         ));
     }
@@ -2307,10 +2554,11 @@ fn strip_html_comments(text: &str, preserve_lines: bool) -> String {
 }
 
 /// Scan the body for leftovers of the shipped PR template, each reported as
-/// (1-based line number, the trimmed line, what it is): the paste-your-output
+/// (1-based line number, what it is): the paste-your-output
 /// placeholder, a table row of empty cells (`|  |  |`), and unresolved
-/// Release impact alternatives.
-fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
+/// Release impact alternatives. The line's own text is never returned: the
+/// policy run's log carries none of the body (TSK-1040).
+fn find_placeholders(body: &str) -> Vec<(usize, &'static str)> {
     let mut out = Vec::new();
     for (idx, line) in body.lines().enumerate() {
         let t = line.trim();
@@ -2334,7 +2582,7 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
         } else {
             continue;
         };
-        out.push((idx + 1, t.to_string(), what));
+        out.push((idx + 1, what));
     }
     out
 }
@@ -2503,6 +2751,9 @@ pub(super) fn branch_anchors(name: &str) -> Vec<String> {
 pub(super) struct Names<'a> {
     pub branch: &'a str,
     pub into: Option<&'a str>,
+    /// `--into` as the caller gave it, `None` when the run inferred its
+    /// target; only a given one earns the own-line exception (TSK-350).
+    pub into_flag: Option<&'a str>,
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,
@@ -2511,6 +2762,10 @@ pub(super) struct Names<'a> {
     /// a tip whose first-parent line a clean merge after a review may come
     /// from (TSK-220).
     pub candidate: Option<&'a str>,
+    /// The timeout and attempts for asking the destination (TSK-1301).
+    pub limits: codeflow_core::git::remote_query::QueryLimits,
+    /// The hosted run's read token for the destination (TSK-1252).
+    pub token: &'a RunToken,
     /// The release scope, asked once per run and shared by the checks.
     release: std::cell::OnceCell<
         Result<
@@ -2521,6 +2776,85 @@ pub(super) struct Names<'a> {
             acceptance::ScopeError,
         >,
     >,
+}
+
+/// The variable that carries the hosted run's read token to `codeflow ci`
+/// (TSK-1252). The managed policy workflow sets it on the `codeflow ci`
+/// step only, from `github.token`, under `permissions: contents: read`.
+pub(super) const TOKEN_ENV: &str = "CODEFLOW_CI_TOKEN";
+
+/// The hosted run's read token for the destination lookup, and whether it
+/// is sent (TSK-1252).
+pub(super) enum RunToken {
+    /// No token was given.
+    Absent,
+    /// A token was given and is not sent, for the reason held.
+    Withheld(String),
+    /// A token was given, read but not yet bound to the destination.
+    Given(String),
+    /// The token, bound to the destination of this run's repository.
+    Sent(codeflow_core::git::remote_query::HttpAuth),
+}
+
+impl RunToken {
+    /// The token from [`TOKEN_ENV`], removed from this process's
+    /// environment so no process the run starts inherits it.
+    fn take() -> Self {
+        let value = std::env::var_os(TOKEN_ENV);
+        std::env::remove_var(TOKEN_ENV);
+        match value {
+            None => Self::Absent,
+            Some(value) if value.is_empty() => Self::Absent,
+            Some(value) => match value.into_string() {
+                Ok(token) => Self::Given(token),
+                Err(_) => Self::Withheld("it is not valid UTF-8".into()),
+            },
+        }
+    }
+
+    /// Bind a given token to `destination`, which must be the repository
+    /// the hosted runner names (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`):
+    /// a later step cannot change those values, so a rewritten `origin`
+    /// or `--destination` never receives the token.
+    fn bind(self, destination: Option<&str>, env: impl Fn(&str) -> Option<String>) -> Self {
+        let Self::Given(token) = self else {
+            return self;
+        };
+        let Some(url) = destination else {
+            return Self::Withheld("this run has no destination".into());
+        };
+        let server = env("GITHUB_SERVER_URL").unwrap_or_default();
+        let repository = env("GITHUB_REPOSITORY").unwrap_or_default();
+        match codeflow_core::git::remote_query::HttpAuth::for_run(url, &token, &server, &repository)
+        {
+            Ok(auth) => Self::Sent(auth),
+            Err(why) => Self::Withheld(why),
+        }
+    }
+
+    /// The credential to send, when one is bound.
+    pub(super) fn auth(&self) -> Option<&codeflow_core::git::remote_query::HttpAuth> {
+        match self {
+            Self::Sent(auth) => Some(auth),
+            _ => None,
+        }
+    }
+
+    /// What this run gave the destination, and the fix, for a lookup the
+    /// destination refused.
+    pub(super) fn fix(&self) -> String {
+        match self {
+            Self::Absent | Self::Given(_) => format!(
+                "The missing input is {TOKEN_ENV}: pass the run's token to the codeflow ci step (`{TOKEN_ENV}: ${{{{ github.token }}}}`) with `permissions: contents: read`."
+            ),
+            Self::Withheld(why) => format!(
+                "{TOKEN_ENV} was given but not sent ({why}); it is sent only to this run's own repository over HTTPS."
+            ),
+            Self::Sent(_) => format!(
+                "The destination did not accept the run's token ({TOKEN_ENV}); the job needs `permissions: contents: read` on this repository."
+            ),
+        }
+    }
 }
 
 /// Auto-detect the target branch NAME of a pull request. Verified variable
@@ -3339,12 +3673,10 @@ mod tests {
         let body = "## Reviews\n| peer | 0123456 | approved |\n";
         let git = super::GitPolicy::default();
         let dir = r24_range(&[], &[("README.md", "readme\n")]);
-        assert!(
-            super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001", false).is_none()
-        );
+        assert!(super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001").is_none());
         let dir = r24_range(&[], &[(RECORD, "---\nid: TSK-001\n---\n")]);
         r24_remove(dir.path(), &format!("HEAD:{RECORD}"));
-        let violation = super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001", false)
+        let violation = super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001")
             .expect("an unreadable record refuses");
         assert_eq!(
             violation.rule,
@@ -3941,7 +4273,7 @@ mod tests {
             assert!(
                 found.iter().any(|v| v.rule == "coord.ledger_citation"
                     && v.level == PolicyLevel::Block
-                    && v.message.contains(planted)),
+                    && !v.message.contains(planted)),
                 "{planted}: {found:?}"
             );
         }
@@ -4535,7 +4867,10 @@ mod tests {
         let findings = find_placeholders(&strip_html_comments(body, true));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].0, 4);
-        assert_eq!(findings[0].1, "- Breaking: yes | no");
+        assert_eq!(
+            findings[0].1,
+            "unresolved template alternatives or placeholders"
+        );
     }
 
     #[test]

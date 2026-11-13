@@ -101,8 +101,20 @@ a value per skin and mode; a figure never sees the values.
 | `--cf-fig-warn` | room left before a limit |
 | `--cf-fig-warn-soft` | a soft warning field, rarely |
 | `--cf-fig-stop` | a gate that stops, a cross, a forbidden route |
+| `--cf-fig-cat1`, `--cf-fig-cat1-soft` | the first companion ink and its tint: a named peer, never the governing path |
+| `--cf-fig-cat2`, `--cf-fig-cat2-soft` | the second companion ink and its tint: a second named peer |
 | `--cf-fig-font`, `--cf-fig-mono` | the label and evidence faces |
 | `--cf-fig-na-alpha` | the stroke opacity of a not-applicable cell (0.5 light, 0.65 dark) |
+
+A drawn mark may carry a `tone`: `cat1` or `cat2` on a peer the subject
+names (a plane, a region, a participant's box), `accent` on the governing
+region. A tone changes hue only. It goes on the layer, layer-remote, state,
+node, optional and denied marks (accent on the filled four), the mark needs an
+id that a text item labels, and the grammar module refuses anything else, so
+hue never carries meaning alone and two states still differ on two non-hue
+channels. The legend key takes the tone when every drawn mark of its state
+shares it. The governing path keeps the accent-bearing marks; warn and stop
+stay reserved.
 
 The mark vocabulary. Every drawn state resolves to one row here, and every row
 carries at least two channels that are not hue. The name is the `data-state`
@@ -244,8 +256,9 @@ external script to be a recorded built script served with its hash. Every
 inline script outside the content, in both the validator and the browser
 gate, must be on the runtime's allowlist: the fixed scripts whose hashes the
 starter commits in `scripts/runtime-scripts.json`, regenerated from a fresh
-build whenever the lockfile changes, and the pre-paint display script for the
-configured theme. The clean copy runs only those and the recorded built
+build whenever the lockfile or the tokens change, and the pre-paint display
+script for the configured theme, whose hash the same file records for every
+theme. The clean copy runs only those and the recorded built
 scripts. It compares each figure's DOM with a clean render of the pinned declaration, and
 every computed property of the companion, the figure and its descendants with
 a clean copy of the page. The figure, its title, its caption and its legend

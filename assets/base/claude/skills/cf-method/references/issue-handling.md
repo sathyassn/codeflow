@@ -43,8 +43,8 @@ report -> intake -> cause and class -> sibling sweep -> group by cause
 6. **Review.** The independent review also checks that the fix covers the
    class, not one site, and that the sweep is recorded. A round that finds a
    new instance of the same class, rather than a regression of the fix, means
-   the mechanism is wrong: the rounds stop, the unit returns to step 4 for a
-   design, and the PR body records the withdrawn approach. This event is what
+   the mechanism is wrong: the rounds stop, the unit returns to step 3 for
+   a new sweep and to step 4 for a design, and the PR body records the withdrawn approach. This event is what
    "diagnose a stalled mechanism" means here; it is not a round count.
 7. **Release target.** The PR's release impact names the release that
    carries the fix, and an adopter-visible change carries its `Migration`

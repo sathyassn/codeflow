@@ -136,6 +136,20 @@ pub const ROOTED_DELETIONS: &[&str] = &[
     "cd /Users/alice/project && rm -rf build",
 ];
 
+/// The [`PROJECT_DELETIONS`] that give `rm` or `find` a word filled in at
+/// run time: the relaxed rule allows them, and where the strict rule
+/// applies the exec guard refuses them under `security.text_guard` (TSK-397
+/// design D).
+pub const RUN_TIME_PROJECT_DELETIONS: &[&str] = &[
+    "D=./build; rm -rf $D",
+    "D=build && find $D -delete",
+    "rm -rf ~/code/app/target",
+    "for d in build dist; do rm -rf \"$d\"; done",
+    "for d in / build; do :; done; rm -rf $d",
+    "D=/; D=build; rm -rf \"$D\"",
+    "rm -rf \"$TMPDIR/codeflow-build\"",
+];
+
 /// Deletions that stay inside the project: allowed, alone and nested
 /// (TSK-141 AC-2).
 pub const PROJECT_DELETIONS: &[&str] = &[
@@ -167,7 +181,10 @@ pub const PROJECT_DELETIONS: &[&str] = &[
     "git clean -fdx -- build/",
     "rsync -a --delete ./src/ ./build/",
     "rsync -a --delete ./dist/ host:/srv/app/",
-    "find / -name '*.log' | xargs ls",
+    // A `find` pipeline reaches `xargs` like any producer since TSK-1002
+    // Fable review 15, and `xargs ls` then lists input the guard does not
+    // read, so this control counts the matches instead.
+    "find / -name '*.log' | wc -l",
 ];
 
 /// Every command of the Codex round 1 deletion probe
@@ -1096,7 +1113,8 @@ pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
     (
         "trap-cleanup-idiom",
         "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; echo hi; rm -rf build",
-        Expect::Allowed,
+        // TSK-1002 AC-1: unread command output is an unproven operand.
+        Expect::Unproven,
     ),
     (
         "trap-function",
@@ -1308,7 +1326,8 @@ pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
     (
         "output-program",
         "D=$(git rev-parse --show-toplevel); rm -rf \"$D/build\"",
-        Expect::Allowed,
+        // TSK-1002 AC-1 also applies when an assignment carries the output.
+        Expect::Unproven,
     ),
     (
         "output-cat-here-string",

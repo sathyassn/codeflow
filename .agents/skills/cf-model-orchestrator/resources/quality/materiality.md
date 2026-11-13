@@ -10,8 +10,9 @@ Collect only uncertain deferral candidates instead of interrupting the peer
 for each observation. The builder gives each nit one disposition in the PR
 body: `fix now`, `track once`, or `drop` with the reason. The primary reads
 the batch once at the next natural checkpoint (the batch landing or the epic
-close); an unavailable seat is recorded as reduced assurance, not silent
-agreement. A worthwhile deferral uses one existing tracking altitude (the
+close); an unavailable seat moves to another family's seat, or, when no
+other family is available, is recorded as reduced assurance, never as
+silent agreement. A worthwhile deferral uses one existing tracking altitude (the
 epic's planning notes, or the task's follow-ups when there is no epic) with
 its evidence and value and a deterministic event trigger such as the next
 touch of the surface, a named dependency landing, a named gate, or

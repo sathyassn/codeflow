@@ -150,6 +150,8 @@ pub enum Block {
     },
     Tabs {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
         tabs: Vec<Tab>,
     },
     FeedbackPrompt {
@@ -723,7 +725,18 @@ impl Block {
             }
             Self::Figure { declaration, .. } => {
                 let (title, caption) = figure_text(declaration);
-                join_parts([title, caption])
+                let labels = figure_drawn_text(&declaration["figure"]);
+                let legend = declaration["figure"]["states"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|state| state["means"].as_str());
+                join_parts(
+                    [title, caption]
+                        .into_iter()
+                        .chain(labels.iter().map(String::as_str))
+                        .chain(legend),
+                )
             }
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
             Self::Disclosure { summary, .. } => summary.clone(),
@@ -812,11 +825,7 @@ impl Block {
             | Self::Form { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
             // No raw ids in the nav (QA defect 8): a name the reader can see.
-            Self::Tabs { tabs, .. } => tabs
-                .iter()
-                .map(|tab| tab.label.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+            Self::Tabs { title, .. } => title.clone().unwrap_or_else(|| "Views".to_string()),
             Self::Bullets { items, .. } => items
                 .first()
                 .map_or_else(|| "List".to_string(), |item| prose_nav_label(item)),
@@ -1226,7 +1235,10 @@ fn validate_block(
                 ids,
             )
         }
-        Block::Tabs { tabs, .. } => {
+        Block::Tabs { title, tabs, .. } => {
+            if let Some(title) = title {
+                require_nonempty_bounded("tabs title", title, limits::MAX_TITLE_BYTES)?;
+            }
             if tabs.is_empty() || tabs.len() > 12 {
                 return Err(invalid("tabs must contain one to twelve entries"));
             }
@@ -1615,11 +1627,11 @@ fn validate_provenance(provenance: &Provenance) -> Result<()> {
     {
         return Err(invalid("provenance task_id must be TSK-NNN or TSK-NNN-NNN"));
     }
-    for (name, value, prefix, digits) in [
+    for (name, value, prefix, minimum) in [
         ("spec_id", provenance.spec_id.as_deref(), "SPC-", 3),
         ("adr_id", provenance.adr_id.as_deref(), "ADR-", 4),
     ] {
-        if value.is_some_and(|value| !valid_fixed_id(value, prefix, digits)) {
+        if value.is_some_and(|value| !valid_numbered_id(value, prefix, minimum)) {
             return Err(invalid(format!(
                 "provenance {name} must use its canonical numeric ID"
             )));
@@ -1628,24 +1640,29 @@ fn validate_provenance(provenance: &Provenance) -> Result<()> {
     Ok(())
 }
 
+// These rules match the work graph's id rules (`codeflow-core`,
+// `workgraph::format_id` and the ADR allocator): at least the zero-padded
+// width in ASCII digits, with no upper bound, so every id an allocator can
+// issue is accepted. This crate does not depend on `codeflow-core`; the
+// `present_id_rules` test in `codeflow-cli` fails when the two drift.
 fn valid_task_id(value: &str) -> bool {
     let Some(suffix) = value.strip_prefix("TSK-") else {
         return false;
     };
     let mut groups = suffix.split('-');
-    let first = groups.next().is_some_and(valid_three_digits);
-    let second = groups.next().is_none_or(valid_three_digits);
+    let first = groups.next().is_some_and(|group| valid_digits(group, 3));
+    let second = groups.next().is_none_or(|group| valid_digits(group, 3));
     first && second && groups.next().is_none()
 }
 
-fn valid_fixed_id(value: &str, prefix: &str, digits: usize) -> bool {
-    value.strip_prefix(prefix).is_some_and(|suffix| {
-        suffix.len() == digits && suffix.bytes().all(|byte| byte.is_ascii_digit())
-    })
+fn valid_numbered_id(value: &str, prefix: &str, minimum: usize) -> bool {
+    value
+        .strip_prefix(prefix)
+        .is_some_and(|suffix| valid_digits(suffix, minimum))
 }
 
-fn valid_three_digits(value: &str) -> bool {
-    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_digit())
+fn valid_digits(value: &str, minimum: usize) -> bool {
+    value.len() >= minimum && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// The figure families of `figure-grammar.md`, in the grammar module's order.
@@ -1661,8 +1678,92 @@ pub const FIGURE_FAMILIES: [&str; 9] = [
     "graph",
 ];
 
+/// Text in the grammar's wide and narrow draw order. Layouts generate the
+/// same labels from their authored rows; no geometry or metadata is review text.
+fn figure_drawn_text(figure: &serde_json::Value) -> Vec<String> {
+    let layout = &figure["layout"];
+    match layout["kind"].as_str() {
+        Some("coverage") => {
+            let columns: Vec<String> = figure_items(&layout["columns"])
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            let rows: Vec<_> = figure_items(&layout["rows"]).collect();
+            let mut labels = columns.clone();
+            labels.extend(
+                rows.iter()
+                    .filter_map(|row| row["label"].as_str())
+                    .map(str::to_owned),
+            );
+            for row in &rows {
+                if let Some(label) = row["label"].as_str() {
+                    labels.push(label.to_owned());
+                }
+                labels.extend(columns.iter().cloned());
+            }
+            labels
+        }
+        Some("extent") => {
+            let mut labels = Vec::new();
+            let unit = layout["unit"].as_str().filter(|unit| !unit.is_empty());
+            for row in figure_items(&layout["rows"]) {
+                if let Some(label) = row["label"].as_str() {
+                    labels.push(label.to_owned());
+                }
+                if let Some(number) = row["value"].as_f64() {
+                    let number = figure_number_text(number);
+                    labels.push(
+                        unit.map_or_else(|| number.clone(), |unit| format!("{number} {unit}")),
+                    );
+                }
+            }
+            for limit in figure_items(&layout["limits"]) {
+                if let (Some(label), Some(number)) =
+                    (limit["label"].as_str(), limit["value"].as_f64())
+                {
+                    labels.push(format!("{label} {}", figure_number_text(number)));
+                }
+            }
+            labels.extend(labels.clone());
+            labels
+        }
+        _ => ["wide", "narrow"]
+            .into_iter()
+            .flat_map(|variant| figure_items(&figure[variant]["draw"]))
+            .filter_map(|item| item["text"].as_str().map(str::to_owned))
+            .collect(),
+    }
+}
+
+fn figure_items(value: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+    value.as_array().into_iter().flatten()
+}
+
+// Matches the grammar's formatNumber for authored layout values: round to
+// hundredths with ties toward positive infinity, and display no trailing zeros.
+fn figure_number_text(value: f64) -> String {
+    let rounded = if value.fract() == 0.0 {
+        value
+    } else {
+        let scaled = value * 100.0;
+        let floor = scaled.floor();
+        (if scaled - floor >= 0.5 {
+            floor + 1.0
+        } else {
+            floor
+        }) / 100.0
+    };
+    if rounded == 0.0 {
+        "0".to_owned()
+    } else if rounded.abs() >= 1e21 {
+        format!("{rounded:e}").replacen('e', "e+", 1)
+    } else {
+        rounded.to_string()
+    }
+}
+
 /// The title and caption a figure placeholder shows before the grammar module
-/// draws it; they are also the block's canonical review text.
+/// draws it; they prefix the block's canonical review text.
 fn figure_text(declaration: &serde_json::Value) -> (&str, &str) {
     let field = |name: &str| {
         declaration
@@ -1848,8 +1949,53 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
             faults.push(CheckFault::fault(None, "document", message));
         }
     }
+    for block in document.walk() {
+        if let Block::Figure { id, declaration } = block {
+            for message in crate::figure_rules::declaration_faults(declaration) {
+                faults.push(CheckFault::fault(Some(id.clone()), "figure", message));
+            }
+        }
+    }
     faults.extend(review_warnings(&document));
+    faults.extend(figure_balance_warnings(&document));
     faults
+}
+
+fn figure_balance_warnings(document: &PresentationDocument) -> Vec<CheckFault> {
+    let mut warnings = Vec::new();
+    let blocks = document.walk();
+    let figures = blocks
+        .iter()
+        .filter(|block| matches!(block, Block::Figure { .. } | Block::Html { .. }))
+        .count();
+    let narratives: Vec<_> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Narrative { markdown, .. } => Some(markdown.as_str()),
+            _ => None,
+        })
+        .collect();
+    // A named Concept section is an author signal, not a guess from the title.
+    let concept = blocks
+        .iter()
+        .any(|block| block.id() == "concept" || block.id().starts_with("concept-"))
+        || narratives.iter().any(|markdown| {
+            markdown.lines().any(|line| {
+                let heading = line.trim_start().trim_start_matches('#').trim();
+                line.trim_start().starts_with('#') && heading.eq_ignore_ascii_case("concept")
+            })
+        });
+    if concept && figures == 0 {
+        warnings.push(CheckFault::warning(None, "figure-balance", "the Concept section has no figure or html stage; consider drawing its governing relationship".into()));
+    }
+    let narrative_words: usize = narratives
+        .iter()
+        .map(|text| text.split_whitespace().count())
+        .sum();
+    if narrative_words > figures.max(1).saturating_mul(500) {
+        warnings.push(CheckFault::warning(None, "figure-balance", "narrative text dominates this document (over 500 narrative words per figure, or over 500 words with no figure); consider a figure for the governing relationship".into()));
+    }
+    warnings
 }
 
 /// Advisory warnings for stages a reviewer cannot comment on part by part
@@ -2151,6 +2297,52 @@ mod tests {
     }
 
     #[test]
+    fn figure_review_text_keeps_each_drawn_occurrence_and_legend() {
+        let declaration = serde_json::json!({"figure": {
+            "title": "Title", "caption": "Caption",
+            "wide": {"draw": [{"text": "Box 🧭"}, {"text": "Axis"}]},
+            "narrow": {"draw": [{"text": "Box 🧭"}]},
+            "states": [{"means": "Legend"}]
+        }});
+        let block = figure("words", declaration);
+        assert_eq!(
+            block.canonical_review_text(&Framing::default()),
+            "Title\nCaption\nBox 🧭\nAxis\nBox 🧭\nLegend"
+        );
+    }
+
+    #[test]
+    fn figure_layout_review_text_matches_generated_labels() {
+        let coverage = serde_json::json!({"layout": {"kind": "coverage",
+            "columns": ["Local", "Remote"], "rows": [{"label": "Review"}, {"label": "Test"}]}});
+        assert_eq!(
+            figure_drawn_text(&coverage),
+            [
+                "Local", "Remote", "Review", "Test", "Review", "Local", "Remote", "Test", "Local",
+                "Remote"
+            ]
+        );
+        let extent = serde_json::json!({"layout": {"kind": "extent", "unit": "ms",
+            "rows": [{"label": "Fast", "value": 12.345}, {"label": "Slow", "value": 50}],
+            "limits": [{"label": "Budget", "value": 72}]}});
+        assert_eq!(
+            figure_drawn_text(&extent),
+            [
+                "Fast",
+                "12.35 ms",
+                "Slow",
+                "50 ms",
+                "Budget 72",
+                "Fast",
+                "12.35 ms",
+                "Slow",
+                "50 ms",
+                "Budget 72"
+            ]
+        );
+    }
+
+    #[test]
     fn figure_declarations_are_checked_at_the_envelope_and_share_the_drawn_budget() {
         let valid = authored_declaration();
         assert!(document(vec![figure("fig", valid.clone())])
@@ -2359,7 +2551,7 @@ mod tests {
             ),
             (
                 serde_json::json!({"type": "tabs", "id": "views", "tabs": [{"label": "Plan", "blocks": []}, {"label": "Risks", "blocks": []}]}),
-                "Plan, Risks",
+                "Views",
             ),
             (
                 serde_json::json!({"type": "bullets", "id": "points", "items": ["Select **words** to quote them."]}),
@@ -2454,5 +2646,76 @@ mod tests {
             caption: None,
         }]);
         assert!(media.validate().is_err());
+    }
+
+    /// The result of parsing a document that carries one provenance field.
+    fn provenance_result(field: &str, value: &str) -> Result<ParsedDocument> {
+        let document = serde_json::json!({
+            "schema_version": 1,
+            "title": "Review",
+            "provenance": { field: value },
+            "blocks": [{ "type": "narrative", "id": "summary", "markdown": "x" }],
+        });
+        parse_document(document.to_string().as_bytes())
+    }
+
+    #[test]
+    fn provenance_ids_accept_every_width_the_allocators_issue() {
+        for (field, id) in [
+            ("task_id", "TSK-001"),
+            ("task_id", "TSK-999"),
+            ("task_id", "TSK-1000"),
+            ("task_id", "TSK-1023"),
+            ("task_id", "TSK-10000"),
+            ("task_id", "TSK-12345"),
+            ("task_id", "TSK-022-013"),
+            ("task_id", "TSK-1000-0001"),
+            ("task_id", "TSK-12345-67890"),
+            ("spec_id", "SPC-001"),
+            ("spec_id", "SPC-999"),
+            ("spec_id", "SPC-1000"),
+            ("spec_id", "SPC-10000"),
+            ("adr_id", "ADR-0001"),
+            ("adr_id", "ADR-9999"),
+            ("adr_id", "ADR-10000"),
+            ("adr_id", "ADR-123456"),
+        ] {
+            let result = provenance_result(field, id);
+            assert!(
+                matches!(result, Ok(ParsedDocument::Supported(_))),
+                "{field} {id} was refused: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provenance_ids_the_work_graph_rejects_are_still_refused() {
+        for (field, id) in [
+            ("task_id", "TSK-99"),
+            ("task_id", "TSK-0x12"),
+            ("task_id", "TSK-"),
+            ("task_id", "TSK-001-"),
+            ("task_id", "TSK-001-001-001"),
+            ("task_id", "TSK-1-001"),
+            ("task_id", "TSK-001-1"),
+            ("task_id", "TSK-+001"),
+            ("task_id", "TSK-001\n"),
+            ("task_id", "tsk-001"),
+            ("spec_id", "SPC-12"),
+            ("spec_id", "SPC-"),
+            ("spec_id", "SPC-12a"),
+            ("spec_id", "SPC-001-001"),
+            ("adr_id", "ADR-123"),
+            ("adr_id", "ADR-12"),
+            ("adr_id", "ADR-"),
+            ("adr_id", "ADR-12a4"),
+            ("adr_id", "ADR-0001-001"),
+        ] {
+            let result = provenance_result(field, id);
+            assert!(
+                matches!(result, Err(PresentError::InvalidDocument(_))),
+                "{field} {id} was accepted: {result:?}"
+            );
+        }
     }
 }

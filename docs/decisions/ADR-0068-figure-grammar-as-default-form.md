@@ -190,3 +190,24 @@ the `cf-present` and `cf-docs-portal` skills, and the grammar module
 
 The verifier rules above hold as written. The portal adds one: a companion
 figure on a page must be the drawing its pinned declaration produces.
+
+## Update 2026-10-23: tones for named peers
+
+TSK-444 adds one optional draw-item field, `tone`, to the declaration. The
+rules above stand.
+
+- `cat1` and `cat2` mark a peer the subject names (a plane, a region, a
+  participant's box) with a companion hue; `accent` marks the governing
+  region. The governing path keeps the accent-bearing marks; warn and stop
+  stay reserved.
+- A tone changes hue only, so it is not a rule 3 channel: it goes on the
+  layer, layer-remote, state, node, optional and denied marks (accent on the
+  first four), and only on a mark with an id that a text item labels, so hue
+  is never alone. The grammar module refuses anything else, and the figure
+  sheet's tone rules set fill and stroke only.
+- The legend key carries a tone when every drawn mark of its state shares
+  it. The Rust reconstruction draws the same bytes, pinned by the
+  `controls/layering-toned` rendered fixture.
+- Participant lifelines in a sequence figure are not toned: a lifeline is a
+  decoration, the participant's name already identifies it, and one family
+  would be the only user.

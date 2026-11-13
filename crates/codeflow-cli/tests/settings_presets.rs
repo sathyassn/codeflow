@@ -27,10 +27,9 @@ const HOOK_NAMES: [&str; 4] = [
 /// Hardcoded union of top-level keys actually used across the three presets.
 /// A typo'd or stray key in any preset fails here; a deliberate new key means
 /// updating this list in the same change.
-const TOP_LEVEL_KEYS: [&str; 9] = [
+const TOP_LEVEL_KEYS: [&str; 8] = [
     "$schema",
     "attribution",
-    "effortLevel",
     "env",
     "hooks",
     "includeCoAuthoredBy",
@@ -55,12 +54,50 @@ fn presets_disable_host_attribution() {
     }
 }
 
+/// TSK-1028 AC-3: effort is each person's setting, so no preset pins it;
+/// seat launches pass their effort explicitly (ADR-0087 supersedes the
+/// settings pin of ADR-0056).
 #[test]
-fn primary_effort_settings_default_to_high() {
+fn presets_leave_effort_to_each_person() {
     for name in preset_files() {
         let bytes = std::fs::read(settings_dir().join(&name)).unwrap();
         let preset: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(preset["effortLevel"], "high", "{name}");
+        assert!(preset.get("effortLevel").is_none(), "{name}");
+    }
+}
+
+/// TSK-1028 AC-5: with no effort in the shared settings, every seat launch
+/// in `cf-herdr` still passes its effort, so seat effort is unchanged. The
+/// transport posture table adds only posture flags after these.
+#[test]
+fn every_seat_launch_passes_its_effort() {
+    let root = settings_dir().join("../../..");
+    let herdr =
+        std::fs::read_to_string(root.join("assets/base/agents/skills/cf-herdr/SKILL.md")).unwrap();
+    assert!(herdr.contains(
+        "Native args after `--` are the ensemble's primary selector and effort, then\n\
+         the seat's posture flags from the transport table"
+    ));
+    for launch in [
+        "- Claude: `--model <selector> --effort <effort> <posture flags>`",
+        "- Codex: `--model <selector> -c model_reasoning_effort=\"<effort>\" <posture flags>`",
+        "- Grok: `--model <selector> --reasoning-effort <effort> <posture flags>`",
+    ] {
+        assert!(herdr.contains(launch), "cf-herdr lost {launch}");
+    }
+    let transport = std::fs::read_to_string(
+        root.join("assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md"),
+    )
+    .unwrap();
+    for row in transport.lines().filter(|line| {
+        ["| Claude |", "| Codex |", "| Grok |"]
+            .iter()
+            .any(|seat| line.starts_with(seat))
+    }) {
+        assert!(
+            !row.contains("effort"),
+            "a posture row overrides effort: {row}"
+        );
     }
 }
 
@@ -184,7 +221,7 @@ fn presets_parse_as_json() {
 fn every_preset_and_the_repository_carry_the_compaction_default() {
     let expected = serde_json::json!({
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
     });
     let path = settings_dir().join("../../../.claude/settings.json");
     let bytes =
@@ -221,15 +258,27 @@ fn context_policy_guidance_pins_scope_effect_and_lifecycle_caution() {
     for marker in [
         "`codeflow init` writes these string values",
         "\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"1000000\"",
-        "\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"50\"",
+        "\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"35\"",
         "capped at the model's real context window",
         "can only lower the compaction threshold",
         "applies to main sessions and to subagents",
-        "| Model with a native 1M window | compacts at about 967K tokens | compacts at about 500K tokens |",
-        "| Session limited to 200K | compacts at the 200K boundary | compacts at about 100K tokens |",
+        "| Model with a native 1M window | compacts at about 967K tokens | compacts at about 350K tokens |",
+        "| Session limited to 200K | compacts at the 200K boundary | compacts at about 70K tokens |",
         "`used_percentage` measures against the full model window, so it no longer shows when compaction runs",
-        "Update keeps every value the project set",
-        "a key it wrote that the project has since deleted stays deleted",
+        "Update keeps a value that differs from the one CodeFlow last shipped",
+        "update cannot tell a deliberate 50 from the shipped 50, so a project on 50 moves to 35",
+        "To keep 50, set it again in the shared `env` after the update",
+        "the update report names the key it kept, never the value",
+        "A key CodeFlow wrote that the project has since deleted stays deleted",
+        "a turn near 350K carries about 0.7 times the input of a turn near 500K",
+        "A lower point compacts more often",
+        "compact at about 70K",
+        "The point matters most for long orchestrator sessions",
+        "Detail that lives only in the conversation may be lost",
+        "let a session recover its task, branch and next step when it rereads them",
+        "supplies context and pointers to those records; it does not restore the session's state by itself",
+        "is revisited once an adopter's measurement of 50, 40, 35 and 30 percent is published on CodeFlow issue 358",
+        "Since Claude Code v2.1.211 a worktree session uses the file at the main checkout's root",
         "delete both keys or the whole `env` object. It stays deleted",
         "With no recorded baseline, update adds the keys only when the project has no `env` at all",
         "Update reports key names, never values",
@@ -526,8 +575,9 @@ fn sandbox_reallows_only_immutable_plugin_code_under_claude_state() {
 /// The extra sandbox write roots, so an agent can run these commands without
 /// a sandbox bypass: the per-user state directory `codeflow present` needs
 /// (macOS, then Linux without `XDG_STATE_HOME`), whose runtime match
-/// `present_cli` proves, and the two `CodeFlow` home directories a full gate
-/// writes (TSK-216): its machine-wide lock and its durable evidence. The rest
+/// `present_cli` proves. With them the presets grant the `CodeFlow` home's
+/// machine-wide lock directory (TSK-216), and never its durable evidence
+/// directory (TSK-1044 AC-4: full gates run outside the sandbox). The rest
 /// of the home, which holds qualification and binding state, stays out.
 const PRESENT_STATE_WRITE_ROOTS: [&str; 2] = [
     "~/Library/Application Support/codeflow/present",
@@ -536,11 +586,8 @@ const PRESENT_STATE_WRITE_ROOTS: [&str; 2] = [
 
 #[test]
 fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
-    use codeflow_core::testing::gate_guard::{HOME_EVIDENCE_DIR, HOME_LOCK_DIR};
-    let gate_roots = [
-        format!("~/.codeflow/{HOME_LOCK_DIR}"),
-        format!("~/.codeflow/{HOME_EVIDENCE_DIR}"),
-    ];
+    use codeflow_core::testing::gate_guard::HOME_LOCK_DIR;
+    let gate_roots = [format!("~/.codeflow/{HOME_LOCK_DIR}")];
     let expected: Vec<&str> = PRESENT_STATE_WRITE_ROOTS
         .iter()
         .copied()
@@ -556,18 +603,56 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             .collect();
         assert_eq!(
             allow_write, expected,
-            "{name}: the sandbox may add only the cf-present state directory and the full gate's lock and evidence directories as write roots"
+            "{name}: the sandbox may add only the cf-present state directory and the gate's lock directory as write roots"
         );
-        // The only write denies are the shell startup class and the default
-        // git configuration files (TSK-242).
+        // The write denies are the enforcement paths (TSK-397 design D,
+        // H-4), the shell startup class and the default git configuration
+        // files (TSK-242).
         let table = actions::table();
+        // The generator appends what a preset lacks, so the entries the
+        // presets already carried come first.
         let mut denied = table.startup_paths.sandbox_write_denies();
         denied.extend(table.git_config_paths.sandbox_write_denies());
+        denied.extend(
+            table
+                .claude_edit_denies
+                .iter()
+                .filter_map(|rule| actions::edit_deny_write_path(rule)),
+        );
         assert_eq!(
             value["sandbox"]["filesystem"]["denyWrite"],
             serde_json::json!(denied),
-            "{name}: the sandbox denies writes only to the shell startup class and the default git configuration files"
+            "{name}: the sandbox denies writes only to the enforcement paths, the shell startup class and the default git configuration files"
         );
+    }
+}
+
+/// TSK-1044 AC-4, decided by the operator on 2026-10-30: no Claude preset
+/// grants the gate evidence folder, so a sandboxed session cannot plant or
+/// replace durable evidence; full gates run outside the sandbox. Checked in
+/// every shipped preset and in this repository's managed baseline copy.
+#[test]
+fn no_claude_settings_grant_the_gate_evidence_folder() {
+    use codeflow_core::testing::gate_guard::HOME_EVIDENCE_DIR;
+    let evidence = format!(".codeflow/{HOME_EVIDENCE_DIR}");
+    let mut copies: Vec<(String, serde_json::Value)> = preset_files()
+        .into_iter()
+        .map(|name| {
+            let value = load(&name);
+            (name, value)
+        })
+        .collect();
+    let baseline = repo_root().join(".codeflow/.baseline/.claude/settings.json");
+    copies.push((baseline.display().to_string(), read_json(&baseline)));
+    for (name, value) in copies {
+        let grants: Vec<&str> = value["sandbox"]["filesystem"]["allowWrite"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|path| path.contains(&evidence))
+            .collect();
+        assert!(grants.is_empty(), "{name} grants {grants:?}");
     }
 }
 
@@ -1813,7 +1898,7 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
             "{case}"
         );
         assert!(
-            first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
+            first.contains("moved security.privilege_escalation to \"block\""),
             "{case}: the moved default is reported:\n{first}"
         );
 
@@ -1830,4 +1915,242 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
             "{case}: validate is not clean:\n{validate}"
         );
     }
+}
+
+// ---- The shipped status line (TSK-1028, issue 351) ----------------------
+
+/// The status JSON Claude Code sends the status line on stdin, with the
+/// context used set to `used` tokens of a 1M window.
+#[cfg(unix)]
+fn status_json(folder: &Path, used: u64) -> String {
+    serde_json::json!({
+        "model": {"id": "claude-opus-5-5", "display_name": "Opus 5.5"},
+        "version": "2.3.1",
+        "output_style": {"name": "Explanatory"},
+        "workspace": {"current_dir": folder},
+        "context_window": {
+            "context_window_size": 1_000_000,
+            "current_usage": {
+                "input_tokens": used - 3000,
+                "cache_read_input_tokens": 1000,
+                "cache_creation_input_tokens": 1000,
+                "output_tokens": 1000
+            }
+        }
+    })
+    .to_string()
+}
+
+/// A fresh folder under the system temporary directory, with a git
+/// repository on branch `feature-x` when `git_branch` is set.
+#[cfg(unix)]
+fn status_folder(name: &str, git_branch: bool) -> PathBuf {
+    let folder = std::env::temp_dir().join(format!("cf-status-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    if git_branch {
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "feature-x"])
+            .current_dir(&folder)
+            .status()
+            .expect("git runs");
+        assert!(status.success());
+    }
+    folder
+}
+
+/// Runs the preset's status line command in `folder` with `json` on stdin
+/// and `path` as `PATH`; returns stdout and the exit code.
+#[cfg(unix)]
+fn run_status_line(
+    preset: &str,
+    folder: &Path,
+    json: &str,
+    path: &std::ffi::OsStr,
+) -> (String, i32) {
+    use std::io::Write;
+    let value = load(preset);
+    assert_eq!(value["statusLine"]["type"], "command", "{preset}");
+    let command = value["statusLine"]["command"].as_str().unwrap();
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", command])
+        .current_dir(folder)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh runs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(json.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "{preset}: stderr {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+/// The ANSI escape sequences stripped, leaving what a reader sees.
+#[cfg(unix)]
+fn visible(text: &str) -> String {
+    regex::Regex::new("\u{1b}\\[[0-9;]*m")
+        .unwrap()
+        .replace_all(text, "")
+        .into_owned()
+}
+
+/// AC-1: given Claude Code's status JSON, every preset's line shows the
+/// model name and id, the version, the output style, the folder, the branch
+/// when there is one, and the context used out of the window with a
+/// percentage coloured green below 50, yellow below 80 and red from 80.
+/// Needs `jq`, which the issue's line reads the fields with.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_model_version_style_folder_branch_and_context() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let has_jq = std::env::split_paths(&path).any(|dir| dir.join("jq").is_file());
+    assert!(
+        has_jq,
+        "this test needs jq on PATH, as the shipped line does"
+    );
+    let repo = status_folder("repo", true);
+    let plain = status_folder("plain", false);
+    for preset in preset_files() {
+        for (used, colour, shown) in [
+            (120_000, "32", "ctx:120k/1000k (12%)"),
+            (550_000, "33", "ctx:550k/1000k (55%)"),
+            (900_000, "31", "ctx:900k/1000k (90%)"),
+        ] {
+            let (out, code) = run_status_line(&preset, &repo, &status_json(&repo, used), &path);
+            assert_eq!(code, 0, "{preset}");
+            let folder = repo.file_name().unwrap().to_str().unwrap();
+            assert_eq!(
+                visible(&out),
+                format!("Opus 5.5 (claude-opus-5-5) | v2.3.1 | Explanatory | {folder} (feature-x) | {shown}\n"),
+                "{preset}"
+            );
+            assert!(
+                out.contains(&format!("\u{1b}[2;{colour}mctx:")),
+                "{preset}: {out:?}"
+            );
+        }
+        let (out, code) = run_status_line(&preset, &plain, &status_json(&plain, 10_000), &path);
+        assert_eq!(code, 0, "{preset}");
+        let folder = plain.file_name().unwrap().to_str().unwrap();
+        assert_eq!(
+            visible(&out),
+            format!("Opus 5.5 (claude-opus-5-5) | v2.3.1 | Explanatory | {folder} | ctx:10k/1000k (1%)\n"),
+            "{preset}: no branch outside a repository"
+        );
+    }
+    let _ = std::fs::remove_dir_all(repo);
+    let _ = std::fs::remove_dir_all(plain);
+}
+
+/// AC-2: without `jq` on `PATH`, the line prints the folder and branch and
+/// exits 0, never an error or an empty line.
+#[cfg(unix)]
+#[test]
+fn status_line_without_jq_prints_folder_and_branch() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let find = |tool: &str| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(tool))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{tool} not on PATH"))
+    };
+    let bin = status_folder("bin", false);
+    for tool in ["cat", "basename", "git"] {
+        std::os::unix::fs::symlink(find(tool), bin.join(tool)).unwrap();
+    }
+    let repo = status_folder("repo-nojq", true);
+    let plain = status_folder("plain-nojq", false);
+    for preset in preset_files() {
+        let (out, code) =
+            run_status_line(&preset, &repo, &status_json(&repo, 10_000), bin.as_os_str());
+        assert_eq!(code, 0, "{preset}");
+        let folder = repo.file_name().unwrap().to_str().unwrap();
+        assert_eq!(
+            out,
+            format!("{folder} (feature-x) | jq not found\n"),
+            "{preset}"
+        );
+
+        let (out, code) = run_status_line(
+            &preset,
+            &plain,
+            &status_json(&plain, 10_000),
+            bin.as_os_str(),
+        );
+        assert_eq!(code, 0, "{preset}");
+        let folder = plain.file_name().unwrap().to_str().unwrap();
+        assert_eq!(out, format!("{folder} | jq not found\n"), "{preset}");
+    }
+    for folder in [bin, repo, plain] {
+        let _ = std::fs::remove_dir_all(folder);
+    }
+}
+
+/// Review of PR 368: the line hands the status JSON to `jq` byte for byte,
+/// so a backslash in a path or name, or an escaped control character, stays
+/// literal under `/bin/sh` instead of turning into an escape or a parse
+/// error.
+#[cfg(unix)]
+#[test]
+fn status_line_keeps_backslashes_and_escapes_literal() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let slashed = status_folder("back\\slash", true);
+    let windows = "C:\\Users\\dev\\proj";
+    for preset in preset_files() {
+        for (cwd, style, folder, branch) in [
+            (
+                slashed.to_str().unwrap().to_string(),
+                "tab\there",
+                slashed.file_name().unwrap().to_str().unwrap().to_string(),
+                " (feature-x)",
+            ),
+            (
+                windows.to_string(),
+                "back\\slash\\nstyle",
+                windows.to_string(),
+                "",
+            ),
+        ] {
+            let json = serde_json::json!({
+                "model": {"id": "claude-opus-5-5", "display_name": "Opus 5.5"},
+                "version": "2.3.1",
+                "output_style": {"name": style},
+                "workspace": {"current_dir": cwd},
+                "context_window": {
+                    "context_window_size": 1_000_000,
+                    "current_usage": {
+                        "input_tokens": 1000,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "output_tokens": 0
+                    }
+                }
+            })
+            .to_string();
+            let (out, code) = run_status_line(&preset, &slashed, &json, &path);
+            assert_eq!(code, 0, "{preset}");
+            assert_eq!(
+                visible(&out),
+                format!(
+                    "Opus 5.5 (claude-opus-5-5) | v2.3.1 | {style} | {folder}{branch} | ctx:1k/1000k (0%)\n"
+                ),
+                "{preset}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(slashed);
 }

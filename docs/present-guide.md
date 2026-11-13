@@ -63,7 +63,7 @@ repository's sessions.
 |---|---|
 | `codeflow present open <DOCUMENT>` | Validates the JSON document, starts the session's service, opens the isolated browser window and prints `opened <session-id>`. `--no-launch` starts the service and prints the bootstrap file to open instead |
 | `codeflow present list` | Prints this repository's sessions as JSON |
-| `codeflow present show <SESSION_ID>` | Reopens an active session, restarting its service if it stopped. For a closed session it prints the session record. `--no-launch` prints where to open it |
+| `codeflow present show <SESSION_ID>` | Reopens an active session, restarting its service if it stopped, and opens a window in its running browser or launches a new one. For a closed session it prints the session record. `--no-launch` prints where to open it |
 | `codeflow present update <SESSION_ID> <DOCUMENT>` | Adds a validated, immutable revision to an active session |
 | `codeflow present feedback <SESSION_ID>` | Delivers pending reviews as JSON lines to whoever runs it, usually the agent. `--follow` keeps delivering until the session closes |
 | `codeflow present responses list <SESSION_ID>` | Lists stored events with their status without delivering them. `--revision`, `--form`, `--status` (`pending`, `delivered`, `acknowledged`) and `--kind` (`review`, `answer`, `amendment`, `reopen`, `tombstone`) combine with AND |
@@ -84,12 +84,14 @@ when you submit them.
 
 1. Wait for the agent to run `codeflow present open <document.json>`, or run it
    yourself.
-   - If you closed the window, reopen it with
-     `codeflow present show <session-id>`.
-   - If `show` says the session's browser is already open, that browser is
-     still running. On macOS it can keep running after its last window closes.
-     Switch to its window, or quit it and run `show` again.
+   - Closing the window keeps the session. Reopen it with
+     `codeflow present show <session-id>`: it opens a new window in the
+     browser that is still running, or launches a new one. The isolated
+     browser quits 15 seconds after its last window closes.
    - `show --no-launch` prints the session's address.
+   - When you are done, click **End review** in the header. It sends any
+     queued notes first, then ends the session and quits the browser, as
+     `codeflow present close` does.
 2. Read the page from the top. On a wide screen, the left rail lists the
    sections.
 3. Press `C` or click **Comment** to turn on Comment mode. The notes rail
@@ -124,6 +126,30 @@ review is over.
    `--mode dark` or `--theme graphite` if you want a different look. Without
    `--with-notes`, the copy holds the document only, without notes or review
    controls.
+   The export is a review capture at a recorded time. The live session remains
+   the handover surface. Open it once at the current revision before exporting
+   HTML stages: a separate measuring host records their export heights at the
+   content widths 360, 372.8, 480, 640, 768, 832 and 900px, independently of
+   the review rail. The export selects the nearest measured width at or below
+   the available column and retains that iframe width, leaving unused space
+   beside it when necessary. This preserves measured geometry even for authored
+   CSS that grows taller at wider widths. A stage without an eligible width,
+   matching revision and rendering contract keeps
+   its fallback height and says "height not measured at this width; open the
+   session". A stylesheet or font change invalidates earlier measurements.
+
+   Capture tools should wait for `html[data-cf-ready="true"]`. This signal
+   means every stage frame loaded or reached its bounded failure timeout;
+   failed frames show a visible notice. It does not mean all stages were
+   measured. Check `[data-cf-stage-notice]` for limitations before relying
+   on a capture. For a full-page browser screenshot, set the capture viewport
+   height to the document's full scroll height without changing its width,
+   then wait for fonts and two animation frames before taking the image.
+   A frame's load event does not guarantee that its offscreen pixels have
+   been composited. The browser checks use
+   `crates/codeflow-present/web/scripts/export-capture.mjs` to prepare the
+   viewport and inspect captured text pixels as well as geometry.
+
 3. Close the session with `codeflow present close <session-id>`.
 4. To reclaim space later, preview with `codeflow present clear --dry-run`,
    then run `codeflow present clear`.

@@ -5,7 +5,8 @@
 //! - **hook entries** whose command starts with the `codeflow` binary name
 //!   (`"codeflow hook git-guard"` etc.) — added on init, regenerated on
 //!   update (stale codeflow hooks not present in the shipped preset are
-//!   removed); user hooks are never touched;
+//!   removed, and a kept one takes the shipped fields, such as a guard's
+//!   `timeout` and `onFailure`); user hooks are never touched;
 //! - **permission entries** (`permissions.deny` / `ask` / `allow` arrays) —
 //!   merged three ways on update against the prior shipped baseline
 //!   (ADR-0075, TSK-171): an entry the preset retired is removed, an entry
@@ -27,17 +28,32 @@
 //!   project-specific sandbox configuration.
 //! - **env entries** — the shipped `env` keys are added to a project that
 //!   lacks them, unless the recorded baseline shows codeflow wrote a key
-//!   before and the project removed it since; every entry the project has
-//!   keeps its value, and an `env` that is not an object of strings is
-//!   reported and left untouched.
+//!   before and the project removed it since. A shipped key still at the
+//!   value the recorded baseline holds moves to the new shipped value;
+//!   every other entry the project has keeps its value, and an `env` that
+//!   is not an object of strings is reported and left untouched.
 //!
-//! Every other key — user or shipped — is preserved verbatim: shipped
-//! top-level keys (`statusLine`, `$schema`) are added only when
-//! the user file lacks them. Every mutation is reported.
+//! - **personal preference keys** ([`PREFERENCE_KEYS`]: `statusLine`,
+//!   `effortLevel`) — merged against the recorded baseline (TSK-1028): a
+//!   value still equal to the one codeflow recorded moves to the new shipped
+//!   value, a value the project changed stays, a shipped key the project
+//!   removed stays removed, and a key this preset no longer ships is removed
+//!   while it still holds the recorded value. With no recorded baseline, a
+//!   missing key is added and every existing value stays.
+//! - **every other shipped top-level key** (`$schema`, and `attribution`
+//!   and `includeCoAuthoredBy`, which keep the host from adding the AI
+//!   attribution project policy forbids) — added whenever the project lacks
+//!   it, a removal included, and never changed once present.
+//!
+//! A key this preset does not ship stays verbatim, except a preference key
+//! the recorded baseline holds as shipped with the same value, which is
+//! retired. Every mutation is reported.
 
 use serde_json::{Map, Value};
 
-use super::ScaffoldError;
+use super::assets::Shipped;
+use super::{ScaffoldError, Shown};
+use crate::shown;
 
 /// Commands with this prefix (or exactly equal to the binary name) are
 /// codeflow-managed hook entries.
@@ -47,20 +63,28 @@ const COMMAND_PREFIX: &str = "codeflow ";
 /// keeps removed.
 pub const KEPT_REMOVAL: &str = "kept the project's removal of";
 
+/// The start of every report line about a top-level value the project
+/// changed that update keeps while the shipped default moved or retired.
+const KEPT_OWN: &str = "kept the project's \"";
+
 /// The start of every report line about a malformed `env`.
 const ENV_MALFORMED: &str = "settings: \"env\" ";
 
-/// The wording of every report line about a shipped `env` key update did
-/// not add.
+/// The wording of every report line about a shipped key, in `env` or at the
+/// top level, that update did not add.
 const ENV_UNSET: &str = "stays unset";
 
 /// Whether a report line describes a standing condition that update reports
 /// on every run, even when the settings file does not change: a permission
-/// entry the project removed, a malformed `env`, or a shipped `env` key
-/// update did not add. Such lines name keys, never `env` values.
+/// entry the project removed, a malformed `env`, a shipped `env` or
+/// top-level key update did not add, or a project value update kept while
+/// the shipped default moved or retired. Such lines name keys, never values.
 #[must_use]
 pub fn is_standing_note(line: &str) -> bool {
-    line.contains(KEPT_REMOVAL) || line.starts_with(ENV_MALFORMED) || line.contains(ENV_UNSET)
+    line.contains(KEPT_REMOVAL)
+        || line.contains(KEPT_OWN)
+        || line.starts_with(ENV_MALFORMED)
+        || line.contains(ENV_UNSET)
 }
 
 fn is_codeflow_command(cmd: &str) -> bool {
@@ -85,15 +109,16 @@ fn matcher_of(group: &Value) -> Option<&str> {
 pub fn merge_settings(
     current: &str,
     incoming: &str,
-    report: &mut Vec<String>,
+    report: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
     merge_settings_from_baseline(current, None, incoming, report)
 }
 
 /// Merges settings during update, using the prior shipped baseline to retire
-/// the CodeFlow-managed permission and sandbox array entries the new preset
-/// removed, and to keep a permission entry the project removed from coming
-/// back. User-only entries are preserved.
+/// the CodeFlow-managed permission and sandbox array entries and the plain
+/// top-level keys the new preset removed, to move a top-level value still at
+/// its recorded value to the new one, and to keep a permission entry or key
+/// the project removed from coming back. User-only entries are preserved.
 ///
 /// # Errors
 ///
@@ -103,7 +128,7 @@ pub fn merge_settings_from_baseline(
     current: &str,
     previous: Option<&str>,
     incoming: &str,
-    report: &mut Vec<String>,
+    report: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
     merge(current, previous, incoming, Previous::Recorded, report)
 }
@@ -126,7 +151,7 @@ pub fn merge_settings_from_prior_release(
     current: &str,
     prior: &str,
     incoming: &str,
-    report: &mut Vec<String>,
+    report: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
     merge(
         current,
@@ -153,33 +178,35 @@ fn merge(
     previous: Option<&str>,
     incoming: &str,
     kind: Previous,
-    report: &mut Vec<String>,
+    report: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
+    let preset = Preset(&SHIPPED_PRESETS);
     let mut current: Value = serde_json::from_str(current)?;
     let incoming: Value = serde_json::from_str(incoming)?;
     let previous: Option<Value> = previous.map(serde_json::from_str).transpose()?;
 
     let Value::Object(cur) = &mut current else {
-        return Err(ScaffoldError::InvalidState {
-            what: "settings.json".to_string(),
-            detail: "top level is not a JSON object".to_string(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("settings.json"),
+            Shown::fixed("top level is not a JSON object"),
+        ));
     };
     let Value::Object(inc) = &incoming else {
-        return Err(ScaffoldError::InvalidState {
-            what: "shipped settings preset".to_string(),
-            detail: "top level is not a JSON object".to_string(),
-        });
+        return Err(ScaffoldError::invalid(
+            Shown::fixed("shipped settings preset"),
+            Shown::fixed("top level is not a JSON object"),
+        ));
     };
 
     for (key, inc_val) in inc {
         match key.as_str() {
-            "hooks" => merge_hooks(cur, inc_val, report),
+            "hooks" => merge_hooks(cur, inc_val, preset, report),
             "permissions" => merge_permissions(
                 cur,
                 previous.as_ref().and_then(|value| value.get("permissions")),
                 inc_val,
                 kind,
+                preset,
                 report,
             ),
             "sandbox" => merge_sandbox(
@@ -189,24 +216,33 @@ fn merge(
                     .filter(|_| kind == Previous::Recorded)
                     .and_then(|value| value.get("sandbox")),
                 inc_val,
+                preset,
                 report,
             ),
             "env" => merge_env(
                 cur,
                 previous.as_ref().filter(|_| kind == Previous::Recorded),
                 inc_val,
+                preset,
                 report,
             ),
-            _ => {
-                if cur.contains_key(key) {
-                    if cur[key] != *inc_val {
-                        report.push(format!("settings: preserved user value for \"{key}\""));
-                    }
-                } else {
-                    cur.insert(key.clone(), inc_val.clone());
-                    report.push(format!("settings: added \"{key}\""));
-                }
-            }
+            _ => merge_top_level_key(
+                cur,
+                key,
+                previous
+                    .as_ref()
+                    .filter(|_| kind == Previous::Recorded)
+                    .filter(|_| PREFERENCE_KEYS.contains(&key.as_str()))
+                    .and_then(|value| value.get(key)),
+                inc_val,
+                preset,
+                report,
+            ),
+        }
+    }
+    if kind == Previous::Recorded {
+        if let Some(Value::Object(baseline)) = &previous {
+            retire_top_level_keys(cur, baseline, inc, report);
         }
     }
 
@@ -218,9 +254,105 @@ fn merge(
         .map_err(ScaffoldError::from)
 }
 
-/// Merge the shipped `env` keys into the project's `env` without changing any
-/// entry the project has. `baseline` is the shipped settings recorded at the
-/// last install or update, or `None` when no such record exists.
+/// The top-level keys that are each person's preference, not policy
+/// (TSK-1028, ADR-0087): update moves, keeps or retires them against the
+/// recorded baseline. Every other plain top-level key, such as the
+/// attribution controls, is restored whenever a project lacks it, so a
+/// deletion never weakens what it guarantees; `hooks`, `permissions`,
+/// `sandbox` and `env` follow their own merge rules.
+pub const PREFERENCE_KEYS: [&str; 2] = ["statusLine", "effortLevel"];
+
+/// Merge one shipped top-level value such as `statusLine` (TSK-1028).
+/// `shipped_before` is the value the recorded baseline holds for this key,
+/// `None` when there is no recorded baseline, it lacks the key, or the key
+/// is not one of [`PREFERENCE_KEYS`].
+///
+/// - A value equal to the one the baseline recorded is still codeflow's, so
+///   it moves to the new shipped value.
+/// - Any other value is the project's and stays. When the shipped default
+///   changed, the report says so even if nothing else in the file changes.
+/// - A key the baseline recorded and the project no longer has was removed
+///   by the project and stays removed, reported on every update.
+/// - Otherwise a missing key is added.
+fn merge_top_level_key(
+    cur: &mut Map<String, Value>,
+    key: &str,
+    shipped_before: Option<&Value>,
+    inc_val: &Value,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
+) {
+    let name = preset.name(key);
+    match cur.get_mut(key) {
+        Some(existing) if existing == inc_val => {}
+        Some(existing) if Some(&*existing) == shipped_before => {
+            *existing = inc_val.clone();
+            report.push(shown!(
+                "settings: updated \"{}\" to the new shipped default",
+                name
+            ));
+        }
+        Some(_) if shipped_before.is_some_and(|before| before != inc_val) => {
+            report.push(shown!(
+                "settings: {}{}\"; the shipped default changed",
+                Shown::fixed(KEPT_OWN),
+                name
+            ));
+        }
+        Some(_) => report.push(shown!("settings: preserved user value for \"{}\"", name)),
+        None if shipped_before.is_some() => report.push(shown!(
+            "settings: \"{}\" {}; update does not restore a shipped key \
+             the project removed",
+            name,
+            Shown::fixed(ENV_UNSET)
+        )),
+        None => {
+            cur.insert(key.to_string(), inc_val.clone());
+            report.push(shown!("settings: added \"{}\"", name));
+        }
+    }
+}
+
+/// Retire the [`PREFERENCE_KEYS`] the recorded baseline carried and this
+/// preset no longer ships, such as `effortLevel` (TSK-1028): a value still
+/// equal to the recorded one is removed, a value the project changed stays.
+/// Both are reported. No other key is ever retired here.
+fn retire_top_level_keys(
+    cur: &mut Map<String, Value>,
+    baseline: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    report: &mut Vec<Shown>,
+) {
+    for (key, shipped_before) in baseline {
+        let Some(name) = PREFERENCE_KEYS.iter().find(|name| **name == key.as_str()) else {
+            continue;
+        };
+        if incoming.contains_key(key) {
+            continue;
+        }
+        let name = Shown::fixed(name);
+        match cur.get(key) {
+            Some(existing) if existing == shipped_before => {
+                cur.shift_remove(key);
+                report.push(shown!(
+                    "settings: removed \"{}\"; this release no longer ships it",
+                    name
+                ));
+            }
+            Some(_) => report.push(shown!(
+                "settings: {}{}\"; this release no longer ships it",
+                Shown::fixed(KEPT_OWN),
+                name
+            )),
+            None => {}
+        }
+    }
+}
+
+/// Merge the shipped `env` keys into the project's `env`, changing only a
+/// value still equal to the one the recorded baseline holds. `baseline` is
+/// the shipped settings recorded at the last install or update, or `None`
+/// when no such record exists.
 ///
 /// - With no `env`, the shipped keys are added, except a key the baseline
 ///   shows codeflow wrote before: the project removed it, so it stays out.
@@ -228,6 +360,11 @@ fn merge(
 ///   the baseline exists and did not carry it. A key the baseline carried was
 ///   removed by the project; with no baseline, update cannot tell a removal
 ///   from a key the project never had, so it adds nothing.
+/// - A value still equal to the one the baseline recorded is codeflow's, so
+///   it moves to the new shipped value (TSK-1029), whatever the project
+///   meant by it; any other value is the project's and stays, and when the
+///   shipped default changed that is a standing note. With no baseline
+///   every value stays.
 /// - An `env` that is not an object of strings is reported and left as is.
 ///
 /// Report lines name keys only, never values, since `env` may hold secrets.
@@ -235,7 +372,8 @@ fn merge_env(
     cur: &mut Map<String, Value>,
     baseline: Option<&Value>,
     inc_env: &Value,
-    report: &mut Vec<String>,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     let Some(inc_env) = inc_env.as_object() else {
         return;
@@ -245,9 +383,11 @@ fn merge_env(
         .and_then(Value::as_object);
     let removed = |key: &str| shipped_before.is_some_and(|env| env.contains_key(key));
     let kept = |key: &str| {
-        format!(
-            "settings: env.{key} {ENV_UNSET}; update does not restore a shipped key \
-             it wrote before"
+        shown!(
+            "settings: env.{} {}; update does not restore a shipped key \
+             it wrote before",
+            preset.name(key),
+            Shown::fixed(ENV_UNSET)
         )
     };
     match cur.get_mut("env") {
@@ -258,7 +398,7 @@ fn merge_env(
                     report.push(kept(key));
                 } else {
                     added.insert(key.clone(), value.clone());
-                    report.push(format!("settings: added env.{key}"));
+                    report.push(shown!("settings: added env.{}", preset.name(key)));
                 }
             }
             if !added.is_empty() {
@@ -267,32 +407,60 @@ fn merge_env(
         }
         Some(Value::Object(env)) => {
             if env.values().any(|value| !value.is_string()) {
-                report.push(format!(
-                    "{ENV_MALFORMED}has a value that is not a string; left untouched"
+                report.push(shown!(
+                    "{}has a value that is not a string; left untouched",
+                    Shown::fixed(ENV_MALFORMED)
                 ));
                 return;
             }
             for (key, value) in inc_env {
                 match env.get(key) {
-                    Some(existing) => {
-                        if existing != value {
-                            report.push(format!("settings: preserved user value for env.{key}"));
-                        }
+                    Some(existing) if existing == value => {}
+                    Some(existing)
+                        if shipped_before.and_then(|env| env.get(key)) == Some(existing) =>
+                    {
+                        env.insert(key.clone(), value.clone());
+                        report.push(shown!(
+                            "settings: updated env.{} to the new shipped default",
+                            preset.name(key)
+                        ));
                     }
-                    None if baseline.is_none() => report.push(format!(
-                        "settings: env.{key} {ENV_UNSET}; no recorded baseline shows \
-                         whether the project removed it from its own \"env\""
+                    Some(_)
+                        if shipped_before
+                            .and_then(|env| env.get(key))
+                            .is_some_and(|before| before != value) =>
+                    {
+                        report.push(shown!(
+                            "settings: {}env.{}\"; the shipped default changed",
+                            Shown::fixed(KEPT_OWN),
+                            preset.name(key)
+                        ));
+                    }
+                    Some(_) => {
+                        report.push(shown!(
+                            "settings: preserved user value for env.{}",
+                            preset.name(key)
+                        ));
+                    }
+                    None if baseline.is_none() => report.push(shown!(
+                        "settings: env.{} {}; no recorded baseline shows \
+                         whether the project removed it from its own \"env\"",
+                        preset.name(key),
+                        Shown::fixed(ENV_UNSET)
                     )),
                     None if removed(key) => report.push(kept(key)),
                     None => {
                         env.insert(key.clone(), value.clone());
-                        report.push(format!("settings: added env.{key}"));
+                        report.push(shown!("settings: added env.{}", preset.name(key)));
                     }
                 }
             }
         }
         Some(_) => {
-            report.push(format!("{ENV_MALFORMED}is not an object; left untouched"));
+            report.push(shown!(
+                "{}is not an object; left untouched",
+                Shown::fixed(ENV_MALFORMED)
+            ));
         }
     }
 }
@@ -301,7 +469,8 @@ fn merge_sandbox(
     cur: &mut Map<String, Value>,
     previous_sandbox: Option<&Value>,
     inc_sandbox: &Value,
-    report: &mut Vec<String>,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     let Some(inc_sandbox) = inc_sandbox.as_object() else {
         return;
@@ -310,7 +479,9 @@ fn merge_sandbox(
         .entry("sandbox")
         .or_insert_with(|| Value::Object(Map::new()));
     let Some(cur_sandbox) = cur_sandbox.as_object_mut() else {
-        report.push("settings: \"sandbox\" is not an object; left untouched".to_string());
+        report.push(Shown::fixed(
+            "settings: \"sandbox\" is not an object; left untouched",
+        ));
         return;
     };
     if let Some(previous_sandbox) = previous_sandbox.and_then(Value::as_object) {
@@ -318,19 +489,27 @@ fn merge_sandbox(
             cur_sandbox,
             previous_sandbox,
             inc_sandbox,
-            "sandbox",
+            &Shown::fixed("sandbox"),
+            preset,
             report,
         );
     }
-    merge_additive_object(cur_sandbox, inc_sandbox, "sandbox", report);
+    merge_additive_object(
+        cur_sandbox,
+        inc_sandbox,
+        &Shown::fixed("sandbox"),
+        preset,
+        report,
+    );
 }
 
 fn remove_retired_array_entries(
     current: &mut Map<String, Value>,
     previous: &Map<String, Value>,
     incoming: &Map<String, Value>,
-    path: &str,
-    report: &mut Vec<String>,
+    path: &Shown,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     for (key, previous_value) in previous {
         let Some(incoming_value) = incoming.get(key) else {
@@ -339,17 +518,25 @@ fn remove_retired_array_entries(
         let Some(current_value) = current.get_mut(key) else {
             continue;
         };
-        let key_path = format!("{path}.{key}");
+        // The key is one the shipped preset has (`incoming` holds it).
+        let key_path = shown!("{}.{}", path, preset.name(key));
         match (current_value, previous_value, incoming_value) {
             (Value::Object(current), Value::Object(previous), Value::Object(incoming)) => {
-                remove_retired_array_entries(current, previous, incoming, &key_path, report);
+                remove_retired_array_entries(
+                    current, previous, incoming, &key_path, preset, report,
+                );
             }
             (Value::Array(current), Value::Array(previous), Value::Array(incoming)) => {
+                // The entry comes from the project's file and its recorded
+                // baseline, both writable by the project: it is named only
+                // when a shipped copy in this binary holds it (TSK-1029).
                 current.retain(|entry| {
                     let retired = previous.contains(entry) && !incoming.contains(entry);
                     if retired {
-                        report.push(format!(
-                            "settings: removed retired {key_path} entry {entry}"
+                        report.push(shown!(
+                            "settings: removed retired {} entry {}",
+                            key_path,
+                            shown_entry(entry)
                         ));
                     }
                     !retired
@@ -363,37 +550,47 @@ fn remove_retired_array_entries(
 fn merge_additive_object(
     current: &mut Map<String, Value>,
     incoming: &Map<String, Value>,
-    path: &str,
-    report: &mut Vec<String>,
+    path: &Shown,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     for (key, inc_val) in incoming {
-        let key_path = format!("{path}.{key}");
+        let key_path = shown!("{}.{}", path, preset.name(key));
         match (current.get_mut(key), inc_val) {
             (Some(Value::Object(cur_obj)), Value::Object(inc_obj)) => {
-                merge_additive_object(cur_obj, inc_obj, &key_path, report);
+                merge_additive_object(cur_obj, inc_obj, &key_path, preset, report);
             }
             (Some(Value::Array(cur_arr)), Value::Array(inc_arr)) => {
                 for item in inc_arr {
                     if !cur_arr.contains(item) {
                         cur_arr.push(item.clone());
-                        report.push(format!("settings: added {key_path} entry {item}"));
+                        report.push(shown!(
+                            "settings: added {} entry {}",
+                            key_path,
+                            preset.entry(item)
+                        ));
                     }
                 }
             }
             (Some(existing), _) => {
                 if existing != inc_val {
-                    report.push(format!("settings: preserved user value for {key_path}"));
+                    report.push(shown!("settings: preserved user value for {}", key_path));
                 }
             }
             (None, _) => {
                 current.insert(key.clone(), inc_val.clone());
-                report.push(format!("settings: added {key_path}"));
+                report.push(shown!("settings: added {}", key_path));
             }
         }
     }
 }
 
-fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec<String>) {
+fn merge_hooks(
+    cur: &mut Map<String, Value>,
+    inc_hooks: &Value,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
+) {
     let Some(inc_events) = inc_hooks.as_object() else {
         return;
     };
@@ -401,7 +598,9 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
         .entry("hooks")
         .or_insert_with(|| Value::Object(Map::new()));
     let Some(cur_events) = cur_hooks.as_object_mut() else {
-        report.push("settings: \"hooks\" is not an object; left untouched".to_string());
+        report.push(Shown::fixed(
+            "settings: \"hooks\" is not an object; left untouched",
+        ));
         return;
     };
 
@@ -409,12 +608,14 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
         let Some(inc_groups) = inc_groups.as_array() else {
             continue;
         };
+        let event_name = preset.name(event);
         let cur_groups = cur_events
             .entry(event.clone())
             .or_insert_with(|| Value::Array(vec![]));
         let Some(cur_groups) = cur_groups.as_array_mut() else {
-            report.push(format!(
-                "settings: hooks.{event} is not an array; left untouched"
+            report.push(shown!(
+                "settings: hooks.{} is not an array; left untouched",
+                event_name
             ));
             continue;
         };
@@ -435,7 +636,7 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
             })
             .collect();
 
-        retire_codeflow_hooks(event, cur_groups, &wanted, report);
+        retire_codeflow_hooks(&event_name, cur_groups, &wanted, preset, report);
         cur_groups.retain(|g| {
             g.get("hooks")
                 .and_then(Value::as_array)
@@ -464,20 +665,54 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
                     .entry("hooks")
                     .or_insert_with(|| Value::Array(vec![]));
                 if let Some(hooks) = hooks.as_array_mut() {
-                    for h in codeflow_hooks {
-                        let cmd = hook_command(h).unwrap_or_default();
-                        if !hooks.iter().any(|e| hook_command(e) == Some(cmd)) {
-                            hooks.push(h.clone());
-                            report.push(format!("settings: added hook {event}: \"{cmd}\""));
-                        }
-                    }
+                    place_codeflow_hooks(hooks, &codeflow_hooks, &event_name, preset, report);
                 }
             } else {
                 cur_groups.push(inc_group.clone());
                 for h in &codeflow_hooks {
                     let cmd = hook_command(h).unwrap_or_default();
-                    report.push(format!("settings: added hook {event}: \"{cmd}\""));
+                    report.push(shown!(
+                        "settings: added hook {}: \"{}\"",
+                        event_name,
+                        preset.name(cmd)
+                    ));
                 }
+            }
+        }
+    }
+}
+
+/// Put each shipped codeflow hook into a group that has the shipped matcher:
+/// added when the group lacks its command, and given the shipped fields
+/// when it has the command with other ones. A codeflow hook is codeflow's,
+/// so its other fields, such as the `timeout` and `onFailure` that make a
+/// guard block when it cannot answer (TSK-1082), move with the preset.
+fn place_codeflow_hooks(
+    hooks: &mut Vec<Value>,
+    shipped: &[&Value],
+    event_name: &Shown,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
+) {
+    for h in shipped {
+        let cmd = hook_command(h).unwrap_or_default();
+        match hooks.iter_mut().find(|e| hook_command(e) == Some(cmd)) {
+            Some(existing) if existing != *h => {
+                *existing = (*h).clone();
+                report.push(shown!(
+                    "settings: updated hook {}: \"{}\" to its shipped fields",
+                    event_name,
+                    preset.name(cmd)
+                ));
+            }
+            Some(_) => {}
+            None => {
+                hooks.push((*h).clone());
+                report.push(shown!(
+                    "settings: added hook {}: \"{}\"",
+                    event_name,
+                    preset.name(cmd)
+                ));
             }
         }
     }
@@ -488,10 +723,11 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
 /// add pass puts it back under the shipped matcher instead of running it
 /// twice; never touch user hooks.
 fn retire_codeflow_hooks(
-    event: &str,
+    event: &Shown,
     cur_groups: &mut [Value],
     wanted: &[(Option<&str>, &str)],
-    report: &mut Vec<String>,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     for group in cur_groups.iter_mut() {
         let group_matcher = matcher_of(group).map(str::to_string);
@@ -506,7 +742,11 @@ fn retire_codeflow_hooks(
                 return true;
             }
             if !wanted.iter().any(|(_, c)| *c == cmd) {
-                report.push(format!("settings: removed stale hook {event}: \"{cmd}\""));
+                report.push(shown!(
+                    "settings: removed stale hook {}: {}",
+                    event,
+                    shown_entry(&Value::String(cmd.to_string()))
+                ));
                 return false;
             }
             if wanted
@@ -515,8 +755,10 @@ fn retire_codeflow_hooks(
             {
                 return true;
             }
-            report.push(format!(
-                "settings: moved hook {event}: \"{cmd}\" to the shipped matcher"
+            report.push(shown!(
+                "settings: moved hook {}: \"{}\" to the shipped matcher",
+                event,
+                preset.name(cmd)
             ));
             false
         });
@@ -528,7 +770,8 @@ fn merge_permissions(
     previous_perms: Option<&Value>,
     inc_perms: &Value,
     kind: Previous,
-    report: &mut Vec<String>,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     let Some(inc_perms) = inc_perms.as_object() else {
         return;
@@ -538,7 +781,9 @@ fn merge_permissions(
         .entry("permissions")
         .or_insert_with(|| Value::Object(Map::new()));
     let Some(cur_perms) = cur_perms.as_object_mut() else {
-        report.push("settings: \"permissions\" is not an object; left untouched".to_string());
+        report.push(Shown::fixed(
+            "settings: \"permissions\" is not an object; left untouched",
+        ));
         return;
     };
 
@@ -554,17 +799,22 @@ fn merge_permissions(
             else {
                 continue;
             };
-            retire_entries(key, cur_arr, prev_arr, &[], report);
+            // The key is one an earlier preset shipped; it is named only
+            // when a shipped copy in this binary has it.
+            let name = prior_key(key);
+            retire_entries(&name, cur_arr, prev_arr, &[], report);
             if cur_arr.is_empty() {
                 cur_perms.remove(key);
-                report.push(format!(
-                    "settings: removed permissions.{key}: the preset no longer ships it"
+                report.push(shown!(
+                    "settings: removed permissions.{}: the preset no longer ships it",
+                    name
                 ));
             }
         }
     }
 
     for (key, inc_val) in inc_perms {
+        let name = preset.name(key);
         let prev_arr = previous
             .and_then(|previous| previous.get(key))
             .and_then(Value::as_array);
@@ -573,24 +823,27 @@ fn merge_permissions(
                 let previous = prev_arr
                     .filter(|_| kind == Previous::Recorded)
                     .map(Vec::as_slice);
-                merge_array(key, cur_arr, previous, inc_arr, report);
+                merge_array(&name, cur_arr, previous, inc_arr, preset, report);
             }
             (Some(existing), _) => {
                 if existing != inc_val {
-                    report.push(format!(
-                        "settings: preserved user value for permissions.{key}"
+                    report.push(shown!(
+                        "settings: preserved user value for permissions.{}",
+                        name
                     ));
                 }
             }
             (None, _) => {
                 if kind == Previous::Recorded && prev_arr.is_some() && inc_val.is_array() {
-                    report.push(format!(
-                        "settings: {KEPT_REMOVAL} permissions.{key}; update does not restore it"
+                    report.push(shown!(
+                        "settings: {} permissions.{}; update does not restore it",
+                        Shown::fixed(KEPT_REMOVAL),
+                        name
                     ));
                     continue;
                 }
                 cur_perms.insert(key.clone(), inc_val.clone());
-                report.push(format!("settings: added permissions.{key}"));
+                report.push(shown!("settings: added permissions.{}", name));
             }
         }
     }
@@ -613,11 +866,12 @@ fn is_exception(entry: &Value) -> bool {
 /// which errs toward denying. An entry `removed` lists was shipped before
 /// and the project removed it: it is reported, not added.
 fn add_around_project_entries(
-    key: &str,
+    key: &Shown,
     current: &mut Vec<Value>,
     incoming: &[Value],
     removed: &[Value],
-    report: &mut Vec<String>,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     let mut front: Vec<Value> = Vec::new();
     let mut back: Vec<Value> = Vec::new();
@@ -626,13 +880,20 @@ fn add_around_project_entries(
             continue;
         }
         if removed.contains(item) {
-            report.push(format!(
-                "settings: {KEPT_REMOVAL} permissions.{key} entry {item}; \
-                 update does not restore it"
+            report.push(shown!(
+                "settings: {} permissions.{} entry {}; \
+                 update does not restore it",
+                Shown::fixed(KEPT_REMOVAL),
+                key,
+                preset.entry(item)
             ));
             continue;
         }
-        report.push(format!("settings: added permissions.{key} entry {item}"));
+        report.push(shown!(
+            "settings: added permissions.{} entry {}",
+            key,
+            preset.entry(item)
+        ));
         if is_exception(item) {
             front.push(item.clone());
         } else {
@@ -640,9 +901,10 @@ fn add_around_project_entries(
         }
     }
     if !front.is_empty() && !current.is_empty() {
-        report.push(format!(
-            "settings: kept the order of the project's permissions.{key} entries; \
-             the new exceptions go first and may not lift an older rule"
+        report.push(shown!(
+            "settings: kept the order of the project's permissions.{} entries; \
+             the new exceptions go first and may not lift an older rule",
+            key
         ));
     }
     front.append(current);
@@ -658,11 +920,12 @@ fn add_around_project_entries(
 /// (`previous`), an entry the preset retired is removed and a shipped entry
 /// the project removed stays removed and is reported.
 fn merge_array(
-    key: &str,
+    key: &Shown,
     current: &mut Vec<Value>,
     previous: Option<&[Value]>,
     incoming: &[Value],
-    report: &mut Vec<String>,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
 ) {
     if let Some(previous) = previous {
         retire_entries(key, current, previous, incoming, report);
@@ -674,13 +937,20 @@ fn merge_array(
         if current.contains(item) {
             next.push(item.clone());
         } else if removed.contains(item) {
-            lines.push(format!(
-                "settings: {KEPT_REMOVAL} permissions.{key} entry {item}; \
-                 update does not restore it"
+            lines.push(shown!(
+                "settings: {} permissions.{} entry {}; \
+                 update does not restore it",
+                Shown::fixed(KEPT_REMOVAL),
+                key,
+                preset.entry(item)
             ));
         } else if !next.contains(item) {
             next.push(item.clone());
-            lines.push(format!("settings: added permissions.{key} entry {item}"));
+            lines.push(shown!(
+                "settings: added permissions.{} entry {}",
+                key,
+                preset.entry(item)
+            ));
         }
     }
     for item in current.iter() {
@@ -692,7 +962,7 @@ fn merge_array(
         report.extend(lines);
         *current = next;
     } else {
-        add_around_project_entries(key, current, incoming, removed, report);
+        add_around_project_entries(key, current, incoming, removed, preset, report);
     }
 }
 
@@ -724,21 +994,127 @@ fn keeps_meaning(current: &[Value], next: &[Value], known_shipped: bool) -> bool
 /// Remove each entry the prior shipped preset carried and the new one does
 /// not; entries the project added itself are never in `previous`.
 fn retire_entries(
-    key: &str,
+    key: &Shown,
     current: &mut Vec<Value>,
     previous: &[Value],
     incoming: &[Value],
-    report: &mut Vec<String>,
+    report: &mut Vec<Shown>,
 ) {
     current.retain(|entry| {
         let retired = previous.contains(entry) && !incoming.contains(entry);
         if retired {
-            report.push(format!(
-                "settings: removed retired permissions.{key} entry {entry}"
+            report.push(shown!(
+                "settings: removed retired permissions.{} entry {}",
+                key,
+                shown_entry(entry)
             ));
         }
         !retired
     });
+}
+
+/// How a report line names an entry update took from the project's file or
+/// its recorded baseline: the entry itself when an earlier release's
+/// settings copy embedded in this binary ([`super::prior_release`]) ships
+/// it, otherwise a placeholder, since either file can hold a secret
+/// (TSK-1029).
+fn shown_entry(entry: &Value) -> Shown {
+    let text = entry.to_string();
+    entry
+        .as_str()
+        .filter(|value| embedded_string(value))
+        .and_then(|_| {
+            PRIOR_PRESETS
+                .iter()
+                .filter_map(|src| super::prior_release::settings(src))
+                .find_map(|shipped| Shown::shipped(&text, Shipped::compiled(shipped)))
+        })
+        .unwrap_or_else(|| Shown::fixed("<not shown: no shipped copy in this binary holds it>"))
+}
+
+/// A key an earlier preset embedded in this binary has, quoted as a JSON
+/// key; any other is a placeholder.
+fn prior_key(key: &str) -> Shown {
+    let quoted = format!("\"{key}\"");
+    PRIOR_PRESETS
+        .iter()
+        .filter_map(|src| super::prior_release::settings(src))
+        .find(|shipped| shipped.contains(&quoted))
+        .and_then(|shipped| Shown::shipped(key, Shipped::compiled(shipped)))
+        .unwrap_or_else(|| Shown::fixed("<a key no shipped copy in this binary holds>"))
+}
+
+/// The settings presets an earlier release shipped, embedded in this
+/// binary ([`super::prior_release`]).
+const PRIOR_PRESETS: [&str; 3] = [
+    "settings/default.json",
+    "settings/acceptEdits.json",
+    "settings/bypass-sandboxed.json",
+];
+
+/// The settings presets this binary ships, compiled in: the proof for a
+/// name or entry a report line shows ([`Shipped::compiled`]). The merge
+/// itself reads the preset it is handed; these are never templated (the
+/// scan test `update_display_boundary` checks).
+const SHIPPED_PRESETS: [&str; 3] = [
+    include_str!("../../../../assets/base/settings/default.json"),
+    include_str!("../../../../assets/base/settings/acceptEdits.json"),
+    include_str!("../../../../assets/base/settings/bypass-sandboxed.json"),
+];
+
+/// How a report line names what the shipped presets hold: it holds the
+/// compiled-in presets the names are proved against.
+#[derive(Clone, Copy)]
+struct Preset<'a>(&'a [&'static str]);
+
+impl Preset<'_> {
+    /// A key or command a shipped preset holds; any other is a placeholder.
+    fn name(self, name: &str) -> Shown {
+        self.0
+            .iter()
+            .find_map(|preset| Shown::shipped(name, Shipped::compiled(preset)))
+            .unwrap_or_else(|| Shown::fixed("<a name the shipped preset does not hold>"))
+    }
+
+    /// An array entry, as JSON, when a shipped preset holds it as written.
+    fn entry(self, entry: &Value) -> Shown {
+        let entry = entry.to_string();
+        self.0
+            .iter()
+            .find_map(|preset| Shown::shipped(&entry, Shipped::compiled(preset)))
+            .unwrap_or_else(|| Shown::fixed("<an entry the shipped preset does not hold>"))
+    }
+}
+
+/// Whether some settings copy embedded in this binary holds `text` as a
+/// string value.
+fn embedded_string(text: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static STRINGS: OnceLock<HashSet<String>> = OnceLock::new();
+    fn collect(value: &Value, into: &mut HashSet<String>) {
+        match value {
+            Value::String(text) => {
+                into.insert(text.clone());
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, into)),
+            Value::Object(map) => map.values().for_each(|item| collect(item, into)),
+            _ => {}
+        }
+    }
+    STRINGS
+        .get_or_init(|| {
+            let mut strings = HashSet::new();
+            for src in PRIOR_PRESETS {
+                if let Some(Ok(value)) =
+                    super::prior_release::settings(src).map(serde_json::from_str::<Value>)
+                {
+                    collect(&value, &mut strings);
+                }
+            }
+            strings
+        })
+        .contains(text)
 }
 
 #[cfg(test)]
@@ -831,7 +1207,195 @@ mod tests {
         );
     }
 
-    /// The shipped compaction keys, as the presets carry them.
+    /// An earlier release's shipped top-level keys (TSK-1028): the
+    /// branch-only status line and the effort pin.
+    const OLD_TOP_LEVEL: &str = r#"{
+        "statusLine": {"type": "command", "command": "printf old"},
+        "effortLevel": "high"
+    }"#;
+
+    /// This release's: a new status line and no effort pin.
+    const NEW_TOP_LEVEL: &str = r#"{
+        "statusLine": {"type": "command", "command": "printf new"}
+    }"#;
+
+    fn merged_value(current: &str, baseline: Option<&str>) -> (Value, Vec<Shown>) {
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(current, baseline, NEW_TOP_LEVEL, &mut report).unwrap();
+        (serde_json::from_str(&merged).unwrap(), report)
+    }
+
+    #[test]
+    fn a_shipped_key_the_project_deleted_is_not_added_back() {
+        // The adopter's case in issue 351: both keys deleted from the shared
+        // file, then `codeflow update`.
+        let (merged, report) = merged_value("{}", Some(OLD_TOP_LEVEL));
+        assert!(merged.get("statusLine").is_none(), "{merged}");
+        assert!(merged.get("effortLevel").is_none(), "{merged}");
+        let line = "settings: \"statusLine\" stays unset; update does not restore \
+                    a shipped key the project removed";
+        assert!(report.iter().any(|l| l == line), "{report:?}");
+        assert!(is_standing_note(line));
+
+        // The next update, against the baseline this one records, keeps it so.
+        let mut again = vec![];
+        let twice =
+            merge_settings_from_baseline("{}", Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
+                .unwrap();
+        assert!(serde_json::from_str::<Value>(&twice).unwrap()["statusLine"].is_null());
+    }
+
+    #[test]
+    fn a_status_line_still_at_the_shipped_value_moves_to_the_new_default() {
+        let (merged, report) = merged_value(OLD_TOP_LEVEL, Some(OLD_TOP_LEVEL));
+        assert_eq!(merged["statusLine"]["command"], "printf new");
+        assert!(report
+            .iter()
+            .any(|l| l == "settings: updated \"statusLine\" to the new shipped default"));
+    }
+
+    #[test]
+    fn a_status_line_the_project_changed_stays_and_is_reported() {
+        let current = r#"{"statusLine": {"type": "command", "command": "my-line"}}"#;
+        let (merged, report) = merged_value(current, Some(OLD_TOP_LEVEL));
+        assert_eq!(merged["statusLine"]["command"], "my-line");
+        let kept = "settings: kept the project's \"statusLine\"; the shipped default changed";
+        assert!(report.iter().any(|l| l == kept), "{report:?}");
+        assert!(is_standing_note(kept));
+
+        // Once the baseline records the new default, the kept line is an
+        // ordinary preserved value.
+        let mut again = vec![];
+        merge_settings_from_baseline(current, Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
+            .unwrap();
+        assert_eq!(again, ["settings: preserved user value for \"statusLine\""]);
+        assert!(!is_standing_note(&again[0]));
+    }
+
+    #[test]
+    fn an_effort_pin_at_the_shipped_value_is_removed_and_a_changed_one_kept() {
+        let (merged, report) = merged_value(OLD_TOP_LEVEL, Some(OLD_TOP_LEVEL));
+        assert!(merged.get("effortLevel").is_none(), "{merged}");
+        assert!(report
+            .iter()
+            .any(|l| l == "settings: removed \"effortLevel\"; this release no longer ships it"));
+
+        // The removal keeps the order of the keys around it.
+        let ordered = r#"{"a": 1, "effortLevel": "high", "b": 2, "c": 3}"#;
+        let (merged, _) = merged_value(ordered, Some(OLD_TOP_LEVEL));
+        let keys: Vec<&String> = merged.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["a", "b", "c"]);
+
+        let chosen = r#"{"effortLevel": "xhigh"}"#;
+        let (merged, report) = merged_value(chosen, Some(OLD_TOP_LEVEL));
+        assert_eq!(merged["effortLevel"], "xhigh");
+        let kept = "settings: kept the project's \"effortLevel\"; this release no longer ships it";
+        assert!(report.iter().any(|l| l == kept), "{report:?}");
+        assert!(is_standing_note(kept));
+
+        // Once removed, later updates never bring it back.
+        let mut again = vec![];
+        let twice =
+            merge_settings_from_baseline("{}", Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
+                .unwrap();
+        assert!(serde_json::from_str::<Value>(&twice).unwrap()["effortLevel"].is_null());
+    }
+
+    /// The shipped default preset, the recorded baseline of a fresh install.
+    const SHIPPED: &str = include_str!("../../../../assets/base/settings/default.json");
+
+    /// Review of PR 368: a deleted attribution control or `$schema`, a
+    /// deleted `hooks` object (the codeflow hook commands) and a deleted
+    /// `sandbox` object come back on update even with a recorded baseline.
+    /// A deleted `permissions` array or `env` key follows its own rule and
+    /// stays removed (`a_removed_env_object_stays_removed`, and
+    /// `permission_presets_update`).
+    #[test]
+    fn deleted_security_keys_are_restored_with_a_recorded_baseline() {
+        let shipped: Value = serde_json::from_str(SHIPPED).unwrap();
+        for key in [
+            "attribution",
+            "includeCoAuthoredBy",
+            "hooks",
+            "sandbox",
+            "$schema",
+        ] {
+            let mut current = shipped.clone();
+            current.as_object_mut().unwrap().shift_remove(key);
+            let mut report = vec![];
+            let merged = merge_settings_from_baseline(
+                &current.to_string(),
+                Some(SHIPPED),
+                SHIPPED,
+                &mut report,
+            )
+            .unwrap();
+            let merged: Value = serde_json::from_str(&merged).unwrap();
+            assert_eq!(merged[key], shipped[key], "{key} was not restored");
+            assert!(
+                !report.iter().any(|line| line.contains("stays unset")),
+                "{key}: {report:?}"
+            );
+        }
+        assert_eq!(PREFERENCE_KEYS, ["statusLine", "effortLevel"]);
+    }
+
+    /// A security key a later preset stopped shipping is never retired by
+    /// the preference rule, even while it holds the recorded value.
+    #[test]
+    fn only_preference_keys_are_retired() {
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(SHIPPED, Some(SHIPPED), NEW_TOP_LEVEL, &mut report)
+                .unwrap();
+        let merged: Value = serde_json::from_str(&merged).unwrap();
+        let shipped: Value = serde_json::from_str(SHIPPED).unwrap();
+        for key in [
+            "$schema",
+            "attribution",
+            "includeCoAuthoredBy",
+            "hooks",
+            "permissions",
+            "sandbox",
+            "env",
+        ] {
+            assert_eq!(merged[key], shipped[key], "{key} was retired");
+        }
+        assert!(
+            !report.iter().any(|line| line.contains("no longer ships")),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn without_a_recorded_baseline_top_level_values_stay() {
+        // No record proves the project's value is one CodeFlow wrote, so the
+        // old line and the effort pin stay, and a missing line is added.
+        let mut report = vec![];
+        let merged = merge_settings(OLD_TOP_LEVEL, NEW_TOP_LEVEL, &mut report).unwrap();
+        let merged: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(merged["statusLine"]["command"], "printf old");
+        assert_eq!(merged["effortLevel"], "high");
+
+        let mut prior_report = vec![];
+        let prior = merge_settings_from_prior_release(
+            OLD_TOP_LEVEL,
+            OLD_TOP_LEVEL,
+            NEW_TOP_LEVEL,
+            &mut prior_report,
+        )
+        .unwrap();
+        let prior: Value = serde_json::from_str(&prior).unwrap();
+        assert_eq!(prior["statusLine"]["command"], "printf old");
+        assert_eq!(prior["effortLevel"], "high");
+
+        let (added, _) = merged_value("{}", None);
+        assert_eq!(added["statusLine"]["command"], "printf new");
+    }
+
+    /// The compaction keys as releases before 3.2.0 shipped them; the
+    /// presets now carry 35 (`ENV_PRESET_NEXT`).
     const ENV_PRESET: &str = r#"{
         "env": {
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
@@ -844,7 +1408,7 @@ mod tests {
     }
 
     /// No report line carries an `env` value, which may be a secret.
-    fn assert_no_values(report: &[String], values: &[&str]) {
+    fn assert_no_values(report: &[Shown], values: &[&str]) {
         for line in report {
             for value in values {
                 assert!(!line.contains(value), "report printed a value: {line}");
@@ -953,6 +1517,109 @@ mod tests {
         assert_eq!(report.len(), 2, "{report:?}");
     }
 
+    /// The compaction keys after the shipped percentage moved (TSK-1029).
+    const ENV_PRESET_NEXT: &str = r#"{
+        "env": {
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
+        }
+    }"#;
+
+    /// TSK-1029 AC-1: a value still equal to the one the recorded baseline
+    /// holds is codeflow's, so it moves to the new shipped value; the
+    /// unchanged key and the project's own keys stay as they are.
+    #[test]
+    fn an_env_value_still_at_the_recorded_default_moves_to_the_new_one() {
+        let user = r#"{
+            "env": {
+                "KEEP_PROJECT_VALUE": "opaque-secret",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+            }
+        }"#;
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(user, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut report)
+                .unwrap();
+        assert_eq!(
+            env_of(&merged),
+            serde_json::json!({
+                "KEEP_PROJECT_VALUE": "opaque-secret",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
+            })
+        );
+        assert_eq!(
+            report,
+            vec![
+                "settings: updated env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE to the new shipped default"
+                    .to_string()
+            ]
+        );
+        assert_no_values(&report, &["\"50\"", "\"35\"", "opaque-secret"]);
+
+        let mut again = vec![];
+        let twice = merge_settings_from_baseline(
+            &merged,
+            Some(ENV_PRESET_NEXT),
+            ENV_PRESET_NEXT,
+            &mut again,
+        )
+        .unwrap();
+        assert_eq!(merged, twice);
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    /// TSK-1029 AC-1: a value the project chose stays when the shipped
+    /// default moves, and is reported; with no recorded baseline update
+    /// cannot tell a shipped value from the project's own, so it keeps both.
+    #[test]
+    fn an_env_value_the_project_chose_stays_when_the_default_moves() {
+        let chosen = r#"{"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"}}"#;
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(chosen, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut report)
+                .unwrap();
+        assert_eq!(env_of(&merged)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "40");
+        let kept = "settings: kept the project's \"env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\"; \
+                    the shipped default changed";
+        assert!(report.iter().any(|line| line == kept), "{report:?}");
+        assert!(is_standing_note(kept));
+        // Once the baseline records the new default, the value is just the
+        // project's own and the note is no longer standing.
+        let mut next = vec![];
+        merge_settings_from_baseline(&merged, Some(ENV_PRESET_NEXT), ENV_PRESET_NEXT, &mut next)
+            .unwrap();
+        assert!(next.iter().all(|line| !is_standing_note(line)), "{next:?}");
+        assert_no_values(&report, &["\"40\"", "\"35\"", "\"50\""]);
+
+        let shipped_before = r#"{"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"}}"#;
+        let mut unrecorded = vec![];
+        let kept = merge_settings(shipped_before, ENV_PRESET_NEXT, &mut unrecorded).unwrap();
+        assert_eq!(env_of(&kept)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50");
+        let mut prior = vec![];
+        let kept = merge_settings_from_prior_release(
+            shipped_before,
+            ENV_PRESET,
+            ENV_PRESET_NEXT,
+            &mut prior,
+        )
+        .unwrap();
+        assert_eq!(env_of(&kept)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50");
+
+        // A key the project deleted stays deleted when its default moves.
+        let deleted = r#"{"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"}}"#;
+        let mut gone = vec![];
+        let merged =
+            merge_settings_from_baseline(deleted, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut gone)
+                .unwrap();
+        assert!(env_of(&merged)
+            .get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+            .is_none());
+    }
+
     #[test]
     fn without_a_baseline_an_existing_env_gains_nothing() {
         let user = r#"{"env": {"KEEP_PROJECT_VALUE": "yes"}}"#;
@@ -1053,6 +1720,75 @@ mod tests {
 
         let mut again = vec![];
         let twice = merge_settings(&merged, incoming, &mut again).unwrap();
+        assert_eq!(merged, twice);
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    /// TSK-1082: a project on a preset from before the guards carried a
+    /// `timeout` and `"onFailure": "block"` gets both on update, while its
+    /// own hook in the same group and its other hooks stay as they are; a
+    /// second update changes nothing.
+    #[test]
+    fn update_gives_the_guards_the_shipped_timeout_and_failure_handling() {
+        let shipped = include_str!("../../../../assets/base/settings/default.json");
+        let timeout = format!(
+            ",\n            \"timeout\": {}",
+            crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS
+        );
+        let before = shipped
+            .replace(&timeout, "")
+            .replace(",\n            \"onFailure\": \"block\"", "");
+        assert_ne!(before, shipped);
+        let mut current: Value = serde_json::from_str(&before).unwrap();
+        current["hooks"]["PreToolUse"][0]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "command", "command": "./mine.sh", "timeout": 3}));
+        let current = serde_json::to_string_pretty(&current).unwrap();
+
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(&current, Some(&before), shipped, &mut report).unwrap();
+        let v: Value = serde_json::from_str(&merged).unwrap();
+        let hooks = v["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
+        let guards: Vec<&Value> = hooks
+            .iter()
+            .filter(|h| {
+                h["command"]
+                    .as_str()
+                    .and_then(crate::hooks::guard_deadline::guard_of)
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(guards.len(), 2, "{merged}");
+        for guard in guards {
+            assert_eq!(
+                guard["timeout"],
+                crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS,
+                "{guard}"
+            );
+            assert_eq!(guard["onFailure"], "block", "{guard}");
+        }
+        assert!(hooks
+            .iter()
+            .any(|h| h["command"] == "./mine.sh" && h["timeout"] == 3));
+        assert_eq!(
+            report
+                .iter()
+                .filter(|l| l.contains("updated hook PreToolUse:")
+                    && l.contains("to its shipped fields"))
+                .count(),
+            2,
+            "{report:?}"
+        );
+        assert!(
+            !report.iter().any(|l| l.contains("added hook")),
+            "{report:?}"
+        );
+
+        let mut again = vec![];
+        let twice =
+            merge_settings_from_baseline(&merged, Some(shipped), shipped, &mut again).unwrap();
         assert_eq!(merged, twice);
         assert!(again.is_empty(), "{again:?}");
     }

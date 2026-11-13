@@ -515,6 +515,73 @@ fn unresolved_targets_fail_closed_near_the_class() {
     }
 }
 
+/// Issue 342 (TSK-397): a directory change writes nothing, so its own
+/// unresolved operand is never judged as a startup-file write, even from
+/// `/` or the home. A relative write after it is still judged.
+#[test]
+fn a_directory_change_is_not_a_write() {
+    let f = Fixture::new();
+    for command in ["cd ~ && cd \"$p\"", "cd / && pushd \"$p\"", "cd H && popd"] {
+        let found = f.judge(command);
+        assert!(!refused(&found), "{command}: {found:?}");
+    }
+    for command in [
+        "cd ~ && cd \"$p\" && echo x >> .zshrc",
+        "cd \"$p\" && echo x >> ~/.zshrc",
+        // Security review SF-7: through an exec-style launcher or as a path,
+        // `cd` is the first `cd` file on `PATH`, which may write anything.
+        "env cd ~/.zshrc",
+        "timeout 5 cd ~/.zshrc",
+        "exec cd ~/.zshrc",
+        "/usr/bin/cd ~/.zshrc",
+    ] {
+        // A line with any other command keeps the normal write judgment,
+        // so the `cd` operand itself may be the reason (Codex round 7).
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    // Codex review round 6: an external `cd`, or a line that can rebind
+    // the name, keeps the write judgment of the `cd` operand itself.
+    for command in [
+        "cd ~ && command cd \"$p\"",
+        "cd ~ && chdir \"$p\"",
+        "enable -n cd; cd ~ && cd \"$p\"",
+        "disable cd; cd ~ && cd \"$p\"",
+        "cd() { :; }; cd ~ && cd \"$p\"",
+        "alias cd=x; cd ~ && cd \"$p\"",
+    ] {
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    // Codex review round 6, its exact forms run from the home: only the
+    // shell's own `cd` is exempt.
+    for (command, refuse) in [
+        ("cd \"$p\"", false),
+        ("pushd \"$p\"", false),
+        ("command cd \"$p\"", true),
+        ("chdir \"$p\"", true),
+        ("enable -n cd; cd \"$p\"", true),
+        ("disable cd; cd \"$p\"", true),
+        // Codex review round 7 and security review SR3-1: a quoted, escaped
+        // or expanded rebinding, or a function table entry.
+        ("\"enable\" -n cd; cd \"$p\"", true),
+        ("\\enable -n cd; cd \"$p\"", true),
+        ("en'able' -n cd; cd \"$p\"", true),
+        ("a=enable; \"$a\" -n cd; cd \"$p\"", true),
+        ("\"disable\" cd; cd \"$p\"", true),
+        ("functions[cd]='/x/cd \"$@\"'; cd \"$p\"", true),
+        // The exemption covers only a line of bare directory builtins, so
+        // a loop around `cd "$p"` is judged as a write again.
+        ("for p in /a /b; do cd \"$p\" && pwd -P; done", true),
+        // Security review SR2-3: the unresolved operand through a launcher
+        // or a path keeps the write judgment too.
+        ("env cd \"$p\"", true),
+        ("exec cd \"$p\"", true),
+        ("/usr/bin/cd \"$p\"", true),
+    ] {
+        let found = f.judge_in(command, &f.home, &f.startup_env());
+        assert_eq!(refused(&found), refuse, "{command}: {found:?}");
+    }
+}
+
 /// Placing programs refuse in or into the home, `/etc` or a startup
 /// directory, and pass elsewhere.
 #[test]
@@ -738,6 +805,45 @@ fn symbolic_links_are_followed() {
     assert!(class_target(&links.join("a"), &f.startup_env()).is_some());
     assert!(class_target(&f.project.join("homelink/.zshrc"), &f.startup_env()).is_some());
     assert!(class_target(&f.project.join("notes.md"), &f.startup_env()).is_none());
+}
+
+/// `count` links in `folder`, each to the one before and the first to `end`;
+/// returns the last.
+#[cfg(unix)]
+fn link_chain(folder: &Path, end: &Path, count: usize) -> std::path::PathBuf {
+    std::fs::create_dir_all(folder).unwrap();
+    let mut target = end.to_path_buf();
+    for at in 0..count {
+        let link = folder.join(format!("l{at}"));
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        target = link;
+    }
+    target
+}
+
+/// A path the guard stops following may lead anywhere, so it refuses. Steps
+/// that each stay short still add up, since the guard reads the joined path.
+#[cfg(unix)]
+#[test]
+fn a_path_past_the_link_bound_is_refused() {
+    let f = Fixture::new();
+    let long = link_chain(&f.project.join("long"), &f.home.join(".zshrc"), 100);
+    assert!(class_target(&long, &f.startup_env()).is_some());
+    let word = long.strip_prefix(&f.project).unwrap().display().to_string();
+    for command in [format!("echo x >> {word}"), format!("cp evil {word}")] {
+        assert!(refused(&f.judge(&command)), "{command}");
+    }
+
+    let middle = f.project.join("middle");
+    let steps = 30;
+    link_chain(&f.project.join("first"), &middle, steps);
+    link_chain(&middle.join("second"), &f.home, steps);
+    let last = steps - 1;
+    let command = format!("cd first/l{last} && cd second/l{last} && echo x >> .zshrc");
+    assert!(refused(&f.judge(&command)), "{command}");
+
+    let short = link_chain(&f.project.join("short"), &f.project.join("notes.md"), 3);
+    assert!(class_target(&short, &f.startup_env()).is_none());
 }
 
 /// `ZDOTDIR` and `XDG_CONFIG_HOME` move the class with them.
@@ -2393,4 +2499,24 @@ fn an_expanding_pattern_and_a_preprocessor_root_are_judged() {
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Whether a line names `RIPGREP_CONFIG_PATH` is read once per line, never
+/// once per segment: the read expands the whole line, so asking per
+/// segment made a long chain quadratic (the bounded guard time check in
+/// `hooks_cli`). The verdicts stay the same.
+#[test]
+fn a_long_chain_reads_the_ripgrep_config_name_once() {
+    let f = Fixture::new();
+    let reads = |command: &str| {
+        crate::security::search_pattern::RIPGREP_CONFIG_READS.with(|reads| reads.set(0));
+        let found = f.judge(command);
+        assert!(!refused(&found), "{command}: {found:?}");
+        crate::security::search_pattern::RIPGREP_CONFIG_READS.with(std::cell::Cell::get)
+    };
+    let one = "rg 'a b' docs";
+    let short = reads(one);
+    let long = reads(&vec![one; 40].join(" && "));
+    assert!(short >= 1, "the search path was not reached");
+    assert_eq!(long, short, "reads grew with the segment count");
 }

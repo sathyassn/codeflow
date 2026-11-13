@@ -52,6 +52,10 @@ pub const MAX_STATE_DEPTH: usize = 24;
 pub const EVENT_POLL_SECONDS: u64 = 25;
 pub const BOOTSTRAP_TTL_SECONDS: u64 = 120;
 pub const SESSION_IDLE_SECONDS: u64 = 4 * 60 * 60;
+/// How long the isolated browser stays running once its last review window
+/// has closed: a window reopened within it, by `present show` or a reload,
+/// keeps the browser; after it the browser quits and the session stays open.
+pub const WINDOW_CLOSE_GRACE_SECONDS: u64 = 15;
 pub const CLOSED_RETENTION_DAYS: u64 = 30;
 pub const MAX_CLOSED_SESSIONS: usize = 100;
 pub const MAX_PROJECT_STATE_BYTES: u64 = 500 * 1024 * 1024;

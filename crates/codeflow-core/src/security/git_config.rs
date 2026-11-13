@@ -119,6 +119,13 @@ fn validate_environment(environment: &Environment) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many effective-configuration reads [`read`] made on this thread,
+    /// for tests that prove a refusal comes before any read.
+    pub(crate) static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `globals` contains only the options before the Git subcommand. Environment
 /// entries are allowlisted literal command-local assignments; inherited native
 /// bytes stay in the child environment. Unresolved shell expressions must be
@@ -128,6 +135,8 @@ pub(crate) fn read(
     globals: &[String],
     environment: &Environment,
 ) -> Result<EffectiveConfig, String> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let deadline = Instant::now() + Duration::from_secs(3);
     validate_environment(environment)?;
     let mut command = crate::git::command();
@@ -138,62 +147,7 @@ pub(crate) fn read(
     // GIT_CONFIG selects a file only for `git config`, not for the command
     // being judged. Keep the runtime configuration environment intact.
     command.env_remove("GIT_CONFIG");
-    let mut directory = cwd.to_path_buf();
-    let mut at = 0;
-    while at < globals.len() {
-        let arg = globals[at].as_str();
-        if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {
-            let value = globals
-                .get(at + 1)
-                .ok_or("cannot verify Git configuration: missing global-option value")?;
-            if arg == "-C" {
-                directory = directory.join(value);
-            }
-            command.args([arg, value]);
-            at += 2;
-        } else if arg.starts_with("--exec-path=") || matches!(arg, "-p" | "-P") {
-            // Configuration and rev-parse are builtins. Do not select an
-            // external program or start a pager while inspecting their data.
-            at += 1;
-        } else if arg.starts_with("-c")
-            || arg.starts_with("-C")
-            || [
-                "--git-dir=",
-                "--work-tree=",
-                "--namespace=",
-                "--config-env=",
-                "--attr-source=",
-                "--shallow-file=",
-            ]
-            .iter()
-            .any(|prefix| arg.starts_with(prefix))
-            || matches!(
-                arg,
-                "--bare"
-                    | "--no-pager"
-                    | "--paginate"
-                    | "--no-optional-locks"
-                    | "--no-replace-objects"
-                    | "--literal-pathspecs"
-                    | "--glob-pathspecs"
-                    | "--noglob-pathspecs"
-                    | "--icase-pathspecs"
-            )
-        {
-            if let Some(path) = arg.strip_prefix("-C") {
-                directory = directory.join(path);
-            }
-            // --paginate must not run a configured pager during inspection.
-            if arg != "--paginate" {
-                command.arg(arg);
-            }
-            at += 1;
-        } else {
-            return Err(format!(
-                "cannot verify Git configuration: unsupported global option {arg}"
-            ));
-        }
-    }
+    let mut directory = with_globals(&mut command, cwd, globals)?;
     // Git reports relative file origins from its discovered repository root,
     // not necessarily the caller's directory. Probe with the identical globals
     // and environment. Outside a repository config still works from cwd.
@@ -392,6 +346,105 @@ fn include_path(
         .parent()
         .ok_or("cannot verify Git configuration: include source has no parent")?
         .join(path))
+}
+
+/// Add `globals`, the options before the Git subcommand, to `command` as Git
+/// reads them, and return the directory Git starts in. An option the
+/// reader does not support refuses.
+fn with_globals(
+    command: &mut std::process::Command,
+    cwd: &Path,
+    globals: &[String],
+) -> Result<PathBuf, String> {
+    let mut directory = cwd.to_path_buf();
+    let mut at = 0;
+    while at < globals.len() {
+        let arg = globals[at].as_str();
+        if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {
+            let value = globals
+                .get(at + 1)
+                .ok_or("cannot verify Git configuration: missing global-option value")?;
+            if arg == "-C" {
+                directory = directory.join(value);
+            }
+            command.args([arg, value]);
+            at += 2;
+        } else if arg.starts_with("--exec-path=") || matches!(arg, "-p" | "-P") {
+            // Configuration and rev-parse are builtins. Do not select an
+            // external program or start a pager while inspecting their data.
+            at += 1;
+        } else if arg.starts_with("-c")
+            || arg.starts_with("-C")
+            || [
+                "--git-dir=",
+                "--work-tree=",
+                "--namespace=",
+                "--config-env=",
+                "--attr-source=",
+                "--shallow-file=",
+            ]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
+            || matches!(
+                arg,
+                "--bare"
+                    | "--no-pager"
+                    | "--paginate"
+                    | "--no-optional-locks"
+                    | "--no-replace-objects"
+                    | "--literal-pathspecs"
+                    | "--glob-pathspecs"
+                    | "--noglob-pathspecs"
+                    | "--icase-pathspecs"
+            )
+        {
+            if let Some(path) = arg.strip_prefix("-C") {
+                directory = directory.join(path);
+            }
+            // --paginate must not run a configured pager during inspection.
+            if arg != "--paginate" {
+                command.arg(arg);
+            }
+            at += 1;
+        } else {
+            return Err(format!(
+                "cannot verify Git configuration: unsupported global option {arg}"
+            ));
+        }
+    }
+    Ok(directory)
+}
+
+/// The Git directory and work tree Git finds from `cwd` with `globals`
+/// (`-C` and `-c` only), as Git reports them: `None` where Git finds no
+/// repository with a work tree (TSK-1002 Fable review 13).
+pub(crate) fn repository_of(
+    cwd: &Path,
+    globals: &[String],
+) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = crate::git::command();
+    probe.current_dir(cwd).stdin(Stdio::null());
+    with_globals(&mut probe, cwd, globals)?;
+    probe.args([
+        "--no-pager",
+        "rev-parse",
+        "--absolute-git-dir",
+        "--show-toplevel",
+    ]);
+    let bytes = match bounded_output(&mut probe, deadline) {
+        Ok(bytes) => bytes,
+        Err(why) if why.contains("git rejected") => return Ok(None),
+        Err(why) => return Err(why),
+    };
+    let text = String::from_utf8(bytes).map_err(|_| "cannot read the Git repository paths")?;
+    let mut lines = text.strip_suffix('\n').unwrap_or(&text).split('\n');
+    match (lines.next(), lines.next(), lines.next()) {
+        (Some(dir), Some(top), None) if !dir.is_empty() && !top.is_empty() => {
+            Ok(Some((PathBuf::from(dir), PathBuf::from(top))))
+        }
+        _ => Err("cannot read the Git repository paths".into()),
+    }
 }
 
 pub(crate) fn bounded_output(

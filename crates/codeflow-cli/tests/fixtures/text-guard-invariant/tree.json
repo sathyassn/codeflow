@@ -1,0 +1,281 @@
+[
+ {
+  "kind": "link",
+  "path": "repo/hidden",
+  "target": ".claude",
+  "committed": true
+ },
+ {
+  "kind": "link",
+  "path": "repo/bridge",
+  "target": ".claude/deep",
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "repo",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/out.txt",
+  "text": "",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/move.sh",
+  "text": "builtin cd ./hidden\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/settings.json",
+  "text": "{\"marker\":\"ORDINARY_FIXTURE\"}\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/x.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/tool.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "link",
+  "path": "repo/safe/lnk",
+  "target": "../.claude",
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "repo/safe",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/safe/x.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/safe/tool.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "repo/.codeflow",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.codeflow/policy.json",
+  "text": "{\"git\":{\"protected_branches\":[\"main\",\"master\"],\"root_checkout_commits\":\"off\",\"hook_integrity\":\"block\"},\"security\":{\"text_guard\":\"relaxed\"}}",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "link",
+  "path": "repo/.claude/alias",
+  "target": "../src",
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "repo/.claude",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/settings.json",
+  "text": "{\"marker\":\"PROTECTED_FIXTURE\"}\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/out",
+  "text": "/private/tmp/tsk397-r7.yF7Kdg/repo/.claude/settings.json\n{\"marker\":\"PROTECTED_FIXTURE\"}\n\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/settings.local.json",
+  "text": "print(\"PROTECTED_FIXTURE\")\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/x.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/x.rb",
+  "text": "puts File.realpath(ARGV[0]); puts File.read(ARGV[0])\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/tool.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/pre-input.py",
+  "text": "import pathlib\nprint(pathlib.Path(\"settings.json\").read_text())\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "dir",
+  "path": "repo/.claude/deep",
+  "committed": false
+ },
+ {
+  "kind": "dir",
+  "path": "repo/.claude/src",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/src/x.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.claude/src/tool.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "repo/.codex",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/.codex/config.toml",
+  "text": "marker=\"PROTECTED_FIXTURE\"\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "link",
+  "path": "repo/src/lnk",
+  "target": "../.claude",
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "repo/src",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/src/settings.json",
+  "text": "{\"marker\":\"SRC_FIXTURE\"}\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/src/x.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "repo/src/tool.py",
+  "text": "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve()); print(pathlib.Path(sys.argv[1]).read_text())\n",
+  "exec": false,
+  "committed": true
+ },
+ {
+  "kind": "dir",
+  "path": "home",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "home/.zshrc",
+  "text": "# fixture\nfixture-write\nfixture-write\nfixture-write\nfixture-write\nfixture-write\nfixture-write\n",
+  "exec": false,
+  "committed": false
+ },
+ {
+  "kind": "dir",
+  "path": "bin",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "bin/pushd",
+  "text": "#!/bin/sh\nprintf \"fixture-write\\n\" >> \"$1\"\n",
+  "exec": true,
+  "committed": false
+ },
+ {
+  "kind": "link",
+  "path": "bin/probe-python3",
+  "target": "/usr/bin/python3",
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "bin/popd",
+  "text": "#!/bin/sh\nprintf \"fixture-write\\n\" >> \"$1\"\n",
+  "exec": true,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "bin/chdir",
+  "text": "#!/bin/sh\nprintf \"fixture-write\\n\" >> \"$1\"\n",
+  "exec": true,
+  "committed": false
+ },
+ {
+  "kind": "file",
+  "path": "bin/cd",
+  "text": "#!/bin/sh\nprintf \"fixture-write\\n\" >> \"$1\"\n",
+  "exec": true,
+  "committed": false
+ },
+ {
+  "kind": "dir",
+  "path": "glob-bin",
+  "committed": false
+ },
+ {
+  "kind": "link",
+  "path": "glob-bin/python3",
+  "target": "/usr/bin/python3",
+  "committed": false
+ }
+]

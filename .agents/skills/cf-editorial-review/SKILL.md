@@ -5,15 +5,9 @@ description: Review or revise substantial repository and user-facing prose witho
 
 # cf-editorial-review: preserve meaning, improve delivery
 
-**Write plainly.** Everything an agent writes, replies and status updates
-included, is simple, straightforward, clear and unambiguous, with the detail
-the reader needs and no more. Avoid mannered prose, writing that performs
-for effect: slogans, "not X but Y" turns, rhetorical triplets, dramatic
-fragments, stacked hedges, colon reveals, self-narration, ceremonial framing
-and walls of text. State the fact directly, and check what a reader could
-take it to mean. Default to short prose and bullets, and
-write long prose only when the reader asks for it or the artifact is prose
-by nature. "Mannered prose" in
+Write every review and rewrite plainly: simple, straightforward and clear,
+no mannered prose (see `.codeflow/rules/writing.md`). That file is the one
+statement of the plain-writing rule, and "Mannered prose" in
 [references/editorial-smells.md](references/editorial-smells.md) lists each
 pattern with its plain rewrite.
 
@@ -102,7 +96,8 @@ style direction outranks this skill's defaults.
 
 ## Duo review
 
-Within the CodeFlow duo, both primary seats check factual and technical
+Within the CodeFlow duo, the Claude primary and the cross-family seat
+(Codex preferred, any other family counts) check factual and technical
 correctness. The directly invoked `claude-judgment-primary` reviews the
 substantial artifact's design, voice, and final editorial quality, even when
 Claude drafted it, in the same pass as the technical review where one is

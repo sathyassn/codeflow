@@ -1,3 +1,4 @@
+import { prepareExportCapture } from "./export-capture.mjs";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
@@ -7,9 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
-import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { assertNoPolicyViolations, recordPolicyViolationsOutsidePage } from "./csp-violations.mjs";
 import { codeflowBinary } from "./codeflow-binary.mjs";
 import { closeWaitMs } from "./browser-close-bound.mjs";
+import { writeFileAtomic } from "./atomic-write.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -180,7 +182,10 @@ try {
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV1 = await waitForProfileProcess(browserProfileV1);
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
+  // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
+  // DOM snapshots are diagnostic, not an assertion; keep screenshots and traces.
+  await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const page = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(page, bootstrapPath, port);
@@ -239,7 +244,7 @@ try {
     await page.getByTestId("composer").waitFor({ state: "detached" });
   };
 
-  await page.getByRole("button", { name: "Pick element" }).click();
+  await page.getByRole("button", { name: "Pick part" }).click();
   await page.locator("code[data-cf-language='rust']").click();
   await saveComposerNote("Keep the implementation example aligned with the verified contract.");
 
@@ -316,8 +321,12 @@ try {
   context = await launchBrowser(browserProfileV2);
   recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
+  const stageMeasurements = trackStageMeasurements(context);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  // Sandboxed scriptless frames refuse the trace snapshot streamer. The .state
+  // probe at 4804477cc found 40 of 43 blocked events followed captureSnapshot.
+  // DOM snapshots are diagnostic, not an assertion; keep screenshots and traces.
+  await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
   tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
@@ -325,6 +334,7 @@ try {
   const exportPath = join(output, "review.html");
   run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "graphite", "--mode", "dark"], project);
   const exportPage = await context.newPage();
+  await recordPolicyViolationsOutsidePage(exportPage);
   await exportPage.goto(pathToFileURL(exportPath).href);
   await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   await exportPage.waitForFunction(() => (
@@ -333,12 +343,16 @@ try {
   await exportPage.waitForFunction(() => (
     document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready"
   ));
+  // The audit runs in this top document only. Context init scripts would
+  // also enter the scriptless measuring and exported stage frames.
+  await exportPage.evaluate(axe.source);
   const exportAccessibility = await exportPage.evaluate(async () => globalThis.axe.run(document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
   }));
   if (exportAccessibility.violations.length) {
     throw new Error(`export accessibility violations: ${exportAccessibility.violations.map((item) => item.id).join(", ")}`);
   }
+  await prepareExportCapture(exportPage);
   await exportPage.screenshot({ path: join(output, "export-dark.png"), fullPage: true });
   await assertNoPolicyViolations(exportPage, "offline export");
   await assertNoPolicyViolations(revisedPage, "second revision");
@@ -347,9 +361,14 @@ try {
   await exportPage.close();
 
   // A stored diagram revision (TSK-087): the served page and a new export show
-  // the conversion notice and each escaped source, and draw nothing.
+  // the conversion notice and each escaped source, and draw nothing. The
+  // revised page measures its export stages against the stored revision, so
+  // the rewrite waits until that is done (TSK-1365): a measurement read
+  // during the rewrite answers 500 on a partial file, and one read after it
+  // answers 400 for the retired revision.
+  await waitForStageMeasuring(revisedPage, stageMeasurements);
   const revisionPath = await findRevisionFile(runRoot, sessionId, 2);
-  await writeFile(revisionPath, `${JSON.stringify({ ...retiredRevision, revision: 2 }, null, 2)}\n`, { mode: 0o600 });
+  await writeFileAtomic(revisionPath, `${JSON.stringify({ ...retiredRevision, revision: 2 }, null, 2)}\n`, { mode: 0o600 });
   const retiredRequestStart = requests.length;
   await revisedPage.reload({ waitUntil: "load" });
   await assertRetiredPage(revisedPage, "served retired revision");
@@ -359,6 +378,7 @@ try {
   const retiredExportPath = join(output, "retired.html");
   run(codeflow, ["present", "export", sessionId, "--out", retiredExportPath], project);
   const retiredExportPage = await context.newPage();
+  await recordPolicyViolationsOutsidePage(retiredExportPage);
   await retiredExportPage.goto(pathToFileURL(retiredExportPath).href);
   await assertRetiredPage(retiredExportPage, "exported retired revision");
   await retiredExportPage.close();
@@ -644,8 +664,6 @@ async function launchBrowser(profile) {
       "--no-first-run",
     ],
   });
-  await launched.addInitScript({ content: axe.source });
-  await recordPolicyViolations(launched);
   return launched;
 }
 
@@ -703,6 +721,7 @@ function recordBrowserVersion(openContext) {
 }
 
 async function openAuthenticatedPresentation(page, bootstrapPath, servicePort) {
+  await recordPolicyViolationsOutsidePage(page);
   // The private file immediately submits into the loopback service. Waiting
   // for its full load event conflates that handoff with the destination page
   // and can hang behind long-lived application requests. A cold renderer on a
@@ -771,6 +790,60 @@ function observeContext(
   });
   observedContext.on("page", observePage);
   for (const observedPage of observedContext.pages()) observePage(observedPage);
+}
+
+// Each stage-measure POST in the context: those still in flight, and those
+// that answered 400 or above or failed in transit.
+function trackStageMeasurements(observedContext) {
+  const tracker = { pending: new Set(), failures: [] };
+  const isMeasure = (request) => (
+    request.method() === "POST" && new URL(request.url()).pathname === "/app/api/stages/measure"
+  );
+  observedContext.on("request", (request) => {
+    if (isMeasure(request)) tracker.pending.add(request);
+  });
+  observedContext.on("response", (response) => {
+    if (isMeasure(response.request()) && response.status() >= 400) {
+      tracker.failures.push(`${response.status()} ${response.statusText()}`);
+    }
+  });
+  observedContext.on("requestfinished", (request) => tracker.pending.delete(request));
+  observedContext.on("requestfailed", (request) => {
+    if (!isMeasure(request)) return;
+    tracker.pending.delete(request);
+    tracker.failures.push(`failed ${request.failure()?.errorText ?? "unknown failure"}`);
+  });
+  return tracker;
+}
+
+// Wait until the page reports its stage measuring done, then assert that no
+// measure request is still in flight and none failed. The page sets the
+// attribute after its last response; the bounded drain lets that response's
+// finished event reach this process.
+async function waitForStageMeasuring(page, tracker) {
+  if (!await page.locator("#cf-stage-measuring").count()) {
+    throw new Error("The revised page carries no stage measuring template; the rewrite would not be checked against it");
+  }
+  const timeout = timeoutWithinQualification(60_000, "stage measuring");
+  const handle = await page.waitForFunction(
+    () => document.documentElement.dataset.cfStagesMeasured,
+    undefined,
+    { timeout },
+  );
+  const measured = await handle.jsonValue();
+  if (measured !== "true") {
+    throw new Error(
+      `The revised page reported data-cf-stages-measured="${measured}"; measure responses: ${JSON.stringify(tracker.failures)}`,
+    );
+  }
+  const drainDeadline = Date.now() + 5_000;
+  while (tracker.pending.size && Date.now() < drainDeadline) await delay(25);
+  if (tracker.pending.size) {
+    throw new Error(`${tracker.pending.size} stage-measure request(s) still in flight after the page reported measuring done`);
+  }
+  if (tracker.failures.length) {
+    throw new Error(`Stage-measure requests failed before the revision rewrite: ${tracker.failures.join(", ")}`);
+  }
 }
 
 async function closeBrowser(openContext, profile, knownProcesses) {

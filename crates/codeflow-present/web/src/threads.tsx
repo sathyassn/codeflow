@@ -29,11 +29,13 @@ function snapshot(value: unknown, config: ChromeConfig): value is Snapshot {
 }
 
 /** Stored conversation lives separately from the unsent comment draft. */
-export function ThreadRail({config, documentRoot}: {config: ChromeConfig; documentRoot: HTMLElement}) {
+export function ThreadRail({config, documentRoot, expanded = false, onToggle, onWithdrawn}: {config: ChromeConfig; documentRoot: HTMLElement; expanded?: boolean; onToggle?: (open: boolean) => void; onWithdrawn?: () => void}) {
   const [data, setData] = useState<Snapshot>({feedback:config.feedback ?? {items:[],omitted_older:0},answers:[],replies:[],reopens:[],tombstones:[],acknowledged:[],omitted_older:0});
   const [error,setError] = useState("");
   const [busy,setBusy] = useState(false);
   const [closed,setClosed] = useState(false);
+  // A sent note is withdrawn only after an in-page confirmation (SPC-014 B9).
+  const [confirming,setConfirming] = useState<string | null>(null);
   const generation = useRef(0);
   async function refresh(): Promise<void> {
     const current = ++generation.current;
@@ -62,6 +64,7 @@ export function ThreadRail({config, documentRoot}: {config: ChromeConfig; docume
         session_id:config.session_id,revision:config.revision,target,...(note ? {note_id:note} : {}),
       });
       await refresh();
+      if (remove) onWithdrawn?.();
     } catch(e) { setError(e instanceof Error ? e.message : "The thread was not changed"); }
     finally { setBusy(false); }
   }
@@ -73,18 +76,23 @@ export function ThreadRail({config, documentRoot}: {config: ChromeConfig; docume
   const controls = (target: string,note: string | undefined, canReopen: boolean) => <div class="cf-thread-actions">
     {reopened(target,note) ? <span data-testid="thread-reopened">Reopened</span> : canReopen ?
       <button type="button" disabled={busy || closed} onClick={() => void change(target,note,false)}>Reopen</button> : null}
-    {note ? <button type="button" disabled={busy || closed} onClick={() => void change(target,note,true)}>Delete note</button> : null}
+    {note ? confirming === `${target}:${note}` ? <span class="cf-withdraw-confirm" data-testid="withdraw-confirm">Withdraw this sent note? The agent is told it was withdrawn.
+      <button type="button" disabled={busy || closed} onClick={() => { setConfirming(null); void change(target,note,true); }}>Withdraw</button>
+      <button type="button" onClick={() => setConfirming(null)}>Keep</button></span>
+      : <button type="button" class="cf-text-action" disabled={busy || closed} onClick={() => setConfirming(`${target}:${note}`)}>Withdraw note</button> : null}
   </div>;
   if (!data.feedback.items.length && !data.answers.length && !error) return null;
-  return <details class="cf-feedback-history" data-testid="feedback-history">
+  // Newest first: the review just sent is the first one listed.
+  const reviews = [...data.feedback.items].reverse();
+  return <details open={expanded} onToggle={(e) => onToggle?.((e.currentTarget as HTMLDetailsElement).open)} class="cf-feedback-history" data-testid="feedback-history">
     <summary id="cf-feedback-history-title">Earlier feedback</summary>
     {error ? <p role="alert">{error}</p> : null}
     {data.omitted_older + data.feedback.omitted_older > 0 ? <p>{data.omitted_older + data.feedback.omitted_older} older entries in session history</p> : null}
     <ol>
-      {data.feedback.items.map(item => <li key={item.event_id} data-review="true" data-thread={item.event_id}>
-        <div class="cf-history-meta"><strong>{item.verdict.replaceAll("_"," ")}</strong><span>{item.lifecycle}</span>
+      {reviews.map(item => <li key={item.event_id} data-review="true" data-thread={item.event_id}>
+        <div class="cf-history-meta"><strong>Sent review: {verdictWords(item.verdict)}</strong><span>{item.lifecycle}</span>
           {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged by agent</span> : null}
-          <span>Revision {item.source_revision}</span><span>Version {item.event_version}</span>
+          <span>Revision {item.source_revision}</span><span>Review update {item.event_version}</span>
           {item.source_revision < config.revision ? <span>Carried from revision {item.source_revision}</span> : null}
         </div>
         {item.instruction ? <p>{item.instruction}</p> : null}
@@ -92,7 +100,7 @@ export function ThreadRail({config, documentRoot}: {config: ChromeConfig; docume
         {controls(item.event_id,undefined,!!item.acknowledged || ["addressed","dismissed"].includes(item.lifecycle))}
         <ul>{item.notes.map(note => <li key={note.id} data-note={note.id} data-anchor-state={note.anchor.state}>
           {deleted(item.event_id,note.id) || note.block_label === "Deleted note" && note.body === "Deleted by the reviewer" ?
-            <p data-testid="thread-tombstone">Deleted by the reviewer</p> : <>
+            <p data-testid="thread-tombstone">Withdrawn by the reviewer</p> : <>
               <div class="cf-note-heading"><strong>{note.block_label}</strong><span>{anchorWords(note.anchor)}</span></div>
               {note.quote ? <blockquote>{note.quote}</blockquote> : null}<p>{note.body}</p>{anchorNotice(note.anchor)}
               {replies(item.event_id,note.id)}
@@ -109,13 +117,17 @@ export function ThreadRail({config, documentRoot}: {config: ChromeConfig; docume
   </details>;
 }
 
+function verdictWords(verdict: string): string {
+  return verdict === "request_changes" ? "Request changes" : verdict === "approve" ? "Approve" : verdict === "approve_with_notes" ? "Approve with notes" : verdict.replaceAll("_", " ");
+}
+
 function anchorWords(anchor: FeedbackAnchor): string {
   switch (anchor.state) {
     case "orphaned": return "unpositioned";
     case "block_fallback": return "on the block";
-    case "reanchored": return anchor.changed ? "moved" : "anchored";
-    case "entity_reanchored": return anchor.label_changed ? "moved" : "anchored";
-    default: return "anchored";
+    case "reanchored": return anchor.changed ? "moved" : "unchanged";
+    case "entity_reanchored": return anchor.label_changed ? "moved" : "unchanged";
+    default: return "unchanged";
   }
 }
 

@@ -76,8 +76,7 @@
 //! text outside the grammar (a reserved word out of place, a construct or
 //! quote left open, zsh's `foreach`, short `if … { … }` or `{ … } always`),
 //! which the parser keeps as an unknown node while still judging its best
-//! reading. A function call or nested script deeper than the reader
-//! follows, and a loop it cannot settle, taint what they may change. Some
+//! reading. A loop it cannot settle taints what it may change. Some
 //! constructs give an unknown value rather than an unknown state: `read`
 //! with an option it does not model or from input it cannot see,
 //! `mapfile`, `getopts`, a case-converting attribute (`declare -u`), a
@@ -90,6 +89,15 @@
 //! `every_word_part_is_modelled_or_taints` match every node and word kind
 //! without a wildcard arm, so a new kind does not compile until it is
 //! given a sample that shows it is modelled or taints.
+//!
+//! **A bound never reads as "nothing found".** Every bound below stops
+//! the reader somewhere, and it keeps that fact. A value past a bound is
+//! unknown, so a later deletion through it refuses. Code past a bound may be
+//! any command, so the line refuses through [`Reader::unfinished`]: a
+//! nested script or function past the depth it follows, compound commands
+//! past the nesting it parses, launch wrappers past those it unwraps, a
+//! script on input past the lines it keeps, and argument combinations past
+//! those it judges, when one of them may delete.
 //!
 //! **A command that may fail is read both ways.** `cd` enters only a
 //! directory the reader sees exists; otherwise it may fail, and the line
@@ -109,10 +117,19 @@
 //! path that exists is also judged where it really lands (the real path of
 //! its longest existing prefix), so a link to `/` is `/`.
 //!
-//! **Residual (ADR-0009).** A value from the environment or the output of
-//! a command the reader does not run (`$(git rev-parse …)`) is judged by
-//! its spelling and passes; `read` is the exception above, since the
-//! builtin exists to take such a value. The deletions inside a sourced
+//! **Text with more than one reading is read every way.** Which reading a
+//! shell takes can depend on the shell and on details of the text, so the
+//! reader builds each one, runs each from the same state and joins what
+//! they leave: a deletion in any reading is judged. `((…))` as a command is
+//! read as arithmetic and as a subshell inside a subshell. `$((…))` is read
+//! as arithmetic, and what its command substitution reading deletes is
+//! judged wherever its value is read; when its text does not surely parse
+//! as arithmetic, the words that hold it also take that reading's value,
+//! so a recursive deletion through an unknown output refuses as unproven.
+//!
+//! **Unread values.** Output of an unmodeled command is unknown, never a
+//! literal path containing the command's spelling. A recursive deletion
+//! using it refuses as unproven. The deletions inside a sourced
 //! file, a program in another language, or a function a sourced file
 //! defines are not seen.
 
@@ -135,6 +152,9 @@ pub(super) struct Found {
     /// Set when the target cannot be proven: the operand or the working
     /// directory depends on a construct the reader does not model exactly.
     pub unproven: Option<Unproven>,
+    /// Set when the reader stopped at a bound before it read the whole line,
+    /// so `unproven` gives why and no target stands behind it.
+    pub unfinished: bool,
 }
 
 /// Why a deletion's target cannot be proven.
@@ -167,12 +187,14 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         rooted_unplaced,
         found: None,
         depth: 0,
+        nesting: 0,
         pipe_input: None,
         jumps: Vec::new(),
         expanding: Vec::new(),
         traps: Vec::new(),
         in_trap: false,
         status: None,
+        script_states: Vec::new(),
     };
     let mut state = State::start();
     reader.script(command, &mut state);
@@ -195,6 +217,13 @@ const MAX_VARIANTS: usize = 64;
 const MAX_DEPTH: usize = 6;
 /// Passes over a loop body before its state is taken as settled.
 const LOOP_PASSES: usize = 6;
+/// Compound commands nested inside one another in one script. Parsing and
+/// reading both recurse on this, once per nested script, so it keeps a line
+/// well inside the stack; hand-written and generated lines stay far below it.
+const MAX_NESTING: usize = 16;
+/// Brace expressions expanded in one word. Expansion recurses once per
+/// expression, so past this the word's further values are unknown.
+const MAX_BRACE_GROUPS: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Words and tokens
@@ -218,8 +247,14 @@ enum Part {
         index: Option<String>,
     },
     /// `$((…))` or `$[…]`: an arithmetic expression, which gives a number
-    /// and may assign.
-    Arith { text: String, quoted: bool },
+    /// and may assign. `subst` is set for `$((…))`: the script of the
+    /// command substitution a shell may read the same text as when the
+    /// text is not arithmetic (TSK-1375).
+    Arith {
+        text: String,
+        quoted: bool,
+        subst: Option<String>,
+    },
     /// `$(…)`, a backtick or a process substitution.
     Subst { script: String, quoted: bool },
     /// The elements of an array value, `NAME=( … )`.
@@ -617,9 +652,11 @@ impl Lexer {
                 .unwrap_or(&inner)
                 .to_string();
             if let Some(w) = word.as_mut() {
+                // The command's other reading is built by the parser.
                 w.parts.push(Part::Arith {
                     text,
                     quoted: false,
+                    subst: None,
                 });
             }
             self.flush(toks, word);
@@ -877,7 +914,12 @@ impl Lexer {
                     .and_then(|t| t.strip_suffix(')'))
                     .unwrap_or(&inner)
                     .to_string();
-                word.parts.push(Part::Arith { text, quoted });
+                // Read as `$(…)`, the same text is a subshell.
+                word.parts.push(Part::Arith {
+                    text,
+                    quoted,
+                    subst: Some(inner),
+                });
             }
             Some('(') => {
                 let (script, next) = self.balanced(self.at + 1, '(', ')');
@@ -888,7 +930,11 @@ impl Lexer {
             Some('[') => {
                 let (text, next) = self.balanced(self.at + 1, '[', ']');
                 self.at = next;
-                word.parts.push(Part::Arith { text, quoted });
+                word.parts.push(Part::Arith {
+                    text,
+                    quoted,
+                    subst: None,
+                });
             }
             Some('{') => {
                 let (inner, next) = self.balanced(self.at + 1, '{', '}');
@@ -1131,6 +1177,11 @@ fn parameter(inner: &str, quoted: bool) -> Part {
     if inner.starts_with('!') {
         return opaque(Some(why::PARAM));
     }
+    // Each expansion inside is parsed by a call of its own, so a count past
+    // the bound stops here and refuses the line where the word is read.
+    if inner.matches("${").count() >= MAX_NESTING {
+        return opaque(Some(why::EXPANSIONS));
+    }
     let name_len = if inner.starts_with(['@', '*']) {
         1
     } else {
@@ -1244,6 +1295,325 @@ fn word_text(word: &Word) -> String {
         .collect()
 }
 
+/// `words` with each `$((…))` read as the command substitution it may also
+/// be, or `None` when no word holds one. Every such expansion takes that
+/// reading at once. Text that surely parses as arithmetic keeps its one
+/// reading: POSIX gives arithmetic precedence, so a shell is expected to
+/// read it as arithmetic. Its substitution reading is still judged for
+/// deletions where the value is read (see [`Reader::part_values`]).
+fn substitution_reading(words: &[Word]) -> Option<Vec<Word>> {
+    let mut changed = false;
+    let read = words
+        .iter()
+        .map(|word| Word {
+            parts: substituted(&word.parts, &mut changed),
+            src: word.src.clone(),
+        })
+        .collect();
+    changed.then_some(read)
+}
+
+/// `parts` with each `$((…))`, also inside `${…}` words and array values,
+/// read as its command substitution; `changed` is set when there was one.
+fn substituted(parts: &[Part], changed: &mut bool) -> Vec<Part> {
+    parts
+        .iter()
+        .map(|part| match part {
+            Part::Arith {
+                text,
+                quoted,
+                subst: Some(script),
+            } if !surely_arithmetic(text) => {
+                *changed = true;
+                Part::Subst {
+                    script: script.clone(),
+                    quoted: *quoted,
+                }
+            }
+            Part::Param {
+                name,
+                op: Some(op),
+                quoted,
+                index,
+            } => {
+                let op = match op {
+                    ParamOp::Default { word, assign } => ParamOp::Default {
+                        word: substituted(word, changed),
+                        assign: *assign,
+                    },
+                    ParamOp::Alternate(word) => ParamOp::Alternate(substituted(word, changed)),
+                    other => other.clone(),
+                };
+                Part::Param {
+                    name: name.clone(),
+                    op: Some(op),
+                    quoted: *quoted,
+                    index: index.clone(),
+                }
+            }
+            Part::Array(words) => Part::Array(
+                words
+                    .iter()
+                    .map(|word| Word {
+                        parts: substituted(&word.parts, changed),
+                        src: word.src.clone(),
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        })
+        .collect()
+}
+
+/// Whether `text` surely parses as a shell arithmetic expression: numbers,
+/// names (with subscripts), expansions as operands, and the arithmetic
+/// operators in a well-formed order. Anything else, a quote, a `;` or two
+/// operands side by side, is not sure; so is text nested deeper than the
+/// check follows.
+fn surely_arithmetic(text: &str) -> bool {
+    let mut check = ArithCheck {
+        chars: text.chars().collect(),
+        at: 0,
+        depth: 0,
+    };
+    check.expr() && {
+        check.blanks();
+        check.at == check.chars.len()
+    }
+}
+
+/// Parentheses and subscripts [`surely_arithmetic`] follows.
+const ARITH_NESTING: usize = 32;
+
+/// A strict reader of arithmetic text for [`surely_arithmetic`]; each
+/// method says whether its form was there and consumes it.
+struct ArithCheck {
+    chars: Vec<char>,
+    at: usize,
+    depth: usize,
+}
+
+impl ArithCheck {
+    /// Binary operators, longest first.
+    const BINARY: &'static [&'static str] = &[
+        "**", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "*", "/", "%", "+", "-", "<", ">",
+        "&", "^", "|",
+    ];
+    const ASSIGN: &'static [&'static str] = &[
+        "<<=", ">>=", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "|=", "=",
+    ];
+
+    fn blanks(&mut self) {
+        while self
+            .chars
+            .get(self.at)
+            .is_some_and(|c| matches!(c, ' ' | '\t' | '\n'))
+        {
+            self.at += 1;
+        }
+    }
+
+    fn rest_starts(&self, op: &str) -> bool {
+        op.chars()
+            .enumerate()
+            .all(|(k, c)| self.chars.get(self.at + k) == Some(&c))
+    }
+
+    /// Consume the first of `ops` at the cursor, unless it is followed by
+    /// `=` (which makes it a longer operator) when `bare` is set.
+    fn op(&mut self, ops: &[&str], bare: bool) -> bool {
+        self.blanks();
+        for op in ops {
+            if self.rest_starts(op) {
+                let next = self.chars.get(self.at + op.len()).copied();
+                if bare && next == Some('=') && !matches!(*op, "<=" | ">=" | "==" | "!=") {
+                    return false;
+                }
+                self.at += op.len();
+                return true;
+            }
+        }
+        false
+    }
+
+    fn nested(&mut self, read: impl FnOnce(&mut Self) -> bool) -> bool {
+        if self.depth >= ARITH_NESTING {
+            return false;
+        }
+        self.depth += 1;
+        let ok = read(self);
+        self.depth -= 1;
+        ok
+    }
+
+    /// `ASSIGN (, ASSIGN)*`
+    fn expr(&mut self) -> bool {
+        self.blanks();
+        if self.at == self.chars.len() {
+            // `$(( ))` is zero.
+            return true;
+        }
+        if !self.assign() {
+            return false;
+        }
+        while self.op(&[","], false) {
+            if !self.assign() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `NAME ASSIGN-OP ASSIGN`, or a conditional.
+    fn assign(&mut self) -> bool {
+        let start = self.at;
+        if self.name() && self.op(Self::ASSIGN, false) {
+            return self.nested(Self::assign);
+        }
+        self.at = start;
+        self.conditional()
+    }
+
+    /// `BINARY (? EXPR : ASSIGN)?`
+    fn conditional(&mut self) -> bool {
+        if !self.binary() {
+            return false;
+        }
+        if self.op(&["?"], false) {
+            return self.nested(Self::expr) && self.op(&[":"], false) && self.nested(Self::assign);
+        }
+        true
+    }
+
+    /// `UNARY (BINARY-OP UNARY)*`; precedence does not change validity.
+    fn binary(&mut self) -> bool {
+        if !self.unary() {
+            return false;
+        }
+        while self.op(Self::BINARY, true) {
+            if !self.unary() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn unary(&mut self) -> bool {
+        let start = self.at;
+        if self.op(&["++", "--"], false) {
+            if self.name() {
+                return true;
+            }
+            self.at = start;
+        }
+        if self.op(&["+", "-", "!", "~"], false) {
+            return self.nested(Self::unary);
+        }
+        self.primary()
+    }
+
+    /// A number, an expansion, `( EXPR )`, or a name with an optional
+    /// `++` or `--` after it.
+    fn primary(&mut self) -> bool {
+        self.blanks();
+        let Some(&c) = self.chars.get(self.at) else {
+            return false;
+        };
+        if c.is_ascii_digit() {
+            while self
+                .chars
+                .get(self.at)
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '#' | '@'))
+            {
+                self.at += 1;
+            }
+            return true;
+        }
+        if c == '(' {
+            self.at += 1;
+            return self.nested(Self::expr) && self.op(&[")"], false);
+        }
+        if c == '$' {
+            return self.expansion();
+        }
+        if self.name() {
+            let start = self.at;
+            if !self.op(&["++", "--"], false) {
+                self.at = start;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// `NAME` or `NAME[EXPR]`.
+    fn name(&mut self) -> bool {
+        self.blanks();
+        let start = self.at;
+        if !self
+            .chars
+            .get(self.at)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+        {
+            return false;
+        }
+        while self
+            .chars
+            .get(self.at)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+        {
+            self.at += 1;
+        }
+        if self.chars.get(self.at) == Some(&'[') {
+            self.at += 1;
+            if !(self.nested(Self::expr) && self.chars.get(self.at) == Some(&']')) {
+                self.at = start;
+                return false;
+            }
+            self.at += 1;
+        }
+        true
+    }
+
+    /// `$NAME`, a special parameter, or a `${…}`, `$(…)` or `$((…))`
+    /// expansion as one operand, its inside not judged.
+    fn expansion(&mut self) -> bool {
+        self.at += 1;
+        match self.chars.get(self.at).copied() {
+            Some('{' | '(') => {
+                let (open, close) = if self.chars[self.at] == '{' {
+                    ('{', '}')
+                } else {
+                    ('(', ')')
+                };
+                let (_, next) = balanced(&self.chars, self.at, open, close);
+                if next > self.chars.len() || self.chars.get(next - 1) != Some(&close) {
+                    return false;
+                }
+                self.at = next;
+                true
+            }
+            Some(c)
+                if c.is_ascii_digit() || matches!(c, '#' | '?' | '@' | '*' | '!' | '$' | '-') =>
+            {
+                self.at += 1;
+                true
+            }
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                while self
+                    .chars
+                    .get(self.at)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                {
+                    self.at += 1;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Structure
 // ---------------------------------------------------------------------------
@@ -1285,6 +1655,11 @@ enum Node {
     Cond(Vec<Word>),
     /// `(( … ))`: an arithmetic command.
     Arith(String),
+    /// Text a shell may read more than one way, one node per reading
+    /// (TSK-1375). Each reading runs from the same state and the states
+    /// after them join, so a deletion in any reading is judged and a value
+    /// any reading gives is kept.
+    Readings(Vec<Node>),
     /// A compound command with redirections: its input feeds the commands
     /// inside.
     Redirected(Box<Node>, Vec<Redir>),
@@ -1308,12 +1683,32 @@ const OUT_OF_PLACE: &[&str] = &[
 struct Parser {
     toks: Vec<Tok>,
     at: usize,
+    nesting: usize,
+    /// The most nesting reached, counting what the text was nested in.
+    deepest: usize,
+    /// Set when the text went past [`MAX_NESTING`], leaving the rest unread.
+    stopped: bool,
 }
 
 impl Parser {
     fn parse(script: &str) -> Node {
+        Self::parse_within(script, 0).0
+    }
+
+    /// `script` read as text nested `nesting` deep, so a second reading of
+    /// text already parsed, or a script inside it, spends what is left of
+    /// the one bound and never starts its own. Gives the node and the most
+    /// nesting reached; past the bound the node is marked as
+    /// [`Parser::parse`] marks it.
+    fn parse_within(script: &str, nesting: usize) -> (Node, usize) {
         let (toks, broken) = Lexer::new(script).tokens();
-        let mut parser = Self { toks, at: 0 };
+        let mut parser = Self {
+            toks,
+            at: 0,
+            nesting,
+            deepest: nesting,
+            stopped: false,
+        };
         let mut items = Vec::new();
         while parser.at < parser.toks.len() {
             let before = parser.at;
@@ -1325,11 +1720,14 @@ impl Parser {
             }
         }
         let node = Node::Seq(items);
-        if broken {
+        let node = if parser.stopped {
+            Node::Unknown(why::STRUCTURE, Box::new(node))
+        } else if broken {
             Node::Unknown(why::SYNTAX, Box::new(node))
         } else {
             node
-        }
+        };
+        (node, parser.deepest)
     }
 
     fn peek(&self) -> Option<&Tok> {
@@ -1377,6 +1775,26 @@ impl Parser {
             },
             _ => None,
         }
+    }
+
+    /// The `(( … ))` word at the cursor read as `( ( … ) )`: its own text,
+    /// with the first two parentheses apart, fed back through the parser.
+    /// Text that does not read that way comes back marked unknown, as any
+    /// script does. The reading starts at this parser's nesting, and a stop
+    /// in it stops this parser too.
+    fn subshell_reading(&mut self) -> Node {
+        let reading = match self.peek() {
+            Some(Tok::Word(w)) if w.src.starts_with("((") => {
+                Parser::parse_within(&format!("( {}", &w.src[1..]), self.nesting)
+            }
+            _ => return Node::Unknown(why::SYNTAX, Box::new(Node::Seq(Vec::new()))),
+        };
+        let (node, deepest) = reading;
+        self.deepest = self.deepest.max(deepest);
+        if matches!(&node, Node::Unknown(reason, _) if *reason == why::STRUCTURE) {
+            self.stopped = true;
+        }
+        node
     }
 
     /// Whether the token at `at` begins a compound command.
@@ -1483,8 +1901,24 @@ impl Parser {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// One command. Past [`MAX_NESTING`] the rest of the text is left
+    /// unread, and the whole script is marked for it, since the stop may
+    /// sit in code that never runs, such as a function never called.
     fn command(&mut self) -> Node {
+        if self.nesting >= MAX_NESTING {
+            self.at = self.toks.len();
+            self.stopped = true;
+            return Node::Seq(Vec::new());
+        }
+        self.nesting += 1;
+        self.deepest = self.deepest.max(self.nesting);
+        let node = self.command_here();
+        self.nesting -= 1;
+        node
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn command_here(&mut self) -> Node {
         let node = if self.at_op("(") {
             self.at += 1;
             if self.at_op(")") {
@@ -1586,8 +2020,12 @@ impl Parser {
         } else if self.at_word("[[") {
             self.cond()
         } else if let Some(text) = self.arith_word() {
+            // `((…))` is arithmetic, or a subshell inside a subshell to a
+            // shell without the arithmetic command or when the text is not
+            // arithmetic: both readings are judged.
+            let subshells = self.subshell_reading();
             self.at += 1;
-            Node::Arith(text)
+            Node::Readings(vec![Node::Arith(text), subshells])
         } else if matches!(self.peek(), Some(Tok::Word(w)) if w.plain().is_some_and(|w| OUT_OF_PLACE.contains(&w)))
         {
             return Node::Unknown(why::SYNTAX, Box::new(self.simple()));
@@ -1663,7 +2101,16 @@ impl Parser {
             });
             odd = true;
         }
-        Self::close(Node::Simple(words, redirs), !odd)
+        // A `$((…))` may be read as a command substitution when its text
+        // is not arithmetic: both readings are judged.
+        let node = match substitution_reading(&words) {
+            Some(substituted) => Node::Readings(vec![
+                Node::Simple(words, redirs.clone()),
+                Node::Simple(substituted, redirs),
+            ]),
+            None => Node::Simple(words, redirs),
+        };
+        Self::close(node, !odd)
     }
 
     /// `[[ … ]]`: every token up to `]]` is a word of the test.
@@ -1857,11 +2304,17 @@ mod why {
     pub const NAMEREF: &str = "a name reference (`declare -n`)";
     pub const COMMAND: &str = "a command whose name the guard cannot resolve";
     pub const NAME: &str = "a variable name the guard cannot resolve";
+    pub const SCRIPT_READINGS: &str =
+        "shell code exceeds the bounded directory and variable reading";
     pub const EVAL: &str = "`eval` of text the guard cannot resolve";
     pub const ALIAS: &str = "an alias the guard cannot resolve";
     pub const DEPTH: &str = "a function call or nested script deeper than the guard follows";
+    pub const STRUCTURE: &str = "compound commands nested deeper than the guard parses";
+    pub const WRAPPERS: &str = "more launch wrappers than the guard unwraps";
+    pub const VARIANTS: &str = "more argument combinations than the guard judges";
     pub const LOOP: &str = "a loop the guard cannot settle";
     pub const MANY: &str = "more values than the guard follows";
+    pub const EXPANSIONS: &str = "parameter expansions nested deeper than the guard parses";
     pub const READ_OPTION: &str = "a `read` option the guard does not model";
     pub const READ_INPUT: &str =
         "input the guard cannot see (`read` from a file or an unknown command)";
@@ -2138,9 +2591,9 @@ impl State {
     /// Change directory. A `cd` to a literal path gives a known directory
     /// again, even after a construct made it unknown.
     fn set_cwd(&mut self, cwd: Values) {
-        let cwd = bounded(cwd);
+        let cwd = bounded_directories(cwd);
         self.oldpwd = std::mem::replace(&mut self.cwd, cwd);
-        self.visited = bounded(self.visited.union(&self.cwd).cloned().collect());
+        self.visited = bounded_directories(self.visited.union(&self.cwd).cloned().collect());
     }
 
     /// A construct that may change any variable and the working directory
@@ -2222,9 +2675,9 @@ impl State {
             let joined: Values = self.var(&name).union(&other.var(&name)).cloned().collect();
             self.vars.insert(name, bounded(joined));
         }
-        self.cwd = bounded(self.cwd.union(&other.cwd).cloned().collect());
-        self.oldpwd = bounded(self.oldpwd.union(&other.oldpwd).cloned().collect());
-        self.visited = bounded(self.visited.union(&other.visited).cloned().collect());
+        self.cwd = bounded_directories(self.cwd.union(&other.cwd).cloned().collect());
+        self.oldpwd = bounded_directories(self.oldpwd.union(&other.oldpwd).cloned().collect());
+        self.visited = bounded_directories(self.visited.union(&other.visited).cloned().collect());
         self.arg0 = bounded(self.arg0.union(&other.arg0).cloned().collect());
         let unset: Values = [String::new()].into();
         let len = self.args.len().max(other.args.len());
@@ -2350,6 +2803,15 @@ impl State {
         self.set(&assign.name, new);
     }
 
+    /// Each of `names` may also hold an unknown value.
+    fn mark_unknown(&mut self, names: &BTreeSet<String>, reason: &str) {
+        for name in names {
+            if let Some(values) = self.vars.get_mut(name) {
+                values.insert(taint(reason));
+            }
+        }
+    }
+
     /// After a loop the reader could not settle: every value still
     /// changing between its last two passes is also unknown.
     fn widen(&mut self, before: &Self) {
@@ -2370,7 +2832,17 @@ impl State {
 /// Keep at most [`MAX_VALUES`], protected and unknown values first; a set
 /// that had to drop values also holds an unknown one.
 fn bounded(values: Values) -> Values {
-    if values.len() <= MAX_VALUES {
+    bounded_to(values, MAX_VALUES)
+}
+
+/// Directory alternatives also bound the PWD-by-cwd product at a later
+/// deletion. Preserve protected values and an unknown for any omitted path.
+fn bounded_directories(values: Values) -> Values {
+    bounded_to(values, super::composed::paths::MAX_SCRIPT_READINGS)
+}
+
+fn bounded_to(values: Values, limit: usize) -> Values {
+    if values.len() <= limit {
         return values;
     }
     let (mut kept, rest): (Values, Values) = values
@@ -2378,12 +2850,17 @@ fn bounded(values: Values) -> Values {
         .partition(|value| unproven(value).is_some() || dangerous_rm_target(value).is_some());
     kept.insert(taint(why::MANY));
     for value in rest {
-        if kept.len() >= MAX_VALUES {
+        if kept.len() >= limit {
             break;
         }
         kept.insert(value);
     }
     kept
+}
+
+/// Whether every one of `values` is an integer.
+fn holds_integers(values: &Values) -> bool {
+    values.iter().all(|value| value.parse::<i64>().is_ok())
 }
 
 /// The positional parameters a command's argument vectors give, from
@@ -2521,6 +2998,11 @@ struct Reader<'a> {
     rooted_unplaced: bool,
     found: Option<Found>,
     depth: usize,
+    /// The compound nesting of the script being read, at its deepest. A
+    /// script parsed while reading it, such as a substitution, starts there,
+    /// so the line has one [`MAX_NESTING`] bound however its text is
+    /// reparsed.
+    nesting: usize,
     /// What the pipeline stage being read receives on its input.
     pipe_input: Option<Fed>,
     jumps: Vec<Frame>,
@@ -2535,6 +3017,9 @@ struct Reader<'a> {
     /// Where the last simple command left the line when it succeeds and
     /// when it fails, when those differ (a `cd` that may fail).
     status: Option<Status>,
+    /// Concrete readings of inline bodies share the same per-line budget as
+    /// the checkout expansion reader. Repeated state/text pairs cost once.
+    script_states: Vec<(State, String)>,
 }
 
 /// The working directory and `OLDPWD` after a `cd` that succeeds and
@@ -2595,21 +3080,68 @@ impl Reader<'_> {
     }
 
     fn script(&mut self, script: &str, st: &mut State) {
-        if self.done() {
+        if self.done() || !self.may_descend(st) {
             return;
         }
-        // Past the depth it follows, the reader reads once more with every
-        // value unknown, so a deletion there is still judged.
-        if self.depth > MAX_DEPTH {
-            if st.wild.is_some() {
-                return;
+        if self.depth > 0
+            && !self
+                .script_states
+                .iter()
+                .any(|(before, text)| before == st && text == script)
+        {
+            if self.script_states.len() >= super::composed::paths::MAX_SCRIPT_READINGS {
+                // Keep inspecting the body for literal protected deletions,
+                // but stop multiplying concrete directory/variable readings.
+                // A later deletion through those unknown values refuses.
+                st.go_wild(why::SCRIPT_READINGS);
+            } else {
+                self.script_states.push((st.clone(), script.to_owned()));
             }
-            st.go_wild(why::DEPTH);
         }
         self.depth += 1;
-        let node = Parser::parse(script);
+        let (node, deepest) = Parser::parse_within(script, self.nesting);
+        let outer = std::mem::replace(&mut self.nesting, deepest);
         self.run(&node, st);
+        self.nesting = outer;
         self.depth -= 1;
+    }
+
+    /// The line refuses: the reader stopped at a bound for `reason`, and
+    /// what it did not read may be any command. Every stop in the line's
+    /// structure ends here. A protected target found already names the
+    /// refusal better.
+    fn unfinished(&mut self, reason: &'static str) {
+        if !self.done() {
+            self.found = Some(Found {
+                target: "unread shell code",
+                ambiguous: false,
+                unproven: Some(Unproven {
+                    reason: reason.into(),
+                    cwd: false,
+                }),
+                unfinished: true,
+            });
+        }
+    }
+
+    /// Whether a nested script or function body may be read. Past the depth
+    /// the reader follows it reads once more with every value unknown, so a
+    /// deletion there is still judged; past that read it stops, and the line
+    /// refuses.
+    fn may_descend(&mut self, st: &mut State) -> bool {
+        if self.depth <= MAX_DEPTH {
+            return true;
+        }
+        if st.wild.is_none() {
+            st.go_wild(why::DEPTH);
+            return true;
+        }
+        self.unfinished(if st.wild == Some(why::SCRIPT_READINGS) {
+            why::SCRIPT_READINGS
+        } else {
+            why::DEPTH
+        });
+        false
     }
 
     /// Read `script` in a child shell of the line.
@@ -2632,6 +3164,7 @@ impl Reader<'_> {
                         target,
                         ambiguous,
                         unproven: None,
+                        unfinished: false,
                     });
                 }
             }
@@ -2641,6 +3174,7 @@ impl Reader<'_> {
                         target: "unproven deletion target",
                         ambiguous: false,
                         unproven: Some(unproven),
+                        unfinished: false,
                     });
                 }
             }
@@ -2782,7 +3316,10 @@ impl Reader<'_> {
                     before = std::mem::replace(&mut acc, next);
                 }
                 if !settled {
-                    acc.widen(&before);
+                    self.read_unsettled(&mut acc, &before, &[cond, body], |reader, pass| {
+                        reader.frame(FrameKind::Loop, body, pass);
+                        reader.run(cond, pass);
+                    });
                 }
                 *st = acc;
             }
@@ -2840,6 +3377,18 @@ impl Reader<'_> {
                 self.apply_traps(st);
                 self.arith(text, st);
             }
+            Node::Readings(readings) => {
+                let entry = st.clone();
+                let mut joined = entry.clone();
+                joined.dead = true;
+                for reading in readings {
+                    let mut taken = entry.clone();
+                    self.run(reading, &mut taken);
+                    joined.join(&taken);
+                }
+                *st = joined;
+                self.status = None;
+            }
             Node::Redirected(body, redirs) => {
                 let fed = self.redirect_input(redirs, st);
                 self.redirect_effects(redirs, st);
@@ -2851,6 +3400,9 @@ impl Reader<'_> {
                 self.pipe_input = outer;
             }
             Node::Unknown(reason, inner) => {
+                if *reason == why::STRUCTURE {
+                    self.unfinished(reason);
+                }
                 st.go_wild(reason);
                 self.run(inner, st);
             }
@@ -2910,9 +3462,65 @@ impl Reader<'_> {
             before = std::mem::replace(st, next);
         }
         if !settled {
-            st.widen(&before);
+            let actions = self.live_traps(st);
+            let bodies: Vec<&Node> = actions.iter().collect();
+            self.read_unsettled(st, &before, &bodies, |reader, pass| {
+                let mut next = pass.clone();
+                for action in &actions {
+                    let mut ran = pass.clone();
+                    reader.frame(FrameKind::Child, action, &mut ran);
+                    next.join(&ran);
+                }
+                *pass = next;
+            });
         }
         self.in_trap = false;
+    }
+
+    /// Finish a loop or trap the passes did not settle. A value may still
+    /// be on its way to a name the passes never saw it reach, so every name
+    /// `bodies` may assign is read as unknown, and `read` runs the bodies on
+    /// that state, so a deletion in them is judged. A name that takes an
+    /// unknown value in a read makes the next read start with it unknown.
+    /// A name still counting through integers keeps its numbers, since an
+    /// unknown number would make its own arithmetic unknown; it joins the
+    /// others the moment it takes anything else.
+    fn read_unsettled(
+        &mut self,
+        acc: &mut State,
+        before: &State,
+        bodies: &[&Node],
+        mut read: impl FnMut(&mut Self, &mut State),
+    ) {
+        let mut unknown: BTreeSet<String> = acc
+            .vars
+            .keys()
+            .filter(|name| {
+                bodies.iter().any(|body| may_assign(body, name, acc))
+                    && !(acc.var(name) != before.var(name) && holds_integers(&acc.var(name)))
+            })
+            .cloned()
+            .collect();
+        loop {
+            let mut pass = acc.clone();
+            pass.mark_unknown(&unknown, why::LOOP);
+            read(self, &mut pass);
+            let more: Vec<String> = pass
+                .vars
+                .iter()
+                .filter(|(name, values)| {
+                    !unknown.contains(*name) && values.iter().any(|v| unproven(v).is_some())
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+            acc.join(&pass);
+            if more.is_empty() || self.done() {
+                break;
+            }
+            unknown.extend(more);
+        }
+        acc.widen(before);
+        acc.mark_unknown(&unknown, why::LOOP);
     }
 
     /// The trap and hook actions `st` has not retracted.
@@ -3039,7 +3647,13 @@ impl Reader<'_> {
             before = std::mem::replace(&mut acc, next);
         }
         if !settled {
-            acc.widen(&before);
+            self.read_unsettled(&mut acc, &before, &[body], |reader, pass| {
+                pass.set(name, values.clone());
+                if select {
+                    pass.set("REPLY", [taint(why::READ_INPUT)].into());
+                }
+                reader.frame(FrameKind::Loop, body, pass);
+            });
         }
         // A fixed list the body never leaves early nor reassigns ends on its
         // last word; otherwise every word stays feasible.
@@ -3376,11 +3990,8 @@ impl Reader<'_> {
         name: &str,
         st: &mut State,
     ) {
-        if self.depth > MAX_DEPTH {
-            if st.wild.is_some() {
-                return;
-            }
-            st.go_wild(why::DEPTH);
+        if !self.may_descend(st) {
+            return;
         }
         let caller_args = std::mem::replace(&mut st.args, positionals(variants, 1));
         let caller_zero = st.arg0.clone();
@@ -3728,7 +4339,7 @@ impl Reader<'_> {
                 if clears {
                     return;
                 }
-                let action = Parser::parse(action);
+                let action = Parser::parse_within(action, self.nesting).0;
                 for signal in signals {
                     self.register(Slot::Signal(signal.clone()), action.clone(), st);
                 }
@@ -3970,6 +4581,14 @@ impl Reader<'_> {
                 }
                 Part::Arith { text, .. } => self.arith(text, st),
                 Part::Array(words) => self.side_effects(words, st),
+                // Text past the bound stays unread: the word refuses the line.
+                Part::Lit { .. }
+                | Part::Tilde(_)
+                | Part::Subst { .. }
+                | Part::Opaque {
+                    unknown: Some(why::EXPANSIONS),
+                    ..
+                } => {}
                 // An expansion the reader does not resolve may still assign
                 // inside (`${V/x/${D:=…}}`); `${!V=…}` assigns a name it
                 // cannot see.
@@ -3981,7 +4600,6 @@ impl Reader<'_> {
                         self.part_effects(&lex_word(inner).parts, st);
                     }
                 }
-                Part::Lit { .. } | Part::Tilde(_) | Part::Subst { .. } => {}
             }
         }
     }
@@ -4261,12 +4879,16 @@ impl Reader<'_> {
         forced: bool,
         ambiguous: bool,
     ) {
-        if self.done() || self.depth > MAX_DEPTH {
+        if self.done() {
             return;
         }
         let Some(run) = unwrap(argv) else {
             return;
         };
+        if run.unfinished {
+            self.unfinished(why::WRAPPERS);
+            return;
+        }
         let mut st = st.clone();
         for (name, value) in &run.env {
             st.set(name, [value.clone()].into());
@@ -4283,9 +4905,14 @@ impl Reader<'_> {
         let Some(first) = argv.first() else {
             return;
         };
+        // The unread choices may name any program, a remover included.
+        if unproven(first) == Some(why::MANY) {
+            self.unfinished(why::MANY);
+            return;
+        }
         let ambiguous = ambiguous || st.cwd.len() > 1;
         match program_name(first).as_str() {
-            "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" => {
+            name if crate::hooks::git_guard::is_shell(name) => {
                 // A new shell: its own arguments, no function calls.
                 let mut child = st.clone();
                 child.scopes.clear();
@@ -4299,6 +4926,13 @@ impl Reader<'_> {
                     self.child_script(&script, &mut child);
                     self.depth -= 1;
                 } else if let Some(input) = input {
+                    if input
+                        .items
+                        .iter()
+                        .any(|i| unproven(&i.value) == Some(why::MANY))
+                    {
+                        self.unfinished(why::MANY);
+                    }
                     let script: Vec<&str> = input.items.iter().map(|i| i.value.as_str()).collect();
                     child.args = Vec::new();
                     self.child_script(&script.join("\n"), &mut child);
@@ -4306,7 +4940,7 @@ impl Reader<'_> {
             }
             "eval" => {
                 let mut child = st.clone();
-                self.child_script(&argv[1..].join(" "), &mut child);
+                self.child_script(&super::composed::paths::eval_body(&argv[1..]), &mut child);
             }
             "rm" => self.judge_rm(&argv, &st, forced, ambiguous),
             "rmdir" | "unlink" | "shred" | "srm" if forced => {
@@ -4837,6 +5471,11 @@ impl Reader<'_> {
             .map(Vec::len)
             .try_fold(1usize, |acc, n| acc.checked_mul(n.max(1)))
             .unwrap_or(usize::MAX);
+        // Past the bound each alternative is still read, but not with every
+        // other: a remover may never meet its flag or its target.
+        if product > MAX_VARIANTS && per_word.iter().flatten().flatten().any(|f| may_delete(f)) {
+            self.unfinished(why::VARIANTS);
+        }
         let count = if product <= MAX_VARIANTS {
             product
         } else {
@@ -4976,6 +5615,44 @@ impl Reader<'_> {
         values.into_iter().collect()
     }
 
+    /// The value of text the reader keeps whole, after judging what any
+    /// substitution inside it deletes.
+    fn opaque_values(
+        &mut self,
+        text: &str,
+        unknown: Option<&'static str>,
+        st: &State,
+    ) -> Vec<(String, Kind)> {
+        if unknown == Some(why::EXPANSIONS) {
+            self.unfinished(why::EXPANSIONS);
+            return vec![(taint(why::EXPANSIONS), Kind::Quoted)];
+        }
+        // A substitution inside arithmetic still runs.
+        if text.contains("$(") || text.contains('`') {
+            let mut lexer = Lexer::new(text.trim_start_matches('$'));
+            let mut inner = Word::default();
+            while lexer.peek(0).is_some() {
+                lexer.word_char(&mut inner, false);
+            }
+            // So does the substitution reading of a `$((…))`.
+            for part in &inner.parts {
+                if let Part::Subst { script, .. }
+                | Part::Arith {
+                    subst: Some(script),
+                    ..
+                } = part
+                {
+                    let mut child = st.clone();
+                    self.child_script(script, &mut child);
+                }
+            }
+        }
+        vec![(
+            unknown.map_or_else(|| text.to_string(), taint),
+            Kind::Quoted,
+        )]
+    }
+
     /// Each value a part may take, with how the shell treats it.
     fn part_values(&mut self, part: &Part, st: &State) -> Vec<(String, Kind)> {
         match part {
@@ -4983,24 +5660,19 @@ impl Reader<'_> {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Bare };
                 vec![(text.clone(), kind)]
             }
-            Part::Opaque { text, unknown, .. } => {
-                // A substitution inside arithmetic still runs.
-                if text.contains("$(") || text.contains('`') {
-                    let mut lexer = Lexer::new(text.trim_start_matches('$'));
-                    let mut inner = Word::default();
-                    while lexer.peek(0).is_some() {
-                        lexer.word_char(&mut inner, false);
-                    }
-                    for part in &inner.parts {
-                        if let Part::Subst { script, .. } = part {
-                            let mut child = st.clone();
-                            self.child_script(script, &mut child);
-                        }
-                    }
+            Part::Opaque { text, unknown, .. } => self.opaque_values(text, *unknown, st),
+            Part::Arith { text, subst, .. } => {
+                // A shell may read `$((…))` as a command substitution when
+                // its text is not arithmetic: what that reading deletes is
+                // judged here. The value it gives an assignment is kept by
+                // the parser's second reading, when the text is not surely
+                // arithmetic.
+                if let Some(script) = subst {
+                    let mut child = st.clone();
+                    self.child_script(script, &mut child);
                 }
-                vec![(unknown.map_or_else(|| text.clone(), taint), Kind::Quoted)]
+                vec![(format!("$(({text}))"), Kind::Quoted)]
             }
-            Part::Arith { text, .. } => vec![(format!("$(({text}))"), Kind::Quoted)],
             Part::Tilde(user) => match user.as_str() {
                 "+" => st
                     .cwd
@@ -5067,8 +5739,7 @@ impl Reader<'_> {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Split };
                 match self.substitution(script, st) {
                     Output::Known(outputs) => outputs.into_iter().map(|v| (v, kind)).collect(),
-                    Output::External => vec![(format!("$({script})"), Kind::Quoted)],
-                    Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
+                    Output::External | Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
                 }
             }
             Part::Array(elements) => {
@@ -5089,14 +5760,16 @@ impl Reader<'_> {
             self.child_script(script, &mut child);
             return Output::Unknown;
         }
-        let node = Parser::parse(script);
+        let (node, deepest) = Parser::parse_within(script, self.nesting);
         let status = self.status.take();
         self.jumps.push(Frame {
             kind: FrameKind::Child,
             left: Vec::new(),
         });
         self.depth += 1;
+        let outer = std::mem::replace(&mut self.nesting, deepest);
         let out = self.output_of(&node, &mut child);
+        self.nesting = outer;
         self.depth -= 1;
         self.jumps.pop();
         self.status = status;
@@ -5138,6 +5811,25 @@ impl Reader<'_> {
             Node::Sub(body) => {
                 let mut child = st.clone();
                 self.output_of(body, &mut child)
+            }
+            // What any reading prints, from the state any reading leaves.
+            Node::Readings(readings) => {
+                let entry = st.clone();
+                let mut joined = entry.clone();
+                joined.dead = true;
+                let mut out: Option<Output> = None;
+                for reading in readings {
+                    let mut taken = entry.clone();
+                    let printed = self.output_of(reading, &mut taken);
+                    joined.join(&taken);
+                    out = Some(match out {
+                        Some(out) => out.or(printed),
+                        None => printed,
+                    });
+                }
+                *st = joined;
+                self.status = None;
+                out.unwrap_or_else(Output::empty)
             }
             Node::Simple(words, redirs) => {
                 let printed = self.printed(words, redirs, st);
@@ -5235,6 +5927,15 @@ impl Reader<'_> {
                 "printf" if operands.first().map(String::as_str) != Some("-v") => {
                     printf(operands).map_or(Output::Unknown, |text| Output::Known([text].into()))
                 }
+                // `pwd -P` prints the physical directory, which the logical
+                // set does not hold (TSK-1002 review 06).
+                "pwd"
+                    if operands
+                        .iter()
+                        .any(|a| a.starts_with('-') && a.contains('P')) =>
+                {
+                    Output::Unknown
+                }
                 "pwd" => Output::Known(
                     st.cwd
                         .iter()
@@ -5265,6 +5966,13 @@ impl Reader<'_> {
             "echo" => Output::Known(echo_output(&run.argv[1..])),
             "printf" => {
                 printf(&run.argv[1..]).map_or(Output::Unknown, |text| Output::Known([text].into()))
+            }
+            "pwd"
+                if run.argv[1..]
+                    .iter()
+                    .any(|a| a.starts_with('-') && a.contains('P')) =>
+            {
+                Output::Unknown
             }
             "pwd" => Output::Known(
                 st.cwd
@@ -5510,6 +6218,10 @@ impl Reader<'_> {
         if out.len() > MAX_VALUES {
             out.truncate(MAX_VALUES);
             complete = false;
+            out.push(Input {
+                value: taint(why::MANY),
+                tree: true,
+            });
         }
         Fed {
             items: out,
@@ -6142,7 +6854,7 @@ fn builtin_prefix(argv: &[String]) -> Option<(usize, bool)> {
                     at += 1;
                 }
             }
-            Some("noglob" | "nocorrect" | "-") => at += 1,
+            Some(name) if crate::hooks::git_guard::is_shell_modifier(name) => at += 1,
             _ => return Some((at, functions)),
         }
     }
@@ -6246,6 +6958,10 @@ fn items(fed: Option<&Fed>, delimiter: Delimiter) -> Vec<Input> {
     fed.items
         .iter()
         .flat_map(|item| {
+            // An unknown item stays one unknown value, whatever frames it.
+            if unproven(&item.value).is_some() {
+                return vec![item.clone()];
+            }
             let values = match delimiter {
                 Delimiter::Blanks => xargs_words(&item.value),
                 Delimiter::ReplacementLines => item
@@ -6363,6 +7079,9 @@ struct Unwrapped {
     argv: Vec<String>,
     env: Vec<(String, String)>,
     cwd: Option<String>,
+    /// Set when `argv` still starts with a wrapper, so the command it runs
+    /// is unread.
+    unfinished: bool,
 }
 
 /// Remove launch wrappers (`env`, `command`, `sudo`, `nice`, `timeout`,
@@ -6371,7 +7090,8 @@ fn unwrap(argv: &[String]) -> Option<Unwrapped> {
     let mut argv = argv.to_vec();
     let mut env = Vec::new();
     let mut cwd = None;
-    for _ in 0..8 {
+    let mut unfinished = false;
+    for round in 0..=8 {
         while let Some((name, value)) = argv
             .first()
             .and_then(|w| w.split_once('='))
@@ -6418,9 +7138,18 @@ fn unwrap(argv: &[String]) -> Option<Unwrapped> {
             "sudo" | "doas" | "pkexec" | "gsudo" => unwrap_privilege(rest, &mut cwd),
             _ => break,
         };
+        if round == 8 {
+            unfinished = true;
+            break;
+        }
         argv = next;
     }
-    Some(Unwrapped { argv, env, cwd })
+    Some(Unwrapped {
+        argv,
+        env,
+        cwd,
+        unfinished,
+    })
 }
 
 /// `env`'s own options and assignments, up to the command it runs. A short
@@ -6811,31 +7540,56 @@ fn exec_bodies(expression: &[String]) -> Vec<Vec<String>> {
     bodies
 }
 
+/// Whether a word names a program the reader judges for what it deletes.
+fn may_delete(word: &str) -> bool {
+    let name = program_name(word);
+    matches!(
+        name.as_str(),
+        "rm" | "rmdir"
+            | "unlink"
+            | "shred"
+            | "srm"
+            | "find"
+            | "xargs"
+            | "parallel"
+            | "rsync"
+            | "eval"
+    ) || crate::hooks::git_guard::is_shell(&name)
+}
+
 /// Whether a command removes files: a remover, possibly behind launchers,
-/// `xargs`, or a shell whose script runs one.
+/// `xargs`, or a shell whose script runs one. A command the reader cannot
+/// read to the end counts as one.
 fn runs_remover(argv: &[String], depth: usize) -> bool {
     if depth > MAX_DEPTH {
-        return false;
+        return true;
     }
     let Some(run) = unwrap(argv) else {
         return false;
     };
+    if run.unfinished {
+        return true;
+    }
     let Some(first) = run.argv.first() else {
         return false;
     };
     match program_name(first).as_str() {
         "rm" | "rmdir" | "unlink" | "shred" | "srm" => true,
         "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).command, depth + 1),
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" | "eval" => {
+        name if name == "eval" || crate::hooks::git_guard::is_shell(name) => {
             let script = if program_name(first) == "eval" {
-                run.argv[1..].join(" ")
+                super::composed::paths::eval_body(&run.argv[1..])
             } else {
                 shell_script(&run.argv[1..])
                     .map(|(script, _)| script.to_string())
                     .unwrap_or_default()
             };
+            let node = Parser::parse(&script);
+            if matches!(&node, Node::Unknown(reason, _) if *reason == why::STRUCTURE) {
+                return true;
+            }
             let mut simples = Vec::new();
-            collect_simples(&Parser::parse(&script), &mut simples);
+            collect_simples(&node, &mut simples);
             simples.iter().any(|(words, _)| {
                 let argv: Vec<String> = words.iter().map(word_text).collect();
                 runs_remover(&argv, depth + 1)
@@ -6859,7 +7613,11 @@ fn collect_simples(node: &Node, out: &mut Vec<(Vec<Word>, Vec<Redir>)>) {
         | Node::Redirected(body, _) => {
             collect_simples(body, out);
         }
-        Node::Seq(items) | Node::AndOr(items, _) | Node::Pipe(items) | Node::Case(_, items) => {
+        Node::Seq(items)
+        | Node::AndOr(items, _)
+        | Node::Pipe(items)
+        | Node::Case(_, items)
+        | Node::Readings(items) => {
             for item in items {
                 collect_simples(item, out);
             }
@@ -6894,9 +7652,11 @@ fn opaque_effects(node: &Node) -> bool {
         | Node::Select(_, _, body)
         | Node::Coproc(_, body)
         | Node::Redirected(body, _) => opaque_effects(body),
-        Node::Seq(items) | Node::AndOr(items, _) | Node::Pipe(items) | Node::Case(_, items) => {
-            items.iter().any(opaque_effects)
-        }
+        Node::Seq(items)
+        | Node::AndOr(items, _)
+        | Node::Pipe(items)
+        | Node::Case(_, items)
+        | Node::Readings(items) => items.iter().any(opaque_effects),
         Node::If(arms, otherwise) => {
             arms.iter()
                 .any(|(cond, body)| opaque_effects(cond) || opaque_effects(body))
@@ -7013,7 +7773,11 @@ fn walk_for(node: &Node, visit: &mut impl FnMut(&str)) {
         | Node::Coproc(_, body)
         | Node::Unknown(_, body)
         | Node::Redirected(body, _) => walk_for(body, visit),
-        Node::Seq(items) | Node::AndOr(items, _) | Node::Pipe(items) | Node::Case(_, items) => {
+        Node::Seq(items)
+        | Node::AndOr(items, _)
+        | Node::Pipe(items)
+        | Node::Case(_, items)
+        | Node::Readings(items) => {
             for item in items {
                 walk_for(item, visit);
             }
@@ -7393,24 +8157,38 @@ fn brace_expand(pieces: &[(String, Kind)]) -> Vec<Vec<(String, Kind)>> {
         .flat_map(|(text, kind)| text.chars().map(move |c| (c, *kind)))
         .collect();
     let mut out = Vec::new();
-    expand_chars(chars, &mut out);
-    out.iter().map(|chars| regroup(chars)).collect()
+    let whole = expand_chars(chars, &mut out, 0);
+    let mut expanded: Vec<Vec<(String, Kind)>> = out.iter().map(|chars| regroup(chars)).collect();
+    if !whole {
+        expanded.push(vec![(taint(why::MANY), Kind::Quoted)]);
+    }
+    expanded
 }
 
-fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>) {
+/// Expand into `out`, `groups` brace expressions in, and whether every
+/// choice fit under [`MAX_VALUES`] and [`MAX_BRACE_GROUPS`].
+fn expand_chars(chars: Vec<(char, Kind)>, out: &mut Vec<Vec<(char, Kind)>>, groups: usize) -> bool {
     if out.len() >= MAX_VALUES {
-        return;
+        return false;
     }
     let Some((open, close, choices)) = find_brace(&chars) else {
         out.push(chars);
-        return;
+        return true;
     };
+    if groups >= MAX_BRACE_GROUPS {
+        return false;
+    }
+    // The first choice that cannot finish ends the expansion: the rest is
+    // unknown, and reading on could only repeat the stop.
     for choice in choices {
         let mut next = chars[..open].to_vec();
         next.extend(choice);
         next.extend_from_slice(&chars[close + 1..]);
-        expand_chars(next, out);
+        if !expand_chars(next, out, groups + 1) {
+            return false;
+        }
     }
+    true
 }
 
 /// The first brace expression in `chars`: its `{`, its `}` and its
@@ -7718,8 +8496,65 @@ fn is_name(name: &str) -> bool {
 // Several guard-form tables feed tests that build symlinks, which run on
 // Unix only.
 #[cfg(test)]
+#[path = "deletion_bounds_tests.rs"]
+mod bounds_tests;
+
+#[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+    #[test]
+    fn tsk1002_unread_command_output_is_not_a_literal_deletion_path() {
+        for line in [
+            "rm -rf \"$(git rev-parse --show-toplevel)\"",
+            "rm -rf `git rev-parse --show-toplevel`",
+            "rm -rf \"$(git rev-parse --show-toplevel)/.git\"",
+        ] {
+            let finding =
+                super::composed_deletion_in(line, Some(std::path::Path::new("/fixture"))).unwrap();
+            assert!(finding.unproven.is_some(), "{line}");
+        }
+    }
+
+    #[test]
+    fn bounded_shell_readings_keep_literal_deletions_and_repeated_controls() {
+        let repeated = std::iter::repeat_n("eval true", 80)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(super::composed_deletion_in(&format!("{repeated}; rm -rf build"), None).is_none());
+        let distinct = (0..20)
+            .map(|n| format!("eval 'n={n}'"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let nested = (0..6).fold("rm -rf /".to_string(), |body, _| {
+            format!("eval '{}'", body.replace('\'', "'\\''"))
+        });
+        for tail in [
+            "eval 'rm -rf /'",
+            "sh -c 'rm -rf /'",
+            "rm -rf $n",
+            nested.as_str(),
+        ] {
+            assert!(
+                super::composed_deletion_in(&format!("{distinct}; {tail}"), None).is_some(),
+                "{tail}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_directory_alternatives_preserve_late_deletions() {
+        let chain = (0..80)
+            .map(|n| format!("cd d{n}"))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        for tail in ["rm -rf /", "rm -rf $PWD/x", "rm -rf relative"] {
+            assert!(
+                super::composed_deletion_in(&format!("{chain}; {tail}"), None).is_some(),
+                "{tail}"
+            );
+        }
+    }
+
     // R22-DELETION-TESTS-BEGIN
     #[test]
     fn r22_glob_entry_failure_is_unproven() {
@@ -7776,12 +8611,14 @@ mod tests {
                 rooted_unplaced: false,
                 found: None,
                 depth: 0,
+                nesting: 0,
                 pipe_input: None,
                 jumps: vec![],
                 expanding: vec![],
                 traps: vec![],
                 in_trap: false,
                 status: None,
+                script_states: Vec::new(),
             };
             let output = std::process::Command::new("/bin/bash")
                 .args(["--noprofile", "--norc", "-c", "printf '%s' ~/ordinary"])
@@ -8096,12 +8933,14 @@ mod tests {
             rooted_unplaced: false,
             found: None,
             depth: 0,
+            nesting: 0,
             pipe_input: None,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
             in_trap: false,
             status: None,
+            script_states: Vec::new(),
         };
         let fed = reader.producer_values(&super::Parser::parse("echo x"), &super::State::start());
         assert!(fed.complete);
@@ -8147,12 +8986,14 @@ mod tests {
             rooted_unplaced: false,
             found: None,
             depth: 0,
+            nesting: 0,
             pipe_input: None,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
             in_trap: false,
             status: None,
+            script_states: Vec::new(),
         };
         let input = super::Fed {
             complete: true,
@@ -8197,12 +9038,14 @@ mod tests {
             rooted_unplaced: false,
             found: None,
             depth: 0,
+            nesting: 0,
             pipe_input: None,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
             in_trap: false,
             status: None,
+            script_states: Vec::new(),
         };
         for expression in ["x\u{a0}=1", "x[0]\u{a0}=1", "+\u{a0}+x"] {
             let mut state = super::State::start();
@@ -8513,6 +9356,7 @@ mod tests {
             Node::Coproc(_, body) => ("coproc", vec![body.as_ref()]),
             Node::Cond(_) => ("conditional", Vec::new()),
             Node::Arith(_) => ("arithmetic", Vec::new()),
+            Node::Readings(readings) => ("readings", readings.iter().collect()),
             Node::Redirected(inner, _) => ("redirected", vec![inner.as_ref()]),
             Node::Unknown(_, inner) => ("unknown", vec![inner.as_ref()]),
         }
@@ -8627,6 +9471,12 @@ mod tests {
             Expect::Protected,
         ),
         (
+            "readings",
+            "readings",
+            "D=$((echo /) ); rm -rf \"$D\"",
+            Expect::Protected,
+        ),
+        (
             "redirected",
             "redirected",
             "{ cd /; } >/dev/null; rm -rf *",
@@ -8672,6 +9522,7 @@ mod tests {
             "coproc",
             "conditional",
             "arithmetic",
+            "readings",
             "redirected",
             "unknown",
         ];
@@ -9115,3 +9966,8 @@ mod tests {
         assert!(super::real_prefix(std::path::Path::new("/tmp/cafe/x")).is_some());
     }
 }
+
+// TSK-1375: text a shell may read more than one way.
+#[cfg(test)]
+#[path = "deletion_readings_tests.rs"]
+mod readings_tests;

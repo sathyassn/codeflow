@@ -6,7 +6,7 @@ use codeflow_core::testing::gate::{
     gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
 };
 use codeflow_core::testing::gate_guard::{
-    acquire_full_gate_lock, check_cargo_target_dir, lock_dirs, GateLock,
+    acquire_gate_lock, check_cargo_target_dir, gate_lock_status, lock_dirs, GateLock,
 };
 use codeflow_core::testing::setup::prompt::TerminalPromptProvider;
 use codeflow_core::testing::setup::{self, SetupError, SetupResult};
@@ -17,21 +17,34 @@ pub struct TestArgs {
     #[command(subcommand)]
     pub command: Option<TestCommand>,
 
-    /// Test mode: full (default), quick, or essential. `quick` is an alias
-    /// for `essential` — the lighter mode shipped test-configs define.
+    /// Full (default) and essential take a heavy-run slot for the run; quick takes
+    /// one when its first heavy target starts. Heavy runs in any worktree or project
+    /// run at once; past the host's job budget a run uses fewer jobs.
+    /// Undeclared quick targets use `execution.quick_default_class` (light by default).
+    /// Only a `host_exclusive` target runs alone; while one holds the host, heavy
+    /// work waits up to `--wait-seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
+    /// With no quick targets, quick uses essential targets, heavy unless declared light.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
-    /// Exit non-zero when no targets executed or candidate evidence skipped a target.
+    /// Seconds heavy work waits for a host-exclusive target, or a
+    /// host-exclusive target for other heavy runs. Default zero.
+    #[arg(long, value_name = "SECONDS")]
+    pub wait_seconds: Option<u64>,
+
+    /// Read recorded lock holders and their start times without running targets.
+    /// Records are snapshots; admission still checks the OS lock and live target groups.
+    #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only", "config", "wait_seconds"])]
+    pub lock_status: bool,
+
+    /// Exit non-zero when no targets executed or a requested target was skipped.
     /// Explicit --only and mode exclusions are not skips.
     /// Use for scripted callers that require execution evidence.
     #[arg(long)]
     pub strict: bool,
 
-    /// Compare the entire candidate delta with a recorded green base.
-    /// Without --since, full mode executes every target.
-    /// Default: the merge base of HEAD and the task's declared integration target.
-    /// An unproven base conservatively runs every target.
+    /// Accepted and narrows nothing: no local run record earns selection
+    /// credit (ADR-0089), so every eligible target runs.
     #[arg(long, conflicts_with = "all")]
     pub since: Option<String>,
 
@@ -51,6 +64,14 @@ pub struct TestArgs {
         conflicts_with = "since"
     )]
     pub only: Vec<String>,
+
+    /// Read the targets from this test config file instead of
+    /// `.codeflow/test-config.json`, with no fallback to it or to stack
+    /// detection; targets still run in this repository. A missing path, a
+    /// symbolic link or a file that is not regular or readable is refused
+    /// before any target starts.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -84,8 +105,58 @@ pub struct SetupArgs {
     pub add_target: bool,
 }
 
+/// A gate flag that `codeflow test setup` cannot honour.
+fn setup_conflict(args: &TestArgs) -> Option<&'static str> {
+    if args.lock_status {
+        Some("--lock-status")
+    } else if args.config.is_some() {
+        Some("--config (setup writes .codeflow/test-config.json)")
+    } else {
+        None
+    }
+}
+
+fn print_target(r: &codeflow_core::testing::gate::GateTargetResult) {
+    let verdict = if r.passed() {
+        "ok".to_string()
+    } else {
+        r.supervision
+            .as_ref()
+            .filter(|info| info.status == r.status)
+            .map_or_else(
+                || r.status.label().to_string(),
+                codeflow_core::testing::runner::deadline::Supervision::detail,
+            )
+    };
+    // A target name is checkout text, shown as one line after a
+    // fixed label (TSK-388).
+    println!(
+        "target {}: {verdict} (exit {}, {} ms)",
+        codeflow_core::git::display_text(&r.name),
+        r.exit_code,
+        r.duration_ms
+    );
+    if let Some(reason) = r
+        .supervision
+        .as_ref()
+        .and_then(|s| s.early_stall_unavailable.as_ref())
+    {
+        println!(
+            "  early stall unavailable: {}",
+            codeflow_core::git::display_text(reason)
+        );
+    }
+    if !r.passed() {
+        print_failure(r);
+    }
+}
+
 pub fn run(args: &TestArgs) -> i32 {
     if let Some(TestCommand::Setup(setup_args)) = &args.command {
+        if let Some(flag) = setup_conflict(args) {
+            eprintln!("codeflow test: {flag} cannot be combined with setup");
+            return 2;
+        }
         return run_setup(setup_args);
     }
 
@@ -96,7 +167,10 @@ pub fn run(args: &TestArgs) -> i32 {
             return 2;
         }
     };
-    let _lock = match guard_gate(&root, &args.mode) {
+    if args.lock_status {
+        return print_lock_status(&root);
+    }
+    let _lock = match guard_gate(&root, &args.mode, args.config.as_deref(), args.wait_seconds) {
         Ok(lock) => lock,
         Err(message) => {
             eprintln!("codeflow test: refused: {message}");
@@ -111,33 +185,11 @@ pub fn run(args: &TestArgs) -> i32 {
             since: args.since.clone(),
             all: args.all,
             only: args.only.clone(),
+            config: args.config.clone(),
+            heavy_wait_seconds: args.wait_seconds,
         },
     ) {
-        Ok(GateOutcome::NoTargets { reason }) => {
-            // AC #7: no stack = loud no-op. The banner is unmissable in both
-            // modes. Default exits 0 (bootstrap/early-setup stays green);
-            // `--strict` exits non-zero so a scripted/unattended caller cannot
-            // mistake "ran nothing" for "passed".
-            eprintln!("==============================================================");
-            eprintln!(
-                "WARNING: codeflow test had nothing to run — {reason}.",
-                reason = crate::cmd::shown(&reason)
-            );
-            eprintln!("test gate: executed 0; skipped 0; not complete");
-            eprintln!("         No tests were executed. This is NOT a green test run.");
-            eprintln!("         Configure .codeflow/test-config.json or add a");
-            eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
-            if args.strict {
-                eprintln!("         --strict: exiting non-zero so no script reads this as green.");
-            }
-            eprintln!("==============================================================");
-            // Distinct from a failed gate (exit 1): 2 == "nothing ran".
-            if args.strict {
-                2
-            } else {
-                0
-            }
-        }
+        Ok(GateOutcome::NoTargets { reason }) => nothing_ran(args, &reason),
         Ok(GateOutcome::Completed {
             results,
             passed,
@@ -145,20 +197,10 @@ pub fn run(args: &TestArgs) -> i32 {
             skipped,
             evidence_skipped,
             complete,
+            ..
         }) => {
-            for r in &results {
-                let verdict = if r.passed() { "ok" } else { "FAILED" };
-                // A target name is checkout text, shown as one line after a
-                // fixed label (TSK-388).
-                println!(
-                    "target {}: {verdict} (exit {}, {} ms)",
-                    codeflow_core::git::display_text(&r.name),
-                    r.exit_code,
-                    r.duration_ms
-                );
-                if !r.passed() {
-                    print_failure(r);
-                }
+            for result in &results {
+                print_target(result);
             }
             print_coverage_report(&coverage);
             let verdict = if !passed {
@@ -187,6 +229,24 @@ pub fn run(args: &TestArgs) -> i32 {
     }
 }
 
+fn print_lock_status(root: &std::path::Path) -> i32 {
+    match gate_lock_status(root) {
+        Ok(lines) => {
+            if lines.is_empty() {
+                println!("no gate lock locations");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("codeflow test: {error}");
+            1
+        }
+    }
+}
+
 fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static str {
     if executed == 0 || skipped != 0 {
         "; not complete"
@@ -197,34 +257,91 @@ fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static 
     }
 }
 
+/// The loud no-op of a run with nothing to execute (AC #7): a banner in
+/// every mode, exit 0 by default (bootstrap stays green) and 2 under
+/// `--strict`, so a scripted caller never reads "ran nothing" as passed.
+fn nothing_ran(args: &TestArgs, reason: &str) -> i32 {
+    // AC #7: no stack = loud no-op. The banner is unmissable in both
+    // modes. Default exits 0 (bootstrap/early-setup stays green);
+    // `--strict` exits non-zero so a scripted/unattended caller cannot
+    // mistake "ran nothing" for "passed".
+    eprintln!("==============================================================");
+    eprintln!(
+        "WARNING: codeflow test had nothing to run — {reason}.",
+        reason = crate::cmd::shown(&reason)
+    );
+    eprintln!("test gate: executed 0; skipped 0; not complete");
+    eprintln!("         No tests were executed. This is NOT a green test run.");
+    if let Some(config) = &args.config {
+        eprintln!(
+            "         Add a target for this mode to {}, the config --config names.",
+            crate::cmd::shown(&config.display().to_string())
+        );
+    } else {
+        eprintln!("         Configure .codeflow/test-config.json or add a");
+        eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
+    }
+    if args.strict {
+        eprintln!("         --strict: exiting non-zero so no script reads this as green.");
+    }
+    eprintln!("==============================================================");
+    // Distinct from a failed gate (exit 1): 2 == "nothing ran".
+    if args.strict {
+        2
+    } else {
+        0
+    }
+}
+
 /// TSK-134 guards, checked before any target runs: a gate that runs cargo
-/// warns about a `CARGO_TARGET_DIR` outside the worktree, and a full gate
-/// takes the machine-wide gate lock (held until the returned value drops) or
-/// refuses naming the gate that holds it.
-fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, String> {
-    if gate_uses_cargo(root, mode) {
+/// warns about a `CARGO_TARGET_DIR` outside the worktree, and essential or
+/// full mode takes a heavy-run slot (held until the returned value drops).
+/// Other heavy runs never refuse it (TSK-1145); a host-exclusive target
+/// holding the host makes it wait up to the run's bound, then refuse.
+fn guard_gate(
+    root: &std::path::Path,
+    mode: &str,
+    config: Option<&std::path::Path>,
+    wait_seconds: Option<u64>,
+) -> Result<Option<GateLock>, String> {
+    if gate_uses_cargo(root, mode, config) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
         let value = std::env::var_os("CARGO_TARGET_DIR");
         if let Some(warning) = check_cargo_target_dir(root, &cwd, value.as_deref()) {
             eprintln!("codeflow test: warning: {warning}");
         }
     }
-    if mode != "full" {
+    if mode != "full" && mode != "essential" {
         return Ok(None);
     }
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| {
-        let mut message = held.to_string();
-        if message.contains("gate lock unavailable") {
-            message.push_str(
-                "; `codeflow doctor --check permissions` names each directory the gate must write, \
-                 and inside the Claude Code sandbox the one to add to `sandbox.filesystem.allowWrite`",
-            );
+    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or(0));
+    let start = std::time::Instant::now();
+    let mut announced = false;
+    let lock = loop {
+        match acquire_gate_lock(&dirs, root, mode) {
+            Ok(lock) => break lock,
+            Err(held) if held.exclusive && start.elapsed() < wait => {
+                if !announced {
+                    announced = true;
+                    eprintln!("codeflow test: waiting up to {}s: {held}", wait.as_secs());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(held) => {
+                let mut message = held.to_string();
+                if message.contains("gate lock unavailable") {
+                    message.push_str(
+                        "; `codeflow doctor --check permissions` names each directory the gate must write, \
+                         and inside the Claude Code sandbox the one to add to `sandbox.filesystem.allowWrite`",
+                    );
+                }
+                return Err(message);
+            }
         }
-        message
-    })?;
+    };
     for note in &lock.notes {
         eprintln!("codeflow test: {note}");
     }

@@ -525,6 +525,9 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            host_exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Custom,
             modes,
             report: Some(ReportConfig {
@@ -556,6 +559,8 @@ mod tests {
             ci_skip: None,
             ci_skip_reason: None,
             timeout_seconds: None,
+            stall_timeout_seconds: None,
+            cleanup_grace_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),
@@ -564,6 +569,9 @@ mod tests {
 
     fn make_run_result(name: &str) -> TargetRunResult {
         TargetRunResult {
+            supervision: None,
+            termination_unconfirmed: false,
+            error: None,
             evidence: None,
             target_name: name.to_string(),
             exit_code: 0,
@@ -952,6 +960,9 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            host_exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes,
             report: None,
@@ -965,6 +976,8 @@ mod tests {
             ci_skip: None,
             ci_skip_reason: None,
             timeout_seconds: None,
+            stall_timeout_seconds: None,
+            cleanup_grace_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),
@@ -974,6 +987,9 @@ mod tests {
             name: "rust-core".to_string(),
             mode: "full".to_string(),
             run_result: TargetRunResult {
+                supervision: None,
+                termination_unconfirmed: false,
+                error: None,
                 evidence: None,
                 target_name: "rust-core".to_string(),
                 exit_code: 0,

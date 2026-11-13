@@ -355,7 +355,8 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
 /// line they stop at, and the edit that clears it (`codeflow update --pin`
 /// keeps the project's own lines, so it cannot).
 fn unreadable(prefix: &str, state: &str, reason: &str) -> PinReport {
-    let (number, line) = unread_line(state).unwrap_or((0, "an unnamed line".to_string()));
+    let (number, line) =
+        unread_line(state).unwrap_or((0, crate::scaffold::Shown::fixed("an unnamed line")));
     PinReport {
         status: Status::Warn(
             remedy::DOCTOR_CI_DIGEST_LINE.with(&[("line", number.to_string().as_str())]),
@@ -649,8 +650,12 @@ fn policy_keys(text: &str) -> Result<BTreeSet<String>, String> {
         }
     }
     let mut out = BTreeSet::new();
-    let value = serde_json::from_str::<serde_json::Value>(text)
-        .map_err(|error| format!("cannot parse policy: {error}"))?;
+    let value = serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
+        format!(
+            "cannot parse policy: {}",
+            crate::scaffold::json_error(&error)
+        )
+    })?;
     walk(&value, "", &mut out);
     Ok(out)
 }
@@ -807,7 +812,7 @@ mod tests {
         assert!(
             shown
                 .message
-                .contains("\"10.0\" is not a parseable version"),
+                .contains("scaffold_version is not a parseable version"),
             "{}",
             shown.message
         );
@@ -818,7 +823,7 @@ mod tests {
         let shown = report(dir.path());
         assert!(shown
             .message
-            .contains("\"3.10\" is not a parseable version"));
+            .contains("scaffold_version is not a parseable version"));
     }
 
     #[test]
@@ -830,7 +835,7 @@ mod tests {
         assert!(
             shown
                 .message
-                .contains("\"10.0\" is not a parseable version"),
+                .contains("scaffold_version is not a parseable version"),
             "{}",
             shown.message
         );
@@ -844,7 +849,7 @@ mod tests {
         assert!(
             shown
                 .message
-                .contains("\"10.0\" is not a parseable version"),
+                .contains("scaffold_version is not a parseable version"),
             "{}",
             shown.message
         );

@@ -45,6 +45,26 @@ fn assert_passes(root: &Path, which: &str, shell: &str) {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clears_secret_selection() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    write(root, "src/public.txt", "token\n");
+    std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
+    let printed = refused(
+        root,
+        "exec-guard",
+        "grep -r token loop",
+        "security.secret_reads",
+        "SECRET_SELECTION",
+    );
+    assert!(printed.contains("narrow the search roots"));
+    assert_passes(root, "exec-guard", "grep -r token src");
+    let output = run("grep", root, &["-r", "token", "src"]);
+    assert!(String::from_utf8(output.stdout).unwrap().contains("token"));
+}
+
 /// The block a guard prints for `bad`, checked against the row.
 fn refused(root: &Path, which: &str, bad: &str, finding: &str, row: &str) -> String {
     let out = guard(root, which, bad);
@@ -69,10 +89,16 @@ fn with_origin() -> tempfile::TempDir {
     // Scratch clones and state live beside the work, outside its status.
     write(root, ".git/info/exclude", ".dest.git/\n.other/\n");
     let dest = root.join(".dest.git");
-    git(root, &["init", "-q", "--bare", dest.to_str().unwrap()]);
+    git(
+        root,
+        &["init", "-q", "--bare", "-b", "main", dest.to_str().unwrap()],
+    );
     git(root, &["remote", "add", "origin", dest.to_str().unwrap()]);
     git(root, &["push", "-q", "origin", "main", "feat/x"]);
     git(root, &["fetch", "-q", "origin"]);
+    // TSK-1077: the remote's default branch is the policy authority; a
+    // fetch records it on git 2.48 or later, so set it on every version.
+    git(root, &["remote", "set-head", "origin", "main"]);
     dir
 }
 

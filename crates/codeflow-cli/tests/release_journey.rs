@@ -195,7 +195,9 @@ fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
     }
     let own = std::fs::read_to_string(root.join(".github/workflows/codeflow-release.yml")).unwrap();
     for required in [
-        "branches: [main, \"integration/**\"]",
+        // Permanent placement (operator ruling, 2026-11-11): no run on a
+        // push to an integration line.
+        "branches: [main]\n",
         "types: [opened, synchronize, reopened, edited]",
         "name: release impact",
         "python3 scripts/release.py check-pr",
@@ -334,6 +336,8 @@ impl Adopted {
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
         git(&root, &["fetch", "-q", "origin"]);
+        // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+        git(&root, &["remote", "set-head", "origin", "-a"]);
         Self { _dir: dir, root }
     }
 

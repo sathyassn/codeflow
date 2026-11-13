@@ -70,6 +70,264 @@ pub fn slashed(path: &Path) -> String {
     }
 }
 
+/// Win32 accepts backslash separators and ignores trailing dots and spaces
+/// in ordinary path components. Verbatim drive prefixes retain the same
+/// protected-name judgment. Other hosts retain those literal bytes.
+#[must_use]
+pub(crate) fn filesystem_spelling(text: &str) -> String {
+    if !cfg!(windows) {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let text = if bytes
+        .get(..4)
+        .is_some_and(|prefix| matches!(prefix, [b'/' | b'\\', b'/' | b'\\', b'?', b'/' | b'\\']))
+        && bytes.get(4).is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(5) == Some(&b':')
+        && bytes.get(6).is_some_and(|c| matches!(c, b'/' | b'\\'))
+    {
+        &text[4..]
+    } else {
+        text
+    };
+    text.replace('\\', "/")
+        .split('/')
+        .map(|part| {
+            if matches!(part, "." | "..") {
+                part
+            } else {
+                part.trim_end_matches(['.', ' '])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Namespaces and streams need a mapping before a guard can compare names.
+/// A namespace spelling becomes the drive or UNC path Windows opens
+/// ([`namespace_spelling`]); one that names no file path refuses. Existing
+/// 8.3 short-name components resolve through the kernel, whose final path
+/// names each entry's long name. A short-looking component that does not
+/// exist refuses while an entry could still be created there, because a
+/// command earlier on the line could create the entry it aliases. It stays
+/// literal only when nothing can exist at that path. Unreadable components
+/// refuse.
+pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
+    if !cfg!(windows) {
+        return Ok(path.to_path_buf());
+    }
+    let text = path
+        .to_str()
+        .ok_or("cannot inspect a Windows path as text")?;
+    let plain = match namespace_spelling(&text.replace('\\', "/"))? {
+        Some(mapped) => PathBuf::from(mapped.replace('/', "\\")),
+        None => without_verbatim(path.to_path_buf()),
+    };
+    let spelling = plain
+        .to_str()
+        .ok_or("cannot inspect a Windows path as text")?
+        .replace('\\', "/");
+    let base = without_streams(&spelling);
+    let (plain, spelling) = if base == spelling {
+        (plain, spelling)
+    } else {
+        (PathBuf::from(base.replace('/', "\\")), base)
+    };
+    if !has_short_component(&spelling) {
+        return Ok(plain);
+    }
+    map_short_components(&plain)
+}
+
+/// The path Windows opens for a namespace spelling, as text with `/`
+/// separators: `//?/UNC/h/s/x` and `//./UNC/h/s/x` open `//h/s/x`,
+/// `//?/C:/x` and `//./C:/x` open `C:/x`, and an administrative share
+/// `//<any host>/C$/x` is read as the drive path `C:/x`. Any host: the local
+/// machine answers to names, addresses and aliases a guard cannot list, so
+/// the share name decides, never the host name a command chooses. `None`
+/// when `text` is no namespace or UNC spelling. Another device or verbatim
+/// namespace (`//./pipe/`, `//?/GLOBALROOT/`, `//?/Volume{...}/`) and
+/// alternate stream syntax (`::$DATA`, `:$I30:$INDEX_ALLOCATION`, which open
+/// the file or directory itself) refuse.
+pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("::") || lower.contains(":$") {
+        return Err("cannot map a Windows alternate-stream path".into());
+    }
+    let drive = |tail: &str| {
+        let bytes = tail.as_bytes();
+        (bytes.len() >= 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes.get(2).is_none_or(|&byte| byte == b'/'))
+        .then(|| tail.to_string())
+    };
+    // `\??\` is the NT object namespace, which Win32 opens without changing
+    // a name, as it opens `\\?\` (review 01).
+    let text = &if lower.starts_with("/??/") {
+        format!("//?/{}", &text[4..])
+    } else {
+        text.to_string()
+    };
+    let lower = text.to_ascii_lowercase();
+    // A verbatim path keeps names Win32 would change elsewhere: a trailing
+    // dot or space, `.` and `..`, an empty name, a device name. The ordinary
+    // path it would map to can name another file, so it refuses (review 01,
+    // B6). A device path (`\\.\`) is normalized like an ordinary path.
+    if lower.starts_with("//?/") && !verbatim_names_survive(&text[4..]) {
+        return Err(
+            "cannot map a verbatim path whose names Windows reads differently elsewhere".into(),
+        );
+    }
+    let unc = if lower.starts_with("//?/unc/") || lower.starts_with("//./unc/") {
+        format!("//{}", &text[8..])
+    } else if lower.starts_with("//?/") || lower.starts_with("//./") {
+        return drive(&text[4..])
+            .map(Some)
+            .ok_or_else(|| "cannot map a Windows device or verbatim namespace path".into());
+    } else if lower.starts_with("//") {
+        text.clone()
+    } else {
+        return Ok(None);
+    };
+    let mut parts = unc[2..].splitn(3, '/');
+    let (host, share, rest) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
+    let admin = share.len() == 2
+        && share.as_bytes()[0].is_ascii_alphabetic()
+        && share.as_bytes()[1] == b'$';
+    Ok(Some(if admin && !host.is_empty() {
+        format!("{}:/{rest}", &share[..1])
+    } else {
+        unc
+    }))
+}
+
+/// Whether every name after a verbatim prefix reads the same in an ordinary
+/// path: none is empty (a final separator aside), `.` or `..`, ends in a dot
+/// or space, or is a device name (`CON`, `NUL`, `COM1`, `LPT1`, with any
+/// extension). The first name is the drive or `UNC`.
+fn verbatim_names_survive(rest: &str) -> bool {
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.iter().enumerate().skip(1).all(|(at, part)| {
+        if part.is_empty() {
+            return at + 1 == parts.len();
+        }
+        // The name before its first dot, where spaces after a device name
+        // still name the device (`CON .txt`).
+        let stem = part.split('.').next().unwrap_or(part).to_ascii_uppercase();
+        let named = |device: &str| {
+            stem.strip_prefix(device)
+                .is_some_and(|rest| rest.bytes().all(|byte| byte == b' '))
+        };
+        let device = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+            .into_iter()
+            .any(named)
+            || ["COM", "LPT"]
+                .into_iter()
+                .flat_map(|prefix| (0..=9).map(move |digit| format!("{prefix}{digit}")))
+                .any(|device| named(&device));
+        !matches!(*part, "." | "..") && !part.ends_with(['.', ' ']) && !device
+    })
+}
+
+/// `text` (with `/` separators) with each named stream suffix removed: a
+/// name other than a drive ends at its first `:`, so `auth.json:notes`
+/// is judged as `auth.json`, the file whose stream it opens (review 01).
+/// Stream type syntax (`::$DATA`, `:$I30`) refuses earlier.
+pub(crate) fn without_streams(text: &str) -> String {
+    text.split('/')
+        .enumerate()
+        .map(|(at, part)| {
+            let bytes = part.as_bytes();
+            let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+            // A drive (`C:`, or drive-relative `C:name` first) is no stream.
+            if drive && (at == 0 || bytes.len() == 2) {
+                part
+            } else {
+                part.split(':').next().unwrap_or(part)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Whether a component of `text` (with `/` separators) can be an 8.3 short
+/// name alias: a base of at most eight characters ending in `~` and digits,
+/// an optional extension of at most three, and no character an 8.3 name
+/// cannot hold (a space, `"*+,/:;<=>?[\]|` or a control character). Win32
+/// drops trailing dots and spaces before the lookup. A component of any
+/// other shape is never resolved as an alias, so it needs no mapping.
+pub(crate) fn has_short_component(text: &str) -> bool {
+    text.split('/').any(short_name_shape)
+}
+
+fn short_name_shape(part: &str) -> bool {
+    let part = part.trim_end_matches(['.', ' ']);
+    let (base, extension) = part.split_once('.').unwrap_or((part, ""));
+    base.rsplit_once('~').is_some_and(|(_, number)| {
+        !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
+    }) && base.chars().count() <= 8
+        && extension.chars().count() <= 3
+        && !extension.contains('.')
+        && !part
+            .chars()
+            .any(|ch| ch.is_control() || " \"*+,/:;<=>?[\\]|".contains(ch))
+}
+
+/// [`guard_path`]'s short-name mapping, without the platform check so every
+/// host can test it.
+fn map_short_components(path: &Path) -> Result<PathBuf, String> {
+    let mut real = PathBuf::new();
+    // Set once a component can hold no entry: nothing below it exists or
+    // can be created, so the rest of the path stays as written.
+    let mut impossible = false;
+    for part in path.components() {
+        if matches!(part, std::path::Component::Normal(_))
+            && matches!(
+                Path::new(part.as_os_str()).components().next(),
+                Some(std::path::Component::Prefix(_))
+            )
+        {
+            // `quoted/C:/tail`: a later component that reads alone as a
+            // drive must not replace the path before it.
+            let mut relative = std::ffi::OsString::from(".");
+            relative.push(std::path::MAIN_SEPARATOR_STR);
+            relative.push(part.as_os_str());
+            real.push(relative);
+        } else {
+            real.push(part.as_os_str());
+        }
+        if impossible {
+            continue;
+        }
+        let part = part
+            .as_os_str()
+            .to_str()
+            .ok_or("cannot inspect a Windows path component as text")?;
+        if !has_short_component(&part.replace('\\', "/")) {
+            continue;
+        }
+        match crate::absence::entry(&real).map_err(|_| "cannot inspect a Windows short filename")? {
+            // The kernel's final path may still contain `~1`: an entry can
+            // have that literal long name rather than an 8.3 alias.
+            crate::absence::Entry::Exists => {
+                real = canonicalize(&real).map_err(|_| "cannot map a Windows short filename")?;
+            }
+            crate::absence::Entry::Impossible => impossible = true,
+            crate::absence::Entry::Creatable => {
+                return Err(
+                    "cannot map a Windows short filename that a command could still create".into(),
+                );
+            }
+        }
+    }
+    Ok(real)
+}
+
 /// The user's home directory as the guards and doctor read it: the first
 /// of [`user_homes`].
 #[must_use]
@@ -177,6 +435,156 @@ pub fn git_bash_drive_text(text: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// TSK-1002 Windows repair (hosted run 40602309629): a literal
+    /// `RUNNER~1` directory is its own long name, and a missing name beneath
+    /// a file can never be created; both stay as written.
+    #[test]
+    fn short_mapping_keeps_literal_long_names_and_impossible_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonicalize(temp.path()).unwrap();
+        let literal = root.join("RUNNER~1");
+        std::fs::create_dir(&literal).unwrap();
+        assert_eq!(map_short_components(&literal).unwrap(), literal);
+        let prospective = literal.join("new-file");
+        assert_eq!(map_short_components(&prospective).unwrap(), prospective);
+        std::fs::write(root.join("file"), "x").unwrap();
+        let below_file = root.join("file/HEAD~1/leaf");
+        assert_eq!(map_short_components(&below_file).unwrap(), below_file);
+    }
+
+    /// A short name that does not exist yet could alias an entry a command
+    /// earlier on the line creates (`mkdir .claude && ... CLAUDE~1/x`), so
+    /// the mapper refuses it rather than judging the literal spelling.
+    #[test]
+    fn short_mapping_refuses_names_a_command_could_create() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonicalize(temp.path()).unwrap();
+        for word in ["HEAD~1", "CLAUDE~1/settings.json", "missing/RUNNER~1/leaf"] {
+            assert!(map_short_components(&root.join(word)).is_err(), "{word}");
+        }
+    }
+
+    /// The kernel maps an existing alias; a symlink models it on Unix. A
+    /// dangling alias cannot be mapped and refuses.
+    #[cfg(unix)]
+    #[test]
+    fn short_mapping_resolves_aliases_and_refuses_dangling_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonicalize(temp.path()).unwrap();
+        let real = root.join("long directory");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("ALIAS~1")).unwrap();
+        assert_eq!(
+            map_short_components(&root.join("ALIAS~1/new-file")).unwrap(),
+            real.join("new-file")
+        );
+        std::os::unix::fs::symlink(root.join("missing"), root.join("BROKEN~1")).unwrap();
+        assert!(map_short_components(&root.join("BROKEN~1/new-file")).is_err());
+    }
+
+    /// TSK-1002 UNC finding: every namespace spelling of a drive path is
+    /// that drive path, an administrative share on any host is its drive,
+    /// and other UNC paths stay UNC so a UNC home or cwd keeps working.
+    #[test]
+    fn namespace_spellings_name_the_path_windows_opens() {
+        for (text, opened) in [
+            ("//?/C:/Users/u/x", "C:/Users/u/x"),
+            ("//./C:/Users/u/x", "C:/Users/u/x"),
+            ("//localhost/C$/Users/u/x", "C:/Users/u/x"),
+            ("//127.0.0.1/c$/Users/u/x", "c:/Users/u/x"),
+            ("//build-host.example/D$/repo", "D:/repo"),
+            ("//?/UNC/localhost/C$/Users/u/x", "C:/Users/u/x"),
+            ("//./UNC/localhost/C$/Users/u/x", "C:/Users/u/x"),
+            ("//?/unc/server/share/x", "//server/share/x"),
+            ("//server/homes/u", "//server/homes/u"),
+            ("//server/share$/x", "//server/share$/x"),
+            // Review 01: the NT object namespace opens as `\\?\` does.
+            ("/??/C:/Users/u/x", "C:/Users/u/x"),
+            ("/??/UNC/server/share/x", "//server/share/x"),
+            // A device path is normalized like an ordinary path.
+            ("//./C:/Users/u/public /x", "C:/Users/u/public /x"),
+        ] {
+            assert_eq!(
+                namespace_spelling(text).unwrap().as_deref(),
+                Some(opened),
+                "{text}"
+            );
+        }
+        for text in ["C:/Users/u/x", "relative/x", "/c/Users/u", "HEAD~1"] {
+            assert_eq!(namespace_spelling(text).unwrap(), None, "{text}");
+        }
+        for text in [
+            "//./pipe/x",
+            "//./PhysicalDrive0",
+            "//?/GLOBALROOT/Device/HarddiskVolume3/x",
+            "//?/Volume{1234}/x",
+            "C:/Users/u/.codex/auth.json::$DATA",
+            "C:/Users/u/.codex::$INDEX_ALLOCATION/auth.json",
+            "C:/Users/u/.codex:$I30:$INDEX_ALLOCATION/auth.json",
+            "//localhost/C$/Users/u/.codex::$DATA",
+            // Review 01, B6: verbatim names an ordinary path would change.
+            "//?/C:/Users/u/public /auth.json",
+            "//?/C:/Users/u/public./auth.json",
+            "//?/C:/Users/u/x/../.codex/auth.json",
+            "//?/C:/Users/u/./x",
+            "//?/C:/Users/u//x",
+            "//?/C:/Users/u/CON/x",
+            "//?/C:/Users/u/nul.txt",
+            "//?/UNC/server/share/x /y",
+            "/??/C:/Users/u/public /auth.json",
+        ] {
+            assert!(namespace_spelling(text).is_err(), "{text}");
+        }
+    }
+
+    /// Review 01: a named stream is judged as the file it belongs to; a
+    /// drive, also drive-relative, is no stream.
+    #[test]
+    fn stream_suffixes_name_their_file() {
+        for (text, base) in [
+            (
+                "C:/Users/u/.codex/auth.json:notes",
+                "C:/Users/u/.codex/auth.json",
+            ),
+            ("C:/Users/u/.git:x/config", "C:/Users/u/.git/config"),
+            ("C:x/y", "C:x/y"),
+            ("quoted/C:/tail", "quoted/C:/tail"),
+            ("//server/share/a:b", "//server/share/a"),
+        ] {
+            assert_eq!(without_streams(text), base, "{text}");
+        }
+    }
+
+    #[test]
+    fn short_component_shape_needs_digits_after_the_tilde() {
+        for text in [
+            "HEAD~1",
+            "c:/users/RUNNER~1/x",
+            "AUTH~1.JSO",
+            "a/b~12",
+            "HEAD~1. ",
+            "café~1",
+        ] {
+            assert!(has_short_component(text), "{text}");
+        }
+        // Hosted run 40623450157: a shell's `-c` string is one component
+        // with spaces, which no 8.3 alias can hold.
+        for text in [
+            "~",
+            "~/x",
+            "a~b",
+            "a~1b",
+            "RUN~1*",
+            "notes.txt~",
+            "git rebase -x 'cargo test' HEAD~3",
+            "verylongname~1",
+            "AUTH~1.JSON",
+            "a.b~1.c",
+        ] {
+            assert!(!has_short_component(text), "{text}");
+        }
+    }
+
     /// Issue 79: two homes whose names differ only in bytes that are not
     /// UTF-8 share one lossy spelling, but they are two homes.
     #[cfg(unix)]
@@ -274,12 +682,14 @@ mod tests {
                 without_verbatim(PathBuf::from(path)),
                 PathBuf::from(r"C:\Users\a\b.txt")
             );
+            assert_eq!(filesystem_spelling(path), "C:/Users/a/b.txt");
         }
         assert_eq!(
             without_verbatim(PathBuf::from(r"\\?\UNC\server\share\x")),
             PathBuf::from(r"\\?\UNC\server\share\x")
         );
         assert_eq!(slashed(Path::new(r"nested\AGENTS.md")), "nested/AGENTS.md");
+        assert_eq!(filesystem_spelling(r".git\config. "), ".git/config");
     }
 
     #[cfg(unix)]

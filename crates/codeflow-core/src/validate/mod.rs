@@ -197,9 +197,9 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         .extend(docs.issues.into_iter().map(|issue| issue.to_string()));
     report.notes = docs.notes;
     report.warnings.extend(docs.warnings);
-    report.issues.sort();
+    report.issues.sort_by(|a, b| crate::ids::compare_ids(a, b));
     report.issues.dedup();
-    report.warnings.sort();
+    report.warnings.sort_by(crate::remedy::Finding::by_text);
     report.warnings.dedup();
     report
 }
@@ -628,6 +628,7 @@ pub fn validate_task(
             message: "does not match EPC-NNN".into(),
         });
     }
+    errs.extend(task_parent_line_error(&data));
 
     // Enum validations.
     errs.extend(validate_enum(&data, "status", TASK_STATUS_VALUES));
@@ -663,8 +664,12 @@ pub fn validate_task(
     }
 
     warns.extend(deliverables_warning(&data, &body_text));
-
     let repo_root = record_repo_root(path);
+    let (outcome_errors, outcome_warnings) =
+        outcome_findings(&data, &body_text, repo_root.as_deref(), false);
+    errs.extend(outcome_errors);
+    warns.extend(outcome_warnings);
+
     errs.extend(awaiting_selection_errors(
         &data,
         &body_text,
@@ -703,6 +708,77 @@ fn deliverables_warning(
         message: "open task names no deliverables: no filled `## Deliverables` section and no path in its Description".into(),
         clearing: &crate::remedy::TASK_DELIVERABLES,
     })
+}
+
+/// The Outcome rule (TSK-435) for one task or epic, and an epic's
+/// Deliverables: a record whose status is terminal is never flagged; an
+/// open record that states its Outcome is clean. Otherwise the project's
+/// adoption marker decides: a record created after adoption (its uid not
+/// listed) is refused, a record present at adoption or one with no uid
+/// warns, a project with no marker warns, and a marker that cannot be
+/// read refuses. An epic created after adoption also warns when it names
+/// no Deliverables.
+fn outcome_findings(
+    data: &HashMap<String, serde_yaml::Value>,
+    body: &str,
+    repo_root: Option<&Path>,
+    epic: bool,
+) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
+    use crate::workgraph::outcome::{Adoption, MARKER_KEY};
+    use crate::workgraph::record_text::{epic_names_deliverables, outcome_line, OutcomeLine};
+    const RAW: &str = "a template token in an Outcome must be in a code span, such as `` `<who>` ``; a raw token, including an escaped, entity-encoded or respaced one, is refused";
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    if matches!(
+        get_string_field(data, "status").as_str(),
+        "complete" | "cancelled" | "archived"
+    ) {
+        return (errors, warnings);
+    }
+    let adoption = repo_root.map_or(Adoption::Unmarked, Adoption::of);
+    let uid = get_string_field(data, "uid");
+    let later = matches!(&adoption, Adoption::Marked(present) if !uid.is_empty() && !present.contains(&uid));
+    let line = outcome_line(body);
+    if line != OutcomeLine::Stated {
+        let raw = line == OutcomeLine::RawToken;
+        let warn = || ValidationWarning {
+            field: "outcome".into(),
+            message: if raw {
+                format!("open record has no filled `## Outcome` section: {RAW}")
+            } else {
+                "open record has no filled `## Outcome` section".into()
+            },
+            clearing: &crate::remedy::RECORD_OUTCOME,
+        };
+        match &adoption {
+            Adoption::Unreadable(why) => errors.push(ValidationError {
+                field: "outcome".into(),
+                message: format!(
+                    "cannot tell whether this record must state its `## Outcome`: {why}; fix `{MARKER_KEY}` in .codeflow/project.toml or add the section"
+                ),
+            }),
+            _ if later && raw => errors.push(ValidationError {
+                field: "outcome".into(),
+                message: format!(
+                    "record created after this project adopted the `## Outcome` section has a template token in its line: {RAW}, and fill the line as: after this merges, <who> can <do what>"
+                ),
+            }),
+            _ if later => errors.push(ValidationError {
+                field: "outcome".into(),
+                message: "record created after this project adopted the `## Outcome` section has none filled; add one line under `## Outcome`: after this merges, <who> can <do what>".into(),
+            }),
+            _ => warnings.push(warn()),
+        }
+    }
+    if epic && later && !epic_names_deliverables(body) {
+        warnings.push(ValidationWarning {
+            field: "deliverables".into(),
+            message: "open epic names no deliverables: no filled `## Deliverables` section".into(),
+            clearing: &crate::remedy::EPIC_DELIVERABLES,
+        });
+    }
+    (errors, warnings)
 }
 
 /// The repository root of a record under `project-management/`.
@@ -816,6 +892,18 @@ const EPIC_STATUS_VALUES: &[&str] = &[
 
 const EPIC_TEMPLATE_SENTINEL_FIELDS: &[&str] = &["id", "title"];
 
+/// A task record never carries `parent_line`: only an epic declares the
+/// line it lands on (TSK-1286).
+fn task_parent_line_error(data: &HashMap<String, serde_yaml::Value>) -> Option<ValidationError> {
+    let field = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
+    data.get(field)
+        .is_some_and(|value| !value.is_null())
+        .then(|| ValidationError {
+            field: field.into(),
+            message: "only an epic record declares the line it lands on; remove it from the task and declare it on the task's epic".into(),
+        })
+}
+
 /// Validate an epic markdown file at the given path.
 ///
 /// Returns blocking validation errors and non-blocking warnings.
@@ -842,7 +930,7 @@ pub fn validate_epic(
         EPIC_TEMPLATE_SENTINEL_FIELDS,
     ));
 
-    let (_id, identity_errors, identity_warnings) =
+    let (id, identity_errors, identity_warnings) =
         canonical_identity(path, &data, is_valid_epic_format_id, "EPC-NNN");
     errs.extend(identity_errors);
     warns.extend(identity_warnings);
@@ -866,6 +954,21 @@ pub fn validate_epic(
             message,
         });
     }
+    let parent_line = crate::workgraph::line_adoption::PARENT_LINE_FIELD;
+    if let Err(message) =
+        crate::workgraph::line_adoption::check_parent_line(&id, data.get(parent_line))
+    {
+        errs.push(ValidationError {
+            field: parent_line.into(),
+            message,
+        });
+    }
+
+    let body_text = String::from_utf8_lossy(&body);
+    let (outcome_errors, outcome_warnings) =
+        outcome_findings(&data, &body_text, record_repo_root(path).as_deref(), true);
+    errs.extend(outcome_errors);
+    warns.extend(outcome_warnings);
 
     Ok((errs, warns))
 }
@@ -954,6 +1057,9 @@ pub(crate) fn open_questions(
 }
 
 #[cfg(test)]
+mod outcome_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn r21_frontmatter_refuses_undecodable_target_identity() {
@@ -1016,6 +1122,9 @@ depends_on: []
 ## Description
 Some description
 
+## Outcome
+after this merges, a tester can check the task
+
 ## Deliverables
 - the change: `crates/codeflow-core/src/`
 
@@ -1035,6 +1144,9 @@ priority: "high"
 ---
 ## Summary
 Summary
+
+## Outcome
+after this merges, a tester can check the epic
 
 ## Acceptance Criteria
 Criteria
@@ -1373,6 +1485,23 @@ Criteria
         assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
     }
 
+    /// TSK-435: the Outcome template's `<who>` and `<do what>` are its own
+    /// tokens; a Deliverables entry naming them, quoted or not, still fills
+    /// the section.
+    #[test]
+    fn outcome_tokens_never_empty_a_deliverables_entry() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let wrong = wrong_cases(
+            &[
+                "- the <who> field reference: `docs/who.md`",
+                "- the `<do what>` guide: `docs/guide.md`",
+            ],
+            false,
+            section,
+        );
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
     /// sathyassn/codeflow#40: a complete or cancelled record never warns, so
     /// closed history stays quiet.
     #[test]
@@ -1649,6 +1778,63 @@ Criteria
                     "{entry}: expected {field}: {errors:?}"
                 ),
             }
+        }
+    }
+
+    /// TSK-1286: an epic's `parent_line` is null or an exact epic line name
+    /// other than the epic's own; a task record never carries it.
+    #[test]
+    fn parent_line_validation_accepts_only_another_epics_exact_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("EPC-022.md");
+        // (value, a text the parent_line error must hold, or None when valid)
+        for (value, named) in [
+            ("null", None),
+            ("integration/EPC-001-outcome", None),
+            ("integration/EPC-022-own", Some("own line")),
+            (
+                "origin/integration/EPC-001-outcome",
+                Some("not an integration line"),
+            ),
+            ("EPC-001", Some("not an integration line")),
+            ("integration/outcome", Some("names no epic")),
+            ("integration/EPC-001-", Some("has no slug")),
+            (
+                "'integration/EPC-001-bad name'",
+                Some("not a valid branch name"),
+            ),
+            ("integration/EPC-001-a..b", Some("not a valid branch name")),
+            (
+                "[integration/EPC-001-outcome]",
+                Some("must be an epic line name"),
+            ),
+        ] {
+            let content =
+                valid_epic_content().replacen("---\n", &format!("---\nparent_line: {value}\n"), 1);
+            std::fs::write(&path, content).unwrap();
+            let (errors, _) = validate_epic(&path, &ValidateOptions::default()).unwrap();
+            match named {
+                None => assert!(errors.is_empty(), "{value}: {errors:?}"),
+                Some(text) => assert!(
+                    errors
+                        .iter()
+                        .any(|e| e.field == "parent_line" && e.message.contains(text)),
+                    "{value}: expected {text}: {errors:?}"
+                ),
+            }
+        }
+        let task = dir.path().join("TSK-022.md");
+        for (value, refused) in [("integration/EPC-001-outcome", true), ("null", false)] {
+            let content =
+                valid_task_content().replacen("---\n", &format!("---\nparent_line: {value}\n"), 1);
+            std::fs::write(&task, content).unwrap();
+            let (errors, _) = validate_task(&task, &ValidateOptions::default()).unwrap();
+            assert_eq!(
+                errors.iter().any(|e| e.field == "parent_line"
+                    && e.message.contains("only an epic record declares")),
+                refused,
+                "{value}: {errors:?}"
+            );
         }
     }
 

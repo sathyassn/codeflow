@@ -20,6 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::file_lock::{locked_read, locked_rmw_typed_io};
+use crate::scaffold::Shown;
+use crate::shown;
 
 /// Registry schema version written by this binary.
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
@@ -88,12 +90,22 @@ pub fn qualified_bindings_path(home: &Path) -> PathBuf {
 
 /// A candidate project root whose `CodeFlow` state could not be inspected:
 /// the file read and the error, so a caller can name what to repair.
-#[derive(Debug)]
 pub struct RootUnreadable {
     /// The `.codeflow` file whose presence could not be established.
     pub path: PathBuf,
     /// The metadata error.
     pub error: std::io::Error,
+}
+
+impl std::fmt::Debug for RootUnreadable {
+    /// The path and the error's category: a custom I/O error's message can
+    /// hold any text (TSK-1029).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RootUnreadable")
+            .field("path", &self.path)
+            .field("error", &self.error.kind())
+            .finish()
+    }
 }
 
 impl std::fmt::Display for RootUnreadable {
@@ -228,10 +240,12 @@ pub fn read_project_info(repo_root: &Path) -> Result<ProjectInfo, String> {
     {
         let text = std::fs::read_to_string(&path)
             .map_err(|error| format!("cannot read project metadata: {error}"))?;
-        Some(
-            toml::from_str(&text)
-                .map_err(|error| format!("cannot parse project metadata: {error}"))?,
-        )
+        Some(toml::from_str(&text).map_err(|error| {
+            format!(
+                "cannot parse project metadata: {}",
+                crate::scaffold::toml_error(&text, &error)
+            )
+        })?)
     } else {
         None
     };
@@ -280,13 +294,32 @@ pub fn read_project_info(repo_root: &Path) -> Result<ProjectInfo, String> {
 ///
 /// Returns `Err(String)` when the lock cannot be acquired or the registry
 /// file cannot be read, parsed, or written for another reason.
-pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
-    if !is_initialized(repo_root).map_err(|error| error.to_string())? {
+pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, Shown> {
+    // Every command that keeps the registry prints this error, `codeflow
+    // update` among them, so it names paths, places and kinds only, never
+    // what the registry or the project metadata holds (TSK-1029).
+    if !is_initialized(repo_root).map_err(|error| {
+        shown!(
+            "cannot inspect {}: {}",
+            Shown::path(repo_root.join(".codeflow")),
+            Shown::io(&error)
+        )
+    })? {
         return Ok(false);
     }
-    let canonical = std::fs::canonicalize(repo_root)
-        .map_err(|e| format!("canonicalize {}: {e}", repo_root.display()))?;
-    let info = read_project_info(&canonical)?;
+    let canonical = std::fs::canonicalize(repo_root).map_err(|error| {
+        shown!(
+            "canonicalize {}: {}",
+            Shown::path(repo_root),
+            Shown::io(&error)
+        )
+    })?;
+    let info = read_project_info(&canonical).map_err(|_| {
+        shown!(
+            "cannot read the project metadata in {}; run `codeflow doctor` to see why",
+            Shown::path(canonical.join(".codeflow"))
+        )
+    })?;
     // OS text rule (issue 79): the path is the row's identity, and a lossy
     // spelling would let two repositories share one row. A path that is not
     // valid UTF-8 is not recorded (a registry write is best effort).
@@ -322,7 +355,20 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         Ok(()) => Ok(true),
         // Any step, from the lock to the atomic write, may be denied.
         Err(error) if error.io().is_some_and(is_denied) => Ok(false),
-        Err(error) => Err(error.to_string()),
+        Err(error) => {
+            let file = Shown::path(registry_path(home));
+            Err(match &error {
+                crate::file_lock::RmwError::Io(step, io) => {
+                    shown!("{} {}: {}", Shown::fixed(step), file, Shown::io(io))
+                }
+                crate::file_lock::RmwError::Parse(place) => {
+                    shown!("cannot read {}: {}", file, Shown::place(place))
+                }
+                crate::file_lock::RmwError::Other(_) => {
+                    shown!("cannot update {}", file)
+                }
+            })
+        }
     }
 }
 

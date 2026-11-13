@@ -1,0 +1,39 @@
+# Judges the daily Windows runs from what GitHub records about them, six hours after
+# windows-daily.yml started them. A run that is missing, late or does not match counts
+# as no evidence, and this workflow fails. A daily result is never merge evidence.
+# A line left out has no daily evidence: this workflow can pass without it, and that
+# pass says nothing about it.
+name: daily Windows verdict
+
+on:
+  schedule:
+    - cron: "23 12 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verdict:
+    name: judge the daily Windows runs
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Credit only runs GitHub records at the requested commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B scripts/windows-daily.py read
+      - name: Keep the result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-windows-result
+          path: daily-windows-result.json
+          if-no-files-found: error
+          retention-days: 7

@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bounded_file::FileIdentity;
+
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const HARNESS_CATALOG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -322,8 +324,8 @@ fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Re
     if policy.policy_id != policy_id {
         return Err("routing policy_id must match the current ensemble".into());
     }
-    if policy.default_review != "standing-pair" {
-        return Err("routing policy default_review must be standing-pair".into());
+    if policy.default_review != "cross-family" {
+        return Err("routing policy default_review must be cross-family".into());
     }
     if policy.design_production != "claude-native-session" {
         return Err("routing policy must keep Claude native-session design production".into());
@@ -419,18 +421,42 @@ fn read_bounded_record(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, String> {
+    read_bounded_json_with_hook(path, label, |_| ())
+}
+
+/// The step [`read_bounded_json`] takes next when its test hook runs, where
+/// a test changes the path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NextStep {
+    /// The first open, after the first no-follow `lstat`.
+    Open,
+    /// The reopen, after the first open.
+    Reopen,
+    /// The final no-follow `lstat`, after the reopen.
+    FinalStat,
+}
+
+/// [`read_bounded_json`] with a hook before each [`NextStep`].
+fn read_bounded_json_with_hook(
+    path: &Path,
+    label: &str,
+    mut hook: impl FnMut(NextStep),
+) -> Result<Vec<u8>, String> {
     let initial = std::fs::symlink_metadata(path)
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if initial.file_type().is_symlink() {
         return Err(format!("refusing symlinked {label} {}", path.display()));
     }
+    hook(NextStep::Open);
     let file = open_without_reparse_follow(path)
         .map_err(|error| format!("open {}: {error}", path.display()))?;
     let opened = file
         .metadata()
         .map_err(|error| format!("inspect open {}: {error}", path.display()))?;
+    hook(NextStep::Reopen);
     let current_file = open_without_reparse_follow(path)
         .map_err(|error| format!("reopen {}: {error}", path.display()))?;
+    hook(NextStep::FinalStat);
     let current = std::fs::symlink_metadata(path)
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if current.file_type().is_symlink() {
@@ -439,7 +465,15 @@ pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, Str
     if !opened.is_file() || !current.is_file() {
         return Err(format!("{label} is not a regular file: {}", path.display()));
     }
-    if !same_file_identity(&file, &opened, &current_file, &current) {
+    // Both identities come from the handles opened above; an identity that
+    // cannot be read refuses (TSK-1021). On Unix the opened handle must also
+    // be the file the final no-follow `lstat` names, so a link swapped in for
+    // the opens and swapped back before the `lstat` is refused.
+    let opened_identity = FileIdentity::of(&file)
+        .map_err(|error| format!("identify open {}: {error}", path.display()))?;
+    let current_identity = FileIdentity::of(&current_file)
+        .map_err(|error| format!("identify reopened {}: {error}", path.display()))?;
+    if opened_identity != current_identity || !names_the_opened_file(opened_identity, &current) {
         return Err(format!(
             "{label} changed while opening; retry: {}",
             path.display()
@@ -475,61 +509,37 @@ fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(not(windows))]
+/// Opens without following a final link and, on Unix, without blocking on a
+/// fifo: the type is then checked on the opened handle.
+#[cfg(unix)]
+fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// Whether the no-follow `lstat` of the path names the opened file: its
+/// device and inode on Unix, where a zero inode refuses. Windows has no ids
+/// in path metadata; there the reparse-point opens refuse a link instead.
 #[cfg(unix)]
-fn same_file_identity(
-    _opened_file: &std::fs::File,
-    opened: &std::fs::Metadata,
-    _current_file: &std::fs::File,
-    current: &std::fs::Metadata,
-) -> bool {
+fn names_the_opened_file(opened: FileIdentity, current: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
 
-    opened.dev() == current.dev() && opened.ino() == current.ino()
+    FileIdentity::from_device_and_inode(current.dev(), current.ino())
+        .is_ok_and(|current| current == opened)
 }
 
-#[cfg(windows)]
-fn same_file_identity(
-    opened_file: &std::fs::File,
-    _opened: &std::fs::Metadata,
-    current_file: &std::fs::File,
-    _current: &std::fs::Metadata,
-) -> bool {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-    };
-
-    fn identity(file: &std::fs::File) -> Option<(u32, u32, u32)> {
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: `file` owns a live OS handle for the duration of the call,
-        // and `info` is a valid writable output buffer of the required type.
-        let succeeded =
-            unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &raw mut info) };
-        (succeeded != 0).then_some((
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow,
-        ))
-    }
-
-    identity(opened_file)
-        .zip(identity(current_file))
-        .is_some_and(|(opened, current)| opened == current)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(
-    _opened_file: &std::fs::File,
-    opened: &std::fs::Metadata,
-    _current_file: &std::fs::File,
-    current: &std::fs::Metadata,
-) -> bool {
-    opened.len() == current.len() && opened.modified().ok() == current.modified().ok()
+#[cfg(not(unix))]
+fn names_the_opened_file(_opened: FileIdentity, _current: &std::fs::Metadata) -> bool {
+    true
 }
 
 pub(crate) fn validate_binding(
@@ -911,7 +921,7 @@ mod tests {
         RoutingPolicy {
             schema_version: 1,
             policy_id: "claude-codex-duo".into(),
-            default_review: "standing-pair".into(),
+            default_review: "cross-family".into(),
             design_production: "claude-native-session".into(),
             host_does_not_own_duty: true,
             extra_family_review: extra_family_review(invoke_when_available),
@@ -970,7 +980,7 @@ mod tests {
         policy.default_review = "all-qualified".into();
         assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
             .unwrap_err()
-            .contains("standing-pair"));
+            .contains("cross-family"));
         policy = routing_policy(true);
         policy.design_production = "host-drafts".into();
         assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
@@ -986,10 +996,98 @@ mod tests {
     #[test]
     fn routing_policy_rejects_unknown_fields() {
         let error = serde_json::from_str::<RoutingPolicy>(
-            r#"{"schema_version":1,"policy_id":"claude-codex-duo","default_review":"standing-pair","design_production":"claude-native-session","host_does_not_own_duty":true,"extra_family_review":{"never_silent_vote":true,"requires_named_assignment":true,"invoke_when_available":true,"triggers":["x"],"rule":"y","silent":true}}"#,
+            r#"{"schema_version":1,"policy_id":"claude-codex-duo","default_review":"cross-family","design_production":"claude-native-session","host_does_not_own_duty":true,"extra_family_review":{"never_silent_vote":true,"requires_named_assignment":true,"invoke_when_available":true,"triggers":["x"],"rule":"y","silent":true}}"#,
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    /// TSK-1021 AC-2: the opened handle and the reopened one name the same
+    /// file, compared by `FileIdentity` on every platform.
+    #[test]
+    fn a_bounded_record_reads_when_its_path_still_names_the_opened_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        std::fs::write(&path, b"{}").unwrap();
+        assert_eq!(
+            read_bounded_json_with_hook(&path, "binding", |_| ()).unwrap(),
+            b"{}"
+        );
+    }
+
+    /// TSK-1021 AC-2: a file replaced between the open and the reopen, with
+    /// the same length and contents, is refused. The original is renamed
+    /// aside while its handle is open, which Windows allows where deleting
+    /// the name would leave it pending.
+    #[test]
+    fn a_bounded_record_replaced_after_the_open_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        let aside = dir.path().join("aside.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let error = read_bounded_json_with_hook(&path, "binding", |point| {
+            if point == NextStep::Reopen {
+                std::fs::rename(&path, &aside).unwrap();
+                std::fs::write(&path, b"{}").unwrap();
+            }
+        })
+        .expect_err("a replaced file");
+        assert!(error.contains("binding changed while opening"), "{error}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod bounded_json_unix_tests {
+    use super::{read_bounded_json, read_bounded_json_with_hook, NextStep};
+
+    /// TSK-1021 SEC-1: a link swapped in before the first open and swapped
+    /// back before the final `lstat` is never followed, so the outside file
+    /// is not read.
+    #[test]
+    fn a_link_swapped_in_for_the_opens_and_back_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        let aside = dir.path().join("aside.json");
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::write(&outside, b"{\"secret\":1}").unwrap();
+        let result = read_bounded_json_with_hook(&path, "binding", |point| match point {
+            NextStep::Open => {
+                std::fs::rename(&path, &aside).unwrap();
+                std::os::unix::fs::symlink(&outside, &path).unwrap();
+            }
+            NextStep::Reopen => {}
+            NextStep::FinalStat => {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::rename(&aside, &path).unwrap();
+            }
+        });
+        assert!(
+            result.is_err(),
+            "the outside file was read: {:?}",
+            result.map(String::from_utf8)
+        );
+    }
+
+    /// TSK-1021 SEC-1 advisory: a fifo at the path is refused at once, never
+    /// waited on for a writer.
+    #[test]
+    fn a_fifo_record_is_refused_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        let name = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()))
+            .unwrap();
+        // SAFETY: a NUL-terminated path the test owns.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(read_bounded_json(&path, "binding"));
+        });
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the read blocked on the fifo");
+        let error = result.expect_err("a fifo is not a record");
+        assert!(error.contains("not a regular file"), "{error}");
     }
 }
 

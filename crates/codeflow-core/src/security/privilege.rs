@@ -7,8 +7,8 @@
 //! A shell `-c` string or `eval` that reaches no launcher, a leading
 //! `source` or `.`, and `LD_LIBRARY_PATH` are ordinary work and are not
 //! reported here: `security.privilege_escalation` blocks by default
-//! (ADR-0075 D5), and these forms are script findings for
-//! `security.script_bypass`, which TSK-172 reads.
+//! (ADR-0075 D5). The separate `security.script_bypass` key is unsupported
+//! and has no effect.
 
 use std::sync::OnceLock;
 

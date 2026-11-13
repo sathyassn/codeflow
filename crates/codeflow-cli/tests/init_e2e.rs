@@ -12,27 +12,70 @@ use std::process::{Command, Output};
 
 const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
+    "agents/openai.yaml",
+    "assets/config.example.toml",
+    "assets/primitive-tokens.example.json",
+    "assets/review-document.example.json",
     "references/document-authoring.md",
     "references/feedback-loop.md",
     "references/visual-craft.md",
-    "resources/explanation-method.md",
-    "resources/how-presentation-works.md",
-    "resources/utility-presentation-system.md",
-    "resources/figure-grammar.md",
-    "resources/figure-grammar-specimens.md",
-    "resources/present-document.example.json",
     "resources/design-system/README.md",
-    "resources/design-system/tokens.json",
-    "resources/design-system/tokens.css",
     "resources/design-system/chrome.css",
-    "resources/design-system/figure.css",
     "resources/design-system/chrome.js",
+    "resources/design-system/count-charts.js",
+    "resources/design-system/counts.reference.html",
+    "resources/design-system/export-fallback.css",
+    "resources/design-system/figure-roles.css",
+    "resources/design-system/figure.css",
+    "resources/design-system/portal.css",
     "resources/design-system/portal.reference.html",
+    "resources/design-system/present.css",
     "resources/design-system/present.reference.html",
-    "assets/review-document.example.json",
-    "assets/config.example.toml",
-    "assets/primitive-tokens.example.json",
-    "agents/openai.yaml",
+    "resources/design-system/settings.js",
+    "resources/design-system/source/accent.ts",
+    "resources/design-system/source/colour.json",
+    "resources/design-system/source/colour.test.ts",
+    "resources/design-system/source/colour.ts",
+    "resources/design-system/source/count-charts.ts",
+    "resources/design-system/source/elevation.json",
+    "resources/design-system/source/floors.json",
+    "resources/design-system/source/generate.test.ts",
+    "resources/design-system/source/generate.ts",
+    "resources/design-system/source/geometry.json",
+    "resources/design-system/source/layout.json",
+    "resources/design-system/source/lint.test.ts",
+    "resources/design-system/source/lint.ts",
+    "resources/design-system/source/matrices.json",
+    "resources/design-system/source/measure.ts",
+    "resources/design-system/source/motion.json",
+    "resources/design-system/source/named-colours.json",
+    "resources/design-system/source/radius.json",
+    "resources/design-system/source/space.json",
+    "resources/design-system/source/stage-geometry.test.ts",
+    "resources/design-system/source/stage-geometry.ts",
+    "resources/design-system/source/stages.json",
+    "resources/design-system/source/styles/chrome.css.in",
+    "resources/design-system/source/styles/export-fallback.css.in",
+    "resources/design-system/source/styles/figure-roles.css.in",
+    "resources/design-system/source/styles/figure.css.in",
+    "resources/design-system/source/styles/portal.css.in",
+    "resources/design-system/source/styles/present.css.in",
+    "resources/design-system/source/styles/utility-tokens.css.in",
+    "resources/design-system/source/type.json",
+    "resources/design-system/source/validate.test.ts",
+    "resources/design-system/source/validate.ts",
+    "resources/design-system/stage-geometry.js",
+    "resources/design-system/tokens.css",
+    "resources/design-system/tokens.js",
+    "resources/design-system/tokens.json",
+    "resources/design-system/tokens.ts",
+    "resources/design-system/utility-tokens.css",
+    "resources/explanation-method.md",
+    "resources/figure-grammar-specimens.md",
+    "resources/figure-grammar.md",
+    "resources/how-presentation-works.md",
+    "resources/present-document.example.json",
+    "resources/utility-presentation-system.md",
 ];
 const PRESENT_SCHEMAS: &[&str] = &[
     "document-v1.schema.json",
@@ -43,6 +86,8 @@ const PRESENT_SCHEMAS: &[&str] = &[
     "utility-tokens-v1.schema.json",
 ];
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -243,7 +288,10 @@ fn assert_design_kit_matches_in_docs_portal(root: &Path) {
         }
         checked += 1;
     }
-    assert_eq!(checked, 8, "the design kit is eight files");
+    assert_eq!(
+        checked, 51,
+        "the design kit ships 51 source and generated files"
+    );
 }
 
 /// Placeholders: everything the engine substitutes must be gone. Scoped to
@@ -312,7 +360,7 @@ fn assert_update_round_trips(root: &Path) {
     // The project changes one shipped compaction key, removes the other and
     // adds its own entry; update keeps all three choices (TSK-211 AC-2).
     assert_eq!(
-        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35",
         "init did not write the compaction default"
     );
     settings["env"] = serde_json::json!({
@@ -560,7 +608,12 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     let codex = read(&root, ".codex/config.toml");
     assert!(!codex.contains("sandbox_mode"));
     assert!(codex.contains("approvals_reviewer = \"auto_review\""));
-    assert!(codex.contains("model_reasoning_effort = \"high\""));
+    assert!(
+        !codex
+            .lines()
+            .any(|line| line.starts_with("model_reasoning_effort")),
+        "effort is each person's setting (TSK-1028)"
+    );
     assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);
@@ -603,7 +656,7 @@ fn init_full_tier_preserves_representative_brownfield_present_files() {
 /// gate while another holds the gate lock.
 #[test]
 fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
-    use codeflow_core::testing::gate_guard::{acquire_full_gate_lock, lock_dirs};
+    use codeflow_core::testing::gate_guard::{hold_host_exclusive_in, lock_dirs};
 
     for tier in ["--minimal", "--standard", "--full"] {
         let tmp = tempfile::tempdir().unwrap();
@@ -636,14 +689,16 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
         assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
-        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)).unwrap(), &root).unwrap();
+        let held = hold_host_exclusive_in(
+            &lock_dirs(&root, Some(&home)).unwrap(),
+            &root,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
         let locked = gate(None);
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
-        assert!(
-            err.contains("another full gate is running"),
-            "{tier}: {err}"
-        );
+        assert!(err.contains("host-exclusive"), "{tier}: {err}");
         drop(held);
 
         // A child forked by a sibling test can hold the released descriptor
@@ -655,7 +710,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
                 false
             }
         });
-        assert!(passed, "{tier}: the gate runs once the lock is free");
+        assert!(passed, "{tier}: the gate runs once the host is free");
     }
 }
 
@@ -1179,7 +1234,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
         "- AC-1\n",
         "- AC-1 When read, the guide shall explain setup.\n",
     );
-    std::fs::write(&task_path, task).unwrap();
+    std::fs::write(&task_path, outcome::with_outcome(&task)).unwrap();
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
@@ -1364,7 +1419,7 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
         "- AC-1\n",
         "- AC-1 When read, the guide shall explain setup.\n",
     );
-    std::fs::write(&task_path, task).unwrap();
+    std::fs::write(&task_path, outcome::with_outcome(&task)).unwrap();
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
@@ -1480,6 +1535,42 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
     .unwrap();
 }
 
+/// The installed doctrine sentences a fresh scaffold must carry.
+const DOCTRINE_PINS: [(&str, &str); 9] = [
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "Every blocker or major finding carries the smallest evidenced remedy",
+    ),
+    // TSK-452: the review cadence has one home, "Review verdicts" in
+    // the discipline rules; findings points there.
+    (
+        ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\"",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Review runs at four stages, and only these:",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Between stages the finder confirms each material fix on the delta plus the affected tests",
+    ),
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "An already approved departure is reused and not asked again.",
+    ),
+    (
+        ".claude/skills/cf-develop/SKILL.md",
+        "No cycle count decides: continue while repairs produce relevant evidence",
+    ),
+    (
+        ".claude/agents/cf-reviewer.md",
+        "remedy: <blocker and major",
+    ),
+    (".codeflow/rules/writing.md", "## Copy guide"),
+    (".codeflow/rules/writing.md", "### Microcopy"),
+];
+
 #[test]
 fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     const FINDINGS_ROW: &str = "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |\n";
@@ -1500,30 +1591,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             );
         }
         // The doctrine an agent in this project reads.
-        for (rel, sentence) in [
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Every blocker or major finding carries the smallest evidenced remedy",
-            ),
-            (
-                ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Review is one holistic pass per revision",
-            ),
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
-                "An already approved departure is reused and not asked again.",
-            ),
-            (
-                ".claude/skills/cf-develop/SKILL.md",
-                "No cycle count decides: continue while repairs produce relevant evidence",
-            ),
-            (
-                ".claude/agents/cf-reviewer.md",
-                "remedy: <blocker and major",
-            ),
-            (".codeflow/rules/writing.md", "## Copy guide"),
-            (".codeflow/rules/writing.md", "### Microcopy"),
-        ] {
+        for (rel, sentence) in DOCTRINE_PINS {
             let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
                 words(&read(&root, rel)).contains(sentence),
@@ -2407,11 +2475,15 @@ fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
 }
 
 /// Let the destination take `chore/seed` as `target` by fetching, so no
-/// client hook runs on the protected branch, and refresh `origin`.
+/// client hook runs on the protected branch, refresh `origin` and record
+/// `target` as its default branch.
 fn seed(root: &Path, dest: &Path, target: &str) {
     let refspec = format!("chore/seed:{target}");
     git_stdout(dest, &["fetch", "-q", root.to_str().unwrap(), &refspec]);
     git_with_binary(root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 does not record origin/HEAD on fetch, and the policy
+    // authority is the remote default branch alone (ADR-0091).
+    git_with_binary(root, &["remote", "set-head", "origin", target]);
 }
 
 fn stderr_text(out: &Output) -> String {
@@ -2508,7 +2580,9 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     git_with_binary(root, &["commit", "-q", "-m", "docs: record a legacy task"]);
     seed(root, dest, target);
 
-    // A pre-push with a ci finding at warn and the stale task.
+    // A pre-push with a ci finding at warn; the stale task is a record
+    // finding `codeflow validate --docs` names, which the push set no longer
+    // runs (TSK-449).
     git_with_binary(root, &["switch", "-q", "-c", "feat/x", &base]);
     std::fs::write(root.join("x.txt"), "x\n").unwrap();
     git_with_binary(root, &["add", "x.txt"]);
@@ -2519,15 +2593,20 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     assert!(
         err.contains("warning — policy rule git.commit_format (warn)")
             && err.contains("reword it with `git commit --amend` as `type(scope): description`")
-            && err.contains("stale status: in_progress with no active branch carrying TSK-001")
+            && !err.contains("stale status")
             && err.contains("codeflow pre-push: push not stopped")
             && !err.contains("BLOCKED"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(
+        validated.contains("stale status: in_progress with no active branch carrying TSK-001"),
+        "{validated}"
+    );
 
     // Each step, run as printed.
     git_with_binary(root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
-    let step = printed_step(&err, "stale status: in_progress");
+    let step = printed_step(&validated, "stale status: in_progress");
     assert_eq!(step[..2], ["codeflow", "task"], "{step:?}");
     let args: Vec<&str> = step[1..].iter().map(String::as_str).collect();
     let status = codeflow(root, &args);
@@ -2548,9 +2627,11 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
         !err.contains("git.commit_format")
             && !err.contains("stale status")
             && !err.contains("warning")
-            && err.contains("codeflow pre-push: push not stopped"),
+            && err.contains("codeflow pre-push: push set finished"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(!validated.contains("stale status"), "{validated}");
 }
 
 /// The refusals line of `codeflow report ceremony` over every date.

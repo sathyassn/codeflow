@@ -41,10 +41,10 @@ The flow from brief to review:
   host records both outputs, disagreements kept
                     |
                     v
-  Claude drafts one plan; Codex challenges it
+  Claude drafts one plan; Codex or a different lineage challenges it
                     |
                     v
-  both seats approve one version, or the host stops for the operator
+  Claude and the challenger approve one version, or the host stops
                     |
                     v
   executor first-verifies -> primary inspects and accepts
@@ -65,12 +65,15 @@ scope is where each starts, and neither sees the other's findings first. Each se
 The host records both outputs without collapsing disagreements. Then:
 
 - Claude drafts the one plan from its native session, and Codex challenges it
-  against its own findings. There is no second plan and no reconciliation round.
+  against its own findings. Codex is the preferred cross-family seat, not a
+  required one: when it is unavailable, any other family's seat takes the
+  challenge and review, and reduced assurance means no other family was
+  available. There is no second plan and no reconciliation round.
 - The plan names each task's responsible primary, actual binding-or-route
   executor, execution mode, routing reason and provenance, and cross-lineage
   reviewer.
-- Settlement ends when both seats approve one version or the host stops for the
-  operator. Approval of an older version does not carry forward.
+- Settlement ends when Claude and the challenging seat approve one version or
+  the host stops for the operator. Approval of an older version does not carry forward.
 - A task inside an approved epic does not repeat discovery. It starts from the
   epic plan.
 
@@ -104,7 +107,8 @@ Grok and extra families:
 - Grok-hosted lane canaries are in the repository at
   `docs/verification/grok-host-duo-canary-2026-09-07.md`. They are not a
   qualified binding.
-- The standing pair remains the quality floor.
+- Claude and one cross-family seat remain the quality floor; any other family
+  can take the cross-family seat.
 - Extra catalog families (today Grok) are named when a routing-policy trigger
   fires and the family is available. Unavailable is an evidenced limitation,
   never a silent third vote (architecture decision record ADR-0054).
@@ -279,9 +283,21 @@ With tracking on, `codeflow ci` classifies every pull request as one of:
   every epic it changes, with records, `docs/plan/`, other docs outside the
   adopter-facing set, and `AGENTS.md` with its managed block unchanged
   (ADR-0078)
-- an epic's integration line: `Task: EPC-NNN`. A task of the epic targets it,
-  it lands on the default target, and it holds merges or direct commits with
-  landed `line_adoptions` entries in its epic record (SPC-013 R-52)
+- an epic's integration line: `Task: EPC-NNN`. A task of the epic, or of an
+  epic whose record declares the line as its `parent_line`, targets it, it
+  lands on the default target, and it holds merges or direct commits with
+  landed `line_adoptions` entries in its epic record (SPC-013 R-52). One
+  level only: `parent_line` names the anchor epic's own line. When the
+  anchor epic itself declares a `parent_line`, a declaring epic's task is
+  refused, and once the anchor holds such a task the whole line refuses,
+  its own epic's tasks included (TSK-1286)
+- a sync of the default branch into a line: `Task: EPC-NNN` naming the
+  epic of the integration line it targets, from a branch that carries no
+  task, when every commit beyond the line and the default branch's trusted
+  commit is a two-parent merge whose second parent is on that commit and
+  whose tree is the clean merge of its parents; its criteria stay frozen,
+  it takes the default branch's version of records whose home is not the
+  line, and it never changes a record whose home is the line (TSK-1312)
 - an automation profile
 
 Related rules:
@@ -340,10 +356,21 @@ One readiness core judges a task for `work next`, `work claim`, `work start`,
 A pin that YAML reads as a number or as null is refused with the quote remedy.
 A pin left out keeps the edge unmet.
 
-- `work next` lists ready, then waiting and blocked tasks, with reasons from
-  the refs as last fetched.
+- `work next` lists ready, then landed, waiting and blocked tasks, with
+  reasons from the refs as last fetched. A task whose branch has landed with
+  work beyond its own record while the record is open is `landed`, never
+  `ready` (TSK-1038).
 - `work claim` fetches, refuses a task a visible branch already carries, and
   pushes `task/TSK-NNN-<slug>` as an advisory claim.
+- Claim selects the live target tip or one line holding a completed code
+  predecessor and records its base in Git independently of the ledger.
+  Start fetches and checks containment while preserving the planning anchor.
+  Missing shared planning or two unmerged sources require line sync.
+  Source advancement keeps a recorded base valid. Explicit replacement pins
+  renew only reviewed claims after current review, ancestry and planning
+  checks and a successful Git write.
+  CI warns until the head contains its target's current tip and names the
+  verified commit to merge. See [the command details](../cli.md#verify-notes).
 - `work claim` and `work start` accept a code predecessor that is reviewed but
   not complete only through `--on TSK-NNN@<sha>`. The pin must equal the
   predecessor branch's tip. The Reviews section must approve that tip or an
@@ -454,6 +481,20 @@ and the landed task head; unrelated line work before the landing does not
 invalidate that source. Direct work and transported work use the same
 binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one candidate.
+When such a merge brings a landed planning move of the task's epic, the
+record may also differ by that edit alone: the `epic_id` line and plain
+added lines outside the criteria, acceptance blocks, Deliverables and
+Closeout, made by exactly one commit on the first-parent line of a target
+tip the run is judged against, with the new epic landing on the task's
+unchanged `integration_target`; any other difference, or anything it cannot
+read, refuses and names the commit and the part (TSK-1320). The task
+branch's own commits after the review never count as that commit. The
+check proves the commit is on a trusted tip's first-parent line, not that a
+reviewed planning pull request made it. On any amendable range (a line pull
+request into `main`, a push to the line, a root-branch range or a planning
+amendment) the range head is also a trusted tip, so that head is the move's
+authority there; at a line pull request into `main` the operator reviews
+and merges it.
 A task pull request that merges its moved target after the review keeps its
 binding when each merge brings a commit on the first-parent line of a target
 tip the run is judged against, and the merge's recorded result equals the

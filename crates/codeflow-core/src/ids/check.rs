@@ -99,7 +99,7 @@ pub fn check(git: &Git, registry: Option<&str>) -> Result<Report, IdsError> {
         }
     }
     for kind in Kind::ALL {
-        let max = ledger.max_seq(kind);
+        let max = ledger.max_seq(kind)?;
         let held = ledger
             .ids()
             .filter(|id| id.kind() == kind && id.seq().is_some())

@@ -45,6 +45,22 @@ pub struct TestConfig {
     pub targets: Vec<TargetConfig>,
 }
 
+/// Default class for undeclared targets in a configured quick mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickTargetClass {
+    #[default]
+    Light,
+    Heavy,
+}
+
+impl QuickTargetClass {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // Serde skip_serializing_if borrows the field.
+    fn is_light(&self) -> bool {
+        *self == Self::Light
+    }
+}
+
 /// Execution settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionConfig {
@@ -55,6 +71,27 @@ pub struct ExecutionConfig {
     /// Maximum number of concurrently running targets. Omitted uses CPU count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parallel: Option<usize>,
+
+    /// Default for undeclared targets in a configured quick mode; fallback stays heavy.
+    #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
+    pub quick_default_class: QuickTargetClass,
+
+    /// Maximum wait for a host-exclusive target: for a heavy run while one
+    /// holds the host, and for one while other heavy runs hold it. Set only
+    /// by `codeflow test --wait-seconds`, never by the config file; heavy
+    /// runs never wait for each other (TSK-1145).
+    #[serde(skip)]
+    pub heavy_wait_seconds: u64,
+
+    /// Jobs all heavy runs on this host share. Omitted computes it from the
+    /// logical cores and available memory (`testing::capacity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_jobs: Option<usize>,
+
+    /// Workers one run shares among its concurrent heavy targets, capped at
+    /// the host job budget. Omitted, a run uses the host budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_budget: Option<usize>,
 
     /// Changes to these shared inputs select every target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -155,9 +192,26 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidenceConfig>,
 
+    /// Heavy work requires admission in quick mode. False explicitly declares light work.
+    /// Omitted is light in a real quick mode, heavy in quick's essential fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+
+    /// Workers this heavy target needs from `execution.worker_budget` before it starts;
+    /// under a lower run budget it runs at that budget.
+    /// Omitted targets divide the currently available workers among ready heavy targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<usize>,
+
     /// Run with no other target alongside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub exclusive: bool,
+
+    /// Run alone on the host: no other target of this run and no other
+    /// heavy run on the machine beside it (TSK-1145). Only for a target that
+    /// cannot share the host, such as a timing-sensitive one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub host_exclusive: bool,
 
     /// Runner type.
     pub runner: RunnerType,
@@ -184,12 +238,19 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_skip_reason: Option<String>,
 
-    /// Per-target wall-clock timeout in seconds. When the command runs longer
-    /// than this, the runner kills it and the target FAILS loudly. Omitted →
-    /// [`crate::testing::runner::DEFAULT_TIMEOUT_SECONDS`] (600s). Guards the
-    /// gate/pre-push against a single hanging target blocking forever.
+    /// Base deadline, default 600s. Heavy targets have a four-times ceiling;
+    /// light targets retain the fixed deadline. Cleanup has a bounded grace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+
+    /// Heavy-target inactivity window with complete scoped accounting; default 300s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_timeout_seconds: Option<u64>,
+
+    /// Bound on termination, reaping and pipe draining after a target stops;
+    /// default 5s. A supervised group still running at half of it is killed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_grace_seconds: Option<u64>,
 
     /// Optional structural integrity configuration. When present, the
     /// structural integrity check validates bidirectional
@@ -486,6 +547,8 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "ci_skip",
         "ci_skip_reason",
         "timeout_seconds",
+        "stall_timeout_seconds",
+        "cleanup_grace_seconds",
         "structural",
         "tags",
         "test_files",
@@ -496,6 +559,9 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "input_class",
         "evidence",
         "exclusive",
+        "host_exclusive",
+        "heavy",
+        "workers",
     ];
     if let Some(targets) = raw.get("targets").and_then(|targets| targets.as_array()) {
         for (index, target) in targets.iter().enumerate() {
@@ -533,6 +599,38 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
     Ok(())
 }
 
+fn validate_deadline(path: &Path, target: &TargetConfig) -> Result<(), TestingError> {
+    for (key, value) in [
+        ("timeout_seconds", target.timeout_seconds),
+        ("stall_timeout_seconds", target.stall_timeout_seconds),
+    ] {
+        if value.is_some_and(|v| v == 0 || v > super::runner::deadline::MAX_TIMEOUT_SECONDS) {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{}': {key} must be in 1..={}",
+                    target.name,
+                    super::runner::deadline::MAX_TIMEOUT_SECONDS
+                ),
+            });
+        }
+    }
+    let max = super::runner::deadline::MAX_CLEANUP_GRACE_SECONDS;
+    if target
+        .cleanup_grace_seconds
+        .is_some_and(|v| v == 0 || v > max)
+    {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: format!(
+                "target '{}': cleanup_grace_seconds must be in 1..={max}",
+                target.name
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
     let validate_globs = |patterns: &[String]| -> Result<(), TestingError> {
         for pattern in patterns {
@@ -554,6 +652,18 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
         validate_globs(&rule.include)?;
         validate_globs(&rule.exclude)?;
     }
+    if config.execution.worker_budget == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "worker_budget must be positive".into(),
+        });
+    }
+    if config.execution.host_jobs == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "host_jobs must be positive".into(),
+        });
+    }
     if config.execution.max_parallel == Some(0) {
         return Err(TestingError::ConfigInvalid {
             path: path.to_path_buf(),
@@ -562,7 +672,22 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
     }
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
+        validate_deadline(path, target)?;
         validate_globs(&target.narrow)?;
+        if let Some(workers) = target.workers {
+            if workers == 0
+                || target.heavy != Some(true)
+                || config
+                    .execution
+                    .worker_budget
+                    .is_none_or(|budget| workers > budget)
+            {
+                return Err(TestingError::ConfigInvalid {
+                    path: path.to_path_buf(),
+                    message: format!("target '{}': workers requires heavy=true and must be within the positive execution.worker_budget", target.name),
+                });
+            }
+        }
         if !seen_names.insert(&target.name) {
             return Err(TestingError::DuplicateTarget(target.name.clone()));
         }
@@ -689,10 +814,56 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
     }
 
     let content = std::fs::read_to_string(path)?;
+    parse_test_config(path, &content)
+}
 
+/// The largest named test config `codeflow test --config` reads.
+const NAMED_CONFIG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Load the test config a caller names (`codeflow test --config`, TSK-1001
+/// and TSK-1020), with the exact bytes it was parsed from. The path itself
+/// must be a regular file: a missing path, a symbolic link (whatever it
+/// points to), a directory or other special file, and an unreadable or
+/// oversized file are refused, so a caller that names a trusted copy reads
+/// exactly that copy.
+///
+/// # Errors
+///
+/// `ConfigNotFound` for a missing path, `ConfigInvalid` for a link, a file
+/// that is not regular, unreadable or changed while read, and the errors of
+/// [`load_test_config`] for its contents.
+pub fn load_named_test_config(path: &Path) -> Result<(TestConfig, Vec<u8>), TestingError> {
+    let refuse = |message: String| TestingError::ConfigInvalid {
+        path: path.to_path_buf(),
+        message,
+    };
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(TestingError::ConfigNotFound(path.to_path_buf()));
+        }
+        Err(error) => return Err(refuse(format!("cannot be read: {error}"))),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(refuse(
+            "is a symbolic link; name the config file itself".to_string(),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(refuse("is not a regular file".to_string()));
+    }
+    let bytes = crate::bounded_file::read_bounded_regular(path, NAMED_CONFIG_MAX_BYTES)
+        .map_err(|error| refuse(format!("cannot be read: {error}")))?;
+    let content =
+        String::from_utf8(bytes.clone()).map_err(|_| refuse("is not UTF-8 text".to_string()))?;
+    Ok((parse_test_config(path, &content)?, bytes))
+}
+
+/// Parse and validate test config text read from `path`.
+fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
     // First, check schema_version before full parse
     let raw: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| TestingError::ConfigInvalid {
+        serde_json::from_str(content).map_err(|e| TestingError::ConfigInvalid {
             path: path.to_path_buf(),
             message: format!("{e}"),
         })?;
@@ -763,6 +934,67 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn deadline_values_match_schema_bounds_and_reject_invalid_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.json");
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../assets/base/testing/test-config.schema.json"
+        ))
+        .unwrap();
+        let max = super::super::runner::deadline::MAX_TIMEOUT_SECONDS;
+        for key in ["timeout_seconds", "stall_timeout_seconds"] {
+            let field = &schema["$defs"]["target"]["properties"][key];
+            assert_eq!(field["minimum"], 1);
+            assert_eq!(field["maximum"], max);
+            for (value, accepted) in [
+                (serde_json::json!(1), true),
+                (serde_json::json!(max), true),
+                (serde_json::json!(0), false),
+                (serde_json::json!(max + 1), false),
+                (serde_json::json!(-1), false),
+                (serde_json::json!(1.5), false),
+                (serde_json::json!("300"), false),
+                (serde_json::json!(u64::MAX), false),
+            ] {
+                let mut raw = serde_json::json!({"schema_version":"1.0", "targets":[
+                    {"name":"sample", "runner":"custom", "modes":{"full":{"command":"exit 0"}}}
+                ]});
+                raw["targets"][0][key] = value.clone();
+                std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+                assert_eq!(load_test_config(&path).is_ok(), accepted, "{key}: {value}");
+            }
+        }
+        let max = super::super::runner::deadline::MAX_CLEANUP_GRACE_SECONDS;
+        let field = &schema["$defs"]["target"]["properties"]["cleanup_grace_seconds"];
+        assert_eq!(field["minimum"], 1);
+        assert_eq!(field["maximum"], max);
+        assert_eq!(
+            field["default"],
+            super::super::runner::deadline::DEFAULT_CLEANUP_GRACE_SECONDS
+        );
+        for (value, accepted) in [
+            (serde_json::json!(1), true),
+            (serde_json::json!(max), true),
+            (serde_json::json!(0), false),
+            (serde_json::json!(max + 1), false),
+            (serde_json::json!(-1), false),
+            (serde_json::json!(1.5), false),
+            (serde_json::json!("5"), false),
+        ] {
+            let mut raw = serde_json::json!({"schema_version":"1.0", "targets":[
+                {"name":"sample", "runner":"custom", "modes":{"full":{"command":"exit 0"}}}
+            ]});
+            raw["targets"][0]["cleanup_grace_seconds"] = value.clone();
+            std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            assert_eq!(
+                load_test_config(&path).is_ok(),
+                accepted,
+                "cleanup_grace_seconds: {value}"
+            );
+        }
+    }
 
     #[test]
     fn prerequisites_round_trip_and_reject_invalid_graphs() {
@@ -1041,6 +1273,9 @@ mod tests {
                 input_class: None,
                 evidence: None,
                 exclusive: false,
+                host_exclusive: false,
+                heavy: None,
+                workers: None,
                 runner: RunnerType::Custom,
                 modes: BTreeMap::from([(
                     "full".to_string(),
@@ -1053,6 +1288,8 @@ mod tests {
                 ci_skip: None,
                 ci_skip_reason: None,
                 timeout_seconds: None,
+                stall_timeout_seconds: None,
+                cleanup_grace_seconds: None,
                 structural: None,
                 tags: Vec::new(),
                 test_files: Vec::new(),

@@ -7,6 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::{deserialize_portal_files, path_text, validate_portal_root, MAX_BUNDLE_FILES};
+use crate::scaffold::Shown;
 use crate::strict_json::parse_strict_json;
 
 pub(crate) const MANAGED_GENERATOR: &str = "@codeflow/docs-portal";
@@ -72,32 +73,32 @@ struct LegacyState {
 
 /// Extract only the root needed to authenticate recovery, without interpreting
 /// adoption schema fields. Duplicate keys at every depth still fail.
-pub(crate) fn recovery_root(bytes: &[u8]) -> Result<String, String> {
+pub(crate) fn recovery_root(bytes: &[u8]) -> Result<String, Shown> {
     check_size(bytes)?;
     let value: serde_json::Value =
-        parse_strict_json(bytes).map_err(|_| "invalid portal adoption JSON".to_string())?;
+        parse_strict_json(bytes).map_err(|_| Shown::fixed("invalid portal adoption JSON"))?;
     let root = value
         .get("root")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "adoption state has no string root".to_string())?;
-    let normalized = validate_portal_root(Path::new(root)).map_err(|e| e.to_string())?;
+        .ok_or_else(|| Shown::fixed("adoption state has no string root"))?;
+    let normalized = validate_portal_root(Path::new(root)).map_err(|e| Shown::from(&e))?;
     if path_text(&normalized) != root {
-        return Err("adoption root is not canonical".into());
+        return Err(Shown::fixed("adoption root is not canonical"));
     }
     Ok(root.into())
 }
 
-pub(crate) fn parse(bytes: &[u8]) -> Result<PortalState, String> {
+pub(crate) fn parse(bytes: &[u8]) -> Result<PortalState, Shown> {
     check_size(bytes)?;
     let value: serde_json::Value =
-        parse_strict_json(bytes).map_err(|_| "invalid portal adoption JSON".to_string())?;
+        parse_strict_json(bytes).map_err(|_| Shown::fixed("invalid portal adoption JSON"))?;
     let state = match value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
     {
         Some(1) => {
             let legacy: LegacyState = serde_json::from_value(value)
-                .map_err(|_| "invalid portal adoption schema fields".to_string())?;
+                .map_err(|_| Shown::fixed("invalid portal adoption schema fields"))?;
             PortalState {
                 schema_version: legacy.schema_version,
                 root: legacy.root,
@@ -108,15 +109,15 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<PortalState, String> {
             }
         }
         Some(2) => serde_json::from_value(value)
-            .map_err(|_| "invalid portal adoption schema fields".to_string())?,
-        _ => return Err("unsupported portal adoption schema_version".into()),
+            .map_err(|_| Shown::fixed("invalid portal adoption schema fields"))?,
+        _ => return Err(Shown::fixed("unsupported portal adoption schema_version")),
     };
     validate(&state)?;
     Ok(state)
 }
 
-pub(crate) fn validate(state: &PortalState) -> Result<(), String> {
-    let root = validate_portal_root(Path::new(&state.root)).map_err(|e| e.to_string())?;
+pub(crate) fn validate(state: &PortalState) -> Result<(), Shown> {
+    let root = validate_portal_root(Path::new(&state.root)).map_err(|e| Shown::from(&e))?;
     if !matches!(state.schema_version, 1 | 2)
         || path_text(&root) != state.root
         || state.starter_version.trim().is_empty()
@@ -125,30 +126,34 @@ pub(crate) fn validate(state: &PortalState) -> Result<(), String> {
         || state.files.len() > MAX_BUNDLE_FILES
         || !state.generator.is_valid()
     {
-        return Err("invalid portal adoption root, version, identity or file count".into());
+        return Err(Shown::fixed(
+            "invalid portal adoption root, version, identity or file count",
+        ));
     }
     if state.runtime_ownership == RuntimeOwnership::Managed
         && (state.generator.name != MANAGED_GENERATOR
             || state.generator.version != state.starter_version)
     {
-        return Err("managed generator identity does not match the adopted release".into());
+        return Err(Shown::fixed(
+            "managed generator identity does not match the adopted release",
+        ));
     }
     let mut paths = std::collections::BTreeSet::new();
     for (path, metadata) in &state.files {
-        super::validate_asset_path(path).map_err(|_| "unsafe portal file path".to_string())?;
+        super::validate_asset_path(path).map_err(|_| Shown::fixed("unsafe portal file path"))?;
         if !paths.insert(super::portable_key(path))
             || !matches!(metadata.ownership.as_str(), "managed" | "user-owned")
             || !super::valid_lower_sha256(&metadata.pristine_sha256)
         {
-            return Err("invalid or duplicate portal file metadata".into());
+            return Err(Shown::fixed("invalid or duplicate portal file metadata"));
         }
     }
     Ok(())
 }
 
-fn check_size(bytes: &[u8]) -> Result<(), String> {
+fn check_size(bytes: &[u8]) -> Result<(), Shown> {
     if bytes.len() as u64 > super::MAX_STATE_BYTES {
-        Err("portal adoption state exceeds its byte limit".into())
+        Err(Shown::fixed("portal adoption state exceeds its byte limit"))
     } else {
         Ok(())
     }
@@ -163,7 +168,7 @@ mod tests {
             "files":{"runtime":{"ownership":"managed","pristine_sha256":"a".repeat(64)}}})
     }
 
-    fn parse_value(value: &serde_json::Value) -> Result<PortalState, String> {
+    fn parse_value(value: &serde_json::Value) -> Result<PortalState, Shown> {
         parse(&serde_json::to_vec(value).unwrap())
     }
 

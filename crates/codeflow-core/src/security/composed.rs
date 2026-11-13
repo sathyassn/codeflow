@@ -75,6 +75,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod paths;
+
 /// The shell grammar a line is read in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialect {
@@ -300,7 +302,7 @@ pub enum Composed {
 pub(crate) fn composed_texts(line: &str) -> Vec<Composed> {
     let mut found = Vec::new();
     for dialect in [Dialect::Bash, Dialect::Zsh] {
-        for event in events(line, dialect) {
+        for event in texts(line, dialect) {
             if !found.contains(&event.value) {
                 found.push(event.value);
             }
@@ -315,7 +317,7 @@ pub(crate) fn composed_texts(line: &str) -> Vec<Composed> {
 #[doc(hidden)]
 #[must_use]
 pub fn final_output(line: &str, dialect: Dialect) -> Option<Composed> {
-    events(line, dialect)
+    texts(line, dialect)
         .into_iter()
         .rev()
         .find(|event| event.output && event.depth == 0)
@@ -332,7 +334,36 @@ pub fn final_output(line: &str, dialect: Dialect) -> Option<Composed> {
 #[doc(hidden)]
 #[must_use]
 pub fn texts_in(line: &str, dialect: Dialect) -> Vec<Composed> {
-    events(line, dialect).into_iter().map(|e| e.value).collect()
+    texts(line, dialect).into_iter().map(|e| e.value).collect()
+}
+
+/// Every value the line binds to a variable, read as bash and as zsh read
+/// it: a standalone or prefix assignment, a declaration operand, and every
+/// other way the line stores a value (`printf -v`, `read`, a `for`
+/// variable), with what each holds. A value the guard cannot resolve is
+/// [`Composed::Unresolved`]; text from outside the line is an open piece
+/// (TSK-1002 review 12: a program value is judged by what it holds).
+pub(crate) fn bindings(line: &str) -> Vec<(String, Composed)> {
+    let mut found = Vec::new();
+    for dialect in [Dialect::Bash, Dialect::Zsh] {
+        for event in events(line, dialect) {
+            if let Some(name) = event.binding {
+                let bound = (name, event.value);
+                if !found.contains(&bound) {
+                    found.push(bound);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The text events, without the bindings [`bindings`] reports.
+fn texts(line: &str, dialect: Dialect) -> Vec<Event> {
+    events(line, dialect)
+        .into_iter()
+        .filter(|event| event.binding.is_none())
+        .collect()
 }
 
 fn events(line: &str, dialect: Dialect) -> Vec<Event> {
@@ -496,7 +527,7 @@ impl Lexer {
                         self.toks.push(Tok::Op("("));
                     }
                 }
-                '<' | '>' if self.peek_at(1) == Some('(') => {
+                '<' | '>' | '=' if self.peek_at(1) == Some('(') => {
                     self.at += 2;
                     let body = self.balanced(1)?;
                     let mut word = Word::default();
@@ -587,6 +618,18 @@ impl Lexer {
                 op,
                 target: None,
                 heredoc: Some(index),
+            });
+            return Ok(());
+        }
+        if self.starts("<(") || self.starts(">(") {
+            self.at += 2;
+            let body = self.balanced(1)?;
+            let mut word = Word::default();
+            word.parts.push(Part::ProcSubst(body));
+            self.toks.push(Tok::Redir {
+                op,
+                target: Some(word),
+                heredoc: None,
             });
             return Ok(());
         }
@@ -1118,10 +1161,9 @@ fn arith_unary(tokens: &[Arith], at: &mut usize) -> Option<i64> {
 /// construct stays text.
 fn push_glob(value: &mut Value, text: &str) {
     let chars: Vec<char> = text.chars().collect();
-    let globs = chars
-        .iter()
-        .enumerate()
-        .any(|(at, c)| *c == '*' || *c == '?' || (*c == '[' && chars[at + 1..].contains(&']')));
+    let globs = chars.iter().enumerate().any(|(at, c)| {
+        matches!(c, '*' | '?' | '^' | '#') || (*c == '[' && chars[at + 1..].contains(&']'))
+    });
     if globs {
         value.0.push(Piece::Glob(text.to_string()));
     } else {
@@ -1248,7 +1290,7 @@ fn decode_value(value: &Value, escapes: Escapes) -> Result<Value, &'static str> 
 // Evaluation
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Var {
     Scalar(Value),
     Array(Vec<Value>),
@@ -1258,7 +1300,7 @@ enum Var {
 }
 
 /// The positional parameters: `$0`, `$1` and on.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum Positional {
     /// Given from outside the line: unknown text.
     #[default]
@@ -1272,8 +1314,10 @@ enum Positional {
     Unknown(&'static str),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct State {
+    /// Known working directory for filesystem consumers, independent of PWD.
+    directory: Option<std::path::PathBuf>,
     vars: BTreeMap<String, Var>,
     /// Names an assignment cannot change: `readonly`, or set by a trap
     /// that may run again.
@@ -1303,6 +1347,8 @@ struct Event {
     /// line may have changed fed it.
     exact: bool,
     value: Composed,
+    /// The variable a binding event assigns; `None` for a text event.
+    binding: Option<String>,
 }
 
 /// The and-or list being read in one frame.
@@ -1575,7 +1621,7 @@ const SHELLS: &[(&str, Dialect)] = &[
 ];
 /// Programs that run the command after their own options, outside the
 /// shell's builtins.
-const LAUNCHERS: &[&str] = &[
+pub(crate) const LAUNCHERS: &[&str] = &[
     "env",
     "nice",
     "nohup",
@@ -1595,7 +1641,7 @@ const LAUNCHERS: &[&str] = &[
     "exec",
 ];
 /// Programs that add arguments of their own to the command they run.
-const SUPPLIERS: &[&str] = &["xargs", "find", "parallel", "watch"];
+pub(crate) const SUPPLIERS: &[&str] = &["xargs", "find", "parallel", "watch"];
 
 /// The identifiers in `text`, in order.
 fn identifiers(text: &str) -> impl Iterator<Item = &str> {
@@ -1769,7 +1815,30 @@ impl Run<'_> {
             output,
             exact: true,
             value,
+            binding: None,
         });
+    }
+
+    /// Report what `name` now holds, for [`bindings`].
+    fn bind(&mut self, name: &str, var: &Var) {
+        let values = match var {
+            Var::Scalar(value) => vec![Composed::Resolved(value.clone())],
+            Var::Array(values) | Var::Choices(values) if !values.is_empty() => values
+                .iter()
+                .map(|value| Composed::Resolved(value.clone()))
+                .collect(),
+            Var::Array(_) | Var::Choices(_) => vec![Composed::Resolved(Value::default())],
+            Var::Unknown(reason) => vec![Composed::Unresolved(reason)],
+        };
+        for value in values {
+            self.events.push(Event {
+                depth: self.depth + usize::from(self.uncertain > 0),
+                output: false,
+                exact: true,
+                value,
+                binding: Some(name.to_string()),
+            });
+        }
     }
 
     fn emit_eval(&mut self, eval: &Eval) {
@@ -1846,7 +1915,7 @@ impl Run<'_> {
     fn store(&mut self, name: &str, var: Var, certain: bool) {
         let var = if !certain {
             Var::Unknown(MAY_ASSIGN)
-        } else if SPECIAL.contains(&name) {
+        } else if SPECIAL.contains(&name) && !(name == "PWD" && self.state.directory.is_some()) {
             Var::Unknown("an assignment to a special shell variable")
         } else if self.state.readonly.contains(name) {
             Var::Unknown("an assignment to a read-only variable")
@@ -1855,6 +1924,7 @@ impl Run<'_> {
         } else {
             var
         };
+        self.bind(name, &var);
         self.state.changed.remove(name);
         self.state.vars.insert(name.to_string(), var);
         self.log.push(name.to_string());
@@ -2428,6 +2498,33 @@ impl Run<'_> {
 
     #[allow(clippy::too_many_lines)] // one pass over a word's parts
     fn word(&mut self, word: &Word, ctx: Ctx) -> Eval {
+        // Builtin output emulation must apply the same leading tilde as the
+        // operand reader. Keep the home prefix quoted and the tail's glob
+        // syntax active. Unknown/named homes retain the unresolved reading.
+        if let Some(tail) = word
+            .plain()
+            .and_then(|raw| raw.strip_prefix('~'))
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
+        {
+            if let Some(Var::Scalar(home)) = self.state.vars.get("HOME") {
+                if let Some(home) = home.exact() {
+                    let expanded = Word {
+                        raw: word.raw.clone(),
+                        parts: vec![
+                            Part::Lit {
+                                text: home,
+                                quoted: true,
+                            },
+                            Part::Lit {
+                                text: tail.into(),
+                                quoted: false,
+                            },
+                        ],
+                    };
+                    return self.word(&expanded, ctx);
+                }
+            }
+        }
         let mut online = false;
         let mut loose = false;
         let mut globbed = false;
@@ -2482,7 +2579,10 @@ impl Run<'_> {
                 Part::Lit { text, quoted } => {
                     // A glob stands for the names it matches, outside text;
                     // as an argument, how many is unknown.
-                    if fields_ctx && !*quoted && text.contains(['*', '?', '[']) {
+                    // zsh reads `^` and `#` as glob operators too, as
+                    // `has_glob` does for a plain word (TSK-1002 security
+                    // review 03, H-A: an unquoted `$HOME/.codex/^`).
+                    if fields_ctx && !*quoted && text.contains(['*', '?', '[', '^', '#']) {
                         loose |= ctx == Ctx::Fields;
                         globbed = true;
                         push_glob(&mut cur, text);
@@ -2644,8 +2744,29 @@ impl Run<'_> {
     /// removed: what the modelled builtins write, and outside text for any
     /// other program. Also whether it holds text the line spells.
     fn capture(&self, body: &str) -> (Result<Value, &'static str>, bool) {
+        let mut value = match self.capture_stdout(body) {
+            Ok(value) => value,
+            Err(reason) => return (Err(reason), true),
+        };
+        while let Some(Piece::Text(text)) = value.0.last_mut() {
+            while text.ends_with('\n') {
+                text.pop();
+            }
+            if text.is_empty() {
+                value.0.pop();
+            } else {
+                break;
+            }
+        }
+        let online = value.0.iter().any(|piece| matches!(piece, Piece::Text(_)));
+        (Ok(value), online)
+    }
+
+    /// Literal stdout bytes for pipeline and process-substitution consumers.
+    /// Unlike command substitution, these retain trailing newlines.
+    fn capture_stdout(&self, body: &str) -> Result<Value, &'static str> {
         if self.nesting >= 8 {
-            return (Err("nesting deeper than the guard reads"), true);
+            return Err("nesting deeper than the guard reads");
         }
         let mut scratch = Vec::new();
         let mut run = new_run(
@@ -2663,23 +2784,9 @@ impl Run<'_> {
         }
         let mut value = Value::default();
         for record in records {
-            match record {
-                Ok(piece) => value.append(&piece),
-                Err(reason) => return (Err(reason), true),
-            }
+            value.append(&record?);
         }
-        while let Some(Piece::Text(text)) = value.0.last_mut() {
-            while text.ends_with('\n') {
-                text.pop();
-            }
-            if text.is_empty() {
-                value.0.pop();
-            } else {
-                break;
-            }
-        }
-        let online = value.0.iter().any(|piece| matches!(piece, Piece::Text(_)));
-        (Ok(value), online)
+        Ok(value)
     }
 
     /// `$((...))` and `$[...]`: integer arithmetic over decimal literals
@@ -3076,6 +3183,26 @@ impl Arg {
 }
 
 /// The fields of a run of arguments, flattened.
+/// Whether a `pwd` prints the physical directory (`-P`) or the logical one
+/// (no option, `-L`); the last of the two wins. `None` for any other word.
+fn pwd_physical(args: &[Arg]) -> Option<bool> {
+    let mut physical = false;
+    for arg in args {
+        let word = arg.literal()?;
+        let letters = word
+            .strip_prefix('-')
+            .filter(|letters| !letters.is_empty())?;
+        for letter in letters.chars() {
+            match letter {
+                'P' => physical = true,
+                'L' => physical = false,
+                _ => return None,
+            }
+        }
+    }
+    Some(physical)
+}
+
 fn flatten(args: &[Arg]) -> Result<Vec<Value>, &'static str> {
     let mut out = Vec::new();
     for arg in args {
@@ -3124,6 +3251,7 @@ impl Run<'_> {
         let mut saved: Vec<(String, Option<Var>)> = Vec::new();
         for tok in &prefix {
             if let Some((name, var)) = self.assignment(tok) {
+                self.bind(&name, &var);
                 if standalone {
                     self.store(&name, var.clone(), certain);
                 } else {
@@ -3399,7 +3527,7 @@ impl Run<'_> {
                         at += 1;
                     }
                 }
-                "noglob" | "nocorrect" | "-" | "!" => at += 1,
+                name if name == "!" || crate::hooks::git_guard::is_shell_modifier(name) => at += 1,
                 "time" => {
                     at += 1;
                     if args.get(at).and_then(Arg::literal).as_deref() == Some("-p") {
@@ -3441,6 +3569,29 @@ impl Run<'_> {
                 && (DECLARERS.contains(&program.as_str())
                     || matches!(program.as_str(), "set" | "shopt" | "trap" | "alias")));
         match program.as_str() {
+            "pwd" if self.state.directory.is_some() && pwd_physical(rest).is_some() => {
+                let logical = self.state.directory.clone().unwrap();
+                // `pwd -P` prints the physical directory: links resolved,
+                // as the kernel reads it (TSK-1002 review 06). A UNC or
+                // namespace place is never resolved.
+                let shown = if pwd_physical(rest) == Some(true) {
+                    logical
+                        .to_str()
+                        .filter(|text| !crate::security::outward::remote_or_namespace_operand(text))
+                        .and_then(|_| crate::portable_path::canonicalize(&logical).ok())
+                } else {
+                    Some(logical)
+                };
+                self.output(match shown {
+                    Some(dir) => {
+                        match crate::git::GitName::from_os_str(dir.as_os_str()).rule_text() {
+                            Ok(text) => Ok(Value::text(&format!("{text}\n"))),
+                            Err(_) => Err("working directory is not UTF-8"),
+                        }
+                    }
+                    None => Err("cannot establish the physical working directory"),
+                });
+            }
             "printf" => self.printf(rest, certain),
             "echo" => {
                 let value = match self.state.opt_echo {
@@ -3481,6 +3632,12 @@ impl Run<'_> {
                 for name in ["PWD", "OLDPWD", "DIRSTACK", "dirstack"] {
                     self.set_unknown(name, "a directory variable the line changes");
                 }
+                // This evaluator does not follow directory changes, so after
+                // one its directory is unknown: a later `pwd` in the same
+                // capture (`$(cd alias && pwd)`) cannot print the place it
+                // started from (TSK-1002 review 08). The command-position
+                // reader applies the main line's changes itself.
+                self.state.directory = None;
             }
             "let" => {
                 for arg in rest {
@@ -3543,7 +3700,7 @@ impl Run<'_> {
                         }
                         Some(_) => {}
                         None => {
-                            for name in ["printf", "echo", "print"] {
+                            for name in ["printf", "echo", "print", "true", "false", ":"] {
                                 self.state.functions.insert(name.to_string(), Vec::new());
                             }
                         }
@@ -3686,6 +3843,7 @@ impl Run<'_> {
             output: true,
             exact,
             value,
+            binding: None,
         });
     }
 
@@ -3808,7 +3966,7 @@ impl Run<'_> {
             }
         };
         match fields.iter().map(Value::exact).collect::<Option<Vec<_>>>() {
-            Some(words) => self.eval_text(&words.join(" ")),
+            Some(words) => self.eval_text(&paths::eval_body(&words)),
             // Code from outside the line, as `source` runs.
             None => self.changed_all(),
         }

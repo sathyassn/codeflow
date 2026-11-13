@@ -67,6 +67,40 @@ fn invalid() -> io::Error {
 }
 
 impl ConfinedRoot {
+    /// Hold `directory` as a root: later work goes through its handle.
+    pub(crate) fn from_directory(directory: ConfinedDirectory) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                directory: directory.file,
+            }
+        }
+        #[cfg(windows)]
+        {
+            Self {
+                ancestors: directory.ancestors,
+            }
+        }
+    }
+
+    /// Whether both roots are the same filesystem object, by the identity of
+    /// the held handles (device and inode). `None` when this platform has no
+    /// handle identity here.
+    #[cfg(unix)]
+    pub(crate) fn same_object(&self, other: &Self) -> io::Result<Option<bool>> {
+        use std::os::unix::fs::MetadataExt;
+        let (left, right) = (self.directory.metadata()?, other.directory.metadata()?);
+        Ok(Some(
+            left.dev() == right.dev() && left.ino() == right.ino() && left.ino() != 0,
+        ))
+    }
+
+    #[cfg(not(unix))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(crate) fn same_object(&self, _other: &Self) -> io::Result<Option<bool>> {
+        Ok(None)
+    }
+
     pub(crate) fn directory(&self, relative: &Path) -> io::Result<ConfinedDirectory> {
         #[cfg(unix)]
         let mut directory = ConfinedDirectory {
@@ -175,9 +209,9 @@ impl ConfinedRoot {
             let parent = self.directory(relative.parent().ok_or_else(invalid)?)?;
             let leaf = components.last().ok_or_else(invalid)?.as_os_str();
             let file = open_at(&parent.file, leaf, false)?;
-            super::read_opened_regular(file, maximum_bytes, after_open, || {
+            super::read_opened_regular(&file, maximum_bytes, after_open, || {
                 let linked = open_at(&parent.file, leaf, false)?;
-                Ok((linked.metadata()?, same_file::Handle::from_file(linked)?))
+                Ok((linked.metadata()?, Some(super::FileIdentity::of(&linked)?)))
             })
         }
         #[cfg(windows)]
@@ -190,9 +224,9 @@ impl ConfinedRoot {
             let open =
                 || windows::open_relative(handle, leaf, FILE_GENERIC_READ, FILE_OPEN, Some(false));
             let file = open()?;
-            let result = super::read_opened_regular(file, maximum_bytes, after_open, || {
+            let result = super::read_opened_regular(&file, maximum_bytes, after_open, || {
                 let linked = open()?;
-                Ok((linked.metadata()?, same_file::Handle::from_file(linked)?))
+                Ok((linked.metadata()?, Some(super::FileIdentity::of(&linked)?)))
             });
             drop(parent);
             result

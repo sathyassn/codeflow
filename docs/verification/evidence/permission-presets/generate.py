@@ -69,8 +69,12 @@ def fail_closed(name):
     # Departure D8. Exit 0 allows; the guard's own exit 2 blocks with its own
     # reason; anything else (missing binary 127, crash, a binary older than
     # contract 3 rejecting the flag) is turned into exit 2 with a reason on
-    # stderr, which Codex requires for a block. A timeout still fails open in
-    # all three harnesses.
+    # stderr, which Codex requires for a block. When this evidence was made, a
+    # timeout failed open in all three harnesses. TSK-1082 later closed that
+    # where it can: the guard refuses on its own after 20 seconds, shipped
+    # guard entries carry a 30 second timeout and Claude's carry
+    # "onFailure": "block". Codex and Grok still fail open on a guard that
+    # cannot reach its own deadline (docs/policy-reference.md).
     return (f"codeflow hook {name} --contract {CONTRACT}; s=$?; [ \"$s\" -eq 0 ] && exit 0; "
             f"[ \"$s\" -eq 2 ] || echo \"codeflow {name} did not run (exit $s); refusing until it does\" >&2; exit 2")
 

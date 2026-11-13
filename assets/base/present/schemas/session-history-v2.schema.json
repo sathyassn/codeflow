@@ -51,15 +51,15 @@
       "properties": {
         "task_id": {
           "type": "string",
-          "pattern": "^TSK-[0-9]{3}(?:-[0-9]{3})?$"
+          "pattern": "^TSK-[0-9]{3,}(?:-[0-9]{3,})?$"
         },
         "spec_id": {
           "type": "string",
-          "pattern": "^SPC-[0-9]{3}$"
+          "pattern": "^SPC-[0-9]{3,}$"
         },
         "adr_id": {
           "type": "string",
-          "pattern": "^ADR-[0-9]{4}$"
+          "pattern": "^ADR-[0-9]{4,}$"
         }
       }
     },
