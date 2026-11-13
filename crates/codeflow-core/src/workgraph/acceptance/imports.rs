@@ -372,13 +372,13 @@ fn unchanged_line_candidate(
     record: &RecordView,
     receiver: Oid,
     head: Oid,
-    line_paths: &BTreeSet<String>,
+    line_paths: &BTreeSet<Vec<u8>>,
 ) -> Result<bool, String> {
     let line_entry = home::entry_at(repo, receiver, &record.path)?;
     if line_entry.is_none() || line_entry != home::entry_at(repo, head, &record.path)? {
         return Ok(false);
     }
-    Ok(line_paths.contains(&record.path))
+    Ok(line_paths.contains(record.path.as_bytes()))
 }
 
 /// Where a changed record's declared integration line supplies imports.

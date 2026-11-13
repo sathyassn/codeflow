@@ -319,7 +319,7 @@ fn line_steps(repo: &Repository, receiver: Oid, start: Oid) -> Result<Vec<LineSt
 /// Every path a commit of the line's first-parent history after `start`
 /// changes, each compared as [`line_steps`] compares it: the files whose
 /// tasks the line may have re-homed or introduced in that span, renames
-/// included (TSK-1378 AC-13).
+/// included (TSK-1378 AC-13). Each path is kept as its exact bytes.
 ///
 /// # Errors
 /// Unreadable history or trees.
@@ -327,7 +327,7 @@ pub(super) fn line_paths(
     repo: &Repository,
     receiver: Oid,
     start: Oid,
-) -> Result<BTreeSet<String>, String> {
+) -> Result<BTreeSet<Vec<u8>>, String> {
     let tree = |at: Oid| {
         repo.find_commit(at)
             .and_then(|commit| commit.tree())
@@ -346,7 +346,7 @@ pub(super) fn line_paths(
         for delta in diff.deltas() {
             for file in [delta.old_file(), delta.new_file()] {
                 if let Some(path) = file.path_bytes() {
-                    paths.insert(String::from_utf8_lossy(path).into_owned());
+                    paths.insert(path.to_vec());
                 }
             }
         }
