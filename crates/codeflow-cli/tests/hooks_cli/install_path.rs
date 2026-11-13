@@ -848,7 +848,10 @@ fn every_guard_and_hook_message_names_the_operator() {
         catalogued >= 15,
         "the catalogued remedies naming a verb were not found: {catalogued}"
     );
-    // Messages outside the catalogue that tell the reader to run a verb.
+    // Messages outside the catalogue that tell the reader to run a verb, or
+    // offer it as the way through, in every production source file of the
+    // three crates. A file's test module, from its `mod tests {` line, and
+    // the `_tests.rs` files are test code.
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let tells_to_run = |line: &str| {
         [
@@ -858,29 +861,64 @@ fn every_guard_and_hook_message_names_the_operator() {
             "run codeflow init",
             "then codeflow update",
             "then `codeflow update",
+            "(codeflow update",
+            "(codeflow init",
+            "(`codeflow update",
+            "(`codeflow init",
         ]
         .iter()
         .any(|phrase| line.contains(phrase))
     };
-    for source in [
-        "crates/codeflow-core/src/hooks/orient.rs",
-        "crates/codeflow-core/src/hooks/policy_schema.rs",
-        "crates/codeflow-core/src/scaffold/version.rs",
-        "crates/codeflow-core/src/scaffold/init.rs",
-        "crates/codeflow-core/src/scaffold/mod.rs",
-        "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "crates/codeflow-core/src/doctor/mod.rs",
-        "crates/codeflow-core/src/doctor/ci_pin.rs",
-        "crates/codeflow-core/src/model_catalog/inputs.rs",
-        "crates/codeflow-present/src/error.rs",
-        "crates/codeflow-cli/src/cmd/hook.rs",
-    ] {
-        let text = std::fs::read_to_string(workspace.join(source)).unwrap();
-        for line in text.lines() {
+    // Lines whose reader is the operator who ran the verb, since only the
+    // verb itself prints them, and one shared text held with its copies.
+    let exempt: &[(&str, &str)] = &[
+        // `init --workspace`'s own refusals.
+        (
+            "crates/codeflow-core/src/root_checkout.rs",
+            "rerun codeflow init --workspace",
+        ),
+        (
+            "crates/codeflow-core/src/root_checkout.rs",
+            "run codeflow init --workspace at the umbrella repository's root checkout",
+        ),
+        // The comment `init --workspace` writes into `.gitignore`.
+        (
+            "crates/codeflow-core/src/root_checkout.rs",
+            "each its own git repository (codeflow init --workspace)",
+        ),
+        // `update`'s own report of a conflicting file.
+        (
+            "crates/codeflow-core/src/scaffold/update.rs",
+            "then rerun codeflow update to record the shipped baseline",
+        ),
+        // The portal check's upgrade step, byte-equal with the shipped
+        // portal generator's text and the adopted portal's managed copy,
+        // which only the operator's refresh rewrites.
+        (
+            "crates/codeflow-core/src/validate/portal/figures.rs",
+            "(`codeflow update` for a managed portal",
+        ),
+    ];
+    let mut sources = Vec::new();
+    for krate in ["codeflow-core", "codeflow-cli", "codeflow-present"] {
+        rust_sources(&workspace.join("crates").join(krate).join("src"), &mut sources);
+    }
+    assert!(sources.len() > 100, "sources found: {}", sources.len());
+    for path in &sources {
+        let source = path
+            .strip_prefix(&workspace)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = std::fs::read_to_string(path).unwrap();
+        for line in text.lines().take_while(|line| line.trim() != "mod tests {") {
             let comment = line.trim_start().starts_with("//");
             if !comment
                 && (tells_to_run(line) || (names_a_verb(line) && line.contains("; then")))
                 && !line.contains("operator")
+                && !exempt
+                    .iter()
+                    .any(|(file, phrase)| source.ends_with(file) && line.contains(phrase))
             {
                 unnamed.push(format!("{source}: {}", line.trim()));
             }
@@ -928,6 +966,27 @@ fn every_guard_and_hook_message_names_the_operator() {
         unnamed.len(),
         unnamed.join("\n")
     );
+}
+
+/// The Rust source files under `dir`, test files named `*_tests.rs` left
+/// out, in every subfolder.
+fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            rust_sources(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs")
+            && !path
+                .file_stem()
+                .is_some_and(|stem| stem.to_string_lossy().ends_with("_tests"))
+        {
+            out.push(path);
+        }
+    }
 }
 
 /// The shipped Codex profiles name no worktree path, since a pattern with a
