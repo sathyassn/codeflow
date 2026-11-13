@@ -53,7 +53,8 @@
 use super::headless::{basename, shell_command_string};
 use super::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SHELLS, SUPPLIERS};
 use crate::hooks::git_guard::{
-    command_argv_literal, expand_commands, shell_blank, strip_launchers, strip_reserved_words,
+    command_argv_literal, command_segments, expand_commands, shell_blank, strip_launchers,
+    strip_reserved_words,
 };
 
 /// The binary's program name.
@@ -452,14 +453,19 @@ fn read(command: &str, depth: usize) -> Found {
         return Found::Unresolved;
     }
     let mut unresolved = command.contains("<<<");
-    // Assignments on the line, live for every later command until `unset`
-    // or a new value: no separator, subshell or function body ends them
-    // here, which can only judge more. Each later program that can read
-    // one judges it.
+    // Assignments on the line, live for every later command. The command
+    // list carries no scope or order of execution, so an `unset` or a new
+    // value clears an earlier value only on a line whose commands all run
+    // in one shell, in order, always ([`one_shell_in_order`]). Anywhere
+    // else the earlier value stays live beside the new one. Each later
+    // program that can read one judges every value it holds.
     let mut pending: Vec<(String, String)> = Vec::new();
+    let clears = one_shell_in_order(command);
     let set = |pending: &mut Vec<(String, String)>, values: Vec<(String, String)>| {
         for (variable, value) in values {
-            pending.retain(|(name, _)| *name != variable);
+            if clears {
+                pending.retain(|(name, _)| *name != variable);
+            }
             pending.push((variable, value));
         }
     };
@@ -493,7 +499,7 @@ fn read(command: &str, depth: usize) -> Found {
         }
         if name == "unset" {
             // `unset -f` removes functions; any other form removes variables.
-            if !command.argv[1..].iter().any(|word| word == "-f") {
+            if clears && !command.argv[1..].iter().any(|word| word == "-f") {
                 pending.retain(|(variable, _)| !command.argv[1..].contains(variable));
             }
             continue;
@@ -535,6 +541,77 @@ fn runs_variable(program: &str, variable: &str) -> bool {
             || COMMAND_VARIABLES
                 .iter()
                 .any(|(_, names)| names.contains(&variable)))
+}
+
+/// Shell words that open a conditional, a loop, a function or a
+/// coprocess: a command after one may not run, or may run later or apart.
+const COMPOUND_WORDS: &[&str] = &[
+    "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "for", "select", "case",
+    "esac", "function", "coproc",
+];
+
+/// Whether every command on `command` runs in the one shell, in the order
+/// written, and always: commands split only by `;`, newlines and brace
+/// groups. A subshell or substitution (any `(`, `)` or backtick), a
+/// pipeline or `|&`, a background job, `&&` or `||`, a conditional, a loop,
+/// a function, a coprocess, an ANSI-C `$'...'` word, or a command another
+/// program's body carries (`sh -c`, `eval`, `env -S`, a word expanding a
+/// line's literal) all fail it. So does an open quote. Only on such a line
+/// may an `unset` or a new value clear an earlier value. The check reads
+/// more structure than the shell runs (a `(` in a comment counts), which
+/// only keeps more values live.
+fn one_shell_in_order(command: &str) -> bool {
+    if expand_commands(command) != command_segments(command) {
+        return false;
+    }
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut previous = ' ';
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if c == '\'' {
+                    quote = None;
+                }
+            }
+            Some(_) => match c {
+                '"' => quote = None,
+                '\\' => {
+                    chars.next();
+                }
+                '`' => return false,
+                '$' if chars.peek() == Some(&'(') => return false,
+                _ => {}
+            },
+            None => match c {
+                '\'' | '"' => {
+                    // A quoted word is never a shell keyword.
+                    word.push(c);
+                    quote = Some(c);
+                }
+                '\\' => {
+                    word.push(c);
+                    chars.next();
+                }
+                '(' | ')' | '|' | '`' => return false,
+                '$' if chars.peek() == Some(&'\'') => return false,
+                // `>&`, `<&` and `&>` redirect; any other `&` forks or joins.
+                '&' if !(matches!(previous, '>' | '<') || chars.peek() == Some(&'>')) => {
+                    return false
+                }
+                c if c.is_whitespace() || c == ';' => words.push(std::mem::take(&mut word)),
+                _ => word.push(c),
+            },
+        }
+        previous = c;
+    }
+    words.push(word);
+    quote.is_none()
+        && !words
+            .iter()
+            .any(|word| COMPOUND_WORDS.contains(&word.as_str()))
 }
 
 /// An assignment's value, for the command `program` that may read it. A
