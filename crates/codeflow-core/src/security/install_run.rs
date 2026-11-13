@@ -1535,6 +1535,46 @@ mod tests {
         }
     }
 
+    /// A command variable set without a `NAME=value` word (a builtin that
+    /// writes a name, an append, a default expansion, a loop variable, a
+    /// name reference) holds a value this reader does not see, and an
+    /// update to a read-only variable fails: the old value stays live, or
+    /// the line is judged on its raw text.
+    #[test]
+    fn a_command_variable_the_reader_cannot_track_is_unresolved() {
+        for (variable, line) in [
+            ("ACK_PAGER", "ack -h 'codeflow update' notes.txt"),
+            ("GH_PAGER", "gh search issues 'codeflow update'"),
+        ] {
+            for form in [
+                format!("export {variable}=sh; readonly {variable}; unset {variable}; {line}"),
+                format!("export {variable}=sh; declare -r {variable}; {variable}=less; {line}"),
+                format!("export {variable}=sh; typeset -rx {variable}; unset {variable}; {line}"),
+                format!("export {variable}=s; {variable}+=h; {line}"),
+                format!("export {variable}=less; read {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; read -r -p x {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; printf -v {variable} sh; {line}"),
+                format!("export {variable}=less; printf -v{variable} sh; {line}"),
+                format!("export {variable}; : ${{{variable}:=sh}}; {line}"),
+                format!("export {variable}; : \"${{{variable}=sh}}\"; {line}"),
+                format!("export {variable}=less; declare -n r={variable}; r=sh; {line}"),
+                format!("export {variable}=less; getopts a {variable}; {line}"),
+                format!("export {variable}=less; mapfile -t {variable} < pager.txt; {line}"),
+                format!("export {variable}=less; for {variable} in sh; do {line}; done"),
+            ] {
+                assert!(runs(&form), "{form}");
+            }
+        }
+        for command in [
+            "readonly NOTE=1; export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update' docs",
+            "export ACK_PAGER=less; echo \"$ACK_PAGER\"; ack 'codeflow update' docs",
+            "export GH_PAGER=less; read answer < notes.txt; gh search issues 'codeflow update'",
+            "export ACK_PAGER; ack 'codeflow update' docs",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// A program another program runs, such as a Git pager setting, is
     /// unresolved when it is a shell reading its input.
     #[test]
