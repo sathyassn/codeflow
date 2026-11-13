@@ -2075,17 +2075,25 @@ fn note_config_write(args: &[String], settings: &mut bool, aliases: &mut bool) {
 /// The arguments Git takes when a program word the guard cannot fill in,
 /// a value or a pattern, is Git running an alias of the repository
 /// (TSK-1456): the command's first word that is not an option is no Git
-/// program and names an alias where the command may run. Its runners are
-/// then read as literal `git` reads them, the alias's included. A builtin
-/// is read through the command's `git` reading, and any other word keeps
-/// the command's own verdict.
+/// program and names an alias where the command would run. Its runners
+/// are then read as literal `git` reads them, the alias's included. A
+/// builtin is read through the command's `git` reading, and any other word
+/// keeps the command's own verdict.
+///
+/// The alias is looked up where runner resolution reads literal `git`:
+/// from each directory in `starts`, moved by the command's launchers
+/// ([`launcher_effects`]), with the inherited environment and the
+/// command's own assignments ([`environment`]). A launcher, assignment or
+/// configuration the guard cannot read with certainty is an error naming
+/// why, so the command is refused as literal `git` would be.
 fn unread_alias(
     segment: &str,
-    program: &str,
-    args: &[String],
-    locations: &[PathBuf],
-    env: &crate::security::git_config::Environment,
-) -> Option<Vec<String>> {
+    (program, args): (&str, &[String]),
+    tokens: &[String],
+    literals: &Literals,
+    starts: &[PathBuf],
+    inherited: &crate::security::git_config::Environment,
+) -> Result<Option<Vec<String>>, String> {
     let (_, marks) = super::command_argv_marked(segment);
     let unread = match marks.len().checked_sub(args.len() + 1) {
         Some(at) if super::unmarked(&marks[at]) == program => {
@@ -2094,21 +2102,108 @@ fn unread_alias(
         _ => expands(program) || super::has_glob(program),
     };
     if !unread {
-        return None;
+        return Ok(None);
     }
-    let (verb, _) = git_subcommand(args)?;
+    let Some((verb, _)) = git_subcommand(args) else {
+        return Ok(None);
+    };
     if known_program(verb) || expands(verb) {
-        return None;
+        return Ok(None);
     }
-    let global = globals(args).ok()?;
+    let Ok(global) = globals(args) else {
+        return Ok(None);
+    };
+    let (changes, uncertain) = launcher_effects(tokens);
+    if let Some(why) = uncertain {
+        return Err(why);
+    }
+    let mut env = inherited.clone();
+    env.extend(environment(&environment_words(tokens)?, literals)?);
+    let env = config_environment(&env);
     let key = format!("alias.{verb}");
-    locations
-        .iter()
-        .any(|at| {
-            crate::security::git_config::read(at, global, &config_environment(env))
-                .is_ok_and(|config| config.get(&key).is_ok_and(|value| value.is_some()))
-        })
-        .then(|| args.to_vec())
+    // A configuration the guard cannot read there, such as one behind a
+    // global option Git does not take, is read as no alias: the command
+    // keeps its own verdict.
+    let alias = starts.iter().any(|start| {
+        let at = changes.iter().fold(start.clone(), |at, change| {
+            integrity_shell_path(change, &at)
+        });
+        crate::security::git_config::read(&at, global, &env)
+            .is_ok_and(|config| config.get(&key).is_ok_and(|value| value.is_some()))
+    });
+    Ok(alias.then(|| args.to_vec()))
+}
+
+/// The words of `tokens` that set the command's environment, for
+/// [`environment`]: its leading assignments, each `env` launcher with its
+/// assignments, and the command. The other launchers and their options are
+/// left out, as are `env`'s directory options (`-C DIR`, `-CDIR`, `--chdir
+/// DIR`, `--chdir=DIR` and its abbreviations), which [`launcher_effects`]
+/// reads, and `env`'s `--`. Any other `env` option is an error naming it,
+/// as [`launcher_env`] gives.
+fn environment_words(tokens: &[String]) -> Result<Vec<String>, String> {
+    let mut kept = Vec::with_capacity(tokens.len());
+    let mut taker = super::Taker::Shell;
+    let mut index = 0;
+    loop {
+        let assignments = tokens
+            .get(index..)
+            .map_or(0, |rest| super::skip_leading(rest, taker));
+        kept.extend_from_slice(&tokens[index..index + assignments]);
+        index += assignments;
+        let Some(word) = tokens.get(index) else {
+            return Ok(kept);
+        };
+        if super::is_prefix_launcher(word) {
+            let Some(next) = super::skip_launcher_options(word, tokens, index + 1) else {
+                return Ok(kept);
+            };
+            // `arch -e NAME=VALUE` and `-d NAME` set and unset variables,
+            // and `exec -c` clears the environment: unread here.
+            let launcher = super::launcher_name(word);
+            if let Some(option) = tokens[index + 1..next.min(tokens.len())].iter().find(|o| {
+                (launcher == "arch" && matches!(o.as_str(), "-e" | "-d"))
+                    || (launcher == "exec"
+                        && o.strip_prefix('-')
+                            .is_some_and(|flags| !flags.starts_with('-') && flags.contains('c')))
+            }) {
+                return Err(format!("the `{launcher}` option `{option}`"));
+            }
+            index = next;
+            taker = super::Taker::Shell;
+            continue;
+        }
+        if super::launcher_name(word) != "env" {
+            kept.extend_from_slice(&tokens[index..]);
+            return Ok(kept);
+        }
+        kept.push(word.clone());
+        index += 1;
+        while let Some(option) = tokens
+            .get(index)
+            .filter(|o| o.starts_with('-') && o.len() > 1)
+        {
+            index += 1;
+            if option == "--" {
+                break;
+            }
+            let refused = || format!("the `env` option `{option}`");
+            if let Some(long) = option.strip_prefix("--") {
+                let (name, value) = long
+                    .split_once('=')
+                    .map_or((long, None), |(n, v)| (n, Some(v)));
+                if !matches!(super::env_long_option(name), Ok(("chdir", _))) {
+                    return Err(refused());
+                }
+                index += usize::from(value.is_none());
+            } else if option == "-C" {
+                index += 1;
+            } else if !option.starts_with("-C") {
+                return Err(refused());
+            }
+        }
+        taker = super::Taker::Env;
+    }
 }
 
 fn literal_segments(segments: &[String]) -> Vec<String> {
@@ -2260,11 +2355,13 @@ fn collect_segments(
         };
         let alias = unread_alias(
             &filled,
-            program,
-            args,
+            (program, args),
+            &tokens,
+            &literals,
             &locations[index],
             &inputs.environment,
-        );
+        )
+        .inspect_err(|_| *reading = vec![program.to_string()])?;
         let alias_read = alias.is_some();
         if alias_read {
             *reading = vec![program.to_string()];
@@ -2297,9 +2394,15 @@ fn collect_segments(
         }
         let original = args;
         let args: Vec<String> = inputs.globals.iter().chain(&original).cloned().collect();
-        let args = config_env(&args, &literals, &tokens)?;
+        // An `env` option in front of the command, a directory change
+        // included, keeps main's refusal ([`launcher_env`]); the command's
+        // environment is then read past every launcher, as the alias reading
+        // above reads it (TSK-1456).
+        launcher_env(&tokens)?;
+        let words = environment_words(&tokens)?;
+        let args = config_env(&args, &literals, &words)?;
         let mut env = inputs.environment.clone();
-        env.extend(environment(&tokens, &literals)?);
+        env.extend(environment(&words, &literals)?);
         let mut pending = Vec::new();
         for start in &locations[index] {
             let (changes, uncertain) = launcher_effects(&tokens);

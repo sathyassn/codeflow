@@ -246,6 +246,119 @@ fn unread_program_words_read_the_runners_of_a_git_alias() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// An alias is read in the repository the command runs in after its
+/// launchers and assignments, for literal `git` and for an unread program
+/// word alike: only the second repository's alias runs a configured
+/// program, and the starting repository has no alias of that name, then
+/// one that only shows status. At exec-guard each command is refused as
+/// literal `git` is: by the configured program's rule, or by
+/// `git.hook_integrity` behind an `env` option; at git-guard the unread
+/// word is refused wherever literal `git` is. The configured program is a
+/// string the guard reads; Git never runs here.
+#[test]
+fn unread_program_words_read_the_alias_where_the_command_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    let other = dir.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    init_repo(&other, "task/x");
+    write_agent_policy(&other, MEASURED_POLICY);
+    git(&other, &["config", "alias.inspect", "diff --ext-diff"]);
+    git(&other, &["config", "diff.external", "claude -p x"]);
+    std::fs::write(other.join("base.txt"), "base\nchanged\n").unwrap();
+    let mut wrong = moved_alias_rows(dir.path(), false);
+    git(dir.path(), &["config", "alias.inspect", "status"]);
+    wrong.extend(moved_alias_rows(dir.path(), true));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The rows of [`unread_program_words_read_the_alias_where_the_command_runs`]
+/// in `root`, whose own alias of the same name only shows status when
+/// `aliased`: every row whose verdict is wrong.
+fn moved_alias_rows(root: &Path, aliased: bool) -> Vec<String> {
+    let headless = Some("security.headless_peer_runs");
+    let integrity = Some("git.hook_integrity");
+    // An `env` option in front of Git keeps main's `git.hook_integrity`
+    // refusal at exec-guard.
+    let moved = [
+        ("env -C other {} inspect", integrity),
+        ("env --chdir=other {} inspect", integrity),
+        ("env --chdir other {} inspect", integrity),
+        ("nice env -C other -- {} inspect", headless),
+        (
+            "env GIT_DIR=other/.git GIT_WORK_TREE=other {} inspect",
+            headless,
+        ),
+        (
+            "nice env GIT_DIR=other/.git GIT_WORK_TREE=other {} inspect",
+            headless,
+        ),
+        (
+            "GIT_DIR=other/.git GIT_WORK_TREE=other {} inspect",
+            headless,
+        ),
+    ];
+    // Each command as literal `git` and with the program word filled in
+    // at run time, unquoted and in double quotes.
+    let mut rows = Vec::new();
+    let mut wrong = Vec::new();
+    for (shape, rule) in moved {
+        let literal = hook(root, "git-guard", &shape.replace("{}", "git"), false);
+        for word in ["git", "$TOOL", "\"$TOOL\""] {
+            let command = shape.replace("{}", word);
+            let out = hook(root, "git-guard", &command, false);
+            if literal.status.code() == Some(2) && out.status.code() != Some(2) {
+                wrong.push(format!(
+                    "git-guard: {command:?}: literal git is refused, exited {:?}: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+            rows.push(("exec-guard", command, rule));
+        }
+    }
+    for word in ["git", "$TOOL"] {
+        rows.push(("exec-guard", format!("env -i {word} inspect"), integrity));
+    }
+    // Main's refusal of an `env` option in front of Git holds, and a
+    // launcher that sets or clears the environment is refused as one.
+    rows.push((
+        "exec-guard",
+        "env -C other git status".to_string(),
+        integrity,
+    ));
+    for command in [
+        "arch -e GIT_DIR=other/.git -e GIT_WORK_TREE=other git inspect",
+        "exec -c git inspect",
+        "exec -c $TOOL inspect",
+    ] {
+        rows.push(("exec-guard", command.to_string(), integrity));
+    }
+    // A word that names no alias where the command runs, and no Git
+    // reading: main's verdicts.
+    let mut allowed = vec![
+        "$TOOL inspect",
+        "env -C other $TOOL notes.md",
+        "env -C other ls",
+    ];
+    if aliased {
+        allowed.push("git inspect");
+    }
+    for command in allowed {
+        rows.push(("exec-guard", command.to_string(), None));
+    }
+    let rows: Vec<(&str, &str, Option<&str>)> = rows
+        .iter()
+        .map(|(name, command, rule)| (*name, command.as_str(), *rule))
+        .collect();
+    wrong.extend(check(root, &rows));
+    wrong
+        .into_iter()
+        .map(|row| format!("starting alias {aliased}: {row}"))
+        .collect()
+}
+
 /// The expansions the shell applies only in some forms (`~+`, `~-` and
 /// zsh's glob qualifiers) in the program position: each keeps main's
 /// verdict, or is read under each guarded name and refused with the way
