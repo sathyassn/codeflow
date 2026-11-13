@@ -475,6 +475,12 @@ fn command_valued_options_refuse_through_launchers() {
         "export ACK_PAGER=sh; builtin readonly ACK_PAGER; unset ACK_PAGER; ack -h 'codeflow update' notes.txt",
         "export GH_PAGER=less; command -p read GH_PAGER < pager.txt; gh search issues 'codeflow update'",
         "export GH_PAGER=sh; env unset GH_PAGER; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; unset GH_PAGER; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; GH_PAGER=less; true; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; { unset GH_PAGER; }; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
+        "export ACK_PAGER=less; printf -v {ACK_PAGER,sh}; ack --nocolor --nogroup -h 'codeflow update' notes.txt",
+        "export ACK_PAGER=sh; readonly {ACK_PAGER,NOTE}; unset ACK_PAGER; ack --nocolor --nogroup -h 'codeflow update' notes.txt",
     ]
     .iter()
     .map(ToString::to_string)
@@ -501,12 +507,9 @@ fn command_valued_options_refuse_through_launchers() {
         "gh pr list --search x -- 'codeflow update'",
         "ACK_PAGER=less ack 'codeflow update' docs",
         "PAGER='less -R' gh search issues 'codeflow update'",
-        "export GH_PAGER=sh; unset GH_PAGER; gh search issues 'codeflow update'",
-        "export GH_PAGER=sh; GH_PAGER=less; true; gh search issues 'codeflow update'",
         "export NOTE=sh; true; gh search issues 'codeflow update'",
-        "export GH_PAGER=sh; { unset GH_PAGER; }; gh search issues 'codeflow update'",
-        "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
         "builtin echo hello; gh search issues 'codeflow update'",
+        "printf -v out '%s' '{GH_PAGER,sh}'; gh search issues 'codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)

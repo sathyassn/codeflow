@@ -1640,9 +1640,9 @@ mod tests {
         }
     }
 
-    /// A command variable set on the line stays live across commands that
-    /// do not read it, until `unset` or a new value: the program that reads
-    /// it later, or one that can start such a program, judges it.
+    /// A command variable set on the line stays live across every other
+    /// command: the program that reads it, or one that can start such a
+    /// program, judges it, whatever `unset` or new value the line holds.
     #[test]
     fn a_command_variable_stays_live_across_other_commands() {
         for (assignments, line) in [
@@ -1693,15 +1693,15 @@ mod tests {
             "export ACK_PAGER=sh; git -c alias.s='!ack -h \"codeflow update\" notes.txt' s",
             "export ACK_PAGER=sh; find . -name notes.txt -exec ack -h 'codeflow update' {} +",
             "export GH_PAGER=sh; echo 'codeflow update' | xargs gh search issues",
-        ] {
-            assert!(runs(command), "{command}");
-        }
-        for command in [
             "export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update' docs",
             "export ACK_PAGER=sh; unset -v ACK_PAGER; true; ack 'codeflow update' docs",
             "export GH_PAGER=sh; unset GH_PAGER; gh search issues 'codeflow update'",
             "export ACK_PAGER=sh; ACK_PAGER=less; true; ack 'codeflow update' docs",
             "export GH_PAGER=sh; export GH_PAGER='less -R'; true; gh search issues 'codeflow update'",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
             "export ACK_PAGER=less; true; ack 'codeflow update' docs",
             "export GH_PAGER='less -R'; cd docs && gh search issues 'codeflow update'",
             "export NOTE=sh; true; ack 'codeflow update' docs",
@@ -1712,13 +1712,12 @@ mod tests {
         }
     }
 
-    /// An `unset` or a new value clears a command variable only where it
-    /// runs in the same shell as the later reader, and always runs: in a
-    /// subshell, a pipeline, a conditional or loop body, a function body, a
-    /// substitution, the background or another shell's body, the old value
-    /// stays live.
+    /// No `unset` or new value clears a command variable: in the same
+    /// shell, a subshell, a pipeline, a conditional or loop body, a
+    /// function body, a substitution, the background or another shell's
+    /// body, the old value stays live.
     #[test]
-    fn a_command_variable_is_cleared_only_by_a_same_shell_update() {
+    fn a_command_variable_is_never_cleared_on_the_line() {
         for (variable, line) in [
             (
                 "ACK_PAGER",
@@ -1746,19 +1745,20 @@ mod tests {
                     format!("export {variable}=sh; bash -c \"{update}\"; {line}"),
                     format!("export {variable}=sh\n({update})\n{line}"),
                     format!("export {variable}=sh; x=$'a\\'b'; {update}; {line}"),
+                    format!("export {variable}=sh; {update}; {line}"),
+                    format!("export {variable}=sh; {{ {update}; }}; {line}"),
+                    format!("export {variable}=sh\n{update}\n{line}"),
+                    format!("export {variable}=sh; command {update}; {line}"),
+                    format!("export {variable}=sh; command -p {update}; {line}"),
                 ] {
                     assert!(runs(&form), "{form}");
                 }
             }
         }
         for command in [
-            "export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update' docs",
-            "export ACK_PAGER=sh; ACK_PAGER=less; ack 'codeflow update' docs",
-            "export ACK_PAGER=sh; { unset ACK_PAGER; }; ack 'codeflow update' docs",
-            "export ACK_PAGER=sh\nunset ACK_PAGER\nack 'codeflow update' docs",
-            "export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update (x|y)' docs",
-            "export GH_PAGER=sh; unset GH_PAGER; gh search issues 'codeflow update'",
-            "export GH_PAGER=sh; export GH_PAGER='less -R'; gh search issues 'codeflow update'",
+            "export ACK_PAGER=less; unset ACK_PAGER; ack 'codeflow update' docs",
+            "export NOTE=sh; unset NOTE; gh search issues 'codeflow update'",
+            "export GH_PAGER='less -R'; gh search issues 'codeflow update'",
         ] {
             assert!(!runs(command), "{command}");
         }
@@ -1766,9 +1766,8 @@ mod tests {
 
     /// A command variable set without a `NAME=value` word (a builtin that
     /// writes a name, an append, a default expansion, a loop variable, a
-    /// name reference) holds a value this reader does not see, and an
-    /// update to a read-only variable fails: the old value stays live, or
-    /// the line is judged on its raw text.
+    /// name reference, a bare name a declaration gives) holds a value this
+    /// reader does not see: the line is judged on its raw text.
     #[test]
     fn a_command_variable_the_reader_cannot_track_is_unresolved() {
         for (variable, line) in [
@@ -1792,15 +1791,16 @@ mod tests {
                 format!("export {variable}=less; for {variable} in sh; do {line}; done"),
                 format!("export {variable}=less; select {variable} in sh; do {line}; done"),
                 format!("export {variable}=less; sleep 1 & wait -n -p {variable}; {line}"),
+                format!("export {variable}; {line}"),
+                format!("readonly NOTE=1; export {variable}=sh; unset {variable}; {line}"),
             ] {
                 assert!(runs(&form), "{form}");
             }
         }
         for command in [
-            "readonly NOTE=1; export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update' docs",
+            "readonly NOTE=1; export ACK_PAGER=less; ack 'codeflow update' docs",
             "export ACK_PAGER=less; echo \"$ACK_PAGER\"; ack 'codeflow update' docs",
             "export GH_PAGER=less; read answer < notes.txt; gh search issues 'codeflow update'",
-            "export ACK_PAGER; ack 'codeflow update' docs",
             "env -u GH_PAGER gh search issues 'codeflow update'",
             "echo GH_PAGER; gh search issues 'codeflow update'",
             "printf '%s' GH_PAGER; gh search issues 'codeflow update'",
@@ -1813,9 +1813,7 @@ mod tests {
     /// current-shell wrappers (`builtin`, `command`, `command -p`, `noglob`)
     /// a builtin acts on this shell, and behind any other launcher (`env`,
     /// `nice`, `timeout`) it does not run in this shell at all. A wrapper
-    /// only some shells know (`builtin`, a zsh modifier) never clears a
-    /// value, and a wrapper the view cannot remove judges the line on its
-    /// raw text.
+    /// the view cannot remove judges the line on its raw text.
     #[test]
     fn variable_checks_read_through_current_shell_wrappers() {
         for (variable, line) in [
@@ -1847,6 +1845,8 @@ mod tests {
                 format!("export {variable}=sh; noglob unset {variable}; {line}"),
                 format!("export {variable}=sh; - unset {variable}; {line}"),
                 format!("export {variable}=sh; command builtin unset {variable}; {line}"),
+                format!("export {variable}=sh; command unset {variable}; {line}"),
+                format!("export {variable}=sh; command export {variable}=less; {line}"),
             ] {
                 assert!(runs(&form), "{form}");
             }
@@ -1856,11 +1856,62 @@ mod tests {
             "command ls docs; gh search issues 'codeflow update'",
             "command -v gh; gh search issues 'codeflow update'",
             "export NOTE=1; builtin unset NOTE; gh search issues 'codeflow update'",
-            "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
-            "export GH_PAGER=sh; command -p unset GH_PAGER; gh search issues 'codeflow update'",
-            "export ACK_PAGER=sh; command unset ACK_PAGER; ack 'codeflow update' docs",
-            "export GH_PAGER=sh; command export GH_PAGER=less; gh search issues 'codeflow update'",
             "export NOTE=1; noglob unset NOTE; gh search issues 'codeflow update'",
+            "command export GH_PAGER=less; gh search issues 'codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// A word the shell expands (braces, a pattern, a variable) where a
+    /// name-writing or declaring builtin, or a wrapper before one, takes a
+    /// word may write any name, or turn an argument into the option that
+    /// names one: the line is judged on its raw text. A word quoted as
+    /// written is data. Values set anywhere on the line count for every
+    /// reader on it, since a loop or function can run a later assignment
+    /// first.
+    #[test]
+    fn expanded_operands_and_later_values_judge_the_line() {
+        for (variable, line) in [
+            (
+                "ACK_PAGER",
+                "ack --nocolor --nogroup -h 'codeflow update' notes.txt",
+            ),
+            ("GH_PAGER", "gh search issues 'codeflow update'"),
+        ] {
+            for form in [
+                format!("export {variable}=less; printf -v {{{variable},sh}}; {line}"),
+                format!(
+                    "export {variable}=sh; readonly {{{variable},NOTE}}; unset {variable}; {line}"
+                ),
+                format!("export {variable}=less; printf {{-v,{variable}}} sh; {line}"),
+                format!("export {variable}=less; read {{{variable},x}} < pager.txt; {line}"),
+                format!("export {variable}=less; read {variable}* < pager.txt; {line}"),
+                format!("export {variable}=less; read \"$name\" < pager.txt; {line}"),
+                format!("export {variable}=less; mapfile -t {{{variable},x}} < pager.txt; {line}"),
+                format!("export {variable}=less; getopts a {{{variable},x}}; {line}"),
+                format!("export {variable}=less; wait -n -p {{{variable},x}}; {line}"),
+                format!("export {variable}=less; vared {{{variable},x}}; {line}"),
+                format!("export {variable}=less; declare {{{variable},x}}=sh; {line}"),
+                format!("export {variable}=less; export {{{variable},x}}=sh; {line}"),
+                format!("export {variable}=less; local -a \"$name\"; {line}"),
+                format!("export {variable}=less; {{read,{variable}}} < pager.txt; {line}"),
+                format!("export {variable}=less; builtin {{read,{variable}}} < pager.txt; {line}"),
+                format!("export {variable}=less; command -$v read {variable} < pager.txt; {line}"),
+                format!("for i in 1 2; do {line}; {variable}=sh; done"),
+                format!("f() {{ {line}; }}; {variable}=sh; f"),
+            ] {
+                assert!(runs(&form), "{form}");
+            }
+        }
+        for command in [
+            "ACK_PAGER=less ack 'codeflow update' docs",
+            "read line < notes.txt; gh search issues 'codeflow update'",
+            "printf -v out '%s' x; gh search issues 'codeflow update'",
+            "printf -v out '%s' '{GH_PAGER,sh}'; gh search issues 'codeflow update'",
+            "echo '{ACK_PAGER,sh}'; ack 'codeflow update' docs",
+            "ls *.md; gh search issues 'codeflow update'",
+            "export GH_PAGER='less -R'; gh search issues 'codeflow update'",
         ] {
             assert!(!runs(command), "{command}");
         }
