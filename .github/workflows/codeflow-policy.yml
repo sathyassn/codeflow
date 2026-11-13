@@ -521,9 +521,17 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+        # Rulings of 2026-11-11: no pull request runs the gates or the
+        # verdicts (into a line until the line gate ships, the Director's;
+        # into main while main is relaxed, the operator's), so admission names
+        # the two security jobs that run on every pull request. The decider
+        # refuses a named job that is skipped or absent, and a run that did
+        # not conclude success. To restore main's checks, also name the two
+        # verdict jobs for a pull request into main only, with the gates; a
+        # pull request into a line keeps this list.
         run: |
           python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
-            --base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows
+            --base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "secret scan" --require "security review"
 
       - name: Assert the authority checkout
         env:
