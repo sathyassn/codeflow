@@ -219,7 +219,7 @@ Details: [harness and model details](#harness-and-model-details).
 Details: [publish and rollback details](#publish-and-rollback-details).
 
 - [ ] 5.1 A human approves and merges the normal work PR after its release-state check is fresh, and no agent merges or tags it. Evidence: the merged PR and fresh check.
-- [ ] 5.2 A human dispatches the generated workflow for current `main` and the pending `vX.Y.Z`, and cargo-dist tags only after the guarded build succeeds. Evidence: the run link.
+- [ ] 5.2 The operator tags current `main` as `vX.Y.Z`, then a human dispatches; the workflow publishes only after the guarded build succeeds. Evidence: the tag and run link.
 - [ ] 5.3 Archives, installers, checksums and attestations from the pinned workflow, and the release notes, are complete and consistent before announcement. Evidence: the release page.
 - [ ] 5.4 Fresh public-network install canaries pass without private credentials or repository access. Evidence: canary output.
 - [ ] 5.5 Rollback is ready, with the prior release still installable and a corrective release owner named. Evidence: the rollback record.

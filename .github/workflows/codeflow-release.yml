@@ -18,8 +18,10 @@ name: codeflow-release
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  # Permanent placement (operator ruling, 2026-11-11): no run on a push to
+  # an integration line; `release state` runs on main's push.
   push:
-    branches: [main, "integration/**"]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
