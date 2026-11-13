@@ -777,6 +777,52 @@ fn programs_handed_output_refuse_outside_their_viewer_options() {
     tally.finish();
 }
 
+/// AC-1 through a Git tool runner (a filter, a diff or merge driver, a
+/// signing program, fsmonitor, a hook or trailer command): a shell or an
+/// interpreter that reads its code from its input or a data operand
+/// judges the line on its raw text; ordinary tools stay clean.
+#[test]
+fn tool_runners_reading_code_from_their_input_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "git -c filter.x.clean=perl log -1 --grep='codeflow update'",
+        "git -c filter.x.smudge='awk -f -' log -1 --grep='codeflow update'",
+        "git -c filter.x.clean='nice python3' log -1 --grep='codeflow update'",
+        "git -c filter.x.clean='perl x.pl' log -1 --grep='codeflow update'",
+        "git -c diff.external=ruby log -p -1 --grep='codeflow update'",
+        "GIT_EXTERNAL_DIFF=node git log -p -1 --grep='codeflow update'",
+        "git -c merge.x.driver=php log -1 --grep='codeflow update'",
+        "git -c gpg.program=lua log --show-signature -1 --grep='codeflow update'",
+        "git -c core.fsmonitor=tclsh log -1 --grep='codeflow update'",
+        "git -c hook.x.command=perl log -1 --grep='codeflow update'",
+        "git -c trailer.x.command=perl interpret-trailers --trailer 'x=codeflow update'",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let controls: Vec<String> = [
+        "git -c filter.lfs.process='git-lfs filter-process' \
+         -c filter.lfs.clean='git-lfs clean -- %f' \
+         -c filter.lfs.smudge='git-lfs smudge -- %f' log -1 --grep='codeflow update'",
+        "git -c diff.external=difft log -p -1 --grep='codeflow update'",
+        "git -c gpg.program=gpg log --show-signature -1 --grep='codeflow update'",
+        "git -c filter.x.clean=\"perl -pe 's/a/b/'\" log -1 --grep='codeflow update'",
+        "git -c merge.x.driver='git merge-file %A %O %B' log -1 --grep='codeflow update'",
+        "git -c difftool.vimdiff.cmd='vimdiff \"$LOCAL\" \"$REMOTE\"' \
+         difftool -t vimdiff -y HEAD -- 'codeflow update'",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&controls, &root);
+    tally.finish();
+}
+
 /// AC-6: words that only name the verbs as data stay allowed: the binary's
 /// own verbs that record free text, test operands, other cargo
 /// subcommands, an assigned value no command on the line reads, a folder

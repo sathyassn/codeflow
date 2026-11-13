@@ -3267,6 +3267,33 @@ mod tests {
         }
     }
 
+    /// A tool variable Git runs with its own data (an ssh command, an
+    /// askpass program, an external diff, a proxy command) naming a shell
+    /// or an interpreter that reads its code from its input or a data
+    /// operand judges the line on its raw text; an ordinary tool, or an
+    /// interpreter given its code inline, stays data.
+    #[test]
+    fn tool_variables_naming_a_code_reader_judge_the_line() {
+        for command in [
+            "GIT_SSH_COMMAND=perl git ls-remote origin 'codeflow update'",
+            "GIT_EXTERNAL_DIFF='env python3' git log -p --grep 'codeflow update'",
+            "export GIT_ASKPASS=ruby; git ls-remote origin 'codeflow update'",
+            "SSH_ASKPASS='awk -f -' git ls-remote origin 'codeflow update'",
+            "GIT_PROXY_COMMAND='perl x.pl' git ls-remote origin 'codeflow update'",
+            "GIT_SSH=node git ls-remote origin 'codeflow update'",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "GIT_SSH_COMMAND='ssh -i key' git ls-remote origin 'codeflow update'",
+            "GIT_EXTERNAL_DIFF=difft git log -p --grep 'codeflow update'",
+            "GIT_ASKPASS=git-gui--askpass git ls-remote origin 'codeflow update'",
+            "GIT_SSH_COMMAND=\"perl -e 'exec q(ssh), @ARGV'\" git ls-remote origin x",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// A program another program runs, such as a Git pager setting, is
     /// unresolved when it is a shell reading its input.
     #[test]
