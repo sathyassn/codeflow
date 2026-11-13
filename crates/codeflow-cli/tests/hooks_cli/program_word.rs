@@ -27,6 +27,17 @@ fn hook(root: &Path, name: &str, command: &str, runners: bool) -> Output {
     run_with_stdin(&mut cmd, &guard_payload(command, root))
 }
 
+/// Run hook `name` on `command` with `env` set in the hook process, the
+/// session's own environment.
+fn hook_env(root: &Path, name: &str, command: &str, env: &[(&str, &str)]) -> Output {
+    let mut cmd = codeflow();
+    cmd.args(["hook", name]).current_dir(root);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    run_with_stdin(&mut cmd, &guard_payload(command, root))
+}
+
 /// Every row whose verdict is wrong, with the hook and what it printed.
 fn check(root: &Path, rows: &[(&str, &str, Option<&str>)]) -> Vec<String> {
     check_with(root, rows, false)
@@ -298,6 +309,20 @@ fn moved_alias_rows(root: &Path, aliased: bool) -> Vec<String> {
             "GIT_DIR=other/.git GIT_WORK_TREE=other {} inspect",
             headless,
         ),
+        // Launchers that set or clear variables, and env's GNU spelling,
+        // are read as they act.
+        (
+            "arch -e GIT_DIR=other/.git -e GIT_WORK_TREE=other {} inspect",
+            headless,
+        ),
+        (
+            "exec -c env GIT_DIR=other/.git GIT_WORK_TREE=other {} inspect",
+            headless,
+        ),
+        (
+            "genv GIT_DIR=other/.git GIT_WORK_TREE=other {} inspect",
+            headless,
+        ),
     ];
     // Each command as literal `git` and with the program word filled in
     // at run time, unquoted and in double quotes.
@@ -318,23 +343,19 @@ fn moved_alias_rows(root: &Path, aliased: bool) -> Vec<String> {
             rows.push(("exec-guard", command, rule));
         }
     }
-    for word in ["git", "$TOOL"] {
-        rows.push(("exec-guard", format!("env -i {word} inspect"), integrity));
-    }
-    // Main's refusal of an `env` option in front of Git holds, and a
-    // launcher that sets or clears the environment is refused as one.
+    // Main's refusal of an `env` option in front of literal Git holds; an
+    // unread word behind one is refused so only where an alias is found.
+    rows.push(("exec-guard", "env -i git inspect".to_string(), integrity));
+    rows.push((
+        "exec-guard",
+        "env -i $TOOL inspect".to_string(),
+        aliased.then_some("git.hook_integrity"),
+    ));
     rows.push((
         "exec-guard",
         "env -C other git status".to_string(),
         integrity,
     ));
-    for command in [
-        "arch -e GIT_DIR=other/.git -e GIT_WORK_TREE=other git inspect",
-        "exec -c git inspect",
-        "exec -c $TOOL inspect",
-    ] {
-        rows.push(("exec-guard", command.to_string(), integrity));
-    }
     // A word that names no alias where the command runs, and no Git
     // reading: main's verdicts.
     let mut allowed = vec![
@@ -357,6 +378,148 @@ fn moved_alias_rows(root: &Path, aliased: bool) -> Vec<String> {
         .into_iter()
         .map(|row| format!("starting alias {aliased}: {row}"))
         .collect()
+}
+
+/// An alias the command defines for itself through a variable, which the
+/// command assigns in front of Git, is read with the value Git sees: the
+/// command's own, whatever the session holds under that name. A variable
+/// the guard cannot read is refused for literal `git` and an unread word
+/// alike. The configured program is a string the guard reads; Git never
+/// runs here.
+#[test]
+fn unread_program_words_read_an_alias_from_the_command_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    git(dir.path(), &["config", "diff.external", "claude -p x"]);
+    std::fs::write(dir.path().join("base.txt"), "base\nchanged\n").unwrap();
+    let headless = Some("security.headless_peer_runs");
+    let integrity = Some("git.hook_integrity");
+    let mut rows = Vec::new();
+    for word in ["git", "$TOOL", "\"$TOOL\""] {
+        rows.push((
+            format!(
+                "K18_ALIAS='diff --ext-diff' {word} --config-env=alias.inspect=K18_ALIAS inspect"
+            ),
+            headless,
+        ));
+        rows.push((
+            format!("{word} --config-env=alias.inspect=K18_UNSET inspect"),
+            integrity,
+        ));
+    }
+    rows.push(("$TOOL inspect".to_string(), None));
+    rows.push(("K18_ALIAS=x $TOOL build".to_string(), None));
+    let mut wrong = Vec::new();
+    // The session without the variable, then holding a different alias
+    // under the same name.
+    for env in [&[][..], &[("K18_ALIAS", "status")][..]] {
+        for (command, rule) in &rows {
+            let out = hook_env(dir.path(), "exec-guard", command, env);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let right = match rule {
+                Some(rule) => out.status.code() == Some(2) && stderr.contains(rule),
+                None => line_allows(&out),
+            };
+            if !right {
+                wrong.push(format!(
+                    "exec-guard {env:?}: {command:?}: expected {rule:?}, exited {:?}: {stderr}",
+                    out.status.code()
+                ));
+            }
+        }
+        // git-guard refuses the unread word wherever it refuses literal
+        // `git`, and allows the rows that name no alias.
+        for (command, rule) in &rows {
+            let literal = hook_env(
+                dir.path(),
+                "git-guard",
+                &command.replace("\"$TOOL\"", "git").replace("$TOOL", "git"),
+                env,
+            );
+            let out = hook_env(dir.path(), "git-guard", command, env);
+            let refused = out.status.code() == Some(2);
+            let right = if rule.is_none() {
+                !refused
+            } else {
+                refused || literal.status.code() != Some(2)
+            };
+            if !right {
+                wrong.push(format!(
+                    "git-guard {env:?}: {command:?}: literal exited {:?}, exited {:?}: {}",
+                    literal.status.code(),
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A launcher whose options the guard can read keeps an ordinary line
+/// allowed: an option's operand is never read as an option, a launcher
+/// that sets, unsets or clears variables is applied, and a directory
+/// change is followed into a repository with no alias of that name.
+#[test]
+fn launcher_options_in_front_of_a_program_word_are_applied() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    let commands = [
+        "exec -a -c git status",
+        "exec -acname git status",
+        "exec -a -c $TOOL build",
+        "exec -c git status",
+        "exec -c $TOOL build",
+        "arch -e LANG=C git status",
+        "arch -e LANG=C $TOOL build",
+        "env -i $TOOL build",
+        "env -u FOO $TOOL build",
+        "env -C sub $TOOL build",
+        "env -C sub $TOOL notes.md",
+    ];
+    let mut rows = Vec::new();
+    for command in commands {
+        rows.push(("exec-guard", command, None));
+        rows.push(("git-guard", command, None));
+    }
+    let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Read as Git, a command whose global options Git rejects or only
+/// answers runs no alias, so an ordinary line keeps its verdict even where
+/// the repository has an alias of its first word. The configured program
+/// is a string the guard reads; Git never runs here.
+#[test]
+fn unread_program_words_git_would_reject_run_no_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    git(dir.path(), &["config", "alias.inspect", "diff --ext-diff"]);
+    git(dir.path(), &["config", "diff.external", "claude -p x"]);
+    std::fs::write(dir.path().join("base.txt"), "base\nchanged\n").unwrap();
+    let commands = [
+        "$TOOL -c 'echo hi' inspect",
+        "$TOOL -o out inspect",
+        "$TOOL -h inspect",
+        "$TOOL -c x.cfg build",
+    ];
+    let mut rows = Vec::new();
+    for command in commands {
+        rows.push(("exec-guard", command, None));
+        rows.push(("git-guard", command, None));
+    }
+    // A setting Git takes keeps the alias reading.
+    rows.push((
+        "exec-guard",
+        "$TOOL -c x.cfg inspect",
+        Some("security.headless_peer_runs"),
+    ));
+    let wrong = check(dir.path(), &rows);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// The expansions the shell applies only in some forms (`~+`, `~-` and

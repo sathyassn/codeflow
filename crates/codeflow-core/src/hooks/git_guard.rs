@@ -10025,6 +10025,23 @@ impl LineFacts {
         } else {
             (shell.cwd.clone(), top_level)
         };
+        // A configuration change the line makes outside the op's own words.
+        let line_env = tracked
+            .then(|| {
+                shell
+                    .vars
+                    .keys()
+                    .filter(|name| configuration_variable(name))
+                    .min()
+                    .map(|name| format!("environment variable {name}"))
+            })
+            .flatten()
+            .or_else(|| self.mentions.shell_env.clone())
+            .or_else(|| {
+                (!tracked)
+                    .then(|| self.mentions.transport_env.clone())
+                    .flatten()
+            });
         Moves {
             cwd,
             vars: tracked.then_some(&shell.vars),
@@ -10032,25 +10049,8 @@ impl LineFacts {
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
             config_write: self.mentions.config_write.clone(),
-            transport_env: configuration_environment_trigger(tokens)
-                .or_else(|| {
-                    tracked
-                        .then(|| {
-                            shell
-                                .vars
-                                .keys()
-                                .filter(|name| configuration_variable(name))
-                                .min()
-                                .map(|name| format!("environment variable {name}"))
-                        })
-                        .flatten()
-                })
-                .or_else(|| self.mentions.shell_env.clone())
-                .or_else(|| {
-                    (!tracked)
-                        .then(|| self.mentions.transport_env.clone())
-                        .flatten()
-                }),
+            line_env: line_env.is_some(),
+            transport_env: configuration_environment_trigger(tokens).or(line_env),
             git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
@@ -10069,6 +10069,9 @@ struct Moves<'r> {
     location_unknown: bool,
     /// A parsed configuration write the alias reader cannot reproduce.
     config_write: Option<String>,
+    /// The line changes Git's configuration environment outside the op's
+    /// own assignments and launchers.
+    line_env: bool,
     transport_env: Option<String>,
     /// The line mentions `GIT_CONFIG`, the file `git config` writes when
     /// no scope option names one.
@@ -10178,6 +10181,15 @@ fn check_unread_git_alias(
     if GIT_BUILTINS.contains(&sub) || expands(sub) {
         return;
     }
+    // Where the line leaves Git's configuration and location to the
+    // command's own words, the Git runner reader follows its launchers
+    // (`env -i`, `env -u`, `exec -c`, `arch -e`) as they act; a word it
+    // finds no alias for there names none.
+    if let Some(starts) = alias_starts(moved, branches.config_changed, cwd) {
+        if matches!(runners::runs_alias(args, moved.tokens, &starts), Ok(false)) {
+            return;
+        }
+    }
     match expand_alias(args, sub, moved, ctx, 0, branches.config_changed) {
         Ok(expansions) => {
             for expanded in expansions {
@@ -10191,6 +10203,34 @@ fn check_unread_git_alias(
             .violation(ctx.policy, None),
         ),
     }
+}
+
+/// The directories an unread program word's command starts in, before its
+/// launchers, when nothing else on the line changes Git's configuration or
+/// location: no earlier configuration write, no location or configuration
+/// variable set on the line and a known directory. `None` otherwise.
+fn alias_starts(moved: &Moves<'_>, config_changed: bool, cwd: &Path) -> Option<Vec<PathBuf>> {
+    if config_changed
+        || moved.location_unknown
+        || moved.config_write.is_some()
+        || moved.line_env
+        || moved.git_config_var
+        || moved.vars.is_some_and(|vars| {
+            vars.keys()
+                .any(|name| name.starts_with("GIT_") || configuration_variable(name))
+        })
+    {
+        return None;
+    }
+    let Cwd::Paths(paths) = &moved.cwd else {
+        return None;
+    };
+    Some(
+        paths
+            .iter()
+            .map(|path| integrity_shell_path(path, cwd))
+            .collect(),
+    )
 }
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
@@ -18644,6 +18684,7 @@ mod tests {
                 vars: None,
                 location_unknown: false,
                 config_write: None,
+                line_env: false,
                 transport_env: None,
                 git_config_var: mentions,
                 narrows: false,
