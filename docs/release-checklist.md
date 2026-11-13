@@ -86,6 +86,7 @@ Details: [source and security details](#source-and-security-details).
 | 2.3 | The mirror inventories every remote branch and tag, hosted pull-request head and merge ref, and any other fetchable or servable ref |
 | 2.3 | Record its ref digest and inventory forbidden runtime paths |
 | 2.3 | Run both raw and configured redacted Gitleaks scans |
+| 2.3 | Both scans run with no broad allowlist of any kind, such as a broad path, directory or pattern allowlist |
 | 2.3 | Reject broad path or directory allowlists that could hide a future secret |
 | 2.4 | For a sanitized public repository, keep the original remote as a sealed private archive and publish only selected clean refs, never a mirror push |
 | 2.4 | For a history rewrite, separately purge retained hosted PR refs and caches |
@@ -228,6 +229,7 @@ Details: [publish and rollback details](#publish-and-rollback-details).
 
 | Box | Detail |
 |---|---|
+| 5.5 | The bad release must be withdrawable without rewriting tags; marking it is a separate option and never replaces withdrawal |
 | 5.5 | The bad release can be marked or withdrawn without rewriting tag history |
 | 5.5 | For CodeQL, rollback removes any required check before disabling default setup |
 | 5.5 | The findings and last healthy tool status stay linked in the release record |
