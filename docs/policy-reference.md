@@ -953,12 +953,16 @@ span, the check looks at the line's own history of the task:
   base, by the task's identity. A commit that changed the task's home or
   introduced it counts, even when a later commit restored the home the
   merge base held, with exact bytes or with other text kept.
-- The line's last such change decides. It must be the adoption described
+- The line's last such change decides. It is the commit that changed the
+  home against its own first parent, and it must be the adoption described
   above, or a reviewed planning merge of the task while it was `todo` or
   `blocked` with no acceptance block, or a shared planning introduction.
   Earlier changes on the line are not judged here.
-- The line's last sync of `main` is compared with the merge base, so a
-  home it took from `main` is not a change of the line's own.
+- The line's last sync of `main` is compared with the merge base. When it
+  holds the merge base's home, a home it took from `main` is not a change
+  of the line's own. When it keeps another home, the line's landing that
+  set that home before the sync decides, never the sync itself. When no
+  commit on the line set it, the record is refused.
 - A line that never changed the task's home or introduced it in that span
   is not examined.
 
