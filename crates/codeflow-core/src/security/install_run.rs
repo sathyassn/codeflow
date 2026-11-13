@@ -34,8 +34,10 @@
 //! the program runs its value: a command line, through this same reader,
 //! or one program given each searched path. A pager, editor or browser
 //! variable assigned earlier on the line is read when a program that runs
-//! it follows. An editor's own command (`vim -c`, `emacs --eval`, a `+`
-//! word for vi or less) is judged on its raw text, as interpreter code is.
+//! it follows. The words `gh` passes to `git` after `--` are read as
+//! quoted arguments are. An editor's own command (`vim -c`, `emacs
+//! --eval`, a `+` word for vi or less) is judged on its raw text, as
+//! interpreter code is.
 //!
 //! A program an agent builds, renames or copies, and the verb's words
 //! written to a file and run later, are not named on the line. They are a
@@ -507,6 +509,11 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
     let written = |at: usize| literal.get(at).copied().unwrap_or(false) && !unresolved(&argv[at]);
     let name = basename(program);
     if DATA_PROGRAMS.contains(&name.as_str()) {
+        if name == "gh" {
+            if let Some(run) = gh_git_arguments(argv, depth) {
+                return Found::Run(run);
+            }
+        }
         return runs_through_option(argv, &written, depth);
     }
     if EDITORS.contains(&name.as_str()) {
@@ -636,6 +643,18 @@ fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool, depth: 
         }
     }
     found
+}
+
+/// The words after `--` that `gh` passes to the `git` it runs (`gh repo
+/// clone`, `gh repo fork --clone`): each one holding a blank, such as a
+/// `-c` setting or an `--upload-pack` value, is read as a quoted argument
+/// is. Its words before `--` are data.
+fn gh_git_arguments(argv: &[String], depth: usize) -> Option<InstallRun> {
+    let start = argv.iter().position(|word| word == "--")?;
+    argv[start + 1..]
+        .iter()
+        .filter(|word| word.contains(shell_blank))
+        .find_map(|word| in_value(word, depth))
 }
 
 /// A command line an option's value holds, read with the recursive
