@@ -330,6 +330,133 @@ fn an_own_move_then_an_amendment_matching_main_passes_without_an_anchor() {
     );
 }
 
+/// `main` moves the task away and back to its merge-base bytes by planning
+/// merges, and lands product work beside them.
+fn main_moves_away_and_back(fixture: &Fixture, base: &str) {
+    let path = path_of("TSK-001");
+    fixture.land("main", &[(&path, &moved("TSK-001", THIRD))]);
+    fixture.land("main", &[("src/feature.rs", "pub fn feature() {}\n")]);
+    fixture.land("main", &[(&path, base)]);
+}
+
+/// AC-13 (review finding 1 at b56cbb783): a home the line changed and then
+/// restored is examined by its history, not by its net home or bytes. The
+/// restoration is the line's last home change: in a merge that also
+/// carries a doc it is refused, and in a records-only planning merge it
+/// passes, with exact restored bytes and with a retained comment.
+#[test]
+fn a_home_the_line_changed_and_restored_is_examined() {
+    let path = path_of("TSK-001");
+    let base = todo("TSK-001", OTHER);
+    let comment = "Pending.\n\n<!-- a line note -->";
+    let cases = [
+        ("exact restored bytes", todo("TSK-001", THIRD), base.clone()),
+        (
+            "a retained comment",
+            todo("TSK-001", THIRD).replace("Pending.", comment),
+            base.replace("Pending.", comment),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (case, away, restored) in &cases {
+        let fixture = Fixture::new(&[("TSK-001", base.clone())]);
+        main_moves_away_and_back(&fixture, &base);
+        fixture.land(LINE, &[(&path, away)]);
+        let restoration = fixture.land(
+            LINE,
+            &[(&path, restored), ("docs/line.md", "The line's note.\n")],
+        );
+        fixture.sync();
+        if !docs_admitted() {
+            failures.extend(not_refused(
+                &fixture,
+                &format!("a docs-bearing restoration, {case}"),
+                &["TSK-001", MOVED, &restoration.to_string()],
+            ));
+        }
+
+        let fixture = Fixture::new(&[("TSK-001", base.clone())]);
+        main_moves_away_and_back(&fixture, &base);
+        fixture.land(LINE, &[(&path, away)]);
+        fixture.land(LINE, &[(&path, restored)]);
+        fixture.sync();
+        if let Err(said) = fixture.judge() {
+            failures.push(format!("a records-only restoration, {case}: {said}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// AC-13 and AC-10: a line adoption of the bytes the merge base already
+/// held sets no anchor, so `main`'s unauthorized move away and its
+/// restoration of those bytes stay in the walk.
+#[test]
+fn an_adoption_of_the_merge_base_version_sets_no_anchor() {
+    let path = path_of("TSK-001");
+    let base = todo("TSK-001", OTHER);
+    let fixture = Fixture::new(&[("TSK-001", base.clone())]);
+    fixture.direct("main", &[(&path, &moved("TSK-001", THIRD))]);
+    let away = format!("the move at {}", fixture.oid("main"));
+    fixture.land("main", &[(&path, &base)]);
+    fixture.land(LINE, &[(&path, &todo("TSK-001", THIRD))]);
+    fixture.land(LINE, &[(&path, &base)]);
+    fixture.sync();
+    refused(
+        &fixture,
+        "a restoration of the merge-base version",
+        &["TSK-001", MOVED, &away],
+    );
+}
+
+/// AC-13 control: a line that edits the task but never changes its home
+/// is not examined, so an ordinary sync passes even though `main` moved
+/// the task away and back.
+#[test]
+fn a_line_that_never_changed_the_home_is_not_examined() {
+    let path = path_of("TSK-001");
+    let base = todo("TSK-001", OTHER);
+    let fixture = Fixture::new(&[("TSK-001", base.clone())]);
+    fixture.direct("main", &[(&path, &moved("TSK-001", THIRD))]);
+    fixture.land("main", &[(&path, &base)]);
+    fixture.land(
+        LINE,
+        &[(
+            &path,
+            &task("TSK-001", OTHER, "todo", "Work.", "Noted on the line."),
+        )],
+    );
+    fixture.sync();
+    let found = passes(&fixture, "a line that never changed the home");
+    assert!(!found.contains_key("TSK-001"), "{found:?}");
+}
+
+/// AC-13 control: an earlier sync that imported a move `main` made, already
+/// judged when it landed, is not the line's own home change. The next sync
+/// passes, whether it leaves the record unchanged or imports a later note.
+#[test]
+fn an_earlier_sync_that_imported_a_judged_move_is_not_the_lines_own_change() {
+    let path = path_of("TSK-001");
+    let homed = moved("TSK-001", "main");
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.land("main", &[("src/feature.rs", "pub fn feature() {}\n")]);
+    fixture.land("main", &[(&path, &homed)]);
+    fixture.sync();
+    passes(&fixture, "the first sync");
+    fixture.git(&["switch", "-q", LINE]);
+    fixture.git(&["merge", "--ff-only", "-q", "sync"]);
+
+    fixture.land("main", &[(&path, &moved("TSK-001", THIRD))]);
+    fixture.land("main", &[(&path, &homed)]);
+    fixture.sync();
+    let found = passes(&fixture, "a later sync leaving the record unchanged");
+    assert!(!found.contains_key("TSK-001"), "{found:?}");
+
+    fixture.land("main", &[(&path, &noted())]);
+    fixture.sync();
+    let found = passes(&fixture, "a later sync importing a note");
+    assert_eq!(found["TSK-001"].home_anchor, None);
+}
+
 /// AC-13 negative (1): a reviewed records-only merge that adopts `main`'s
 /// exact version but never landed on the line sets no anchor, so `main`'s
 /// docs-bearing move is judged and refused.
