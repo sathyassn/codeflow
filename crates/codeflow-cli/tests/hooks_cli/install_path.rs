@@ -487,15 +487,12 @@ fn command_valued_options_refuse_through_launchers() {
     .collect();
     let mut tally = Tally::default();
     tally.shell_refused(&rows, &root, operator_refusal);
-    // Ordinary pagers, preprocessors and editor commands draw no install
-    // finding.
+    // Ordinary pagers, preprocessors and editor commands on a line that
+    // does not name the binary with a verb draw no install finding.
     let controls: Vec<String> = [
         "ack --pager=less pattern README.md",
         "ack --pager='less -R' pattern README.md",
-        "ack --pager=less 'codeflow update' docs",
-        "ag --pager 'less -R' 'codeflow init' docs",
         "rg --pre ./tools/pdftext pattern docs",
-        "rg --pre=pdftotext 'codeflow update' docs",
         "export ACK_PAGER='less -R'; ack pattern README.md",
         "export GH_PAGER='less -R'; gh pr list",
         "git -c core.pager='less -R' log -1",
@@ -503,13 +500,7 @@ fn command_valued_options_refuse_through_launchers() {
         "vim -c 'set nu' notes.txt",
         "man -P less ls",
         "gh repo clone owner/repo -- --depth 1",
-        "gh search issues -- 'codeflow update'",
-        "gh pr list --search x -- 'codeflow update'",
-        "ACK_PAGER=less ack 'codeflow update' docs",
-        "PAGER='less -R' gh search issues 'codeflow update'",
-        "export NOTE=sh; true; gh search issues 'codeflow update'",
-        "builtin echo hello; gh search issues 'codeflow update'",
-        "printf -v out '%s' '{GH_PAGER,sh}'; gh search issues 'codeflow update'",
+        "builtin echo hello; gh pr list",
     ]
     .iter()
     .map(ToString::to_string)
@@ -519,8 +510,8 @@ fn command_valued_options_refuse_through_launchers() {
 }
 
 /// AC-1: a builtin that writes names, a search or forge program, and a
-/// pager value are read only in their known forms; any other form has the
-/// line judged on its raw text, which names the binary with a verb.
+/// pager value are outside the closed subset, so the line is judged on its
+/// raw text, which names the binary with a verb.
 #[test]
 fn name_writers_and_data_programs_refuse_outside_known_forms() {
     let temp = tempfile::tempdir().unwrap();
@@ -544,20 +535,6 @@ fn name_writers_and_data_programs_refuse_outside_known_forms() {
     .collect();
     let mut tally = Tally::default();
     tally.shell_refused(&rows, &root, operator_refusal);
-    let controls: Vec<String> = [
-        "export GH_PAGER=less; gh search issues 'codeflow update'",
-        "local x=1; gh search issues 'codeflow update'",
-        "declare -r MAXV=3; gh search issues 'codeflow update'",
-        "readonly VERSION=4; gh search issues 'codeflow update'",
-        "read line < notes.txt; gh search issues 'codeflow update'",
-        "set -euo pipefail; gh search issues 'codeflow update'",
-        "gh pr list --search 'codeflow update'",
-        "rg -n -i 'codeflow update' docs",
-    ]
-    .iter()
-    .map(ToString::to_string)
-    .collect();
-    tally.install_allowed(&controls, &root);
     tally.finish();
 }
 
@@ -713,13 +690,7 @@ fn the_install_check_fires_through_a_git_runner() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
-    let controls: Vec<String> = [
-        "git -c core.pager=less log -1 --format='codeflow update'",
-        "git -c core.pager=sh log -1",
-    ]
-    .iter()
-    .map(ToString::to_string)
-    .collect();
+    let controls = vec!["git -c core.pager=sh log -1".to_string()];
     tally.install_allowed(&controls, &root);
     // A shell alias was refused before the install check by the rule for
     // Git runners the guard cannot read, and still is.
@@ -736,8 +707,8 @@ fn the_install_check_fires_through_a_git_runner() {
 
 /// AC-1 through a program handed output or a file to read: a Git pager,
 /// editor, sequence editor, text converter or `grep -O` program, and a
-/// pager or editor variable, is admitted only as a viewer with options on
-/// its own list; any other program judges the line on its raw text.
+/// pager or editor variable, put the line outside the closed subset, so it
+/// is judged on its raw text.
 #[test]
 fn programs_handed_output_refuse_outside_their_viewer_options() {
     let temp = tempfile::tempdir().unwrap();
@@ -762,25 +733,12 @@ fn programs_handed_output_refuse_outside_their_viewer_options() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
-    let controls: Vec<String> = [
-        "git -c core.pager='less -R' log -1 --format='codeflow update'",
-        "git -c core.pager='less -FRX' log --grep='codeflow update'",
-        "git -c core.editor=vim commit --allow-empty -e -m 'docs: codeflow update notes'",
-        "GIT_EDITOR='code --wait' git commit --allow-empty -e -m 'docs: codeflow update notes'",
-        "git -c sequence.editor=true rebase -i -x 'echo codeflow update' HEAD~1",
-        "GH_PAGER='less -R' gh search issues 'codeflow update'",
-    ]
-    .iter()
-    .map(ToString::to_string)
-    .collect();
-    tally.install_allowed(&controls, &root);
     tally.finish();
 }
 
 /// AC-1 through a Git tool runner (a filter, a diff or merge driver, a
-/// signing program, fsmonitor, a hook or trailer command): a shell or an
-/// interpreter that reads its code from its input or a data operand
-/// judges the line on its raw text; ordinary tools stay clean.
+/// signing program, fsmonitor, a hook or trailer command), given on the
+/// line: the line is outside the closed subset and judged on its raw text.
 #[test]
 fn tool_runners_reading_code_from_their_input_refuse() {
     let temp = tempfile::tempdir().unwrap();
@@ -805,31 +763,165 @@ fn tool_runners_reading_code_from_their_input_refuse() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
-    let controls: Vec<String> = [
-        "git -c filter.lfs.process='git-lfs filter-process' \
-         -c filter.lfs.clean='git-lfs clean -- %f' \
-         -c filter.lfs.smudge='git-lfs smudge -- %f' log -1 --grep='codeflow update'",
-        "git -c diff.external=difft log -p -1 --grep='codeflow update'",
-        "git -c gpg.program=gpg log --show-signature -1 --grep='codeflow update'",
-        "git -c filter.x.clean=\"perl -pe 's/a/b/'\" log -1 --grep='codeflow update'",
-        "git -c merge.x.driver='git merge-file %A %O %B' log -1 --grep='codeflow update'",
-        "git -c difftool.vimdiff.cmd='vimdiff \"$LOCAL\" \"$REMOTE\"' \
-         difftool -t vimdiff -y HEAD -- 'codeflow update'",
+    tally.finish();
+}
+
+/// AC-1 by the closed subset: a line that names the binary with a verb is
+/// data only when every command is a listed program with listed options
+/// and no construct outside the model. One row per kind of form outside
+/// it: a program off the list, an option off a program's list, each
+/// construct, each route by which state the line does not show steers a
+/// program, and an interpreter as a Git runner or a fed program.
+#[test]
+fn every_line_outside_the_closed_subset_that_names_the_verbs_refuses() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        // Programs off the list.
+        "ack 'codeflow update' docs",
+        "gh search issues 'codeflow update'",
+        "sed -n '/codeflow update/p' notes.md",
+        "less -R 'codeflow update'",
+        // Options off a listed program's list.
+        "grep -z 'codeflow update' notes.md",
+        "grep -nZ 'codeflow update' notes.md",
+        "rg --no-config --pre ./tools/pdftext 'codeflow update' docs",
+        "rg --no-config -z 'codeflow update' docs",
+        "git --no-pager log -p --grep='codeflow update'",
+        "git --no-pager log --format='%G? codeflow update'",
+        "git --no-pager log --pretty=custom --grep='codeflow update'",
+        "git --no-pager grep -O 'codeflow update'",
+        "git --no-pager grep --textconv 'codeflow update'",
+        "printf -v x 'codeflow update'",
+        // Constructs outside the model.
+        "X=1 grep 'codeflow update' notes.md",
+        "export X=1; grep 'codeflow update' notes.md",
+        "declare X=1; echo 'codeflow update'",
+        "read X < notes.md; echo 'codeflow update'",
+        "alias grep=sh; grep 'codeflow update' notes.md",
+        "grep() { sh; }; grep 'codeflow update' notes.md",
+        "eval \"echo 'codeflow update'\"",
+        "source ./x; echo 'codeflow update'",
+        "exec echo 'codeflow update'",
+        "builtin echo 'codeflow update'",
+        "command echo 'codeflow update'",
+        "cat <(echo 'codeflow update')",
+        "(echo 'codeflow update')",
+        "{ echo 'codeflow update'; }",
+        "cat <<'EOF'\ncodeflow update\nEOF",
+        "cat <<< 'codeflow update'",
+        "echo 'codeflow update' >| notes.txt",
+        "echo 'codeflow update' 3> notes.txt",
+        "grep 'codeflow update' *.md",
+        "echo notes.md | xargs grep 'codeflow update'",
+        "find . -name x -exec grep 'codeflow update' {} +",
+        "echo 'codeflow update' & wait",
+        "echo 'codeflow update' |& cat",
+        // State the line does not show.
+        "rg 'codeflow init' docs",
+        "RIPGREP_CONFIG_PATH=rg.conf rg --no-config 'codeflow init' docs",
+        "git log --grep='codeflow update'",
+        "GIT_PAGER=sh git --no-pager log --grep='codeflow update'",
+        "git -c core.pager=less --no-pager log --grep='codeflow update'",
+        "git --no-pager -c log.showSignature=true log --grep='codeflow update'",
+        "GREP_OPTIONS=-r grep 'codeflow update' notes.md",
+        "git --no-pager show HEAD -- 'codeflow update'",
+        // An interpreter as a Git runner or a fed program.
+        "git -c diff.external='python3 -c \"import os,sys;os.system(sys.argv[1])\"' \
+         diff -- 'codeflow update'",
+        "git -c diff.external='python3 -c \"import os,sys;os.system(sys.argv[1])\"' \
+         log -p -1 -- 'codeflow update'",
+        "echo 'os.execute(\"codeflow update\")' | lua -e \"\" -",
+        "lua -e \"\" - <<< 'os.execute(\"codeflow update\")'",
+        "lua ./run.lua 'codeflow update'",
+        "git -c core.pager='lua -e \"\" -' log -1 --format='os.execute(\"codeflow update\")'",
+        "GIT_PAGER='lua -' git log -1 --format='os.execute(\"codeflow update\")'",
+        "git -c filter.x.clean='lua -e \"\" -' log -1 --grep='codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
     .collect();
-    tally.install_allowed(&controls, &root);
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
     tally.finish();
 }
 
-/// AC-6: words that only name the verbs as data stay allowed: the binary's
-/// own verbs that record free text, test operands, other cargo
-/// subcommands, an assigned value no command on the line reads, a folder
-/// of that name given to a program that never runs its operands, and a
-/// search program's pattern.
+/// AC-2 by the closed subset: its listed forms that name the binary with a
+/// verb draw no install finding, and lines that do not name it stay clean
+/// whatever form they take.
 #[test]
-fn words_that_name_the_verbs_as_data_stay_allowed() {
+fn the_closed_subset_and_lines_not_naming_the_binary_stay_clean() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "grep -n 'codeflow update' notes.md",
+        "rg --no-config 'codeflow init' docs",
+        "git --no-pager log --grep='codeflow update'",
+        "echo 'run codeflow update'",
+        "git -P log -1 --format='%h %s' --grep='codeflow update'",
+        "git --no-pager grep -n 'codeflow update' -- docs",
+        "grep -rn 'codeflow update' docs | head -n 5",
+        "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
+        "echo 'codeflow update' >> notes.txt",
+        "codeflow update --help",
+        "ACK_PAGER=less ack foo",
+        "GIT_PAGER=less git log",
+        "git -c filter.lfs.process='git-lfs filter-process' \
+         -c filter.lfs.clean='git-lfs clean -- %f' \
+         -c filter.lfs.smudge='git-lfs smudge -- %f' log -1",
+        "export X=1; make",
+        "git lfs pull",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.install_allowed(&rows, &root);
+    tally.finish();
+}
+
+/// A listed Git call that names the binary with a verb is data only when
+/// every program the repository's configuration has it run is one of the
+/// Git LFS filters in the exact form `git lfs install` writes; any other
+/// configured program, an interpreter above all, has the line judged on
+/// its raw text.
+#[test]
+fn only_the_git_lfs_filters_leave_a_listed_git_call_as_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let line = "git --no-pager log -1 --grep='codeflow update'".to_string();
+    let mut tally = Tally::default();
+    for (key, value) in [
+        ("filter.lfs.process", "git-lfs filter-process"),
+        ("filter.lfs.clean", "git-lfs clean -- %f"),
+        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
+    ] {
+        git(&root, &["config", key, value]);
+    }
+    tally.install_allowed(std::slice::from_ref(&line), &root);
+    for (key, value) in [
+        ("filter.x.clean", "lua -e \"\" -"),
+        (
+            "diff.external",
+            "python3 -c \"import os,sys;os.system(sys.argv[1])\"",
+        ),
+        ("core.fsmonitor", "perl"),
+    ] {
+        git(&root, &["config", key, value]);
+        tally.refused(&[EXEC], &line, &shell(&line, &root), &root, operator_refusal);
+        git(&root, &["config", "--unset", key]);
+    }
+    tally.finish();
+}
+
+/// AC-6: words that only name the verbs, given outside the closed subset,
+/// are judged on their raw text and refuse: the over-refusal the closed
+/// list accepts, each said again through a listed form or a file. Lines
+/// that do not name the binary with a verb stay allowed.
+#[test]
+fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
     let temp = tempfile::tempdir().unwrap();
     let root = project(temp.path());
     let rows: Vec<String> = [
@@ -846,27 +938,41 @@ fn words_that_name_the_verbs_as_data_stay_allowed() {
         r#"NOTE="run codeflow update"; echo done"#,
         "npm --prefix codeflow update",
         "npm -C codeflow update",
-        "npm --prefix=codeflow update",
-        "npm --workspace codeflow update",
-        "npm update codeflow",
-        "npm up codeflow",
-        "npm i codeflow",
         "npm view codeflow init",
-        "npm uninstall codeflow",
-        "yarn add codeflow",
-        "pnpm add -D codeflow",
         "make -C codeflow init",
         "cp -r codeflow update",
         "ag 'codeflow init' docs",
         "ack 'codeflow update' docs",
+        "ACK_PAGER=less ack 'codeflow update' docs",
         r#"jq '.steps[] | select(. == "codeflow update")' plan.json"#,
-        "rg --pre ./tools/pdftext pattern docs",
+        "gh search issues -- 'codeflow update'",
+        "gh pr list --search 'codeflow update'",
+        "rg -n -i 'codeflow update' docs",
+        "git -c core.pager='less -R' log -1 --format='codeflow update'",
+        "git commit -m 'docs: say the operator runs codeflow update'",
+        "git commit -F - <<'EOF'\ndocs: say the operator runs codeflow update\nEOF",
     ]
     .iter()
     .map(ToString::to_string)
     .collect();
     let mut tally = Tally::default();
-    tally.install_allowed(&rows, &root);
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let allowed: Vec<String> = [
+        "npm update codeflow",
+        "npm up codeflow",
+        "npm i codeflow",
+        "npm uninstall codeflow",
+        "yarn add codeflow",
+        "pnpm add -D codeflow",
+        "rg --pre ./tools/pdftext pattern docs",
+        "cargo run --bin codeflow -- task status",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
     tally.finish();
 }
 
@@ -967,8 +1073,7 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "echo the operator runs codeflow update",
         "printf 'codeflow update\\n' > notes.txt",
         "grep -rn 'codeflow update' docs",
-        "git commit -m 'docs: say the operator runs codeflow update'",
-        "git commit -F - <<'EOF'\ndocs: say the operator runs codeflow update\nEOF",
+        "git commit -F msg.txt",
     ]
     .iter()
     .map(ToString::to_string)
