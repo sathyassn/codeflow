@@ -28,16 +28,17 @@ Each section is bound to the runbook section that owns its procedure.
 
 Each box says what must be true and what counts as evidence. Longer
 explanations sit in the detail table after each section, keyed by box number.
+Each section's runbook links are in the [section table](#architecture) above.
 
 ### 1. Scope and version
 
-Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pending entries, local checks and repairs](releasing.md#pending-entries-local-checks-and-repairs). Details: [scope and version details](#scope-and-version-details).
+Details: [scope and version details](#scope-and-version-details).
 
-- [ ] 1.1 The normal work PR holds reviewed pending notes in its own `changelog.d/` fragment, one labelled entry with an adjacent impact annotation per item, and every warranted coupled stamp change. Evidence: the PR link and `release.py check-pr` output.
+- [ ] 1.1 The normal work PR holds reviewed pending notes in its own `changelog.d/` fragment and every warranted coupled stamp change. Evidence: the PR link and `release.py check-pr` output.
 - [ ] 1.2 The cumulative version is the verified public baseline bumped once by the highest remaining pending impact, with breaking changes and migrations explicit. Evidence: `release.py sync` output.
-- [ ] 1.3 A reviewed `release.py assemble` PR (`Impact: none`) wrote every fragment into `CHANGELOG.md`, no `changelog.d/` fragment remains at the source, and `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, the release notes and the proposed `vX.Y.Z` tag agree. Evidence: the assemble PR and `release.py check-pr` output.
+- [ ] 1.3 A reviewed `release.py assemble` PR (`Impact: none`) assembled the notes, and the release files and the proposed tag agree. Evidence: the assemble PR and `release.py check-pr` output.
 - [ ] 1.4 PR validation used the current target and the actual proposed merge tree. Evidence: the fresh PR CI run.
-- [ ] 1.5 Every shipped behavior change links its capability or epic and its accepted architecture decision record (ADR), and the docs describe current behavior. Evidence: those links.
+- [ ] 1.5 Every shipped behavior change links its capability or epic and its accepted architecture decision record (ADR). Evidence: those links.
 - [ ] 1.6 The notes rendered from the final assembled source were read twice before the tag, as a new user and as an upgrading user. Evidence: both reads and their fixes.
 - [ ] 1.7 No published section changed; any correction is a dated `## Errata` entry. Evidence: the `CHANGELOG.md` diff.
 - [ ] 1.8 The ceremony report over the release's window is pasted with a one-line comparison against the recorded baseline. Evidence: the report output.
@@ -47,8 +48,11 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 
 | Box | Detail |
 |---|---|
+| 1.1 | The fragment holds one labelled entry with an adjacent impact annotation per item |
 | 1.1 | Every label is unique, and a removed or lowered entry carries its `Withdrawal` |
 | 1.2 | Conventional markers do not understate the version |
+| 1.3 | The assemble PR wrote every fragment into `CHANGELOG.md`, and no `changelog.d/` fragment remains at the source |
+| 1.3 | `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, the release notes and the proposed `vX.Y.Z` tag agree |
 | 1.4 | A clean result is not a fresh one, so recheck immediately before the human merge |
 | 1.5 | Documentation describes current behavior, never an aspiration |
 | 1.6 | The new-user read checks what the release does. The upgrade read checks what to do, in order |
@@ -60,15 +64,15 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 
 ### 2. Source and security gates
 
-Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication). Details: [source and security details](#source-and-security-details).
+Details: [source and security details](#source-and-security-details).
 
-- [ ] 2.1 Format, workspace tests, warning-free clippy and rustdoc, the full CodeFlow test mode, documentation validation and the 90% line coverage floor pass from a clean checkout. Evidence: pasted output.
+- [ ] 2.1 The code gates pass from a clean checkout. Evidence: pasted output.
 - [ ] 2.2 Secret scanning, dependency audit, policy validation and the repository integrity and managed-drift checks pass, or carry a documented human-approved disposition that keeps every non-relaxable floor. Evidence: output or disposition.
-- [ ] 2.3 A fresh authenticated mirror of every fetchable ref passes raw and redacted Gitleaks scans with no broad allowlist. Evidence: the ref digest and both scan outputs.
+- [ ] 2.3 A fresh authenticated mirror of every fetchable ref passes raw and redacted Gitleaks scans. Evidence: the ref digest and both scan outputs.
 - [ ] 2.4 The operator-approved publication boundary is complete before visibility changes. Evidence: the boundary record and a rescan of the resulting public refs.
-- [ ] 2.5 Hosted PR, issue and review text, releases and assets, Actions logs and artifacts, Pages and packages each have an audited or removed disposition. Evidence: the disposition record.
+- [ ] 2.5 Every provider-owned hosted surface has an audited or removed disposition. Evidence: the disposition record.
 - [ ] 2.6 Private vulnerability reporting is enabled before `docs/SECURITY.md`'s channel or a public release is advertised. Evidence: **Report a vulnerability** visible to a logged-out visitor or non-maintainer.
-- [ ] 2.7 Presentation schemas match the Rust contracts and adversarial fixtures, and the service matrices pass without exposing secrets or private state. Evidence: test output.
+- [ ] 2.7 Presentation schemas and service matrices pass the checks in the detail table. Evidence: test output.
 - [ ] 2.8 The committed presentation web distribution rebuilds byte-identically and passes its integrity, budget, license, audit and binary-delta limits. Evidence: `npm run supply-chain` and `npm run check` output.
 - [ ] 2.9 CodeQL state is honest for the repository's visibility, as the [CodeQL rows](releasing.md#re-verification-before-tagging) require. Evidence: the tool status page.
 - [ ] 2.10 Catastrophic-action blocked and allowed canaries pass for macOS, Linux and WSL2, and native Windows command forms, including supported privilege and shell launch wrappers. Evidence: canary output.
@@ -78,6 +82,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 
 | Box | Detail |
 |---|---|
+| 2.1 | The code gates: format, workspace tests, warning-free clippy and rustdoc, the full CodeFlow test mode, documentation validation and the 90% line coverage floor |
 | 2.3 | The mirror inventories every remote branch and tag, hosted pull-request head and merge ref, and any other fetchable or servable ref |
 | 2.3 | Record its ref digest and inventory forbidden runtime paths |
 | 2.3 | Run both raw and configured redacted Gitleaks scans |
@@ -85,10 +90,13 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 | 2.4 | For a sanitized public repository, keep the original remote as a sealed private archive and publish only selected clean refs, never a mirror push |
 | 2.4 | For a history rewrite, separately purge retained hosted PR refs and caches |
 | 2.4 | Rescan the resulting public refs and regenerated exact fingerprints instead of reusing pre-rewrite commit IDs |
+| 2.5 | The surfaces: hosted PR, issue and review text, releases and assets, Actions logs and artifacts, Pages and packages, each with its own disposition |
 | 2.5 | An ordinary branch scan does not prove these provider-owned surfaces safe |
 | 2.6 | Open the repository's Security tab while logged out or as a non-maintainer |
 | 2.6 | An API 404 leaves the feature state unverified. It is evidence of neither enabled nor disabled |
 | 2.6 | `docs/SECURITY.md` never points reporters at a channel the repository has not enabled |
+| 2.7 | Presentation schemas match the Rust contracts and adversarial fixtures |
+| 2.7 | The service matrices pass without exposing secrets or private state |
 | 2.7 | Document, token and history schemas match |
 | 2.7 | Service request, auth, bootstrap, sandbox and export matrices, crash recovery, concurrent feedback, retention and identity-scoped cleanup pass |
 | 2.8 | The rebuild uses the exact lockfile and toolchain |
@@ -98,14 +106,14 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 
 ### 3. Distribution and platform assurance
 
-Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration). Details: [distribution and platform details](#distribution-and-platform-details).
+Details: [distribution and platform details](#distribution-and-platform-details).
 
 - [ ] 3.1 Pinned cargo-dist regenerates the workflow except job timeouts. Evidence: `generate --check` on a `git archive` export without `allow-dirty`.
 - [ ] 3.2 The dispatched authority job enforces every check in the runbook's [Dispatch and authority rows](releasing.md#architecture) and fails closed. Evidence: the authority job log.
-- [ ] 3.3 Generated host dependencies reject a failed or cancelled authority or main-recheck job, so publishing cannot skip either. Evidence: the generated workflow and a run log.
+- [ ] 3.3 Generated host dependencies reject a failed or cancelled authority or main-recheck job. Evidence: the generated workflow and a run log.
 - [ ] 3.4 The post-announce verifier binds the public tag and release to the selected main source and matches every asset exactly. Evidence: the verifier log.
 - [ ] 3.5 A stopped attempt is retried or recovered only as [when publication stops](releasing.md#when-publication-stops) allows. Evidence: the attempt record.
-- [ ] 3.6 `cargo dist plan --output-format=json` lists both macOS archives, the Linux x86-64 archive, the Windows x86-64 MSVC archive and both installers on native runners. Evidence: the pasted plan.
+- [ ] 3.6 `cargo dist plan --output-format=json` lists every claimed archive and installer on native runners. Evidence: the pasted plan.
 - [ ] 3.7 Optional `cargo-xwin` and `cargo-zigbuild` target checks pass. Evidence: their output, with tool versions and host recorded.
 - [ ] 3.8 Native macOS, Linux and Windows build and test canaries pass. Evidence: OS, architecture, Rust version and exact command, with WSL2 recorded as Linux.
 - [ ] 3.9 Each claimed presentation platform passes the isolated browser review journey and teardown, and an unqualified adapter fails closed. Evidence: journey output per platform.
@@ -122,9 +130,11 @@ Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentat
 |---|---|
 | 3.2 | The latest exact-source main-push results come from `codeflow-ci` and `codeflow-release` |
 | 3.2 | The release-state check runs in `codeflow-release` |
+| 3.3 | Publishing cannot skip either job |
 | 3.3 | A dry run creates no draft and performs no hosting |
 | 3.3 | Recheck timing and the one-publication-at-a-time rule are in [the Architecture bullets](releasing.md#architecture) |
 | 3.4 | Every asset name, size and SHA-256 digest matches the same-run staged artifact set, with no missing, duplicate or extra asset |
+| 3.6 | The claimed set: both macOS archives, the Linux x86-64 archive, the Windows x86-64 MSVC archive and both installers |
 | 3.7 | These are static-analysis, compile and link evidence only ([cross-build toolchain](releasing.md#cross-build-toolchain)) |
 | 3.9 | The platform opens only a task-owned isolated browser and profile |
 | 3.9 | It passes the qualified Brotli and full review journey and preserves light, dark and system themes and accessibility behavior |
@@ -164,19 +174,19 @@ Presentation adversarial cases for box 3.12:
 
 ### 4. Harness and model qualification
 
-Runbook: [re-verification before tagging](releasing.md#re-verification-before-tagging). Details: [harness and model details](#harness-and-model-details).
+Details: [harness and model details](#harness-and-model-details).
 
 - [ ] 4.1 The host-neutral Claude and Codex contract and evaluator fixtures pass with the currently supported model and harness bindings. Evidence: fixture test output.
-- [ ] 4.2 A material orchestration, task-graph or verification-selection change updates its requirements, cases, fixtures, packs and mirrors. Evidence: the PR and retained native canaries.
+- [ ] 4.2 A material orchestration, task-graph or verification-selection change updates its evaluation corpus. Evidence: the PR and retained native canaries.
 - [ ] 4.3 A material design-contract change exercises the required design cases. Evidence: retained same-environment artifacts and blinded paired judgments.
 - [ ] 4.4 Whole-flow and concurrent-browser canaries cover every applicable changed boundary with isolated resources and proven teardown. Evidence: the canary records.
-- [ ] 4.5 The mixed closeout canary removes only the clean proven-landed worktree and retains every other entry. Evidence: canary output with ownership and recheck evidence.
+- [ ] 4.5 The mixed closeout canary removes only the clean proven-landed worktree and retains every other entry. Evidence: canary output.
 - [ ] 4.6 `codeflow status` classifies linked worktrees and unattached local branches as removable, preserve-dirty or retain-unproven without mutating anything. Evidence: its test output.
 - [ ] 4.7 The ensemble selectors, effort and worker policy and catalog entries match the [ensemble rows](releasing.md#re-verification-before-tagging). Evidence: the ensemble record and native results.
 - [ ] 4.8 `codeflow doctor --check model-bindings` passes for each retained local promotion record, or records the native canary still needed. Evidence: doctor output.
 - [ ] 4.9 Both native interactive directions complete a scoped tool and Model Context Protocol (MCP) canary. Evidence: versions, effort, tool access and graceful degradation.
 - [ ] 4.10 Each task records its producer and cross-lineage reviewer, and every blocking finding is resolved or stops the release. Evidence: verified routing evidence per task.
-- [ ] 4.11 Host, peer and worker role canaries reject nested orchestration, observe usage state, and record a reassignment where the assignment lives, reviewed by one other-lineage seat and never carrying an old approval (ADR-0076). Evidence: canary output.
+- [ ] 4.11 Host, peer and worker role canaries pass every role check in the detail table. Evidence: canary output.
 
 #### Harness and model details
 
@@ -199,18 +209,20 @@ Runbook: [re-verification before tagging](releasing.md#re-verification-before-ta
 | 4.6 | Tests cover squash-equivalent, dirty and unlanded states |
 | 4.6 | The report does not replace the active-owner check |
 | 4.10 | Producers verify first, the other lineage reviews each unit independently, and the selected Claude judgment primary owns the integrated design and code judgment |
+| 4.11 | The canaries reject nested orchestration and observe usage state |
+| 4.11 | They record a reassignment where the assignment lives, reviewed by one other-lineage seat and never carrying an old approval (ADR-0076) |
 | 4.11 | Usage state is observed, never inferred |
 
 ### 5. Publish, canary and rollback
 
-Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication), [public version baseline](releasing.md#public-version-baseline). Details: [publish and rollback details](#publish-and-rollback-details).
+Details: [publish and rollback details](#publish-and-rollback-details).
 
 - [ ] 5.1 A human approves and merges the normal work PR after its release-state check is fresh, and no agent merges or tags it. Evidence: the merged PR and fresh check.
 - [ ] 5.2 A human dispatches the generated workflow for current `main` and the pending `vX.Y.Z`, and cargo-dist tags only after the guarded build succeeds. Evidence: the run link.
 - [ ] 5.3 Archives, installers, checksums and attestations from the pinned workflow, and the release notes, are complete and consistent before announcement. Evidence: the release page.
 - [ ] 5.4 Fresh public-network install canaries pass without private credentials or repository access. Evidence: canary output.
-- [ ] 5.5 Rollback is ready, with the prior release still installable, the bad release withdrawable without rewriting tags, and a corrective release owner named. Evidence: the rollback record.
-- [ ] 5.6 Downstream Agent OS work starts only from this verified public release, and the Agent OS portal updates only after the matching Agent OS release. Evidence: the release link.
+- [ ] 5.5 Rollback is ready, with the prior release still installable and a corrective release owner named. Evidence: the rollback record.
+- [ ] 5.6 Downstream Agent OS work starts only from this verified public release. Evidence: the release link.
 
 #### Publish and rollback details
 
@@ -220,3 +232,4 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 | 5.5 | For CodeQL, rollback removes any required check before disabling default setup |
 | 5.5 | The findings and last healthy tool status stay linked in the release record |
 | 5.6 | Agent OS is the companion repository that consumes CodeFlow |
+| 5.6 | The Agent OS portal updates only after the matching Agent OS release |
