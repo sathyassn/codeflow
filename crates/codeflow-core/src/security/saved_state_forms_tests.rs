@@ -601,8 +601,8 @@ fn a_changed_expansion_the_guard_cannot_read_fails_closed() {
             ),
             ("V=x; echo x > ${V@P}/session-env/h", "${V@P}/session-env/h"),
             (
-                "echo x > ${A:-a}${B:-b}${C:-c}${D:-d}${E:-e}${F:-f}${G:-g}/session-env/h",
-                "${A:-a}${B:-b}${C:-c}${D:-d}${E:-e}${F:-f}${G:-g}/session-env/h",
+                "echo x > ${A:-a}${B:-b}${C:-c}${D:-d}${E:-e}${F:-f}${H:-h}/session-env/h",
+                "${A:-a}${B:-b}${C:-c}${D:-d}${E:-e}${F:-f}${H:-h}/session-env/h",
             ),
         ] {
             let message = format!(
