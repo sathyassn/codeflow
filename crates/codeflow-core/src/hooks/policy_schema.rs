@@ -284,6 +284,11 @@ pub const SCHEMA: [KeySpec; 82] = [
                 option or a Git setting) is judged by one check: it counts as data only when \
                 it is a viewer on the guard's list with each option on that viewer's own \
                 list, and any other program or option has the line judged on its raw text. \
+                A tool Git runs with its own data (a filter, an external diff or merge \
+                driver, a difftool or mergetool, a credential helper, an askpass or ssh \
+                command, a gpg program, an fsmonitor, trailer, sendemail or hook command) \
+                has the line judged on its raw text when it is a shell or interpreter that \
+                reads its code from its input or a file rather than inline. \
                 Words \
                 that only name the verbs stay data: the binary's own record verbs, test \
                 operands, a search program's pattern, an assigned value no later command on \
