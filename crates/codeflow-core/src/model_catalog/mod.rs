@@ -23,7 +23,7 @@ pub use authority::{
     AnchoredAuthority, AuthorityRecord, AuthorityRole, DesignAuthority, LineAuthority, ReviewMode,
     ReviewPer, StandingReview, DESIGN_APPROVAL,
 };
-pub use inputs::{load_catalog, CatalogInputs};
+pub use inputs::{load_catalog, shipped_catalog, CatalogInputs};
 pub use operator::{anchored_override, parse_override_route};
 pub use overlay::{CandidateAddition, PersonalOverlay};
 pub use resolve::{
