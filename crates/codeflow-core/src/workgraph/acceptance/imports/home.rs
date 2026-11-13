@@ -273,6 +273,10 @@ enum LineChange {
     Moved(Oid, Oid),
     /// The commit that introduced the task.
     Introduced(Oid),
+    /// The line's last sync, which keeps another home than the merge base
+    /// holds that no commit on the line's first-parent history set. It is
+    /// never an own change and sets no anchor.
+    Unset(Oid),
 }
 
 /// One commit of the line's first-parent history after `start`.
@@ -354,32 +358,97 @@ pub(super) fn line_paths(
     Ok(paths)
 }
 
+/// How the task's home differs at `at` from `before`: `Some(true)` when the
+/// task arrived there, `Some(false)` when its declared home changed, `None`
+/// when neither. The record's own path holding the same blob on both sides
+/// is no change.
+///
+/// # Errors
+/// The identity is ambiguous or unreadable on either side.
+fn home_differs(
+    repo: &Repository,
+    who: &Identity<'_>,
+    at: Oid,
+    before: Oid,
+) -> Result<Option<bool>, String> {
+    let path = &who.record.path;
+    let now = entry_at(repo, at, path)?;
+    if now.is_some() && now == entry_at(repo, before, path)? {
+        return Ok(None);
+    }
+    match (held_at(repo, at, who), held_at(repo, before, who)) {
+        (Held::One(_), Held::Absent) => Ok(Some(true)),
+        (Held::One(now), Held::One(then)) if declared(&now) != declared(&then) => Ok(Some(false)),
+        (Held::Ambiguous, _) | (_, Held::Ambiguous) => Err(ambiguous(at)),
+        _ => Ok(None),
+    }
+}
+
 /// The line's last home change or introduction of the task after `start`,
 /// or `None` when its first-parent history since `start` holds neither.
-/// Each commit is compared as [`line_steps`] compares it, so a commit the
-/// line later restored still counts, and an earlier sync's import does not.
+/// Each commit inside the span is compared with its first parent, so a
+/// commit the line later restored still counts. The line's last sync of the
+/// default branch is compared with `start`: when it holds the home `start`
+/// holds, what it took from the default branch is no change of the line's
+/// own; when it keeps another home, that home was set by a landing before
+/// the sync, and [`landing_before`] finds it. A sync never stands in for
+/// the landing that changed the home.
+///
+/// # Errors
+/// Unreadable history, or an ambiguous identity at a compared commit.
 fn line_change(
     repo: &Repository,
     who: &Identity<'_>,
     receiver: Oid,
     start: Oid,
 ) -> Result<Option<LineChange>, String> {
-    let path = &who.record.path;
     for step in line_steps(repo, receiver, start)? {
-        let now = entry_at(repo, step.at, path)?;
-        if now.is_some() && now == entry_at(repo, step.before, path)? {
+        let Some(arrived) = home_differs(repo, who, step.at, step.before)? else {
             continue;
+        };
+        if step.before != step.parent {
+            return landing_before(repo, who, step.at, start).map(Some);
         }
-        match (held_at(repo, step.at, who), held_at(repo, step.before, who)) {
-            (Held::One(_), Held::Absent) => return Ok(Some(LineChange::Introduced(step.at))),
-            (Held::One(now), Held::One(then)) if declared(&now) != declared(&then) => {
-                return Ok(Some(LineChange::Moved(step.at, step.parent)));
-            }
-            (Held::Ambiguous, _) | (_, Held::Ambiguous) => return Err(ambiguous(step.at)),
-            _ => {}
-        }
+        return Ok(Some(if arrived {
+            LineChange::Introduced(step.at)
+        } else {
+            LineChange::Moved(step.at, step.parent)
+        }));
     }
     Ok(None)
+}
+
+/// The refusal of a home the line's last sync keeps that no line commit set.
+fn unset(sync: Oid) -> String {
+    format!("{MOVED}: the line's sync at {sync} keeps another home for the task than its merge base with the default branch, and no commit on the line's first-parent history changed it")
+}
+
+/// The landing that set the home the line's last sync `boundary` keeps
+/// against `start`: the newest commit on the line's first-parent history
+/// from `boundary` that changed the task's home or introduced it, against
+/// its own first parent, before that history reaches what `start` holds.
+/// [`LineChange::Unset`] when there is none.
+///
+/// # Errors
+/// Unreadable history, or an ambiguous identity.
+fn landing_before(
+    repo: &Repository,
+    who: &Identity<'_>,
+    boundary: Oid,
+    start: Oid,
+) -> Result<LineChange, String> {
+    let mut at = boundary;
+    while !is_ancestor_or_same(repo, at, start)? {
+        let Some(parent) = first_parent(repo, at)? else {
+            break;
+        };
+        match home_differs(repo, who, at, parent)? {
+            Some(true) => return Ok(LineChange::Introduced(at)),
+            Some(false) => return Ok(LineChange::Moved(at, parent)),
+            None => at = parent,
+        }
+    }
+    Ok(LineChange::Unset(boundary))
 }
 
 /// Whether the line's copy of the task at `receiver` is the copy at
@@ -482,7 +551,8 @@ fn adoption_anchor(
     head: Oid,
 ) -> Result<Option<HomeAnchor>, String> {
     let LineChange::Moved(landing, parent) = change else {
-        // An introduction is judged as shared planning, never as an adoption.
+        // An introduction is judged as shared planning, never as an
+        // adoption, and a home no line commit set anchors nothing.
         return Ok(None);
     };
     let Held::One(adopted) = held_at(repo, landing, who) else {
@@ -595,6 +665,7 @@ fn own_change(
     head: Oid,
 ) -> Result<(), String> {
     let (at, admitted) = match change {
+        LineChange::Unset(sync) => return Err(unset(sync)),
         LineChange::Introduced(at) => (at, is_shared_planning(repo, who.record, at, head)?),
         LineChange::Moved(at, parent) => (
             at,
@@ -626,8 +697,10 @@ pub(super) fn line_landing(
         return Ok((None, None));
     };
     let anchor = adoption_anchor(repo, &who, change, start, default_tip, head)?;
-    let (LineChange::Moved(at, _) | LineChange::Introduced(at)) = change;
-    Ok((Some(at), anchor))
+    match change {
+        LineChange::Unset(sync) => Err(unset(sync)),
+        LineChange::Moved(at, _) | LineChange::Introduced(at) => Ok((Some(at), anchor)),
+    }
 }
 
 /// Judge a record that names the receiving line as its home and that the
