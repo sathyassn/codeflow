@@ -890,6 +890,8 @@ fn check_common_directory(repo: &Repository) -> Result<(), String> {
 /// The comparison behind [`check_common_directory`], from the canonical
 /// administrative directory and the common directory the checkout names.
 fn check_common_paths(admin: &Path, commondir: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    COMMON_PATH_CHECKS.with(|checks| checks.set(checks.get() + 1));
     let registrations = admin
         .parent()
         .ok_or("worktree has no registration directory")?;
@@ -1233,7 +1235,10 @@ pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, Str
         match gate_step(admin, &common) {
             GateStep::Skip => {
                 #[cfg(test)]
-                SKIPPED_OPENS.with(|skips| skips.set(skips.get() + 1));
+                {
+                    SKIPPED_OPENS.with(|skips| skips.set(skips.get() + 1));
+                    interleave("after-sibling-skipped");
+                }
                 return Ok(CheckedRegistration {
                     marker: registered,
                     checkout: Some(root),
@@ -1290,6 +1295,8 @@ thread_local! {
 thread_local! {
     /// How many sibling opens [`read_registration`] skipped.
     static SKIPPED_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times [`check_common_paths`] resolved its two paths.
+    static COMMON_PATH_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(all(test, unix))]
@@ -2805,6 +2812,182 @@ mod tests {
         let settled = validate_in_one_scope(&[&one, &two, &three]);
         super::REQUIRE_SETTLED.with(|require| require.set(false));
         assert_eq!(settled, 2);
+    }
+
+    fn common_path_checks() -> usize {
+        super::COMMON_PATH_CHECKS.with(std::cell::Cell::get)
+    }
+
+    /// TSK-1275: a sibling registered as git writes it, `commondir` `../..`
+    /// in a folder named `worktrees`, proves its registration directory from
+    /// its own resolved administrative directory, so the check's two
+    /// resolutions run only on full opens.
+    #[cfg(unix)]
+    #[test]
+    fn a_git_written_registration_resolves_its_check_only_on_full_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let (one, _) = sibling(dir.path(), "one");
+        let (two, _) = sibling(dir.path(), "two");
+        let (three, _) = sibling(dir.path(), "three");
+        let checks = common_path_checks();
+        let skips = validate_in_one_scope(&[&one, &two, &three]);
+        assert_eq!(common_path_checks() - checks, 3 - skips);
+    }
+
+    /// TSK-1275 (AC-3, AC-6): the shared configuration replaced between two
+    /// skipped siblings inside one evaluation is read by every sibling
+    /// validated afterwards, as main's own open of each reads it. Each skip
+    /// restamps the shared files, so no later sibling skips.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_config_replaced_between_skipped_siblings_is_read_by_later_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let admins: Vec<PathBuf> = ["one", "two", "three", "four", "five"]
+            .into_iter()
+            .map(|name| sibling(dir.path(), name).0)
+            .collect();
+        let all: Vec<&Path> = admins.iter().map(PathBuf::as_path).collect();
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        assert_eq!(validate_in_one_scope(&all), 4);
+        let config = common.join("config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        let refused = text.replacen(
+            "repositoryformatversion = 0",
+            "repositoryformatversion = 99",
+            1,
+        );
+        assert_ne!(refused, text);
+        // Main's answer once the change is in place, sibling by sibling.
+        std::fs::write(&config, &refused).unwrap();
+        let main: Vec<_> = all[3..]
+            .iter()
+            .map(|admin| super::read_registration(admin))
+            .collect();
+        std::fs::write(&config, &text).unwrap();
+        // In one evaluation the change lands after the second skip.
+        let (skips, results) = {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            let before = skipped();
+            let mut results = Vec::new();
+            for (index, admin) in all.iter().enumerate() {
+                if index == 3 {
+                    std::fs::write(&config, &refused).unwrap();
+                }
+                results.push(super::read_registration(admin));
+            }
+            (skipped() - before, results)
+        };
+        std::fs::write(&config, &text).unwrap();
+        assert_eq!(skips, 2);
+        assert!(results[..3].iter().all(Result::is_ok));
+        for (inside, main) in results[3..].iter().zip(&main) {
+            assert!(main.is_err());
+            assert_eq!(inside.as_ref().err(), main.as_ref().err());
+        }
+        // The same change at the seam after the second skip, inside discovery.
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = seen.clone();
+        let (path, replacement) = (config.clone(), refused.clone());
+        super::INTERLEAVE.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |at: &str| {
+                if at == "after-sibling-skipped" {
+                    count.set(count.get() + 1);
+                    if count.get() == 2 {
+                        std::fs::write(&path, &replacement).unwrap();
+                    }
+                }
+            }));
+        });
+        let discovered = {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            super::RepoInfo::discover(dir.path())
+        };
+        super::INTERLEAVE.with(|slot| *slot.borrow_mut() = None);
+        std::fs::write(&config, &text).unwrap();
+        assert_eq!(seen.get(), 2, "no sibling skips after the change");
+        assert!(discovered.is_err(), "a later sibling refuses the change");
+    }
+
+    /// TSK-1275: among six siblings validated in one evaluation, a
+    /// registration linked to an administrative directory elsewhere under the
+    /// common directory is refused with main's error, and the siblings after
+    /// it still skip.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_registration_among_many_siblings_stays_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let admins: Vec<PathBuf> = ["one", "two", "three", "four", "five", "six"]
+            .into_iter()
+            .map(|name| sibling(dir.path(), name).0)
+            .collect();
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        let listed = &admins[3];
+        let moved = common.join("other").join("four");
+        std::fs::create_dir(common.join("other")).unwrap();
+        std::fs::rename(listed, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, listed).unwrap();
+        let main = super::read_registration(listed);
+        assert!(main
+            .as_ref()
+            .is_err_and(|refused| refused.contains("common directory disagrees")));
+        let (skips, results) = {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            let before = skipped();
+            let results: Vec<_> = admins
+                .iter()
+                .map(|admin| super::read_registration(admin))
+                .collect();
+            (skipped() - before, results)
+        };
+        assert_eq!(skips, 4);
+        assert_eq!(results[3].as_ref().err(), main.as_ref().err());
+        for (index, result) in results.iter().enumerate() {
+            assert!(index == 3 || result.is_ok(), "sibling {index}");
+        }
+    }
+
+    /// TSK-1275: a `worktrees` folder that links to a folder of another name
+    /// is accepted, as main's full open accepts it. Each sibling's facts take
+    /// the full registration check there, and the siblings still skip.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_worktrees_folder_keeps_the_full_registration_check() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let names = ["one", "two", "three"];
+        for name in names {
+            sibling(dir.path(), name);
+        }
+        let common = dir.path().join(".git").canonicalize().unwrap();
+        if !super::shared_config_is_sibling_independent(&common) {
+            return; // this host's global or system configuration already decides
+        }
+        std::fs::rename(common.join("worktrees"), common.join("registered")).unwrap();
+        std::os::unix::fs::symlink("registered", common.join("worktrees")).unwrap();
+        let admins: Vec<PathBuf> = names
+            .iter()
+            .map(|name| common.join("worktrees").join(name))
+            .collect();
+        for admin in &admins {
+            super::read_registration(admin).unwrap();
+        }
+        let all: Vec<&Path> = admins.iter().map(PathBuf::as_path).collect();
+        let checks = common_path_checks();
+        assert_eq!(validate_in_one_scope(&all), 2);
+        assert_eq!(
+            common_path_checks() - checks,
+            4,
+            "three siblings' facts and the first full open"
+        );
     }
 
     #[test]
