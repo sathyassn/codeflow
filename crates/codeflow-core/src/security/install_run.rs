@@ -1819,6 +1819,203 @@ mod tests {
         }
     }
 
+    /// A builtin that writes or declares names is read only in the forms
+    /// known to name plain variables: each option on its admitted list and
+    /// each name a plain identifier. Any other option (a pattern, a
+    /// reference, a case or number format), a name with a subscript or
+    /// pattern, and a builtin outside the list judge the line on its raw
+    /// text, as do builtins that rebind a program name or change how the
+    /// shell reads later words.
+    #[test]
+    fn name_writers_are_read_only_in_known_forms() {
+        for (variable, pattern, line) in [
+            (
+                "ACK_PAGER",
+                "ACK_*",
+                "ack --nocolor --nogroup -h 'codeflow update' notes.txt",
+            ),
+            ("GH_PAGER", "GH_*", "gh search issues 'codeflow update'"),
+        ] {
+            for form in [
+                format!("export {variable}=less; typeset -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; declare -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; export -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; readonly -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; local -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; typeset -gm '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; typeset -mg '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; typeset -m -- '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; typeset +m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; builtin typeset -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; command typeset -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; noglob typeset -m '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; typeset '{pattern}=sh'; {line}"),
+                format!("export {variable}=less; export '{variable}[1]=sh'; {line}"),
+                format!("export {variable}=x; read '{variable}[1]' < pager.txt; {line}"),
+                format!("export {variable}=x; read -p '{variable}[1]' y < pager.txt; {line}"),
+                format!("export {variable}=x; printf -v '{variable}[1]' sh; {line}"),
+                format!("export {variable}=x; getopts a '{variable}[1]'; {line}"),
+                format!("export {variable}=less; declare -l note=x; {line}"),
+                format!("export {variable}=less; typeset -u note=x; {line}"),
+                format!("export {variable}=less; typeset -T note notes; {line}"),
+                format!("export {variable}=less; declare -p note=1; {line}"),
+                format!("export {variable}=less; export -n note; {line}"),
+                format!("export {variable}=less; local -n ref=note; {line}"),
+                format!("export {variable}=less; read -A note < pager.txt; {line}"),
+                format!("export {variable}=less; mapfile -C cb note < pager.txt; {line}"),
+                format!("export {variable}=less; print -P -v note x; {line}"),
+                format!("export {variable}=less; vared -A note; {line}"),
+                format!("export {variable}=less; private {variable}=sh; {line}"),
+                format!("export {variable}=less; integer note=1; {line}"),
+                format!("export {variable}=less; let note=1; {line}"),
+                format!("export {variable}=less; zparseopts -D -A {variable}; {line}"),
+                format!("export {variable}=less; zstyle -s ctx style {variable}; {line}"),
+                format!("export {variable}=less; zformat -f {variable} x; {line}"),
+                format!("export {variable}=less; pcre_match -v {variable} x; {line}"),
+                format!("export {variable}=less; trap '{variable}=sh' DEBUG; {line}"),
+                format!("export {variable}=less; setopt globassign; {line}"),
+                format!("export {variable}=less; shopt -s expand_aliases; {line}"),
+                format!("export {variable}=less; set -k; {line} {variable}=sh"),
+                format!("export {variable}=less; set -o keyword; {line}"),
+                format!("export {variable}=less; set -A note x; {line}"),
+            ] {
+                assert!(runs(&form), "{form}");
+            }
+        }
+        for command in [
+            "hash -p /bin/sh gh; echo 'codeflow update' | gh",
+            "hash gh=/bin/sh; echo 'codeflow update' | gh",
+            "enable -f ./x.so echo; echo 'codeflow update'",
+            "set -k; gh GH_PAGER=sh search issues 'codeflow update'",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "export GH_PAGER=less; gh search issues 'codeflow update'",
+            "local x=1; gh search issues 'codeflow update'",
+            "declare -r MAXV=3; gh search issues 'codeflow update'",
+            "readonly VERSION=4; gh search issues 'codeflow update'",
+            "typeset -gx NOTE=1; gh search issues 'codeflow update'",
+            "export -p; gh search issues 'codeflow update'",
+            "read line < notes.txt; gh search issues 'codeflow update'",
+            "read -r -s line < notes.txt; gh search issues 'codeflow update'",
+            "mapfile -t lines < notes.txt; gh search issues 'codeflow update'",
+            "getopts ab opt; gh search issues 'codeflow update'",
+            "printf -v out '%s' x; gh search issues 'codeflow update'",
+            "printf '%s' \"$x\"; gh search issues 'codeflow update'",
+            "print -r -- text; gh search issues 'codeflow update'",
+            "set -euo pipefail; gh search issues 'codeflow update'",
+            "set -- a b; gh search issues 'codeflow update'",
+            "hash -r; gh search issues 'codeflow update'",
+            "unset NOTE; gh search issues 'codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+        // An integer attribute makes the shell evaluate later values as
+        // arithmetic, which writes other names: judged on the raw text.
+        assert!(runs("typeset -i n=0; gh search issues 'codeflow update'"));
+    }
+
+    /// A search or forge program is read as data only in the forms known
+    /// to run nothing: each option on the program's list and each `gh`
+    /// command on gh's list. Any other option (`--hostname-bin`,
+    /// `--ackrc`) or gh command (an alias, an extension, a setting) judges
+    /// the line on its raw text.
+    #[test]
+    fn data_programs_are_read_only_in_known_forms() {
+        for command in [
+            "gh alias set --shell u 'codeflow update'; gh u",
+            "gh alias set u '!codeflow update'",
+            "gh extension exec x 'codeflow update'",
+            "gh config set pager sh; gh search issues 'codeflow update'",
+            "gh u 'codeflow update'",
+            "rg --hostname-bin=x 'codeflow update' docs",
+            "rg -Q 'codeflow update' docs",
+            "ack --ackrc=x.rc -h 'codeflow update' notes.txt",
+            "ack --output=x 'codeflow update' docs",
+            "ag --unknown 'codeflow update' docs",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "gh search issues 'codeflow update'",
+            "gh pr list --search 'codeflow update'",
+            "gh issue create --title 'codeflow update' --body x",
+            "gh issue comment 5 --body 'codeflow update'",
+            "gh api search/issues -f q='codeflow update'",
+            "gh search issues -- 'codeflow update'",
+            "rg -n -i 'codeflow update' docs",
+            "rg -g '*.md' -e 'codeflow update' docs",
+            "rg -A3 --type md 'codeflow update' docs",
+            "rg --no-config -- 'codeflow update' docs",
+            "ack -i --nocolor 'codeflow update' docs",
+            "ag -Q --nogroup 'codeflow update' docs",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// A program a search or forge program runs with its output or a file
+    /// (a pager, editor, browser or preprocessor value) is read as data
+    /// only when it is a viewer known to run nothing it reads; any other
+    /// program, such as an interpreter reading its input, judges the line
+    /// on its raw text.
+    #[test]
+    fn programs_given_output_to_read_are_known_viewers() {
+        for command in [
+            "export GH_PAGER=perl; gh search issues 'codeflow update'",
+            "GH_PAGER=python3 gh search issues 'codeflow update'",
+            "export ACK_PAGER=ed; ack -h 'codeflow update' notes.txt",
+            "ack --pager=perl -h 'codeflow update' notes.txt",
+            "ag --pager=ruby 'codeflow update' notes.txt",
+            "rg --pre=perl 'codeflow update' notes.txt",
+            "export GH_EDITOR=node; gh issue create --title t --body 'codeflow update'",
+            "export PAGER=perl; gh search issues 'codeflow update'",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "GH_PAGER=cat gh search issues 'codeflow update'",
+            "export GH_PAGER='less -R'; gh search issues 'codeflow update'",
+            "export ACK_PAGER='less -FRX'; ack 'codeflow update' docs",
+            "ag --pager=more 'codeflow init' docs",
+            "rg --pre=pdftotext 'codeflow update' docs",
+            "export GH_EDITOR='code --wait'; gh issue create --title 'codeflow update'",
+            "export BROWSER=echo; gh search issues 'codeflow update' --web",
+            "export PAGER='less -s'; gh search issues 'codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// A variable that gives a search or forge program, or a pager it
+    /// runs, options or a settings file (`ACK_OPTIONS`,
+    /// `RIPGREP_CONFIG_PATH`, `GH_CONFIG_DIR`, `LESS`) can make it run a
+    /// program: live on the line, it judges the line on its raw text.
+    #[test]
+    fn options_variables_judge_the_line() {
+        for command in [
+            "export ACK_OPTIONS=--pager=sh; ack -h 'codeflow update' notes.txt",
+            "ACK_OPTIONS='--pager=sh' ack -h 'codeflow update' notes.txt",
+            "export ACKRC=x.rc; ack -h 'codeflow update' notes.txt",
+            "export RIPGREP_CONFIG_PATH=rg.conf; rg 'codeflow update' docs",
+            "export GH_CONFIG_DIR=cfg; gh search issues 'codeflow update'",
+            "export XDG_CONFIG_HOME=cfg; gh search issues 'codeflow update'",
+            "export LESS='+!sh'; gh search issues 'codeflow update'",
+            "read ACK_OPTIONS < opts.txt; ack -h 'codeflow update' notes.txt",
+            "export ACK_OPTIONS; ack -h 'codeflow update' notes.txt",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "export NOTE=1; ack 'codeflow update' docs",
+            "RIPGREP_CONFIG_PATH=rg.conf grep 'codeflow update' notes.txt",
+            "export ACK_OPTIONS=x; cat notes.txt; echo 'codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// A program another program runs, such as a Git pager setting, is
     /// unresolved when it is a shell reading its input.
     #[test]
