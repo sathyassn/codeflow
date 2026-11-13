@@ -15,10 +15,7 @@ use std::path::{Path, PathBuf};
 pub(super) struct Body {
     pub command: String,
     pub directory: PathBuf,
-    /// Whether Git hands the program its output, a file or an address to
-    /// read: a pager, an editor, a browser, a manual viewer, the
-    /// interactive diff filter, a text converter or `grep -O`.
-    pub fed: bool,
+    pub kind: super::RunnerKind,
 }
 
 #[derive(Default)]
@@ -604,15 +601,22 @@ fn config_environment(
         .collect()
 }
 
-/// The configured and environment programs a Git call runs, each with
-/// whether Git hands it output, a file or an address to read
-/// ([`catalog::fed`], [`catalog::FED_ENVIRONMENT`]).
+/// The configured and environment programs a Git call runs, each a
+/// program Git hands output, a file or an address to read
+/// ([`catalog::fed`], [`catalog::FED_ENVIRONMENT`]) or a tool.
 fn configured_commands(
     args: &[String],
     cwd: &Path,
     env: &crate::security::git_config::Environment,
     earlier: &[PathBuf],
-) -> Result<Vec<(String, bool)>, String> {
+) -> Result<Vec<(String, super::RunnerKind)>, String> {
+    let kind = |fed: bool| {
+        if fed {
+            super::RunnerKind::Fed
+        } else {
+            super::RunnerKind::Tool
+        }
+    };
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(Vec::new());
     };
@@ -670,7 +674,7 @@ fn configured_commands(
             // Helpers and custom submodule updates use a leading shell marker.
             commands.push((
                 value.strip_prefix('!').unwrap_or(value).to_string(),
-                catalog::fed(key),
+                kind(catalog::fed(key)),
             ));
         }
     }
@@ -699,7 +703,7 @@ fn configured_commands(
                 },
             };
             if let Some(value) = value.filter(|value| !value.is_empty()) {
-                commands.push((value, catalog::FED_ENVIRONMENT.contains(name)));
+                commands.push((value, kind(catalog::FED_ENVIRONMENT.contains(name))));
             }
         }
     }
@@ -1005,7 +1009,7 @@ fn external_body(
     Ok(Some(Body {
         command: quote_words(&words),
         directory: at,
-        fed: false,
+        kind: super::RunnerKind::Command,
     }))
 }
 
@@ -1800,12 +1804,11 @@ fn note_segment(
 }
 
 /// Read the command bodies and callbacks a runner starts, each from the
-/// directories it runs in, each with whether Git hands it output to read
-/// ([`Body::fed`]).
+/// directories it runs in, each with its kind ([`Body::kind`]).
 fn descend(
     runner: &Runner<'_>,
     args: &[String],
-    [commands, configured]: [&Vec<(String, bool)>; 2],
+    [commands, configured]: [&Vec<(String, super::RunnerKind)>; 2],
     bodies: &mut Vec<Body>,
 ) -> Result<(), String> {
     let child = Inputs::child(args, runner.env)?;
@@ -1819,12 +1822,12 @@ fn descend(
             directories(args, runner.at, runner.env)?
         };
         for dir in dirs {
-            for (command, fed) in commands {
+            for (command, kind) in commands {
                 collect(command, &dir, runner.depth + 1, &child, bodies)?;
                 bodies.push(Body {
                     command: command.clone(),
                     directory: dir.clone(),
-                    fed: *fed,
+                    kind: *kind,
                 });
             }
         }
@@ -2261,23 +2264,27 @@ fn collect(
                 bodies.push(Body {
                     command: normalized_command(&args, &env),
                     directory: at.clone(),
-                    fed: false,
+                    kind: super::RunnerKind::Command,
                 });
             }
             bodies.extend(external_body(&args, &at, &env)?);
             note_config_write(&args, &mut changed_sources, &mut changed_aliases);
             // `grep -O` is grep's one command option: a pager given the
             // matching files.
-            let fed = git_subcommand(&args).is_some_and(|(verb, _)| verb == "grep");
-            let mut commands: Vec<(String, bool)> = commands(&args)?
+            let kind = if git_subcommand(&args).is_some_and(|(verb, _)| verb == "grep") {
+                super::RunnerKind::Fed
+            } else {
+                super::RunnerKind::Command
+            };
+            let mut commands: Vec<(String, super::RunnerKind)> = commands(&args)?
                 .into_iter()
-                .map(|command| (command, fed))
+                .map(|command| (command, kind))
                 .collect();
             let configured = configured_commands(&args, &at, &env, &earlier)?;
             commands.extend(
                 saved_commands(&args, &at, &env, &earlier)?
                     .into_iter()
-                    .map(|command| (command, false)),
+                    .map(|command| (command, super::RunnerKind::Command)),
             );
             if option_spec(git_subcommand(&args).map_or("", |(verb, _)| verb)).is_some()
                 || !commands.is_empty()

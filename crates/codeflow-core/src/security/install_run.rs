@@ -1451,6 +1451,7 @@ const SEARCH_OPTIONS: &[SearchOptions] = &[
 /// leave the line judged on its raw text.
 const GH_DATA_COMMANDS: &[&str] = &[
     "api",
+    "auth git-credential",
     "auth status",
     "browse",
     "cache list",
@@ -1772,15 +1773,16 @@ fn set_admitted(args: &[String], marks: &[bool]) -> bool {
 /// option's command line is ([`command_line_value`]), so a command this
 /// reader cannot resolve, such as a shell reading its input, leaves the
 /// line judged on its raw text; a pager, editor, browser or preprocessor
-/// value must also name an admitted viewer ([`fed_input`]). Any other
-/// value is read for a run only.
+/// value must also name an admitted viewer ([`fed_input`]), and any other
+/// command value must not read code it is not given inline
+/// ([`tool_input`]). Any other value is read for a run only.
 fn assignment_value(program: &str, variable: &str, value: &str, depth: usize) -> Found {
     if reads_options(program, variable) {
         Found::Unresolved
     } else if runs_variable(program, variable) && FED_VARIABLES.contains(&variable) {
         fed_input(value, depth)
     } else if runs_variable(program, variable) {
-        command_line_value(value, depth)
+        tool_input(value, depth)
     } else {
         in_value(value, depth).map_or(Found::Nothing, Found::Run)
     }
@@ -2453,6 +2455,221 @@ pub(crate) fn unresolved_command(command: &str) -> bool {
 #[must_use]
 pub(crate) fn unresolved_fed_command(command: &str) -> bool {
     matches!(fed_input(command, 0), Found::Unresolved)
+}
+
+/// Whether `command`, a tool Git runs with its own data (a filter, an
+/// external diff or merge driver, a credential helper, an askpass or ssh
+/// command, a gpg program, an fsmonitor or hook command), reads code it
+/// is not given inline ([`tool_input`]). The line that starts it is then
+/// judged on its raw text.
+#[must_use]
+pub(crate) fn unresolved_tool_command(command: &str) -> bool {
+    matches!(tool_input(command, 0), Found::Unresolved)
+}
+
+/// A tool's command line, judged as [`command_line_value`] judges it, and
+/// unresolved when any of its commands reads code from its input or from
+/// a data operand ([`reads_code`]). Its callers: [`assignment_value`] for
+/// the command variables that are not [`FED_VARIABLES`], and
+/// [`unresolved_tool_command`] for the tools Git runs.
+fn tool_input(value: &str, depth: usize) -> Found {
+    match command_line_value(value, depth) {
+        Found::Nothing
+            if simple(value)
+                .iter()
+                .any(|command| reads_code(command, depth)) =>
+        {
+            Found::Unresolved
+        }
+        found => found,
+    }
+}
+
+/// How deep [`reads_code`] reads shell command strings inside a tool
+/// before it fails closed.
+const MAX_TOOL_DEPTH: usize = 8;
+
+/// Programs that run code they read: [`reads_code`] admits one only with
+/// its code given inline, before any operand. Each entry is the program's
+/// names (read without a version suffix, as `python3.12` is `python`),
+/// the option letters that take inline code, the flag letters admitted
+/// alongside, and the long options that take inline code; any other
+/// option fails closed, since many name a file of code or a module.
+const CODE_READERS: &[CodeReader] = &[
+    CodeReader {
+        names: &["perl"],
+        inline: "eE",
+        flags: "alnpstTwWX",
+        long: &[],
+    },
+    CodeReader {
+        names: &["python", "pypy"],
+        inline: "c",
+        flags: "BbdEIOqsSuv",
+        long: &[],
+    },
+    CodeReader {
+        names: &["bun", "node", "nodejs"],
+        inline: "ep",
+        flags: "",
+        long: &["--eval", "--print"],
+    },
+    CodeReader {
+        names: &["ruby"],
+        inline: "e",
+        flags: "alnpswW",
+        long: &[],
+    },
+    CodeReader {
+        names: &["php"],
+        inline: "r",
+        flags: "nqH",
+        long: &[],
+    },
+    CodeReader {
+        names: &["lua", "luajit"],
+        inline: "e",
+        flags: "W",
+        long: &[],
+    },
+    CodeReader {
+        names: &["rscript"],
+        inline: "e",
+        flags: "",
+        long: &[],
+    },
+    CodeReader {
+        names: &["osascript"],
+        inline: "e",
+        flags: "",
+        long: &[],
+    },
+];
+
+/// One [`CODE_READERS`] entry.
+struct CodeReader {
+    names: &'static [&'static str],
+    inline: &'static str,
+    flags: &'static str,
+    long: &'static [&'static str],
+}
+
+/// Programs that read their code from their input, a file or their
+/// working tree however they are called, so a tool naming one is always
+/// unresolved: Tcl, Expect, Scheme and Julia interpreters, R, Deno, make,
+/// `pwsh`, the line editors and the calculators and macro processors
+/// with a shell escape.
+const ALWAYS_READS_CODE: &[&str] = &[
+    "cmd",
+    "dc",
+    "deno",
+    "ed",
+    "ex",
+    "expect",
+    "gmake",
+    "guile",
+    "julia",
+    "m4",
+    "make",
+    "powershell",
+    "pwsh",
+    "r",
+    "racket",
+    "red",
+    "tclsh",
+    "wish",
+];
+
+/// The awk programs, which read their program from a file with `-f`.
+const AWKS: &[&str] = &["awk", "gawk", "mawk", "nawk"];
+
+/// Whether one simple command of a tool reads code it is not given
+/// inline: a shell with no command string (or one whose string does), an
+/// [`ALWAYS_READS_CODE`] program, a [`CODE_READERS`] program without its
+/// inline code before any operand, awk with a program file or a loaded
+/// extension, sed with a script file, or any program a supplier such as
+/// `xargs` hands words it reads.
+fn reads_code(command: &Simple, depth: usize) -> bool {
+    let launchers = command.words.len().saturating_sub(command.argv.len());
+    if command
+        .words
+        .iter()
+        .take(launchers + 1)
+        .any(|word| SUPPLIERS.contains(&basename(word).as_str()))
+    {
+        return true;
+    }
+    let Some(program) = command.argv.first() else {
+        return false;
+    };
+    let args = &command.argv[1..];
+    let name = code_reader_name(program);
+    if SHELLS.contains(&basename(program).as_str()) {
+        return depth >= MAX_TOOL_DEPTH
+            || shell_command_string(args)
+                .is_none_or(|string| matches!(tool_input(string, depth + 1), Found::Unresolved));
+    }
+    if ALWAYS_READS_CODE.contains(&name.as_str()) {
+        return true;
+    }
+    if AWKS.contains(&name.as_str()) {
+        return args.iter().any(|word| {
+            ["-f", "-E", "-i", "-l"]
+                .iter()
+                .any(|option| word.starts_with(option))
+                || ["--exec", "--file", "--include", "--load"]
+                    .iter()
+                    .any(|option| word == option || word.starts_with(&format!("{option}=")))
+        });
+    }
+    if name == "sed" || name == "gsed" {
+        return args.iter().any(|word| {
+            (word.starts_with('-') && !word.starts_with("--") && word.contains('f'))
+                || word == "--file"
+                || word.starts_with("--file=")
+        });
+    }
+    CODE_READERS
+        .iter()
+        .find(|reader| reader.names.contains(&name.as_str()))
+        .is_some_and(|reader| !inline_code_first(reader, args))
+}
+
+/// Whether a [`CODE_READERS`] program's words give its code inline before
+/// any operand, `-` or `--`, with only its admitted flags beside it.
+fn inline_code_first(reader: &CodeReader, args: &[String]) -> bool {
+    for word in args {
+        if let Some(long) = word.strip_prefix("--") {
+            let name = long.split_once('=').map_or(long, |(name, _)| name);
+            return !long.is_empty()
+                && reader
+                    .long
+                    .iter()
+                    .any(|option| option.strip_prefix("--") == Some(name));
+        }
+        let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) else {
+            return false;
+        };
+        for letter in letters.chars() {
+            if reader.inline.contains(letter) {
+                return true;
+            }
+            if !reader.flags.contains(letter) {
+                return false;
+            }
+        }
+    }
+    false
+}
+
+/// A program's name as [`CODE_READERS`] and [`ALWAYS_READS_CODE`] list
+/// it: its base name in lower case, without a `.exe` suffix or a version
+/// suffix of digits, dots and hyphens (`python3.12`, `lua5.4`, `pypy3`).
+fn code_reader_name(program: &str) -> String {
+    let name = basename(program).to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '-')
+        .to_string()
 }
 
 /// The raw-text judgement for a line that could not be resolved, and for
@@ -3353,6 +3570,58 @@ mod tests {
             "/usr/bin/firefox",
         ] {
             assert!(!unresolved_fed_command(command), "{command}");
+        }
+    }
+
+    /// A tool Git runs with its own data is unresolved when it reads code
+    /// from its input or a data operand, directly, through a launcher or
+    /// supplier, or inside a shell's command string; an ordinary tool, or
+    /// an interpreter given its code inline, is not.
+    #[test]
+    fn a_tool_reading_code_it_is_not_given_inline_is_unresolved() {
+        for command in [
+            "perl",
+            "perl x.pl",
+            "perl -w",
+            "perl -I lib -e 1",
+            "python3.12",
+            "python -m tool",
+            "nice python3 -",
+            "env node",
+            "node --require x -e 1",
+            "ruby helper.rb",
+            "php",
+            "lua5.4",
+            "tclsh",
+            "make",
+            "awk -f -",
+            "gawk -f/dev/stdin",
+            "sed -f script.sed",
+            "sh",
+            "sh -c perl",
+            "bash -c 'ruby x.rb'",
+            "xargs -n1 git",
+        ] {
+            assert!(unresolved_tool_command(command), "{command}");
+        }
+        for command in [
+            "",
+            "git-lfs filter-process",
+            "git-lfs clean -- %f",
+            "vimdiff \"$LOCAL\" \"$REMOTE\"",
+            "gh auth git-credential",
+            "ssh -i key",
+            "gpg",
+            "difft",
+            "git merge-file %A %O %B",
+            "perl -pe 's/a/b/'",
+            "python3 -c 'import sys'",
+            "node --eval 'process.exit(0)'",
+            "awk '{print}'",
+            "sed -e 's/a/b/'",
+            "sh -c 'ssh -i key \"$@\"'",
+        ] {
+            assert!(!unresolved_tool_command(command), "{command}");
         }
     }
 

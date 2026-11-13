@@ -419,14 +419,19 @@ pub(crate) fn code_install_violation(level: PolicyLevel, code: &str) -> Option<V
 /// The install run on `command`. A line whose Git call runs a program the
 /// reader cannot resolve, such as a shell reading its input, or hands its
 /// output or a file to a program that is not an admitted viewer, such as
-/// an interpreter as the pager or editor, is judged on its raw text; a
-/// runner body is not read again for this (TSK-1476).
+/// an interpreter as the pager or editor, or runs a tool that reads its
+/// code from its input or a data operand, such as an interpreter as the
+/// ssh command or a filter, is judged on its raw text; a runner body is
+/// not read again for this (TSK-1476).
 fn install_run_on_line(
     command: &str,
     posix: bool,
     cwd: &std::path::Path,
 ) -> Option<crate::security::install_run::InstallRun> {
-    use crate::security::install_run::{unresolved_command, unresolved_fed_command};
+    use super::git_guard::RunnerKind;
+    use crate::security::install_run::{
+        unresolved_command, unresolved_fed_command, unresolved_tool_command,
+    };
     crate::security::install_run::install_run(command, posix).or_else(|| {
         if RUNNER_BODY.get() {
             return None;
@@ -434,12 +439,10 @@ fn install_run_on_line(
         let bodies = super::git_guard::git_runner_kinds(command, cwd).ok()?;
         bodies
             .iter()
-            .any(|(body, fed)| {
-                if *fed {
-                    unresolved_fed_command(body)
-                } else {
-                    unresolved_command(body)
-                }
+            .any(|(body, kind)| match kind {
+                RunnerKind::Fed => unresolved_fed_command(body),
+                RunnerKind::Tool => unresolved_tool_command(body),
+                RunnerKind::Command => unresolved_command(body),
             })
             .then(|| crate::security::install_run::raw_run(command))
             .flatten()
