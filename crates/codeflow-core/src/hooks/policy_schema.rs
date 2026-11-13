@@ -285,8 +285,10 @@ pub const SCHEMA: [KeySpec; 82] = [
                 fetch a missing \
                 object through a transport its configuration names. Every other line that \
                 names the binary with a verb refuses, whatever program reads it: in its text \
-                as written, in its words as the shell passes them, or in what `printf`, \
-                `echo` and `print` write from them once their escapes are decoded. So give \
+                as written, in its words as the shell passes them, in what `printf`, \
+                `echo` and `print` write from them once their escapes are decoded and their \
+                numbers formatted, or in a value the line builds from its own assignments. \
+                So give \
                 such text to a listed program or leave the binary's name out of a search. A \
                 run whose program \
                 word or first operand the guard cannot resolve, and a run inside a quoted \
