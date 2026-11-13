@@ -387,34 +387,22 @@ and a successful build implies no publishing.
 | Unknown or changed baseline content from an earlier portal version | Stop and preserve; resolve journal recovery and inspect before manual recovery |
 | Transferred runtime | The project owns maintenance; setup and update preserve edits and intentional deletions |
 
-Transfer rules:
+| Transfer rule | Detail |
+|---|---|
+| Scope | `codeflow portal transfer --confirm` operates on the whole adopted runtime. It does not install the new embedded release, repair missing runtime or configuration, or waive integrity checks |
+| Release frozen | The release actually adopted, which may differ from the release in the current binary |
+| A genuine fork after transfer | Update the actual generator and its state declaration together. Its evidence must still pass `codeflow validate --portal <dir>` |
+| What a green verifier attests | Not visual quality, security, accessibility or runtime provenance |
 
-- `codeflow portal transfer --confirm` operates on the whole adopted runtime.
-  It does not install the new embedded release, repair missing runtime or
-  configuration, or waive integrity checks.
-- It freezes the release actually adopted, which may differ from the release in
-  the current binary.
-- For a genuine fork after transfer, update the actual generator and its state
-  declaration together. Its evidence must still pass
-  `codeflow validate --portal <dir>`.
-- A green verifier does not attest visual quality, security, accessibility or
-  runtime provenance.
-
-Recovery rules:
-
-- The normal portal command recovers any pending journal from an earlier portal
-  version under its lease, before full adoption parsing and migration.
-- Never delete journal, stage or lease data to make an error disappear.
-- If a baseline-integrity failure remains, the new migration or transfer did
-  not publish. Earlier journaled recovery may have completed, and you report it
-  separately.
-- Preserve and inspect the questionable content and the repository history.
-- Once pending recovery is settled, an explicit reviewed operation may move a
-  verified preserved copy outside the reserved baseline directory or restore
-  exact reviewed bytes. Keep a restore path.
-- Never normalize line endings or delete unknown files as a shortcut. Retry the
-  intended command afterwards.
-- Absent baselines are benign. They do not waive managed runtime-drift checks.
+| Recovery rule | Detail |
+|---|---|
+| Pending journal | The normal portal command recovers any pending journal from an earlier portal version under its lease, before full adoption parsing and migration |
+| Journal, stage and lease data | Never delete them to make an error disappear |
+| A remaining baseline-integrity failure | The new migration or transfer did not publish. Earlier journaled recovery may have completed, and you report it separately |
+| Questionable content | Preserve and inspect it and the repository history |
+| After pending recovery is settled | An explicit reviewed operation may move a verified preserved copy outside the reserved baseline directory or restore exact reviewed bytes. Keep a restore path |
+| Shortcuts | Never normalize line endings or delete unknown files as a shortcut. Retry the intended command afterwards |
+| Absent baselines | Benign. They do not waive managed runtime-drift checks |
 
 Portal release evidence covers:
 
