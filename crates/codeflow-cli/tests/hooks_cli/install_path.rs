@@ -462,6 +462,7 @@ fn command_valued_options_refuse_through_launchers() {
         "tar -cf a.tar --use-compress-program='env codeflow update' notes.txt",
         "ssh -o ProxyCommand='env codeflow update' host",
         "sed '1e env codeflow update' notes.txt",
+        "gh repo clone owner/repo -- -c core.sshCommand='env codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
@@ -483,6 +484,7 @@ fn command_valued_options_refuse_through_launchers() {
         "less +G notes.txt",
         "vim -c 'set nu' notes.txt",
         "man -P less ls",
+        "gh repo clone owner/repo -- --depth 1",
     ]
     .iter()
     .map(ToString::to_string)

@@ -1179,6 +1179,26 @@ mod tests {
         }
     }
 
+    /// The words after `--` that `gh` passes to the `git` it runs are read
+    /// as a quoted argument is: a setting or option value holding a command
+    /// line. Its other words stay data.
+    #[test]
+    fn words_gh_passes_to_git_are_read() {
+        for command in [
+            "gh repo clone owner/repo -- -c core.sshCommand='env codeflow update'",
+            "gh repo clone owner/repo -- --upload-pack='codeflow update'",
+            "gh repo fork owner/repo --clone -- -c core.fsmonitor='nice codeflow init'",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "gh repo clone owner/repo -- --depth 1",
+            "gh issue create --title 'codeflow update fails' --body 'run codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// An editor's or pager's own command, given as an option value or a
     /// `+` word, runs a shell command through its command language, so it
     /// is judged on its text as interpreter code is.
