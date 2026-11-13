@@ -5084,8 +5084,15 @@ fn worktree_add_reads_includes_through_an_admin_alias() {
 #[test]
 fn agents_fetch_and_push_their_own_work_branch() {
     let f = Fixture::new();
-    f.empty_origin();
     let bare = f.temp.path().join("origin.git");
+    // The landed policy names the origin's URL (AC-5).
+    let policy = serde_json::json!({"git": {
+        "protected_branches": ["main", "master"],
+        "root_checkout_commits": "off",
+        "agent_remote_urls": [shell_path(&bare)],
+    }});
+    super::write_agent_policy(&f.root, &policy.to_string());
+    f.empty_origin();
     git(
         &f.root,
         &["config", "credential.helper", "!gh auth git-credential"],

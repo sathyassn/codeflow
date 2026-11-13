@@ -21,8 +21,33 @@ const WORK: &str = "task/agent-work";
 /// them), and a loopback question never leaves this machine
 /// (`test_remotes_contract`).
 const ORIGIN: &str = "https://localhost/example/project.git";
-/// The policy on `origin/main`, the landed authority.
-const LANDED_POLICY: &str = r#"{"git":{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/"],"release_branch_pattern":"rel/v*"}}"#;
+/// The policy on `origin/main`, the landed authority, which names
+/// [`ORIGIN`] in `git.agent_remote_urls`.
+const LANDED_POLICY: &str = r#"{"git":{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/"],"release_branch_pattern":"rel/v*","agent_remote_urls":["https://localhost/example/project.git"]}}"#;
+
+/// [`LANDED_POLICY`] with `git.agent_remote_urls` set to `urls`, written as
+/// JSON, or left out when `None`.
+fn landed_urls(urls: Option<&str>) -> String {
+    let key = urls.map_or_else(String::new, |urls| format!(r#","agent_remote_urls":{urls}"#));
+    format!(
+        r#"{{"git":{{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/"],"release_branch_pattern":"rel/v*"{key}}}}}"#
+    )
+}
+
+/// Moves `main` and `origin/main` to a new commit holding `policy`, so it
+/// becomes the landed policy.
+fn reland(repo: &git2::Repository, policy: &str) {
+    let head = repo
+        .find_reference("refs/remotes/origin/main")
+        .unwrap()
+        .target()
+        .unwrap();
+    let landed = commit(repo, policy, Some(head));
+    repo.reference("refs/heads/main", landed, true, "fixture")
+        .unwrap();
+    repo.reference("refs/remotes/origin/main", landed, true, "fixture")
+        .unwrap();
+}
 /// The work branch's own policy, which adds the prefix `wip/`.
 const WORK_POLICY: &str = r#"{"git":{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/","wip/"],"release_branch_pattern":"rel/v*"}}"#;
 /// The GitHub CLI helper as `gh auth setup-git` writes it for one host,
@@ -645,6 +670,90 @@ fn push_and_remote_settings_withhold_the_admission() {
     report(&wrong);
 }
 
+/// AC-5: `origin`'s one URL must equal an entry of `git.agent_remote_urls`
+/// in the landed policy, exactly. The sole URL replaced by another
+/// repository on the same host, its count kept at one, an unset, empty,
+/// malformed or non-matching list, a near spelling, and a list that is
+/// only uncommitted or branch-local all withhold the admission.
+#[test]
+fn origin_must_match_a_landed_remote_url() {
+    type Setup = Box<dyn Fn(&git2::Repository, &Path)>;
+    if !isolated("origin_must_match_a_landed_remote_url") {
+        return;
+    }
+    let lines = rows(&[
+        "git fetch",
+        "git fetch origin",
+        "git push origin HEAD:refs/heads/task/agent-work",
+        "git push origin HEAD",
+    ]);
+    let none = landed_urls(None);
+    let mut wrong = Vec::new();
+    let mut refused: Vec<(&str, String, Setup)> = vec![(
+        "the sole URL replaced by another repository on the same host",
+        LANDED_POLICY.to_string(),
+        Box::new(|repo, _| {
+            repo.remote_set_url("origin", "https://localhost/attacker/project.git")
+                .unwrap();
+        }),
+    )];
+    for (case, urls) in [
+        ("unset", None),
+        ("empty", Some("[]")),
+        ("another repository", Some(r#"["https://localhost/example/other.git"]"#)),
+        ("a trailing slash", Some(r#"["https://localhost/example/project.git/"]"#)),
+        ("without .git", Some(r#"["https://localhost/example/project"]"#)),
+        ("host in capitals", Some(r#"["https://LOCALHOST/example/project.git"]"#)),
+        ("a string, not a list", Some(r#""https://localhost/example/project.git""#)),
+        ("a number", Some("[1]")),
+        ("a null beside the URL", Some(r#"["https://localhost/example/project.git",null]"#)),
+        ("null", Some("null")),
+    ] {
+        refused.push((case, landed_urls(urls), Box::new(|_, _| {})));
+    }
+    // The list only in the working tree, or only on the work branch.
+    refused.push((
+        "an uncommitted edit",
+        none.clone(),
+        Box::new(|_, root| {
+            std::fs::write(root.join(".codeflow").join("policy.json"), LANDED_POLICY).unwrap();
+        }),
+    ));
+    refused.push((
+        "a branch-local commit",
+        none.clone(),
+        Box::new(|repo, _| {
+            let head = repo.head().unwrap().target().unwrap();
+            let local = commit(repo, LANDED_POLICY, Some(head));
+            repo.reference(&format!("refs/heads/{WORK}"), local, true, "fixture")
+                .unwrap();
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .unwrap();
+        }),
+    ));
+    for (case, landed, setup) in &refused {
+        let f = Fixture::landed(landed, GH_HELPER, |repo, root| setup(repo, root));
+        let before = wrong.len();
+        expect_account(&f.root, &lines, &mut wrong);
+        for entry in &mut wrong[before..] {
+            write!(entry, " [{case}]").unwrap();
+        }
+    }
+    // The exact URL, alone or beside another entry, is admitted.
+    for urls in [
+        r#"["https://localhost/example/project.git"]"#,
+        r#"["https://localhost/example/other.git","https://localhost/example/project.git"]"#,
+    ] {
+        let f = Fixture::landed(&landed_urls(Some(urls)), GH_HELPER, |_, _| {});
+        let before = wrong.len();
+        expect_pass(&f.root, &lines, &mut wrong);
+        for entry in &mut wrong[before..] {
+            write!(entry, " [list {urls}]").unwrap();
+        }
+    }
+    report(&wrong);
+}
+
 /// AC-1 and AC-5: only an `origin` whose transport programs are accounted
 /// for is admitted: an `https://` URL, which Git serves with its own HTTPS
 /// helper, or a local absolute path. Git starts a remote helper program
@@ -679,8 +788,13 @@ fn unaccounted_transports_withhold_the_admission() {
         "example/project.git",
         "./project.git",
     ] {
+        // The landed list names the URL, so only its transport refuses.
         let f = Fixture::with(GH_HELPER, |repo, _| {
             repo.remote_set_url("origin", url).unwrap();
+            reland(
+                repo,
+                &landed_urls(Some(&serde_json::json!([url]).to_string())),
+            );
         });
         let before = wrong.len();
         expect_account(&f.root, &lines, &mut wrong);
@@ -688,12 +802,14 @@ fn unaccounted_transports_withhold_the_admission() {
             write!(entry, " [origin {url}]").unwrap();
         }
     }
-    // A local absolute path: Git serves it with its own upload and receive
-    // programs, whose configured replacements withhold the admission.
+    // A local absolute path that the landed `git.agent_remote_urls` names:
+    // Git serves it with its own upload and receive programs, whose
+    // configured replacements withhold the admission.
     let f = Fixture::with(GH_HELPER, |repo, root| {
-        let path = root.parent().unwrap().join("origin.git");
-        repo.remote_set_url("origin", &crate::portable_path::slashed(&path))
-            .unwrap();
+        let path = crate::portable_path::slashed(&root.parent().unwrap().join("origin.git"));
+        repo.remote_set_url("origin", &path).unwrap();
+        let urls = serde_json::json!([path]).to_string();
+        reland(repo, &landed_urls(Some(&urls)));
     });
     expect_pass(&f.root, &lines, &mut wrong);
     report(&wrong);
