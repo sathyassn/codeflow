@@ -168,56 +168,10 @@ changes, repository or account changes, secret-store reads and user-level
 persistence. Commands inside opaque child programs are not inspected. Ordinary
 builds, a task-branch push and a single-file restore stay ordinary work.
 
-**Agent fetch and push.** Agents fetch from `origin` and push their own work
-branches (TSK-1479). Git starts the configured credential helper on each
-transport call, and exec-guard judges that helper as a command of its own, so
-the GitHub CLI helper `gh auth git-credential` draws the
-`security.outward_actions` account finding. That finding is skipped for that
-exact helper body, and only on two closed forms:
-
-- `git [-C <path>] fetch [-q|-p] [origin [<branch>...]]`;
-- `git [-C <path>] push [-u] [-q] origin <src>:refs/heads/<name>`, or the
-  short forms that push the current branch to its own name.
-
-The repository must have one remote, `origin`, with one URL that no rewrite
-changes, no plain `http://` or remote-helper URL, no push, mirror or
-submodule setting that widens the call, and no `.gitmodules`. A pushed name
-must sit under a `git.branch_prefixes` entry of the landed policy, and must not
-be protected, `origin`'s default branch, an integration line, a release
-branch (`git.release_branch_pattern`), the ID registry, `main` or `master`.
-Every program the call starts must be a credential helper, and the helpers
-Git selects for `origin`'s URL must be the GitHub CLI helper alone. The guard
-reads that selection as Git makes it: matching `credential.helper` entries
-apply in configuration order, and an empty value clears those before it, so
-a system `osxkeychain` helper that `gh auth setup-git`'s empty `helper =`
-clears does not count. Where the guard cannot read the selection (a
-wildcard, path or user in the pattern, or an origin that is not a plain
-HTTPS URL), every helper the call may start must be the GitHub CLI helper.
-Any read that fails keeps the finding. git-guard still refuses a push to a
-protected branch on its own rule. Other calls that contact a remote, such as
-`git remote update`, `git remote prune`, `git remote show` and
-`git maintenance`, start the helper too and keep the finding. The identity the helper serves is the
-operator's setup; see "Mode A setup (operator)" in
-[the policy reference](../policy-reference.md).
-
-**Branches agents never push.** git-guard and exec-guard refuse an agent push
-that updates or deletes a branch named by `git.agent_push_refused_branches`
-(default `integration` and `integration/*`), `origin`'s default branch,
-`main` or `master`, whatever credential Git uses. Both guards apply one
-judgement to each git call that git-guard's command reader finds on the line;
-exec-guard runs only that judgement, without git-guard's other rules. The
-list is read only from the landed policy, so an uncommitted or branch-local edit has no effect; an
-empty list frees the lines but never the default branch, `main` or `master`;
-a value the guards cannot read counts as the default list. The guards also
-refuse a push of every branch (`--all`, `--branches`, `--mirror`, a
-wildcard, the matching refspec `:`), a push whose destination they do not
-read (`git send-pack`, `git http-push`, `git subtree push`, a remote helper
-run by hand), and a push that leaves its destination to configuration they
-cannot read as the source's own name: `push.default` other than `simple` or
-`current`, a `remote.<name>.push` mapping, a configuration change earlier on
-the line, or a `-c` option or `GIT_` variable on it. The git hooks do not read
-the key, so the operator's own pushes are unaffected, and landing a reviewed
-pull request with `gh pr merge` stays under `git.pr_merge_to_protected`.
+**Agent fetch and push.** exec-guard admits an agent's fetch from `origin`
+and push of its own work branch through the GitHub CLI helper; both guards
+refuse an agent push of a line or the default branch
+([agent fetch and push](../policy-reference.md#agent-fetch-and-push)).
 
 **Refusals and relief.** A refusal names the policy rule and the operator's
 route.
