@@ -274,15 +274,17 @@ pub const SCHEMA: [KeySpec; 82] = [
                 package runner or package manager, shell, interpreter, Git runner or `cargo \
                 run` starts it and however the binary's path is written. A line is data only \
                 in a closed subset the guard lists: each command one of a few programs that \
-                print or search (`echo`, `printf`, `cat`, `head`, `tail`, `wc`, `grep`, `rg` \
-                with `--no-config`, `git` with its pager off running `log` or `grep`, and the \
-                binary's exact help and version forms), each option on that program's own \
-                list, with no assignment, wrapper, substitution, expansion, subshell, \
-                here-document or supplier, and pipes and redirections to plain files only. A \
-                listed Git call is data only when every program its configuration runs is one \
-                of the Git LFS filters in the exact form `git lfs install` writes. Every other \
-                line whose text names the binary with a verb refuses, whatever program reads \
-                it, so give such text in a file or to a listed program. A run whose program \
+                print or search (`echo`, `printf` with a format of literal text and `%s` only, \
+                `cat`, `head`, `tail`, `wc`, `grep`, `rg` with `--no-config` as its first \
+                argument, and the binary by its bare name in its exact help and version forms), \
+                each argument read by that program's own grammar and inert in bash, zsh and \
+                sh, with no assignment, wrapper, substitution, expansion, subshell, \
+                here-document or supplier, and pipes and redirections to plain files or \
+                `/dev/null` only. No Git call is data, since a Git search can fetch a missing \
+                object through a transport its configuration names. Every other line whose \
+                text names the binary with a verb refuses, whatever program reads it, so give \
+                such text to a listed program or leave the binary's name out of a search. A \
+                run whose program \
                 word or first operand the guard cannot resolve, and a run inside a quoted \
                 argument or an assigned value, refuse too (TSK-1476). A binary an agent \
                 renames or copies, the verb's words written to a file and run later, and state \
