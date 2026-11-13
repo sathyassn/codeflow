@@ -412,6 +412,85 @@ fn runs_behind_launchers_values_and_options_refuse() {
     tally.finish();
 }
 
+/// AC-1: an option, variable or editor command whose value a program runs
+/// as a command is judged as that command, behind any launcher, for each
+/// program and option the guard reads: search programs' pagers and
+/// preprocessors, pager, editor and browser variables, Git's command
+/// settings, editors' command options, and the suppliers and launchers
+/// that run the words after them.
+#[test]
+fn command_valued_options_refuse_through_launchers() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "ack --pager='env codeflow update' pattern README.md",
+        "ack --pager='nice codeflow update' pattern README.md",
+        "ack --pager='command codeflow init --yes' pattern README.md",
+        "ack --pager='/usr/bin/env ./target/debug/codeflow update' pattern README.md",
+        "ack --pager='timeout 5 codeflow update' pattern README.md",
+        "ack --pager='xargs codeflow' pattern README.md",
+        "ack --pager 'env codeflow update' pattern README.md",
+        "ack --pag='env codeflow update' pattern README.md",
+        "ack --pager='sh -c \"codeflow update\"' pattern README.md",
+        "ack --pager=sh -h 'codeflow update' notes.txt",
+        "ag --pager='env codeflow update' pattern README.md",
+        "ag --pager 'nice codeflow init --yes' pattern README.md",
+        "ag --pag='env codeflow update' pattern README.md",
+        "ag --pager=sh 'codeflow update' notes.txt",
+        "rg --pre xargs pattern codeflow",
+        "rg --pre 'env codeflow update' pattern docs",
+        "export ACK_PAGER='env codeflow update'; ack pattern README.md",
+        "ACK_PAGER='env codeflow init'; ack pattern README.md",
+        "export GH_PAGER='env codeflow update'; gh pr list",
+        "export GIT_PAGER='env codeflow update'; git log -1",
+        "git -c core.pager='env codeflow update' log -1",
+        "git -c core.editor='env codeflow update' commit",
+        "less '+!codeflow update' notes.txt",
+        "less '+!env codeflow update' notes.txt",
+        "LESSOPEN='|env codeflow update %s' less notes.txt",
+        "vim -c '!codeflow update' notes.txt",
+        "vim '+!env codeflow update' notes.txt",
+        "emacs --eval '(shell-command \"codeflow update\")'",
+        "man -P 'env codeflow update' ls",
+        "find . -name x -exec env codeflow update ';'",
+        "echo update | xargs env codeflow",
+        "watch -n 60 env codeflow update",
+        "parallel env codeflow ::: update",
+        "fd -x env codeflow update",
+        "flock /tmp/l -c 'env codeflow update'",
+        "script -q /dev/null env codeflow update",
+        "tar -cf a.tar --use-compress-program='env codeflow update' notes.txt",
+        "ssh -o ProxyCommand='env codeflow update' host",
+        "sed '1e env codeflow update' notes.txt",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    // Ordinary pagers, preprocessors and editor commands draw no install
+    // finding.
+    let controls: Vec<String> = [
+        "ack --pager=less pattern README.md",
+        "ack --pager='less -R' pattern README.md",
+        "ack --pager=less 'codeflow update' docs",
+        "ag --pager 'less -R' 'codeflow init' docs",
+        "rg --pre ./tools/pdftext pattern docs",
+        "rg --pre=pdftotext 'codeflow update' docs",
+        "export ACK_PAGER='less -R'; ack pattern README.md",
+        "export GH_PAGER='less -R'; gh pr list",
+        "git -c core.pager='less -R' log -1",
+        "less +G notes.txt",
+        "vim -c 'set nu' notes.txt",
+        "man -P less ls",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&controls, &root);
+    tally.finish();
+}
+
 /// AC-1: a package manager that runs a package's binary by name, a
 /// subcommand that runs a command, and a quoted option value naming a
 /// command after its own `=` are judged as the run they start.
@@ -920,7 +999,7 @@ fn source_messages_without_the_operator(workspace: &Path) -> Vec<String> {
         .any(|phrase| line.contains(phrase))
     };
     // Lines whose reader is the operator who ran the verb, since only the
-    // verb itself prints them, and one shared text held with its copies.
+    // verb itself prints them.
     let exempt: &[(&str, &str)] = &[
         // `init --workspace`'s own refusals.
         (

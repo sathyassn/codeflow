@@ -881,6 +881,126 @@ mod tests {
         }
     }
 
+    /// A search program's option whose value is a command line it runs is
+    /// judged as that command: behind each launcher, a path spelling, a
+    /// shell or a supplier, with the value attached or as the next word,
+    /// and under an abbreviated option name. A preprocessor value is one
+    /// program, run with each searched path and the file on its input. A
+    /// shell reading its input as the pager has the line's text judged.
+    /// Ordinary pagers and preprocessors stay allowed.
+    #[test]
+    fn command_valued_options_are_judged_as_the_command_they_run() {
+        for launcher in [
+            "env",
+            "nice",
+            "command",
+            "/usr/bin/env",
+            "timeout 5",
+            "sudo -u root",
+            "busybox env",
+            "env -i PATH=/usr/bin",
+        ] {
+            for option in [
+                "ack --pager=",
+                "ack --pager ",
+                "ack --pag=",
+                "ag --pager=",
+                "ag --pager ",
+                "ag --pag=",
+            ] {
+                for run in ["codeflow update", "./target/debug/codeflow init --yes"] {
+                    let command = format!("{option}'{launcher} {run}' pattern README.md");
+                    assert!(runs(&command), "{command}");
+                }
+            }
+        }
+        for command in [
+            "ack --pager='sh -c \"codeflow update\"' pattern README.md",
+            "ack --pager='env codefl?w update' pattern README.md",
+            "ack --pager='xargs codeflow' pattern README.md",
+            "ack --pager=sh -h 'codeflow update' notes.txt",
+            "ack --pager='bash -s' -h 'codeflow init --yes' notes.txt",
+            "ag --pager=sh 'codeflow update' notes.txt",
+            "ack --pager='less -R \"x' 'codeflow update' notes.txt",
+            "rg --pre xargs pattern codeflow",
+            "rg --pre=parallel pattern codeflow",
+            "rg --pre 'env codeflow update' pattern docs",
+            "rg --pre='nice codeflow init' pattern docs",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "ack --pager=less pattern README.md",
+            "ack --pager='less -R' pattern README.md",
+            "ack --pager 'less -FRX' pattern README.md",
+            "ack --pager='env LESS=-R less' pattern README.md",
+            "ack --nopager 'codeflow update' docs",
+            "ack --pager=less 'codeflow update' docs",
+            "ag --pager=less pattern README.md",
+            "ag --pager 'less -R' 'codeflow init' docs",
+            "ag --pager=more 'codeflow init' docs",
+            "rg --pre ./tools/pdftext pattern docs",
+            "rg --pre=pdftotext 'codeflow update' docs",
+            "rg --pre env pattern codeflow",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// A pager, editor or browser variable assigned earlier on the line is
+    /// read when a search or forge program that runs it follows; another
+    /// variable stays data for them.
+    #[test]
+    fn command_variables_a_data_program_runs_are_judged() {
+        for command in [
+            "export ACK_PAGER='env codeflow update'; ack pattern README.md",
+            "export ACK_PAGER_COLOR='nice codeflow update'; ack pattern README.md",
+            "ACK_PAGER='env codeflow init'; ack pattern README.md",
+            "export PAGER='env codeflow update'; ack --pager pattern README.md",
+            "export GH_PAGER='env codeflow update'; gh pr list",
+            "export GH_EDITOR='codeflow update'; gh pr create",
+            "export BROWSER='nice codeflow init'; gh browse",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "export ACK_PAGER='less -R'; ack pattern README.md",
+            "export GH_PAGER='less -R'; gh pr list",
+            "NOTE='codeflow update'; ack \"$NOTE\" docs",
+            "export NOTE='codeflow update'; gh pr list",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// An editor's or pager's own command, given as an option value or a
+    /// `+` word, runs a shell command through its command language, so it
+    /// is judged on its text as interpreter code is.
+    #[test]
+    fn editor_commands_are_judged_on_their_text() {
+        for command in [
+            "less '+!codeflow update' notes.txt",
+            "vim -c '!codeflow update' notes.txt",
+            "vim '+!codeflow update' notes.txt",
+            "nvim --cmd 'silent !codeflow update' notes.txt",
+            "vi -c 'r !./target/debug/codeflow init' notes.txt",
+            "emacs --eval '(shell-command \"codeflow update\")'",
+            "vim --cmd='!codeflow update' notes.txt",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "less -R notes.txt",
+            "less +G notes.txt",
+            "vim -c 'set nu' notes.txt",
+            "vim +10 notes.txt",
+            "emacs --eval '(setq x 1)' notes.txt",
+            "vim docs/codeflow-update.md",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// Package managers that run a package's binary by name, a subcommand
     /// that runs a command, and a quoted option value that names a command
     /// after its own `=`.
