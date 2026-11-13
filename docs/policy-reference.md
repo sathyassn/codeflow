@@ -943,11 +943,24 @@ A home change made any other way sets no starting point, and the walk then
 judges every move since the merge base. Such ways include a direct commit,
 a merge that also carries docs, a merge reached only through another
 merge's second parent, a completed task, a copy that differs from `main`'s
-version, or a new record on the line. When the sync leaves such a record
-unchanged and `main` moved the task in that span, the line's own home
-change must itself be a reviewed planning merge of the task while it was
-`todo` or `blocked` with no acceptance block, or a shared planning
-introduction.
+version, a copy of the version the merge base already held, or a new
+record on the line.
+
+When the sync leaves a record unchanged and `main` moved the task in that
+span, the check looks at the line's own history of the task:
+
+- It reads each commit on the line's first-parent history since the merge
+  base, by the task's identity. A commit that changed the task's home or
+  introduced it counts, even when a later commit restored the home the
+  merge base held, with exact bytes or with other text kept.
+- The line's last such change decides. It must be the adoption described
+  above, or a reviewed planning merge of the task while it was `todo` or
+  `blocked` with no acceptance block, or a shared planning introduction.
+  Earlier changes on the line are not judged here.
+- The line's last sync of `main` is compared with the merge base, so a
+  home it took from `main` is not a change of the line's own.
+- A line that never changed the task's home or introduced it in that span
+  is not examined.
 
 Every refused record is named with its own cause. A refused move clears
 through the line's own reviewed planning merge where the task's state
