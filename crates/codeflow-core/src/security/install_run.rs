@@ -11,8 +11,9 @@
 //!    `printf` with a format of literal text and `%s`, `cat`, `head`,
 //!    `tail`, `wc`, `grep`, `rg` with `--no-config` first, and the binary by
 //!    its bare name in its exact help and version shapes), each argument
-//!    read by that program's own grammar and proven inert, redirections to
-//!    files or `/dev/null` only, and no construct outside the model. No Git
+//!    read by that program's own grammar and proven inert, output
+//!    redirected to `/dev/null` only, input read from a named file, and no
+//!    construct outside the model. No Git
 //!    call is listed: a search can fetch a missing object through a
 //!    transport its configuration names.
 //! 2. Any other line is read for a run whose text need not hold the
@@ -832,9 +833,22 @@ fn starts_a_command(before: &[String]) -> bool {
 /// verb, or `cargo` followed by `run` or `r` and then a verb.
 #[must_use]
 pub(crate) fn raw_run(text: &str) -> Option<InstallRun> {
+    // A backslash is read both ways: dropped, as the shell drops one that
+    // quotes a letter (`cod\eflow`), and as a break, as a printf or echo
+    // escape such as `\n` ends the word before it (`update\n`).
+    raw_run_reading(text, false).or_else(|| raw_run_reading(text, true))
+}
+
+/// [`raw_run`] with each backslash dropped, or read as a word break when
+/// `backslash_breaks` is true.
+fn raw_run_reading(text: &str, backslash_breaks: bool) -> Option<InstallRun> {
     let plain: String = text
         .chars()
-        .filter(|c| !matches!(c, '\\' | '\'' | '"'))
+        .filter_map(|c| match c {
+            '\\' if backslash_breaks => Some(' '),
+            '\\' | '\'' | '"' => None,
+            c => Some(c),
+        })
         .collect();
     let words: Vec<&str> = plain
         .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '-')))
@@ -1386,6 +1400,9 @@ mod tests {
             "require('child_process').execFileSync('codeflow', ['init'])",
             "system(\"codeflow\", \"update\")",
             "cargo run -- init",
+            "printf 'codeflow update\\n' > notes.txt",
+            "echo -e 'codeflow init\\tx'",
+            "cod\\eflow update",
         ] {
             assert!(raw_run(code).is_some(), "{code}");
         }

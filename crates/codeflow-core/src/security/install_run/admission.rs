@@ -7,12 +7,19 @@
 //!
 //! - It reads with this module's own lexer: words of plain characters,
 //!   single-quoted text, double-quoted text with no `$`, backtick,
-//!   backslash or `!`, the separators `;`, newline, `&&`, `||` and `|`, and
-//!   redirections of a listed form to a file or `/dev/null`. Any other
-//!   character or form (an expansion, a pattern, a substitution, a subshell
-//!   or brace group, a here-document or here-string, the background `&`, a
-//!   comment, a redirection to any other device) ends the reading, and the
-//!   line is not admitted.
+//!   backslash or `!`, the separators `;`, newline, `&&`, `||` and `|`,
+//!   output redirections of descriptor 1 or 2 to exactly `/dev/null` (or a
+//!   copy of one already sent there), and input from a named file. Any
+//!   other character or form (an expansion, a pattern, a substitution, a
+//!   subshell or brace group, a here-document or here-string, the
+//!   background `&`, a comment, output to any other target, input from a
+//!   device) ends the reading, and the line is not admitted. No target is
+//!   looked at on disk: what a name is when the line runs can differ from
+//!   what it was when the guard judged it.
+//! - No listed program takes an operand or option that names a file it
+//!   writes (no `tee`, `-o` or `--output`), so `/dev/null` and a pipe to
+//!   the next listed program are the only places output goes besides the
+//!   session's own standard output and error.
 //! - Every simple command has a program word, written plainly, that is one
 //!   of the arms of [`command_admitted`], with its arguments read by that
 //!   program's own grammar. No assignment, declaration, alias, function,
@@ -47,11 +54,21 @@ enum Token {
     Pipe,
     /// `;`, newline, `&&` or `||` after a command.
     End,
-    /// `>`, `>>` or `<`, with an optional `1` or `2` before it: the next
-    /// word is its target.
-    Redirect,
-    /// `>&1` or `>&2`, with an optional `1` or `2` before it: no target.
-    Duplicate,
+    /// `>` or `>>` on descriptor 1 or 2: the next word is its target.
+    Output(u8),
+    /// `<` on standard input: the next word is the file it reads.
+    Input,
+    /// `>&1` or `>&2` from descriptor 1 or 2: the first descriptor
+    /// becomes a copy of the second. No target word.
+    Duplicate(u8, u8),
+}
+
+/// What the next word is, after a redirection operator.
+enum Target {
+    /// The file an output redirection on this descriptor opens.
+    Output(u8),
+    /// The file standard input reads.
+    Input,
 }
 
 /// The characters a word may hold unquoted: none the shell expands or
@@ -68,43 +85,69 @@ pub(super) fn admitted(line: &str) -> bool {
         return false;
     };
     let mut command: Vec<Word> = Vec::new();
-    // Whether the next word is a redirection's target.
-    let mut target = false;
+    // What the next word is when it follows a redirection operator.
+    let mut target: Option<Target> = None;
     // Whether the current command holds a redirection.
     let mut redirected = false;
+    // Whether descriptors 1 and 2 of the current command are known to
+    // write to `/dev/null` (index 0 unused).
+    let mut null = [false; 3];
     // The separator before the current command: `Some(true)` after `;`,
     // a newline, `&&` or `||`, `Some(false)` after `|`.
     let mut separator = None;
     for token in tokens {
         match token {
-            Token::Word(word) => {
-                if target {
-                    if !target_admitted(&word.text) {
+            Token::Word(word) => match target.take() {
+                // Output goes only to `/dev/null`: a name says nothing of
+                // what the target is when the line runs (a FIFO a running
+                // shell reads, a descriptor path, a link to one, or a file
+                // swapped for one after this check), so no other target is
+                // admitted and none is looked at on disk.
+                Some(Target::Output(fd)) => {
+                    if word.text != "/dev/null" {
                         return false;
                     }
-                    target = false;
-                } else {
-                    command.push(word);
+                    null[usize::from(fd)] = true;
                 }
+                Some(Target::Input) => {
+                    if !input_admitted(&word.text) {
+                        return false;
+                    }
+                }
+                None => command.push(word),
+            },
+            Token::Output(_) | Token::Input | Token::Duplicate(..) if target.is_some() => {
+                return false;
             }
-            Token::Redirect | Token::Duplicate => {
-                if target {
+            Token::Output(fd) => {
+                target = Some(Target::Output(fd));
+                redirected = true;
+            }
+            Token::Input => {
+                target = Some(Target::Input);
+                redirected = true;
+            }
+            // A copy is admitted only of a descriptor already sent to
+            // `/dev/null` on this command.
+            Token::Duplicate(fd, to) => {
+                if !null[usize::from(to)] {
                     return false;
                 }
-                target = matches!(token, Token::Redirect);
+                null[usize::from(fd)] = true;
                 redirected = true;
             }
             Token::Pipe | Token::End => {
-                if target || !command_admitted(&command) {
+                if target.is_some() || !command_admitted(&command) {
                     return false;
                 }
                 command.clear();
                 redirected = false;
+                null = [false; 3];
                 separator = Some(matches!(token, Token::End));
             }
         }
     }
-    if target {
+    if target.is_some() {
         return false;
     }
     if command.is_empty() {
@@ -115,10 +158,11 @@ pub(super) fn admitted(line: &str) -> bool {
     command_admitted(&command)
 }
 
-/// Whether a redirection may open `target`: a file, or `/dev/null`. bash
-/// opens a network connection for a target under `/dev/tcp/` or
-/// `/dev/udp/`, so no other path with a `dev` component is admitted.
-fn target_admitted(target: &str) -> bool {
+/// Whether standard input may be read from `target`: a listed program only
+/// reads it as data, whatever it is. bash opens a network connection for a
+/// target under `/dev/tcp/` or `/dev/udp/`, so no path with a `dev`
+/// component other than `/dev/null` is admitted.
+fn input_admitted(target: &str) -> bool {
     target == "/dev/null" || !target.split('/').any(|part| part == "dev")
 }
 
@@ -183,17 +227,22 @@ fn lex(line: &str) -> Option<Vec<Token>> {
                 // A `1` or `2` written right before the operator names the
                 // descriptor, and any other number there names one outside
                 // the subset; any other word before it ends there.
-                if in_word && !quoted && word.bytes().all(|b| b.is_ascii_digit()) {
-                    if word != "1" && word != "2" {
-                        return None;
-                    }
+                let fd = if in_word && !quoted && word.bytes().all(|b| b.is_ascii_digit()) {
+                    let fd = match word.as_str() {
+                        "1" => 1,
+                        "2" => 2,
+                        _ => return None,
+                    };
                     word.clear();
                     in_word = false;
+                    Some(fd)
                 } else {
                     flush(&mut tokens, &mut word, &mut quoted, &mut in_word);
-                }
+                    None
+                };
                 let (token, length) = redirection(
                     c,
+                    fd,
                     next,
                     chars.get(at + 2).copied(),
                     chars.get(at + 3).copied(),
@@ -234,12 +283,15 @@ fn quote(chars: &[char], at: usize) -> Option<(&[char], usize)> {
     Some((inside, close + 2))
 }
 
-/// The redirection that starts with `c`, followed by `next`, `third` and
-/// `fourth`, and its length: `>`, `>>`, `<`, or `>&1` and `>&2` ending
-/// there. Any other form (`<<`, `<<<`, `<>`, `<&`, `>|`, `>&` to a file
-/// or another descriptor, `<(` or `>(`) is outside the subset.
+/// The redirection that starts with `c`, with the descriptor `fd` written
+/// before it, followed by `next`, `third` and `fourth`, and its length:
+/// `>` or `>>` on descriptor 1 or 2, `<` with no descriptor, or `>&1` and
+/// `>&2` ending there. Any other form (`<<`, `<<<`, `<>`, `<&`, `>|`, `>&`
+/// to a file or another descriptor, `<(` or `>(`, a descriptor before `<`)
+/// is outside the subset.
 fn redirection(
     c: char,
+    fd: Option<u8>,
     next: Option<char>,
     third: Option<char>,
     fourth: Option<char>,
@@ -247,13 +299,19 @@ fn redirection(
     let ends = |after: Option<char>| {
         after.is_none_or(|after| matches!(after, ' ' | '\t' | '\n' | ';' | '|' | '&'))
     };
+    let written = fd;
+    let fd = fd.unwrap_or(1);
     match (c, next) {
-        ('>', Some('>')) => Some((Token::Redirect, 2)),
-        ('>', Some('&')) if matches!(third, Some('1' | '2')) && ends(fourth) => {
-            Some((Token::Duplicate, 3))
-        }
+        ('>', Some('>')) => Some((Token::Output(fd), 2)),
+        ('>', Some('&')) if ends(fourth) => match third {
+            Some('1') => Some((Token::Duplicate(fd, 1), 3)),
+            Some('2') => Some((Token::Duplicate(fd, 2), 3)),
+            _ => None,
+        },
         ('>' | '<', Some('>' | '<' | '&' | '|' | '(')) => None,
-        _ => Some((Token::Redirect, 1)),
+        ('>', _) => Some((Token::Output(fd), 1)),
+        ('<', _) if written.is_none() => Some((Token::Input, 1)),
+        _ => None,
     }
 }
 
