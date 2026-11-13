@@ -1573,8 +1573,15 @@ fn sibling_facts_unix(admin: &Path, root: &Path) -> Option<PathBuf> {
     // Either way the full open's physical check applies: the registration
     // directory must be `<common>/worktrees`. A listed registration can link
     // to an administrative directory anywhere under the common directory,
-    // and the full open refuses that.
-    check_common_paths(&admin, &common).ok()?;
+    // and the full open refuses that. For `../..` in a folder named
+    // `worktrees`, both paths the check resolves are ancestors of `admin`,
+    // resolved above, so it held as of that resolution. Any other folder
+    // name, the linked registration among them, takes the check.
+    let resolved =
+        named == b"../.." && admin.parent()?.file_name() == Some(std::ffi::OsStr::new("worktrees"));
+    if !resolved {
+        check_common_paths(&admin, &common).ok()?;
+    }
     regular(&common.join("HEAD"))?;
     directory(&common.join("objects"))?;
     directory(&common.join("refs"))?;
