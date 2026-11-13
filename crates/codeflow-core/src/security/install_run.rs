@@ -1355,6 +1355,14 @@ mod tests {
                 }
             }
         }
+        // A program that starts others passes the variable on.
+        for command in [
+            "export ACK_PAGER=sh; git -c alias.s='!ack -h \"codeflow update\" notes.txt' s",
+            "export ACK_PAGER=sh; find . -name notes.txt -exec ack -h 'codeflow update' {} +",
+            "export GH_PAGER=sh; echo 'codeflow update' | xargs gh search issues",
+        ] {
+            assert!(runs(command), "{command}");
+        }
         for command in [
             "export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update' docs",
             "export ACK_PAGER=sh; unset -v ACK_PAGER; true; ack 'codeflow update' docs",
