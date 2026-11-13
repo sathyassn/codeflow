@@ -1018,6 +1018,15 @@ fn starts_a_command(before: &[String]) -> bool {
         })
 }
 
+/// Whether `command`, a program another program runs (such as a Git pager
+/// or editor setting), is a command line this reader cannot resolve, such
+/// as a shell reading its input. The line that starts it is then judged on
+/// its raw text.
+#[must_use]
+pub(crate) fn unresolved_command(command: &str) -> bool {
+    matches!(command_line_value(command, 0), Found::Unresolved)
+}
+
 /// The raw-text judgement for a line that could not be resolved, and for
 /// interpreter code: the binary's name followed, anywhere later, by a
 /// verb, or `cargo` followed by `run` or `r` and then a verb.
@@ -1298,6 +1307,18 @@ mod tests {
             "NOTE=sh codeflow task new --title 'codeflow update docs'",
         ] {
             assert!(!runs(command), "{command}");
+        }
+    }
+
+    /// A program another program runs, such as a Git pager setting, is
+    /// unresolved when it is a shell reading its input.
+    #[test]
+    fn a_stdin_shell_another_program_runs_is_unresolved() {
+        for command in ["sh", "bash -s", "zsh", "'sh'", "env sh"] {
+            assert!(unresolved_command(command), "{command}");
+        }
+        for command in ["less", "less -R", "cat", "delta --dark", ""] {
+            assert!(!unresolved_command(command), "{command}");
         }
     }
 

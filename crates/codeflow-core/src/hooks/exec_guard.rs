@@ -243,9 +243,11 @@ pub fn evaluate_ruled(
     }
     // An install run writes the project's install files from any folder,
     // so it refuses wherever it runs, a certified prose line included
-    // (TSK-1476).
+    // (TSK-1476). A program a Git call on the line runs that the reader
+    // cannot resolve, such as a shell reading its input as the pager, may
+    // run the call's output, so the line is then judged on its raw text.
     if integrity.is_active() {
-        if let Some(run) = crate::security::install_run::install_run(command, posix) {
+        if let Some(run) = install_run_on_line(command, posix, cwd) {
             violations.push(install_violation(integrity, &run));
         }
     }
@@ -412,6 +414,28 @@ pub(crate) fn code_install_violation(level: PolicyLevel, code: &str) -> Option<V
         return None;
     }
     crate::security::install_run::raw_run(code).map(|run| install_violation(level, &run))
+}
+
+/// The install run on `command`. A line whose Git call runs a program the
+/// reader cannot resolve, such as a shell reading its input as the pager,
+/// is judged on its raw text; a runner body is not read again for this
+/// (TSK-1476).
+fn install_run_on_line(
+    command: &str,
+    posix: bool,
+    cwd: &std::path::Path,
+) -> Option<crate::security::install_run::InstallRun> {
+    crate::security::install_run::install_run(command, posix).or_else(|| {
+        if RUNNER_BODY.get() {
+            return None;
+        }
+        let bodies = super::git_guard::git_runner_bodies(command, cwd).ok()?;
+        bodies
+            .iter()
+            .any(|(body, _)| crate::security::install_run::unresolved_command(body))
+            .then(|| crate::security::install_run::raw_run(command))
+            .flatten()
+    })
 }
 
 /// An agent's run of the install verbs, under hook integrity at the call's
