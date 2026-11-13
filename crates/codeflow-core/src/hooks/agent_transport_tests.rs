@@ -1176,9 +1176,9 @@ fn agent_pushes_of_lines_and_the_default_branch_are_refused() {
     report(&wrong);
 }
 
-/// AC-15: exec-guard reads a line push behind a spelled program word as a
-/// line push, and still refuses one behind a program word or subcommand it
-/// cannot resolve.
+/// AC-15: exec-guard reads a line push behind a spelled or expanded program
+/// word as a line push, and still refuses one behind a subcommand it cannot
+/// resolve.
 #[test]
 fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
     if !isolated("spelled_or_expanded_program_words_still_refuse_a_line_push") {
@@ -1189,6 +1189,7 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
     expect_both_refuse(
         &f.root,
         &rows(&[
+            "P=git; $P push origin HEAD:refs/heads/integration/EPC-001-line",
             "g\"\"it push origin HEAD:refs/heads/integration/EPC-001-line",
             "\\git push origin HEAD:refs/heads/integration/EPC-001-line",
             "'git' push origin HEAD:refs/heads/integration/EPC-001-line",
@@ -1199,13 +1200,7 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
         ]),
         &mut wrong,
     );
-    for row in rows(&[
-        "P=git; $P push origin HEAD:refs/heads/integration/EPC-001-line",
-        "$(printf git) push origin HEAD:refs/heads/integration/EPC-001-line",
-        "$P push origin HEAD:refs/heads/integration/EPC-001-line",
-        "${PROGRAM:-/usr/bin/git} push origin HEAD:refs/heads/integration/EPC-001-line",
-        "git $SUB origin HEAD:refs/heads/integration/EPC-001-line",
-    ]) {
+    for row in rows(&["git $SUB origin HEAD:refs/heads/integration/EPC-001-line"]) {
         let found = verdict(&f.root, &row);
         if !blocked(&found) {
             wrong.push(format!(

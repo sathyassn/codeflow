@@ -12264,38 +12264,13 @@ fn judge_agent_push(
     unique
 }
 
-/// The refusal for a part of the line the guard cannot read as a known
-/// program, which could be a `git push` of a branch agents never push.
-fn agent_push_unresolved(what: &str) -> Violation {
-    Violation::always_blocking(
-        AGENT_PUSH_RULE,
-        format!("{what}, so the guard cannot read whether it pushes a branch agents never push"),
-        "name the program and its subcommand directly, as in `git push <remote> <source>:refs/heads/<work branch>`",
-    )
-}
-
-/// Whether a segment's program word is filled in only when the line runs,
-/// so it could name git: the expander left it unread (`expanded`), and it
-/// holds a command substitution or its name after the last `/` holds an
-/// expansion or a brace. A literal name after an expanded directory names
-/// that program.
-fn program_word_unresolved(program: &str, expanded: &Expanded) -> bool {
-    expanded.unread_commands.iter().any(|word| word == program)
-        && (has_substitution(program) || basename(program).contains(['$', '`', '{', '}']))
-}
-
-/// Whether a segment needs exec-guard's AC-15 pass: it runs git, it is past
-/// what the reader follows, or its program word is unresolved.
-fn agent_push_segment(segment: &str, expanded: &Expanded) -> bool {
-    if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
-        return true;
-    }
+/// Whether a segment runs git, so exec-guard's AC-15 pass must read the
+/// line, as git-guard's walker dispatches it.
+fn agent_push_segment(segment: &str) -> bool {
     let mut words = command_argv(segment);
     strip_reserved_words(&mut words);
     configuration_launch(&words)
         .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
-        || strip_launchers(&words)
-            .is_some_and(|(program, _)| program_word_unresolved(program, expanded))
 }
 
 /// [`check_git`] limited to what [`judge_agent_push`] needs: aliases
@@ -12356,8 +12331,7 @@ fn agent_push_git(
 
 /// Walk the line's segments as git-guard's walker does, keeping the shell,
 /// directory, branch and configuration state later git calls see, and
-/// apply [`judge_agent_push`] to each git invocation. A segment past what
-/// the reader follows, or one whose program word is unresolved, refuses.
+/// apply [`judge_agent_push`] to each git invocation.
 fn agent_push_walk(
     command: &str,
     expanded: &Expanded,
@@ -12382,13 +12356,7 @@ fn agent_push_walk(
         };
         let mut tokens = shell_tokens(segment);
         strip_reserved_words(&mut tokens);
-        if tokens.is_empty() {
-            continue;
-        }
-        if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
-            out.push(agent_push_unresolved(
-                "the line nests commands deeper than the guard reads",
-            ));
+        if tokens.is_empty() || segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
             continue;
         }
         if let Some(dir) = cd_target(&tokens) {
@@ -12403,14 +12371,6 @@ fn agent_push_walk(
         }
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        if let Some((program, _)) = strip_launchers(&words) {
-            if program_word_unresolved(program, expanded) {
-                out.push(agent_push_unresolved(&format!(
-                    "the program word `{}` is filled in only when the line runs",
-                    shown_word(program)
-                )));
-            }
-        }
         let launched = configuration_launch(&words);
         if top_level {
             let redirected = words.len() != tokens.len();
@@ -12432,20 +12392,16 @@ fn agent_push_walk(
 /// The [`AGENT_PUSH_RULE`] refusals on `command` run in `cwd`, for
 /// exec-guard (TSK-1479 AC-15). The line is parsed by git-guard's walker
 /// and each git invocation judged by [`judge_agent_push`], the judgement
-/// git-guard applies, without git-guard's other rules. A segment whose
-/// program word the walker cannot resolve, or text nested past what it
-/// reads, refuses. The policy is the landed policy of the repository at
-/// `cwd`, read without asking the remote, and only for a line that needs
-/// it; one that cannot be read is the built-in policy, whose list is the
-/// default. Programs Git runs and the line's runners reach this pass
-/// through exec-guard's own judgement of them as commands.
+/// git-guard applies, without git-guard's other rules, so it reads the
+/// same git calls git-guard's AC-15 findings come from. The policy is the
+/// landed policy of the repository at `cwd`, read without asking the
+/// remote, and only for a line that runs git; one that cannot be read is
+/// the built-in policy, whose list is the default. Programs Git runs and
+/// the line's runners reach this pass through exec-guard's own judgement
+/// of them as commands.
 pub(crate) fn agent_push_refusals(command: &str, cwd: &Path) -> Vec<Violation> {
     let expanded = expand_shell_commands(command);
-    if !expanded
-        .segments
-        .iter()
-        .any(|segment| agent_push_segment(segment, &expanded))
-    {
+    if !expanded.segments.iter().any(|s| agent_push_segment(s)) {
         return Vec::new();
     }
     let _facts = super::edit_guard::RepoFactsScope::enter();

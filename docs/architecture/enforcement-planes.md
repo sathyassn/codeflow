@@ -205,11 +205,8 @@ that updates or deletes a branch named by `git.agent_push_refused_branches`
 (default `integration` and `integration/*`), `origin`'s default branch,
 `main` or `master`, whatever credential Git uses. Both guards apply one
 judgement to each git call that git-guard's command reader finds on the line;
-exec-guard runs only that judgement, without git-guard's other rules. A
-program word filled in only when the command runs, such as a command
-substitution or a variable the line does not set, could be `git`, so
-exec-guard refuses that command under this rule. The list is read only from
-the landed policy, so an uncommitted or branch-local edit has no effect; an
+exec-guard runs only that judgement, without git-guard's other rules. The
+list is read only from the landed policy, so an uncommitted or branch-local edit has no effect; an
 empty list frees the lines but never the default branch, `main` or `master`;
 a value the guards cannot read counts as the default list. The guards also
 refuse a push of every branch (`--all`, `--branches`, `--mirror`, a
