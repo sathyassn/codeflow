@@ -384,6 +384,59 @@ fn executors(command: &str, depth: usize, stdin: &Stdin) -> Option<&'static str>
     None
 }
 
+/// One simple command's words as the shell passes them, where the reader
+/// can tell.
+struct Resolved {
+    /// Each word: its text, a settled substitution's output, a stand-in
+    /// path for a process substitution, or the word as written.
+    words: Vec<String>,
+    /// Whether each word is known.
+    settled: Vec<bool>,
+    /// A settled substitution's output, by word.
+    texts: Vec<Option<String>>,
+    /// Each process substitution's position and output.
+    processes: Vec<(usize, Stdin)>,
+}
+
+/// The words of `simple`, a command on the line `commands`; `Err` with the
+/// form when a substitution in them executes unsettled text itself.
+fn resolve(simple: &Simple, commands: &[Simple], depth: usize) -> Result<Resolved, &'static str> {
+    let mut resolved = Resolved {
+        words: Vec::new(),
+        settled: Vec::new(),
+        texts: Vec::new(),
+        processes: Vec::new(),
+    };
+    for piece in &simple.words {
+        let (word, settled, text) = match piece {
+            Spelt::Plain(text) => (text.clone(), true, None),
+            Spelt::Open(raw) => (raw.clone(), false, None),
+            Spelt::Output(body) | Spelt::Process(body) => {
+                if let Some(form) = executors(body, depth + 1, &Stdin::Unsettled) {
+                    return Err(form);
+                }
+                let output = body_output(body, commands);
+                if matches!(piece, Spelt::Process(_)) {
+                    resolved.processes.push((resolved.words.len(), output));
+                    ("/dev/fd/63".to_string(), true, None)
+                } else if let Stdin::Text(mut value) = output {
+                    // The shell drops the trailing newlines.
+                    while value.ends_with('\n') {
+                        value.pop();
+                    }
+                    (value.clone(), true, Some(value))
+                } else {
+                    (format!("$({body})"), false, None)
+                }
+            }
+        };
+        resolved.words.push(word);
+        resolved.settled.push(settled);
+        resolved.texts.push(text);
+    }
+    Ok(resolved)
+}
+
 /// The judgment of the texts one simple command executes: a substitution
 /// in a word that runs (its program, `eval`'s words, a shell's `-c` value,
 /// an interpreter's code value), what it reads when it runs its input, a
@@ -398,57 +451,16 @@ fn judge_simple(
     depth: usize,
 ) -> Option<&'static str> {
     let simple = &commands[at];
-    let mut words = Vec::new();
-    let mut settled = Vec::new();
-    let mut texts = Vec::new();
-    let mut processes = Vec::new();
-    for piece in &simple.words {
-        match piece {
-            Spelt::Plain(text) => {
-                words.push(text.clone());
-                settled.push(true);
-                texts.push(None);
-            }
-            Spelt::Output(body) | Spelt::Process(body) => {
-                if let Some(form) = executors(body, depth + 1, &Stdin::Unsettled) {
-                    return Some(form);
-                }
-                let output = body_output(body, commands);
-                if matches!(piece, Spelt::Process(_)) {
-                    processes.push((words.len(), output));
-                    words.push("/dev/fd/63".to_string());
-                    settled.push(true);
-                    texts.push(None);
-                    continue;
-                }
-                match output {
-                    Stdin::Text(text) => {
-                        // The shell drops the trailing newlines.
-                        let mut value = text;
-                        while value.ends_with('\n') {
-                            value.pop();
-                        }
-                        words.push(value.clone());
-                        settled.push(true);
-                        texts.push(Some(value));
-                    }
-                    Stdin::Unseen | Stdin::Unsettled => {
-                        words.push(format!("$({body})"));
-                        settled.push(false);
-                        texts.push(None);
-                    }
-                }
-            }
-            Spelt::Open(raw) => {
-                words.push(raw.clone());
-                settled.push(false);
-                texts.push(None);
-            }
-        }
-    }
-    let Some((program, _)) = strip_launchers(&words) else {
-        return None;
+    let Resolved {
+        words,
+        settled,
+        texts,
+        processes,
+    } = match resolve(simple, commands, depth) {
+        Ok(resolved) => resolved,
+        Err(form) => return Some(form),
     };
+    let (program, _) = strip_launchers(&words)?;
     let program = basename(program);
     for (at, code) in running_positions(&words) {
         if !settled.get(at).copied().unwrap_or(false) {

@@ -1286,7 +1286,7 @@ mod tests {
             r"printf '\143odeflow update\n' | xargs -0 sh -c",
             r"printf '\143odeflow update\n' | parallel",
             r"printf '\143odeflow update\n' | xargs env",
-            r#"x=$(printf '\143odeflow update'); $x"#,
+            r"x=$(printf '\143odeflow update'); $x",
             r#"x=$(printf '\143odeflow update'); sh -c "$x""#,
             r#"x=$(printf '\143odeflow update'); eval "$x""#,
             "python3 - <<EOF\nimport os; os.system(\"$(printf '\\143odeflow update')\")\nEOF",

@@ -8796,15 +8796,14 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     // hook integrity alone (TSK-1476 r18); the interpreter reading names
     // nothing here. Unsettled output the interpreter reads as data does
     // not refuse.
-    for command in ["python3 <<< $'print(17330\\x32)'"] {
-        let out = exec_guard_contract_3(&root, command);
-        let err = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2)
-            || !err.contains("cannot settle")
-            || err.matches("BLOCKED").count() != err.matches("git.hook_integrity").count()
-        {
-            wrong.push(format!("should refuse as unsettled only: {command}: {err}"));
-        }
+    let command = "python3 <<< $'print(17330\\x32)'";
+    let out = exec_guard_contract_3(&root, command);
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2)
+        || !err.contains("cannot settle")
+        || err.matches("BLOCKED").count() != err.matches("git.hook_integrity").count()
+    {
+        wrong.push(format!("should refuse as unsettled only: {command}: {err}"));
     }
     let command = "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'";
     let out = exec_guard_contract_3(&root, command);
