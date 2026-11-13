@@ -1406,6 +1406,58 @@ mod tests {
         }
     }
 
+    /// An `unset` or a new value clears a command variable only where it
+    /// runs in the same shell as the later reader, and always runs: in a
+    /// subshell, a pipeline, a conditional or loop body, a function body, a
+    /// substitution, the background or another shell's body, the old value
+    /// stays live.
+    #[test]
+    fn a_command_variable_is_cleared_only_by_a_same_shell_update() {
+        for (variable, line) in [
+            (
+                "ACK_PAGER",
+                "ack --nocolor --nogroup -h 'codeflow update' notes.txt",
+            ),
+            ("GH_PAGER", "gh search issues 'codeflow update'"),
+        ] {
+            for update in [format!("unset {variable}"), format!("{variable}=less")] {
+                for form in [
+                    format!("export {variable}=sh; ({update}); {line}"),
+                    format!("export {variable}=sh; {update} | true; {line}"),
+                    format!("export {variable}=sh; true | {update}; {line}"),
+                    format!("export {variable}=sh; false && {update}; {line}"),
+                    format!("export {variable}=sh; true || {update}; {line}"),
+                    format!("export {variable}=sh; {update} & {line}"),
+                    format!("export {variable}=sh; if false; then {update}; fi; {line}"),
+                    format!("export {variable}=sh; while false; do {update}; done; {line}"),
+                    format!("export {variable}=sh; until true; do {update}; done; {line}"),
+                    format!("export {variable}=sh; case x in y) {update};; esac; {line}"),
+                    format!("export {variable}=sh; f() {{ {update}; }}; {line}"),
+                    format!("export {variable}=sh; function f {{ {update}; }}; {line}"),
+                    format!("export {variable}=sh; echo \"$({update})\"; {line}"),
+                    format!("export {variable}=sh; echo `{update}`; {line}"),
+                    format!("export {variable}=sh; sh -c '{update}'; {line}"),
+                    format!("export {variable}=sh; bash -c \"{update}\"; {line}"),
+                    format!("export {variable}=sh\n({update})\n{line}"),
+                    format!("export {variable}=sh; x=$'a\\'b'; {update}; {line}"),
+                ] {
+                    assert!(runs(&form), "{form}");
+                }
+            }
+        }
+        for command in [
+            "export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update' docs",
+            "export ACK_PAGER=sh; ACK_PAGER=less; ack 'codeflow update' docs",
+            "export ACK_PAGER=sh; { unset ACK_PAGER; }; ack 'codeflow update' docs",
+            "export ACK_PAGER=sh\nunset ACK_PAGER\nack 'codeflow update' docs",
+            "export ACK_PAGER=sh; unset ACK_PAGER; ack 'codeflow update (x|y)' docs",
+            "export GH_PAGER=sh; unset GH_PAGER; gh search issues 'codeflow update'",
+            "export GH_PAGER=sh; export GH_PAGER='less -R'; gh search issues 'codeflow update'",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// A program another program runs, such as a Git pager setting, is
     /// unresolved when it is a shell reading its input.
     #[test]
