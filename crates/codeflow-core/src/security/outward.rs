@@ -27,7 +27,7 @@ pub(crate) fn evaluate_at(
     for code in &parsed.code {
         let words = literal_words(code);
         for at in 0..words.len() {
-            argv(&words[at..], None, cwd, 0, &mut embedded);
+            argv(&words[at..], None, None, cwd, 0, &mut embedded);
         }
     }
     let mut families = parsed.families;
@@ -138,6 +138,8 @@ struct Parsed {
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Unwrapped>,
+    /// Launcher operands retained for reference checks after unwrapping.
+    reference_parents: Vec<Unwrapped>,
     /// Literal stdin at the current command position, scoped across recursion.
     literal_input: Option<String>,
     /// Whether the current command position and its shell have stdin.
@@ -219,6 +221,10 @@ pub(crate) enum Supplier {
 #[derive(Clone)]
 pub(crate) struct Unwrapped {
     pub(crate) args: Vec<String>,
+    /// Operand positions owned by this occurrence, excluding its parsed children.
+    pub(crate) reference_words: Vec<usize>,
+    /// Program readability from the original words, before rebuilding any body.
+    pub(crate) readable: Option<Vec<bool>>,
     /// Literal stdin from this command position, before any file-list parsing.
     pub(crate) input: Option<String>,
     /// Whether the line gives this command stdin (a pipe or an input
@@ -244,7 +250,11 @@ pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>)
 
 /// The commands of [`unwrapped_commands`] and the names of the launchers
 /// the walk unwrapped whose command is a word the guard cannot fill in.
-fn unwrapped_line(command: &str, cwd: &Path, home: Option<&Path>) -> (Vec<Unwrapped>, Vec<String>) {
+fn unwrapped_line(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> (Vec<Unwrapped>, Vec<String>, Vec<Unwrapped>) {
     let mut parsed = Parsed {
         resolve_shell: true,
         shell_home: home.map(Path::to_path_buf),
@@ -252,7 +262,11 @@ fn unwrapped_line(command: &str, cwd: &Path, home: Option<&Path>) -> (Vec<Unwrap
         ..Parsed::default()
     };
     visit(command, Some(cwd), 0, &mut parsed);
-    (parsed.commands, parsed.unread_launchers)
+    (
+        parsed.commands,
+        parsed.unread_launchers,
+        parsed.reference_parents,
+    )
 }
 
 /// What the line's shells and interpreters read (TSK-302 review rounds 7
@@ -403,6 +417,7 @@ pub(crate) fn literal_words(code: &str) -> Vec<String> {
 
 fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
+        out.unread_launchers.push("a nested command line".into());
         return;
     }
     let inherited_input = out.literal_input.take();
@@ -416,6 +431,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             let first_call = out.calls.len();
             let first_command = out.commands.len();
             if step.text == "__unresolved_shell_code" {
+                out.unread_launchers.push("a nested command line".into());
                 out.calls.push(InterpreterCall {
                     positional_source: PositionalSource::Unresolved,
                     unresolved: step.unresolved.clone(),
@@ -441,6 +457,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                 xargs_input(input.as_deref(), &out.commands[first_command..]);
             for command in &mut out.commands[first_command..] {
                 if matches!(command.supplier, Some(Supplier::Xargs)) {
+                    let original = command.args.clone();
                     apply_xargs_input(
                         &mut command.args,
                         &mut command.unresolved,
@@ -450,6 +467,16 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                     // Resolved stdin text is already shell output; it must not
                     // acquire a second round of shell glob expansion.
                     command.expands = Some(vec![false; command.args.len()]);
+                    if command.args != original {
+                        let program_readable = command.args.first() == original.first()
+                            && command.readable.as_ref().is_some_and(|words| words[0]);
+                        let mut readable = vec![false; command.args.len()];
+                        if let Some(first) = readable.first_mut() {
+                            *first = program_readable;
+                        }
+                        command.readable = Some(readable);
+                        command.reference_words = (1..command.args.len()).collect();
+                    }
                 }
             }
             for call in &mut out.calls[first_call..] {
@@ -658,6 +685,7 @@ fn apply_xargs_input(
 
 fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
+        out.unread_launchers.push("a nested command line".into());
         return;
     }
     shell_inputs(command, out);
@@ -674,9 +702,11 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     for (stage, segment) in segments.into_iter().enumerate() {
         stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
+        let (_, mut readable) = crate::hooks::git_guard::command_argv_readable(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
         patterns.drain(..before - words.len());
+        readable.drain(..before - words.len());
         let trigger = crate::hooks::git_guard::configuration_environment_trigger(&words);
         if skip_assignments(&words).is_empty() {
             persistent = trigger.clone().or(persistent);
@@ -685,6 +715,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         out.config_trigger = trigger.or_else(|| persistent.clone());
         let mut assigned = skip_assignments(&words).to_vec();
         let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
+        let mut assigned_readable = readable[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
             .iter()
             .take_while(|s| s.contains('='))
@@ -692,27 +723,16 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         {
             assigned.splice(0..0, ["env".to_string(), setting.clone()]);
             assigned_patterns.splice(0..0, [false, false]);
+            assigned_readable.splice(0..0, [true, true]);
         }
         let args = assigned.as_slice();
         let before = out.stdin_interpreter;
         for dir in &directories {
-            // The shell reads these files even when the executable is not a
-            // reader. Keep their cwd alongside the unwrapped command's cwd.
-            for (source, expands) in crate::hooks::git_guard::redirect_reads(&segment) {
-                out.commands.push(Unwrapped {
-                    input: None,
-                    stdin_bound: false,
-                    links: Vec::new(),
-                    args: vec!["cat".to_string(), source],
-                    unresolved: Vec::new(),
-                    supplier: out.supplier.clone(),
-                    expands: Some(vec![false, expands]),
-                    cwd: dir.clone(),
-                });
-            }
+            record_literal_redirect_reads(&segment, dir.as_deref(), out);
             argv(
                 args,
                 Some(&assigned_patterns),
+                Some(&assigned_readable),
                 dir.as_deref(),
                 depth + 1,
                 out,
@@ -765,6 +785,25 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     out.literal_input = step_input;
     out.input.bound = step_bound;
     out.config_trigger = inherited;
+}
+
+/// The shell reads redirects even when the executable is not a reader.
+/// Keep their directory alongside the unwrapped command's directory.
+fn record_literal_redirect_reads(segment: &str, cwd: Option<&Path>, out: &mut Parsed) {
+    for (source, expands) in crate::hooks::git_guard::redirect_reads(segment) {
+        out.commands.push(Unwrapped {
+            input: None,
+            stdin_bound: false,
+            links: Vec::new(),
+            args: vec!["cat".to_string(), source],
+            reference_words: Vec::new(),
+            readable: None,
+            unresolved: Vec::new(),
+            supplier: out.supplier.clone(),
+            expands: Some(vec![false, expands]),
+            cwd: cwd.map(Path::to_path_buf),
+        });
+    }
 }
 
 /// The stdin of pipeline stage `stage` of `stages`. Only the last stage of
@@ -1616,15 +1655,18 @@ pub(crate) fn line_directories(
 fn argv(
     args: &[String],
     patterns: Option<&[bool]>,
+    readable: Option<&[bool]>,
     cwd: Option<&Path>,
     depth: usize,
     out: &mut Parsed,
 ) {
     if depth > 32 {
+        out.unread_launchers.push("a nested command line".into());
         return;
     }
     let args = skip_assignments(args);
     let patterns = pattern_tail(patterns, args.len());
+    let readable = pattern_tail(readable, args.len());
     let possible_command = crate::hooks::git_guard::configuration_assignment_tail(args);
     if possible_command.len() < args.len() {
         // An unresolved prefix may be an assignment or an executable path.
@@ -1632,6 +1674,7 @@ fn argv(
         argv(
             possible_command,
             pattern_tail(patterns, possible_command.len()),
+            pattern_tail(readable, possible_command.len()),
             cwd,
             depth + 1,
             out,
@@ -1640,6 +1683,9 @@ fn argv(
     let Some(program) = args.first() else {
         return;
     };
+    if program == crate::hooks::git_guard::NESTING_UNREAD || program == "__unresolved_shell_code" {
+        out.unread_launchers.push("a nested command line".into());
+    }
     let name = crate::hooks::git_guard::launcher_name(program);
     let command_at = out.commands.len();
     out.commands.push(Unwrapped {
@@ -1647,6 +1693,8 @@ fn argv(
         stdin_bound: out.input.bound,
         links: Vec::new(),
         args: args.to_vec(),
+        reference_words: (1..args.len()).collect(),
+        readable: readable.map(<[bool]>::to_vec),
         unresolved: Vec::new(),
         supplier: out.supplier.clone(),
         expands: patterns.map(<[bool]>::to_vec),
@@ -1695,8 +1743,10 @@ fn argv(
             // The split string read by env's own grammar runs where its
             // own `-C` moves, judged from the line's directory (TSK-1002
             // review 02).
-            if let Some(Ok(words)) = crate::hooks::git_guard::env_split_argv(args) {
-                argv(&words, None, cwd, depth + 1, out);
+            if let Some(Ok((words, readings))) =
+                crate::hooks::git_guard::env_split_argv_readable(args, readable)
+            {
+                argv(&words, None, Some(&readings), cwd, depth + 1, out);
                 return;
             }
             // A string the guard cannot read exactly: retain every trailing
@@ -1707,7 +1757,7 @@ fn argv(
                     "cat".to_string(),
                     format!("{UNVERIFIED_ENV_DIRECTORY}{}", args.join(" ")),
                 ];
-                argv(&marker, None, cwd, depth + 1, out);
+                argv(&marker, None, None, cwd, depth + 1, out);
             }
             visit(&command, None, depth + 1, out);
             return;
@@ -1719,7 +1769,7 @@ fn argv(
             if inner.first().is_some_and(|s| s == "git") {
                 let mut target = vec!["git".into(), format!("--git-dir={dir}")];
                 target.extend_from_slice(&inner[1..]);
-                argv(&target, None, cwd, depth + 1, out);
+                argv(&target, None, None, cwd, depth + 1, out);
                 return;
             }
         }
@@ -1771,11 +1821,12 @@ fn argv(
                         "cat".to_string(),
                         format!("{UNVERIFIED_ENV_DIRECTORY}{written}"),
                     ];
-                    argv(&marker, None, cwd, depth + 1, out);
+                    argv(&marker, None, None, cwd, depth + 1, out);
                 }
                 argv(
                     inner,
                     pattern_tail(patterns, inner.len()),
+                    pattern_tail(readable, inner.len()),
                     dir.as_deref(),
                     depth + 1,
                     out,
@@ -1817,6 +1868,14 @@ fn argv(
         )),
         name if crate::hooks::git_guard::is_shell(name) => {
             if let Some(script) = shell_command_string(rest) {
+                if let Some(at) = rest
+                    .iter()
+                    .position(|word| std::ptr::eq(word.as_str(), script))
+                {
+                    out.commands[command_at]
+                        .reference_words
+                        .retain(|word| *word != at + 1);
+                }
                 let previous = out.positional_source;
                 // Only this exact calling convention proves that every
                 // positional argument comes from the enclosing supplier.
@@ -1852,9 +1911,14 @@ fn argv(
                         appends: false,
                     };
                     let outer = out.supplier.replace(supplier);
+                    let start = args.len() - tail.len();
+                    out.commands[command_at]
+                        .reference_words
+                        .retain(|word| !(start..start + end).contains(word));
                     argv(
                         &tail[..end],
                         pattern_tail(patterns, tail.len()).map(|p| &p[..end]),
+                        pattern_tail(readable, tail.len()).map(|p| &p[..end]),
                         cwd,
                         depth + 1,
                         out,
@@ -1879,9 +1943,14 @@ fn argv(
                     appends: true,
                 };
                 let outer = out.supplier.replace(supplier);
+                let start = exec.command.start + 1;
+                out.commands[command_at]
+                    .reference_words
+                    .retain(|word| !(start..start + len).contains(word));
                 argv(
                     &tail[..len],
                     pattern_tail(patterns, tail.len()).map(|p| &p[..len]),
+                    pattern_tail(readable, tail.len()).map(|p| &p[..len]),
                     cwd,
                     depth + 1,
                     out,
@@ -1896,9 +1965,13 @@ fn argv(
                 if let Some(program) = inner.first_mut() {
                     *program = package_bin(program);
                 }
+                out.commands[command_at]
+                    .reference_words
+                    .retain(|word| *word < at + 1);
                 argv(
                     &inner,
                     pattern_tail(patterns, inner.len()),
+                    pattern_tail(readable, inner.len()),
                     cwd,
                     depth + 1,
                     out,
@@ -1907,30 +1980,70 @@ fn argv(
             None
         }
         _ => {
+            if is_carrier_wrapper(program) {
+                if let Some(at) = wrapper_command_position(program, rest) {
+                    if !pattern_tail(readable, rest.len()).is_some_and(|words| words[at]) {
+                        out.unread_launchers.push(name.to_string());
+                    }
+                    // With unread option grammar, only a command at the
+                    // first operand position can transfer ownership.
+                    if at == 0 {
+                        if holds_a_command_line(&rest[at]) {
+                            out.commands[command_at]
+                                .reference_words
+                                .retain(|word| *word != 1);
+                        } else {
+                            out.commands[command_at].reference_words.clear();
+                        }
+                    }
+                }
+            }
             unmodeled_launch(
                 program,
                 name,
                 rest,
                 pattern_tail(patterns, rest.len()),
+                pattern_tail(readable, rest.len()),
                 depth,
                 out,
             );
             // The wrappers git-guard reads a carried command from keep it
             // here too, in the directory the wrapper runs in (TSK-1344).
             if crate::hooks::git_guard::COMMAND_CARRIERS.contains(&name) {
-                for command in crate::hooks::git_guard::launcher_commands(name, rest) {
-                    visit(&command, cwd, depth + 1, out);
+                for body in crate::hooks::git_guard::launcher_command_readings(name, rest) {
+                    out.commands[command_at]
+                        .reference_words
+                        .retain(|word| !body.owned.contains(&word.saturating_sub(1)));
+                    if let Some(at) = body.program {
+                        if !pattern_tail(readable, rest.len()).is_some_and(|words| words[at]) {
+                            out.unread_launchers.push(name.to_string());
+                        }
+                        if name != "watch" {
+                            let end = body.owned.end;
+                            argv(
+                                &rest[at..end],
+                                pattern_tail(patterns, rest.len()).map(|words| &words[at..end]),
+                                pattern_tail(readable, rest.len()).map(|words| &words[at..end]),
+                                cwd,
+                                depth + 1,
+                                out,
+                            );
+                            continue;
+                        }
+                    }
+                    visit(&body.text, cwd, depth + 1, out);
                 }
             }
             None
         }
     };
     if let Some(inner) = inner {
-        if inner
-            .first()
-            .is_some_and(|word| crate::hooks::git_guard::unresolved_word(word))
-        {
+        if !inner.is_empty() && !pattern_tail(readable, inner.len()).is_some_and(|words| words[0]) {
             out.unread_launchers.push(name.to_string());
+        }
+        if let Some(call) = out.commands.get_mut(command_at) {
+            let start = args.len() - inner.len();
+            call.reference_words.retain(|word| *word < start);
         }
         // A launcher `fd` runs with nothing after it runs each path `fd`
         // hands it, a program the guard cannot read: the walk stands with
@@ -1955,7 +2068,7 @@ fn argv(
             // The child receives these operands. Recording the wrapper as
             // a second file reader loses the child's input/output roles.
             // xargs itself can read an argument file and keeps that check.
-            out.commands.remove(command_at);
+            out.reference_parents.push(out.commands.remove(command_at));
         }
         let outer = if name == "xargs" {
             out.supplier.replace(Supplier::Xargs)
@@ -1965,6 +2078,7 @@ fn argv(
         argv(
             inner,
             pattern_tail(patterns, inner.len()),
+            pattern_tail(readable, inner.len()),
             cwd,
             depth + 1,
             out,
@@ -2062,14 +2176,15 @@ fn unmodeled_launch(
     name: &str,
     rest: &[String],
     patterns: Option<&[bool]>,
+    readable: Option<&[bool]>,
     depth: usize,
     out: &mut Parsed,
 ) {
     if name == "git" || interpreter_family(name).is_some() {
         return;
     }
-    // Only the calls are kept: the rest of what these readings find stays
-    // with the checks that read the modeled grammar.
+    // Interpreter calls and incomplete readings are retained. Ordinary
+    // operands remain owned by the original occurrence.
     let mut inner = Parsed {
         supplier: out.supplier.clone(),
         ..Parsed::default()
@@ -2108,6 +2223,7 @@ fn unmodeled_launch(
             argv(
                 &rest[at..],
                 pattern_tail(patterns, rest.len() - at),
+                pattern_tail(readable, rest.len() - at),
                 None,
                 depth + 1,
                 &mut inner,
@@ -2137,6 +2253,7 @@ fn unmodeled_launch(
             argv(
                 &rest[at..],
                 pattern_tail(patterns, rest.len() - at),
+                pattern_tail(readable, rest.len() - at),
                 None,
                 depth + 1,
                 &mut reader,
@@ -2156,9 +2273,11 @@ fn unmodeled_launch(
     // directory the wrapper runs in is unknown, so the carried command
     // refuses where it needs one.
     if is_carrier_wrapper(program) {
-        keep_wrapped_carriers(rest, patterns, depth, out);
+        keep_wrapped_carriers(program, rest, patterns, readable, depth, out);
     }
     out.calls.extend(inner.calls);
+    out.unread_launchers.extend(inner.unread_launchers);
+    out.reference_parents.extend(inner.reference_parents);
     out.opaque |= inner.opaque;
     out.runs |= inner.runs;
 }
@@ -2166,8 +2285,10 @@ fn unmodeled_launch(
 /// The terminal carriers a wrapper from [`CARRIER_WRAPPERS`] runs with the
 /// words after it, kept as commands of their own in `out`.
 fn keep_wrapped_carriers(
+    program: &str,
     rest: &[String],
     patterns: Option<&[bool]>,
+    readable: Option<&[bool]>,
     depth: usize,
     out: &mut Parsed,
 ) {
@@ -2178,26 +2299,23 @@ fn keep_wrapped_carriers(
         home: out.home.clone(),
         ..Parsed::default()
     };
-    if let Some(at) = wrapper_command_string(rest) {
-        visit(&rest[at], None, depth + 1, &mut carrier);
+    if let Some(at) = wrapper_command_position(program, rest) {
+        if holds_a_command_line(&rest[at]) {
+            visit(&rest[at], None, depth + 1, &mut carrier);
+        } else {
+            argv(
+                &rest[at..],
+                pattern_tail(patterns, rest.len() - at),
+                pattern_tail(readable, rest.len() - at),
+                None,
+                depth + 1,
+                &mut carrier,
+            );
+        }
     }
-    if let Some(at) = rest.iter().position(|word| starts_wrapped_command(word)) {
-        argv(
-            &rest[at..],
-            pattern_tail(patterns, rest.len() - at),
-            None,
-            depth + 1,
-            &mut carrier,
-        );
-    }
-    out.commands
-        .extend(carrier.commands.into_iter().filter(|call| {
-            call.args.first().is_some_and(|program| {
-                crate::security::terminal_carriers::is_carrier_program(
-                    crate::hooks::git_guard::launcher_name(program),
-                )
-            })
-        }));
+    out.commands.extend(carrier.commands);
+    out.unread_launchers.extend(carrier.unread_launchers);
+    out.reference_parents.extend(carrier.reference_parents);
 }
 
 /// The wrappers whose command starts after options the traversal does not
@@ -2215,32 +2333,32 @@ fn is_carrier_wrapper(program: &str) -> bool {
     CARRIER_WRAPPERS.contains(&name.as_str())
 }
 
-/// Whether a wrapper from [`CARRIER_WRAPPERS`] may run the command that
-/// starts with this program word: a carrier, a launcher the traversal
-/// reads, another wrapper, a shell or an interpreter.
-fn starts_wrapped_command(program: &str) -> bool {
-    let name = crate::hooks::git_guard::launcher_name(program);
-    crate::security::terminal_carriers::is_carrier_program(name)
-        || MODELED_LAUNCHERS.contains(&name)
-        || crate::hooks::git_guard::COMMAND_CARRIERS.contains(&name)
-        || is_carrier_wrapper(program)
-        || crate::hooks::git_guard::is_shell(name)
-        || interpreter_family(name).is_some()
-}
-
-/// The index of the command string a wrapper is given in place of a
-/// command: the first word that holds a command line, when every word
-/// before it is an option or the value of one. Later words are the
-/// command's own arguments, so a quoted argument of `grep` stays data.
-fn wrapper_command_string(rest: &[String]) -> Option<usize> {
+/// The first possible command position after a wrapper's leading words.
+/// Once an ordinary program starts, later operands cannot become its peer.
+fn wrapper_command_position(program: &str, rest: &[String]) -> Option<usize> {
+    let name = crate::security::terminal_carriers::carrier_name(program);
+    if rest.first().is_some_and(|word| match name.as_str() {
+        "chrt" => word.parse::<i64>().is_ok(),
+        "taskset" => {
+            let mask = word.strip_prefix("0x").unwrap_or(word);
+            !mask.is_empty() && mask.chars().all(|ch| ch.is_ascii_hexdigit())
+        }
+        _ => false,
+    }) {
+        return (rest.len() > 1).then_some(1);
+    }
     let mut after_option = false;
     for (at, word) in rest.iter().enumerate() {
-        if holds_a_command_line(word) {
+        if holds_a_command_line(word)
+            || crate::security::terminal_carriers::is_carrier_program(word)
+            || MODELED_LAUNCHERS.contains(&crate::hooks::git_guard::launcher_name(word))
+            || crate::hooks::git_guard::is_shell(crate::hooks::git_guard::launcher_name(word))
+        {
             return Some(at);
         }
         let option = word.starts_with('-') && word.len() > 1;
         if !option && !after_option {
-            return None;
+            return Some(at);
         }
         after_option = option;
     }
@@ -2248,9 +2366,8 @@ fn wrapper_command_string(rest: &[String]) -> Option<usize> {
 }
 
 /// Why a terminal carrier name found in a call's words refuses.
-const UNPROVEN_CARRIER: &str = "found where the guard could not prove it is data (accepted: a \
-     modeled data role such as a search pattern, a message body or a printed operand, or \
-     keeping the text in a file)";
+const UNPROVEN_CARRIER: &str = "found outside a position where the guard runs and judges it \
+     (accepted: keep the text in a file with --body-file, git commit -F or grep -f)";
 
 /// Why a wrapper or launcher whose command cannot be read refuses.
 const UNREAD_COMMAND: &str = "the command it runs cannot be read, so the guard cannot tell \
@@ -2263,37 +2380,29 @@ const TOO_DEEP: &str = "its words are nested too deeply for the guard to read";
 const REFERENCE_DEPTH: usize = 6;
 
 /// Every place the line names a terminal carrier without proof, as the
-/// form and why it refuses (TSK-1344). Each carrier name in a call's words
-/// needs one of two proofs: the line runs it (the call list holds a call
-/// that starts at that word), or the program that holds it reads it as data
-/// by a modeled grammar and argument role ([`data_role`]). Quoting is not a
-/// proof, and the wrappers the traversal reads are precision for the first
-/// proof, never the test. A wrapper or launcher whose command position
-/// holds a word the guard cannot fill in refuses too ([`unread_command`]).
-///
-/// A program that is neither a launcher nor a wrapper is judged by its
-/// literal carrier names only; an unresolved word in its arguments is the
-/// residual, because the guard cannot know which argument the program runs.
+/// form and why it refuses (TSK-1344). Only the program word of the exact
+/// parsed occurrence is accounted for. Its parent owns the other words;
+/// equal argument vectors elsewhere on the line supply no proof.
+/// Commands hidden in files or external programs remain outside a text rule.
 pub(crate) fn unproven_carrier_references(
     command: &str,
     cwd: &Path,
     home: Option<&Path>,
 ) -> Vec<(String, &'static str)> {
-    let (calls, launchers) = unwrapped_line(command, cwd, home);
+    let (mut calls, launchers, parents) = unwrapped_line(command, cwd, home);
+    calls.extend(parents);
     let mut found: Vec<_> = launchers
         .into_iter()
         .map(|name| (name, UNREAD_COMMAND))
         .collect();
-    scan_references(&calls, &calls, cwd, home, 0, &mut found);
+    scan_references(&calls, cwd, home, 0, &mut found);
     found
 }
 
 /// One pass of [`unproven_carrier_references`] over `calls`: the line's own
-/// calls, or the calls read out of a word that holds a command line, which
-/// count only where the line does not already run them.
+/// calls, or the calls read out of an operand that holds a command line.
 fn scan_references(
     calls: &[Unwrapped],
-    real: &[Unwrapped],
     cwd: &Path,
     home: Option<&Path>,
     depth: usize,
@@ -2304,9 +2413,6 @@ fn scan_references(
         let Some(program) = call.args.first() else {
             continue;
         };
-        if depth > 0 && real.iter().any(|run| run.args == call.args) {
-            continue;
-        }
         if is_carrier_program(program) {
             // The line's own carrier calls are read by the carrier grammar.
             if depth > 0 {
@@ -2314,25 +2420,30 @@ fn scan_references(
             }
             continue;
         }
-        if let Some(form) = unread_command(call, calls) {
+        // Executable stdin is visited by its interpreter. Other literal
+        // input remains an operand of this exact occurrence.
+        if !crate::hooks::git_guard::is_shell(crate::hooks::git_guard::launcher_name(program))
+            && interpreter_family(crate::hooks::git_guard::launcher_name(program)).is_none()
+        {
+            if let Some(input) = &call.input {
+                if depth >= REFERENCE_DEPTH {
+                    found.push(("a nested command line".to_string(), TOO_DEEP));
+                } else {
+                    let (mut nested, launchers, parents) =
+                        unwrapped_line(input, call.cwd.as_deref().unwrap_or(cwd), home);
+                    nested.extend(parents);
+                    found.extend(launchers.into_iter().map(|name| (name, UNREAD_COMMAND)));
+                    scan_references(&nested, cwd, home, depth + 1, found);
+                }
+            }
+        }
+        if let Some(form) = unread_command(call) {
             found.push((form, UNREAD_COMMAND));
         }
-        let end = owned_words_end(call, calls);
-        for at in 1..end {
+        for &at in &call.reference_words {
             let word = &call.args[at];
-            let proven = !crate::hooks::git_guard::unresolved_word(word)
-                && match data_role(&call.args, at) {
-                    Some(DataRole::Plain) => true,
-                    Some(DataRole::Printed) => !feeds_an_executor(call, real),
-                    None => false,
-                };
-            if proven {
-                continue;
-            }
             if is_carrier_program(word) {
-                if !real.iter().any(|run| run.args == call.args[at..]) {
-                    found.push((carrier_name(word), UNPROVEN_CARRIER));
-                }
+                found.push((carrier_name(word), UNPROVEN_CARRIER));
                 continue;
             }
             if word
@@ -2345,21 +2456,13 @@ fn scan_references(
                 found.push(("a nested command line".to_string(), TOO_DEEP));
                 continue;
             }
-            let (nested, launchers) =
+            let (mut nested, launchers, parents) =
                 unwrapped_line(word, call.cwd.as_deref().unwrap_or(cwd), home);
+            nested.extend(parents);
             found.extend(launchers.into_iter().map(|name| (name, UNREAD_COMMAND)));
-            scan_references(&nested, real, cwd, home, depth + 1, found);
+            scan_references(&nested, cwd, home, depth + 1, found);
         }
     }
-}
-
-/// The index where the words a call owns end: a launcher's own words come
-/// first, and the command it runs, which the call list holds as a call of
-/// its own, is judged there.
-fn owned_words_end(call: &Unwrapped, calls: &[Unwrapped]) -> usize {
-    (1..call.args.len())
-        .find(|&at| calls.iter().any(|run| run.args == call.args[at..]))
-        .unwrap_or(call.args.len())
 }
 
 /// The form of a wrapper or supplier whose command position holds a word
@@ -2368,23 +2471,20 @@ fn owned_words_end(call: &Unwrapped, calls: &[Unwrapped]) -> usize {
 /// `find -exec` supplies is a call with a supplier. The modeled launchers
 /// are read where [`argv`] unwraps them, which records each one whose
 /// command is such a word in `unread_launchers`.
-fn unread_command(call: &Unwrapped, calls: &[Unwrapped]) -> Option<String> {
+fn unread_command(call: &Unwrapped) -> Option<String> {
     let program = call.args.first()?;
     let name = crate::security::terminal_carriers::carrier_name(program);
     if call.supplier.is_some() {
-        return call
-            .args
-            .first()
-            .filter(|word| crate::hooks::git_guard::unresolved_word(word))
-            .map(|_| "launcher".to_string());
+        return (!call.readable.as_ref().is_some_and(|words| words[0]))
+            .then(|| "launcher".to_string());
     }
     if is_carrier_wrapper(program) {
         let mut after_option = false;
         for (at, word) in call.args.iter().enumerate().skip(1) {
-            if calls.iter().any(|run| run.args == call.args[at..]) {
+            if !call.reference_words.contains(&at) {
                 return None;
             }
-            if crate::hooks::git_guard::unresolved_word(word) {
+            if !call.readable.as_ref().is_some_and(|words| words[at]) {
                 return Some(name);
             }
             let option = word.starts_with('-') && word.len() > 1;
@@ -2396,64 +2496,6 @@ fn unread_command(call: &Unwrapped, calls: &[Unwrapped]) -> Option<String> {
         return None;
     }
     None
-}
-
-/// What a program does with a word it reads as data.
-#[derive(Clone, Copy)]
-enum DataRole {
-    /// The word is searched for, named as a file or used as a message,
-    /// and goes nowhere else.
-    Plain,
-    /// The word is printed, so a later command on the line can read it.
-    Printed,
-}
-
-/// The modeled data roles: `echo` and `printf` operands, every operand of
-/// `grep` and `which` families, and the values of the message options of
-/// `git` and the body and title options of `gh`. A wrapper hands the
-/// roles of the program that directly follows it.
-fn data_role(args: &[String], at: usize) -> Option<DataRole> {
-    let program = args.first()?;
-    if at == 0 {
-        return None;
-    }
-    if is_carrier_wrapper(program) {
-        return data_role(args.get(1..)?, at - 1);
-    }
-    let name = crate::security::terminal_carriers::carrier_name(program);
-    let before = args.get(at - 1).map(String::as_str);
-    match name.as_str() {
-        "echo" | "printf" => Some(DataRole::Printed),
-        "grep" | "egrep" | "fgrep" | "which" | "whereis" => Some(DataRole::Plain),
-        "git" if matches!(before, Some("-m" | "--message")) => Some(DataRole::Plain),
-        "gh" if matches!(before, Some("--body" | "-b" | "--title" | "-t" | "--notes")) => {
-            Some(DataRole::Plain)
-        }
-        _ => None,
-    }
-}
-
-/// Whether another call on the line can run what `call` prints: a call
-/// that reads stdin or holds an expansion and is not one of the readers
-/// that only display, count or filter text.
-fn feeds_an_executor(call: &Unwrapped, real: &[Unwrapped]) -> bool {
-    const READERS: &[&str] = &[
-        "cat", "grep", "egrep", "fgrep", "head", "tail", "wc", "sort", "uniq", "tee", "cut", "tr",
-        "less", "more", "nl", "tac", "rev", "fold", "echo", "printf",
-    ];
-    real.iter().any(|other| {
-        let Some(program) = other.args.first() else {
-            return false;
-        };
-        let name = crate::security::terminal_carriers::carrier_name(program);
-        other.args != call.args
-            && !READERS.contains(&name.as_str())
-            && (other.stdin_bound
-                || other
-                    .args
-                    .iter()
-                    .any(|word| crate::hooks::git_guard::unresolved_word(word)))
-    })
 }
 
 /// Whether one word holds more than a bare name: a shell blank (space,
@@ -3817,7 +3859,7 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         args.extend_from_slice(&rest[..end]);
         args.extend(words);
         args.extend_from_slice(&sub[1..]);
-        argv(&args, None, cwd, depth + 1, out);
+        argv(&args, None, None, cwd, depth + 1, out);
     } else {
         out.families.push(("release", source));
     }

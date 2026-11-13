@@ -2,8 +2,8 @@
 //! (`hc`) or the older `herdr` CLI as the same command typed bare. Nothing
 //! here runs `hc` or `herdr`; each string is only judged by the guards.
 use super::{
-    codeflow, enforced_repo, guard_payload, init_repo, run_with_stdin, shell_path,
-    write_agent_policy, TARGETING_POLICY,
+    codeflow, enforced_repo, init_repo, run_with_stdin, shell_path, write_agent_policy,
+    TARGETING_POLICY,
 };
 use std::path::Path;
 use std::process::Output;
@@ -14,7 +14,12 @@ fn judge(hook: &str, command: &str, cwd: &Path, config: Option<&Path>) -> Output
     if let Some(config) = config {
         cmd.env("XDG_CONFIG_HOME", config);
     }
-    run_with_stdin(&mut cmd, &guard_payload(command, cwd))
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+        "cwd": cwd,
+    });
+    run_with_stdin(&mut cmd, &payload.to_string())
 }
 
 /// The reason every `hc run` refuses, as the guards print it.
@@ -324,13 +329,10 @@ fn every_hc_run_refuses_in_both_guards() {
     // Unaffected: a line without `hc run`, and the other `hc` forms.
     for command in [
         "git status",
-        "echo hc run",
         "hc ls",
         "hc exec --cwd . ls",
         "hc file read README.md",
         "hc send t1 hello",
-        "busybox grep 'hc run' notes.txt",
-        "busybox echo 'hc run peer'",
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);
@@ -346,8 +348,7 @@ fn every_hc_run_refuses_in_both_guards() {
 }
 
 /// Wrapper names are matched the way carrier names are, so a wrapper the
-/// host finds under another spelling still has its command read; a wrapper
-/// that only prints or searches stays data.
+/// host finds under another spelling still has its command read.
 #[test]
 fn wrapper_names_match_as_carrier_names_do() {
     let fixture = Fixture::new();
@@ -375,8 +376,7 @@ fn wrapper_names_match_as_carrier_names_do() {
             }
         }
     }
-    // The privilege rule refuses these wrappers by itself, so the data-only
-    // lines are checked against the carrier rule alone.
+    // Inline text also refuses under the carrier rule.
     for command in [
         "gsudo.exe grep 'hc run' notes.txt".to_string(),
         "GSUDO echo 'hc run peer'".to_string(),
@@ -385,9 +385,9 @@ fn wrapper_names_match_as_carrier_names_do() {
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, &command);
-            if String::from_utf8_lossy(&out.stderr).contains(HC_RUN_REFUSAL) {
+            if !refused(&out, UNPROVEN_REFUSAL) {
                 wrong.push(format!(
-                    "{hook} should not apply the carrier rule: {command}: {}",
+                    "{hook} should refuse inline text: {command}: {}",
                     String::from_utf8_lossy(&out.stderr)
                 ));
             }
@@ -398,13 +398,12 @@ fn wrapper_names_match_as_carrier_names_do() {
 
 /// What the guards print for a carrier name with no proof, and for a
 /// wrapper or launcher whose command cannot be read.
-const UNPROVEN_REFUSAL: &str = "could not prove it is data";
+const UNPROVEN_REFUSAL: &str = "outside a position where the guard runs and judges it";
 const UNREAD_COMMAND_REFUSAL: &str = "cannot be read";
 
-/// A carrier name needs an execution classification or a data proof, under
+/// A carrier name needs its own parsed program position, under
 /// any program, and a wrapper or launcher whose command cannot be read
-/// refuses, in both guards. Text a modeled grammar reads as data passes,
-/// and data that reaches a command on the same line does not.
+/// refuses, in both guards. Inline text has no exemption.
 #[test]
 fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
     let fixture = Fixture::new();
@@ -420,9 +419,25 @@ fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
         "echo 'hc run peer' | sh",
         "printf '%s' 'hc run peer' | bash -s",
         "echo hc run peer | frobnicate",
-        // The accepted cost: a bare carrier name given to a program with no
-        // modeled data role.
+        // Inline text is kept in a file instead.
         "ls hc",
+        "grep 'hc run peer' commands.txt | sh",
+        "hc exec git commit -m x; uv run --directory /other hc exec git commit -m x",
+        "gh extension exec runner --body 'hc run peer'",
+        "grep 'hc run' notes.txt",
+        "grep -rn hc docs",
+        "echo 'hc run peer'",
+        "echo hc run | grep hc",
+        "which hc",
+        "busybox grep 'hc run' notes.txt",
+        "nice grep 'hc run' notes.txt",
+        "timeout 5 echo 'hc run peer'",
+        "sudo grep 'hc run' notes.txt",
+        "gsudo echo 'hc run peer'",
+        "gsudo gh pr create --body 'hc run peer'",
+        "gh pr create --body 'hc run peer'",
+        "gh pr create --title 'hc run peer' --body x",
+        "git commit -m 'hc run peer'",
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);
@@ -446,6 +461,12 @@ fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
         "nice -n 5 \"$COMMAND\"",
         "find . -maxdepth 0 -exec \"$COMMAND\" {} \\;",
         "echo x | xargs \"$COMMAND\"",
+        "env /opt/bin/[h]c run peer",
+        "sudo /opt/bin/[h]c run peer",
+        "find . -maxdepth 0 -exec /opt/bin/[h]c run peer {} \\;",
+        "echo x | xargs /opt/bin/[h]c run peer",
+        "flock lock /opt/bin/[h]c run peer",
+        "script out /opt/bin/[h]c run peer",
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);
@@ -457,17 +478,8 @@ fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
             }
         }
     }
-    // Data a modeled grammar reads passes.
-    for command in [
-        "grep 'hc run' notes.txt",
-        "grep -rn hc docs",
-        "echo 'hc run peer'",
-        "echo hc run | grep hc",
-        "which hc",
-        "busybox grep 'hc run' notes.txt",
-        "nice grep 'hc run' notes.txt",
-        "timeout 5 echo 'hc run peer'",
-    ] {
+    // These files remain subject to ordinary read and execution checks.
+    for command in ["grep -f patterns.txt notes.md"] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);
             if !passed(&out) {
@@ -478,17 +490,8 @@ fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
             }
         }
     }
-    // The privilege rule refuses these wrappers by itself, and the `gh`
-    // and `git` forms meet their own rules, so the data-only lines are
-    // checked against the carrier rule alone.
-    for command in [
-        "sudo grep 'hc run' notes.txt",
-        "gsudo echo 'hc run peer'",
-        "gsudo gh pr create --body 'hc run peer'",
-        "gh pr create --body 'hc run peer'",
-        "gh pr create --title 'hc run peer' --body x",
-        "git commit -m 'hc run peer'",
-    ] {
+    // The Git and hosting rules judge these file forms independently.
+    for command in ["gh pr create --body-file body.md", "git commit -F msg.txt"] {
         for hook in ["exec-guard", "git-guard"] {
             let out = fixture.judge(hook, command);
             let said = String::from_utf8_lossy(&out.stderr);
@@ -503,6 +506,296 @@ fn a_carrier_name_needs_proof_and_unread_commands_refuse_in_both_guards() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn original_carried_program_readings_reach_the_git_rule() {
+    let fixture = Fixture::new();
+    for command in [
+        "setsid /usr/bin/gi[t] push --force origin main",
+        "env /usr/bin/gi[t] push --force origin main",
+        "flock lock /usr/bin/gi[t] push --force origin main",
+    ] {
+        let out = fixture.judge("git-guard", command);
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            refused(&out, "git.") && said.contains("command unresolved"),
+            "{command}: {said}"
+        );
+    }
+}
+
+#[test]
+fn incomplete_carried_walks_refuse_in_both_guards() {
+    let fixture = Fixture::new();
+    let command = format!("{}hc exec git status", "env ".repeat(40));
+    for hook in ["exec-guard", "git-guard"] {
+        let out = fixture.judge(hook, &command);
+        assert!(
+            refused(&out, UNREAD_COMMAND_REFUSAL),
+            "{hook}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn plain_program_handling_and_carried_readability_keep_their_boundaries() {
+    let fixture = Fixture::new();
+    for command in ["f() { echo hi; }; f", "P=ls; $P"] {
+        let out = judge("git-guard", command, &fixture.other, Some(&fixture.config));
+        assert!(passed(&out), "{command}: {out:?}");
+    }
+    let out = judge(
+        "git-guard",
+        "setsid /usr/bin/gi[t] push --force origin main",
+        &fixture.other,
+        Some(&fixture.config),
+    );
+    assert!(refused(&out, "git."), "{out:?}");
+}
+
+#[test]
+fn validated_env_splits_preserve_unread_carried_words() {
+    let fixture = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        let out = fixture.judge(hook, "env -S 'python3 tool.py' data.json");
+        assert!(passed(&out), "{hook}: {out:?}");
+        for command in [
+            "env -S 'setsid' /usr/bin/gi[t] push --force origin main",
+            "env -S 'command ${PROGRAM}'",
+        ] {
+            let out = fixture.judge(hook, command);
+            assert!(
+                refused(&out, UNREAD_COMMAND_REFUSAL),
+                "{hook}: {command}: {out:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn applescript_shell_bodies_and_terminal_input_keep_their_boundaries() {
+    let fixture = Fixture::new();
+    for (hook, rule) in [
+        ("git-guard", "git.hook_integrity"),
+        ("exec-guard", "security.dangerous_commands"),
+    ] {
+        let out = fixture.judge(hook, "osascript -e 'do shell script \"cat README.md\"'");
+        assert!(passed(&out), "{hook}: {out:?}");
+        let out = fixture.judge(
+            hook,
+            "osascript -e 'tell app \"Terminal\" to do script \"git push --force origin main\"'",
+        );
+        assert!(refused(&out, rule), "{hook}: {out:?}");
+    }
+}
+
+/// Catalog rows are only passed to guard code; none of the payloads run.
+#[test]
+fn orca_catalog_rows_reach_the_named_rules() {
+    let fixture = Fixture::new();
+    let typed = [
+        Some("git.hook_integrity"),
+        Some("security.dangerous_commands"),
+    ];
+    let git = [
+        Some("git.force_push_protected"),
+        Some("security.dangerous_commands"),
+    ];
+    let cases = [
+        ("ctl-git", "git push --force origin main", [Some("git.force_push_protected"), None]),
+        ("ctl-headless", "claude -p hi", [None, Some("security.headless_peer_runs")]),
+        ("ctl-orca-plain", "orca terminal create --worktree active --command \"pnpm dev\"", [None, None]),
+        ("ctl-orca-list", "orca terminal list", [None, None]),
+        ("tc-git", "orca terminal create --worktree active --command \"git push --force origin main\"", git),
+        ("tc-headless", "orca terminal create --worktree active --command 'claude -p hi'", [Some("git.hook_integrity"), Some("security.headless_peer_runs")]),
+        ("ts-git", "orca terminal send --terminal term_abc --text \"git push --force origin main\" --enter", typed),
+        ("ts-headless", "orca terminal send --terminal term_abc --text 'codex exec hi' --enter", typed),
+        ("ts-ansi", "orca terminal send --terminal term_abc --text $'git push --force origin main\\r'", typed),
+        ("split-git", "orca terminal split --terminal term_abc --command \"git push --force origin main\"", git),
+        ("agent-prompt", "orca agent launch --agent codex --prompt \"run git push --force origin main\"", typed),
+        ("wt-prompt", "orca worktree create --name n --agent codex --prompt \"git push --force origin main\"", typed),
+        ("auto-precheck", "orca automations create --name n --trigger daily --prompt p --provider claude --precheck \"git push --force origin main\"", git),
+        ("worker-spec", "orca orchestration worker-start --spec \"git push --force origin main\"", typed),
+        ("orch-send", "orca orchestration send --to dispatch:d1 --subject s --body \"git push --force origin main\"", typed),
+        ("type-text", "orca computer type-text --app Orca --text \"git push --force origin main\"", typed),
+        ("paste-text", "orca computer paste-text --app Orca --text \"git push --force origin main\"", typed),
+        ("type-stdin", "printf '%s\\n' 'git push --force origin main' | orca computer type-text --app Orca --text-stdin", typed),
+        ("ts-file", "orca terminal send --terminal term_abc --text \"$(cat cmd.txt)\" --enter", typed),
+    ];
+    let mut wrong = Vec::new();
+    for (id, command, expected) in cases {
+        for (hook, expected) in ["git-guard", "exec-guard"].into_iter().zip(expected) {
+            let out = fixture.judge(hook, command);
+            let correct = expected.map_or_else(|| passed(&out), |rule| refused(&out, rule));
+            if !correct {
+                wrong.push(format!(
+                    "{id} {hook} expected {expected:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+            if !id.starts_with("ctl-") {
+                let class_rule = if hook == "git-guard" {
+                    "git.hook_integrity"
+                } else {
+                    "security.dangerous_commands"
+                };
+                if !refused(&out, class_rule) {
+                    wrong.push(format!(
+                        "{id} {hook} lost its carrier rule: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+            }
+            if id == "ts-file" && hook == "exec-guard" && !refused(&out, "security.text_guard") {
+                wrong.push(format!(
+                    "{id} lost its independent text rule: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn orca_seat_and_brief_file_routes_remain_available() {
+    let fixture = Fixture::new();
+    let dir = codeflow_core::portable_path::slashed(&fixture.session);
+    let brief = codeflow_core::portable_path::slashed(&fixture.session.join("brief.txt"));
+    let cases = [
+        format!("orca terminal create --worktree active --title t --command \"cd '{dir}' && codex --ask-for-approval never\""),
+        format!("orca terminal send --terminal term_abc --text \"Read {brief} in full and follow it.\" --enter"),
+        "orca terminal read --terminal term_abc".to_string(),
+        "orca terminal list".to_string(),
+        "orca terminal wait --terminal term_abc --for idle".to_string(),
+        "orca terminal close --terminal term_abc".to_string(),
+    ];
+    let mut wrong = Vec::new();
+    for command in cases {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = fixture.judge(hook, &command);
+            if !passed(&out) {
+                wrong.push(format!(
+                    "{hook} should allow: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn terminal_carrier_seats_and_file_pointer_prompts_remain_available() {
+    let fixture = Fixture::new();
+    let dir = codeflow_core::portable_path::slashed(&fixture.session);
+    let brief = codeflow_core::portable_path::slashed(&fixture.session.join("brief.txt"));
+    let cases = [
+        format!("tmux new-session -d -s seat -c '{dir}' 'codex --ask-for-approval never'"),
+        format!("tmux new-window -t seat -c '{dir}' 'codex --ask-for-approval never'"),
+        format!("tmux send-keys -t seat \"Read {brief} in full and follow it.\" Enter"),
+        format!("tmux send -t seat \"Read {brief} in full and follow it.\" Enter"),
+        format!("screen -S seat -X stuff 'Read {brief} in full and follow it.'"),
+        format!("osascript -e 'tell application \"System Events\" to keystroke \"Read {brief} in full and follow it.\"'"),
+        format!("expect -c 'send \"Read {brief} in full and follow it.\"'"),
+    ];
+    let mut wrong = Vec::new();
+    for command in cases {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = fixture.judge(hook, &command);
+            if !passed(&out) {
+                wrong.push(format!(
+                    "{hook} should allow: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn terminal_carrier_unknown_routes_and_unread_input_refuse_with_a_remedy() {
+    let fixture = Fixture::new();
+    for command in [
+        "tmux future-text-route --text 'git status'",
+        "orca terminal future-text-route --text 'git status'",
+        "screen -S seat -X future-text-route 'git status'",
+        "tmux send-keys -t seat g 'it status' Enter",
+        "tmux send-keys -t seat Enter",
+        "tmux paste-buffer -t seat",
+        "tmux send-keys -H 67 69 74 Enter",
+    ] {
+        for (hook, rule) in [
+            ("git-guard", "git.hook_integrity"),
+            ("exec-guard", "security.dangerous_commands"),
+        ] {
+            let out = fixture.judge(hook, command);
+            let said = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                refused(&out, rule)
+                    && said.contains("keep instructions in a brief file and send its path"),
+                "{hook}: {command}: {said}"
+            );
+        }
+    }
+}
+
+#[test]
+fn orca_remaining_text_and_file_routes_refuse_in_both_guards() {
+    let fixture = Fixture::new();
+    for command in [
+        "orca terminal send --terminal term_abc --text 'git status'",
+        "orca terminal send --terminal term_abc --enter",
+        "orca terminal send --terminal term_abc --text $'\\x1b'",
+        "cat commands.txt | xargs orca terminal send --terminal term_abc --text '{}' --enter",
+        "orca computer paste-text --app Terminal --text-stdin",
+        "orca emulator type --text 'git status'",
+        "orca automations create --name n --trigger daily --provider claude --prompt 'codex exec hi'",
+        "orca orchestration worker-start --spec-file spec.txt --agent codex",
+        "orca orchestration ask --to dispatch:d1 --subject s --body 'git status'",
+        "orca orchestration reply --id m1 --body 'git status'",
+        "orca orchestration dispatch --task t1 --to term_abc --inject",
+        "orca plugin dev hook --project .",
+        "orca plugin dev request --project .",
+        "orca plugin dev emit --project .",
+        "orca plugin test --project .",
+        "orca plugin check --project .",
+        "orca terminal create --title hc --command 'pnpm dev'",
+        "echo orca terminal list",
+        "orca terminal create --command \"$COMMAND\"",
+    ] {
+        for (hook, rule) in [("git-guard", "git.hook_integrity"), ("exec-guard", "security.dangerous_commands")] {
+            let out = fixture.judge(hook, command);
+            assert!(refused(&out, rule), "{hook}: {command}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+}
+
+#[test]
+fn sibling_terminal_input_rows_refuse_under_the_carrier_rule() {
+    let fixture = Fixture::new();
+    for command in [
+        "tmux send-keys -t peer 'git push --force origin main' Enter",
+        "tmux send -t peer 'git push --force origin main' Enter",
+        "tmux paste-buffer -t peer",
+        "tmux run-shell 'git push --force origin main'",
+        "tmux new-session 'git push --force origin main'",
+        "tmux new-window 'git push --force origin main'",
+        "tmux split-window 'git push --force origin main'",
+        "screen -S peer -X stuff 'git push --force origin main\r'",
+        "screen -dm git push --force origin main",
+        "osascript -e 'tell application \"System Events\" to keystroke \"git push --force origin main\"'",
+        "osascript -e 'tell application \"Terminal\" to do script \"git push --force origin main\"'",
+        "expect -c 'send \"git push --force origin main\\r\"'",
+    ] {
+        for (hook, rule) in [("git-guard", "git.hook_integrity"), ("exec-guard", "security.dangerous_commands")] {
+            let out = fixture.judge(hook, command);
+            assert!(refused(&out, rule), "{hook}: {command}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
 }
 
 /// The secret-read rules still judge what a carrier reads: a carried

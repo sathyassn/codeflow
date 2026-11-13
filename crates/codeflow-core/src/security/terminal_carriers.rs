@@ -1,4 +1,4 @@
-//! Commands run through the Herdr app's `hc` and the older `herdr` CLI
+//! Commands and input carried by terminal and app CLIs
 //! (TSK-1344).
 //!
 //! `hc run`, `hc exec` and `herdr pane run` start a command in another
@@ -27,15 +27,26 @@
 //! as protection. Their options are still read, and an unknown one refuses.
 //! `docs/policy-reference.md` ("Terminal carriers the guards model") states
 //! the forms and the floor that holds for typed text.
+//!
+//! Terminal and app input carriers share a text check. Guarded names and
+//! unread input refuse; actual shell commands also meet the bare-command
+//! checks. The accepted form is an interactive seat and a file-pointer prompt.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
+
+mod inventory;
+mod orca;
+mod terminal_inputs;
 
 /// The program names of the Herdr app's CLI.
 pub(crate) const HC_PROGRAMS: &[&str] = &["hc", "herdr-core"];
 
 /// The program name of the older Herdr CLI.
 pub(crate) const HERDR_PROGRAMS: &[&str] = &["herdr"];
+
+/// Other CLIs whose terminal and app input routes the guards read.
+pub(crate) use inventory::PROGRAMS as INPUT_PROGRAMS;
 
 /// How deep carried commands are judged inside one another before the
 /// guard refuses: a template whose command starts itself would not end.
@@ -118,8 +129,17 @@ pub(crate) struct Carried {
 
 impl Carried {
     fn unread(&mut self, form: &str, why: impl std::fmt::Display) {
+        let accepted = if form
+            .split_ascii_whitespace()
+            .next()
+            .is_some_and(|name| INPUT_PROGRAMS.contains(&name))
+        {
+            "; keep instructions in a brief file and send its path"
+        } else {
+            ""
+        };
         self.unread.push(format!(
-            "`{form}`: {why}; the guard cannot judge what it runs"
+            "`{form}`: {why}; the guard cannot judge what it runs{accepted}"
         ));
     }
 }
@@ -135,13 +155,15 @@ pub(crate) fn carrier_name(program: &str) -> String {
     }
 }
 
-/// Whether the program word names a terminal carrier (`hc`, `herdr`).
+/// Whether the program word names one of the modeled terminal or app carriers.
 pub(crate) fn is_carrier_program(program: &str) -> bool {
     let name = carrier_name(program);
-    HC_PROGRAMS.contains(&name.as_str()) || HERDR_PROGRAMS.contains(&name.as_str())
+    HC_PROGRAMS.contains(&name.as_str())
+        || HERDR_PROGRAMS.contains(&name.as_str())
+        || INPUT_PROGRAMS.contains(&name.as_str())
 }
 
-/// Every command the line runs through `hc` or `herdr`, with the directory
+/// Every command the line runs through a carrier, with the directory
 /// it runs in, every file `hc file` changes, and every carrier form the
 /// guard cannot read. `cwd` is where the line runs.
 pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
@@ -152,8 +174,8 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
         .chain(crate::hooks::git_guard::line_home::assigned().map(Some));
     for home in homes {
         let calls = super::outward::unwrapped_commands(command, cwd, home.as_deref());
-        // Each carrier name the guard found without proof that it is data
-        // or that something runs it, and each wrapper or launcher whose
+        // Each carrier name outside its own parsed program position,
+        // and each wrapper or launcher whose
         // command it cannot read, refuses.
         for (form, why) in
             super::outward::unproven_carrier_references(command, cwd, home.as_deref())
@@ -178,15 +200,30 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
                 home: home.clone(),
             };
             let before = (out.runs.len(), out.writes.len(), out.unread.len());
+            if INPUT_PROGRAMS.contains(&name)
+                && words
+                    .args
+                    .iter()
+                    .any(|word| terminal_inputs::carrier_reference(word))
+            {
+                out.unread(
+                    name,
+                    "a carrier name occurs outside its own judged program position",
+                );
+            }
             if HC_PROGRAMS.contains(&name) {
                 hc(&words, &place, &mut out);
             } else if HERDR_PROGRAMS.contains(&name) {
                 herdr(&words, &mut out);
+            } else if name == "orca" {
+                orca::read(&words, &place, call.input.as_deref(), &mut out);
+            } else if INPUT_PROGRAMS.contains(&name) {
+                terminal_inputs::read(name, &words, &place, &mut out);
             } else {
                 continue;
             }
             let carries = out.runs.len() > before.0 || out.writes.len() > before.1;
-            if carries && call.supplier.is_some() {
+            if (carries || INPUT_PROGRAMS.contains(&name)) && call.supplier.is_some() {
                 out.unread(
                     name,
                     "its words come from input the guard cannot see (`xargs`, `find -exec`)",
@@ -195,7 +232,7 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
             let unfilled = call.unresolved.iter().any(|unknown| {
                 !unknown.is_empty() && words.args.iter().any(|a| a.contains(unknown.as_str()))
             });
-            if carries && unfilled {
+            if (carries || INPUT_PROGRAMS.contains(&name)) && unfilled {
                 out.unread(name, "a word holds an expansion the guard cannot fill in");
             }
         }
@@ -739,7 +776,7 @@ fn read_path(form: &'static str, path: &str, directory: Option<PathBuf>, out: &m
 }
 
 /// Whether the carrier reader reads the call `args` (program first) in
-/// full: a known `hc` subcommand with every option known, whose carried
+/// full: a known carrier subcommand with every option known, whose carried
 /// commands all run in a directory the guard can establish. The guards'
 /// other readers then leave the outer words to it, so its carried command
 /// is judged once, in its own directory (TSK-1344). A form with an unknown
@@ -761,6 +798,8 @@ pub(crate) fn fully_read(args: &[String]) -> bool {
     let mut out = Carried::default();
     if HC_PROGRAMS.contains(&name) {
         hc(&words, &place, &mut out);
+    } else if name == "orca" {
+        orca::read(&words, &place, None, &mut out);
     } else if HERDR_PROGRAMS.contains(&name)
         && matches!(
             (
@@ -1487,8 +1526,7 @@ mod tests {
         let found = read("pkexec /bin/sh -c 'hc run -- git status'");
         assert_eq!(found.runs.len(), 1, "{found:?}");
         assert_eq!(found.runs[0].line, "\"git\" \"status\"");
-        // Data the wrappers print or search stays unaffected, as does a
-        // string with no carrier in it.
+        // Inline carrier text refuses behind wrappers too.
         for command in [
             "sudo grep \"hc run\" notes.txt",
             "sudo grep -e 'hc run' notes.txt",
@@ -1499,11 +1537,15 @@ mod tests {
             "busybox echo 'hc run peer'",
             "sudo sh -c 'echo hc run peer'",
             "gsudo 'echo hc run peer'",
+            "sudo gh pr create --title t --body \"run hc run peer first\"",
+            "gsudo gh pr create --body 'hc run peer'",
+        ] {
+            assert!(unproven(command), "{command}");
+        }
+        for command in [
             "gsudo 'ls -l'",
             "pkexec /bin/sh -c 'ls'",
             "busybox sh -c 'ls'",
-            "sudo gh pr create --title t --body \"run hc run peer first\"",
-            "gsudo gh pr create --body 'hc run peer'",
         ] {
             assert_eq!(read(command), Carried::default(), "{command}");
         }
@@ -1724,18 +1766,18 @@ mod tests {
             "GSUDO echo 'hc run peer'",
             "/usr/bin/SUDO grep 'hc run' notes.txt",
         ] {
-            assert_eq!(read(command), Carried::default(), "{command}");
+            assert!(unproven(command), "{command}");
         }
     }
 
-    /// Whether the line names a carrier where the guard has no proof that
-    /// it is data, or runs a command through a wrapper or launcher that
+    /// Whether the line names a carrier outside its own program position,
+    /// or runs a command through a wrapper or launcher that
     /// the guard cannot read.
     fn unproven(command: &str) -> bool {
         read(command)
             .unread
             .iter()
-            .any(|u| u.contains("could not prove it is data") || u.contains("cannot be read"))
+            .any(|u| u.contains("outside a position") || u.contains("cannot be read"))
     }
 
     /// A carrier name needs a proof, whatever program holds it: a launcher
@@ -1777,6 +1819,12 @@ mod tests {
             "setsid \"$COMMAND\"",
             "find . -maxdepth 0 -exec \"$COMMAND\" {} \\;",
             "echo x | xargs \"$COMMAND\"",
+            "env /opt/bin/[h]c run peer",
+            "sudo /opt/bin/[h]c run peer",
+            "find . -exec /opt/bin/[h]c run peer \\;",
+            "echo x | xargs /opt/bin/[h]c run peer",
+            "flock lock /opt/bin/[h]c run peer",
+            "script out /opt/bin/[h]c run peer",
         ] {
             assert!(unproven(command), "{command}");
         }
@@ -1790,11 +1838,10 @@ mod tests {
         }
     }
 
-    /// Text a modeled grammar reads as data never refuses, behind a
-    /// wrapper or launcher too; text that reaches a command on the same
-    /// line does not keep that proof.
+    /// Inline carrier text refuses; keeping the text in a file leaves
+    /// the command subject to its ordinary checks.
     #[test]
-    fn modeled_data_roles_pass_and_data_fed_to_a_command_does_not() {
+    fn inline_carrier_text_refuses_and_file_forms_pass() {
         for command in [
             "grep 'hc run' notes.txt",
             "grep -rn hc docs",
@@ -1817,8 +1864,7 @@ mod tests {
             "env A=B git commit -m 'hc run peer'",
             "git commit -m \"$(cat <<'EOF'\nfix: guard text\n\n- hc run peer refuses\nEOF\n)\"",
         ] {
-            assert!(!unproven(command), "{command}");
-            assert_eq!(read(command), Carried::default(), "{command}");
+            assert!(unproven(command), "{command}");
         }
         for command in [
             "echo 'hc run peer' | sh",
@@ -1835,6 +1881,38 @@ mod tests {
                 read(command)
             );
         }
+        for command in [
+            "gh pr create --body-file body.md",
+            "git commit -F msg.txt",
+            "grep -f patterns.txt notes.md",
+            "hc exec git status",
+            "hc file read notes.md",
+            "hc machine add peer --via ssh",
+        ] {
+            assert!(!unproven(command), "{command}: {:?}", read(command));
+        }
+    }
+
+    #[test]
+    fn each_occurrence_needs_its_own_program_position() {
+        for command in [
+            "grep 'hc run peer' commands.txt | sh",
+            "hc exec git commit -m x; uv run --directory /other hc exec git commit -m x",
+            "gh extension exec runner --body 'hc run peer'",
+            "hc exec git status; echo hc exec git status",
+            "sh -c 'hc exec git status'; echo 'hc exec git status'",
+        ] {
+            assert!(unproven(command), "{command}: {:?}", read(command));
+        }
+    }
+
+    #[test]
+    fn incomplete_carrier_walks_refuse() {
+        let command = format!("{}hc exec git status", "env ".repeat(40));
+        assert!(unproven(&command), "{command}");
+        let nested = format!("{}hc exec git status{}", "( ".repeat(40), " )".repeat(40));
+        let found = read(&nested);
+        assert!(!found.unread.is_empty(), "{found:?}");
     }
 
     /// `--cwd` is read as the host reads it, and one the guard cannot
@@ -1880,7 +1958,12 @@ mod tests {
             "### Terminal carriers the guards model",
             "Programs",
         );
-        let code: Vec<&str> = HC_PROGRAMS.iter().chain(HERDR_PROGRAMS).copied().collect();
+        let code: Vec<&str> = HC_PROGRAMS
+            .iter()
+            .chain(HERDR_PROGRAMS)
+            .chain(INPUT_PROGRAMS)
+            .copied()
+            .collect();
         assert_eq!(listed, code);
     }
 

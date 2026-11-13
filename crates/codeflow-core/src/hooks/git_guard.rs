@@ -1145,12 +1145,12 @@ fn evaluate_report_with_runners(
                 );
             }
             ProgramKind::Gh => check_gh(args, ctx, violations),
-            // A program named by a substitution could be git itself.
-            ProgramKind::Other if has_substitution(program) => {
+            // Judge the original words before any launcher body is rebuilt.
+            ProgramKind::Other if has_substitution(program) || unread_launcher_program(segment) => {
                 violations.extend(unclassifiable_violation(
                     ctx.policy,
                     None,
-                    "a command substitution in the program name decides which program runs",
+                    "the program word cannot be read",
                     &crate::remedy::GUARD_UNCLASSIFIABLE,
                 ));
             }
@@ -7730,6 +7730,38 @@ fn quote_words(words: &[String]) -> String {
 /// integrity checks read those wrappers on their own ([`wrapped_violation`]).
 /// Empty for any other program.
 pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
+    launcher_command_readings(name, args)
+        .into_iter()
+        .map(|body| body.text)
+        .collect()
+}
+
+/// A carried body and the positions that supplied it in this launcher call.
+pub(crate) struct LauncherCommand {
+    pub(crate) text: String,
+    pub(crate) owned: std::ops::Range<usize>,
+    /// The original program position for argv bodies, before rebuilding text.
+    pub(crate) program: Option<usize>,
+}
+
+fn argv_body(args: &[String], start: usize) -> Option<LauncherCommand> {
+    let words = args.get(start..).filter(|words| !words.is_empty())?;
+    Some(LauncherCommand {
+        text: quote_words(words),
+        owned: start..args.len(),
+        program: Some(start),
+    })
+}
+
+fn string_body(text: String, at: usize) -> LauncherCommand {
+    LauncherCommand {
+        text,
+        owned: at..at + 1,
+        program: None,
+    }
+}
+
+pub(crate) fn launcher_command_readings(name: &str, args: &[String]) -> Vec<LauncherCommand> {
     if !COMMAND_CARRIERS.contains(&name) {
         return Vec::new();
     }
@@ -7738,24 +7770,27 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
             || !carried_commands(words).is_empty()
     };
     match name {
-        "flock" => flock_command(args).into_iter().collect(),
-        "script" => script_command(args).into_iter().collect(),
-        "watch" => watch_command(args).into_iter().collect(),
-        "parallel" => parallel_commands(args),
+        "flock" => flock_reading(args).into_iter().collect(),
+        "script" => script_reading(args).into_iter().collect(),
+        "watch" => watch_reading(args).into_iter().collect(),
+        "parallel" => parallel_commands(args)
+            .into_iter()
+            .map(|text| LauncherCommand {
+                text,
+                owned: 0..0,
+                program: None,
+            })
+            .collect(),
         "setsid" | "unbuffer" => {
             let at = args
                 .iter()
                 .position(|a| !a.starts_with('-'))
                 .unwrap_or(args.len());
-            let words = &args[at..];
-            (!words.is_empty())
-                .then(|| quote_words(words))
-                .into_iter()
-                .collect()
+            argv_body(args, at).into_iter().collect()
         }
         "xargs" => xargs_command(args)
             .filter(|words| judged(words))
-            .map(quote_words)
+            .and_then(|words| argv_body(args, args.len() - words.len()))
             .into_iter()
             .collect(),
         "find" => args
@@ -7769,7 +7804,11 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
                     .position(|w| w == ";" || w == "+")
                     .unwrap_or(tail.len());
                 let words = &tail[..end];
-                judged(words).then(|| quote_words(words))
+                judged(words).then(|| LauncherCommand {
+                    text: quote_words(words),
+                    owned: at + 1..at + 1 + end,
+                    program: Some(at + 1),
+                })
             })
             .collect(),
         _ => Vec::new(),
@@ -7781,15 +7820,19 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
 /// or `--command=CMD` string run by `sh -c` (TSK-242 review round 15), or
 /// the command words. Short options run together (`-nc CMD`) are read
 /// letter by letter. `None` with no command.
-fn flock_command(args: &[String]) -> Option<String> {
+fn flock_reading(args: &[String]) -> Option<LauncherCommand> {
     // The string of a `-c` or `--command` option word, the next word when
     // the option word does not carry it.
-    let command_option = |at: usize| -> Option<Option<String>> {
+    let command_option = |at: usize| -> Option<Option<LauncherCommand>> {
         let a = args.get(at)?.as_str();
         if let Some(long) = a.strip_prefix("--") {
             return match long.split_once('=') {
-                Some(("command", value)) => Some(Some(value.to_string())),
-                None if long == "command" => Some(args.get(at + 1).cloned()),
+                Some(("command", value)) => Some(Some(string_body(value.to_string(), at))),
+                None if long == "command" => Some(
+                    args.get(at + 1)
+                        .cloned()
+                        .map(|text| string_body(text, at + 1)),
+                ),
                 _ => None,
             };
         }
@@ -7797,8 +7840,14 @@ fn flock_command(args: &[String]) -> Option<String> {
         for (offset, letter) in cluster.char_indices() {
             let attached = &cluster[offset + letter.len_utf8()..];
             match letter {
-                'c' if attached.is_empty() => return Some(args.get(at + 1).cloned()),
-                'c' => return Some(Some(attached.to_string())),
+                'c' if attached.is_empty() => {
+                    return Some(
+                        args.get(at + 1)
+                            .cloned()
+                            .map(|text| string_body(text, at + 1)),
+                    )
+                }
+                'c' => return Some(Some(string_body(attached.to_string(), at))),
                 'w' | 'E' => return None,
                 _ => {}
             }
@@ -7806,7 +7855,7 @@ fn flock_command(args: &[String]) -> Option<String> {
         None
     };
     // Options before the lock file and after it, which getopt permutes.
-    let skip_options = |mut at: usize| -> Result<usize, Option<String>> {
+    let skip_options = |mut at: usize| -> Result<usize, Option<LauncherCommand>> {
         while let Some(a) = args.get(at).map(String::as_str) {
             if a == "--" {
                 return Ok(at + 1);
@@ -7834,8 +7883,7 @@ fn flock_command(args: &[String]) -> Option<String> {
         Ok(start) => start,
         Err(command) => return command,
     };
-    let rest = args.get(start..).unwrap_or_default();
-    (!rest.is_empty()).then(|| quote_words(rest))
+    argv_body(args, start)
 }
 
 /// The command `script` runs: a `-c CMD` or `--command CMD` string
@@ -7843,7 +7891,7 @@ fn flock_command(args: &[String]) -> Option<String> {
 /// after the file (BSD and macOS: `script -q FILE CMD ...`). The scan stops
 /// at the command words, so a `-c` there is the command's own. `None` with
 /// no command.
-fn script_command(args: &[String]) -> Option<String> {
+fn script_reading(args: &[String]) -> Option<LauncherCommand> {
     // Options that take a value: `-t TIME` (BSD) and util-linux's logs.
     const VALUED_LONG: &[&str] = &[
         "--log-in",
@@ -7865,10 +7913,13 @@ fn script_command(args: &[String]) -> Option<String> {
         }
         if options && a.starts_with("--") {
             if a == "--command" {
-                return args.get(at + 1).cloned();
+                return args
+                    .get(at + 1)
+                    .cloned()
+                    .map(|text| string_body(text, at + 1));
             }
             if let Some(command) = a.strip_prefix("--command=") {
-                return Some(command.to_string());
+                return Some(string_body(command.to_string(), at));
             }
             at += 1 + usize::from(VALUED_LONG.contains(&a));
             continue;
@@ -7878,8 +7929,10 @@ fn script_command(args: &[String]) -> Option<String> {
             for (offset, letter) in cluster.char_indices() {
                 let attached = &cluster[offset + letter.len_utf8()..];
                 match letter {
-                    'c' if attached.is_empty() => return args.get(at).cloned(),
-                    'c' => return Some(attached.to_string()),
+                    'c' if attached.is_empty() => {
+                        return args.get(at).cloned().map(|text| string_body(text, at))
+                    }
+                    'c' => return Some(string_body(attached.to_string(), at - 1)),
                     'B' | 'E' | 'I' | 'O' | 'm' | 'T' | 't' => {
                         if attached.is_empty() {
                             at += 1;
@@ -7896,14 +7949,14 @@ fn script_command(args: &[String]) -> Option<String> {
             at += 1;
             continue;
         }
-        return Some(quote_words(&args[at..]));
+        return argv_body(args, at);
     }
     None
 }
 
 /// The string `watch` hands to `sh -c`: its words after its options (`-n`,
 /// `-q` and `-s` take a value), joined by blanks. `None` with no command.
-fn watch_command(args: &[String]) -> Option<String> {
+fn watch_reading(args: &[String]) -> Option<LauncherCommand> {
     let mut at = 0;
     while let Some(a) = args.get(at).map(String::as_str) {
         if a == "--" {
@@ -7918,7 +7971,11 @@ fn watch_command(args: &[String]) -> Option<String> {
         at += 1 + usize::from(valued);
     }
     let words = args.get(at..).unwrap_or_default();
-    (!words.is_empty()).then(|| words.join(" "))
+    (!words.is_empty()).then(|| LauncherCommand {
+        text: words.join(" "),
+        owned: at..args.len(),
+        program: Some(at),
+    })
 }
 
 /// The commands `parallel` runs: its command template, and the template
@@ -8119,7 +8176,18 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
 /// are read again by [`env_words`] (TSK-1002 review 02). `None` when no
 /// launcher uses `-S`; an error when the string uses a form the guard does
 /// not read exactly.
-pub(crate) fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, String>> {
+#[cfg(test)]
+fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, String>> {
+    env_split_argv_readable(tokens, None).map(|result| result.map(|(words, _)| words))
+}
+
+pub(crate) type EnvSplitReading = (Vec<String>, Vec<bool>);
+
+/// Preserve each source word's readability through env's validated split.
+pub(crate) fn env_split_argv_readable(
+    tokens: &[String],
+    readable: Option<&[bool]>,
+) -> Option<Result<EnvSplitReading, String>> {
     let assignment = |t: &str| {
         t.split_once('=')
             .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -8149,17 +8217,22 @@ pub(crate) fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, St
         // The option word itself goes; a cluster before it (`-iS`) keeps
         // its other letters.
         let mut out: Vec<String> = tokens[..at].to_vec();
+        let source_readable = |at: usize| readable.is_some_and(|words| words[at]);
+        let mut readings: Vec<bool> = (0..at).map(source_readable).collect();
         if let Some(letters) = tokens[at].strip_prefix('-').filter(|w| !w.starts_with('-')) {
             if let Some((before, _)) = letters.split_once('S') {
                 if !before.is_empty() {
                     out.push(format!("-{before}"));
+                    readings.push(source_readable(at));
                 }
             }
         }
         return Some(env_split_string(operand).map(|split| {
+            readings.extend(std::iter::repeat_n(source_readable(after - 1), split.len()));
+            readings.extend((after..tokens.len()).map(source_readable));
             out.extend(split);
             out.extend(tokens.get(after..).unwrap_or_default().iter().cloned());
-            out
+            (out, readings)
         }));
     }
 }
@@ -13783,6 +13856,45 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
             (word.text, literal)
         })
         .unzip()
+}
+
+/// The original argv with the shared literal-word test applied to program slots.
+/// Callers retain these readings when a launcher passes on a tail of argv.
+pub(crate) fn command_argv_readable(segment: &str) -> (Vec<String>, Vec<bool>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| {
+            let readable = word.literal() && !word.expands && !has_substitution(&word.text);
+            (word.text, readable)
+        })
+        .unzip()
+}
+
+/// Read command positions from the original argv, including carried tails.
+pub(crate) fn unread_carried_program(segment: &str) -> bool {
+    unread_program(segment, true)
+}
+
+fn unread_launcher_program(segment: &str) -> bool {
+    unread_program(segment, false)
+}
+
+fn unread_program(segment: &str, include_top_level: bool) -> bool {
+    let (words, readable) = command_argv_readable(segment);
+    let Some((program, args)) = strip_launchers(&words) else {
+        return false;
+    };
+    let at = words.len() - args.len() - 1;
+    let carried = words[..at].iter().any(|word| assignment(word).is_none());
+    ((include_top_level || carried) && !readable[at])
+        || launcher_command_readings(launcher_name(program), args)
+            .iter()
+            .filter_map(|body| body.program)
+            .any(|start| {
+                let tail = &args[start..];
+                strip_launchers(tail)
+                    .is_none_or(|(_, rest)| !readable[words.len() - rest.len() - 1])
+            })
 }
 
 /// The words of [`command_argv`] with their parse.
@@ -20439,10 +20551,7 @@ mod tests {
             let v = r
                 .violations
                 .iter()
-                .find(|v| {
-                    v.message
-                        .starts_with("command unresolved: a command substitution in")
-                })
+                .find(|v| v.message.starts_with("command unresolved:"))
                 .unwrap_or_else(|| panic!("{cmd}: {:?}", r.violations));
             assert_eq!(v.level, PolicyLevel::Block, "{cmd}");
             assert!(v.remedy.contains("literally"), "{}", v.remedy);

@@ -803,19 +803,49 @@ promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
 ### Terminal carriers the guards model
 
-The Herdr app's CLI and the older `herdr` CLI start a command in another
-process. Both guards read these forms wherever a line runs them (after a
-launcher, inside `sh -c`, in a substitution), and judge the command each
-carries as a command of its own, by the same rules as that command typed
-bare (TSK-1344). The code holds the program names in
+Terminal and app CLIs can start a command in another process or deliver
+text to a running program. Both guards find these forms wherever a line
+runs them, including after a launcher and inside a shell command string.
+A carried shell command meets the same rules as that command typed bare;
+delivered text meets the restrictions below (TSK-1344). The code holds the program names in
 `security/terminal_carriers.rs`, and a test keeps them equal to this list.
 
-- Programs: `hc`, `herdr-core`, `herdr`.
+- Programs: `hc`, `herdr-core`, `herdr`, `orca`, `tmux`, `screen`, `osascript`, `expect`.
 - Names: each program name matches the way the host finds the program.
 - Carried commands: `hc exec [options] <program> <args>...` with each
   `--env K=V` as an assignment; `hc machine add --via <command>`; `herdr
   pane run <pane> <command>`; `herdr agent start <name> --kind <kind>
   [options] -- <args>...`, judged as `<kind> <args>...`.
+- Terminal and app input carriers form one class: a program that types
+  into, or starts a command in, another terminal or app is a carrier.
+  The class inventory is `security/terminal_carriers/inventory.rs`.
+  Every carried text is checked as a command line. Text naming a guarded
+  command refuses; shell commands also meet the bare-command rules.
+  An unread command, input, buffer or execution directory refuses.
+  The accepted form is a file pointer: keep instructions in a brief file
+  and send its literal path to an interactive seat.
+- Interactive seats remain available. A startup command must name an
+  interactive agent CLI, with no headless flag, in an established directory.
+  A prompt such as `Read /literal/brief.txt in full and follow it.` holds
+  no guarded name. The session operations below still meet their ordinary
+  read and execution checks.
+
+  | Operation | Examples |
+  |---|---|
+  | Start a seat | `orca terminal create --worktree active --title t --command "cd /literal/project && codex --ask-for-approval never"`; `tmux new-session -d -s seat -c /literal/project 'codex --ask-for-approval never'` |
+  | Send the file pointer | `orca terminal send --terminal term_abc --text "Read /literal/brief.txt in full and follow it." --enter`; `tmux send-keys -t seat "Read /literal/brief.txt in full and follow it." Enter` |
+  | Manage a terminal without carried text | `orca terminal read`, `orca terminal list`, `orca terminal wait`, `orca terminal close` |
+
+- Code from files that a known route runs outside the guarded shell
+  refuses where the command text cannot establish it. Stored prompts and
+  tasks are not read by this rule. Their direct dispatch routes refuse;
+  the file-pointer prompt above remains available.
+- Inventory coverage is bounded. Tests exercise the declared routes and
+  refuse unknown command routes; they cannot discover later upstream verbs
+  without an independent versioned command inventory. A typing program not
+  on the list is outside this rule. That limit joins commands hidden in
+  files or external programs in the not-covered classes for the operator's
+  decision on the guard's claims.
 - `hc run` always refuses, whatever its options and operands, and the
   command it carries is still judged, so a rule it breaks is named too.
   `hc run` can start a template, a file whose command runs instead of the
@@ -827,26 +857,16 @@ bare (TSK-1344). The code holds the program names in
   `watch`, `parallel`, `arch`, `sudo`, `doas`, `gsudo`, `pkexec`, `busybox`,
   `chrt` and `taskset`, and inside the shell command string or command line
   a wrapper runs. Wrapper names are matched the way carrier names are.
-  Quoted arguments of a program the wrapper runs, such as a search pattern,
-  stay data. The list of wrappers only improves what the guard reads; it is
-  not the test. A carrier name in the words of any program refuses unless
-  the line runs it, which the guard then judges, or a modeled data role
-  proves the word is data. The modeled data roles are, by class: every
-  operand of the search programs (`grep` family) and of `which` and
-  `whereis`; the operands `echo` and `printf` print; the message values of
-  `git`; and the body and title values of `gh`. A wrapper hands on the roles
-  of the program that directly follows it. Quoting is not a proof, a word
-  that holds a substitution is never data, and printed text loses its role
-  when another command on the line reads standard input or holds a word the
-  guard cannot fill in. A word the guard cannot prove is data refuses, naming
-  the carrier and the accepted forms: a modeled data role, or the text kept
-  in a file. A wrapper or launcher whose command is a word the guard cannot
-  fill in refuses too, because the guard cannot tell whether that command is
-  a carrier. The residual, by class: a program that is neither a modeled
-  launcher nor a listed wrapper is judged by the carrier names it holds
-  literally, and an unfilled word among its arguments is not judged, because
-  the guard cannot know which argument the program runs; commands hidden in
-  files or in external programs are outside a text rule. To start a program in a Herdr terminal, start it outside a guarded session,
+  The wrapper list improves what the guard reads. Every carrier-name
+  occurrence must be the program word of the call parsed at that position,
+  with its own parent launch and directory. An identical call elsewhere
+  supplies no proof. All other occurrences refuse, including search
+  patterns, message text and printed operands. Keep that text in a file:
+  use `--body-file`, `git commit -F` or `grep -f`. These forms remain subject
+  to the ordinary read and execution checks. A wrapper, launcher or supplier
+  whose command cannot be read refuses too, and a traversal limit leaves
+  the command unknown. Commands hidden in files or in external programs are
+  outside a text rule. To start a program in a Herdr terminal, start it outside a guarded session,
   or through the host's own terminal. A guarded form returns when the Herdr
   app's dispatch contract is known.
 - Directory: `--cwd` from where the line runs, else that directory, so a

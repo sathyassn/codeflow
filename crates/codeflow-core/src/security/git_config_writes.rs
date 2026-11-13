@@ -116,6 +116,8 @@ mod tests {
 
     fn call(line: &str) -> Unwrapped {
         Unwrapped {
+            reference_words: Vec::new(),
+            readable: None,
             args: crate::hooks::git_guard::command_argv(line),
             input: None,
             stdin_bound: false,

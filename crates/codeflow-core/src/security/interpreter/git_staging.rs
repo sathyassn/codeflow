@@ -313,6 +313,8 @@ mod tests {
 
     fn read(line: &str) -> Option<Staging> {
         let call = outward::Unwrapped {
+            reference_words: Vec::new(),
+            readable: None,
             args: crate::hooks::git_guard::command_argv(line),
             input: None,
             stdin_bound: false,

@@ -158,6 +158,8 @@ pub(super) fn expand_alias(
         expanded = Some(outward::Unwrapped {
             args,
             expands,
+            reference_words: Vec::new(),
+            readable: None,
             input: current.input.clone(),
             stdin_bound: current.stdin_bound,
             unresolved: current.unresolved.clone(),

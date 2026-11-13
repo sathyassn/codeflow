@@ -725,6 +725,7 @@ fn walk(
     reparses: &mut Reparses,
 ) -> Vec<Position> {
     if depth > 16 {
+        output.push(unread_code(GRAMMAR));
         for state in &mut states {
             state.state.directory = None;
             state.state.world = Some(GRAMMAR);
