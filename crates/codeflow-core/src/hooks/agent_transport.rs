@@ -24,7 +24,8 @@
 //! assignment, a launcher, a redirection or a second command fails it. The
 //! repository the line names must have exactly one remote, `origin`, with
 //! one URL that no rewrite changes, on a transport whose programs are
-//! accounted for (`https://` or a local absolute path), and none of the
+//! accounted for (`https://` or a local absolute path), equal byte for byte
+//! to an entry of `git.agent_remote_urls` in the landed policy, and none of the
 //! push, mirror or submodule settings that would widen what the command
 //! does. A pushed name must sit under a work-branch prefix of the landed
 //! policy, read at `origin`'s default branch, and must not be protected, an integration
@@ -302,6 +303,12 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
     let landed = super::landed_policy::load_local(target).ok()?;
     let authority = landed.authority.as_ref()?;
     if !landed.remote_tracked || !authority.reference.starts_with("refs/remotes/origin/") {
+        return None;
+    }
+    // `origin` must point where the landed policy says agents fetch and
+    // push (AC-5): a URL set by hand, however plausible, withholds the
+    // admission until a reviewed policy names it.
+    if !landed.policy.git.agent_remote_urls.iter().any(|named| named == url) {
         return None;
     }
     let current = current_branch(&repo);

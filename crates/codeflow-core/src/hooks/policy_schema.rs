@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 83] = [
+pub const SCHEMA: [KeySpec; 84] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -276,6 +276,23 @@ pub const SCHEMA: [KeySpec; 83] = [
                 unaffected. Landing a reviewed pull request with `gh pr \
                 merge` is a separate rule, `git.pr_merge_to_protected`, \
                 which this key does not change.",
+    },
+    KeySpec {
+        path: "git.agent_remote_urls",
+        kind: KeyKind::StringList,
+        valid: "an array of remote URLs, each `https://` or a local absolute path, written exactly as `git remote get-url origin` prints it; an empty array admits none",
+        purpose: "The `origin` URLs for which the guards let an agent's fetch or push use the GitHub CLI credential helper.",
+        notes: "Read only from the landed policy at the remote's default \
+                branch, so an uncommitted or branch-local edit, or a URL \
+                set by hand with `git remote set-url`, has no effect until \
+                a reviewed policy naming it lands there. `origin`'s \
+                configured URL must equal an entry byte for byte: a \
+                trailing slash, a missing `.git` or a change of case is a \
+                different URL. Unset or empty, agents' fetches and pushes \
+                that reach the helper keep the account finding. The guards \
+                read a value that is not an array of non-empty strings as \
+                empty, and validation reports a value that is not an array \
+                of strings. The git hooks do not read the key.",
     },
     KeySpec {
         path: "git.local_ref_protection",

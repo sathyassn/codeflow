@@ -293,6 +293,29 @@ where
     Ok(read.unwrap_or_else(default_agent_push_refused_branches))
 }
 
+/// `git.agent_remote_urls` as written, or an empty list when the value is
+/// not an array of non-empty strings: a value the guards cannot read admits
+/// no remote (TSK-1479 AC-5), and never stops the rest of the policy
+/// loading.
+fn agent_remote_urls<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let read = value.as_array().and_then(|entries| {
+        entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_string)
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    Ok(read.unwrap_or_default())
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,6 +352,14 @@ pub struct GitPolicy {
     /// default.
     #[serde(deserialize_with = "agent_push_refused_branches")]
     pub agent_push_refused_branches: Vec<String>,
+    /// The `origin` URLs for which the guards admit the GitHub CLI
+    /// credential helper on an agent fetch or push (TSK-1479 AC-5). Only
+    /// the value in the landed policy at the remote's default branch
+    /// counts, and `origin`'s configured URL must equal one entry byte for
+    /// byte. Default empty, which admits no remote; a value that is not an
+    /// array of non-empty strings reads as empty.
+    #[serde(deserialize_with = "agent_remote_urls")]
+    pub agent_remote_urls: Vec<String>,
     /// The default branch this policy was read at, when it was read at a
     /// remote's default branch ([`super::landed_policy`]); `None` for a
     /// policy read anywhere else. Not a policy key: never read from or
@@ -696,6 +727,7 @@ impl Default for GitPolicy {
             merge_to_protected: PolicyLevel::Block,
             pr_merge_to_protected: PolicyLevel::Block,
             agent_push_refused_branches: default_agent_push_refused_branches(),
+            agent_remote_urls: Vec::new(),
             landed_default_branch: None,
             local_ref_protection: PolicyLevel::Block,
             hook_integrity: PolicyLevel::Block,
