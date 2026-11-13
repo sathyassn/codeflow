@@ -1649,7 +1649,7 @@ fn the_shipped_gate_runs_essential_on_pull_requests_and_full_elsewhere() {
         assert_eq!(log.trim(), line(mode), "{body:?} on {event:?}");
     }
     assert!(
-        !job(CI, "gates").contains("    if:"),
+        !job(CI, "gates").contains("\n    if:"),
         "the gates job runs on every event"
     );
 }
@@ -1666,8 +1666,8 @@ fn the_ci_workflow_schedules_the_full_scan_and_the_full_gate() {
     for event in ["pull_request:", "push:", "schedule:", "workflow_dispatch:"] {
         assert!(on.contains(event), "{event}: {on}");
     }
-    assert!(!job(CI, "gates").contains("    if:"));
-    assert!(!job(CI, "secret-scan").contains("    if:"));
+    assert!(!job(CI, "gates").contains("\n    if:"));
+    assert!(!job(CI, "secret-scan").contains("\n    if:"));
 }
 
 /// The job-level text of `id` in a workflow, up to the next job.
