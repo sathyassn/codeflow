@@ -54,7 +54,7 @@ export function prePaintHashes(list = committed) {
 // keeps the committed schema_version, so regenerating alone writes version 1
 // again: the version 2 generator comes first. The Rust validator gives the
 // same reason (crates/codeflow-core/src/validate/portal/figures.rs).
-export const SCHEMA_UPGRADE = `adopt the version ${RUNTIME_SCRIPTS_SCHEMA} generator first (\`codeflow update\` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: ${REGENERATE}; see the changelog entry "The portal's runtime script list is version ${RUNTIME_SCRIPTS_SCHEMA}"`;
+export const SCHEMA_UPGRADE = `adopt the version ${RUNTIME_SCRIPTS_SCHEMA} generator first (the operator's \`codeflow update\` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: ${REGENERATE}; see the changelog entry "The portal's runtime script list is version ${RUNTIME_SCRIPTS_SCHEMA}"`;
 
 // Why a runtime script list cannot be read for a theme, or null when it can.
 // The checks and their order match the Rust validator's, so the browser gate

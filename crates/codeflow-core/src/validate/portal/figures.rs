@@ -1261,7 +1261,7 @@ const REGENERATE: &str = "npm run build && node scripts/runtime-scripts.mjs dist
 /// list cases hold both to the same text. The old
 /// generator keeps the committed `schema_version`, so regenerating alone
 /// writes version 1 again: the version 2 generator comes first.
-const SCHEMA_UPGRADE: &str = "adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\"";
+const SCHEMA_UPGRADE: &str = "adopt the version 2 generator first (the operator's `codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\"";
 
 /// The version of the runtime script list this validator reads. Version 2
 /// records the pre-paint script's hash for every theme; version 1 recorded
