@@ -1277,6 +1277,74 @@ fn prerequisite_failure_never_starts_its_consumer() {
     assert!(!dir.path().join("consumed").exists());
 }
 
+/// TSK-1305 AC-1 and AC-2 (issue 546): the run record a hosted gate
+/// publishes lists every target it was given in `outcomes`, with its state
+/// and duration: the passing one, the failing one, the one never run behind
+/// it and the one skipped in CI. The passing target's captured output is in
+/// the record too, which the job log never shows.
+#[cfg(unix)]
+#[test]
+fn the_run_record_lists_every_targets_outcome_and_a_passing_targets_output() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"probe","runner":"custom","modes":{"full":{"command":"echo probe: cpus=4"}}},
+      {"name":"broken","runner":"custom","modes":{"full":{"command":"exit 3"}}},
+      {"name":"after-broken","runner":"custom","requires":["broken"],"modes":{"full":{"command":"true"}}},
+      {"name":"local-only","runner":"custom","ci_skip":true,"ci_skip_reason":"needs a local device","modes":{"full":{"command":"true"}}}] }"#,
+    );
+    std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: fixture"]);
+    let home = tempfile::tempdir().unwrap();
+    let output = command(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "full", "--all"],
+    )
+    .env("CI", "true")
+    .output()
+    .unwrap();
+    let err = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{err}");
+    // The record the hosted workflow uploads: target/codeflow-gate/<run id>/run.json.
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] artifact: "))
+        .unwrap();
+    assert!(artifact.contains("/target/codeflow-gate/"), "{artifact}");
+    assert!(artifact.ends_with("/run.json"), "{artifact}");
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    let outcomes = raw["outcomes"].as_array().expect("outcomes is a list");
+    let state = |name: &str| {
+        let entry = outcomes
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is missing from {raw}"));
+        assert!(entry["duration_ms"].is_u64(), "{entry}");
+        entry["state"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(state("probe"), "passed");
+    assert_eq!(state("broken"), "failed");
+    assert_eq!(state("after-broken"), "not_run");
+    assert_eq!(state("local-only"), "skipped_in_ci");
+    assert_eq!(outcomes.len(), 4, "{raw}");
+    let skipped = outcomes
+        .iter()
+        .find(|entry| entry["name"] == "local-only")
+        .unwrap();
+    assert_eq!(skipped["reason"], "needs a local device");
+    let probe = raw["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|result| result["name"] == "probe")
+        .unwrap();
+    assert!(
+        probe["stdout"].as_str().unwrap().contains("probe: cpus=4"),
+        "{probe}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn delayed_producer_precedes_consumer_and_evidence_survives_cleanup() {
