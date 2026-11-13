@@ -85,6 +85,11 @@ pub struct AliasQuery<'s> {
     /// The command's own `-c <name>=<value>` settings, in order. They can
     /// define the alias or an `include.path` that does.
     pub config: &'s [String],
+    /// The configuration variables the command's launchers and
+    /// assignments give Git or take from it, over the guard's own
+    /// environment; a NUL value removes one (TSK-1456). Empty for a
+    /// command Git runs in the guard's environment.
+    pub environment: &'s BTreeMap<String, String>,
     /// The subcommand as written.
     pub name: &'s str,
 }
@@ -180,7 +185,7 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
     for setting in query.config {
         globals.extend(["-c".into(), setting.clone()]);
     }
-    match crate::security::git_config::read(cwd, &globals, &BTreeMap::new()) {
+    match crate::security::git_config::read(cwd, &globals, query.environment) {
         Ok(config) => match config.get(&format!("alias.{}", query.name.to_ascii_lowercase())) {
             Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
             Ok(None) => AliasAnswer::NotAlias,
@@ -10987,6 +10992,9 @@ fn expand_alias(
         }
     }
     let specs = compose_targets(args, moved)?;
+    // The environment the command's launchers leave Git, in which the
+    // admission reading found the alias (TSK-1456).
+    let environment = runners::alias_environment(moved.tokens)?;
     let mut expansions: Vec<Vec<String>> = Vec::new();
     for spec in &specs {
         let query = AliasQuery {
@@ -10995,6 +11003,7 @@ fn expand_alias(
                 git_dir: s.git_dir,
             }),
             config: &config,
+            environment: &environment,
             name: sub,
         };
         let value = match lookup(&query) {
@@ -11260,7 +11269,17 @@ fn compose_targets_with(
             _ => {}
         }
     }
-    let mut dash_c: Vec<String> = Vec::new();
+    // The directories the command's launchers move to before Git starts,
+    // such as `env -C DIR` behind `nice`, come before Git's own `-C`
+    // options; an `env` in first place is refused above (TSK-1456).
+    let (launched_to, uncertain) = launcher_effects(moved.tokens);
+    if let Some(why) = uncertain {
+        return Err(why);
+    }
+    let mut dash_c: Vec<String> = launched_to
+        .iter()
+        .map(|dir| expand_word(dir, vars))
+        .collect::<Result<_, _>>()?;
     let mut idx = 0;
     while idx < args.len() {
         let t = args[idx].as_str();
@@ -16263,6 +16282,7 @@ mod tests {
                 &AliasQuery {
                     target: None,
                     config: &config,
+                    environment: &BTreeMap::new(),
                     name: "x"
                 }
             ),
@@ -21737,6 +21757,7 @@ mod tests {
             context.alias_lookup.unwrap()(&AliasQuery {
                 target: mapped,
                 config: &config,
+                environment: query.environment,
                 name: query.name,
             })
         };

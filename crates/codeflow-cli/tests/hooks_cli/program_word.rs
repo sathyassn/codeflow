@@ -38,6 +38,19 @@ fn hook_env(root: &Path, name: &str, command: &str, env: &[(&str, &str)]) -> Out
     run_with_stdin(&mut cmd, &guard_payload(command, root))
 }
 
+/// The policy rules a hook's message names, sorted, each once.
+fn refusal_rules(out: &Output) -> Vec<String> {
+    let mut rules: Vec<String> = String::from_utf8_lossy(&out.stderr)
+        .split("policy rule ")
+        .skip(1)
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_string)
+        .collect();
+    rules.sort();
+    rules.dedup();
+    rules
+}
+
 /// Every row whose verdict is wrong, with the hook and what it printed.
 fn check(root: &Path, rows: &[(&str, &str, Option<&str>)]) -> Vec<String> {
     check_with(root, rows, false)
@@ -64,6 +77,31 @@ fn check_with(root: &Path, rows: &[(&str, &str, Option<&str>)], runners: bool) -
             let expected = rule.map_or("allow".to_string(), |rule| format!("refuse by {rule}"));
             wrong.push(format!(
                 "{name}: {command:?}: expected {expected}, exited {:?}: {stderr}",
+                out.status.code()
+            ));
+        }
+    }
+    wrong
+}
+
+/// [`check`], with `env` set in each hook process ([`hook_env`]).
+fn check_env(
+    root: &Path,
+    rows: &[(&str, &str, Option<&str>)],
+    env: &[(&str, &str)],
+) -> Vec<String> {
+    let mut wrong = Vec::new();
+    for (name, command, rule) in rows {
+        let out = hook_env(root, name, command, env);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let right = match rule {
+            Some(rule) => out.status.code() == Some(2) && stderr.contains(rule),
+            None if *name == "exec-guard" => line_allows(&out),
+            None => out.status.code() == Some(0),
+        };
+        if !right {
+            wrong.push(format!(
+                "{name} {env:?}: {command:?}: expected {rule:?}, exited {:?}: {stderr}",
                 out.status.code()
             ));
         }
@@ -276,6 +314,7 @@ fn unread_program_words_read_the_alias_where_the_command_runs() {
     init_repo(&other, "task/x");
     write_agent_policy(&other, MEASURED_POLICY);
     git(&other, &["config", "alias.inspect", "diff --ext-diff"]);
+    git(&other, &["config", "alias.ship", "push --force origin main"]);
     git(&other, &["config", "diff.external", "claude -p x"]);
     std::fs::write(other.join("base.txt"), "base\nchanged\n").unwrap();
     let mut wrong = moved_alias_rows(dir.path(), false);
@@ -341,6 +380,18 @@ fn moved_alias_rows(root: &Path, aliased: bool) -> Vec<String> {
                 ));
             }
             rows.push(("exec-guard", command, rule));
+            // The second repository's alias that force-pushes its
+            // protected branch is refused on its own, for literal `git`
+            // and the unread word alike.
+            let ship = shape.replace("{}", word).replace(" inspect", " ship");
+            let out = hook(root, "git-guard", &ship, false);
+            if out.status.code() != Some(2) || refusal_rules(&out).is_empty() {
+                wrong.push(format!(
+                    "git-guard: {ship:?}: a force push is not refused, exited {:?}: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
         }
     }
     // Main's refusal of an `env` option in front of literal Git holds; an
@@ -428,9 +479,19 @@ fn unread_program_words_read_an_alias_from_the_command_environment() {
                 ));
             }
         }
-        // git-guard refuses the unread word wherever it refuses literal
-        // `git`, and allows the rows that name no alias.
-        for (command, rule) in &rows {
+        // git-guard refuses each aliased row on its own, as it refuses
+        // literal `git`, and allows the rows that name no alias. A row
+        // whose alias force-pushes the protected branch is refused too.
+        let mut judged = rows.clone();
+        for word in ["git", "$TOOL", "\"$TOOL\""] {
+            judged.push((
+                format!(
+                    "K18_ALIAS='push --force origin main' {word} --config-env=alias.ship=K18_ALIAS ship"
+                ),
+                integrity,
+            ));
+        }
+        for (command, rule) in &judged {
             let literal = hook_env(
                 dir.path(),
                 "git-guard",
@@ -442,7 +503,7 @@ fn unread_program_words_read_an_alias_from_the_command_environment() {
             let right = if rule.is_none() {
                 !refused
             } else {
-                refused || literal.status.code() != Some(2)
+                refused && literal.status.code() == Some(2)
             };
             if !right {
                 wrong.push(format!(
@@ -454,6 +515,90 @@ fn unread_program_words_read_an_alias_from_the_command_environment() {
             }
         }
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// git-guard judges the alias Git runs in the environment the command's
+/// launchers and settings give it, so each row is refused for the force
+/// push its alias runs, whatever alias the session holds. The command
+/// strings are only read; Git never runs them.
+#[test]
+fn launchers_that_remove_variables_judge_the_alias_git_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    git(dir.path(), &["config", "alias.ship", "push --force origin main"]);
+    git(dir.path(), &["config", "diff.external", "claude -p x"]);
+    std::fs::write(dir.path().join("base.txt"), "base\nchanged\n").unwrap();
+    let force = Some("git.force_push_protected");
+    let headless = Some("security.headless_peer_runs");
+    let integrity = Some("git.hook_integrity");
+    let unresolved = Some("git.commit_to_protected");
+    let refused = Some("BLOCKED");
+    let removed = [
+        ("exec -c git ship", force),
+        ("exec -c \"$G\" ship", force),
+        ("git -c alias.ship='push --force origin main' ship", force),
+        // Refused before any alias is read, as `main` refuses them: an
+        // `env` option in front of Git, and a `-c` value the guard reads
+        // as an assignment in front of an unread word.
+        ("env -i git ship", integrity),
+        ("env -i $G ship", integrity),
+        ("env -u GIT_CONFIG_COUNT git ship", integrity),
+        ("env -u GIT_CONFIG_COUNT $G ship", integrity),
+        ("$G -c alias.ship='push --force origin main' ship", unresolved),
+        // Git takes `-c` only with its setting as the next word and stops
+        // at this one before it reads any alias; the guard refuses it.
+        ("git -calias.ship='push --force origin main' ship", refused),
+        ("$G -calias.ship='push --force origin main' ship", refused),
+    ];
+    let mut wrong = Vec::new();
+    // The session holds no alias of that name, then one that runs a
+    // configured program, then one that only shows status.
+    for session in [None, Some("diff --ext-diff"), Some("status")] {
+        let mut env = vec![("G", "git")];
+        if let Some(value) = session {
+            env.extend([
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "alias.ship"),
+                ("GIT_CONFIG_VALUE_0", value),
+            ]);
+        }
+        let mut rows: Vec<(&str, &str, Option<&str>)> = removed
+            .iter()
+            .map(|(command, rule)| ("git-guard", *command, *rule))
+            .collect();
+        // Without a launcher, Git runs the session's alias.
+        let (git_guard, exec_guard) = match session {
+            None => (force, None),
+            Some("status") => (None, None),
+            Some(_) => (None, headless),
+        };
+        for command in ["git ship", "$G ship"] {
+            rows.push(("git-guard", command, git_guard));
+            rows.push(("exec-guard", command, exec_guard));
+        }
+        wrong.extend(check_env(dir.path(), &rows, &env));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The variable naming the file `git config` reads is removed from every
+/// configuration reading, so a launcher that removes it from the session
+/// leaves an ordinary command's verdict as literal `git` has it.
+#[test]
+fn removing_the_config_command_file_keeps_ordinary_verdicts() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    let file = dir.path().join("k18-config");
+    let env = [("GIT_CONFIG", file.to_str().unwrap())];
+    let mut rows = Vec::new();
+    for command in ["git status", "exec -c git status", "exec -c $TOOL build"] {
+        rows.push(("exec-guard", command, None));
+        rows.push(("git-guard", command, None));
+    }
+    let wrong = check_env(dir.path(), &rows, &env);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 

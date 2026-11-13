@@ -564,6 +564,17 @@ mod tests {
         assert_eq!(config.get("REMOTE.mixed.URL").unwrap(), Some("second"));
     }
 
+    /// Git takes `-c` only with its setting as the next word: with the
+    /// setting attached it stops before reading any configuration, so a
+    /// command written that way runs no alias (TSK-1456).
+    #[test]
+    fn git_takes_a_setting_only_after_a_separate_option() {
+        let (dir, env) = fixture();
+        let separate = read(dir.path(), &["-c".into(), "k18.probe=yes".into()], &env).unwrap();
+        assert_eq!(separate.get("k18.probe").unwrap(), Some("yes"));
+        assert!(read(dir.path(), &["-ck18.probe=yes".into()], &env).is_err());
+    }
+
     #[test]
     fn missing_inactive_include_does_not_hide_aliases() {
         let (dir, mut env) = fixture();

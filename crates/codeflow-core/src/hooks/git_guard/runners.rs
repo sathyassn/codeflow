@@ -585,11 +585,17 @@ fn known_program(verb: &str) -> bool {
     GIT_BUILTINS.contains(&verb) || command_options(verb) || matches!(verb, "submodule" | "bisect")
 }
 
+/// The entries of `env` a configuration reading takes. `GIT_CONFIG` names
+/// a file only `git config` reads, and the reader removes it from every
+/// reading, so an entry for it, a launcher removing it included, changes
+/// nothing (TSK-1456).
 fn config_environment(
     env: &crate::security::git_config::Environment,
 ) -> crate::security::git_config::Environment {
     env.iter()
-        .filter(|(name, _)| !catalog::environment(name) && !program_environment(name))
+        .filter(|(name, _)| {
+            !catalog::environment(name) && !program_environment(name) && *name != "GIT_CONFIG"
+        })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
@@ -2186,6 +2192,30 @@ pub(super) fn runs_alias(
     .map(|alias| alias.is_some())
 }
 
+/// The configuration environment Git reads its aliases with when it runs
+/// as the program of the simple command `tokens`: the guard's own
+/// variables its launchers keep, and its assignments as its launchers
+/// leave them ([`launched_environment`]). git-guard expands an alias with
+/// this environment, the one [`alias_where_run`] finds the alias in, so
+/// the alias it judges is the alias Git runs (TSK-1456).
+pub(super) fn alias_environment(
+    tokens: &[String],
+) -> Result<crate::security::git_config::Environment, String> {
+    alias_environment_of(&launched(tokens)?, &Literals::default(), &Inputs::default())
+}
+
+fn alias_environment_of(
+    launched: &Launched,
+    literals: &Literals,
+    inputs: &Inputs,
+) -> Result<crate::security::git_config::Environment, String> {
+    Ok(config_environment(&launched_environment(
+        launched,
+        literals,
+        &inputs.environment,
+    )?))
+}
+
 /// The arguments Git takes when `args`, run as the program of the simple
 /// command `tokens` from a directory in `starts`, is Git running an alias:
 /// the first word that is not an option is no Git program and names an
@@ -2239,11 +2269,7 @@ fn alias_where_run(
     {
         return Ok(None);
     }
-    let env = config_environment(&launched_environment(
-        &launched,
-        literals,
-        &inputs.environment,
-    )?);
+    let env = alias_environment_of(&launched, literals, inputs)?;
     let key = format!("alias.{verb}");
     for start in starts {
         let at = changes.iter().fold(start.clone(), |at, change| {
