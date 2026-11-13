@@ -244,9 +244,10 @@ pub fn evaluate_ruled(
     // An install run writes the project's install files from any folder,
     // so it refuses wherever it runs, a certified prose line included
     // (TSK-1476). Only a line in the install reader's closed subset is
-    // data; every other line naming the binary with a verb refuses.
+    // data; every other line naming the binary with a verb refuses. The
+    // subset lists no Git call, so no configured Git runner is read here.
     if integrity.is_active() {
-        if let Some(run) = install_run_on_line(command, posix, cwd) {
+        if let Some(run) = crate::security::install_run::install_run(command, posix) {
             violations.push(install_violation(integrity, &run));
         }
     }
@@ -415,32 +416,6 @@ pub(crate) fn code_install_violation(level: PolicyLevel, code: &str) -> Option<V
     crate::security::install_run::raw_run(code).map(|run| install_violation(level, &run))
 }
 
-/// The install run on `command` (TSK-1476). A line the install reader
-/// admits as data draws no finding there; when its raw text still names
-/// the binary with a verb, each program its Git call runs from its
-/// configuration or environment must be one of the audited Git LFS filter
-/// shapes, or the line is judged on its raw text, as it is when the runner
-/// reader cannot read them. A runner body is not read again for this.
-fn install_run_on_line(
-    command: &str,
-    posix: bool,
-    cwd: &std::path::Path,
-) -> Option<crate::security::install_run::InstallRun> {
-    use crate::security::install_run::{audited_git_runner, install_run, raw_run};
-    install_run(command, posix).or_else(|| {
-        if RUNNER_BODY.get() {
-            return None;
-        }
-        // `install_run` judges every line outside the admitted subset on
-        // its raw text, so a raw match here is an admitted line.
-        let raw = raw_run(command)?;
-        match super::git_guard::git_runner_bodies(command, cwd) {
-            Ok(bodies) if bodies.iter().all(|(body, _)| audited_git_runner(body)) => None,
-            _ => Some(raw),
-        }
-    })
-}
-
 /// An agent's run of the install verbs, under hook integrity at the call's
 /// level: the edit guard's rule for the same files (TSK-1476).
 pub(crate) fn install_violation(
@@ -456,8 +431,9 @@ pub(crate) fn install_violation(
             run.form,
             if !run.parsed {
                 " (the line is outside the forms the guard reads as data and its text names \
-                 the binary with an install verb; give such text in a file, or to `echo`, \
-                 `printf`, `grep`, `rg --no-config` or `git --no-pager log` alone)"
+                 the binary with an install verb; give such text to `echo`, `printf '%s'`, \
+                 `grep` or `rg --no-config` alone, or leave the binary's name out of a \
+                 search)"
             } else if run.in_argument {
                 " (found inside a quoted argument or an assigned value, which the guard read as \
                  a command line; give such text in a file, or to a program that only prints \

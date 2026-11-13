@@ -421,7 +421,8 @@ fn document_file(target: &str) -> bool {
 /// A `printf` format that holds only `%s` and `%%` conversions and only the
 /// escapes `\n`, `\t` and `\\`. zsh decodes `\u0025` and every other numeric
 /// escape before it reads conversions, so such an escape can spell `%n`.
-fn string_format(format: &str) -> bool {
+/// The install check's closed subset admits a `printf` by the same rule.
+pub(in crate::security) fn string_format(format: &str) -> bool {
     let mut chars = format.chars();
     while let Some(c) = chars.next() {
         match c {

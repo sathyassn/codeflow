@@ -894,17 +894,13 @@ fn listed_programs_whose_own_grammar_can_run_code_refuse() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
-    // A Git search refuses whatever the repository configures, the filters
-    // `git lfs install` writes and a promisor remote with a command
-    // transport alike.
+    // A Git search refuses even when the repository configures only the
+    // filters `git lfs install` writes, which r12 admitted.
     let line = "git --no-pager grep -e 'codeflow update' HEAD -- notes.txt".to_string();
     for (key, value) in [
         ("filter.lfs.process", "git-lfs filter-process"),
         ("filter.lfs.clean", "git-lfs clean -- %f"),
         ("filter.lfs.smudge", "git-lfs smudge -- %f"),
-        ("remote.origin.promisor", "true"),
-        ("remote.origin.url", "ext::sh -c true"),
-        ("protocol.ext.allow", "always"),
     ] {
         git(&root, &["config", key, value]);
     }

@@ -8,25 +8,32 @@
 //! - It reads with this module's own lexer: words of plain characters,
 //!   single-quoted text, double-quoted text with no `$`, backtick,
 //!   backslash or `!`, the separators `;`, newline, `&&`, `||` and `|`, and
-//!   redirections of a listed form. Any other character or form (an
-//!   expansion, a pattern, a substitution, a subshell or brace group, a
-//!   here-document or here-string, the background `&`, a comment) ends the
-//!   reading, and the line is not admitted.
-//! - Every simple command has a program word, written plainly, that is on
-//!   [`PROGRAMS`], with each option on that program's own list. No
-//!   assignment, declaration, alias, function, `eval`, `source`, `exec`,
-//!   `builtin`, `command` or other wrapper, and no supplier such as `xargs`
-//!   or `find -exec`, is on the list, so each of those leaves the line out.
-//! - Each program that reads state the guard cannot see, which could steer
-//!   it to run a program, is admitted only in a form that turns that state
-//!   off: `rg` with `--no-config`, `git` with `--no-pager` or `-P`. `grep`,
-//!   `cat`, `head`, `tail`, `wc`, `echo` and `printf` run no program
-//!   whatever their environment holds.
+//!   redirections of a listed form to a file or `/dev/null`. Any other
+//!   character or form (an expansion, a pattern, a substitution, a subshell
+//!   or brace group, a here-document or here-string, the background `&`, a
+//!   comment, a redirection to any other device) ends the reading, and the
+//!   line is not admitted.
+//! - Every simple command has a program word, written plainly, that is one
+//!   of the arms of [`command_admitted`], with its arguments read by that
+//!   program's own grammar. No assignment, declaration, alias, function,
+//!   `eval`, `source`, `exec`, `builtin`, `command` or other wrapper, and no
+//!   supplier such as `xargs` or `find -exec`, is listed, so each of those
+//!   leaves the line out.
+//! - Every argument is inert in bash, zsh and sh: it is printed, searched
+//!   for or read as a file name, and never evaluated, run or used to reach
+//!   the network. So `printf` takes only a format of literal text and `%s`
+//!   (zsh evaluates the argument of a numeric conversion as arithmetic,
+//!   which can run a substitution), `rg` takes `--no-config` as its first
+//!   argument (so no option can take it as a value and no configuration
+//!   file adds `--pre`), the binary is admitted only by its bare name, and
+//!   no `git` call is listed (a search can fetch a missing object through a
+//!   transport its configuration names).
 //!
 //! There is no denylist in this path: a program, option or form is
 //! admitted only by being listed here.
 
-use super::PRINTS_ONLY;
+use super::{BINARY, PRINTS_ONLY};
+use crate::security::prose::string_format;
 
 /// One word after quote removal, with whether any of it was quoted.
 struct Word {
@@ -72,6 +79,9 @@ pub(super) fn admitted(line: &str) -> bool {
         match token {
             Token::Word(word) => {
                 if target {
+                    if !target_admitted(&word.text) {
+                        return false;
+                    }
                     target = false;
                 } else {
                     command.push(word);
@@ -103,6 +113,13 @@ pub(super) fn admitted(line: &str) -> bool {
         return separator == Some(true) && !redirected;
     }
     command_admitted(&command)
+}
+
+/// Whether a redirection may open `target`: a file, or `/dev/null`. bash
+/// opens a network connection for a target under `/dev/tcp/` or
+/// `/dev/udp/`, so no other path with a `dev` component is admitted.
+fn target_admitted(target: &str) -> bool {
+    target == "/dev/null" || !target.split('/').any(|part| part == "dev")
 }
 
 /// The tokens of `line`, or `None` when it holds anything outside the
@@ -254,9 +271,12 @@ struct Options {
 }
 
 // The listed programs are the arms of [`command_admitted`], each with its
-// options below. Every program there runs no other program in the forms
-// its options allow; the sources are each program's manual, cited in the
-// TSK-1476 report.
+// options below, read as [`operands`] reads them. `cat`, `head`, `tail`,
+// `wc` and `grep` have no option, in their GNU or BSD form, that runs a
+// program, opens a connection or evaluates an argument, so a word read
+// with another arity is still inert; for `rg`, whose `--pre` runs a
+// program, each listed option has the arity ripgrep 15.2.0 gives it. The
+// sources are each program's manual, cited in the TSK-1476 report.
 
 const CAT: Options = Options {
     flags: "AbeEnstTuvl",
@@ -356,12 +376,15 @@ const GREP: Options = Options {
     numbers: false,
 };
 
-/// ripgrep, always with `--no-config` so no configuration file adds an
-/// option. Left out: `--pre`, `--pre-glob`, `-z` and `--search-zip`,
-/// which run programs, and `--hostname-bin`, which runs one.
+/// ripgrep after its first argument, `--no-config`: a short list whose
+/// arity matches ripgrep 15.2.0's `rg --help`, so no word read here as a
+/// value is an option to ripgrep and no option ripgrep reads is off this
+/// list. Left out among others: `--pre`, `--pre-glob`, `-z` and
+/// `--search-zip`, which run programs, and `--hostname-bin`, which runs
+/// one.
 const RG: Options = Options {
-    flags: "iSsFwxnNlcvoHIuULaPq0.bpVh",
-    values: "eftgTABCmjdErM",
+    flags: "iSsFwxnNlcvoHIuLaUq0.",
+    values: "eftTgABCmd",
     long_flags: &[
         "no-config",
         "hidden",
@@ -391,25 +414,12 @@ const RG: Options = Options {
         "files",
         "follow",
         "multiline",
-        "multiline-dotall",
-        "pcre2",
         "text",
         "null",
         "quiet",
-        "stats",
-        "trim",
         "column",
         "no-messages",
-        "type-list",
         "unrestricted",
-        "pretty",
-        "byte-offset",
-        "crlf",
-        "passthru",
-        "include-zero",
-        "binary",
-        "one-file-system",
-        "no-require-git",
     ],
     long_values: &[
         "glob",
@@ -423,118 +433,9 @@ const RG: Options = Options {
         "context",
         "max-count",
         "max-depth",
-        "threads",
-        "color",
-        "colors",
-        "sort",
-        "sortr",
-        "replace",
-        "encoding",
-        "max-columns",
-        "max-filesize",
-        "engine",
-        "context-separator",
-        "field-match-separator",
     ],
     attached: &[],
     numbers: false,
-};
-
-/// `git log`, without the options that make a patch or a diff (which run
-/// configured diff programs and text converters) or check a signature
-/// (which runs the signing program). A format may not ask for a
-/// signature (`%G`) or a describe call.
-const GIT_LOG: Options = Options {
-    flags: "iEF",
-    values: "n",
-    long_flags: &[
-        "oneline",
-        "all",
-        "graph",
-        "reverse",
-        "first-parent",
-        "no-merges",
-        "merges",
-        "abbrev-commit",
-        "no-abbrev-commit",
-        "no-color",
-        "all-match",
-        "invert-grep",
-        "regexp-ignore-case",
-        "extended-regexp",
-        "fixed-strings",
-        "basic-regexp",
-        "date-order",
-        "topo-order",
-        "author-date-order",
-        "pretty",
-        "abbrev",
-        "decorate",
-        "no-decorate",
-        "source",
-        "branches",
-        "tags",
-        "remotes",
-    ],
-    long_values: &[
-        "grep",
-        "author",
-        "committer",
-        "since",
-        "until",
-        "after",
-        "before",
-        "max-count",
-        "skip",
-    ],
-    attached: &[
-        "format", "pretty", "date", "abbrev", "decorate", "branches", "tags", "remotes",
-    ],
-    numbers: true,
-};
-
-/// `git grep`, without `-O` (`--open-files-in-pager`), which runs a
-/// program, and `--textconv`, which runs configured text converters.
-const GIT_GREP: Options = Options {
-    flags: "iIvwnlLchHEFGPoqz",
-    values: "efABCm",
-    long_flags: &[
-        "cached",
-        "untracked",
-        "no-index",
-        "ignore-case",
-        "invert-match",
-        "word-regexp",
-        "line-number",
-        "column",
-        "files-with-matches",
-        "name-only",
-        "files-without-match",
-        "count",
-        "full-name",
-        "extended-regexp",
-        "basic-regexp",
-        "fixed-strings",
-        "perl-regexp",
-        "all-match",
-        "heading",
-        "break",
-        "null",
-        "and",
-        "or",
-        "not",
-        "no-textconv",
-    ],
-    long_values: &[
-        "max-depth",
-        "threads",
-        "context",
-        "after-context",
-        "before-context",
-        "max-count",
-    ],
-    attached: &[],
-    numbers: true,
 };
 
 /// Whether one simple command is a listed program in an admitted form.
@@ -547,107 +448,58 @@ fn command_admitted(words: &[Word]) -> bool {
     }
     let args: Vec<&str> = args.iter().map(|word| word.text.as_str()).collect();
     match program.text.as_str() {
+        // bash, zsh and sh `echo` print their words; an escape they decode
+        // yields text, never a conversion or an evaluation.
         "echo" => true,
-        // `printf -v` writes a variable; a format is never an option.
-        "printf" => {
-            !matches!(args.first(), Some(first) if first.starts_with('-') && *first != "--")
-        }
+        "printf" => printf_admitted(&args),
         "cat" => operands(&CAT, &args).is_some(),
         "head" => operands(&HEAD, &args).is_some(),
         "tail" => operands(&TAIL, &args).is_some(),
         "wc" => operands(&WC, &args).is_some(),
         "grep" => operands(&GREP, &args).is_some(),
         "rg" => rg_admitted(&args),
-        "git" => git_admitted(&args),
-        // The binary itself, by name or path, only in the exact help and
-        // version shapes.
-        path if super::basename(path) == "codeflow" => PRINTS_ONLY
+        // The binary by its bare name only, in the exact help and version
+        // shapes; a path can name any file an agent wrote there.
+        BINARY => PRINTS_ONLY
             .iter()
             .any(|shape| shape.len() == args.len() && shape.iter().zip(&args).all(|(a, b)| a == b)),
         _ => false,
     }
 }
 
-/// `rg` with `--no-config` before any `--`, and each option listed.
-fn rg_admitted(args: &[&str]) -> bool {
-    let end = args
-        .iter()
-        .position(|word| *word == "--")
-        .unwrap_or(args.len());
-    args[..end].contains(&"--no-config") && operands(&RG, args).is_some()
-}
-
-/// `git` with its pager turned off (`--no-pager` or `-P`), only `-C` with
-/// a path and `--no-optional-locks` among its other options, running `log`
-/// or `grep` with each option listed. `-c`, `--git-dir`, `--exec-path` and
-/// every other global option leave the call out.
-fn git_admitted(args: &[&str]) -> bool {
-    let mut pager_off = false;
-    let mut at = 0;
-    let verb = loop {
-        let Some(&word) = args.get(at) else {
-            return false;
-        };
-        at += 1;
-        match word {
-            "--no-pager" | "-P" => pager_off = true,
-            "--no-optional-locks" => {}
-            "-C" => {
-                if args.get(at).is_none() {
-                    return false;
-                }
-                at += 1;
-            }
-            _ if word.starts_with('-') => return false,
-            _ => break word,
-        }
+/// `printf` with a format, after an optional `--`, that holds only literal
+/// text, `%s`, `%%` and the escapes `\n`, `\t` and `\\`
+/// ([`string_format`]), so bash, zsh and sh print every other argument as
+/// a string. Left out: a leading option (`-v` writes a variable), any
+/// numeric conversion (zsh evaluates its argument as arithmetic, and a
+/// subscript there runs a substitution), `%n`, `%b`, a width, precision or
+/// position, and every other escape (zsh decodes an octal or Unicode
+/// escape to `%` before it reads conversions).
+fn printf_admitted(args: &[&str]) -> bool {
+    let format = match args {
+        ["--", format, ..] => format,
+        [format, ..] if !format.starts_with('-') => format,
+        _ => return false,
     };
-    let rest = &args[at..];
-    pager_off
-        && match verb {
-            "log" => {
-                operands(&GIT_LOG, rest).is_some()
-                    && rest.iter().take_while(|word| **word != "--").all(|word| {
-                        word.strip_prefix("--format=")
-                            .or_else(|| word.strip_prefix("--pretty="))
-                            .is_none_or(format_admitted)
-                    })
-            }
-            "grep" => operands(&GIT_GREP, rest).is_some(),
-            _ => false,
-        }
+    string_format(format)
 }
 
-/// A `git log` format that runs nothing: one of Git's own named formats,
-/// or a format string (`format:`, `tformat:` or one holding `%`) with no
-/// signature placeholder (`%G`) and no `%(describe)`. A name Git would look
-/// up as a `pretty.<name>` setting is left out.
-fn format_admitted(value: &str) -> bool {
-    const NAMED: &[&str] = &[
-        "oneline",
-        "short",
-        "medium",
-        "full",
-        "fuller",
-        "reference",
-        "email",
-        "raw",
-        "mboxrd",
-    ];
-    if value.contains("%G") || value.contains("%(describe") {
-        return false;
+/// `rg` whose first argument is `--no-config`, so ripgrep reads it as that
+/// flag (no option before it can take it as a value) and reads no
+/// configuration file, with each later option on [`RG`].
+fn rg_admitted(args: &[&str]) -> bool {
+    match args.split_first() {
+        Some((&"--no-config", rest)) => operands(&RG, rest).is_some(),
+        _ => false,
     }
-    NAMED.contains(&value)
-        || value.starts_with("format:")
-        || value.starts_with("tformat:")
-        || value.contains('%')
 }
 
 /// The operands of a call whose options are each on `options`, read as
-/// getopt reads them: every word before `--` that starts with `-` is an
-/// option, letters may be combined, and a letter that takes a value takes
-/// the rest of its word or the next word. `None` when any option is not
-/// listed.
+/// getopt and ripgrep's parser read them: every word before `--` that
+/// starts with `-` is an option, letters may be combined, and a letter or
+/// long name that takes a value takes the rest of its word or the next
+/// word, whatever that word holds. `None` when any option is not listed,
+/// a long flag carries `=`, or a value is missing.
 fn operands<'a>(options: &Options, args: &[&'a str]) -> Option<Vec<&'a str>> {
     let mut found = Vec::new();
     let mut at = 0;

@@ -8,12 +8,13 @@
 //!
 //! 1. A POSIX line in the closed subset [`admission`] lists is data and
 //!    draws no finding: every command a listed data program (`echo`,
-//!    `printf`, `cat`, `head`, `tail`, `wc`, `grep`, `rg --no-config`, `git
-//!    --no-pager log` or `grep`, and the binary's exact help and version
-//!    shapes), each option on that program's own list, and no construct
-//!    outside the model. Exec-guard also reads the programs a listed Git
-//!    call runs from its configuration, and admits the line only when each
-//!    is one of the audited Git LFS filter shapes ([`audited_git_runner`]).
+//!    `printf` with a format of literal text and `%s`, `cat`, `head`,
+//!    `tail`, `wc`, `grep`, `rg` with `--no-config` first, and the binary by
+//!    its bare name in its exact help and version shapes), each argument
+//!    read by that program's own grammar and proven inert, redirections to
+//!    files or `/dev/null` only, and no construct outside the model. No Git
+//!    call is listed: a search can fetch a missing object through a
+//!    transport its configuration names.
 //! 2. Any other line is read for a run whose text need not hold the
 //!    binary's name with a verb: a word the shell expands where a program
 //!    runs, with a verb after it, or a run inside a quoted argument or an
@@ -44,8 +45,7 @@
 //! A program an agent builds, renames or copies, the verb's words written
 //! to a file and run later, and state the line does not show (an exported
 //! session variable, a shell alias or function from a profile, a program
-//! put first on the path, Git's own signature check through
-//! `log.showSignature`) are not on the line. They are named residuals.
+//! put first on the path) are not on the line. They are named residuals.
 
 mod admission;
 
@@ -323,17 +323,6 @@ const CARGO_VALUE_OPTIONS: &[&str] = &[
     "--test",
 ];
 
-/// The programs Git runs from its configuration that exec-guard admits on
-/// a line [`admission`] admits: the three filters `git lfs install`
-/// writes, each in its exact shape, words split on blanks. Any other
-/// configured program, and a configuration the runner reader cannot read,
-/// has such a line judged on its raw text.
-const AUDITED_GIT_RUNNERS: &[&str] = &[
-    "git-lfs clean -- %f",
-    "git-lfs smudge -- %f",
-    "git-lfs filter-process",
-];
-
 /// An install run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallRun {
@@ -361,17 +350,6 @@ pub fn install_run(command: &str, posix: bool) -> Option<InstallRun> {
         .or_else(|| slashed.as_deref().and_then(|text| find(text, 0)))
         .or_else(|| raw_run(command))
         .or_else(|| slashed.as_deref().and_then(raw_run))
-}
-
-/// Whether `body`, a program a Git call runs from its configuration, is
-/// one of [`AUDITED_GIT_RUNNERS`].
-#[must_use]
-pub(crate) fn audited_git_runner(body: &str) -> bool {
-    AUDITED_GIT_RUNNERS.iter().any(|shape| {
-        shape
-            .split_ascii_whitespace()
-            .eq(body.split_ascii_whitespace())
-    })
 }
 
 /// One simple command: the argument vector from the program on, after
@@ -1413,29 +1391,6 @@ mod tests {
             "cargo build && run tests",
         ] {
             assert!(raw_run(code).is_none(), "{code}");
-        }
-    }
-
-    /// Only the exact filter shapes `git lfs install` writes are audited.
-    #[test]
-    fn only_the_git_lfs_filter_shapes_are_audited_runners() {
-        for body in [
-            "git-lfs clean -- %f",
-            "git-lfs  smudge --  %f",
-            "git-lfs filter-process",
-        ] {
-            assert!(audited_git_runner(body), "{body}");
-        }
-        for body in [
-            "git-lfs clean -- %f; sh",
-            "/usr/bin/git-lfs filter-process",
-            "git-lfs filter-process --skip",
-            "python3 -c 'import os'",
-            "lua -e '' -",
-            "less -R",
-            "",
-        ] {
-            assert!(!audited_git_runner(body), "{body}");
         }
     }
 }
