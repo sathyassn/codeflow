@@ -645,6 +645,60 @@ fn push_and_remote_settings_withhold_the_admission() {
     report(&wrong);
 }
 
+/// AC-1 and AC-5: only an `origin` whose transport programs are accounted
+/// for is admitted: an `https://` URL, which Git serves with its own HTTPS
+/// helper, or a local absolute path. Git starts a remote helper program
+/// named after any other scheme, so such a URL keeps the account finding.
+/// The rows are payload strings; no transport or helper program runs.
+#[test]
+fn unaccounted_transports_withhold_the_admission() {
+    if !isolated("unaccounted_transports_withhold_the_admission") {
+        return;
+    }
+    let lines = rows(&[
+        "git fetch",
+        "git fetch origin",
+        "git push origin HEAD:refs/heads/task/agent-work",
+        "git push origin HEAD",
+    ]);
+    let mut wrong = Vec::new();
+    for url in [
+        // Schemes Git hands to a remote helper program it finds by name.
+        "reviewproto://localhost/example/project.git",
+        "persistent-https://localhost/example/project.git",
+        "ftp://localhost/example/project.git",
+        "HTTPS://localhost/example/project.git",
+        "Https://localhost/example/project.git",
+        // Transports that run a program with its own configuration, or
+        // that are not the admitted ones.
+        "ssh://localhost/example/project.git",
+        "git+ssh://localhost/example/project.git",
+        "localhost:example/project.git",
+        "git://localhost/example/project.git",
+        "file:///example/project.git",
+        "example/project.git",
+        "./project.git",
+    ] {
+        let f = Fixture::with(GH_HELPER, |repo, _| {
+            repo.remote_set_url("origin", url).unwrap();
+        });
+        let before = wrong.len();
+        expect_account(&f.root, &lines, &mut wrong);
+        for entry in &mut wrong[before..] {
+            write!(entry, " [origin {url}]").unwrap();
+        }
+    }
+    // A local absolute path: Git serves it with its own upload and receive
+    // programs, whose configured replacements withhold the admission.
+    let f = Fixture::with(GH_HELPER, |repo, root| {
+        let path = root.parent().unwrap().join("origin.git");
+        repo.remote_set_url("origin", &crate::portable_path::slashed(&path))
+            .unwrap();
+    });
+    expect_pass(&f.root, &lines, &mut wrong);
+    report(&wrong);
+}
+
 /// AC-6 and AC-7: configuration overrides on the line, and program
 /// spellings other than the plain `git` word, withhold the admission.
 #[test]
@@ -1231,6 +1285,74 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
             ));
         }
     }
+    report(&wrong);
+}
+
+/// AC-15: a push into another repository whose authority the guard cannot
+/// read is refused by exec-guard under the rule, explicit refspecs
+/// included, instead of being judged by the session's policy. Here the
+/// session's default branch is `main`, and the other repository's is
+/// `trunk`, whose landed policy does not parse.
+#[test]
+fn a_push_into_an_unreadable_repository_is_refused() {
+    if !isolated("a_push_into_an_unreadable_repository_is_refused") {
+        return;
+    }
+    let f = Fixture::new("");
+    let other = f.parent.join("other");
+    let mut options = git2::RepositoryInitOptions::new();
+    options.initial_head("trunk");
+    let repo = git2::Repository::init_opts(&other, &options).unwrap();
+    let trunk = commit(&repo, "{ not json", None);
+    repo.reference("refs/heads/trunk", trunk, true, "fixture")
+        .unwrap();
+    repo.remote("origin", "https://localhost/example/other.git")
+        .unwrap();
+    repo.reference("refs/remotes/origin/trunk", trunk, true, "fixture")
+        .unwrap();
+    repo.reference_symbolic(
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/trunk",
+        true,
+        "fixture",
+    )
+    .unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let other = crate::portable_path::slashed(&other);
+    let missing = crate::portable_path::slashed(&f.parent.join("missing"));
+    let lines: Vec<String> = [
+        format!("git -C {other} push origin HEAD:refs/heads/trunk"),
+        format!("git -C {other} push origin HEAD:trunk"),
+        format!("git -C {other} push origin trunk"),
+        format!("git -C {other} push origin HEAD:refs/heads/task/agent-work"),
+        format!("git -C {missing} push origin HEAD:refs/heads/task/agent-work"),
+    ]
+    .into();
+    let mut wrong = Vec::new();
+    for row in &lines {
+        let found = verdict(&f.root, row);
+        if !agent_push_refused(&found) {
+            wrong.push(format!(
+                "exec-guard should refuse under {AGENT_PUSH}: {row}: {}",
+                shown(&found)
+            ));
+        }
+        let found = git_guard_verdict(&f.root, row);
+        if !blocked(&found) {
+            wrong.push(format!("git-guard should refuse: {row}: {}", shown(&found)));
+        }
+    }
+    // A fetch there is not a push, and the session's own push is judged
+    // as before.
+    expect_rule_silent(
+        &f.root,
+        &[
+            format!("git -C {other} fetch origin"),
+            "git push origin HEAD:refs/heads/task/agent-work".to_string(),
+        ],
+        &mut wrong,
+    );
     report(&wrong);
 }
 
