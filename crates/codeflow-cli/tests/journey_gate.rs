@@ -270,12 +270,9 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     assert!(trigger.contains(
         "  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n  push:"
     ));
-    // Rulings of 2026-11-11: no line push runs (operator, permanent), and no
-    // pull request or push runs a gate job (a line pull request until the
-    // line gate ships, by the Director; main's while main is relaxed, by the
-    // operator); the gates run on the daily schedule and a manual dispatch.
-    assert!(!trigger.contains("integration/**"));
-    let condition = "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
+    assert!(trigger.contains("integration/**"));
+    // TSK-449: a draft of any base runs no gate job.
+    let condition = "github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
     for id in [
         "gates-build",
         "gates",
@@ -289,7 +286,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     ] {
         assert!(
             job(&workflow, id).contains(condition),
-            "{id} must run for schedules and manual dispatch"
+            "{id} must run for ready integration PRs, main and master PRs, line pushes, schedules and manual dispatch"
         );
     }
     for id in ["gates-verdict", "windows-verdict"] {
@@ -297,8 +294,8 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
             job(&workflow, id)
                 .lines()
                 .any(|line| line
-                    == "    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}"),
-            "{id} must report the selected gate results on schedules and manual dispatch"
+                    == "    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"),
+            "{id} must report the selected gate results on every event but a draft"
         );
     }
     for id in ["secret-scan", "gitleaks-canary", "security-review"] {
@@ -309,7 +306,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
             "{id} runs for every PR"
         );
     }
-    assert!(trigger.contains("    branches: [main, master]\n"));
+    assert!(trigger.contains("    branches: [main, master, \"integration/**\"]"));
     assert!(trigger.contains("  schedule:\n"));
     assert!(trigger.contains("  workflow_dispatch:"));
     assert!(!workflow.contains("  rust:\n"));

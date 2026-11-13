@@ -501,10 +501,7 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    # Rulings of 2026-11-11 (lines until the line gate ships, the Director's;
-    # main while main is relaxed, the operator's): verdicts run only on the
-    # daily schedule and a manual dispatch.
-    DRAFT_NEUTRAL = "${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}"
+    DRAFT_NEUTRAL = "${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"
     VERDICT_IF = (f"    if: {DRAFT_NEUTRAL}\n"
                   "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
@@ -719,10 +716,10 @@ class VerdictOutcomeControls(unittest.TestCase):
 class HostedEventParityControls(unittest.TestCase):
     """Ready integration pull requests must keep both verdict contracts intact."""
 
-    # Director and operator rulings, 2026-11-11: no PR or push runs a gate job.
-    # Restoring main's checks adds clauses for a pull request into main and
-    # a push to main only; no line clause comes back.
-    READY = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+    READY = ("github.event_name == 'pull_request' && !github.event.pull_request.draft && "
+             "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
+             "startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || "
+             "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
 
     def test_both_verdicts_run_for_every_event_but_a_draft(self):
         # TSK-449 AC-6: a draft's verdicts are skipped (neutral); every
@@ -731,19 +728,19 @@ class HostedEventParityControls(unittest.TestCase):
             job = parity.workflow_jobs(WORKFLOW)[name]
             condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
             self.assertEqual(condition, GatePartControls.DRAFT_NEUTRAL)
-        current = f"    if: {GatePartControls.DRAFT_NEUTRAL}\n    name: windows\n"
-        for old, new in ((current, "    if: always()\n    name: windows\n"),
-                         (current, "    if: ${{ always() && !github.event.pull_request.draft }}\n    name: windows\n"),
-                         (current, "    if: ${{ always() && !(github.event_name == 'pull_request' && "
-                                   "github.event.pull_request.draft) }}\n    name: windows\n")):
+        for old, new in (("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: always()\n    name: windows\n"),
+                         ("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: ${{ always() && !github.event.pull_request.draft }}\n    name: windows\n")):
             self.assertIn(old, WORKFLOW)
             problems = parity.windows_verdict_problems(WORKFLOW.replace(old, new))
             self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
 
     def test_a_draft_skips_every_gate_job(self):
-        # Director and operator rulings of 2026-11-11: no pull request, draft
-        # or ready, runs a gate job.
-        self.assertNotIn("pull_request", self.READY)
+        # Every gate job's pull request clause requires a non-draft, whatever
+        # the base, so a draft runs no gate and spends no runner on one.
+        self.assertTrue(self.READY.startswith(
+            "github.event_name == 'pull_request' && !github.event.pull_request.draft && ("))
 
     def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
         trigger = WORKFLOW.split("permissions:", 1)[0]
