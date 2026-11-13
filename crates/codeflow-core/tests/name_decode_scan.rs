@@ -2487,6 +2487,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:push-bounded-lines",
     ),
+    // Reads for-each-ref LF rows once; each row is one exact branch name, never trimmed (TSK-1351).
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "candidate_at",
+        "split_terminator",
+        1,
+        "framing:push-candidate-ref-lines",
+    ),
     // Trims stderr only to explain why the commit inventory is unknown.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
@@ -5253,6 +5261,37 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1351: parses GitHub's check-runs JSON answer; it reads no shell or git name.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "check_runs",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
+    // TSK-1351: parses GitHub's workflow-runs JSON answer for a check suite; it reads no shell or git name.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "producer",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
+    // TSK-1351: shortens a failed `gh` read to its first line for the refusal a person reads; any failure refuses.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "unreadable",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "unreadable",
+        "trim",
+        1,
+        "display",
+    ),
     // TSK-1308: trims a failed `gh pr list` stderr for the refusal a person reads; it decides nothing beyond refusing.
     (
         "crates/codeflow-cli/src/cmd/work.rs",
@@ -6780,6 +6819,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "push-bounded-lines",
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "bounded_by",
+    ),
+    (
+        "push-candidate-ref-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "candidate_at",
     ),
     (
         "recall-index-file-records",

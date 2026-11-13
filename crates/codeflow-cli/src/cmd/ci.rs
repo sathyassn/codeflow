@@ -25,6 +25,7 @@ mod classification;
 mod conflict_markers;
 mod context;
 pub(super) use context::{judged_declared_target, Declared};
+mod candidate;
 mod id_registry;
 mod judging;
 mod line_tip;
@@ -172,7 +173,8 @@ pub struct CiArgs {
     /// its HEAD, branches and tags) from stdin instead of asking it again.
     /// The pre-push hook passes what it already asked. It is the hook's
     /// hand-off, not an authority: a run given it is advisory only, and
-    /// hosted CI never passes it.
+    /// hosted CI never passes it. A landing candidate's run reads the
+    /// destination again itself and refuses when the two reads differ.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
 
@@ -432,6 +434,20 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         }
     };
 
+    // A landing candidate's hand-off without `--into` is refused before the
+    // target is resolved, so its cause is named first (TSK-1351 AC-3).
+    if let Some(refusal) = candidate::unnamed_line(
+        args.pushed_ref.as_deref(),
+        &working.git,
+        args.into.as_deref(),
+    ) {
+        let tagged = vec![refusal];
+        if let Some(out) = &args.blocking_rules_out {
+            write_blocking_rules(out, &tagged);
+        }
+        return report(&tagged, &["landing-candidate"], &[]);
+    }
+
     // Resolve names and pin revisions once before any range rule runs.
     // The working copy's policy finds the range, its work prefixes as its
     // protected branches (see `judging_policy`): the judging policy is read at
@@ -677,10 +693,45 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     } else {
         None
     };
+    // A pushed landing candidate, bound again from this run's own reads
+    // (TSK-1351), is judged as its line's next tip: the records, the
+    // acceptance binding and the line's direct-commit rule read the line,
+    // while the branch-naming check keeps the pushed name.
+    let candidate = candidate::check(
+        &root,
+        args.pushed_ref.as_deref(),
+        configured,
+        (
+            match &authority {
+                Some(Authority::Named(sha)) => Some(sha.as_str()),
+                _ => None,
+            },
+            args.into.as_deref(),
+        ),
+        (base_sha.as_deref(), &head),
+        (destination.as_deref(), advertisement.as_deref()),
+        &mut tagged,
+        &mut ran,
+    );
+    timings.lap("landing-candidate");
+    // Judged as a push of the line itself: the line's records into the
+    // line's own target, the default branch, as the hook hands a line push.
+    // The hand-off's `--into` named the bound line (checked above), so the
+    // line's own target replaces it only after that check.
+    let pushed_name = branch.clone();
+    let (branch, line_target, into, into_flag) = match &candidate {
+        Some(bound) => (
+            bound.line.line.clone(),
+            bound.target.clone(),
+            Some(bound.target.clone()),
+            Some(bound.target.clone()),
+        ),
+        None => (branch, line_target, into, args.into.clone()),
+    };
     let names = Names {
         branch: &branch,
         into: into.as_deref(),
-        into_flag: args.into.as_deref(),
+        into_flag: into_flag.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
         candidate: match &authority {
@@ -721,7 +772,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     let target_tip = target_tip(
         &root,
         &line_target,
-        args.into.as_deref(),
+        into_flag.as_deref(),
         &names,
         &environment,
     );
@@ -753,7 +804,8 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     }
 
     // --- branch-naming check ---------------------------------------------
-    if branch.is_empty() {
+    let branch_name = &pushed_name;
+    if branch_name.is_empty() {
         let finding = codeflow_core::remedy::Finding::new(
             "no branch name resolved; branch-naming check skipped",
             codeflow_core::remedy::CI_BRANCH_UNRESOLVED.remedy(),
@@ -763,9 +815,9 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     } else {
         println!(
             "codeflow ci: branch '{}'",
-            codeflow_core::git::display_text(&branch)
+            codeflow_core::git::display_text(branch_name)
         );
-        if let Some(v) = evaluate_branch(git, &branch) {
+        if let Some(v) = evaluate_branch(git, branch_name) {
             tagged.push(v);
         }
         ran.push("branch-naming");
@@ -785,6 +837,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         &root,
         &line_tip::Run {
             line_tip: args.line_tip.as_deref(),
+            candidate: candidate.as_ref().map(|bound| bound.line.line.as_str()),
             base: base_sha.as_deref(),
             head: &head,
             merge_landing: pr_body.is_some() || pr_context,

@@ -460,7 +460,7 @@ pub const SCHEMA: [KeySpec; 87] = [
         kind: KeyKind::String,
         valid: "a branch name prefix ending in /, such as candidate/, that shares no start with \
                 a git.branch_prefixes entry, integration/ or a protected branch",
-        purpose: "The name prefix of landing candidate branches that `codeflow work remove-candidate` may remove.",
+        purpose: "The name prefix of landing candidate branches: an allowed branch name, judged at pre-push and by `codeflow ci` against the line it is cut from, and removable by `codeflow work remove-candidate`.",
         notes: "Default candidate/. A prefix that equals, contains or is contained by a \
                 git.branch_prefixes entry, integration/, or a protected branch name or the \
                 part of a protected pattern before its first glob character is refused, by \
@@ -472,8 +472,8 @@ pub const SCHEMA: [KeySpec; 87] = [
         path: "git.candidate_search_depth",
         kind: KeyKind::UInt,
         valid: "a positive number of commits",
-        purpose: "How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree.",
-        notes: "Default 200. A tree older than the depth is not found, so the removal is refused. \
+        purpose: "How many commits of first-parent history are searched: a pushed candidate's chain for its line's fetched tip, and the line's history by `codeflow work remove-candidate` for the candidate's tree.",
+        notes: "Default 200. A line tip or tree older than the depth is not found, so the push or the removal is refused. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {

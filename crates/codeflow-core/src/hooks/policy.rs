@@ -859,14 +859,33 @@ impl GitPolicy {
     }
 
     /// `true` when `branch` starts with one of the sanctioned prefixes
-    /// (charter §6.4). Protected branches are exempt — they are governed by
-    /// the protection rules, not naming.
+    /// (charter §6.4) or is a landing candidate
+    /// ([`Self::is_candidate_branch`], TSK-1351). Protected branches are
+    /// exempt — they are governed by the protection rules, not naming.
     #[must_use]
     pub fn branch_name_ok(&self, branch: &str) -> bool {
         if self.branch_is_protected(branch) {
             return true;
         }
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))
+            || self.is_candidate_branch(branch)
+    }
+
+    /// `true` when `branch` is named as a landing candidate: it starts with
+    /// `git.candidate_prefix` and names something after it (TSK-1351). A
+    /// prefix that [`Self::candidate_prefix_problem`] refuses, that does not
+    /// end in `/` or that holds a glob character names no candidate, so a
+    /// policy the schema would refuse never turns other branches into
+    /// candidates. The name only opts a branch in to the candidate binding;
+    /// it grants nothing by itself.
+    #[must_use]
+    pub fn is_candidate_branch(&self, branch: &str) -> bool {
+        let prefix = self.candidate_prefix.as_str();
+        prefix.ends_with('/')
+            && !prefix.contains(['*', '?', '[', '{', '\\'])
+            && self.candidate_prefix_problem().is_none()
+            && branch.len() > prefix.len()
+            && branch.starts_with(prefix)
     }
 
     /// Why `git.candidate_prefix` does not keep landing candidates apart from
@@ -1717,6 +1736,44 @@ mod tests {
         assert!(!g.branch_name_ok("my-cool-branch"));
         // Protected branches are exempt from naming.
         assert!(g.branch_name_ok("main"));
+    }
+
+    /// TSK-1351 AC-1: a landing candidate under `git.candidate_prefix` is an
+    /// allowed name. The PR 600 security review's run-time cases: a prefix
+    /// that differs from a sanctioned one only in case, holds a `*`, or has
+    /// no trailing slash names no candidate, so a policy the schema would
+    /// refuse never makes another branch a candidate.
+    #[test]
+    fn a_landing_candidate_is_an_allowed_branch_name() {
+        let g = GitPolicy::default();
+        assert!(g.is_candidate_branch("candidate/epc-022-c4a"));
+        assert!(g.branch_name_ok("candidate/epc-022-c4a"));
+        assert!(!g.is_candidate_branch("candidate/"), "the prefix alone");
+        assert!(!g.is_candidate_branch("candidates/x"));
+        let land = GitPolicy {
+            candidate_prefix: "land/".into(),
+            ..GitPolicy::default()
+        };
+        assert!(land.branch_name_ok("land/epc-022-c4a"));
+        assert!(!land.branch_name_ok("candidate/epc-022-c4a"));
+        for prefix in ["Task/", "TASK/", "cand*/", "*/", "cand", "candidate"] {
+            let g = GitPolicy {
+                candidate_prefix: prefix.into(),
+                ..GitPolicy::default()
+            };
+            for branch in [
+                format!("{prefix}x"),
+                "task/TSK-001-x".to_string(),
+                "Task/x".to_string(),
+                "candidate-x".to_string(),
+            ] {
+                assert!(
+                    !g.is_candidate_branch(&branch),
+                    "prefix {prefix:?} must name no candidate, named {branch:?}"
+                );
+            }
+        }
+        assert!(!GitPolicy::default().branch_name_ok("Task/x"));
     }
 
     #[test]
