@@ -1200,10 +1200,10 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
         &mut wrong,
     );
     for row in rows(&[
-        "G=git; $G push origin HEAD:refs/heads/integration/EPC-001-line",
+        "P=git; $P push origin HEAD:refs/heads/integration/EPC-001-line",
         "$(printf git) push origin HEAD:refs/heads/integration/EPC-001-line",
-        "$G push origin HEAD:refs/heads/integration/EPC-001-line",
-        "${GIT:-/usr/bin/git} push origin HEAD:refs/heads/integration/EPC-001-line",
+        "$P push origin HEAD:refs/heads/integration/EPC-001-line",
+        "${PROGRAM:-/usr/bin/git} push origin HEAD:refs/heads/integration/EPC-001-line",
         "git $SUB origin HEAD:refs/heads/integration/EPC-001-line",
     ]) {
         let found = verdict(&f.root, &row);
