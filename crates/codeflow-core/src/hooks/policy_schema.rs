@@ -279,8 +279,10 @@ pub const SCHEMA: [KeySpec; 82] = [
                 argument, and the binary by its bare name in its exact help and version forms), \
                 each argument read by that program's own grammar and inert in bash, zsh and \
                 sh, with no assignment, wrapper, substitution, expansion, subshell, \
-                here-document or supplier, and pipes and redirections to plain files or \
-                `/dev/null` only. No Git call is data, since a Git search can fetch a missing \
+                here-document or supplier, with pipes, input read from a named file, and \
+                output redirected only to `/dev/null`, since a target's name does not show \
+                what it is when the line runs. No Git call is data, since a Git search can \
+                fetch a missing \
                 object through a transport its configuration names. Every other line whose \
                 text names the binary with a verb refuses, whatever program reads it, so give \
                 such text to a listed program or leave the binary's name out of a search. A \
