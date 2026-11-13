@@ -129,8 +129,9 @@ const COMMAND_VARIABLES: &[(&str, &[&str])] = &[
 /// clone` they run, as gh's source declares them: `repo clone <repository>
 /// [<directory>] [-- <gitflags>...]`, `repo fork [<repository>] [--
 /// <gitflags>...]` (used when it clones) and `gist clone <gist>
-/// [<directory>] [-- <gitflags>...]`.
-const GH_GIT_COMMANDS: &[(&str, &str)] = &[("gist", "clone"), ("repo", "clone"), ("repo", "fork")];
+/// [<directory>] [-- <gitflags>...]`. Each is its two words joined by one
+/// space.
+const GH_GIT_COMMANDS: &[&str] = &["gist clone", "repo clone", "repo fork"];
 
 /// Editors and a pager whose own command language runs a shell command
 /// (`!` in vi and less, `shell-command` in emacs). Their command options'
@@ -698,8 +699,8 @@ fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool, depth: 
 fn gh_git_arguments(argv: &[String], depth: usize) -> Option<InstallRun> {
     let start = argv.iter().position(|word| word == "--")?;
     let mut words = argv[1..start].iter().filter(|word| !word.starts_with('-'));
-    let command = (words.next()?.as_str(), words.next()?.as_str());
-    if !GH_GIT_COMMANDS.contains(&command) {
+    let command = format!("{} {}", words.next()?, words.next()?);
+    if !GH_GIT_COMMANDS.contains(&command.as_str()) {
         return None;
     }
     argv[start + 1..]
@@ -1347,7 +1348,7 @@ mod tests {
         }
         for command in [
             "less -R notes.txt",
-            "less +G notes.txt",
+            "less +10 notes.txt",
             "vim -c 'set nu' notes.txt",
             "vim +10 notes.txt",
             "emacs --eval '(setq x 1)' notes.txt",

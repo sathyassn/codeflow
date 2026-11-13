@@ -484,7 +484,7 @@ fn command_valued_options_refuse_through_launchers() {
         "export ACK_PAGER='less -R'; ack pattern README.md",
         "export GH_PAGER='less -R'; gh pr list",
         "git -c core.pager='less -R' log -1",
-        "less +G notes.txt",
+        "less +10 notes.txt",
         "vim -c 'set nu' notes.txt",
         "man -P less ls",
         "gh repo clone owner/repo -- --depth 1",
