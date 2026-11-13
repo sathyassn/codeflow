@@ -48,8 +48,9 @@
 //! shell runs, once zsh's precommand modifiers and the `builtin` and
 //! `command` wrappers are removed; a declaration or `unset` behind any
 //! other launcher (`env`, `nice`) runs as a program and changes nothing,
-//! and a wrapper this reader cannot remove leaves the line judged on its
-//! raw text.
+//! one behind `builtin` or a zsh modifier, which some shells lack, never
+//! clears a value, and a wrapper this reader cannot remove leaves the line
+//! judged on its raw text.
 //! The words `gh repo clone`, `gh repo fork` and `gh gist clone` pass to
 //! `git` after `--` are read as quoted arguments are. An editor's own
 //! command (`vim -c`, `emacs
@@ -415,7 +416,11 @@ enum Shell {
     /// Assignments alone, which set their variables in this shell.
     Assigns(Vec<(String, String)>),
     /// The words of the command this shell runs, from its program on.
-    Runs(Vec<String>),
+    /// `portable` is false when a wrapper only some shells know led to it
+    /// (`builtin`, which dash lacks, or a zsh modifier, which bash runs as
+    /// a program): the command then counts where it adds a value, a
+    /// read-only name or an unseen write, never where it clears one.
+    Runs { words: Vec<String>, portable: bool },
     /// Nothing this shell keeps: a `command -v` lookup or a bare wrapper.
     Nothing,
     /// A wrapper the view cannot remove: a `command` option it does not
@@ -465,10 +470,11 @@ fn current_shell(words: &[String]) -> Shell {
         .iter()
         .position(|word| assigned(word).is_none() && !word.contains("+="))
         .unwrap_or(words.len());
-    let mut rest = &words[start..];
-    if rest.is_empty() {
+    let written = &words[start..];
+    if written.is_empty() {
         return Shell::Assigns(words.iter().filter_map(|word| assigned(word)).collect());
     }
+    let mut rest = written;
     loop {
         let before = rest.len();
         while rest.first().is_some_and(|word| is_shell_modifier(word)) {
@@ -479,10 +485,16 @@ fn current_shell(words: &[String]) -> Shell {
             break;
         }
     }
+    let portable = !written[..written.len() - rest.len()]
+        .iter()
+        .any(|word| word == "builtin" || is_shell_modifier(word));
     match rest.first() {
         None => Shell::Nothing,
         Some(program) if program == "command" || unresolved(program) => Shell::Hidden,
-        Some(_) => Shell::Runs(rest.to_vec()),
+        Some(_) => Shell::Runs {
+            words: rest.to_vec(),
+            portable,
+        },
     }
 }
 
@@ -540,24 +552,27 @@ fn read(command: &str, depth: usize) -> Found {
         .collect();
     let clears = one_shell_in_order(command);
     let clears_name = |variable: &str| clears && !fixed.iter().any(|name| name == variable);
-    let set = |pending: &mut Vec<(String, String)>, values: Vec<(String, String)>| {
-        for (variable, value) in values {
-            if clears_name(&variable) {
-                pending.retain(|(name, _)| *name != variable);
+    let set =
+        |pending: &mut Vec<(String, String)>, values: Vec<(String, String)>, portable: bool| {
+            for (variable, value) in values {
+                if portable && clears_name(&variable) {
+                    pending.retain(|(name, _)| *name != variable);
+                }
+                pending.push((variable, value));
             }
-            pending.push((variable, value));
-        }
-    };
+        };
     for command in commands {
         if untracked(&command).unseen {
             unresolved = true;
         }
         let shell = match &command.shell {
             Shell::Assigns(values) => {
-                set(&mut pending, values.clone());
+                set(&mut pending, values.clone(), true);
                 continue;
             }
-            Shell::Runs(words) => words.first().map(|program| (basename(program), words)),
+            Shell::Runs { words, portable } => words
+                .first()
+                .map(|program| (basename(program), words, *portable)),
             Shell::Hidden => {
                 unresolved = true;
                 None
@@ -587,19 +602,19 @@ fn read(command: &str, depth: usize) -> Found {
         // A declaration or an `unset` changes this shell's variables only
         // when this shell runs it; behind another launcher it runs as a
         // program, which reads them as any program does.
-        if let Some((builtin, words)) = shell {
+        if let Some((builtin, words, portable)) = shell {
             if DECLARES.contains(&builtin.as_str()) {
                 let values = words[1..]
                     .iter()
                     .filter_map(|word| assigned(word))
                     .collect();
-                set(&mut pending, values);
+                set(&mut pending, values, portable);
                 continue;
             }
             if builtin == "unset" {
                 // `unset -f` removes functions; any other form removes
                 // variables.
-                if !words[1..].iter().any(|word| word == "-f") {
+                if portable && !words[1..].iter().any(|word| word == "-f") {
                     pending.retain(|(variable, _)| {
                         !(clears_name(variable) && words[1..].contains(variable))
                     });
@@ -762,7 +777,7 @@ struct Untracked {
 fn untracked(command: &Simple) -> Untracked {
     let words = &command.words;
     let shell: &[String] = match &command.shell {
-        Shell::Runs(words) => words,
+        Shell::Runs { words, .. } => words,
         _ => &[],
     };
     let program = shell.first().map(|word| basename(word)).unwrap_or_default();
@@ -1798,7 +1813,9 @@ mod tests {
     /// current-shell wrappers (`builtin`, `command`, `command -p`, `noglob`)
     /// a builtin acts on this shell, and behind any other launcher (`env`,
     /// `nice`, `timeout`) it does not run in this shell at all. A wrapper
-    /// the view cannot remove judges the line on its raw text.
+    /// only some shells know (`builtin`, a zsh modifier) never clears a
+    /// value, and a wrapper the view cannot remove judges the line on its
+    /// raw text.
     #[test]
     fn variable_checks_read_through_current_shell_wrappers() {
         for (variable, line) in [
@@ -1825,6 +1842,11 @@ mod tests {
                 format!("export {variable}=sh; nice export {variable}=less; {line}"),
                 format!("export {variable}=sh; timeout 5 unset {variable}; {line}"),
                 format!("export {variable}=sh; command -x unset {variable}; {line}"),
+                format!("export {variable}=sh; builtin unset {variable}; {line}"),
+                format!("export {variable}=sh; builtin export {variable}=less; {line}"),
+                format!("export {variable}=sh; noglob unset {variable}; {line}"),
+                format!("export {variable}=sh; - unset {variable}; {line}"),
+                format!("export {variable}=sh; command builtin unset {variable}; {line}"),
             ] {
                 assert!(runs(&form), "{form}");
             }
@@ -1836,8 +1858,9 @@ mod tests {
             "export NOTE=1; builtin unset NOTE; gh search issues 'codeflow update'",
             "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
             "export GH_PAGER=sh; command -p unset GH_PAGER; gh search issues 'codeflow update'",
-            "export ACK_PAGER=sh; builtin unset ACK_PAGER; ack 'codeflow update' docs",
-            "export GH_PAGER=sh; builtin export GH_PAGER=less; gh search issues 'codeflow update'",
+            "export ACK_PAGER=sh; command unset ACK_PAGER; ack 'codeflow update' docs",
+            "export GH_PAGER=sh; command export GH_PAGER=less; gh search issues 'codeflow update'",
+            "export NOTE=1; noglob unset NOTE; gh search issues 'codeflow update'",
         ] {
             assert!(!runs(command), "{command}");
         }
