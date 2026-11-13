@@ -7648,6 +7648,21 @@ pub(crate) fn git_runner_bodies(
         .collect())
 }
 
+/// [`git_runner_bodies`], each command with whether Git hands it output,
+/// a file or an address to read (a pager, editor, browser, manual viewer,
+/// diff filter, text converter or `grep -O` program), which exec-guard
+/// judges as a viewer (TSK-1476).
+///
+/// # Errors
+///
+/// Why a runner, its command or its directory cannot be read.
+pub(crate) fn git_runner_kinds(command: &str, cwd: &Path) -> Result<Vec<(String, bool)>, String> {
+    Ok(runners::read(command, cwd)?
+        .into_iter()
+        .map(|body| (body.command, body.fed))
+        .collect())
+}
+
 /// The environment variables whose value is a program Git runs, as the
 /// runner catalog lists them.
 pub(crate) fn git_program_environment() -> impl Iterator<Item = &'static str> {

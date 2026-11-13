@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 pub(super) struct Body {
     pub command: String,
     pub directory: PathBuf,
+    /// Whether Git hands the program its output, a file or an address to
+    /// read: a pager, an editor, a browser, a manual viewer, the
+    /// interactive diff filter, a text converter or `grep -O`.
+    pub fed: bool,
 }
 
 #[derive(Default)]
@@ -600,12 +604,15 @@ fn config_environment(
         .collect()
 }
 
+/// The configured and environment programs a Git call runs, each with
+/// whether Git hands it output, a file or an address to read
+/// ([`catalog::fed`], [`catalog::FED_ENVIRONMENT`]).
 fn configured_commands(
     args: &[String],
     cwd: &Path,
     env: &crate::security::git_config::Environment,
     earlier: &[PathBuf],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<(String, bool)>, String> {
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(Vec::new());
     };
@@ -661,7 +668,10 @@ fn configured_commands(
                 continue;
             }
             // Helpers and custom submodule updates use a leading shell marker.
-            commands.push(value.strip_prefix('!').unwrap_or(value).to_string());
+            commands.push((
+                value.strip_prefix('!').unwrap_or(value).to_string(),
+                catalog::fed(key),
+            ));
         }
     }
     for source in catalog::SOURCES {
@@ -689,7 +699,7 @@ fn configured_commands(
                 },
             };
             if let Some(value) = value.filter(|value| !value.is_empty()) {
-                commands.push(value);
+                commands.push((value, catalog::FED_ENVIRONMENT.contains(name)));
             }
         }
     }
@@ -995,6 +1005,7 @@ fn external_body(
     Ok(Some(Body {
         command: quote_words(&words),
         directory: at,
+        fed: false,
     }))
 }
 
@@ -1789,11 +1800,12 @@ fn note_segment(
 }
 
 /// Read the command bodies and callbacks a runner starts, each from the
-/// directories it runs in.
+/// directories it runs in, each with whether Git hands it output to read
+/// ([`Body::fed`]).
 fn descend(
     runner: &Runner<'_>,
     args: &[String],
-    [commands, configured]: [&Vec<String>; 2],
+    [commands, configured]: [&Vec<(String, bool)>; 2],
     bodies: &mut Vec<Body>,
 ) -> Result<(), String> {
     let child = Inputs::child(args, runner.env)?;
@@ -1807,11 +1819,12 @@ fn descend(
             directories(args, runner.at, runner.env)?
         };
         for dir in dirs {
-            for command in commands {
+            for (command, fed) in commands {
                 collect(command, &dir, runner.depth + 1, &child, bodies)?;
                 bodies.push(Body {
                     command: command.clone(),
                     directory: dir.clone(),
+                    fed: *fed,
                 });
             }
         }
@@ -2248,13 +2261,24 @@ fn collect(
                 bodies.push(Body {
                     command: normalized_command(&args, &env),
                     directory: at.clone(),
+                    fed: false,
                 });
             }
             bodies.extend(external_body(&args, &at, &env)?);
             note_config_write(&args, &mut changed_sources, &mut changed_aliases);
-            let mut commands = commands(&args)?;
+            // `grep -O` is grep's one command option: a pager given the
+            // matching files.
+            let fed = git_subcommand(&args).is_some_and(|(verb, _)| verb == "grep");
+            let mut commands: Vec<(String, bool)> = commands(&args)?
+                .into_iter()
+                .map(|command| (command, fed))
+                .collect();
             let configured = configured_commands(&args, &at, &env, &earlier)?;
-            commands.extend(saved_commands(&args, &at, &env, &earlier)?);
+            commands.extend(
+                saved_commands(&args, &at, &env, &earlier)?
+                    .into_iter()
+                    .map(|command| (command, false)),
+            );
             if option_spec(git_subcommand(&args).map_or("", |(verb, _)| verb)).is_some()
                 || !commands.is_empty()
                 || !configured.is_empty()

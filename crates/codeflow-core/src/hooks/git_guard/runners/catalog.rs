@@ -186,6 +186,43 @@ pub(super) fn config_matches(key: &str, pattern: &str) -> bool {
     }
 }
 
+/// The configured programs Git hands its output, a file or an address to
+/// read, as git-config(1) describes each: pagers, editors, browsers
+/// (`git web--browse`), manual viewers (`git help`), the interactive diff
+/// filter and text converters (gitattributes(5)). Exec-guard judges each
+/// as a viewer.
+const FED_CONFIG: &[&str] = &[
+    "core.pager",
+    "pager.*",
+    "core.editor",
+    "sequence.editor",
+    "browser.*.path",
+    "browser.*.cmd",
+    "man.*.path",
+    "man.*.cmd",
+    "interactive.difffilter",
+    "diff.*.textconv",
+];
+
+/// The environment programs Git hands its output or a file to read: its
+/// pagers and editors.
+pub(super) const FED_ENVIRONMENT: &[&str] = &[
+    "GIT_PAGER",
+    "PAGER",
+    "GIT_EDITOR",
+    "GIT_SEQUENCE_EDITOR",
+    "EDITOR",
+    "VISUAL",
+];
+
+/// Whether Git hands the program the setting `key` names its output, a
+/// file or an address to read ([`FED_CONFIG`]).
+pub(super) fn fed(key: &str) -> bool {
+    FED_CONFIG
+        .iter()
+        .any(|pattern| config_matches(key, pattern))
+}
+
 /// The environment variables whose value is a program Git runs.
 pub(super) fn environment_names() -> impl Iterator<Item = &'static str> {
     SOURCES.iter().filter_map(|source| match source {

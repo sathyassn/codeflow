@@ -37,12 +37,16 @@
 //! program (`ack` and `ag` `--pager`, `rg --pre`, by any prefix of the
 //! option's name) is judged as the program runs its value: a command line,
 //! through this same reader, or one program given each searched path. A
-//! pager, editor or browser variable assigned before a program that runs
-//! it, or earlier on the line, is judged the same way. Such a value is
-//! data only when it names a viewer known to run nothing it is given
-//! (`less`, `cat`, an editor, a browser); any other program leaves the
-//! line judged on its raw text, and so does a live variable that gives
-//! such a program options or a settings file.
+//! pager, editor, browser or preprocessor variable assigned before a
+//! program that runs it, or earlier on the line, is judged the same way,
+//! and so is each pager, editor, browser and text converter a Git call on
+//! the line runs. One check decides all of these: such a value is data
+//! only when each program it names is a viewer known to run nothing it is
+//! given (`less`, `cat`, an editor, a browser), with each option on that
+//! viewer's own list and no operand but `-`. Any other program or option
+//! leaves the line judged on its raw text, and so does a live variable
+//! that gives such a program options, start-up commands or a settings
+//! file.
 //! An assignment anywhere on the line is live for the whole line, and any
 //! program on it that can start another one (a shell, a Git alias,
 //! `find -exec`) judges every such variable, since the program it starts
@@ -905,26 +909,33 @@ const SET_OPTIONS: &[&str] = &[
     "xtrace",
 ];
 
-/// Variables that give a search or forge program, or a pager it runs,
-/// options or a settings file, which can name a program it runs. Live on
-/// the line for a program that may start another, each leaves the line
-/// judged on its raw text.
+/// Variables that give a search or forge program, or a viewer it runs
+/// ([`VIEWERS`]), options, start-up commands, a settings file or a pager
+/// of its own, which can name a program it runs. Live on the line for a
+/// program that may start another, each leaves the line judged on its raw
+/// text.
 const OPTIONS_VARIABLES: &[&str] = &[
     "ACKRC",
     "ACK_OPTIONS",
+    "BAT_CONFIG_PATH",
+    "BAT_PAGER",
+    "EXINIT",
     "GH_CONFIG_DIR",
+    "GVIMINIT",
     "LESS",
     "LESSKEY",
     "LESSKEYIN",
     "LESSKEY_CONTENT",
     "MORE",
+    "NVIM_APPNAME",
     "RIPGREP_CONFIG_PATH",
+    "VIMINIT",
     "XDG_CONFIG_HOME",
 ];
 
-/// The command variables a program hands its output or a file to read:
-/// pagers, editors and browsers. Their values are judged by
-/// [`fed_value`].
+/// The command variables a program hands its output, a file or an
+/// address to read: pagers, editors, browsers and less's input
+/// preprocessor. Their values are judged by [`fed_input`].
 const FED_VARIABLES: &[&str] = &[
     "ACK_PAGER",
     "ACK_PAGER_COLOR",
@@ -937,71 +948,247 @@ const FED_VARIABLES: &[&str] = &[
     "GIT_EDITOR",
     "GIT_PAGER",
     "GIT_SEQUENCE_EDITOR",
+    "LESSCLOSE",
+    "LESSOPEN",
     "MANPAGER",
     "PAGER",
     "VISUAL",
 ];
 
-/// Programs known to show, convert or open what they are given and run
-/// nothing from it: pagers and text filters, the converters a search
-/// preprocessor names, editors given a file and browsers given an
-/// address. A pager, editor, browser or preprocessor value naming any
-/// other program, such as an interpreter that reads its input as code,
-/// leaves the line judged on its raw text.
-const VIEWERS: &[&str] = &[
-    ":",
-    "bat",
-    "batcat",
-    "bzcat",
-    "cat",
-    "chromium",
-    "code",
-    "code-insiders",
-    "codium",
-    "cursor",
-    "delta",
-    "diff-highlight",
-    "diff-so-fancy",
-    "echo",
-    "emacs",
-    "emacsclient",
-    "false",
-    "firefox",
-    "gedit",
-    "google-chrome",
-    "gzcat",
-    "head",
-    "hx",
-    "kak",
-    "kate",
-    "less",
-    "links",
-    "lynx",
-    "mate",
-    "micro",
-    "moar",
-    "more",
-    "most",
-    "nano",
-    "nvim",
-    "open",
-    "ov",
-    "pdftotext",
-    "pico",
-    "subl",
-    "tail",
-    "true",
-    "vi",
-    "view",
-    "vim",
-    "w3m",
-    "wslview",
-    "xdg-open",
-    "xzcat",
-    "ydiff",
-    "zcat",
-    "zed",
-    "zstdcat",
+/// A program known to show, convert or open what it is given and run
+/// nothing from it, with the options it is admitted with, each read from
+/// its manual: flag letters, letters that take a value (attached or the
+/// next word), long options matched exactly, and long options that take
+/// a value (after `=` or the next word). Any other option, an operand
+/// other than `-` (its input), or a `+` word is not admitted.
+struct Viewer {
+    names: &'static [&'static str],
+    flags: &'static str,
+    values: &'static str,
+    long: &'static [&'static str],
+    long_values: &'static [&'static str],
+}
+
+/// A [`Viewer`] admitted with no option.
+const fn bare(names: &'static [&'static str]) -> Viewer {
+    Viewer {
+        names,
+        flags: "",
+        values: "",
+        long: &[],
+        long_values: &[],
+    }
+}
+
+/// The programs a pager, editor, browser or preprocessor value may name
+/// ([`fed_input`]), each with its admitted options. A program whose ways
+/// of running code cannot be listed from its manual is left out, so a
+/// value naming it leaves the line judged on its raw text: Emacs and
+/// `emacsclient` (Lisp from `--script`, `-l`, `--eval`, `-batch` and an
+/// alternate editor), Kakoune (`-e` commands), text browsers whose
+/// settings run programs (`lynx`, `links`, `w3m`), `delta` (which runs
+/// the pager its Git settings name), and pagers whose options are not
+/// listed here (`moar`, `most`, `ov`, `ydiff`).
+const VIEWERS: &[Viewer] = &[
+    // POSIX `:`, `true` and `false` run nothing and take no option.
+    bare(&[":", "true", "false"]),
+    // cat(1), GNU coreutils and BSD: numbering, marking and squeezing.
+    Viewer {
+        names: &["cat"],
+        flags: "AbeElnstTuv",
+        values: "",
+        long: &[
+            "--number",
+            "--number-nonblank",
+            "--show-all",
+            "--show-ends",
+            "--show-nonprinting",
+            "--show-tabs",
+            "--squeeze-blank",
+        ],
+        long_values: &[],
+    },
+    // echo(1) and bash's echo: `-n`, `-e` and `-E` escape handling.
+    Viewer {
+        names: &["echo"],
+        flags: "eEn",
+        values: "",
+        long: &[],
+        long_values: &[],
+    },
+    // head(1) and tail(1), GNU coreutils and BSD: a count of lines or
+    // bytes, headers, and tail's follow and reverse modes.
+    Viewer {
+        names: &["head"],
+        flags: "qv",
+        values: "cn",
+        long: &["--quiet", "--silent", "--verbose"],
+        long_values: &["--bytes", "--lines"],
+    },
+    Viewer {
+        names: &["tail"],
+        flags: "fFqrv",
+        values: "cn",
+        long: &["--follow", "--quiet", "--silent", "--verbose"],
+        long_values: &["--bytes", "--lines"],
+    },
+    // Decompressors that write to standard output: no option.
+    bare(&["bzcat", "gzcat", "xzcat", "zcat", "zstdcat"]),
+    // less(1) OPTIONS: display, search, prompt and exit options, and
+    // `-L` (no input preprocessor). Not admitted: `-k` and the lesskey
+    // options (key bindings, which can run a shell), `-o` and `-O` (log
+    // files), `-t` and `-T` (tags), `-p`, `-P`, `-D` and `+` (commands
+    // run at start).
+    Viewer {
+        names: &["less"],
+        flags: "aAcdeEfFgGiIJKLmMnNqQrRsSuUwWX",
+        values: "bhjxyz",
+        long: &[
+            "--chop-long-lines",
+            "--clear-screen",
+            "--HILITE-UNREAD",
+            "--hilite-unread",
+            "--IGNORE-CASE",
+            "--ignore-case",
+            "--LINE-NUMBERS",
+            "--line-numbers",
+            "--LONG-PROMPT",
+            "--long-prompt",
+            "--mouse",
+            "--no-init",
+            "--no-lessopen",
+            "--QUIET",
+            "--quiet",
+            "--QUIT-AT-EOF",
+            "--quit-at-eof",
+            "--quit-if-one-screen",
+            "--quit-on-intr",
+            "--RAW-CONTROL-CHARS",
+            "--raw-control-chars",
+            "--SILENT",
+            "--silent",
+            "--squeeze-blank-lines",
+            "--status-column",
+            "--use-color",
+        ],
+        long_values: &[
+            "--buffers",
+            "--jump-target",
+            "--max-back-scroll",
+            "--max-forw-scroll",
+            "--tabs",
+            "--window",
+        ],
+    },
+    // more(1), util-linux, and macOS's less in its more mode: display
+    // options shared by both. Not admitted: `+` (a start line or search).
+    Viewer {
+        names: &["more"],
+        flags: "cdflpsu",
+        values: "",
+        long: &[],
+        long_values: &[],
+    },
+    // bat(1): plain style, numbers, shown characters, paging mode,
+    // color, style, language, theme, tabs and wrapping. Not admitted:
+    // `--pager` (a command it runs) or any other option.
+    Viewer {
+        names: &["bat", "batcat"],
+        flags: "AnpP",
+        values: "l",
+        long: &["--number", "--plain", "--show-all"],
+        long_values: &[
+            "--color",
+            "--decorations",
+            "--language",
+            "--paging",
+            "--style",
+            "--tabs",
+            "--theme",
+            "--wrap",
+        ],
+    },
+    // Git diff filters: diff-so-fancy's `--patch` (its README, for
+    // `interactive.diffFilter`) and diff-highlight with no option.
+    Viewer {
+        names: &["diff-so-fancy"],
+        flags: "",
+        values: "",
+        long: &["--patch"],
+        long_values: &[],
+    },
+    bare(&["diff-highlight"]),
+    // vim(1) OPTIONS, also nvim(1) and vi: read-only, no-modify,
+    // no-write, no-swap, binary, restricted, diff and foreground modes,
+    // and window layout. Not admitted: `-c`, `--cmd`, `-S`, `-s`, `-u`,
+    // `-U`, `-e`, `-E`, `-i`, `-w`, `-W`, `-y` and `+` (commands, scripts,
+    // settings files and Ex mode, which reads commands from its input).
+    Viewer {
+        names: &["nvim", "vi", "view", "vim"],
+        flags: "bdfmMnoOpRZ",
+        values: "",
+        long: &["--clean", "--noplugin", "--not-a-term"],
+        long_values: &[],
+    },
+    // Editors that open a window, given a file by an editor variable:
+    // wait for it to close, or choose a window (`code --help`, `subl
+    // --help`, `zed --help`, `mate -h`, `gedit --help`, `kate --help`).
+    Viewer {
+        names: &["code", "code-insiders", "codium", "cursor"],
+        flags: "nrw",
+        values: "",
+        long: &["--new-window", "--reuse-window", "--wait"],
+        long_values: &[],
+    },
+    Viewer {
+        names: &["subl"],
+        flags: "nw",
+        values: "",
+        long: &["--new-window", "--wait"],
+        long_values: &[],
+    },
+    Viewer {
+        names: &["zed"],
+        flags: "nw",
+        values: "",
+        long: &["--new", "--wait"],
+        long_values: &[],
+    },
+    Viewer {
+        names: &["mate"],
+        flags: "w",
+        values: "",
+        long: &["--wait"],
+        long_values: &[],
+    },
+    Viewer {
+        names: &["gedit"],
+        flags: "sw",
+        values: "",
+        long: &["--new-window", "--standalone", "--wait"],
+        long_values: &[],
+    },
+    Viewer {
+        names: &["kate"],
+        flags: "bn",
+        values: "",
+        long: &["--block", "--new"],
+        long_values: &[],
+    },
+    // Terminal editors given a file: no option.
+    bare(&["hx", "micro", "nano", "pico"]),
+    // Browsers given an address and openers that hand it to the default
+    // program: no option (`open -a` names any application).
+    bare(&[
+        "chromium",
+        "firefox",
+        "google-chrome",
+        "open",
+        "wslview",
+        "xdg-open",
+    ]),
+    // pdftotext(1) as a search preprocessor: no option.
+    bare(&["pdftotext"]),
 ];
 
 /// One search program's options known to run nothing: its flag letters,
@@ -1584,14 +1771,14 @@ fn set_admitted(args: &[String], marks: &[bool]) -> bool {
 /// its raw text. A value the program runs as a command is judged as an
 /// option's command line is ([`command_line_value`]), so a command this
 /// reader cannot resolve, such as a shell reading its input, leaves the
-/// line judged on its raw text; a pager, editor or browser value must
-/// also name a viewer ([`fed_value`]). Any other value is read for a run
-/// only.
+/// line judged on its raw text; a pager, editor, browser or preprocessor
+/// value must also name an admitted viewer ([`fed_input`]). Any other
+/// value is read for a run only.
 fn assignment_value(program: &str, variable: &str, value: &str, depth: usize) -> Found {
     if reads_options(program, variable) {
         Found::Unresolved
     } else if runs_variable(program, variable) && FED_VARIABLES.contains(&variable) {
-        fed_value(value, depth)
+        fed_input(value, depth)
     } else if runs_variable(program, variable) {
         command_line_value(value, depth)
     } else {
@@ -1599,32 +1786,93 @@ fn assignment_value(program: &str, variable: &str, value: &str, depth: usize) ->
     }
 }
 
-/// A command line a program hands its output or a file to read: judged as
-/// [`command_line_value`] judges it, and unresolved unless each of its
-/// commands is a [`VIEWERS`] program, written as it stands, with no
-/// assignment before it and no command of its own (an editor's `-c`,
-/// `--eval` or `+` word).
-fn fed_value(value: &str, depth: usize) -> Found {
+/// The one judgement of a program another program hands its output, a
+/// file or an address to read: a pager, an editor, a browser or a
+/// preprocessor. The value is judged as [`command_line_value`] judges
+/// it, and is unresolved unless it is empty or each of its commands is
+/// a viewer written as it stands, with no assignment before it, that
+/// [`viewer_admits`]. Its callers: [`assignment_value`] for
+/// [`FED_VARIABLES`], [`runs_through_option`] for a search program's
+/// pager, [`program_path_value`] for its preprocessor, and
+/// [`unresolved_fed_command`] for the pagers, editors, browsers and
+/// converters Git runs.
+fn fed_input(value: &str, depth: usize) -> Found {
     match command_line_value(value, depth) {
-        Found::Nothing if !simple(value).iter().all(views_only) => Found::Unresolved,
+        Found::Nothing if value.trim().is_empty() => Found::Nothing,
+        Found::Nothing => {
+            let commands = simple(value);
+            if !commands.is_empty() && commands.iter().all(views_only) {
+                Found::Nothing
+            } else {
+                Found::Unresolved
+            }
+        }
         found => found,
     }
 }
 
-/// Whether `command` is a viewer run as written ([`fed_value`]).
+/// Whether `command` is an admitted viewer run as written ([`fed_input`]).
 fn views_only(command: &Simple) -> bool {
     command.values.is_empty()
         && matches!(&command.shell, Shell::Runs { written, .. } if !written.contains(&false))
-        && command
-            .argv
-            .first()
-            .is_some_and(|program| VIEWERS.contains(&basename(program).as_str()))
-        && !command.argv[1..].iter().any(|word| {
-            word.starts_with('+')
-                || EDITOR_COMMAND_OPTIONS
+        && viewer_admits(&command.argv)
+}
+
+/// Whether `argv` runs a [`VIEWERS`] program with only the options it is
+/// admitted with and no operand other than `-`.
+fn viewer_admits(argv: &[String]) -> bool {
+    let Some(viewer) = argv.first().and_then(|program| {
+        let name = basename(program);
+        VIEWERS
+            .iter()
+            .find(|viewer| viewer.names.contains(&name.as_str()))
+    }) else {
+        return false;
+    };
+    let mut words = argv[1..].iter();
+    while let Some(word) = words.next() {
+        let admitted = if word == "-" {
+            true
+        } else if let Some(long) = word.strip_prefix("--") {
+            let takes_value = |name: &str| {
+                viewer
+                    .long_values
                     .iter()
-                    .any(|option| word.split('=').next() == Some(*option))
-        })
+                    .any(|option| option.strip_prefix("--") == Some(name))
+            };
+            match long.split_once('=') {
+                Some((name, _)) => takes_value(name),
+                None if viewer.long.contains(&word.as_str()) => true,
+                None => takes_value(long) && words.next().is_some(),
+            }
+        } else if let Some(letters) = word.strip_prefix('-') {
+            short_options_admitted(viewer, letters, &mut words)
+        } else {
+            false
+        };
+        if !admitted {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a viewer's cluster of option letters is admitted: each a flag,
+/// up to a letter that takes a value, attached or the next word.
+fn short_options_admitted<'a>(
+    viewer: &Viewer,
+    letters: &str,
+    words: &mut impl Iterator<Item = &'a String>,
+) -> bool {
+    for (at, letter) in letters.char_indices() {
+        if viewer.values.contains(letter) {
+            return at + letter.len_utf8() < letters.len() || words.next().is_some();
+        }
+        if !viewer.flags.contains(letter) {
+            return false;
+        }
+    }
+    true
 }
 
 /// A run inside a quoted argument or an assignment's value, read as a
@@ -1788,7 +2036,7 @@ fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool, depth: 
                 });
             }
             let judged = match runs {
-                OptionValue::CommandLine => fed_value(value, depth),
+                OptionValue::CommandLine => fed_input(value, depth),
                 OptionValue::ProgramPath => {
                     program_path_value(value, argv, value_at + 1, written, depth)
                 }
@@ -1901,9 +2149,10 @@ fn command_line_value(value: &str, depth: usize) -> Found {
 /// A program path an option's value names, run with each word of `argv`
 /// from `from` on that is not an option as its argument and the searched
 /// file on its input, so a supplier there adds words of its own. A value
-/// naming the binary refuses whatever it is given. A value holding a blank
-/// names no program the search program can find, so it is also read as a
-/// command line, which fails closed.
+/// naming the binary refuses whatever it is given. The value is judged as
+/// a preprocessor by [`fed_input`], so it must name an admitted viewer; a
+/// value holding a blank names no program the search program can find and
+/// fails closed there.
 fn program_path_value(
     value: &str,
     argv: &[String],
@@ -1922,11 +2171,7 @@ fn program_path_value(
             in_argument: false,
         });
     }
-    let mut found = if value.contains(shell_blank) {
-        command_line_value(value, depth)
-    } else {
-        Found::Nothing
-    };
+    let mut found = fed_input(value, depth);
     if matches!(found, Found::Run(_)) {
         return found;
     }
@@ -1941,10 +2186,6 @@ fn program_path_value(
             Found::Unresolved => found = Found::Unresolved,
             Found::Nothing => {}
         }
-    }
-    // A program that is not a viewer may run the file it is given as code.
-    if matches!(found, Found::Nothing) && !VIEWERS.contains(&basename(first).as_str()) {
-        return Found::Unresolved;
     }
     found
 }
@@ -2203,6 +2444,15 @@ fn starts_a_command(before: &[String]) -> bool {
 #[must_use]
 pub(crate) fn unresolved_command(command: &str) -> bool {
     matches!(command_line_value(command, 0), Found::Unresolved)
+}
+
+/// Whether `command`, a program another program hands its output, a file
+/// or an address to read (such as a Git pager, editor or text converter
+/// setting), is not an admitted viewer ([`fed_input`]). The line that
+/// starts it is then judged on its raw text.
+#[must_use]
+pub(crate) fn unresolved_fed_command(command: &str) -> bool {
+    matches!(fed_input(command, 0), Found::Unresolved)
 }
 
 /// The raw-text judgement for a line that could not be resolved, and for
@@ -3026,6 +3276,56 @@ mod tests {
         }
         for command in ["less", "less -R", "cat", "delta --dark", ""] {
             assert!(!unresolved_command(command), "{command}");
+        }
+    }
+
+    /// A program another program hands its output or a file to read, such
+    /// as a Git pager, editor or text converter setting, is unresolved
+    /// unless it is an admitted viewer with its listed options.
+    #[test]
+    fn a_program_handed_output_is_unresolved_unless_an_admitted_viewer() {
+        for command in [
+            "perl",
+            "python3",
+            "node",
+            "ruby",
+            "awk -f /dev/stdin",
+            "sh",
+            "emacs",
+            "emacs --script /dev/stdin",
+            "vim -S x.vim",
+            "vim -es",
+            "less -k keys",
+            "less notes.txt",
+            "less +!sh",
+            "delta",
+            "bat --pager perl",
+            "LESSOPEN=x less",
+            "$PAGER",
+            "code --wait --install-extension x",
+        ] {
+            assert!(unresolved_fed_command(command), "{command}");
+        }
+        for command in [
+            "",
+            ":",
+            "true",
+            "cat",
+            "less",
+            "less -R",
+            "less -FRX",
+            "less -x4 -R",
+            "less --tabs=4 -RFX",
+            "diff-so-fancy | less --tabs=4 -RFX",
+            "vim",
+            "vim -R -",
+            "nvim --clean",
+            "code --wait",
+            "subl -w",
+            "bat -p --paging=always",
+            "/usr/bin/firefox",
+        ] {
+            assert!(!unresolved_fed_command(command), "{command}");
         }
     }
 
