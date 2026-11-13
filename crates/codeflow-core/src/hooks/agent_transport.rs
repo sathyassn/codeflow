@@ -23,10 +23,11 @@
 //! characters, blanks and, for a push, `:`, so a quote, an expansion, an
 //! assignment, a launcher, a redirection or a second command fails it. The
 //! repository the line names must have exactly one remote, `origin`, with
-//! one URL that no rewrite changes, and none of the push, mirror or
-//! submodule settings that would widen what the command does. A pushed name
-//! must sit under a work-branch prefix of the landed policy, read at
-//! `origin`'s default branch, and must not be protected, an integration
+//! one URL that no rewrite changes, on a transport whose programs are
+//! accounted for (`https://` or a local absolute path), and none of the
+//! push, mirror or submodule settings that would widen what the command
+//! does. A pushed name must sit under a work-branch prefix of the landed
+//! policy, read at `origin`'s default branch, and must not be protected, an integration
 //! line, a release branch, the ID registry, `origin`'s default branch,
 //! `main`, `master` or a name `git.agent_push_refused_branches` lists.
 //! git-guard and exec-guard refuse a push of that list's names and of the
@@ -355,16 +356,39 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
     }
 }
 
-/// Whether Git may be given `url` for the admission: not plain-text HTTP,
-/// which would send the token in the clear, and no remote-helper form
-/// (`<transport>::<address>`), which runs another program.
+/// Whether Git may be given `url` for the admission: only a transport whose
+/// programs are accounted for. That is an `https://` URL, which Git serves
+/// with the HTTPS helper it ships, or a local absolute path, which Git
+/// serves with its own upload and receive programs (a configured
+/// replacement for either is a runner body that is not a credential helper,
+/// which withholds the admission). Every other URL refuses: Git starts a
+/// remote helper program named after any other scheme, a scheme spelled in
+/// another case or a `<transport>::<address>` form; SSH starts `ssh` with
+/// its own configuration; and plain-text HTTP would send the token in the
+/// clear.
 fn url_allowed(url: &str) -> bool {
-    !url.is_empty()
-        && !url.contains("::")
-        && !url.starts_with('-')
-        && !url
-            .get(..7)
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+    if url.contains("::") {
+        return false;
+    }
+    match url.strip_prefix("https://") {
+        Some(rest) => !rest.is_empty(),
+        None => !url.contains("://") && local_absolute_path(url),
+    }
+}
+
+/// Whether Git reads `url` as a local absolute path: a leading `/`, or on
+/// Windows a drive letter, `:` and a separator. Elsewhere Git reads
+/// `C:/x` as an SSH address, so a drive path is local only on Windows.
+fn local_absolute_path(url: &str) -> bool {
+    if url.starts_with('/') {
+        return true;
+    }
+    let bytes = url.as_bytes();
+    cfg!(windows)
+        && bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 /// The credential helpers Git runs for `url`, in order, as Git's credential
