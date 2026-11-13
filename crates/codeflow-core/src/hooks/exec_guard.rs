@@ -435,7 +435,8 @@ pub(crate) fn install_violation(
                 " (the line is outside the forms the guard reads as data, and a `printf`, \
                  `echo`, `print` or `$'...'` word on it holds an escape, a conversion other \
                  than a bare `%s`, a width, precision or flag, an expansion `echo` may decode, \
-                 or more arguments than conversions, so the guard cannot tell whether what it \
+                 a value the line sets that the guard cannot resolve exactly, or more \
+                 arguments than conversions, so the guard cannot tell whether what it \
                  writes names the binary with an install verb; write the text literally, as \
                  `printf '%s\\n' words` or `echo words`, or write the file with the file editor)"
             } else if !run.parsed {

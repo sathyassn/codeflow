@@ -25,8 +25,11 @@
 //!    followed by `run` or `r` and then a verb. So any line outside the
 //!    subset that names the binary with a verb refuses. The same match is
 //!    made on the texts the line produces ([`produced`]): its words as the
-//!    shell passes them, and what `printf`, `echo` and `print` write from
-//!    them once their escapes are decoded.
+//!    shell passes them, what `printf`, `echo` and `print` write from them
+//!    where that is plain literal text (any other output refuses, since
+//!    the guard decodes no escape and models no conversion but `%s`), the
+//!    values the shell composer resolves, and all of it joined in line
+//!    order.
 //!
 //! The reader of step 2 reads each simple command as git-guard reads it
 //! (`git_guard::simple_commands`), with the lexer's mark of whether the
@@ -1276,6 +1279,9 @@ mod tests {
             r#"x='co\deflow'; printf '%s update\n' "$x" > commands.fifo"#,
             r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
             r#"x='$'; y="'\\143'"; printf '%s%s%s\n' "$x" "$y" 'odeflow update' > commands.fifo"#,
+            r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
+            r#"for f in *.txt; do echo "$f"; done > commands.fifo"#,
+            r#"x=code; { printf '%s' "$x"; printf '%s\n' 'flow update'; } > commands.fifo"#,
         ] {
             assert!(runs(command), "{command}");
         }

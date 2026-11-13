@@ -1059,6 +1059,7 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
         r"( printf '%s' code; cat notes.txt; printf '%s\n' 'flow update' ) > commands.fifo",
         r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
+        r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
     ]
     .iter()
     .map(ToString::to_string)

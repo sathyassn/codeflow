@@ -311,6 +311,17 @@ pub(crate) fn composed_texts(line: &str) -> Vec<Composed> {
     found
 }
 
+/// What each `printf`, `echo` and `print` on the line writes, read as
+/// `dialect` reads it, in the order the line runs them, at every depth,
+/// with whether the output is claimed exact (TSK-1476).
+pub(crate) fn outputs(line: &str, dialect: Dialect) -> Vec<(Composed, bool)> {
+    texts(line, dialect)
+        .into_iter()
+        .filter(|event| event.output)
+        .map(|event| (event.value, event.exact))
+        .collect()
+}
+
 /// What the last top-level `printf`, `echo` or `print` on the line writes
 /// in `dialect`, or `None` when the line has none the dialect models. For
 /// the differential test.

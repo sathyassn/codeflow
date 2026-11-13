@@ -21,16 +21,26 @@
 //!    that holds an escape is not settled either;
 //! 3. the texts the guard's shell composer resolves for bash and zsh: a
 //!    word built from a value the line assigns, a substitution over the
-//!    builtins it models, arithmetic, `eval` and `sh -c` bodies.
+//!    builtins it models, arithmetic, `eval` and `sh -c` bodies;
+//! 4. everything the line writes, joined in line order, since a reader on
+//!    the other end takes it as one stream: the printed texts of item 2,
+//!    and the composer's outputs in the order the line runs them, whatever
+//!    the redirections, separators, groups, subshells or loops. A program
+//!    this reader does not model adds nothing to the stream.
 //!
-//! A printing program's output that is not settled refuses whatever it
-//! would name: three rounds of review found a way past each general model
-//! of the escapes and conversions, so this reader keeps none. Text read
-//! again past [`DEPTH`] levels refuses the same way.
+//! Each of those texts takes one judgment ([`judge`]): it names the binary
+//! with a verb as written, or it is read again as a command line, where
+//! the same unsettled checks apply. A printing program's output that is
+//! not settled refuses whatever it would name: three rounds of review
+//! found a way past each general model of the escapes and conversions, so
+//! this reader keeps none. So does a value the line binds, expanded into a
+//! printing program, that the composer does not resolve exactly; a value
+//! from outside the line is the named residual. Text read again past
+//! [`DEPTH`] levels refuses the same way.
 
 use super::{raw_run, InstallRun};
 use crate::hooks::git_guard::{command_argv_literal, expand_commands, shell_blank};
-use crate::security::composed::{composed_texts, Composed};
+use crate::security::composed::{bindings, composed_texts, outputs, Composed, Dialect};
 use crate::security::headless::basename;
 
 /// Programs whose output this reader judges.
@@ -47,25 +57,113 @@ const FORM: &str =
 /// The form reported when a printing program's output is not settled.
 pub(crate) const UNSETTLED: &str = "printed text the guard cannot settle";
 
-/// The first install run, or unsettled printed text, that `command`
-/// produces.
-pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
-    let texts = composed_texts(command);
-    // A value expanded into `echo` or `print` is settled only when no value
-    // the composer resolves holds a backslash, and, where the line holds a
-    // backslash, the composer resolves every value the line builds: a value
-    // from outside the line is the named residual.
-    let values_unsettled = texts.iter().any(|text| match text {
-        Composed::Resolved(value) => {
-            value.render().contains('\\') || value.without_open().render().contains('\\')
+/// What the composer settles about the values a line builds.
+struct Values {
+    /// A value expanded into `echo` or `print` may hold a backslash: the
+    /// composer resolves a value that holds one, or leaves a value
+    /// unresolved on a line that holds one.
+    escape: bool,
+    /// The names the line binds (an assignment, a `for` variable, `read`,
+    /// `printf -v`) to a value the composer does not resolve exactly, as
+    /// bash or as zsh reads it: a construct it does not model, or text
+    /// from outside the line (a file `read` takes, a program's output, a
+    /// glob's names).
+    inexact: Vec<String>,
+    /// The names every binding of which the composer resolves exactly.
+    exact: Vec<String>,
+    /// The line as written, where a name the composer reports no binding
+    /// for may still be bound (a `for` variable, `read` in a `while`
+    /// condition and other constructs).
+    line: String,
+    /// Whether the composer resolves every output on the line exactly, as
+    /// bash and as zsh read it, with at least one output: then a name it
+    /// reports no binding for (a `for` variable) is written exactly.
+    outputs_exact: bool,
+}
+
+impl Values {
+    fn of(command: &str, texts: &[Composed]) -> Self {
+        let escape = texts.iter().any(|text| match text {
+            Composed::Resolved(value) => {
+                value.render().contains('\\') || value.without_open().render().contains('\\')
+            }
+            Composed::Unresolved(_) => command.contains('\\'),
+        });
+        let mut inexact = Vec::new();
+        let mut exact = Vec::new();
+        for (name, value) in bindings(command) {
+            if matches!(&value, Composed::Resolved(value) if value.exact().is_some()) {
+                if !exact.contains(&name) {
+                    exact.push(name);
+                }
+            } else if !inexact.contains(&name) {
+                inexact.push(name);
+            }
         }
-        Composed::Unresolved(_) => command.contains('\\'),
-    });
-    let form = match read(command, 0, values_unsettled) {
-        Some(form) => form,
-        None if composed(&texts) => FORM,
-        None => return None,
-    };
+        exact.retain(|name| !inexact.contains(name));
+        let outputs_exact = [Dialect::Bash, Dialect::Zsh].into_iter().all(|dialect| {
+            let outputs = outputs(command, dialect);
+            !outputs.is_empty()
+                && outputs.iter().all(|(output, claimed)| {
+                    *claimed
+                        && matches!(output, Composed::Resolved(value) if value.exact().is_some())
+                })
+        });
+        Self {
+            escape,
+            inexact,
+            exact,
+            line: command.to_string(),
+            outputs_exact,
+        }
+    }
+
+    /// Whether `args` expand a value the line binds that the composer does
+    /// not resolve exactly. A name the line spells bare, outside an
+    /// expansion (`read w`, `for w`, `w=`), counts as bound by the line;
+    /// with no binding the composer reports, it is settled only when every
+    /// output on the line is exact.
+    fn unsettled_in(&self, args: &[String]) -> bool {
+        args.iter().any(|arg| {
+            expanded_names(arg).iter().any(|name| {
+                self.inexact.contains(name)
+                    || (!self.exact.contains(name)
+                        && !self.outputs_exact
+                        && spelled_bare(&self.line, name))
+            })
+        })
+    }
+}
+
+/// Whether `line` spells `name` as a whole name outside a `$name` or
+/// `${name...}` expansion.
+fn spelled_bare(line: &str, name: &str) -> bool {
+    let name_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut from = 0;
+    while let Some(found) = line[from..].find(name) {
+        let at = from + found;
+        let end = at + name.len();
+        let before = &line[..at];
+        let whole = !before.ends_with(name_char) && !line[end..].starts_with(name_char);
+        let expanded = before.ends_with('$')
+            || before.ends_with("${")
+            || before.ends_with("${#")
+            || before.ends_with("${!");
+        if whole && !expanded {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// The first install run, or unsettled printed text, that `command`
+/// produces. Every text the line produces takes one judgment
+/// ([`judge`]): each printing program's output, the line's printed output
+/// joined in line order, each text the composer resolves, and the
+/// composer's outputs joined in the order the line runs them.
+pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
+    let form = produced(command)?;
     Some(InstallRun {
         form,
         parsed: false,
@@ -73,16 +171,69 @@ pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
     })
 }
 
-/// Whether a text the guard's shell composer resolves on the line, as bash
-/// and as zsh build it, names the binary with a verb. Outside text is read
-/// as written (`$`) and as empty.
-fn composed(texts: &[Composed]) -> bool {
-    texts.iter().any(|text| match text {
-        Composed::Resolved(value) => {
-            names(&value.render()) || names(&value.without_open().render())
+fn produced(command: &str) -> Option<&'static str> {
+    let texts = composed_texts(command);
+    let values = Values::of(command, &texts);
+    if let Some(form) = judge_line(command, 0, &values) {
+        return Some(form);
+    }
+    for text in &texts {
+        if let Composed::Resolved(value) = text {
+            for rendered in [value.render(), value.without_open().render()] {
+                if let Some(form) = judge(&rendered, 0, &values) {
+                    return Some(form);
+                }
+            }
         }
-        Composed::Unresolved(_) => false,
-    })
+    }
+    for dialect in [Dialect::Bash, Dialect::Zsh] {
+        let mut written = String::new();
+        let mut empty = String::new();
+        for (output, _) in outputs(command, dialect) {
+            match output {
+                Composed::Resolved(value) => {
+                    written.push_str(&value.render());
+                    empty.push_str(&value.without_open().render());
+                }
+                // An output the composer cannot resolve is unknown text
+                // there, as outside text is: a value the line sets that
+                // feeds it is refused by `Values::unsettled_in`.
+                Composed::Unresolved(_) => written.push('$'),
+            }
+        }
+        for joined in [written, empty] {
+            if let Some(form) = judge(&joined, 0, &values) {
+                return Some(form);
+            }
+        }
+    }
+    None
+}
+
+/// The one judgment of a produced text: [`FORM`] when it names the binary
+/// with a verb as written, else what reading it again as a command line
+/// finds ([`judge_line`]).
+fn judge(text: &str, depth: usize, values: &Values) -> Option<&'static str> {
+    if names(text) {
+        return Some(FORM);
+    }
+    judge_line(text, depth + 1, values)
+}
+
+/// What reading `text` as a command line finds ([`read`]), then the
+/// judgment of everything its printing programs write, joined in line
+/// order: the stream a reader on the other end receives whatever the
+/// redirections, separators, groups or loops. A program this reader does
+/// not model adds nothing there.
+fn judge_line(text: &str, depth: usize, values: &Values) -> Option<&'static str> {
+    let mut stream = Vec::new();
+    if let Some(form) = read(text, depth, values, &mut stream) {
+        return Some(form);
+    }
+    if stream.len() < 2 {
+        return None;
+    }
+    judge(&stream.concat(), depth, values)
 }
 
 /// Whether `text`, read as the raw text is, names the binary with a verb.
@@ -91,8 +242,14 @@ fn names(text: &str) -> bool {
 }
 
 /// [`FORM`] when a text `command` produces names the binary with a verb,
-/// [`UNSETTLED`] when a printing program's output is not settled.
-fn read(command: &str, depth: usize, values_unsettled: bool) -> Option<&'static str> {
+/// [`UNSETTLED`] when a printing program's output is not settled. Each
+/// printing program's output is added to `stream` in line order.
+fn read(
+    command: &str,
+    depth: usize,
+    values: &Values,
+    stream: &mut Vec<String>,
+) -> Option<&'static str> {
     if depth > DEPTH {
         return Some(UNSETTLED);
     }
@@ -106,7 +263,7 @@ fn read(command: &str, depth: usize, values_unsettled: bool) -> Option<&'static 
         }
         for word in words.iter().skip(1) {
             if word.contains(shell_blank) {
-                if let Some(form) = read(word, depth + 1, values_unsettled) {
+                if let Some(form) = read(word, depth + 1, values, stream) {
                     return Some(form);
                 }
             }
@@ -116,21 +273,42 @@ fn read(command: &str, depth: usize, values_unsettled: bool) -> Option<&'static 
             if !PRINTERS.contains(&program.as_str()) {
                 continue;
             }
-            if shell_escaped(&segment, &words) {
+            let args = &words[at + 1..];
+            if shell_escaped(&segment, &words) || values.unsettled_in(args) {
                 return Some(UNSETTLED);
             }
-            let Some(text) = printed(&program, &words[at + 1..], values_unsettled) else {
+            let Some(text) = printed(&program, args, values.escape) else {
                 return Some(UNSETTLED);
             };
-            if names(&text) {
-                return Some(FORM);
-            }
-            if let Some(form) = read(&text, depth + 1, values_unsettled) {
+            if let Some(form) = judge(&text, depth, values) {
                 return Some(form);
             }
+            stream.push(text);
         }
     }
     None
+}
+
+/// The names `arg` expands as `$name` or `${name...}`.
+fn expanded_names(arg: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = arg;
+    while let Some(at) = rest.find('$') {
+        let after = &rest[at + 1..];
+        let body = match after.strip_prefix('{') {
+            Some(braced) => braced.strip_prefix(['#', '!']).unwrap_or(braced),
+            None => after,
+        };
+        let name: String = body
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            names.push(name);
+        }
+        rest = after;
+    }
+    names
 }
 
 /// Whether `segment` holds a `$'...'` word with an escape in it.
