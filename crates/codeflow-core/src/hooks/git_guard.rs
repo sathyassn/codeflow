@@ -12319,7 +12319,20 @@ fn agent_push_git(
         rest,
         moved,
     };
-    for v in judge_agent_push(&invocation, &judged.cases, cwd, branches.config_changed) {
+    let mut found = judge_agent_push(&invocation, &judged.cases, cwd, branches.config_changed);
+    // An unresolved target is judged above by the session's policy, which
+    // does not hold that repository's default branch or list. Fail closed:
+    // a push there is refused, whatever its refspecs name.
+    if let (Some(why), "push") = (&judged.unresolved, sub) {
+        found.push(Violation::always_blocking(
+            AGENT_PUSH_RULE,
+            format!(
+                "`git push` runs in a repository whose policy the guard cannot read ({why}), so it may reach branches agents never push"
+            ),
+            "push from a readable repository whose landed policy the guard reads",
+        ));
+    }
+    for v in found {
         if !out
             .iter()
             .any(|f| f.rule == v.rule && f.message == v.message)
@@ -12396,7 +12409,10 @@ fn agent_push_walk(
 /// same git calls git-guard's AC-15 findings come from. The policy is the
 /// landed policy of the repository at `cwd`, read without asking the
 /// remote, and only for a line that runs git; one that cannot be read is
-/// the built-in policy, whose list is the default. Programs Git runs and
+/// the built-in policy, whose list is the default. A push into another
+/// repository whose branch or landed policy cannot be read is refused,
+/// since the session's policy does not hold its default branch or list.
+/// Programs Git runs and
 /// the line's runners reach this pass through exec-guard's own judgement
 /// of them as commands.
 pub(crate) fn agent_push_refusals(command: &str, cwd: &Path) -> Vec<Violation> {
