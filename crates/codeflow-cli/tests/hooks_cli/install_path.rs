@@ -436,6 +436,90 @@ fn package_managers_and_option_values_that_run_the_binary_refuse() {
     tally.finish();
 }
 
+/// AC-1: the word a package runner or manager runs is a program position,
+/// so a word the shell expands there refuses, for each runner and manager
+/// the guard knows, with and without a subcommand, and for each kind of
+/// expansion. A word the shell expands among the words of a program the
+/// guard does not know refuses when its text names the binary and a verb.
+#[test]
+fn expanded_words_a_package_runner_runs_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let mut rows: Vec<String> = Vec::new();
+    for runner in [
+        "yarn",
+        "yarn run",
+        "yarn exec",
+        "yarn dlx",
+        "pnpm",
+        "pnpm run",
+        "pnpm exec",
+        "pnpm dlx",
+        "pn",
+        "npm exec --",
+        "npm x",
+        "npm explore pkg --",
+        "npx",
+        "bunx",
+        "bun",
+        "bun x",
+        "pnpx",
+        "corepack pnpm",
+        "volta run",
+        "uv run",
+    ] {
+        for word in [
+            "{codeflow,update}",
+            "{codeflow,} update",
+            "codefl?w update",
+            "=codeflow update",
+        ] {
+            rows.push(format!("{runner} {word}"));
+        }
+    }
+    rows.push("pnpm run codefl[o]w init --yes".to_string());
+    rows.push("mise exec -- {codeflow,update}".to_string());
+    rows.push("tool --run {./target/debug/codeflow,init}".to_string());
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    tally.finish();
+}
+
+/// AC-1: npm reads its operands as data only after one of its own commands
+/// that never runs a program, written in full or as a documented alias. An
+/// abbreviation, a command that runs a script or a binary, an option the
+/// guard does not know before the command, and an expanded word there
+/// leave npm read as a package runner.
+#[test]
+fn npm_runs_the_binary_after_any_word_but_its_own_commands_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "npm exe -- codeflow update",
+        "npm exe codeflow update",
+        "npm expl pkg -- codeflow update",
+        "npm explo pkg -- codeflow update",
+        "npm explor pkg -- codeflow update",
+        "npm run codeflow update",
+        "npm run-script codeflow update",
+        "npm rum codeflow update",
+        "npm urn codeflow init",
+        "npm t -- codeflow update",
+        "npm --prefix codeflow exe -- codeflow update",
+        "npm -g exe codeflow update",
+        "npm --registry update exe -- codeflow update",
+        "npm --reg update exe -- codeflow update",
+        "npm -- exe codeflow update",
+        "npm exe -- {codeflow,update}",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    tally.finish();
+}
+
 /// AC-1: on a shell that reads a backslash as a path separator, an
 /// unquoted path of that form is read.
 #[test]
@@ -511,6 +595,16 @@ fn words_that_name_the_verbs_as_data_stay_allowed() {
         r#"export NOTE="run codeflow update""#,
         r#"NOTE="run codeflow update"; echo done"#,
         "npm --prefix codeflow update",
+        "npm -C codeflow update",
+        "npm --prefix=codeflow update",
+        "npm --workspace codeflow update",
+        "npm update codeflow",
+        "npm up codeflow",
+        "npm i codeflow",
+        "npm view codeflow init",
+        "npm uninstall codeflow",
+        "yarn add codeflow",
+        "pnpm add -D codeflow",
         "make -C codeflow init",
         "cp -r codeflow update",
         "ag 'codeflow init' docs",

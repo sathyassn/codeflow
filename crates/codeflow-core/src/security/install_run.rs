@@ -679,6 +679,119 @@ mod tests {
         }
     }
 
+    /// The word a package runner or manager runs is a program position, so
+    /// a word the shell expands there is judged as one: with and without a
+    /// subcommand, for each runner and manager this reader knows, and for
+    /// each kind of expansion. A word the shell expands among the words of
+    /// a program this reader does not know is judged on its raw text.
+    #[test]
+    fn expanded_words_a_package_runner_runs_are_found() {
+        for runner in [
+            "yarn",
+            "yarn run",
+            "yarn exec",
+            "yarn dlx",
+            "pnpm",
+            "pnpm run",
+            "pnpm exec",
+            "pnpm dlx",
+            "pn",
+            "npm exec --",
+            "npm x",
+            "npm explore pkg --",
+            "npx",
+            "bunx",
+            "bun",
+            "bun x",
+            "bun run",
+            "pnpx",
+            "pnx",
+            "corepack yarn",
+            "volta run",
+            "deno run",
+            "uv run",
+            "uvx",
+        ] {
+            for word in [
+                "{codeflow,update}",
+                "{codeflow,} update",
+                "codefl?w update",
+                "codefl[o]w init --yes",
+                "=codeflow update",
+                "$B update",
+            ] {
+                let command = format!("{runner} {word}");
+                assert!(runs(&command), "{command}");
+            }
+        }
+        // A program this reader does not know: a word the shell expands
+        // is judged on its raw text with the words after it.
+        for command in [
+            "mise exec -- {codeflow,update}",
+            "mise exec -- {codeflow,} update",
+            "mise exec -- =codeflow update",
+            "tool --run {./target/debug/codeflow,init}",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+    }
+
+    /// npm reads its operands as data only after one of its own commands
+    /// that never runs a program, in its exact name or a documented alias:
+    /// an abbreviation, a command that runs a script or a binary, an option
+    /// this reader does not know before the command, or an expanded word
+    /// there leaves npm read as a package runner.
+    #[test]
+    fn npm_runs_the_binary_after_any_word_but_its_own_commands() {
+        for command in [
+            "npm exe -- codeflow update",
+            "npm exe codeflow update",
+            "npm expl pkg -- codeflow update",
+            "npm explo pkg -- codeflow update",
+            "npm explor pkg -- codeflow update",
+            "npm run codeflow update",
+            "npm run-script codeflow update",
+            "npm rum codeflow update",
+            "npm urn codeflow init",
+            "npm t -- codeflow update",
+            "npm Exec codeflow update",
+            "npm --prefix codeflow exe -- codeflow update",
+            "npm -g exe codeflow update",
+            "npm --registry update exe -- codeflow update",
+            "npm --reg update exe -- codeflow update",
+            "npm --prefix -x update codeflow update",
+            "npm -- exe codeflow update",
+            "npm $SUB codeflow update",
+            "npm --prefix $D update codeflow update",
+            "npm exe -- {codeflow,update}",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            "npm --prefix codeflow update",
+            "npm -C codeflow update",
+            "npm --prefix=codeflow update",
+            "npm --workspace codeflow update",
+            "npm -g update codeflow",
+            "npm update codeflow",
+            "npm up codeflow",
+            "npm i codeflow",
+            "npm view codeflow init",
+            "npm uninstall codeflow",
+            "npm ls codeflow",
+            "npm -- update codeflow",
+            "npm init -y",
+            "npm run build",
+            "yarn add codeflow",
+            "pnpm add -D codeflow",
+            "pnpm install --frozen-lockfile",
+            "cargo test {a,b}",
+            "cp {a,b} codeflow",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     #[test]
     fn a_backslash_path_is_read_on_a_shell_that_takes_it_as_a_separator() {
         for command in [
