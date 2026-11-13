@@ -16,15 +16,19 @@ use std::path::{Path, PathBuf};
 
 /// The work branch the fixture checks out.
 const WORK: &str = "task/agent-work";
-/// The fixture's `origin`. The guard never asks it anything.
-const ORIGIN: &str = "https://github.com/example/project.git";
+/// The fixture's `origin`, on the loopback host: a guard asks it what it
+/// holds only when its tracking refs are missing (a table row deletes
+/// them), and a loopback question never leaves this machine
+/// (`test_remotes_contract`).
+const ORIGIN: &str = "https://localhost/example/project.git";
 /// The policy on `origin/main`, the landed authority.
 const LANDED_POLICY: &str = r#"{"git":{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/"],"release_branch_pattern":"rel/v*"}}"#;
 /// The work branch's own policy, which adds the prefix `wip/`.
 const WORK_POLICY: &str = r#"{"git":{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/","wip/"],"release_branch_pattern":"rel/v*"}}"#;
-/// The GitHub CLI helper as `gh auth setup-git` writes it for one host.
+/// The GitHub CLI helper as `gh auth setup-git` writes it for one host,
+/// here [`ORIGIN`]'s.
 const GH_HELPER: &str =
-    "[credential \"https://github.com\"]\n\thelper =\n\thelper = !/usr/local/bin/gh auth git-credential\n";
+    "[credential \"https://localhost\"]\n\thelper =\n\thelper = !/usr/local/bin/gh auth git-credential\n";
 /// The same helper for every host, found on `PATH`.
 const PLAIN_HELPER: &str = "[credential]\n\thelper = !gh auth git-credential\n";
 
@@ -309,8 +313,8 @@ fn refused_fetch_forms_keep_the_account_rule() {
         &rows(&[
             "git fetch --upload-pack=git-upload-pack origin",
             "git fetch --upload-pack git-upload-pack origin",
-            "git fetch https://github.com/example/project.git",
-            "git fetch https://github.com/example/other.git main",
+            "git fetch https://localhost/example/project.git",
+            "git fetch https://localhost/example/other.git main",
             "git fetch /tmp/elsewhere.git",
             "git fetch --all",
             "git fetch --multiple origin",
@@ -420,7 +424,7 @@ fn refused_push_forms_keep_the_account_rule() {
             "git push origin",
             "git push -u origin",
             "git push upstream HEAD:refs/heads/task/agent-work",
-            "git push https://github.com/example/project.git HEAD:refs/heads/task/agent-work",
+            "git push https://localhost/example/project.git HEAD:refs/heads/task/agent-work",
             "git push /tmp/elsewhere.git HEAD:refs/heads/task/agent-work",
             "git push origin HEAD:refs/heads/task/agent-work HEAD:refs/heads/task/agent-two",
             "git push origin HEAD:task/agent-work",
@@ -556,8 +560,8 @@ fn push_and_remote_settings_withhold_the_admission() {
     }
     let mut wrong = Vec::new();
     for setting in [
-        "[remote \"origin\"]\n\tpushurl = https://github.com/example/other.git\n",
-        "[remote \"origin\"]\n\tpushurl = https://github.com/example/project.git\n",
+        "[remote \"origin\"]\n\tpushurl = https://localhost/example/other.git\n",
+        "[remote \"origin\"]\n\tpushurl = https://localhost/example/project.git\n",
         "[remote \"origin\"]\n\tpush = refs/heads/*:refs/heads/*\n",
         "[remote \"origin\"]\n\tpush = HEAD:refs/heads/main\n",
         "[remote \"origin\"]\n\tmirror = true\n",
@@ -567,11 +571,11 @@ fn push_and_remote_settings_withhold_the_admission() {
         "[push]\n\tgpgSign = if-asked\n",
         "[submodule]\n\trecurse = true\n",
         "[fetch]\n\trecurseSubmodules = yes\n",
-        "[url \"https://github.com/attacker/\"]\n\tinsteadOf = https://github.com/example/\n",
-        "[url \"https://github.com/attacker/\"]\n\tpushInsteadOf = https://github.com/example/\n",
+        "[url \"https://localhost/attacker/\"]\n\tinsteadOf = https://localhost/example/\n",
+        "[url \"https://localhost/attacker/\"]\n\tpushInsteadOf = https://localhost/example/\n",
         // AC-5: a second remote, and a second URL for `origin`.
-        "[remote \"upstream\"]\n\turl = https://github.com/example/upstream.git\n",
-        "[remote \"origin\"]\n\turl = https://github.com/example/other.git\n",
+        "[remote \"upstream\"]\n\turl = https://localhost/example/upstream.git\n",
+        "[remote \"origin\"]\n\turl = https://localhost/example/other.git\n",
         "[remote \"origin\"]\n\tvcs = fixture\n",
         // AC-1: a configured program other than the helper.
         "[core]\n\tsshCommand = ssh\n",
@@ -607,8 +611,8 @@ fn push_and_remote_settings_withhold_the_admission() {
     );
     // AC-5: an `origin` on a plain-text HTTP URL, or a remote helper URL.
     for url in [
-        "http://github.com/example/project.git",
-        "fixture::https://github.com/example/project.git",
+        "http://localhost/example/project.git",
+        "fixture::https://localhost/example/project.git",
     ] {
         let f = Fixture::with(GH_HELPER, |repo, _| {
             repo.remote_set_url("origin", url).unwrap();
@@ -626,7 +630,7 @@ fn push_and_remote_settings_withhold_the_admission() {
     let modules = Fixture::with(GH_HELPER, |_, root| {
         std::fs::write(
             root.join(".gitmodules"),
-            "[submodule \"m\"]\n\tpath = m\n\turl = https://github.com/example/m.git\n",
+            "[submodule \"m\"]\n\tpath = m\n\turl = https://localhost/example/m.git\n",
         )
         .unwrap();
     });
@@ -711,7 +715,7 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
         "gh auth git-credential",
     ] {
         let f = Fixture::new(&format!(
-            "[credential \"https://github.com\"]\n\thelper =\n\thelper = {helper}\n"
+            "[credential \"https://localhost\"]\n\thelper =\n\thelper = {helper}\n"
         ));
         let before = wrong.len();
         expect_account(
@@ -736,7 +740,7 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
             "git ls-remote origin",
             "git pull origin main",
             "git fetch --all",
-            "git clone https://github.com/example/project.git copy",
+            "git clone https://localhost/example/project.git copy",
             "git credential fill",
         ]),
         &mut wrong,
@@ -749,7 +753,7 @@ fn near_miss_helper_bodies_and_other_lines_keep_the_account_rule() {
         "!/usr/local/bin/xgh auth git-credential",
     ] {
         let f = Fixture::new(&format!(
-            "[credential \"https://github.com\"]\n\thelper =\n\thelper = {helper}\n"
+            "[credential \"https://localhost\"]\n\thelper =\n\thelper = {helper}\n"
         ));
         for row in [
             "git fetch origin",
@@ -794,8 +798,8 @@ fn remote_contacting_verbs_keep_the_account_rule() {
         &f.root,
         &rows(&[
             "git remote frobnicate origin",
-            "git remote add -f upstream https://github.com/example/upstream.git",
-            "git remote add --fetch upstream https://github.com/example/upstream.git",
+            "git remote add -f upstream https://localhost/example/upstream.git",
+            "git remote add --fetch upstream https://localhost/example/upstream.git",
             "git maintenance run --task=prefetch",
             "git request-pull HEAD origin",
         ]),
@@ -838,14 +842,14 @@ fn system_helper_cleared_by_a_later_reset_is_admitted() {
     expect_pass(&Fixture::new(GH_HELPER).root, &lines, &mut wrong);
     for config in [
         // A reset for another host clears nothing for `origin`.
-        "[credential \"https://gitlab.com\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://gitlab.com\"]\n\thelper =\n[credential \"https://localhost\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
         // A helper after the GitHub CLI helper runs too.
-        "[credential \"https://github.com\"]\n\thelper =\n\thelper = !/usr/local/bin/gh auth git-credential\n[credential]\n\thelper = store\n",
+        "[credential \"https://localhost\"]\n\thelper =\n\thelper = !/usr/local/bin/gh auth git-credential\n[credential]\n\thelper = store\n",
         // Patterns the model does not read: a wildcard host and a path.
-        "[credential \"https://*.github.com\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
-        "[credential \"https://github.com/example\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://*.localhost\"]\n\thelper =\n[credential \"https://localhost\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://localhost/example\"]\n\thelper =\n[credential \"https://localhost\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
         // A user in the pattern.
-        "[credential \"https://agent@github.com\"]\n\thelper =\n[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://agent@localhost\"]\n\thelper =\n[credential \"https://localhost\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
     ] {
         let before = wrong.len();
         expect_account(&Fixture::new(config).root, &lines, &mut wrong);
@@ -867,7 +871,7 @@ fn system_helper_without_a_reset_keeps_the_account_rule() {
         return;
     }
     let f = Fixture::new(
-        "[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://localhost\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
     );
     let mut wrong = Vec::new();
     expect_account(
@@ -887,12 +891,12 @@ fn system_helper_without_a_reset_keeps_the_account_rule() {
 fn reset_before_the_system_helper_keeps_the_account_rule() {
     if !isolated_with(
         "reset_before_the_system_helper_keeps_the_account_rule",
-        Some("[credential \"https://github.com\"]\n\thelper =\n[credential]\n\thelper = osxkeychain\n"),
+        Some("[credential \"https://localhost\"]\n\thelper =\n[credential]\n\thelper = osxkeychain\n"),
     ) {
         return;
     }
     let f = Fixture::new(
-        "[credential \"https://github.com\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
+        "[credential \"https://localhost\"]\n\thelper = !/usr/local/bin/gh auth git-credential\n",
     );
     let mut wrong = Vec::new();
     expect_account(
@@ -990,7 +994,7 @@ fn read_failures_withhold_the_admission() {
             Box::new(|_, root| {
                 append(
                     &root.join(".git").join("config"),
-                    b"[remote \"origin\"]\n\turl = https://github.com/\xff.git\n",
+                    b"[remote \"origin\"]\n\turl = https://localhost/\xff.git\n",
                 );
             }),
         ),
@@ -1012,6 +1016,24 @@ fn read_failures_withhold_the_admission() {
                     &root.join(".git").join("config"),
                     b"[branch \"task/agent-work\"]\n\tremote = \xff\n",
                 );
+            }),
+        ),
+        (
+            // A bare fetch goes to the current branch's remote, which the
+            // guard cannot look up when the branch name is not UTF-8; such a
+            // branch is never read as a detached `HEAD`.
+            "current branch name that is not UTF-8",
+            bare_fetch.as_slice(),
+            Box::new(|repo, root| {
+                let work = repo.head().unwrap().target().unwrap();
+                let mut packed = format!("{work} refs/heads/task/").into_bytes();
+                packed.extend_from_slice(b"\xff\n");
+                std::fs::write(root.join(".git").join("packed-refs"), packed).unwrap();
+                std::fs::write(
+                    root.join(".git").join("HEAD"),
+                    b"ref: refs/heads/task/\xff\n",
+                )
+                .unwrap();
             }),
         ),
     ];
@@ -1143,11 +1165,11 @@ fn agent_pushes_of_lines_and_the_default_branch_are_refused() {
                 "git push --mirror origin",
                 "git push origin refs/heads/*:refs/heads/*",
                 "git push origin :",
-                "git push https://github.com/example/project.git HEAD:refs/heads/integration/x",
+                "git push https://localhost/example/project.git HEAD:refs/heads/integration/x",
                 "git send-pack origin HEAD:refs/heads/task/agent-work",
-                "git http-push https://github.com/example/project.git HEAD",
+                "git http-push https://localhost/example/project.git HEAD",
                 "git subtree push -P lib origin task/agent-work",
-                "git remote-https origin https://github.com/example/project.git",
+                "git remote-https origin https://localhost/example/project.git",
             ]),
             &mut wrong,
         );
@@ -1386,8 +1408,8 @@ fn uncommitted_or_branch_local_lists_have_no_effect() {
     report(&wrong);
 }
 
-/// AC-15: a value that is not an array of non-blank strings without
-/// whitespace reads as the default list.
+/// AC-15: a value that is not an array of non-empty strings without a space
+/// or control character reads as the default list.
 #[test]
 fn a_malformed_list_reads_as_the_default() {
     if !isolated("a_malformed_list_reads_as_the_default") {
@@ -1399,6 +1421,7 @@ fn a_malformed_list_reads_as_the_default() {
         "[1]",
         r#"[""]"#,
         r#"["release/* integration/*"]"#,
+        r#"["release/*\tintegration/*"]"#,
         r#"["release/*", null]"#,
         "null",
         "{}",
