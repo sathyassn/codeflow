@@ -1054,6 +1054,11 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"printf '\x63odeflow\n' > notes.txt",
         r"printf '%x\n' 255 > notes.txt",
         r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
+        r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
+        r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
+        r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
+        r"( printf '%s' code; cat notes.txt; printf '%s\n' 'flow update' ) > commands.fifo",
+        r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
     ]
     .iter()
     .map(ToString::to_string)
@@ -1069,6 +1074,7 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         "printf '%s' notes > out.txt",
         "echo notes > out.txt",
         r"printf '%s\n' notes > out.txt",
+        r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1154,6 +1160,7 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "printf '%d\\n' 5 > notes.txt",
         "echo -e 'a\\tb' > notes.txt",
         "python3 <<< $'print(1)\\nprint(2)'",
+        "echo -n code > a.txt; echo 'flow update' > b.txt",
     ]
     .iter()
     .map(ToString::to_string)

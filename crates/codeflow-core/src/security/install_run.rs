@@ -1258,6 +1258,37 @@ mod tests {
         }
     }
 
+    /// Everything a line writes is judged as one stream, in line order,
+    /// whatever separates the writers, and every produced text, literal
+    /// or one the composer resolves, takes the same judgment.
+    #[test]
+    fn a_lines_joined_output_takes_one_judgment() {
+        for command in [
+            r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
+            r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
+            r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
+            r"printf '%s' code > commands.fifo; printf '%s\n' 'flow update' > commands.fifo",
+            r"printf '%s' code >> commands.fifo && printf '%s\n' 'flow update' >> commands.fifo",
+            r"{ printf '%s' code || printf '%s\n' 'flow update'; } > commands.fifo",
+            r"( printf '%s' code; printf '%s\n' 'flow update' ) > commands.fifo",
+            r"{ echo -n code; cat notes.txt; echo 'flow update'; } > commands.fifo",
+            r"{ printf '%s' code; head -n 1 notes.txt; printf '%s\n' 'flow update'; } > commands.fifo",
+            r#"x='co\deflow'; printf '%s update\n' "$x" > commands.fifo"#,
+            r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
+            r#"x='$'; y="'\\143'"; printf '%s%s%s\n' "$x" "$y" 'odeflow update' > commands.fifo"#,
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
+            r"printf '%s\n' a > out.txt; printf '%s\n' b > out.txt",
+            r#"for w in no tes; do printf '%s' "$w"; done > out.txt"#,
+            r"printf '%s\n' notes > out.txt",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// The brief's controls: the admitted lines that name the binary with
     /// a verb draw no finding, and lines that do not name it stay clean
     /// whatever form they take.
