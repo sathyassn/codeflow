@@ -1033,18 +1033,41 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"printf '\ncodeflow update' > commands.fifo",
         r"printf 'codeflow\x20update' > commands.fifo",
         r"printf '\143odeflow update' > commands.fifo",
-        r"printf '\u0063odeflow update' > commands.fifo",
         r"printf '%b' '\x63odeflow update' > commands.fifo",
-        r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
         r"echo -e 'codeflow\tupdate' > commands.fifo",
         r"echo '\0143odeflow update' > commands.fifo",
         r"printf '%s\n' $'\x63odeflow update' > commands.fifo",
-        r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
         r#"sh -c "printf '\\143odeflow update' > commands.fifo""#,
+        r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
+        r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
+        r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    // Text written to a process started earlier that runs what it reads
+    // is the named residual where these checks do not settle the text
+    // (TSK-1476 r18); unsettled text written to a file refuses only where
+    // the line runs it. The sandbox, where it runs, holds against the
+    // writes the verbs make.
+    let allowed: Vec<String> = [
+        r"printf '%s\n' 'notes' > notes.txt",
+        r"printf 'codeflow\n' > notes.txt",
+        r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
+        "printf '%s' notes > out.txt",
+        "echo notes > out.txt",
+        r"printf '%s\n' notes > out.txt",
+        r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
+        "printf '\\u0063odeflow update' > commands.fifo",
+        r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
+        r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
         r"printf 'codeflow upd%xte' 10 > commands.fifo",
         r"printf 'co%xflow update' 222 > commands.fifo",
         r#"printf '%xo%xflow update' "$a" "$b" > commands.fifo"#,
-        r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
         r"printf '\143odeflow%1supdate\n' '' > commands.fifo",
         r"printf '#\c\n\143odeflow update\n' > commands.fifo",
         reused.as_str(),
@@ -1055,11 +1078,37 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"printf '%x\n' 255 > notes.txt",
         r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
         r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
-        r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
         r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
         r"( printf '%s' code; cat notes.txt; printf '%s\n' 'flow update' ) > commands.fifo",
-        r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
         r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
+    tally.finish();
+}
+
+/// Text a line hands to a shell or interpreter on the same line must be
+/// settled: one printer of plain literal text, a literal here-string or a
+/// literal here-document, through a pipe, a redirection, a process
+/// substitution or a command substitution. Any other feed refuses,
+/// whatever it names (TSK-1476 r18).
+#[test]
+fn text_handed_to_an_executor_on_the_line_must_be_settled() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        r"printf 'co%xflow update' 222 | sh",
+        r#"x=code; printf '%s' "$x flow update" | sh"#,
+        r"{ { sleep 1; printf '%s\n' 'flow update'; } & printf '%s' code; wait; } | sh",
+        r#"for w in code 'flow update'; do printf '%s' "$w"; done | sh"#,
+        r"bash <(printf 'co%xflow update' 222)",
+        r#"python3 -c "$(printf 'co%xflow update' 222)""#,
+        r#"echo 'eval "$1"' | sh -s "$x""#,
+        r"printf 'co%xflow update' 222 > s.sh; cat s.sh | sh",
+        r"printf 'co%xflow update\n' 222 | xargs -0 sh -c",
+        r"python3 <<< $'print(17330\x32)'",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1069,13 +1118,14 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
     let allowed: Vec<String> = [
-        r"printf '%s\n' 'notes' > notes.txt",
-        r"printf 'codeflow\n' > notes.txt",
-        r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
-        "printf '%s' notes > out.txt",
-        "echo notes > out.txt",
+        r"printf 'echo hi\n' | sh",
         r"printf '%s\n' notes > out.txt",
-        r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
+        r"echo -e 'a\tb' > out.txt",
+        "bash <<< 'echo hi'",
+        "python3 - <<'EOF'\nprint(1)\nEOF",
+        "cat script.sh | bash",
+        "bash <(echo 'ls src')",
+        r#"python3 -c "$(printf '%s\n' 'print(1)')""#,
     ]
     .iter()
     .map(ToString::to_string)
@@ -1157,11 +1207,7 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "echo 'codeflow update' >> notes.txt",
         "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
         "ls codeflow 'update\\n'",
-        "printf '%s\\n' a b > notes.txt",
-        "printf '%d\\n' 5 > notes.txt",
-        "echo -e 'a\\tb' > notes.txt",
         "python3 <<< $'print(1)\\nprint(2)'",
-        "echo -n code > a.txt; echo 'flow update' > b.txt",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1179,6 +1225,12 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "pnpm add -D codeflow",
         "rg --pre ./tools/pdftext pattern docs",
         "cargo run --bin codeflow -- task status",
+        // Unsettled printed text no executor on the line runs (TSK-1476
+        // r18).
+        "printf '%s\\n' a b > notes.txt",
+        "printf '%d\\n' 5 > notes.txt",
+        "echo -e 'a\\tb' > notes.txt",
+        "echo -n code > a.txt; echo 'flow update' > b.txt",
     ]
     .iter()
     .map(ToString::to_string)

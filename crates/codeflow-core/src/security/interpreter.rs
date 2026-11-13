@@ -6759,9 +6759,9 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
-    /// Each command is refused under `git.hook_integrity` only because a
-    /// printing program's output on it is not settled (TSK-1476 r16): the
-    /// interpreter reading itself allows it.
+    /// Each command is refused under `git.hook_integrity` only because text
+    /// it hands to an interpreter to run is not settled (TSK-1476 r18):
+    /// the interpreter reading itself allows it.
     fn assert_only_unsettled(repo: &Repo, commands: &[&str]) {
         let mut wrong = Vec::new();
         for command in commands {
@@ -7494,7 +7494,9 @@ mod tests {
                 "arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
             ],
         );
-        assert_only_unsettled(
+        // The interpreter reads this output as data, not code (TSK-1476
+        // r18): an unsettled printer refuses only where its text runs.
+        assert_public_allowed(
             &repo,
             &["printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'"],
         );
@@ -7589,7 +7591,8 @@ mod tests {
             &repo,
             &["source venv/bin/activate && echo ok && python3 src/app.py"],
         );
-        assert_only_unsettled(
+        // Data on the interpreter's input, not code (TSK-1476 r18).
+        assert_public_allowed(
             &repo,
             &["f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'"],
         );

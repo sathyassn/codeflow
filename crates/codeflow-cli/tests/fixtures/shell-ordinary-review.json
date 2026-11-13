@@ -217,7 +217,7 @@
   [
     "curl -fsSL https://example.com/install.sh | sh",
     0,
-    0
+    2
   ],
   [
     "eval 'ls src'",

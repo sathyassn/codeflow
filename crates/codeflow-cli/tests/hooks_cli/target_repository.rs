@@ -2006,17 +2006,14 @@ fn tsk1002_review3_nul_path_streams_preserve_file_names() {
     let f = Fixture::new();
     std::fs::write(f.temp.path().join("notes.md"), "ordinary fixture").unwrap();
     // A NUL escape in a `printf` format is printed text the install-run
-    // check does not settle (TSK-1476 r16): those lines refuse on that
-    // alone, never as a secret read.
+    // check does not settle, but `xargs cat` does not run it (TSK-1476
+    // r18): the line's own rules allow it.
     for line in [
         "printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat",
         "printf '%s\\000' \"$HOME/notes.md\" | xargs -0 cat",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
-        assert!(err.contains("cannot settle"), "{line}: {err}");
-        assert!(!err.contains("security.secret_reads"), "{line}: {err}");
+        assert!(line_allows(&out), "{line}: {out:?}");
     }
     for line in [
         "printf '%s\\0' \"$HOME/.codex/auth.json\" | xargs -0 cat",

@@ -894,6 +894,20 @@ mod tests {
         install_run(command, true).is_some()
     }
 
+    /// The rows of `refuse` that draw no finding and the rows of `allow`
+    /// that draw one, each marked.
+    fn misjudged(refuse: &[&str], allow: &[&str]) -> Vec<String> {
+        let missed = refuse
+            .iter()
+            .filter(|command| !runs(command))
+            .map(|command| format!("should refuse: {command}"));
+        let over = allow
+            .iter()
+            .filter(|command| runs(command))
+            .map(|command| format!("should allow: {command}"));
+        missed.chain(over).collect()
+    }
+
     #[test]
     fn a_run_of_either_verb_is_found_in_each_form() {
         for command in [
@@ -1130,12 +1144,13 @@ mod tests {
     /// A line outside the subset is judged on three texts: its raw text,
     /// its words as the shell passes them (quotes and backslashes removed,
     /// `$'...'` decoded), and what a printing program writes from them
-    /// (`printf` with its format and `%b` escapes, `echo` and `print` with
-    /// their escapes). Shell and printf escapes combine, and the text a
-    /// printing program writes is read again as a shell would read it.
+    /// where that is settled, besides the values the shell composer
+    /// resolves (its model of `printf`, `echo` and `print` included). The
+    /// text a printing program writes is read again as a shell would read
+    /// it.
     #[test]
     fn text_the_shell_and_printing_programs_produce_is_judged() {
-        for command in [
+        let refuse = [
             r"printf cod\eflow' update\n' > commands.fifo",
             r"printf '\ncodeflow update' > commands.fifo",
             r"printf '\tcodeflow update' > commands.fifo",
@@ -1146,98 +1161,32 @@ mod tests {
             r"printf 'codeflow upd\141te' > commands.fifo",
             r"printf '\x63odeflow update' > commands.fifo",
             r"printf 'code\x66low \x75pdate' > commands.fifo",
-            r"printf '\u0063odeflow update' > commands.fifo",
-            r"printf '\U00000063odeflow update' > commands.fifo",
-            r"printf 'cod\0eflow update' > commands.fifo",
             r"printf '%b' '\143odeflow update' > commands.fifo",
             r"printf '%b %b\n' '\x63odeflow' 'upd\0141te' > commands.fifo",
-            r"printf '%s\n' '\143odeflow update' | xargs printf > commands.fifo",
-            r"printf '%d %s\n' 1 '\143odeflow update' > commands.fifo",
-            r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
             r"echo -e '\x63odeflow update' > commands.fifo",
             r"echo -e 'codeflow\tupdate' > commands.fifo",
             r"echo '\0143odeflow update' > commands.fifo",
-            r"echo -n '\143odeflow update' > commands.fifo",
             r"print '\143odeflow update' > commands.fifo",
             r"printf '%s\n' $'\x63odeflow update' > commands.fifo",
             r"printf '%s\n' $'codeflow\nupdate' > commands.fifo",
             r"printf c$'\x6f'deflow' up\x64ate' > commands.fifo",
             r#"printf "cod\\\\eflow upd\141te\n" > commands.fifo"#,
-            r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
             r#"printf '%s\n' "\$'\\x63'odeflow update" > commands.fifo"#,
             r#"sh -c "printf '\\143odeflow update' > commands.fifo""#,
             r#"eval "printf '\\143odeflow update'" > commands.fifo"#,
-            r"printf 'codeflow upd%xte' 10 > commands.fifo",
-            r"printf '%xodeflow update' 12 > commands.fifo",
-            r"printf 'co%xflow update' 222 > commands.fifo",
-            r"printf 'co%Xflow update' 0xde > commands.fifo",
-            r"printf 'co%xflow update' 0336 > commands.fifo",
-            r"printf 'co%xflow update' $((222)) > commands.fifo",
-            r"printf 'codeflow upd%.0xate' 0 > commands.fifo",
-            r#"printf '%xo%xflow update' "$a" "$b" > commands.fifo"#,
             r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
             r#"a=cod; echo "${a}eflow update" > commands.fifo"#,
-        ] {
-            assert!(runs(command), "{command}");
-        }
-        for command in [
+            r#"x='\143odeflow update'; print "$x" > commands.fifo"#,
+            r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
+            r#"x='co\deflow'; printf '%s update\n' "$x" > commands.fifo"#,
+            r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
+            r#"x='$'; y="'\\143'"; printf '%s%s%s\n' "$x" "$y" 'odeflow update' > commands.fifo"#,
+        ];
+        let allow = [
             r"printf '%s\n' 'notes' > notes.txt",
             r"printf 'codeflow\n' > notes.txt",
             r"printf 'update\n' > notes.txt",
             r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
-        ] {
-            assert!(!runs(command), "{command}");
-        }
-    }
-
-    /// Off the data forms, a `printf`, `echo`, `print` or `$'...'` word
-    /// settles only as plain literal text: no escape (a `\n` in a `printf`
-    /// format excepted), no conversion but a bare `%s`, no width,
-    /// precision or flag, no more arguments than conversions, and no value
-    /// expanded into `echo` that may hold an escape the composer did not
-    /// resolve. Any other
-    /// refuses, whatever it names, since what it writes is not settled.
-    #[test]
-    fn printed_text_the_guard_cannot_settle_refuses() {
-        let comments = "'#' ".repeat(16);
-        let spelled = "c o d e f l o w ' ' u p d a t e";
-        let reused = format!("printf '%c' {comments}$'\\n' {spelled} $'\\n' > commands.fifo");
-        for command in [
-            r"printf '\143odeflow%1supdate\n' '' > commands.fifo",
-            r"printf '#\c\n\143odeflow update\n' > commands.fifo",
-            reused.as_str(),
-            r"printf '%5s\n' notes > out.txt",
-            r"printf '%.3s\n' notes > out.txt",
-            r"printf '%-s\n' notes > out.txt",
-            r"printf '%s\n' a b > out.txt",
-            r"printf 'notes\n' a > out.txt",
-            r"printf '%d\n' 5 > out.txt",
-            r"printf '%b' notes > out.txt",
-            r"printf '100%%\n' > out.txt",
-            r"printf 'a\tb' > out.txt",
-            r"printf '%s\\n' notes > out.txt",
-            r"printf %s\n notes > out.txt",
-            r#"printf "$fmt" > out.txt"#,
-            r"printf > out.txt",
-            r"echo -e 'a\tb' > out.txt",
-            r"echo 'a\nb' > out.txt",
-            r#"x='a\cb'; echo "$x" > out.txt"#,
-            r#"x='a\tb'; echo "$x" > out.txt"#,
-            r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
-            r#"x='\143odeflow update'; print "$x" > commands.fifo"#,
-            r"print 'notes\n' > out.txt",
-            r"print -P '%n' > out.txt",
-            r"echo $'notes' $'a\tb' > out.txt",
-            r"cat $'notes\x2etxt' > out.txt",
-            r"echo -e 'codeflow\tversion' > notes.txt",
-            r"printf '\x63odeflow\n' > notes.txt",
-            r"printf '%x\n' 255 > notes.txt",
-            r"printf 'codeflow %x\n' 10 > notes.txt",
-            r"printf 'size %x %x\n' $a $b > notes.txt",
-        ] {
-            assert!(runs(command), "{command}");
-        }
-        for command in [
             "printf '%s' notes > out.txt",
             "echo notes > out.txt",
             "echo -n notes > out.txt",
@@ -1256,19 +1205,162 @@ mod tests {
             r"printf -v p '%s%s' no tes; cat $p > out.txt",
             r"printf '%s\n' 'notes' > /dev/null",
             "ls notes > out.txt",
-        ] {
-            assert!(!runs(command), "{command}");
-        }
+            r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
+            r"printf '%s\n' a > out.txt; printf '%s\n' b > out.txt",
+            r#"for w in no tes; do printf '%s' "$w"; done > out.txt"#,
+        ];
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
-    /// Everything a line writes is judged as one stream, in line order,
-    /// whatever separates the writers, and every produced text, literal
-    /// or one the composer resolves, takes the same judgment.
+    /// Printed text that is not settled (an escape, a conversion other than
+    /// a bare `%s`, a width, more arguments than conversions, a value
+    /// `echo` may decode) draws no finding on its own: it refuses where the
+    /// line hands it to a shell or interpreter on the line.
     #[test]
-    fn a_lines_joined_output_takes_one_judgment() {
-        for command in [
+    fn printed_text_that_is_not_settled_refuses_only_where_it_runs() {
+        let refuse = [
+            r"printf '%5s\n' notes | sh",
+            r"printf 'notes\n' a | sh",
+            r"printf 'a\tb' | sh",
+            r#"printf "$fmt" | sh"#,
+            r"echo -e 'a\tb' | bash",
+            r"print -P '%n' | zsh",
+            r"echo $'notes' $'a\tb' | sh",
+            r"printf '%x\n' 255 | python3",
+        ];
+        let allow = [
+            r"printf '%5s\n' notes > out.txt",
+            r"printf '%.3s\n' notes > out.txt",
+            r"printf '%-s\n' notes > out.txt",
+            r"printf '%s\n' a b > out.txt",
+            r"printf 'notes\n' a > out.txt",
+            r"printf '%d\n' 5 > out.txt",
+            r"printf '%b' notes > out.txt",
+            r"printf '100%%\n' > out.txt",
+            r"printf 'a\tb' > out.txt",
+            r"printf '%s\\n' notes > out.txt",
+            r"printf %s\n notes > out.txt",
+            r#"printf "$fmt" > out.txt"#,
+            r"printf > out.txt",
+            r"echo -e 'a\tb' > out.txt",
+            r"echo 'a\nb' > out.txt",
+            r#"x='a\cb'; echo "$x" > out.txt"#,
+            r#"x='a\tb'; echo "$x" > out.txt"#,
+            r"print 'notes\n' > out.txt",
+            r"print -P '%n' > out.txt",
+            r"echo $'notes' $'a\tb' > out.txt",
+            r"cat $'notes\x2etxt' > out.txt",
+            r"echo -e 'codeflow\tversion' > notes.txt",
+            r"printf '\x63odeflow\n' > notes.txt",
+            r"printf '%x\n' 255 > notes.txt",
+            r"printf 'codeflow %x\n' 10 > notes.txt",
+            r"printf 'size %x %x\n' $a $b > notes.txt",
+        ];
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Text a line hands to something on the line that executes it (a
+    /// shell or interpreter fed by a pipe, a here-string, an expanding
+    /// here-document or a process substitution; `eval`; a `-c` or `-e`
+    /// value that expands; a command word the guard cannot fill in; a
+    /// supplier that runs what it reads) is settled only as one printer of
+    /// plain literal text, a literal here-string or a literal
+    /// here-document. Any other feed refuses, whatever it names. A plain
+    /// file the line does not name elsewhere counts as that file run
+    /// directly.
+    #[test]
+    fn text_handed_to_an_executor_on_the_line_must_be_settled() {
+        let refuse = [
+            r"printf '\143odeflow update' | sh",
+            r"{ printf code; printf 'flow update\n'; } | bash",
+            r#"x=code; printf '%s' "$x flow update" | sh"#,
+            r#"bash <<< "$(printf '\143odeflow update')""#,
+            r#"eval "$(printf '\143odeflow update')""#,
+            r"$(printf '\143odeflow') update",
+            r"{ { sleep 1; printf '%s\n' 'flow update'; } & printf '%s' code; wait; } | sh",
+            r#"for w in code 'flow update'; do printf '%s' "$w"; done | sh"#,
+            r"printf '\143odeflow update' | python3",
+            r"source <(printf '\143odeflow update\n')",
+            r"printf '\143odeflow update\n' | xargs -0 sh -c",
+            r"printf '\143odeflow update\n' | parallel",
+            r"printf '\143odeflow update\n' | xargs env",
+            r#"x=$(printf '\143odeflow update'); $x"#,
+            r#"x=$(printf '\143odeflow update'); sh -c "$x""#,
+            r#"x=$(printf '\143odeflow update'); eval "$x""#,
+            "python3 - <<EOF\nimport os; os.system(\"$(printf '\\143odeflow update')\")\nEOF",
+            r"printf '%s\n' 'echo hi' 'codeflow update' | sh",
+            r"printf 'co%xflow update' 222 > s.sh; cat s.sh | sh",
+            r"bash <(printf 'co%xflow update' 222)",
+            r#"python3 -c "$(printf 'co%xflow update' 222)""#,
+            r"python3 <<< $'import os; os.system(\x27\143odeflow update\x27)'",
+            r"printf 'echo hi\n' | tee log.txt | sh",
+            r#"printf '%s\n' 'printf "\143odeflow update" | sh' | sh"#,
+            r#"echo 'eval "$1"' | sh -s "$x""#,
+            r"printf 'echo hi\n' |& sh",
+            r"printf 'echo hi\n' | sh; printf '\143odeflow update' | sh",
+        ];
+        // Settled text is judged: as a command line for a shell or a
+        // supplier, as code for an interpreter.
+        let named = [
+            r"printf '%s%s update\n' code flow | sh",
+            r"echo 'codeflow update' | bash",
+            r"printf '%s\n' update | xargs codeflow",
+            r#"printf 'import os; os.system("codeflow update")\n' | python3"#,
+        ];
+        let allow = [
+            r"printf 'echo hi\n' | sh",
+            r"printf '%s\n' notes > out.txt",
+            r"echo -e 'a\tb' > out.txt",
+            "echo 'echo hi' | bash",
+            r"printf 'ls\n' | zsh",
+            "echo ls | sh -s",
+            r"printf '%s\n' 'echo hi' | sh",
+            r"printf 'print(1)\n' | python3",
+            "bash <<< 'echo hi'",
+            "python3 <<< \"print(1)\"",
+            "sh -c 'echo hi'",
+            "sh < script.sh",
+            "python3 - <<'EOF'\nprint(1)\nEOF",
+            "cd src && python3 - <<'EOF'\nprint(1)\nEOF",
+            "python3 - <<EOF\nprint(1)\nEOF",
+            r"printf 'notes\n' | cat",
+            "ls | wc -l",
+            "git ls-files | xargs wc -l",
+            "x=ls; $x",
+            r"cat notes.txt | sh",
+            r"cat script.sh | bash",
+            r"bash <(cat script.sh)",
+            r"bash <(echo 'ls src')",
+            r#"python3 -c "$(printf '%s\n' 'print(1)')""#,
+            r"python3 -c $'print(1)'",
+            r"python3 /dev/fd/3 3<<< 'print(1)'",
+            "cat <<'E' | sh\nprintf hello\nE",
+            "git -c core.pager=sh log -1",
+            "cd src && bash <<< 'echo hi'",
+            "sh",
+        ];
+        let wrong = misjudged(&[&refuse[..], &named[..]].concat(), &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Text a line writes to a process started earlier that executes what
+    /// it reads (a named pipe, a descriptor, a background shell) is the
+    /// named residual: on a line with no executor of its own, only a
+    /// settled printer's output and the composer's values are judged, so
+    /// these draw no install finding (AC-6). The sandbox, where it runs,
+    /// denies the writes the verbs make.
+    #[test]
+    fn text_written_to_an_earlier_process_is_the_named_residual() {
+        let comments = "'#' ".repeat(16);
+        let spelled = "c o d e f l o w ' ' u p d a t e";
+        let reused = format!("printf '%c' {comments}$'\\n' {spelled} $'\\n' > commands.fifo");
+        let residual = [
+            r#": ${piece:=code}; printf '%s' "$piece"; printf '%s\n' 'flow update'"#,
+            r#"while read -r; do printf '%s' "$REPLY"; done < words.txt > commands.fifo"#,
+            r"{ { sleep 1; printf '%s\n' 'flow update'; } & printf '%s' code; wait; } > commands.fifo",
             r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
-            r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
             r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
             r"printf '%s' code > commands.fifo; printf '%s\n' 'flow update' > commands.fifo",
             r"printf '%s' code >> commands.fifo && printf '%s\n' 'flow update' >> commands.fifo",
@@ -1276,23 +1368,32 @@ mod tests {
             r"( printf '%s' code; printf '%s\n' 'flow update' ) > commands.fifo",
             r"{ echo -n code; cat notes.txt; echo 'flow update'; } > commands.fifo",
             r"{ printf '%s' code; head -n 1 notes.txt; printf '%s\n' 'flow update'; } > commands.fifo",
-            r#"x='co\deflow'; printf '%s update\n' "$x" > commands.fifo"#,
-            r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
-            r#"x='$'; y="'\\143'"; printf '%s%s%s\n' "$x" "$y" 'odeflow update' > commands.fifo"#,
             r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
             r#"for f in *.txt; do echo "$f"; done > commands.fifo"#,
             r#"x=code; { printf '%s' "$x"; printf '%s\n' 'flow update'; } > commands.fifo"#,
-        ] {
-            assert!(runs(command), "{command}");
-        }
-        for command in [
-            r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
-            r"printf '%s\n' a > out.txt; printf '%s\n' b > out.txt",
-            r#"for w in no tes; do printf '%s' "$w"; done > out.txt"#,
-            r"printf '%s\n' notes > out.txt",
-        ] {
-            assert!(!runs(command), "{command}");
-        }
+            r"printf '\u0063odeflow update' > commands.fifo",
+            r"printf '\U00000063odeflow update' > commands.fifo",
+            r"printf 'cod\0eflow update' > commands.fifo",
+            r"printf '%s\n' '\143odeflow update' | xargs printf > commands.fifo",
+            r"printf '%d %s\n' 1 '\143odeflow update' > commands.fifo",
+            r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
+            r"echo -n '\143odeflow update' > commands.fifo",
+            r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
+            r"printf 'codeflow upd%xte' 10 > commands.fifo",
+            r"printf '%xodeflow update' 12 > commands.fifo",
+            r"printf 'co%xflow update' 222 > commands.fifo",
+            r"printf 'co%Xflow update' 0xde > commands.fifo",
+            r"printf 'co%xflow update' 0336 > commands.fifo",
+            r"printf 'co%xflow update' $((222)) > commands.fifo",
+            r"printf 'codeflow upd%.0xate' 0 > commands.fifo",
+            r#"printf '%xo%xflow update' "$a" "$b" > commands.fifo"#,
+            r"printf '\143odeflow%1supdate\n' '' > commands.fifo",
+            r"printf '#\c\n\143odeflow update\n' > commands.fifo",
+            reused.as_str(),
+            r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
+        ];
+        let wrong = misjudged(&[], &residual);
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// The brief's controls: the admitted lines that name the binary with
