@@ -36,21 +36,20 @@
 //! variable assigned before a program that runs it, or earlier on the
 //! line, is judged the same way; where that command cannot be resolved,
 //! such as a shell reading its input, the line is judged on its raw text.
-//! An assignment stays live for the rest of the line, and any later
-//! program that can start another one (a shell, a Git alias, `find -exec`)
-//! judges every such variable, since the program it starts inherits them.
-//! An `unset` or a new value ends the old value only on a line whose
-//! commands all run in one shell, in order, always, and not for a
-//! read-only variable; elsewhere both values stay live. A command variable
-//! set without a `NAME=value` word (`read`, `printf -v`, `NAME+=`,
-//! `${NAME:=...}`, a loop variable, a name reference) leaves the line
-//! judged on its raw text. Each of these checks reads what the current
-//! shell runs, once zsh's precommand modifiers and the `builtin` and
-//! `command` wrappers are removed; a declaration or `unset` behind any
-//! other launcher (`env`, `nice`) runs as a program and changes nothing,
-//! one behind `builtin` or a zsh modifier, which some shells lack, never
-//! clears a value, and a wrapper this reader cannot remove leaves the line
-//! judged on its raw text.
+//! An assignment anywhere on the line is live for the whole line, and any
+//! program on it that can start another one (a shell, a Git alias,
+//! `find -exec`) judges every such variable, since the program it starts
+//! inherits them. No `unset` or new value removes a value; a new value
+//! only adds one. A command variable written without a `NAME=value` word
+//! this reader sees (`read`, `printf -v`, `NAME+=`, `${NAME:=...}`, a loop
+//! variable, a name reference, a declaration of a bare name) leaves the
+//! line judged on its raw text, and so does any word the shell expands
+//! (braces, a pattern, a variable) given to a builtin that writes or
+//! declares names. These checks read what the current shell runs, once
+//! zsh's precommand modifiers and the `builtin` and `command` wrappers are
+//! removed, with the lexer's mark of each word kept; a wrapper or program
+//! word the shell expands, or a wrapper this reader cannot remove, leaves
+//! the line judged on its raw text.
 //! The words `gh repo clone`, `gh repo fork` and `gh gist clone` pass to
 //! `git` after `--` are read as quoted arguments are. An editor's own
 //! command (`vim -c`, `emacs
@@ -64,8 +63,8 @@
 use super::headless::{basename, shell_command_string};
 use super::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SHELLS, SUPPLIERS};
 use crate::hooks::git_guard::{
-    builtin_words, command_argv_literal, command_segments, expand_commands, is_shell_modifier,
-    shell_blank, strip_launchers, strip_reserved_words,
+    builtin_words, command_argv_literal, expand_commands, is_shell_modifier, shell_blank,
+    strip_launchers, strip_reserved_words,
 };
 
 /// The binary's program name.
@@ -415,17 +414,23 @@ struct Simple {
 enum Shell {
     /// Assignments alone, which set their variables in this shell.
     Assigns(Vec<(String, String)>),
-    /// The words of the command this shell runs, from its program on.
-    /// `portable` is false when a wrapper only some shells know led to it
-    /// (`builtin`, which dash lacks, or a zsh modifier, which bash runs as
-    /// a program): the command then counts where it adds a value, a
-    /// read-only name or an unseen write, never where it clears one.
-    Runs { words: Vec<String>, portable: bool },
+    /// The words of the command this shell runs, from its program on, and
+    /// whether the shell passes each one as written ([`written`]).
+    Runs {
+        words: Vec<String>,
+        written: Vec<bool>,
+    },
     /// Nothing this shell keeps: a `command -v` lookup or a bare wrapper.
     Nothing,
     /// A wrapper the view cannot remove: a `command` option it does not
-    /// know, or a program word the shell expands.
+    /// know, or a wrapper or program word the shell expands.
     Hidden,
+}
+
+/// Whether the shell passes a word as exactly the text written: the
+/// lexer's literal mark, and no `$`, backtick or substitution left in it.
+fn written(word: &str, literal: bool) -> bool {
+    literal && !unresolved(word)
 }
 
 /// The simple commands of `command`, read as
@@ -450,8 +455,8 @@ fn simple(command: &str) -> Vec<Simple> {
                 argv: words[start..].to_vec(),
                 literal: literal[start..].to_vec(),
                 values,
+                shell: current_shell(&words, &literal),
                 words: all,
-                shell: current_shell(&words),
             }
         })
         .collect()
@@ -464,17 +469,19 @@ fn simple(command: &str) -> Vec<Simple> {
 /// ([`builtin_words`]), as often as they lead, since each runs the command
 /// after it in this same shell. Any other launcher (`env`, `exec`, `nice`,
 /// `timeout`) starts a new program, so its words stay in this view and the
-/// command it runs changes nothing here.
-fn current_shell(words: &[String]) -> Shell {
+/// command it runs changes nothing here. The lexer's literal marks go with
+/// the words, and a removed wrapper word or a program word the shell
+/// expands hides the command.
+fn current_shell(words: &[String], literal: &[bool]) -> Shell {
     let start = words
         .iter()
         .position(|word| assigned(word).is_none() && !word.contains("+="))
         .unwrap_or(words.len());
-    let written = &words[start..];
-    if written.is_empty() {
+    let command = &words[start..];
+    if command.is_empty() {
         return Shell::Assigns(words.iter().filter_map(|word| assigned(word)).collect());
     }
-    let mut rest = written;
+    let mut rest = command;
     loop {
         let before = rest.len();
         while rest.first().is_some_and(|word| is_shell_modifier(word)) {
@@ -485,15 +492,23 @@ fn current_shell(words: &[String]) -> Shell {
             break;
         }
     }
-    let portable = !written[..written.len() - rest.len()]
-        .iter()
-        .any(|word| word == "builtin" || is_shell_modifier(word));
+    let from = words.len() - rest.len();
+    let marks: Vec<bool> = (start..words.len())
+        .map(|at| written(&words[at], literal.get(at).copied().unwrap_or(false)))
+        .collect();
+    let (wrappers, marks) = marks.split_at(from - start);
+    // The lexer marks any `[` as pattern syntax, but the test builtins'
+    // names alone hold no pattern the shell can expand.
+    let test = rest.first().is_some_and(|word| word == "[" || word == "[[");
+    if wrappers.contains(&false) || (marks.first() == Some(&false) && !test) {
+        return Shell::Hidden;
+    }
     match rest.first() {
         None => Shell::Nothing,
-        Some(program) if program == "command" || unresolved(program) => Shell::Hidden,
+        Some(program) if program == "command" => Shell::Hidden,
         Some(_) => Shell::Runs {
             words: rest.to_vec(),
-            portable,
+            written: marks.to_vec(),
         },
     }
 }
@@ -532,47 +547,23 @@ fn read(command: &str, depth: usize) -> Found {
         return Found::Unresolved;
     }
     let mut unresolved = command.contains("<<<");
-    // Assignments on the line, live for every later command. The command
-    // list carries no scope or order of execution, so an `unset` or a new
-    // value clears an earlier value only on a line whose commands all run
-    // in one shell, in order, always ([`one_shell_in_order`]). Anywhere
-    // else the earlier value stays live beside the new one, and so it does
-    // on a line that makes a variable read-only, where an update can fail.
-    // Each later program that can read one judges every value it holds. A
-    // command variable set by a word this reader does not read as an
-    // assignment leaves the line judged on its raw text ([`untracked`]).
-    // Every check of what a command does to these variables reads its
-    // shell view ([`current_shell`]); a wrapper that view cannot remove
-    // leaves the line judged on its raw text.
+    // Every value assigned anywhere on the line is live for every command
+    // on it: the command list carries no scope or order of execution, and
+    // a loop or function can run a later assignment first. No `unset` or
+    // new value removes one; a new value only adds to them. Each program
+    // that can read one judges every value. A command variable written
+    // in a way this reader cannot see leaves the line judged on its raw
+    // text ([`unseen_write`]). Every check of what a command does to these
+    // variables reads its shell view ([`current_shell`]).
     let commands = simple(command);
-    let mut pending: Vec<(String, String)> = Vec::new();
-    let fixed: Vec<String> = commands
-        .iter()
-        .flat_map(|command| untracked(command).read_only)
-        .collect();
-    let clears = one_shell_in_order(command);
-    let clears_name = |variable: &str| clears && !fixed.iter().any(|name| name == variable);
-    let set =
-        |pending: &mut Vec<(String, String)>, values: Vec<(String, String)>, portable: bool| {
-            for (variable, value) in values {
-                if portable && clears_name(&variable) {
-                    pending.retain(|(name, _)| *name != variable);
-                }
-                pending.push((variable, value));
-            }
-        };
+    let live: Vec<(String, String)> = commands.iter().flat_map(line_values).collect();
     for command in commands {
-        if untracked(&command).unseen {
+        if unseen_write(&command) {
             unresolved = true;
         }
-        let shell = match &command.shell {
-            Shell::Assigns(values) => {
-                set(&mut pending, values.clone(), true);
-                continue;
-            }
-            Shell::Runs { words, portable } => words
-                .first()
-                .map(|program| (basename(program), words, *portable)),
+        let builtin = match &command.shell {
+            Shell::Assigns(_) => continue,
+            Shell::Runs { words, .. } => words.first().map(|program| basename(program)),
             Shell::Hidden => {
                 unresolved = true;
                 None
@@ -599,33 +590,17 @@ fn read(command: &str, depth: usize) -> Found {
                 return Found::Run(run);
             }
         }
-        // A declaration or an `unset` changes this shell's variables only
-        // when this shell runs it; behind another launcher it runs as a
-        // program, which reads them as any program does.
-        if let Some((builtin, words, portable)) = shell {
-            if DECLARES.contains(&builtin.as_str()) {
-                let values = words[1..]
-                    .iter()
-                    .filter_map(|word| assigned(word))
-                    .collect();
-                set(&mut pending, values, portable);
-                continue;
-            }
-            if builtin == "unset" {
-                // `unset -f` removes functions; any other form removes
-                // variables.
-                if portable && !words[1..].iter().any(|word| word == "-f") {
-                    pending.retain(|(variable, _)| {
-                        !(clears_name(variable) && words[1..].contains(variable))
-                    });
-                }
-                continue;
-            }
+        // A declaration or an `unset` this shell runs starts no program.
+        // Behind another launcher it runs as a program, which reads the
+        // values as any program does.
+        if builtin.is_some_and(|builtin| DECLARES.contains(&builtin.as_str()) || builtin == "unset")
+        {
+            continue;
         }
         // A data program reads only the variables it runs as a command;
         // any other program may also run any value as a command.
         let data = DATA_PROGRAMS.contains(&name.as_str());
-        for (variable, value) in pending
+        for (variable, value) in live
             .iter()
             .filter(|(variable, _)| !data || runs_variable(&name, variable))
         {
@@ -657,84 +632,9 @@ fn runs_variable(program: &str, variable: &str) -> bool {
     !STARTS_NO_PROGRAM.contains(&program) && command_variable(variable)
 }
 
-/// Shell words that open a conditional, a loop, a function or a
-/// coprocess: a command after one may not run, or may run later or apart.
-const COMPOUND_WORDS: &[&str] = &[
-    "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "for", "select", "case",
-    "esac", "function", "coproc",
-];
-
-/// Whether every command on `command` runs in the one shell, in the order
-/// written, and always: commands split only by `;`, newlines and brace
-/// groups. A subshell or substitution (any `(`, `)` or backtick), a
-/// pipeline or `|&`, a background job, `&&` or `||`, a conditional, a loop,
-/// a function, a coprocess, an ANSI-C `$'...'` word, or a command another
-/// program's body carries (`sh -c`, `eval`, `env -S`, a word expanding a
-/// line's literal) all fail it. So does an open quote. Only on such a line
-/// may an `unset` or a new value clear an earlier value. The check reads
-/// more structure than the shell runs (a `(` in a comment counts), which
-/// only keeps more values live.
-fn one_shell_in_order(command: &str) -> bool {
-    if expand_commands(command) != command_segments(command) {
-        return false;
-    }
-    let mut words: Vec<String> = Vec::new();
-    let mut word = String::new();
-    let mut quote: Option<char> = None;
-    let mut previous = ' ';
-    let mut chars = command.chars().peekable();
-    while let Some(c) = chars.next() {
-        match quote {
-            Some('\'') => {
-                if c == '\'' {
-                    quote = None;
-                }
-            }
-            Some(_) => match c {
-                '"' => quote = None,
-                '\\' => {
-                    chars.next();
-                }
-                '`' => return false,
-                '$' if chars.peek() == Some(&'(') => return false,
-                _ => {}
-            },
-            None => match c {
-                '\'' | '"' => {
-                    // A quoted word is never a shell keyword.
-                    word.push(c);
-                    quote = Some(c);
-                }
-                '\\' => {
-                    word.push(c);
-                    chars.next();
-                }
-                '(' | ')' | '|' | '`' => return false,
-                '$' if chars.peek() == Some(&'\'') => return false,
-                // `>&`, `<&` and `&>` redirect; any other `&` forks or joins.
-                '&' if !(matches!(previous, '>' | '<') || chars.peek() == Some(&'>')) => {
-                    return false
-                }
-                c if c.is_whitespace() || c == ';' => words.push(std::mem::take(&mut word)),
-                _ => word.push(c),
-            },
-        }
-        previous = c;
-    }
-    words.push(word);
-    quote.is_none()
-        && !words
-            .iter()
-            .any(|word| COMPOUND_WORDS.contains(&word.as_str()))
-}
-
-/// Whether `variable` is a command variable: one a data program lists
-/// ([`COMMAND_VARIABLES`]) or the startup check lists.
+/// Whether `variable` is a command variable ([`command_variables`]).
 fn command_variable(variable: &str) -> bool {
-    super::startup::COMMAND_VARIABLES.contains(&variable)
-        || COMMAND_VARIABLES
-            .iter()
-            .any(|(_, names)| names.contains(&variable))
+    command_variables().any(|name| *name == variable)
 }
 
 /// Bash and zsh builtins that write the variable a word names without a
@@ -754,93 +654,95 @@ const WRITES_NAMES: &[&str] = &[
     "zparseopts",
 ];
 
-/// What one simple command does to the variables this reader tracks
-/// beyond its `NAME=value` words.
-struct Untracked {
-    /// It may set a command variable to a value this reader does not see:
-    /// a builtin that writes a name (`read`, `printf -v`, `mapfile`,
-    /// `getopts`, `wait -p`), a loop variable, an append (`NAME+=`), a
-    /// default expansion (`${NAME:=...}`), a name reference (`declare -n`),
-    /// or a name the shell expands where a declaration or such a builtin
-    /// takes one.
-    unseen: bool,
-    /// The variables it makes read-only, so a later `unset` or new value
-    /// for them fails.
-    read_only: Vec<String>,
+/// The command variables a data program lists ([`COMMAND_VARIABLES`]) and
+/// the startup check lists.
+fn command_variables() -> impl Iterator<Item = &'static &'static str> {
+    COMMAND_VARIABLES
+        .iter()
+        .flat_map(|(_, names)| names.iter())
+        .chain(super::startup::COMMAND_VARIABLES)
 }
 
-/// What `command` does to the variables beyond its `NAME=value` words. The
-/// builtin and its operands are read from its shell view
-/// ([`current_shell`]), so a wrapper hides none of them; the text of each
-/// word as written is read for appends, default expansions and loop
-/// variables.
-fn untracked(command: &Simple) -> Untracked {
-    let words = &command.words;
-    let shell: &[String] = match &command.shell {
-        Shell::Runs { words, .. } => words,
-        _ => &[],
-    };
-    let program = shell.first().map(|word| basename(word)).unwrap_or_default();
-    let args = shell.get(1..).unwrap_or_default();
-    let declares = DECLARES.contains(&program.as_str());
-    let options: Vec<&String> = args
-        .iter()
-        .filter(|word| word.starts_with('-') || word.starts_with('+'))
-        .collect();
-    let read_only = if program == "readonly"
-        || (declares
-            && options
-                .iter()
-                .any(|option| option.starts_with('-') && option.contains('r')))
-    {
-        args.iter()
-            .filter(|word| !word.starts_with('-') && !word.starts_with('+'))
-            .map(|word| assigned(word).map_or_else(|| word.clone(), |(name, _)| name))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let builtin_writes = WRITES_NAMES.contains(&program.as_str())
-        && (!matches!(program.as_str(), "print" | "printf")
-            || args
-                .iter()
-                .any(|word| word.starts_with('-') && word.contains('v')));
-    let mut unseen = (declares
-        && program != "export"
-        && options
-            .iter()
-            .any(|option| option.starts_with('-') && option.contains('n')))
-        || ((declares || builtin_writes)
-            && args
-                .iter()
-                .any(|word| word.contains('$') || word.contains('`')));
-    let names = || {
-        COMMAND_VARIABLES
-            .iter()
-            .flat_map(|(_, names)| names.iter())
-            .chain(super::startup::COMMAND_VARIABLES)
-    };
-    for word in words {
-        unseen |= names().any(|name| {
-            word.starts_with(&format!("{name}+="))
-                || word.contains(&format!("{{{name}:="))
-                || word.contains(&format!("{{{name}="))
-        });
+/// The values `command` assigns, each live for the whole line: assignments
+/// alone, the assignments before its program (which a function or a
+/// special builtin keeps), and the `NAME=value` operands written as they
+/// stand of a declaration this shell runs.
+fn line_values(command: &Simple) -> Vec<(String, String)> {
+    let mut values = command.values.clone();
+    match &command.shell {
+        Shell::Assigns(assigns) => values.extend(assigns.iter().cloned()),
+        Shell::Runs { words, written } if DECLARES.contains(&basename(&words[0]).as_str()) => {
+            values.extend(
+                words
+                    .iter()
+                    .zip(written)
+                    .skip(1)
+                    .filter(|(_, written)| **written)
+                    .filter_map(|(word, _)| assigned(word)),
+            );
+        }
+        _ => {}
     }
-    // A name the builtin writes, given alone or attached (`-vNAME`), the
-    // loop variable of `for` or `select`, and a name left in program
-    // position once the loop words are stripped.
-    let gives = |word: &String, name: &str| {
-        word == name || (word.starts_with('-') && word.len() > name.len() && word.ends_with(name))
-    };
-    unseen |= names().any(|name| {
-        (builtin_writes && args.iter().any(|word| gives(word, name)))
-            || program == *name
-            || words
-                .windows(2)
-                .any(|pair| matches!(pair[0].as_str(), "for" | "select") && pair[1] == *name)
+    values
+}
+
+/// Whether `command` may write a command variable to a value this reader
+/// does not see, which leaves the line judged on its raw text. From the
+/// text of every word: an append (`NAME+=`), a default expansion
+/// (`${NAME:=...}`), or the variable of a `for` or `select` loop. From its
+/// shell view ([`current_shell`]), for a builtin that writes a name
+/// ([`WRITES_NAMES`], `printf` and `print` with `-v`) or declares one
+/// ([`DECLARES`]): any word the shell expands, which may be any name or
+/// the option that names one; a name reference (`-n`); a command variable
+/// the writer is given alone or attached to an option (`-vNAME`); and one a
+/// declaration gives without a value. A declaration's `NAME=value` word
+/// written as it stands is a value this reader sees ([`line_values`]).
+fn unseen_write(command: &Simple) -> bool {
+    let words = &command.words;
+    let in_text = words.iter().any(|word| {
+        command_variables().any(|name| {
+            word.starts_with(&format!("{name}+="))
+                || word.contains(&format!("${{{name}:="))
+                || word.contains(&format!("${{{name}="))
+        })
+    }) || words.windows(2).any(|pair| {
+        matches!(pair[0].as_str(), "for" | "select")
+            && command_variables().any(|name| pair[1] == *name)
     });
-    Untracked { unseen, read_only }
+    if in_text {
+        return true;
+    }
+    let Shell::Runs { words, written } = &command.shell else {
+        return false;
+    };
+    let program = basename(&words[0]);
+    let args = &words[1..];
+    let declares = DECLARES.contains(&program.as_str());
+    if command_variables().any(|name| program == *name) {
+        return true;
+    }
+    if !declares && !WRITES_NAMES.contains(&program.as_str()) {
+        return false;
+    }
+    if written[1..].contains(&false) {
+        return true;
+    }
+    let options = || args.iter().filter(|word| word.starts_with('-'));
+    if matches!(program.as_str(), "print" | "printf") && !options().any(|word| word.contains('v')) {
+        return false;
+    }
+    if declares && program != "export" && options().any(|word| word.contains('n')) {
+        return true;
+    }
+    args.iter().any(|word| {
+        command_variables().any(|name| {
+            word == name
+                || (!declares
+                    && word.starts_with('-')
+                    && word.len() > name.len()
+                    && word.ends_with(name))
+        })
+    })
 }
 
 /// An assignment's value, for the command `program` that may read it. A
