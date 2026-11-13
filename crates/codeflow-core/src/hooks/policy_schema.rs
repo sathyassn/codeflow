@@ -261,8 +261,9 @@ pub const SCHEMA: [KeySpec; 83] = [
                 An empty list lets agents push the lines it would name \
                 where the credential allows; the GitHub CLI credential \
                 admission still never admits an `integration/` name. The \
-                guards read a value that is not an array of non-blank \
-                strings without whitespace as the default list, and \
+                guards read a value that is not an array of non-empty \
+                strings without a space or control character as the \
+                default list, and \
                 validation reports a value that is not an array of \
                 strings. A push of every \
                 branch (`--all`, `--branches`, `--mirror`, a wildcard) is \

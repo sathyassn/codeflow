@@ -292,8 +292,10 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
     }
     config_allows(&config, url, bodies)?;
     unrewritten(target, url)?;
-    match std::fs::symlink_metadata(workdir.join(".gitmodules")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    // Only a `.gitmodules` proven absent lets the form through; an entry of
+    // any kind, a dangling link or a read error withholds the admission.
+    match crate::absence::symlink_metadata_optional(&workdir.join(".gitmodules")) {
+        Ok(None) => {}
         _ => return None,
     }
     let landed = super::landed_policy::load_local(target).ok()?;
@@ -307,15 +309,13 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
         Form::Fetch { named: false } => {
             // A bare fetch goes to the current branch's remote, which must
             // be `origin` when one is set.
-            if let Some(current) = current {
+            if let Some(current) = current? {
                 let key = format!("branch.{current}.remote");
                 if let Some((_, _, remote)) = config.get_all(&key).last() {
                     if *remote != b"origin" {
                         return None;
                     }
                 }
-            } else {
-                repo.head().ok()?;
             }
             Some(())
         }
@@ -324,7 +324,9 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
                 source_allowed(&repo, src)?;
                 (*name).to_string()
             } else {
-                let current = current?;
+                let Some(Some(current)) = current else {
+                    return None;
+                };
                 let name = if *src == "HEAD" {
                     current.clone()
                 } else {
@@ -334,7 +336,7 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
                     return None;
                 }
                 let resolved = repo.resolve_reference_from_short_name(&name).ok()?;
-                if resolved.name().ok()? != format!("refs/heads/{name}") {
+                if !names_branch(&resolved, &name) {
                     return None;
                 }
                 name
@@ -464,17 +466,22 @@ fn unrewritten(target: &Path, url: &str) -> Option<()> {
     Some(())
 }
 
-/// The current branch's name, or `None` when `HEAD` is detached, unborn
-/// or unreadable.
-fn current_branch(repo: &git2::Repository) -> Option<String> {
+/// The current branch's name: `Some(None)` when `HEAD` is detached, and
+/// `None` when `HEAD` is unborn or unreadable or names a branch whose name
+/// is not UTF-8, which the forms never admit.
+fn current_branch(repo: &git2::Repository) -> Option<Option<String>> {
     let head = repo.head().ok()?;
     if !head.is_branch() {
-        return None;
+        return Some(None);
     }
-    head.name()
-        .ok()?
-        .strip_prefix("refs/heads/")
-        .map(str::to_string)
+    let name = crate::git::name::reference_name(&head);
+    let name = name.rule_text().ok()?.strip_prefix("refs/heads/")?;
+    Some(Some(name.to_string()))
+}
+
+/// Whether `reference`'s full name is `refs/heads/<name>`, compared as bytes.
+fn names_branch(reference: &git2::Reference<'_>, name: &str) -> bool {
+    crate::git::name::reference_name(reference).bytes() == format!("refs/heads/{name}").as_bytes()
 }
 
 /// `Some` when the push source is `HEAD`, a full object id, or a local
@@ -492,7 +499,7 @@ fn source_allowed(repo: &git2::Repository, src: &str) -> Option<()> {
         return None;
     }
     let resolved = repo.resolve_reference_from_short_name(src).ok()?;
-    if resolved.name().ok()? != format!("refs/heads/{src}") || tag_exists(repo, src)? {
+    if !names_branch(&resolved, src) || tag_exists(repo, src)? {
         return None;
     }
     Some(())

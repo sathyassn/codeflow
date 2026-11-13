@@ -267,9 +267,11 @@ pub fn default_agent_push_refused_branches() -> Vec<String> {
 }
 
 /// `git.agent_push_refused_branches` as written, or the default when the
-/// value is not an array of non-blank strings without whitespace or control
-/// characters: a value the guards cannot read refuses at least what the
-/// default refuses, and never stops the rest of the policy loading.
+/// value is not an array of non-empty strings without a space or control
+/// character, which Git refuses in a branch name (other characters, Unicode
+/// spaces included, are kept as Git keeps them): a value the guards cannot
+/// read refuses at least what the default refuses, and never stops the rest
+/// of the policy loading.
 fn agent_push_refused_branches<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -282,8 +284,7 @@ where
                 entry
                     .as_str()
                     .filter(|name| {
-                        !name.is_empty()
-                            && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+                        !name.is_empty() && !name.chars().any(|c| c == ' ' || c.is_control())
                     })
                     .map(str::to_string)
             })
@@ -324,7 +325,8 @@ pub struct GitPolicy {
     /// list lets agents push lines where the credential allows.
     /// [`AGENT_PUSH_FLOOR`] and the default branch the policy was read at
     /// are refused whatever the list holds. A value that is not an array of
-    /// non-blank strings without whitespace reads as the default.
+    /// non-empty strings without a space or control character reads as the
+    /// default.
     #[serde(deserialize_with = "agent_push_refused_branches")]
     pub agent_push_refused_branches: Vec<String>,
     /// The default branch this policy was read at, when it was read at a
