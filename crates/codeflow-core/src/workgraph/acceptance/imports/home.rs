@@ -610,6 +610,26 @@ fn own_change(
     }
 }
 
+/// The line landing the walk binds for `record`, and the anchor it sets,
+/// apart from whether the record is admitted: for fixtures only.
+#[cfg(test)]
+pub(super) fn line_landing(
+    repo: &Repository,
+    record: &RecordView,
+    default_tip: Oid,
+    receiver: Oid,
+    head: Oid,
+) -> Result<(Option<Oid>, Option<HomeAnchor>), String> {
+    let who = Identity::of(record);
+    let start = start_point(repo, receiver, default_tip)?;
+    let Some(change) = line_change(repo, &who, receiver, start)? else {
+        return Ok((None, None));
+    };
+    let anchor = adoption_anchor(repo, &who, change, start, default_tip, head)?;
+    let (LineChange::Moved(at, _) | LineChange::Introduced(at)) = change;
+    Ok((Some(at), anchor))
+}
+
 /// Judge a record that names the receiving line as its home and that the
 /// line does not already hold homed there (AC-12): its exact version must
 /// stand on the default branch, its introduction there since `start` must

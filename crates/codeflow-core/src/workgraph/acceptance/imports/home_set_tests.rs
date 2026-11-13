@@ -2,10 +2,13 @@
 //! landing may carry, tested under the live set and the aligned one, and
 //! the home anchor that a line's own records-only adoption sets.
 
+use super::home::line_landing;
 use super::home_tests::{
     docs_move, moved, passes, path_of, refused, task, todo, Fixture, LINE, MOVED, OTHER, THIRD,
 };
-use super::{admissible_planning_landing_with, Repository, PLANNING_LANDING_PATHS};
+use super::{
+    admissible_planning_landing_with, Graph, HomeAnchor, Repository, PLANNING_LANDING_PATHS,
+};
 use crate::workgraph::classify::AmendmentPath;
 
 const NARROW: &[AmendmentPath] = &[AmendmentPath::Record];
@@ -455,6 +458,145 @@ fn an_earlier_sync_that_imported_a_judged_move_is_not_the_lines_own_change() {
     fixture.sync();
     let found = passes(&fixture, "a later sync importing a note");
     assert_eq!(found["TSK-001"].home_anchor, None);
+}
+
+/// The line landing the walk binds for TSK-001 at the sync, and the anchor
+/// it sets, apart from whether the record is admitted.
+fn bound(fixture: &Fixture) -> Result<(Option<git2::Oid>, Option<HomeAnchor>), String> {
+    let repo = Repository::open(fixture.root()).unwrap();
+    let graph = Graph::from_revision(&repo, "sync").unwrap();
+    line_landing(
+        &repo,
+        &graph.records["TSK-001"],
+        fixture.oid("main"),
+        fixture.oid(LINE),
+        fixture.oid("sync"),
+    )
+}
+
+/// Take the sync onto the line, as a landed sync pull request does.
+fn take_the_sync(fixture: &Fixture) {
+    fixture.git(&["switch", "-q", LINE]);
+    fixture.git(&["merge", "--ff-only", "-q", "sync"]);
+}
+
+/// The history of review finding 1 at 94c5eaae1. The line moves the task
+/// to `main` in its own landing, with a doc when `docs`. `main` lands an
+/// unrelated change, a note on another record or product work when
+/// `product`, and the line takes it by a clean sync that keeps the task as
+/// the line holds it. `main` then moves the task to the line's exact bytes
+/// and lands product work, and the next sync leaves the record unchanged.
+/// Returns the line's own move.
+fn own_move_kept_across_a_sync(docs: bool, product: bool) -> (Fixture, git2::Oid) {
+    let path = path_of("TSK-001");
+    let homed = moved("TSK-001", "main");
+    let fixture = Fixture::new(&[
+        ("TSK-001", todo("TSK-001", OTHER)),
+        ("TSK-002", todo("TSK-002", "main")),
+    ]);
+    let mut own = vec![(path.as_str(), homed.as_str())];
+    if docs {
+        own.push(("docs/line.md", "The line's note.\n"));
+    }
+    let landing = fixture.land(LINE, &own);
+    let other = path_of("TSK-002");
+    let note = task("TSK-002", "main", "todo", "Work.", "Noted on main.");
+    let unrelated = if product {
+        ("src/feature.rs", "pub fn feature() {}\n")
+    } else {
+        (other.as_str(), note.as_str())
+    };
+    fixture.land("main", &[unrelated]);
+    fixture.sync();
+    passes(&fixture, "the earlier sync");
+    take_the_sync(&fixture);
+    fixture.land("main", &[(&path, &homed)]);
+    fixture.land("main", &[("src/later.rs", "pub fn later() {}\n")]);
+    fixture.sync();
+    (fixture, landing)
+}
+
+/// AC-13 (review finding 1 at 94c5eaae1): when the line's last sync keeps
+/// a home the line set before it, the walk binds the line's own move, never
+/// the sync, whose own first-parent diff did not change the home. A
+/// records-only own move passes and a docs-bearing one is refused, after a
+/// records-only or a product-bearing earlier sync, with no anchor either way.
+#[test]
+fn a_home_kept_across_a_sync_binds_the_lines_own_move() {
+    let mut failures = Vec::new();
+    for docs in [false, true] {
+        for product in [false, true] {
+            let (fixture, landing) = own_move_kept_across_a_sync(docs, product);
+            let case = format!(
+                "{} own move, {} earlier sync",
+                if docs {
+                    "a docs-bearing"
+                } else {
+                    "a records-only"
+                },
+                if product {
+                    "a product-bearing"
+                } else {
+                    "a records-only"
+                },
+            );
+            match bound(&fixture) {
+                Ok((at, anchor)) => {
+                    if at != Some(landing) {
+                        failures.push(format!("{case}: bound {at:?}, not the own move {landing}"));
+                    }
+                    if anchor.is_some() {
+                        failures.push(format!("{case}: anchor {anchor:?}"));
+                    }
+                }
+                Err(said) => failures.push(format!("{case}: no landing bound: {said}")),
+            }
+            if docs && !docs_admitted() {
+                let named = format!("own home change at {landing}");
+                failures.extend(not_refused(&fixture, &case, &["TSK-001", MOVED, &named]));
+            } else if let Err(said) = fixture.judge() {
+                failures.push(format!("{case}: refused: {said}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// AC-13: a line whose last sync kept a home that no commit of the line
+/// set, by resolving the sync against `main`'s move, binds no landing, and
+/// the next sync is refused rather than proving the sync itself.
+#[test]
+fn a_kept_home_no_line_commit_set_is_refused() {
+    let path = path_of("TSK-001");
+    let base = todo("TSK-001", OTHER);
+    let fixture = Fixture::new(&[("TSK-001", base.clone())]);
+    fixture.land("main", &[(&path, &moved("TSK-001", THIRD))]);
+    fixture.git(&["switch", "-q", "-C", "sync", LINE]);
+    fixture.git(&["merge", "--no-ff", "-q", "--no-commit", "main"]);
+    fixture.git(&["checkout", LINE, "--", &path]);
+    fixture.git(&["commit", "-qm", "chore(merge): take main"]);
+    let kept = fixture.oid("sync");
+    take_the_sync(&fixture);
+    fixture.land("main", &[(&path, &base)]);
+    fixture.sync();
+    let mut failures = Vec::new();
+    match bound(&fixture) {
+        Ok((at, _)) => failures.push(format!("bound {at:?} for a home no line commit set")),
+        Err(said) if !said.contains(&kept.to_string()) => {
+            failures.push(format!("the refusal does not name the sync {kept}: {said}"));
+        }
+        Err(_) => {}
+    }
+    failures.extend(not_refused(
+        &fixture,
+        "a home the sync kept against main",
+        &[
+            "TSK-001",
+            MOVED,
+            "no commit on the line's first-parent history changed it",
+        ],
+    ));
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// AC-13 negative (1): a reviewed records-only merge that adopts `main`'s
