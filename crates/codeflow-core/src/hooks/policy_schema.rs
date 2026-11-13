@@ -272,31 +272,23 @@ pub const SCHEMA: [KeySpec; 82] = [
                 `codeflow init`, which write the files the guards enforce from: exec-guard \
                 refuses a run of either verb in every folder, whichever launcher, supplier, \
                 package runner or package manager, shell, interpreter, Git runner or `cargo \
-                run` starts it and however the binary's path is written, and a run whose \
-                program word or first operand it cannot resolve. Every word after a package \
-                manager is read as a program it may run; `npm` is read that way after any word \
-                but its own commands that run no program, written in full or as a documented \
-                alias. A word the shell expands among the words of a program the guard does \
-                not know refuses when its text spells the binary with a verb. Only the exact \
-                help and version forms, which write nothing, stay allowed (TSK-1476). A \
-                program another program hands its output, a file or an address to read (a \
-                pager, editor, browser or preprocessor, set by a variable, a search program's \
-                option or a Git setting) is judged by one check: it counts as data only when \
-                it is a viewer on the guard's list with each option on that viewer's own \
-                list, and any other program or option has the line judged on its raw text. \
-                A tool Git runs with its own data (a filter, an external diff or merge \
-                driver, a difftool or mergetool, a credential helper, an askpass or ssh \
-                command, a gpg program, an fsmonitor, trailer, sendemail or hook command) \
-                has the line judged on its raw text when it is a shell or interpreter that \
-                reads its code from its input or a file rather than inline. \
-                Words \
-                that only name the verbs stay data: the binary's own record verbs, test \
-                operands, a search program's pattern, an assigned value no later command on \
-                the line reads, and a folder of that name given to a program that never runs \
-                its operands. A binary an agent renames or copies, the verb's words written \
-                to a file and run later, and a variable or pattern that only a program the \
-                guard does not know runs as the binary, are not named on the line; that is a \
-                named residual. The guards hold each worktree's copies of \
+                run` starts it and however the binary's path is written. A line is data only \
+                in a closed subset the guard lists: each command one of a few programs that \
+                print or search (`echo`, `printf`, `cat`, `head`, `tail`, `wc`, `grep`, `rg` \
+                with `--no-config`, `git` with its pager off running `log` or `grep`, and the \
+                binary's exact help and version forms), each option on that program's own \
+                list, with no assignment, wrapper, substitution, expansion, subshell, \
+                here-document or supplier, and pipes and redirections to plain files only. A \
+                listed Git call is data only when every program its configuration runs is one \
+                of the Git LFS filters in the exact form `git lfs install` writes. Every other \
+                line whose text names the binary with a verb refuses, whatever program reads \
+                it, so give such text in a file or to a listed program. A run whose program \
+                word or first operand the guard cannot resolve, and a run inside a quoted \
+                argument or an assigned value, refuse too (TSK-1476). A binary an agent \
+                renames or copies, the verb's words written to a file and run later, and state \
+                the line does not show (an exported variable, a shell alias or function from \
+                a profile, a program put first on the path) are not named on the line; that \
+                is a named residual. The guards hold each worktree's copies of \
                 the enforcement files as they hold the root checkout's, against shell writes \
                 and against the file tools edit-guard is bound to. The shipped presets name no \
                 worktree path, since a deny there also stops Git's own writes in a sandboxed \
