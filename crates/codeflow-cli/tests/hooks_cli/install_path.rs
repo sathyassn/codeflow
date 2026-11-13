@@ -927,12 +927,13 @@ fn the_closed_subset_and_lines_not_naming_the_binary_stay_clean() {
         "rg --no-config -n -e 'codeflow update' -- docs",
         "echo 'run codeflow update'",
         "printf '%s\\n' 'run codeflow update'",
-        "printf -- '%s %s\\n' codeflow update > notes.txt",
+        "printf '%s\\n' 'codeflow update' > /dev/null",
         "echo 'codeflow update' > /dev/null",
+        "grep -c 'codeflow init' notes.md 2>/dev/null",
+        "grep 'codeflow update' notes.md > /dev/null 2>&1",
+        "grep -c 'codeflow update' < notes.md",
         "git --no-pager log --grep=update --grep=codeflow --all-match",
         "grep -rn 'codeflow update' docs | head -n 5",
-        "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
-        "echo 'codeflow update' >> notes.txt",
         "codeflow update --help",
         "ACK_PAGER=less ack foo",
         "GIT_PAGER=less git log",
@@ -947,6 +948,62 @@ fn the_closed_subset_and_lines_not_naming_the_binary_stay_clean() {
     .collect();
     let mut tally = Tally::default();
     tally.install_allowed(&rows, &root);
+    tally.finish();
+}
+
+/// An output redirection is data only to `/dev/null`: a target's name says
+/// nothing of what it is when the line runs (a FIFO a running shell reads,
+/// a descriptor path, a link to either, or a file swapped for one after the
+/// guard looked), so a line writing anywhere else that names the binary with
+/// a verb refuses, a FIFO, a link and a plain file alike. Input from a
+/// named file stays data, since a listed program only reads it.
+#[test]
+fn output_redirections_other_than_to_dev_null_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    std::fs::write(root.join("plain.txt"), "notes\n").unwrap();
+    std::fs::write(root.join("notes.md"), "codeflow update\n").unwrap();
+    #[cfg(unix)]
+    {
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("commands.fifo"))
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo failed");
+        std::os::unix::fs::symlink(root.join("commands.fifo"), root.join("link.txt")).unwrap();
+    }
+    let rows: Vec<String> = [
+        "printf '%s\\n' 'codeflow update' > commands.fifo",
+        "printf '%s\\n' 'codeflow update' > link.txt",
+        "printf '%s\\n' 'codeflow update' > /proc/self/fd/3",
+        "printf '%s\\n' 'codeflow update' > plain.txt",
+        "echo 'codeflow update' >> plain.txt",
+        "echo 'codeflow update' >| plain.txt",
+        "echo 'codeflow update' &> plain.txt",
+        "echo 'codeflow update' 2> plain.txt",
+        "echo 'codeflow update' 3> plain.txt",
+        "echo 'codeflow update' 1>&2",
+        "grep 'codeflow update' notes.md 2>&1 > /dev/null",
+        "grep 'codeflow update' notes.md > /dev/null 2> plain.txt",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let allowed: Vec<String> = [
+        "printf '%s\\n' 'codeflow update' > /dev/null",
+        "grep -c 'codeflow init' notes.md 2>/dev/null",
+        "grep 'codeflow update' notes.md > /dev/null 2>&1",
+        "cat < notes.md; echo 'codeflow init'",
+        "grep -c 'codeflow update' < plain.txt",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
     tally.finish();
 }
 
@@ -1018,6 +1075,10 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "git --no-pager grep -n 'codeflow update' -- docs",
         "rg -i --no-config 'codeflow update' docs",
         "./target/debug/codeflow update --help",
+        "printf -- '%s %s\\n' codeflow update > notes.txt",
+        "printf 'codeflow update\\n' > notes.txt",
+        "echo 'codeflow update' >> notes.txt",
+        "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1138,7 +1199,7 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "rustup update",
         // The words as data.
         "echo the operator runs codeflow update",
-        "printf 'codeflow update\\n' > notes.txt",
+        "printf 'codeflow update\\n' > /dev/null",
         "grep -rn 'codeflow update' docs",
         "git commit -F msg.txt",
     ]

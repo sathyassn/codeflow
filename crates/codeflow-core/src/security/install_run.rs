@@ -1092,6 +1092,10 @@ mod tests {
             "git --no-pager log --grep='codeflow update'",
             "./target/debug/codeflow update --help",
             "echo 'codeflow update' > /dev/tcp/127.0.0.1/9",
+            "printf '%s\\n' 'codeflow update' > commands.fifo",
+            "printf '%s\\n' 'codeflow update' > /proc/self/fd/3",
+            "printf 'codeflow update\\n' > notes.txt",
+            "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
         ] {
             assert!(runs(command), "{command}");
         }
@@ -1364,7 +1368,7 @@ mod tests {
             "brew update",
             "rustup update",
             "echo the operator runs codeflow update",
-            "printf 'codeflow update\\n' > notes.txt",
+            "printf 'codeflow update\\n' > /dev/null",
             "grep -rn 'codeflow update' docs",
             "xargs codeflow doctor",
             "find . -name codeflow",
