@@ -29,27 +29,38 @@
 //! interpreter code, are judged on their raw text: the binary's name
 //! followed, anywhere later, by a verb.
 //!
-//! A search program's option that runs a program (`ack` and `ag`
-//! `--pager`, `rg --pre`, by any prefix of the option's name) is judged as
-//! the program runs its value: a command line, through this same reader,
-//! or one program given each searched path. A pager, editor or browser
-//! variable assigned before a program that runs it, or earlier on the
-//! line, is judged the same way; where that command cannot be resolved,
-//! such as a shell reading its input, the line is judged on its raw text.
+//! A search or forge program is read as data only in the forms known to
+//! run nothing: `ack`, `ag` and `rg` with each option on the program's
+//! list, and `gh` with a command on gh's list. Any other option or gh
+//! command, or a word the shell expands where an option can stand, leaves
+//! the line judged on its raw text. A search program's option that runs a
+//! program (`ack` and `ag` `--pager`, `rg --pre`, by any prefix of the
+//! option's name) is judged as the program runs its value: a command line,
+//! through this same reader, or one program given each searched path. A
+//! pager, editor or browser variable assigned before a program that runs
+//! it, or earlier on the line, is judged the same way. Such a value is
+//! data only when it names a viewer known to run nothing it is given
+//! (`less`, `cat`, an editor, a browser); any other program leaves the
+//! line judged on its raw text, and so does a live variable that gives
+//! such a program options or a settings file.
 //! An assignment anywhere on the line is live for the whole line, and any
 //! program on it that can start another one (a shell, a Git alias,
 //! `find -exec`) judges every such variable, since the program it starts
 //! inherits them. No `unset` or new value removes a value; a new value
-//! only adds one. A command variable written without a `NAME=value` word
-//! this reader sees (`read`, `printf -v`, `NAME+=`, `${NAME:=...}`, a loop
-//! variable, a name reference, a declaration of a bare name) leaves the
-//! line judged on its raw text, and so does any word the shell expands
-//! (braces, a pattern, a variable) given to a builtin that writes or
-//! declares names. These checks read what the current shell runs, once
-//! zsh's precommand modifiers and the `builtin` and `command` wrappers are
-//! removed, with the lexer's mark of each word kept; a wrapper or program
-//! word the shell expands, or a wrapper this reader cannot remove, leaves
-//! the line judged on its raw text.
+//! only adds one. A builtin that writes or declares names is read only in
+//! its admitted form: each option on that builtin's list of letters known
+//! to keep plain identifier semantics, and each name it writes a plain
+//! identifier this reader does not track. Any other form (a pattern
+//! target, a name reference, a subscript, a word the shell expands), a
+//! tracked variable written without a `NAME=value` word this reader sees
+//! (`read`, `printf -v`, `NAME+=`, `${NAME:=...}`, a loop variable, a
+//! declaration of a bare name), a builtin this reader does not model, and
+//! one that rebinds a program name or changes how the shell reads later
+//! words leave the line judged on its raw text. These checks read what the current shell runs,
+//! once zsh's precommand modifiers and the `builtin` and `command`
+//! wrappers are removed, with the lexer's mark of each word kept; a wrapper
+//! or program word the shell expands, or a wrapper this reader cannot
+//! remove, leaves the line judged on its raw text.
 //! The words `gh repo clone`, `gh repo fork` and `gh gist clone` pass to
 //! `git` after `--` are read as quoted arguments are. An editor's own
 //! command (`vim -c`, `emacs
@@ -516,12 +527,7 @@ fn current_shell(words: &[String], literal: &[bool]) -> Shell {
 /// The name and value of a `NAME=value` word.
 fn assigned(word: &str) -> Option<(String, String)> {
     let (name, value) = word.split_once('=')?;
-    let mut chars = name.chars();
-    let identifier = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    identifier.then(|| (name.to_string(), value.to_string()))
+    identifier(name).then(|| (name.to_string(), value.to_string()))
 }
 
 /// What one simple command is.
@@ -597,13 +603,13 @@ fn read(command: &str, depth: usize) -> Found {
         {
             continue;
         }
-        // A data program reads only the variables it runs as a command;
-        // any other program may also run any value as a command.
+        // A data program reads only the variables it runs as a command or
+        // reads as options; any other program may also run any value as a
+        // command.
         let data = DATA_PROGRAMS.contains(&name.as_str());
-        for (variable, value) in live
-            .iter()
-            .filter(|(variable, _)| !data || runs_variable(&name, variable))
-        {
+        for (variable, value) in live.iter().filter(|(variable, _)| {
+            !data || runs_variable(&name, variable) || reads_options(&name, variable)
+        }) {
             if let Some(run) = judge(variable, value) {
                 return Found::Run(run);
             }
@@ -637,21 +643,672 @@ fn command_variable(variable: &str) -> bool {
     command_variables().any(|name| *name == variable)
 }
 
-/// Bash and zsh builtins that write the variable a word names without a
-/// `NAME=value` word (`printf` and zsh's `print` only with `-v`).
-const WRITES_NAMES: &[&str] = &[
-    "getln",
-    "getopts",
-    "mapfile",
-    "print",
-    "printf",
-    "read",
-    "readarray",
-    "strftime",
-    "sysread",
-    "vared",
-    "wait",
+/// What the words after a [`WRITERS`] builtin's options are.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Operands {
+    /// `NAME` or `NAME=value` words it declares.
+    Declarations,
+    /// The names it writes.
+    Names,
+    /// Data, such as a format and its arguments; it writes only the name
+    /// its name option gives.
+    Data,
+    /// An option string, the name it writes, then data (`getopts`).
+    Getopts,
+    /// None: an operand leaves the line judged on its raw text.
+    Nothing,
+}
+
+/// The form in which a builtin that writes or declares names, or rebinds
+/// a program name, is read: the option letters known to keep plain
+/// identifier semantics in bash, zsh and POSIX sh, by what each takes, and
+/// what its operands are. Any other letter, a `+` option of a
+/// declaration, or a word the shell expands where an option can stand
+/// leaves the line judged on its raw text.
+struct Writer {
+    builtins: &'static [&'static str],
+    /// Letters that take no value.
+    flags: &'static str,
+    /// Letters that only list, admitted when no operand follows.
+    listing: &'static str,
+    /// Letters whose value is data in every shell that has the builtin.
+    data: &'static str,
+    /// Letters whose value one shell reads as data and another as a name
+    /// (`read -p`, `-n` and `-t` in bash and zsh), so the value must also
+    /// be a plain name or a number.
+    either: &'static str,
+    /// Letters whose value is a name the builtin writes.
+    name: &'static str,
+    /// The letter without which the builtin writes no name, if any.
+    writes_with: Option<char>,
+    operands: Operands,
+}
+
+/// The builtins that write or declare names, with their admitted forms
+/// (the option table in the TSK-1476 report cites each manual).
+const WRITERS: &[Writer] = &[
+    Writer {
+        builtins: &["declare", "typeset"],
+        flags: "grx",
+        listing: "p",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Declarations,
+    },
+    Writer {
+        builtins: &["local"],
+        flags: "rx",
+        listing: "p",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Declarations,
+    },
+    Writer {
+        builtins: &["export", "readonly"],
+        flags: "",
+        listing: "p",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Declarations,
+    },
+    Writer {
+        builtins: &["read"],
+        flags: "ers",
+        listing: "",
+        data: "du",
+        either: "Ninpt",
+        name: "a",
+        writes_with: None,
+        operands: Operands::Names,
+    },
+    Writer {
+        builtins: &["mapfile", "readarray"],
+        flags: "t",
+        listing: "",
+        data: "Odnsu",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Names,
+    },
+    Writer {
+        builtins: &["vared"],
+        flags: "ceh",
+        listing: "",
+        data: "Mfimprt",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Names,
+    },
+    Writer {
+        builtins: &["sysread"],
+        flags: "",
+        listing: "",
+        data: "iost",
+        either: "",
+        name: "c",
+        writes_with: None,
+        operands: Operands::Names,
+    },
+    Writer {
+        builtins: &["getln"],
+        flags: "",
+        listing: "",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Names,
+    },
+    Writer {
+        builtins: &["getopts"],
+        flags: "",
+        listing: "",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Getopts,
+    },
+    Writer {
+        builtins: &["printf"],
+        flags: "",
+        listing: "",
+        data: "",
+        either: "",
+        name: "v",
+        writes_with: Some('v'),
+        operands: Operands::Data,
+    },
+    Writer {
+        builtins: &["print"],
+        flags: "Nlnr",
+        listing: "",
+        data: "CXfux",
+        either: "",
+        name: "v",
+        writes_with: Some('v'),
+        operands: Operands::Data,
+    },
+    Writer {
+        builtins: &["wait"],
+        flags: "fn",
+        listing: "",
+        data: "",
+        either: "",
+        name: "p",
+        writes_with: Some('p'),
+        operands: Operands::Data,
+    },
+    Writer {
+        builtins: &["strftime"],
+        flags: "nqr",
+        listing: "",
+        data: "",
+        either: "",
+        name: "s",
+        writes_with: Some('s'),
+        operands: Operands::Data,
+    },
+    Writer {
+        builtins: &["hash"],
+        flags: "r",
+        listing: "",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Nothing,
+    },
+    Writer {
+        builtins: &["trap"],
+        flags: "",
+        listing: "lp",
+        data: "",
+        either: "",
+        name: "",
+        writes_with: None,
+        operands: Operands::Nothing,
+    },
+];
+
+/// Builtins this reader does not model, read in no form: they write
+/// names by a pattern, a reference, an arithmetic expression or a module's
+/// own rules, run code in this shell later or from text this reader does
+/// not see, rebind a program or builtin name, or change how the shell
+/// reads later words. Any of them leaves the line judged on its raw text.
+const UNMODELED: &[&str] = &[
+    ".",
+    "alias",
+    "autoload",
+    "compgen",
+    "disable",
+    "emulate",
+    "enable",
+    "eval",
+    "fc",
+    "float",
+    "fltexpr",
+    "functions",
+    "integer",
+    "let",
+    "nameref",
+    "pcre_match",
+    "private",
+    "sched",
+    "setopt",
+    "shopt",
+    "source",
+    "syserror",
+    "sysopen",
+    "unsetopt",
+    "zcurses",
+    "zformat",
+    "zgetattr",
+    "zle",
+    "zlistattr",
+    "zmodload",
     "zparseopts",
+    "zpty",
+    "zregexparse",
+    "zselect",
+    "zsocket",
+    "zstat",
+    "zstyle",
+    "zsystem",
+    "ztcp",
+    "ztie",
+];
+
+/// The `set` option letters that change only whether the shell stops,
+/// traces, exports or expands, never which word sets a name.
+const SET_FLAGS: &str = "Caefnuvx";
+
+/// The `set -o` names this reader admits, those of [`SET_FLAGS`] and
+/// `pipefail`.
+const SET_OPTIONS: &[&str] = &[
+    "allexport",
+    "errexit",
+    "noclobber",
+    "noexec",
+    "noglob",
+    "nounset",
+    "pipefail",
+    "verbose",
+    "xtrace",
+];
+
+/// Variables that give a search or forge program, or a pager it runs,
+/// options or a settings file, which can name a program it runs. Live on
+/// the line for a program that may start another, each leaves the line
+/// judged on its raw text.
+const OPTIONS_VARIABLES: &[&str] = &[
+    "ACKRC",
+    "ACK_OPTIONS",
+    "GH_CONFIG_DIR",
+    "LESS",
+    "LESSKEY",
+    "LESSKEYIN",
+    "LESSKEY_CONTENT",
+    "MORE",
+    "RIPGREP_CONFIG_PATH",
+    "XDG_CONFIG_HOME",
+];
+
+/// The command variables a program hands its output or a file to read:
+/// pagers, editors and browsers. Their values are judged by
+/// [`fed_value`].
+const FED_VARIABLES: &[&str] = &[
+    "ACK_PAGER",
+    "ACK_PAGER_COLOR",
+    "BROWSER",
+    "EDITOR",
+    "FCEDIT",
+    "GH_BROWSER",
+    "GH_EDITOR",
+    "GH_PAGER",
+    "GIT_EDITOR",
+    "GIT_PAGER",
+    "GIT_SEQUENCE_EDITOR",
+    "MANPAGER",
+    "PAGER",
+    "VISUAL",
+];
+
+/// Programs known to show, convert or open what they are given and run
+/// nothing from it: pagers and text filters, the converters a search
+/// preprocessor names, editors given a file and browsers given an
+/// address. A pager, editor, browser or preprocessor value naming any
+/// other program, such as an interpreter that reads its input as code,
+/// leaves the line judged on its raw text.
+const VIEWERS: &[&str] = &[
+    ":",
+    "bat",
+    "batcat",
+    "bzcat",
+    "cat",
+    "chromium",
+    "code",
+    "code-insiders",
+    "codium",
+    "cursor",
+    "delta",
+    "diff-highlight",
+    "diff-so-fancy",
+    "echo",
+    "emacs",
+    "emacsclient",
+    "false",
+    "firefox",
+    "gedit",
+    "google-chrome",
+    "gzcat",
+    "head",
+    "hx",
+    "kak",
+    "kate",
+    "less",
+    "links",
+    "lynx",
+    "mate",
+    "micro",
+    "moar",
+    "more",
+    "most",
+    "nano",
+    "nvim",
+    "open",
+    "ov",
+    "pdftotext",
+    "pico",
+    "subl",
+    "tail",
+    "true",
+    "vi",
+    "view",
+    "vim",
+    "w3m",
+    "wslview",
+    "xdg-open",
+    "xzcat",
+    "ydiff",
+    "zcat",
+    "zed",
+    "zstdcat",
+];
+
+/// One search program's options known to run nothing: its flag letters,
+/// its letters that take a value, and its long option names. Any other
+/// option, except one of [`RUNS_THROUGH_OPTION`], leaves the line judged
+/// on its raw text. Long names match exactly, so an abbreviation `ack` or
+/// `ag` would accept is read as unknown.
+struct SearchOptions {
+    program: &'static str,
+    flags: &'static str,
+    values: &'static str,
+    long: &'static [&'static str],
+}
+
+/// The options of `ack`, `ag` and `rg` known to run nothing, from each
+/// program's manual (`ack --help`, `ag --help`, `rg --help`). Left out:
+/// options that read a settings file or run a program, and those whose
+/// effect this reader has not established.
+const SEARCH_OPTIONS: &[SearchOptions] = &[
+    SearchOptions {
+        program: "ack",
+        flags: "1HILQRScfhiklnorsvwx",
+        values: "ABCgm",
+        long: &[
+            "after-context",
+            "before-context",
+            "break",
+            "color",
+            "colour",
+            "column",
+            "context",
+            "count",
+            "create-ackrc",
+            "dump",
+            "files-from",
+            "files-with-matches",
+            "files-without-matches",
+            "filter",
+            "flush",
+            "follow",
+            "group",
+            "heading",
+            "help",
+            "help-types",
+            "ignore-case",
+            "ignore-dir",
+            "ignore-directory",
+            "ignore-file",
+            "invert-match",
+            "literal",
+            "match",
+            "max-count",
+            "no-filename",
+            "no-recurse",
+            "nobreak",
+            "nocolor",
+            "nocolour",
+            "nocolumn",
+            "noenv",
+            "nofilter",
+            "nofollow",
+            "nogroup",
+            "noheading",
+            "noignore-dir",
+            "noignore-directory",
+            "nopager",
+            "nosmart-case",
+            "passthru",
+            "print0",
+            "recurse",
+            "show-types",
+            "smart-case",
+            "sort-files",
+            "type",
+            "version",
+            "with-filename",
+            "word-regexp",
+        ],
+    },
+    SearchOptions {
+        program: "ag",
+        flags: "0FHLQSUacfilnostuvwz",
+        values: "ABCGgmp",
+        long: &[
+            "ackmate",
+            "after",
+            "all-text",
+            "all-types",
+            "before",
+            "break",
+            "case-sensitive",
+            "color",
+            "column",
+            "context",
+            "count",
+            "depth",
+            "file-search-regex",
+            "filename",
+            "files-with-matches",
+            "files-without-matches",
+            "fixed-strings",
+            "follow",
+            "group",
+            "heading",
+            "help",
+            "hidden",
+            "ignore",
+            "ignore-case",
+            "ignore-dir",
+            "invert-match",
+            "list-file-types",
+            "literal",
+            "max-count",
+            "nobreak",
+            "nocolor",
+            "nofilename",
+            "nogroup",
+            "noheading",
+            "nonumbers",
+            "nopager",
+            "norecurse",
+            "null",
+            "numbers",
+            "one-device",
+            "only-matching",
+            "path-to-ignore",
+            "print0",
+            "print-long-lines",
+            "recurse",
+            "search-binary",
+            "search-zip",
+            "silent",
+            "skip-vcs-ignores",
+            "smart-case",
+            "stats",
+            "unrestricted",
+            "version",
+            "vimgrep",
+            "width",
+            "word-regexp",
+            "workers",
+        ],
+    },
+    SearchOptions {
+        program: "rg",
+        flags: ".0FHILNPSUVabchilnopqsuvwx",
+        values: "ABCEMTdefgjmrt",
+        long: &[
+            "after-context",
+            "auto-hybrid-regex",
+            "before-context",
+            "binary",
+            "block-buffered",
+            "byte-offset",
+            "case-sensitive",
+            "color",
+            "colors",
+            "column",
+            "context",
+            "context-separator",
+            "count",
+            "count-matches",
+            "crlf",
+            "debug",
+            "dfa-size-limit",
+            "encoding",
+            "engine",
+            "field-context-separator",
+            "field-match-separator",
+            "file",
+            "files",
+            "files-with-matches",
+            "files-without-match",
+            "fixed-strings",
+            "follow",
+            "glob",
+            "glob-case-insensitive",
+            "heading",
+            "help",
+            "hidden",
+            "hyperlink-format",
+            "iglob",
+            "ignore-case",
+            "ignore-file",
+            "ignore-file-case-insensitive",
+            "include-zero",
+            "invert-match",
+            "json",
+            "line-buffered",
+            "line-number",
+            "line-regexp",
+            "max-columns",
+            "max-columns-preview",
+            "max-count",
+            "max-depth",
+            "max-filesize",
+            "mmap",
+            "multiline",
+            "multiline-dotall",
+            "no-config",
+            "no-context-separator",
+            "no-filename",
+            "no-heading",
+            "no-ignore",
+            "no-ignore-dot",
+            "no-ignore-exclude",
+            "no-ignore-files",
+            "no-ignore-global",
+            "no-ignore-messages",
+            "no-ignore-parent",
+            "no-ignore-vcs",
+            "no-line-number",
+            "no-messages",
+            "no-mmap",
+            "no-pcre2-unicode",
+            "no-require-git",
+            "no-unicode",
+            "null",
+            "null-data",
+            "one-file-system",
+            "only-matching",
+            "passthru",
+            "path-separator",
+            "pcre2",
+            "pcre2-version",
+            "pre-glob",
+            "pretty",
+            "quiet",
+            "regex-size-limit",
+            "regexp",
+            "replace",
+            "smart-case",
+            "sort",
+            "sort-files",
+            "sortr",
+            "stats",
+            "stop-on-nonmatch",
+            "text",
+            "threads",
+            "trace",
+            "trim",
+            "type",
+            "type-add",
+            "type-clear",
+            "type-list",
+            "type-not",
+            "unrestricted",
+            "version",
+            "vimgrep",
+            "with-filename",
+            "word-regexp",
+        ],
+    },
+];
+
+/// The `gh` commands known to read, show or open data and run no program
+/// but a pager, editor or browser, whose variables are judged: one word
+/// (`api`) or two (`pr list`). Any other first words (an alias, an
+/// extension, a command that changes gh's settings or checks out code)
+/// leave the line judged on its raw text.
+const GH_DATA_COMMANDS: &[&str] = &[
+    "api",
+    "auth status",
+    "browse",
+    "cache list",
+    "gist clone",
+    "gist list",
+    "gist view",
+    "help",
+    "issue close",
+    "issue comment",
+    "issue create",
+    "issue edit",
+    "issue list",
+    "issue reopen",
+    "issue status",
+    "issue view",
+    "label list",
+    "pr checks",
+    "pr close",
+    "pr comment",
+    "pr create",
+    "pr diff",
+    "pr edit",
+    "pr list",
+    "pr ready",
+    "pr reopen",
+    "pr review",
+    "pr status",
+    "pr view",
+    "release list",
+    "release view",
+    "repo clone",
+    "repo fork",
+    "repo list",
+    "repo view",
+    "run list",
+    "run view",
+    "run watch",
+    "search code",
+    "search commits",
+    "search issues",
+    "search prs",
+    "search repos",
+    "status",
+    "workflow list",
+    "workflow view",
 ];
 
 /// The command variables a data program lists ([`COMMAND_VARIABLES`]) and
@@ -661,6 +1318,18 @@ fn command_variables() -> impl Iterator<Item = &'static &'static str> {
         .iter()
         .flat_map(|(_, names)| names.iter())
         .chain(super::startup::COMMAND_VARIABLES)
+}
+
+/// Whether `name` is a variable this reader tracks: a command variable
+/// ([`command_variables`]) or an options variable ([`OPTIONS_VARIABLES`]).
+fn tracked(name: &str) -> bool {
+    command_variables().any(|variable| *variable == name) || OPTIONS_VARIABLES.contains(&name)
+}
+
+/// Whether `program`, which may start another program, reads `variable`
+/// as options or a settings file ([`OPTIONS_VARIABLES`]).
+fn reads_options(program: &str, variable: &str) -> bool {
+    !STARTS_NO_PROGRAM.contains(&program) && OPTIONS_VARIABLES.contains(&variable)
 }
 
 /// The values `command` assigns, each live for the whole line: assignments
@@ -686,28 +1355,32 @@ fn line_values(command: &Simple) -> Vec<(String, String)> {
     values
 }
 
-/// Whether `command` may write a command variable to a value this reader
-/// does not see, which leaves the line judged on its raw text. From the
-/// text of every word: an append (`NAME+=`), a default expansion
-/// (`${NAME:=...}`), or the variable of a `for` or `select` loop. From its
-/// shell view ([`current_shell`]), for a builtin that writes a name
-/// ([`WRITES_NAMES`], `printf` and `print` with `-v`) or declares one
-/// ([`DECLARES`]): any word the shell expands, which may be any name or
-/// the option that names one; a name reference (`-n`); a command variable
-/// the writer is given alone or attached to an option (`-vNAME`); and one a
-/// declaration gives without a value. A declaration's `NAME=value` word
-/// written as it stands is a value this reader sees ([`line_values`]).
+/// Whether `command` may write a tracked variable ([`tracked`]) to a value
+/// this reader does not see, or change what a later word means, which
+/// leaves the line judged on its raw text. From the text of every word:
+/// an append (`NAME+=`), a default expansion (`${NAME:=...}`), or the
+/// variable of a `for` or `select` loop. From its shell view
+/// ([`current_shell`]): a program word naming a tracked variable, a
+/// builtin this reader does not model ([`UNMODELED`]), `set` outside its
+/// admitted letters ([`set_admitted`]), and a builtin of [`WRITERS`]
+/// outside its admitted form ([`admitted`]). Every other command writes
+/// no tracked variable this reader does not see: a declaration's
+/// `NAME=value` word is a value it sees ([`line_values`]).
 fn unseen_write(command: &Simple) -> bool {
+    let tracked_names = || {
+        command_variables()
+            .copied()
+            .chain(OPTIONS_VARIABLES.iter().copied())
+    };
     let words = &command.words;
     let in_text = words.iter().any(|word| {
-        command_variables().any(|name| {
+        tracked_names().any(|name| {
             word.starts_with(&format!("{name}+="))
                 || word.contains(&format!("${{{name}:="))
                 || word.contains(&format!("${{{name}="))
         })
     }) || words.windows(2).any(|pair| {
-        matches!(pair[0].as_str(), "for" | "select")
-            && command_variables().any(|name| pair[1] == *name)
+        matches!(pair[0].as_str(), "for" | "select") && tracked_names().any(|name| pair[1] == name)
     });
     if in_text {
         return true;
@@ -716,46 +1389,242 @@ fn unseen_write(command: &Simple) -> bool {
         return false;
     };
     let program = basename(&words[0]);
-    let args = &words[1..];
-    let declares = DECLARES.contains(&program.as_str());
-    if command_variables().any(|name| program == *name) {
+    let (args, marks) = (&words[1..], &written[1..]);
+    if tracked(&program) || UNMODELED.contains(&program.as_str()) {
         return true;
     }
-    if !declares && !WRITES_NAMES.contains(&program.as_str()) {
-        return false;
+    if program == "set" {
+        return !set_admitted(args, marks);
     }
-    if written[1..].contains(&false) {
-        return true;
-    }
-    let options = || args.iter().filter(|word| word.starts_with('-'));
-    if matches!(program.as_str(), "print" | "printf") && !options().any(|word| word.contains('v')) {
-        return false;
-    }
-    if declares && program != "export" && options().any(|word| word.contains('n')) {
-        return true;
-    }
-    args.iter().any(|word| {
-        command_variables().any(|name| {
-            word == name
-                || (!declares
-                    && word.starts_with('-')
-                    && word.len() > name.len()
-                    && word.ends_with(name))
-        })
-    })
+    WRITERS
+        .iter()
+        .find(|writer| writer.builtins.contains(&program.as_str()))
+        .is_some_and(|writer| !admitted(writer, args, marks))
 }
 
-/// An assignment's value, for the command `program` that may read it. A
-/// value the program runs as a command is judged as an option's command
-/// line is ([`command_line_value`]), so a command this reader cannot
-/// resolve, such as a shell reading its input, leaves the line judged on
-/// its raw text. Any other value is read for a run only.
+/// A [`WRITERS`] builtin's words, read by its option grammar.
+struct Options<'a> {
+    /// A letter outside the builtin's admitted letters.
+    unknown: bool,
+    /// A letter that only lists.
+    listing: bool,
+    /// The values of its name letters.
+    names: Vec<&'a str>,
+    /// The values of its letters that some shell reads as a name.
+    either: Vec<&'a str>,
+    /// The words after its options, with the shell's mark of each.
+    operands: &'a [String],
+    marks: &'a [bool],
+}
+
+/// `args` read by `writer`'s option grammar: options lead, each a `-`
+/// word of letters whose value is the rest of the word or the next word,
+/// up to `--` or the first other word. `None` when a word where an option
+/// or its value stands is one the shell expands, which may be any option,
+/// when a declaration carries a `+` option, or when a value is missing.
+fn options<'a>(writer: &Writer, args: &'a [String], marks: &'a [bool]) -> Option<Options<'a>> {
+    let written = |at: usize| marks.get(at).copied().unwrap_or(false);
+    let mut read = Options {
+        unknown: false,
+        listing: false,
+        names: Vec::new(),
+        either: Vec::new(),
+        operands: &[],
+        marks: &[],
+    };
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        if !written(at) {
+            return None;
+        }
+        if word == "--" {
+            at += 1;
+            break;
+        }
+        if writer.operands == Operands::Declarations && word.len() > 1 && word.starts_with('+') {
+            return None;
+        }
+        let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) else {
+            break;
+        };
+        at += 1;
+        for (index, letter) in letters.char_indices() {
+            let slot = if writer.name.contains(letter) {
+                Some(&mut read.names)
+            } else if writer.either.contains(letter) {
+                Some(&mut read.either)
+            } else if writer.data.contains(letter) {
+                None
+            } else {
+                if writer.listing.contains(letter) {
+                    read.listing = true;
+                } else if !writer.flags.contains(letter) {
+                    read.unknown = true;
+                }
+                continue;
+            };
+            let attached = &letters[index + letter.len_utf8()..];
+            let value = if attached.is_empty() {
+                let value = args.get(at).filter(|_| written(at))?;
+                at += 1;
+                value.as_str()
+            } else {
+                attached
+            };
+            if let Some(slot) = slot {
+                slot.push(value);
+            }
+            break;
+        }
+    }
+    read.operands = &args[at.min(args.len())..];
+    read.marks = &marks[at.min(marks.len())..];
+    Some(read)
+}
+
+/// Whether `word` is a plain identifier.
+fn identifier(word: &str) -> bool {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether a [`WRITERS`] builtin given `args` is in its admitted form, so
+/// it writes no tracked variable this reader does not see: every option
+/// letter on its lists, a listing letter only with no operand, every name
+/// it writes a plain identifier that is not tracked, a declaration's
+/// operands each `NAME` or `NAME=value` with an identifier name, and every
+/// word written as it stands, except the data after a data builtin's
+/// options. A data builtin with no word holding its name letter writes no
+/// name.
+fn admitted(writer: &Writer, args: &[String], marks: &[bool]) -> bool {
+    let Some(read) = options(writer, args, marks) else {
+        return false;
+    };
+    if let Some(letter) = writer.writes_with {
+        if !args
+            .iter()
+            .any(|word| word.starts_with('-') && word.contains(letter))
+        {
+            return true;
+        }
+    }
+    if read.unknown || (read.listing && !read.operands.is_empty()) {
+        return false;
+    }
+    let plain = |word: &str, number: bool| {
+        (identifier(word)
+            || (number && !word.is_empty() && word.bytes().all(|b| b.is_ascii_digit())))
+            && !tracked(word)
+    };
+    if !read.names.iter().all(|word| plain(word, false))
+        || !read.either.iter().all(|word| plain(word, true))
+    {
+        return false;
+    }
+    let all_written = !read.marks.contains(&false);
+    match writer.operands {
+        Operands::Declarations => {
+            all_written
+                && read
+                    .operands
+                    .iter()
+                    .all(|word| assigned(word).is_some() || plain(word, false))
+        }
+        Operands::Names => all_written && read.operands.iter().all(|word| plain(word, false)),
+        Operands::Data => true,
+        Operands::Getopts => {
+            all_written && read.operands.get(1).is_none_or(|word| plain(word, false))
+        }
+        Operands::Nothing => read.operands.is_empty(),
+    }
+}
+
+/// Whether `set` given `args` is in its admitted form: options of
+/// [`SET_FLAGS`] and `-o` or `+o` with a name of [`SET_OPTIONS`] or none,
+/// each written as it stands, then the positional words, which are data.
+/// Any other option, which may change which words set a name, leaves the
+/// line judged on its raw text.
+fn set_admitted(args: &[String], marks: &[bool]) -> bool {
+    let written = |at: usize| marks.get(at).copied().unwrap_or(false);
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        if !written(at) {
+            return false;
+        }
+        if word == "--" || word == "-" {
+            return true;
+        }
+        let Some(letters) = word.strip_prefix('-').or_else(|| word.strip_prefix('+')) else {
+            return true;
+        };
+        at += 1;
+        for (index, letter) in letters.char_indices() {
+            if letter == 'o' {
+                if index + 1 != letters.len() {
+                    return false;
+                }
+                match args.get(at) {
+                    None => return true,
+                    Some(name) if written(at) && SET_OPTIONS.contains(&name.as_str()) => at += 1,
+                    Some(_) => return false,
+                }
+            } else if !SET_FLAGS.contains(letter) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// An assignment's value, for the command `program` that may read it. An
+/// options variable it reads ([`reads_options`]) leaves the line judged on
+/// its raw text. A value the program runs as a command is judged as an
+/// option's command line is ([`command_line_value`]), so a command this
+/// reader cannot resolve, such as a shell reading its input, leaves the
+/// line judged on its raw text; a pager, editor or browser value must
+/// also name a viewer ([`fed_value`]). Any other value is read for a run
+/// only.
 fn assignment_value(program: &str, variable: &str, value: &str, depth: usize) -> Found {
-    if runs_variable(program, variable) {
+    if reads_options(program, variable) {
+        Found::Unresolved
+    } else if runs_variable(program, variable) && FED_VARIABLES.contains(&variable) {
+        fed_value(value, depth)
+    } else if runs_variable(program, variable) {
         command_line_value(value, depth)
     } else {
         in_value(value, depth).map_or(Found::Nothing, Found::Run)
     }
+}
+
+/// A command line a program hands its output or a file to read: judged as
+/// [`command_line_value`] judges it, and unresolved unless each of its
+/// commands is a [`VIEWERS`] program, written as it stands, with no
+/// assignment before it and no command of its own (an editor's `-c`,
+/// `--eval` or `+` word).
+fn fed_value(value: &str, depth: usize) -> Found {
+    match command_line_value(value, depth) {
+        Found::Nothing if !simple(value).iter().all(views_only) => Found::Unresolved,
+        found => found,
+    }
+}
+
+/// Whether `command` is a viewer run as written ([`fed_value`]).
+fn views_only(command: &Simple) -> bool {
+    command.values.is_empty()
+        && matches!(&command.shell, Shell::Runs { written, .. } if !written.contains(&false))
+        && command
+            .argv
+            .first()
+            .is_some_and(|program| VIEWERS.contains(&basename(program).as_str()))
+        && !command.argv[1..].iter().any(|word| {
+            word.starts_with('+')
+                || EDITOR_COMMAND_OPTIONS
+                    .iter()
+                    .any(|option| word.split('=').next() == Some(*option))
+        })
 }
 
 /// A run inside a quoted argument or an assignment's value, read as a
@@ -790,8 +1659,20 @@ fn classify(argv: &[String], literal: &[bool], depth: usize) -> Found {
             if let Some(run) = gh_git_arguments(argv, depth) {
                 return Found::Run(run);
             }
+            if !gh_reads_only(argv, &written) {
+                return Found::Unresolved;
+            }
         }
-        return runs_through_option(argv, &written, depth);
+        let found = runs_through_option(argv, &written, depth);
+        let known = SEARCH_OPTIONS
+            .iter()
+            .find(|options| options.program == name);
+        if matches!(found, Found::Nothing)
+            && known.is_some_and(|options| !search_options_known(options, argv, &written))
+        {
+            return Found::Unresolved;
+        }
+        return found;
     }
     if EDITORS.contains(&name.as_str()) {
         if let Some(run) = editor_command(argv) {
@@ -907,7 +1788,7 @@ fn runs_through_option(argv: &[String], written: &dyn Fn(usize) -> bool, depth: 
                 });
             }
             let judged = match runs {
-                OptionValue::CommandLine => command_line_value(value, depth),
+                OptionValue::CommandLine => fed_value(value, depth),
                 OptionValue::ProgramPath => {
                     program_path_value(value, argv, value_at + 1, written, depth)
                 }
@@ -939,6 +1820,67 @@ fn gh_git_arguments(argv: &[String], depth: usize) -> Option<InstallRun> {
         .iter()
         .filter(|word| word.contains(shell_blank))
         .find_map(|word| in_value(word, depth))
+}
+
+/// Whether a `gh` call is one of [`GH_DATA_COMMANDS`], read from its
+/// first words that are not options before any `--`, and passes no word
+/// the shell expands to the `git` a [`GH_GIT_COMMANDS`] command runs. A
+/// call with no command only prints help or the version.
+fn gh_reads_only(argv: &[String], written: &dyn Fn(usize) -> bool) -> bool {
+    let end = argv
+        .iter()
+        .position(|word| word == "--")
+        .unwrap_or(argv.len());
+    let mut words = argv[1..end].iter().filter(|word| !word.starts_with('-'));
+    let Some(first) = words.next() else {
+        return true;
+    };
+    let command = match words.next() {
+        Some(second) if !GH_DATA_COMMANDS.contains(&first.as_str()) => {
+            format!("{first} {second}")
+        }
+        _ => first.clone(),
+    };
+    GH_DATA_COMMANDS.contains(&command.as_str())
+        && (!GH_GIT_COMMANDS.contains(&command.as_str()) || (end..argv.len()).all(written))
+}
+
+/// Whether every option of a search program's call is one of `options`
+/// or [`RUNS_THROUGH_OPTION`], up to `--`, and no word before `--` is one
+/// the shell expands, which may be any option.
+fn search_options_known(
+    options: &SearchOptions,
+    argv: &[String],
+    written: &dyn Fn(usize) -> bool,
+) -> bool {
+    for (at, word) in argv.iter().enumerate().skip(1) {
+        if word == "--" {
+            return true;
+        }
+        if !written(at) {
+            return false;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let long = long.split_once('=').map_or(long, |(name, _)| name);
+            if !options.long.contains(&long)
+                && !RUNS_THROUGH_OPTION
+                    .iter()
+                    .any(|(option, _)| option[2..].starts_with(long))
+            {
+                return false;
+            }
+        } else if let Some(letters) = word.strip_prefix('-') {
+            for letter in letters.chars() {
+                if options.values.contains(letter) {
+                    break;
+                }
+                if !options.flags.contains(letter) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// A command line an option's value holds, read with the recursive
@@ -999,6 +1941,10 @@ fn program_path_value(
             Found::Unresolved => found = Found::Unresolved,
             Found::Nothing => {}
         }
+    }
+    // A program that is not a viewer may run the file it is given as code.
+    if matches!(found, Found::Nothing) && !VIEWERS.contains(&basename(first).as_str()) {
+        return Found::Unresolved;
     }
     found
 }
@@ -1918,10 +2864,9 @@ mod tests {
 
     /// A search or forge program is read as data only in the forms known
     /// to run nothing: each option on the program's list and each `gh`
-    /// command on gh's list. Any other option (`--hostname-bin`,
-    /// `--ackrc`), a word the shell expands where an option can stand, or
-    /// another gh command (an alias, an extension, a setting) judges the
-    /// line on its raw text.
+    /// command on gh's list. Any other option, a word the shell expands
+    /// where an option can stand, or another gh command (an alias, an
+    /// extension, a setting) judges the line on its raw text.
     #[test]
     fn data_programs_are_read_only_in_known_forms() {
         for command in [
@@ -1995,9 +2940,8 @@ mod tests {
     }
 
     /// A variable that gives a search or forge program, or a pager it
-    /// runs, options or a settings file (`ACK_OPTIONS`,
-    /// `RIPGREP_CONFIG_PATH`, `GH_CONFIG_DIR`, `LESS`) can make it run a
-    /// program: live on the line, it judges the line on its raw text.
+    /// runs, options or a settings file can make it run a program: live on
+    /// the line, it judges the line on its raw text.
     #[test]
     fn options_variables_judge_the_line() {
         for command in [

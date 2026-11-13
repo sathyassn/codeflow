@@ -481,18 +481,6 @@ fn command_valued_options_refuse_through_launchers() {
         "export GH_PAGER=sh; command unset GH_PAGER; gh search issues 'codeflow update'",
         "export ACK_PAGER=less; printf -v {ACK_PAGER,sh}; ack --nocolor --nogroup -h 'codeflow update' notes.txt",
         "export ACK_PAGER=sh; readonly {ACK_PAGER,NOTE}; unset ACK_PAGER; ack --nocolor --nogroup -h 'codeflow update' notes.txt",
-        "export GH_PAGER=less; typeset -m 'GH_*=sh'; gh search issues 'codeflow update'",
-        "export GH_PAGER=less; builtin typeset -m 'GH_*=sh'; gh search issues 'codeflow update'",
-        "export GH_PAGER=less; command typeset -m 'GH_*=sh'; gh search issues 'codeflow update'",
-        "export GH_PAGER=x; read -p 'GH_PAGER[1]' y; gh search issues 'codeflow update'",
-        "export GH_PAGER=less; private GH_PAGER=sh; gh search issues 'codeflow update'",
-        "export GH_PAGER=less; trap 'GH_PAGER=sh' DEBUG; gh search issues 'codeflow update'",
-        "set -k; gh GH_PAGER=sh search issues 'codeflow update'",
-        "hash -p /bin/sh gh; echo 'codeflow update' | gh",
-        "gh alias set --shell u 'codeflow update'; gh u",
-        "export GH_PAGER=perl; gh search issues 'codeflow update'",
-        "export GH_CONFIG_DIR=cfg; gh search issues 'codeflow update'",
-        "export RIPGREP_CONFIG_PATH=rg.conf; rg 'codeflow update' docs",
     ]
     .iter()
     .map(ToString::to_string)
@@ -522,6 +510,41 @@ fn command_valued_options_refuse_through_launchers() {
         "export NOTE=sh; true; gh search issues 'codeflow update'",
         "builtin echo hello; gh search issues 'codeflow update'",
         "printf -v out '%s' '{GH_PAGER,sh}'; gh search issues 'codeflow update'",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&controls, &root);
+    tally.finish();
+}
+
+/// AC-1: a builtin that writes names, a search or forge program, and a
+/// pager value are read only in their known forms; any other form has the
+/// line judged on its raw text, which names the binary with a verb.
+#[test]
+fn name_writers_and_data_programs_refuse_outside_known_forms() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "export GH_PAGER=less; typeset -m 'GH_*=sh'; gh search issues 'codeflow update'",
+        "export GH_PAGER=less; builtin typeset -m 'GH_*=sh'; gh search issues 'codeflow update'",
+        "export GH_PAGER=less; command typeset -m 'GH_*=sh'; gh search issues 'codeflow update'",
+        "export GH_PAGER=x; read -p 'GH_PAGER[1]' y; gh search issues 'codeflow update'",
+        "export GH_PAGER=less; private GH_PAGER=sh; gh search issues 'codeflow update'",
+        "export GH_PAGER=less; trap 'GH_PAGER=sh' DEBUG; gh search issues 'codeflow update'",
+        "set -k; gh GH_PAGER=sh search issues 'codeflow update'",
+        "hash -p /bin/sh gh; echo 'codeflow update' | gh",
+        "gh alias set --shell u 'codeflow update'; gh u",
+        "export GH_PAGER=perl; gh search issues 'codeflow update'",
+        "export GH_CONFIG_DIR=cfg; gh search issues 'codeflow update'",
+        "export RIPGREP_CONFIG_PATH=rg.conf; rg 'codeflow update' docs",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    tally.shell_refused(&rows, &root, operator_refusal);
+    let controls: Vec<String> = [
         "export GH_PAGER=less; gh search issues 'codeflow update'",
         "local x=1; gh search issues 'codeflow update'",
         "declare -r MAXV=3; gh search issues 'codeflow update'",
