@@ -1007,6 +1007,57 @@ fn output_redirections_other_than_to_dev_null_refuse() {
     tally.finish();
 }
 
+/// A line outside the closed subset is judged on the text its shell and its
+/// printing programs produce, not only on its raw text: shell quoting and
+/// backslashes, `$'...'`, and the escapes `printf`, `echo` and `print`
+/// decode, in any combination, cannot hide the binary's name or a verb from
+/// a FIFO a running shell reads.
+#[test]
+fn text_the_shell_and_printing_programs_produce_refuses() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    #[cfg(unix)]
+    {
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("commands.fifo"))
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo failed");
+    }
+    let rows: Vec<String> = [
+        r"printf cod\eflow' update\n' > commands.fifo",
+        r"printf '\ncodeflow update' > commands.fifo",
+        r"printf 'codeflow\x20update' > commands.fifo",
+        r"printf '\143odeflow update' > commands.fifo",
+        r"printf '\u0063odeflow update' > commands.fifo",
+        r"printf '%b' '\x63odeflow update' > commands.fifo",
+        r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
+        r"echo -e 'codeflow\tupdate' > commands.fifo",
+        r"echo '\0143odeflow update' > commands.fifo",
+        r"printf '%s\n' $'\x63odeflow update' > commands.fifo",
+        r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
+        r#"sh -c "printf '\\143odeflow update' > commands.fifo""#,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let allowed: Vec<String> = [
+        r"printf '%s\n' 'notes' > notes.txt",
+        r"echo -e 'a\tb' > notes.txt",
+        r"printf 'codeflow\n' > notes.txt",
+        r"printf '\x63odeflow\n' > notes.txt",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
+    tally.finish();
+}
+
 /// A Git call that names the binary with a verb refuses whatever programs
 /// the repository's configuration has it run, an interpreter above all.
 #[test]
@@ -1079,6 +1130,8 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "printf 'codeflow update\\n' > notes.txt",
         "echo 'codeflow update' >> notes.txt",
         "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
+        "ls codeflow 'update\\n'",
+        "printf '%s\\n' '\\143odeflow update' > notes.txt",
     ]
     .iter()
     .map(ToString::to_string)

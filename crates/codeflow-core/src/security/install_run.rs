@@ -1115,6 +1115,61 @@ mod tests {
         }
     }
 
+    /// A line outside the subset is judged on three texts: its raw text,
+    /// its words as the shell passes them (quotes and backslashes removed,
+    /// `$'...'` decoded), and what a printing program writes from them
+    /// (`printf` with its format and `%b` escapes, `echo` and `print` with
+    /// their escapes). Shell and printf escapes combine, and the text a
+    /// printing program writes is read again as a shell would read it.
+    #[test]
+    fn text_the_shell_and_printing_programs_produce_is_judged() {
+        for command in [
+            r"printf cod\eflow' update\n' > commands.fifo",
+            r"printf '\ncodeflow update' > commands.fifo",
+            r"printf '\tcodeflow update' > commands.fifo",
+            r"printf 'codeflow\nupdate' > commands.fifo",
+            r"printf 'codeflow\x20update' > commands.fifo",
+            r"printf 'codeflow update\n\n' > commands.fifo",
+            r"printf '\143odeflow update' > commands.fifo",
+            r"printf 'codeflow upd\141te' > commands.fifo",
+            r"printf '\x63odeflow update' > commands.fifo",
+            r"printf 'code\x66low \x75pdate' > commands.fifo",
+            r"printf '\u0063odeflow update' > commands.fifo",
+            r"printf '\U00000063odeflow update' > commands.fifo",
+            r"printf 'cod\0eflow update' > commands.fifo",
+            r"printf '%b' '\143odeflow update' > commands.fifo",
+            r"printf '%b %b\n' '\x63odeflow' 'upd\0141te' > commands.fifo",
+            r"printf '%s\n' '\143odeflow update' | xargs printf > commands.fifo",
+            r"printf '%d %s\n' 1 '\143odeflow update' > commands.fifo",
+            r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
+            r"echo -e '\x63odeflow update' > commands.fifo",
+            r"echo -e 'codeflow\tupdate' > commands.fifo",
+            r"echo '\0143odeflow update' > commands.fifo",
+            r"echo -n '\143odeflow update' > commands.fifo",
+            r"print '\143odeflow update' > commands.fifo",
+            r"printf '%s\n' $'\x63odeflow update' > commands.fifo",
+            r"printf '%s\n' $'codeflow\nupdate' > commands.fifo",
+            r"printf c$'\x6f'deflow' up\x64ate' > commands.fifo",
+            r#"printf "cod\\\\eflow upd\141te\n" > commands.fifo"#,
+            r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
+            r#"printf '%s\n' "\$'\\x63'odeflow update" > commands.fifo"#,
+            r#"sh -c "printf '\\143odeflow update' > commands.fifo""#,
+            r#"eval "printf '\\143odeflow update'" > commands.fifo"#,
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        for command in [
+            r"printf '%s\n' 'notes' > notes.txt",
+            r"echo -e 'a\tb' > notes.txt",
+            r"printf 'codeflow\n' > notes.txt",
+            r"printf 'update\n' > notes.txt",
+            r"echo -e 'codeflow\tversion' > notes.txt",
+            r"printf '\x63odeflow\n' > notes.txt",
+        ] {
+            assert!(!runs(command), "{command}");
+        }
+    }
+
     /// The brief's controls: the admitted lines that name the binary with
     /// a verb draw no finding, and lines that do not name it stay clean
     /// whatever form they take.
