@@ -1353,7 +1353,9 @@ fn tsk1002_committed_content_is_outside_the_promise() {
         "git show v-blob".to_string(),
         format!("git cat-file --batch <<< {blob}"),
         format!("git update-index --add --cacheinfo 100644,{blob},notes.txt"),
-        format!("printf '100644 blob {blob}\\tnotes.txt\\n' | git mktree"),
+        // A literal tab: a `\t` escape in a `printf` format is printed text
+        // the install-run check does not settle (TSK-1476 r16).
+        format!("printf '100644 blob {blob}\tnotes.txt\\n' | git mktree"),
         "git show HEAD --stat".to_string(),
         "git cat-file -p HEAD:README.md".to_string(),
     ] {
@@ -2003,24 +2005,25 @@ fn tsk1002_review3_environment_ignore_inputs_cannot_hide_secrets() {
 fn tsk1002_review3_nul_path_streams_preserve_file_names() {
     let f = Fixture::new();
     std::fs::write(f.temp.path().join("notes.md"), "ordinary fixture").unwrap();
-    for (line, expected) in [
-        ("printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat", 0),
-        ("printf '%s\\000' \"$HOME/notes.md\" | xargs -0 cat", 0),
-        (
-            "printf '%s\\0' \"$HOME/.codex/auth.json\" | xargs -0 cat",
-            2,
-        ),
-        (
-            "printf() { :; }; printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat",
-            2,
-        ),
+    // A NUL escape in a `printf` format is printed text the install-run
+    // check does not settle (TSK-1476 r16): those lines refuse on that
+    // alone, never as a secret read.
+    for line in [
+        "printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat",
+        "printf '%s\\000' \"$HOME/notes.md\" | xargs -0 cat",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if expected == 0 {
-            assert!(line_allows(&out), "{line}: {out:?}");
-        } else {
-            assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
-        }
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+        assert!(err.contains("cannot settle"), "{line}: {err}");
+        assert!(!err.contains("security.secret_reads"), "{line}: {err}");
+    }
+    for line in [
+        "printf '%s\\0' \"$HOME/.codex/auth.json\" | xargs -0 cat",
+        "printf() { :; }; printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
     }
 }
 

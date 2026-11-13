@@ -8725,8 +8725,6 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "echo x | python3",
         "python3 /dev/stdin <<< 'print(1)'",
         "source <(echo 'python3 tool.py notes.txt')",
-        "python3 <<< $'print(17330\\x32)'",
-        "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
         "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
         "print -r '.cla\\x75de/settings.json'",
     ];
@@ -8792,6 +8790,21 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         if out.status.code() != Some(0) {
             let err = String::from_utf8_lossy(&out.stderr);
             wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    // Printed text the guard cannot settle refuses under hook integrity
+    // (TSK-1476 r16); the interpreter reading names nothing here.
+    for command in [
+        "python3 <<< $'print(17330\\x32)'",
+        "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2)
+            || !err.contains("cannot settle")
+            || err.contains("interpreter")
+        {
+            wrong.push(format!("should refuse as unsettled only: {command}: {err}"));
         }
     }
     for cwd in [&root, &linked] {

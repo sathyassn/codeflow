@@ -6759,6 +6759,30 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
+    /// Each command is refused under `git.hook_integrity` only because a
+    /// printing program's output on it is not settled (TSK-1476 r16): the
+    /// interpreter reading itself allows it.
+    fn assert_only_unsettled(repo: &Repo, commands: &[&str]) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            let findings = public(repo, &repo.root, command, PolicyLevel::Block);
+            let integrity: Vec<&Violation> = findings
+                .iter()
+                .filter(|v| v.rule == "git.hook_integrity")
+                .collect();
+            let unsettled = integrity.len() == 1
+                && integrity[0]
+                    .message
+                    .contains(crate::security::install_run::UNSETTLED);
+            if !unsettled {
+                wrong.push(format!(
+                    "should refuse as unsettled only: {command}: {findings:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     fn assert_public_allowed(repo: &Repo, commands: &[&str]) {
         let mut wrong = Vec::new();
         for command in commands {
@@ -7400,7 +7424,6 @@ mod tests {
         assert_public_allowed(
             &repo,
             &[
-                "python3 <<< $'print(17330\\x32)'",
                 "python3 -c $'print(1)'",
                 "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
                 "printf -v p '%s%s' '.cla' 'ude/settings.json'",
@@ -7410,6 +7433,7 @@ mod tests {
                 "python3 -c 'print(\"173\" \"302\")'",
             ],
         );
+        assert_only_unsettled(&repo, &["python3 <<< $'print(17330\\x32)'"]);
     }
 
     /// Grok round 10: a shell construct that composes a path from pieces
@@ -7462,7 +7486,6 @@ mod tests {
         assert_public_allowed(
             &repo,
             &[
-                "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
                 "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
                 "echo -e \"python3 tool.py .claude/settings.json\"",
@@ -7470,6 +7493,10 @@ mod tests {
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
             ],
+        );
+        assert_only_unsettled(
+            &repo,
+            &["printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'"],
         );
     }
 
@@ -7538,7 +7565,6 @@ mod tests {
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "a=no; b=\"${a}tes.txt\"; python3 tool.py \"$b\"",
                 "export a=notes.txt; python3 tool.py \"$a\"",
-                "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
@@ -7562,6 +7588,10 @@ mod tests {
         assert_public_allowed(
             &repo,
             &["source venv/bin/activate && echo ok && python3 src/app.py"],
+        );
+        assert_only_unsettled(
+            &repo,
+            &["f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'"],
         );
         // In the tightened outcome a printf format the text does not show
         // may hold `%n`, so its words are judged (TSK-397 design D).

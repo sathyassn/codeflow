@@ -1149,7 +1149,10 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "echo 'codeflow update' >> notes.txt",
         "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
         "ls codeflow 'update\\n'",
-        "printf '%s\\n' '\\143odeflow update' > notes.txt",
+        "printf '%s\\n' a b > notes.txt",
+        "printf '%d\\n' 5 > notes.txt",
+        "echo -e 'a\\tb' > notes.txt",
+        "python3 <<< $'print(1)\\nprint(2)'",
     ]
     .iter()
     .map(ToString::to_string)

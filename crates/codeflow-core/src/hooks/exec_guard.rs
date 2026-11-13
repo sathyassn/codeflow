@@ -422,14 +422,23 @@ pub(crate) fn install_violation(
     level: PolicyLevel,
     run: &crate::security::install_run::InstallRun,
 ) -> Violation {
+    let unsettled = run.form == crate::security::install_run::UNSETTLED;
     Violation::new(
         "git.hook_integrity",
         level,
         format!(
-            "install run `{}`{}: it writes the project's install files (harness settings, hooks, \
+            "{}install run `{}`{}: {} the project's install files (harness settings, hooks, \
              policy and workflows), which only the operator installs or refreshes",
+            if unsettled { "possible " } else { "" },
             run.form,
-            if !run.parsed {
+            if unsettled {
+                " (the line is outside the forms the guard reads as data, and a `printf`, \
+                 `echo`, `print` or `$'...'` word on it holds an escape, a conversion other \
+                 than a bare `%s`, a width, precision or flag, an expansion `echo` may decode, \
+                 or more arguments than conversions, so the guard cannot tell whether what it \
+                 writes names the binary with an install verb; write the text literally, as \
+                 `printf '%s\\n' words` or `echo words`, or write the file with the file editor)"
+            } else if !run.parsed {
                 " (the line is outside the forms the guard reads as data and its text names \
                  the binary with an install verb; give such text to `echo`, `printf '%s'`, \
                  `grep` or `rg --no-config` alone, or leave the binary's name out of a \
@@ -440,6 +449,11 @@ pub(crate) fn install_violation(
                  or records it)"
             } else {
                 ""
+            },
+            if unsettled {
+                "such a run writes"
+            } else {
+                "it writes"
             }
         ),
         crate::remedy::INSTALL_RUN.remedy(),

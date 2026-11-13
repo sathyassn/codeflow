@@ -56,6 +56,8 @@
 mod admission;
 mod produced;
 
+pub(crate) use produced::UNSETTLED;
+
 use super::headless::basename;
 use super::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
 use crate::hooks::git_guard::{
@@ -1188,7 +1190,9 @@ mod tests {
     /// Off the data forms, a `printf`, `echo`, `print` or `$'...'` word
     /// settles only as plain literal text: no escape (a `\n` in a `printf`
     /// format excepted), no conversion but a bare `%s`, no width,
-    /// precision or flag, and no more arguments than conversions. Any other
+    /// precision or flag, no more arguments than conversions, and no value
+    /// expanded into `echo` that may hold an escape the composer did not
+    /// resolve. Any other
     /// refuses, whatever it names, since what it writes is not settled.
     #[test]
     fn printed_text_the_guard_cannot_settle_refuses() {
@@ -1211,11 +1215,10 @@ mod tests {
             r"printf '%s\\n' notes > out.txt",
             r"printf %s\n notes > out.txt",
             r#"printf "$fmt" > out.txt"#,
-            r"printf -v x '%s' notes > out.txt",
             r"printf > out.txt",
             r"echo -e 'a\tb' > out.txt",
             r"echo 'a\nb' > out.txt",
-            r#"echo "$x" > out.txt"#,
+            r#"x='a\cb'; echo "$x" > out.txt"#,
             r"print 'notes\n' > out.txt",
             r"print -P '%n' > out.txt",
             r"echo $'notes' $'a\tb' > out.txt",
@@ -1238,6 +1241,11 @@ mod tests {
             r"printf 'a %s b %s\n' x y > out.txt",
             r"printf '%s %s\n' x > out.txt",
             r#"printf '%s\n' "$a" > out.txt"#,
+            r#"echo "$HOME" > out.txt"#,
+            r#"x='a\tb'; echo "$x" > out.txt"#,
+            r#"find . -type f -exec sh -c 'echo "$1"' _ {} \;"#,
+            r"print -r 'a\x75b' > out.txt",
+            r"printf -v p '%s%s' no tes; cat $p > out.txt",
             r"printf '%s\n' 'notes' > /dev/null",
             "ls notes > out.txt",
         ] {
