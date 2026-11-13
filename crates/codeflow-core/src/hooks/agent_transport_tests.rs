@@ -28,7 +28,9 @@ const LANDED_POLICY: &str = r#"{"git":{"protected_branches":["main","master","ta
 /// [`LANDED_POLICY`] with `git.agent_remote_urls` set to `urls`, written as
 /// JSON, or left out when `None`.
 fn landed_urls(urls: Option<&str>) -> String {
-    let key = urls.map_or_else(String::new, |urls| format!(r#","agent_remote_urls":{urls}"#));
+    let key = urls.map_or_else(String::new, |urls| {
+        format!(r#","agent_remote_urls":{urls}"#)
+    });
     format!(
         r#"{{"git":{{"protected_branches":["main","master","task/held-*"],"branch_prefixes":["feat/","fix/","task/","integration/","codeflow/","rel/"],"release_branch_pattern":"rel/v*"{key}}}}}"#
     )
@@ -700,13 +702,31 @@ fn origin_must_match_a_landed_remote_url() {
     for (case, urls) in [
         ("unset", None),
         ("empty", Some("[]")),
-        ("another repository", Some(r#"["https://localhost/example/other.git"]"#)),
-        ("a trailing slash", Some(r#"["https://localhost/example/project.git/"]"#)),
-        ("without .git", Some(r#"["https://localhost/example/project"]"#)),
-        ("host in capitals", Some(r#"["https://LOCALHOST/example/project.git"]"#)),
-        ("a string, not a list", Some(r#""https://localhost/example/project.git""#)),
+        (
+            "another repository",
+            Some(r#"["https://localhost/example/other.git"]"#),
+        ),
+        (
+            "a trailing slash",
+            Some(r#"["https://localhost/example/project.git/"]"#),
+        ),
+        (
+            "without .git",
+            Some(r#"["https://localhost/example/project"]"#),
+        ),
+        (
+            "host in capitals",
+            Some(r#"["https://LOCALHOST/example/project.git"]"#),
+        ),
+        (
+            "a string, not a list",
+            Some(r#""https://localhost/example/project.git""#),
+        ),
         ("a number", Some("[1]")),
-        ("a null beside the URL", Some(r#"["https://localhost/example/project.git",null]"#)),
+        (
+            "a null beside the URL",
+            Some(r#"["https://localhost/example/project.git",null]"#),
+        ),
         ("null", Some("null")),
     ] {
         refused.push((case, landed_urls(urls), Box::new(|_, _| {})));

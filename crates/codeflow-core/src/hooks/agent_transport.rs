@@ -308,7 +308,13 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
     // `origin` must point where the landed policy says agents fetch and
     // push (AC-5): a URL set by hand, however plausible, withholds the
     // admission until a reviewed policy names it.
-    if !landed.policy.git.agent_remote_urls.iter().any(|named| named == url) {
+    if !landed
+        .policy
+        .git
+        .agent_remote_urls
+        .iter()
+        .any(|named| named == url)
+    {
         return None;
     }
     let current = current_branch(&repo);
