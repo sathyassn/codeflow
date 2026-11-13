@@ -941,13 +941,6 @@ fn source_messages_without_the_operator(workspace: &Path) -> Vec<String> {
             "crates/codeflow-core/src/scaffold/update.rs",
             "then rerun codeflow update to record the shipped baseline",
         ),
-        // The portal check's upgrade step, byte-equal with the shipped
-        // portal generator's text and the adopted portal's managed copy,
-        // which only the operator's refresh rewrites.
-        (
-            "crates/codeflow-core/src/validate/portal/figures.rs",
-            "(`codeflow update` for a managed portal",
-        ),
     ];
     let mut sources = Vec::new();
     for krate in ["codeflow-core", "codeflow-cli", "codeflow-present"] {

@@ -20,7 +20,7 @@
       "remove": [
         "/pre_paint_sha256"
       ],
-      "error": "it has schema_version 1, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+      "error": "it has schema_version 1, and this codeflow reads version 2; adopt the version 2 generator first (the operator's `codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
     },
     {
       "name": "no version",
@@ -28,7 +28,7 @@
       "remove": [
         "/schema_version"
       ],
-      "error": "it has schema_version none, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+      "error": "it has schema_version none, and this codeflow reads version 2; adopt the version 2 generator first (the operator's `codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
     },
     {
       "name": "a version that is not a number",
@@ -36,7 +36,7 @@
       "set": {
         "/schema_version": "2"
       },
-      "error": "it has schema_version none, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+      "error": "it has schema_version none, and this codeflow reads version 2; adopt the version 2 generator first (the operator's `codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
     },
     {
       "name": "a later version",
@@ -44,7 +44,7 @@
       "set": {
         "/schema_version": 3
       },
-      "error": "it has schema_version 3, and this codeflow reads version 2; adopt the version 2 generator first (`codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
+      "error": "it has schema_version 3, and this codeflow reads version 2; adopt the version 2 generator first (the operator's `codeflow update` for a managed portal; for a transferred portal, copy scripts/runtime-scripts.mjs from the CodeFlow starter), then regenerate it: npm run build && node scripts/runtime-scripts.mjs dist; see the changelog entry \"The portal's runtime script list is version 2\""
     },
     {
       "name": "no pre-paint hashes",

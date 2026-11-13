@@ -3237,10 +3237,14 @@ mod tests {
     /// that `chrome.test.mjs` runs through `runtimeScriptsFailure`, so the two
     /// readers accept and refuse the same lists: a version 1 list, whose fix
     /// is the version 2 generator first, a theme map missing another theme or
-    /// carrying an extra one, an unknown theme and malformed hashes.
+    /// carrying an extra one, an unknown theme and malformed hashes. The
+    /// fixture is read from the shipped starter, the reader this binary
+    /// ships with; this repository's adopted portal copy follows it only
+    /// when the operator refreshes the portal.
     #[test]
     fn runtime_script_list_fails_closed_like_the_starter_reader() {
-        let portal = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-portal");
+        let portal =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/docs-portal/starter");
         let list: serde_json::Value = serde_json::from_slice(
             &std::fs::read(portal.join("scripts/runtime-scripts.json")).unwrap(),
         )
