@@ -314,7 +314,10 @@ fn unread_program_words_read_the_alias_where_the_command_runs() {
     init_repo(&other, "task/x");
     write_agent_policy(&other, MEASURED_POLICY);
     git(&other, &["config", "alias.inspect", "diff --ext-diff"]);
-    git(&other, &["config", "alias.ship", "push --force origin main"]);
+    git(
+        &other,
+        &["config", "alias.ship", "push --force origin main"],
+    );
     git(&other, &["config", "diff.external", "claude -p x"]);
     std::fs::write(other.join("base.txt"), "base\nchanged\n").unwrap();
     let mut wrong = moved_alias_rows(dir.path(), false);
@@ -527,7 +530,10 @@ fn launchers_that_remove_variables_judge_the_alias_git_runs() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "task/x");
     write_agent_policy(dir.path(), MEASURED_POLICY);
-    git(dir.path(), &["config", "alias.ship", "push --force origin main"]);
+    git(
+        dir.path(),
+        &["config", "alias.ship", "push --force origin main"],
+    );
     git(dir.path(), &["config", "diff.external", "claude -p x"]);
     std::fs::write(dir.path().join("base.txt"), "base\nchanged\n").unwrap();
     let force = Some("git.force_push_protected");
@@ -546,7 +552,10 @@ fn launchers_that_remove_variables_judge_the_alias_git_runs() {
         ("env -i $G ship", integrity),
         ("env -u GIT_CONFIG_COUNT git ship", integrity),
         ("env -u GIT_CONFIG_COUNT $G ship", integrity),
-        ("$G -c alias.ship='push --force origin main' ship", unresolved),
+        (
+            "$G -c alias.ship='push --force origin main' ship",
+            unresolved,
+        ),
         // Git takes `-c` only with its setting as the next word and stops
         // at this one before it reads any alias; the guard refuses it.
         ("git -calias.ship='push --force origin main' ship", refused),

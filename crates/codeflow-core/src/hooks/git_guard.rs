@@ -11233,6 +11233,25 @@ fn inherited_locations(
     Ok(found)
 }
 
+/// The directories the command's launchers move to before Git starts, such
+/// as `env -C DIR` behind `nice`, in order; they come before Git's own `-C`
+/// options. A launcher whose directory the guard cannot be sure of is an
+/// error; an `env` in first place is refused by [`launcher_env`] before
+/// this is read (TSK-1456).
+fn launched_directories(
+    tokens: &[String],
+    vars: &HashMap<String, Val>,
+) -> Result<Vec<String>, String> {
+    let (launched_to, uncertain) = launcher_effects(tokens);
+    if let Some(why) = uncertain {
+        return Err(why);
+    }
+    launched_to
+        .iter()
+        .map(|dir| expand_word(dir, vars))
+        .collect()
+}
+
 /// [`compose_targets`] for git that also inherits `inherited`: an inherited
 /// `GIT_DIR` is the git dir unless the op names one, and an inherited
 /// `GIT_COMMON_DIR` or `GIT_WORK_TREE` leaves the location unresolved, as
@@ -11269,17 +11288,7 @@ fn compose_targets_with(
             _ => {}
         }
     }
-    // The directories the command's launchers move to before Git starts,
-    // such as `env -C DIR` behind `nice`, come before Git's own `-C`
-    // options; an `env` in first place is refused above (TSK-1456).
-    let (launched_to, uncertain) = launcher_effects(moved.tokens);
-    if let Some(why) = uncertain {
-        return Err(why);
-    }
-    let mut dash_c: Vec<String> = launched_to
-        .iter()
-        .map(|dir| expand_word(dir, vars))
-        .collect::<Result<_, _>>()?;
+    let mut dash_c = launched_directories(moved.tokens, vars)?;
     let mut idx = 0;
     while idx < args.len() {
         let t = args[idx].as_str();
