@@ -1231,17 +1231,18 @@ and reports B and C as not applied.
 
 1. TSK-336 reaches the default branch through the line's reviewed pull
    request, under the existing rules.
-2. From that merge, the old names (`commit standards`, `secret scan`,
-   `release impact`) have no producer, so every pull request into the
-   default branch and the lines is blocked by the rulesets that still
-   require them. This fails closed by design.
+2. `commit standards` keeps its producer: the policy verdict job is still
+   named `commit standards` (TSK-1368), and `secret scan` is the head-built
+   CI job. A ruleset that already requires those names stays satisfiable.
+   In this repository `release impact` is posted by `codeflow-release.yml`.
 3. In the same session, an administrator runs `codeflow remote protect`
    (with `--check-app <id>` in Mode A, and `--lines` for the line pattern),
    which writes A, B and C.
-4. The administrator retires, on the host, every foreign ruleset that
-   requires an old name. In this repository those are 24379074 (`main`)
-   and 25435656 (`integration/**`). `codeflow doctor --check
-   remote-perimeter` names each one, and is green only after.
+4. Do not retire a foreign ruleset because it requires `commit standards`.
+   In this repository 24379074 (`main`) and 25435656 (`integration/**`)
+   require it and stay in place. Retire only a ruleset that `codeflow
+   doctor --check remote-perimeter` names for requiring a name no workflow
+   on the default branch produces.
 
 ### Mode A setup (operator)
 
@@ -1260,9 +1261,10 @@ one session. Step 7 has no ordering dependency.
 5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
    file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
 6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
-   as the administrator; retire the foreign rulesets; run `codeflow doctor
-   --check remote-perimeter` and stop only when it is green with no
-   recovery window open.
+   as the administrator; run `codeflow doctor --check remote-perimeter`
+   and stop only when it is green with no recovery window open. Retire a
+   foreign ruleset only when that check names it for requiring a name no
+   workflow on the default branch produces.
 7. Create the agent principal: a non-administrator App installation or bot
    account with Contents and Pull requests write and Actions read, and no
    Workflows, Commit statuses, Checks, Administration, Environments or
@@ -1863,19 +1865,85 @@ operands.
   checkout [REV] -- PATH`, `git restore PATH` (not `--staged` alone),
   `git checkout-index` and `git apply --directory=DIR`. A path is judged
   as written: one naming an enforcement file, or a glob or pathspec that
-  may select one (`-- .claude`, `-- '*'`, `-- :/`), refuses. A path that
-  names only a directory holding enforcement files (`git checkout main --
-  .`, `git restore .`, `git checkout-index -a -f`) restores their committed
-  content, as switching to that ref does, and is not refused; switching
-  refs stays allowed by necessity, so refusing those spellings would
-  protect nothing it leaves open. The commit operand of `git checkout`
-  (`-b`, `-B` and `--orphan` start points, a revision before `--`, and a
-  first operand with a `~N` or `^N` suffix) is not a written path. `git
-  worktree remove` without `--force` removes only a clean worktree, whose
-  files are all committed: it is the sanctioned cleanup after a landing
-  and stays allowed. The writer list stays a filter that only refuses; the
-  installed sandbox's write denies remain the backstop for a writer it
-  does not name.
+  may select one (`-- .claude`, `-- '*'`, `-- :/`), refuses. The commit
+  operand of `git checkout` (`-b`, `-B` and `--orphan` start points, a
+  revision before `--`, and a first operand with a `~N` or `^N` suffix) is
+  not a written path. `git worktree remove` without `--force` removes only
+  a clean worktree, whose files are all committed: it is the sanctioned
+  cleanup after a landing and stays allowed. The writer list stays a filter
+  that only refuses; the installed sandbox's write denies remain the
+  backstop for a writer it does not name.
+- git-guard also judges every Git command that writes work-tree files
+  without moving HEAD by the content it would write (TSK-1390, issue 633):
+  `git checkout` and `git restore` of paths, `git checkout-index`
+  (`-n` included; `--temp` writes temporary names and passes), `git
+  read-tree -u`, `git stash apply`, `pop` and `branch`, `git apply`
+  without `--cached`, `git cherry-pick -n` and `git revert -n`, `git
+  sparse-checkout` `set`, `add`, `init`, `reapply` and `disable`, `git
+  stash` push with `--keep-index` (`-k`), which checks the index out
+  after its reset and removes an enforcement path the index lacks, and
+  with `--patch`, whose index content is compared too although it
+  reverses work-tree changes instead; and also `git am`, and `git reset
+  --hard`, `--keep` and `--merge` to a revision.
+  The same holds for each of these reached through a Git alias, a one-shot
+  `-c alias.NAME=...` included: the expansion is judged as written. Such a
+  write leaves the file as an uncommitted change that rides into the next
+  commit. The guard reads the content each command would write from
+  the object store, read only: the named revision, the index, the stash's
+  commits, the picked or reverted commits, or the paths a patch or mailbox
+  names. It compares that content with HEAD's entry (blob, mode and
+  presence) for every enforcement path the command's selection can reach,
+  and refuses under `git.hook_integrity` when they differ. The selection
+  is read as Git reads it: `.` and a directory select what lies below
+  them, a `*` crosses `/` and matches leading dots, abbreviated options
+  (`--work`, `--sour=`) are what Git takes them for, a `-C` names the
+  worktree, and a stored name that differs only in case, or holds a
+  character a file system may fold, counts as the enforcement path it may
+  land on. Restoring HEAD's content (`git restore .`, `git checkout -- .`
+  with a clean index) and restoring an ordinary file from any revision
+  stay allowed. A two-step plant, an index-only write (`restore --staged
+  --source`, `reset REV -- PATH`, `update-index --cacheinfo`, `read-tree`
+  without `-u`, `apply --cached`) followed by a work-tree write from the
+  index, refuses at the second step. `git sparse-checkout` writes the
+  files its new set takes in from the index and removes the ones it leaves
+  out, so it refuses when the index differs from HEAD on an enforcement
+  path or when the new set leaves out an enforcement path HEAD holds. The
+  guard reads that set only in cone form: `set --cone DIR...` (or `set`
+  with `core.sparseCheckoutCone` true) run from the top of the work tree,
+  and a patterns file in the cone form Git writes; other patterns, `--stdin`
+  and an `add` pattern starting with `!` refuse. The guard fails closed: a
+  selection it cannot read (pathspec magic, `--pathspec-from-file`, `--stdin`, a
+  wildcard with an escape) is judged as the whole tree, and it refuses
+  when it cannot establish the source: an option it does not read, a
+  revision, stash or commit it cannot resolve, a patch on stdin or one it
+  cannot read, an encoded mail, an unmerged index entry on an enforcement
+  path, replacement refs or grafts, or `--git-dir`, `--work-tree`,
+  `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and the other
+  settings that move the repository, index or objects Git reads. A `-c`
+  counts as such a setting unless its key only changes a program run for
+  a person or how output looks (`core.editor`, `core.pager`, `color.*`,
+  `user.*`, `alias.*` and a few more); an include or a filter always
+  counts. These settings also refuse on every other form that writes
+  work-tree files whose content the guard does not compare: branch
+  switches (`git switch`, `git checkout BRANCH`, `-b`, `-B`, `--orphan`,
+  `--detach`), `git merge`, `git rebase`, `git pull`, `git bisect`, `git
+  worktree add`, `git stash` push without `--keep-index` or `--patch`,
+  `git reset --hard` without a revision,
+  `git am --abort`, and committing `git cherry-pick` and `git revert`. A
+  filter there would rewrite the files Git writes. A form that writes no
+  work-tree file, such as `git reset --soft`, `git restore --staged` or
+  `git checkout-index --temp`, is not refused for these settings. These
+  refusals hold whatever `git.discard_uncommitted` and
+  `security.secret_reads` say. The guard also checks the command's other
+  Git rules, so a `warn` finding here does not hide another rule's block,
+  such as `git.policy_authority`. The stated limit: without such a setting,
+  branch switches, `git merge` (with `--squash` and `--no-commit`), `git
+  rebase`, `git pull` and committing `git cherry-pick` and `git revert`
+  keep their verdict (TSK-325 AC-7): the tree they write is not compared
+  with HEAD's. For these, HEAD moves with the files, so a change to an
+  enforcement file is a commit in the pull request diff. `git merge
+  --squash` and `--no-commit` stay with merge by decision: their
+  uncommitted result is a branch's merged content.
 
 ### Git settings that can run a program
 

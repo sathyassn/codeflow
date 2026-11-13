@@ -902,6 +902,7 @@ fn named_default(name: &str, tip: Oid) -> Destination {
         default: Some((name.to_string(), tip)),
         heads: vec![(name.to_string(), tip)],
         limits: QueryLimits::default(),
+        auth: None,
     }
 }
 
