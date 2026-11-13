@@ -1,0 +1,11 @@
+id = "TSK-1487"
+uid = "c4269a33-10c2-490e-9cfe-216b15af201e"
+kind = "TSK"
+title = "A relaxed secret-read policy can still refuse an inherited program word"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-13T00:13:02Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
