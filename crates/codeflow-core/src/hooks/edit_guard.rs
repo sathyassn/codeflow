@@ -62,9 +62,20 @@ pub fn parse_payload(input: &str) -> Result<Option<EditRequest>, EditError> {
     let tool = alias(object, &["tool_name", "toolName"])?
         .and_then(Value::as_str)
         .ok_or_else(|| EditError("tool_name must be a string".into()))?;
+    // `MultiEdit` and `NotebookEdit` are the other Claude Code tools that
+    // write a file. The shipped hook entries send all four Claude tools
+    // (`Edit`, `MultiEdit`, `Write` and `NotebookEdit`) to this guard; an
+    // older settings file that sends fewer is reported by doctor, and a call
+    // that reaches the guard under any of the four names gets the same check.
     if !matches!(
         tool,
-        "apply_patch" | "write" | "search_replace" | "Write" | "Edit"
+        "apply_patch"
+            | "write"
+            | "search_replace"
+            | "Write"
+            | "Edit"
+            | "MultiEdit"
+            | "NotebookEdit"
     ) {
         return Ok(None);
     }
@@ -96,7 +107,7 @@ pub fn parse_payload(input: &str) -> Result<Option<EditRequest>, EditError> {
         let fields = input
             .as_object()
             .ok_or_else(|| EditError("file edit input must be an object".into()))?;
-        let path = alias(fields, &["file_path", "filePath", "path"])?
+        let path = alias(fields, &["file_path", "filePath", "path", "notebook_path"])?
             .and_then(Value::as_str)
             .ok_or_else(|| EditError("file edit input must name its path".into()))?;
         vec![checked_path(path)?]
@@ -308,6 +319,15 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
                 ));
             }
         }
+    }
+    // Saved shell state refuses whatever the integrity level, after every
+    // other finding (TSK-1461).
+    let places = crate::security::startup::saved_state::Places::with_home_at(ctx.home, cwd);
+    for path in &request.paths {
+        let absolute = absolute_target(path, cwd, ctx.home);
+        violations.extend(crate::security::startup::saved_state::edit_target(
+            &absolute, &places,
+        ));
     }
     Ok(violations)
 }
@@ -1897,6 +1917,65 @@ mod tests {
                 evaluate(&request, &f.ctx()).unwrap().is_empty(),
                 "{ordinary}"
             );
+        }
+    }
+
+    /// Saved shell state at its known locations below the home refuses
+    /// through every edit tool that names a file, all four Claude Code tools
+    /// the shipped hook entries send here included, whatever the integrity
+    /// level, for a file that does not exist yet too. A folder of
+    /// the user's own named like a saved-state folder is not one.
+    #[test]
+    fn saved_state_edits_refuse_through_every_edit_tool() {
+        let f = Fixture::new();
+        std::fs::create_dir_all(f.home.join(".claude/session-env/abc")).unwrap();
+        std::fs::create_dir_all(f.home.join(".config/herdr-core/templates")).unwrap();
+        let refused = |request: &EditRequest, level: PolicyLevel| {
+            let ctx = EditContext { level, ..f.ctx() };
+            evaluate(request, &ctx)
+                .unwrap()
+                .iter()
+                .any(|v| v.rule == "security.shell_startup" && v.level_fixed)
+        };
+        for target in [
+            ".claude/session-env/abc/hook.sh",
+            ".claude/session-env/new.sh",
+            ".codex/shell_snapshots/s.sh",
+            ".claude/shell-snapshots/snapshot-zsh-1.sh",
+            ".config/herdr-core/templates/build.md",
+        ] {
+            let path = f.home.join(target).to_str().unwrap().to_string();
+            let request_text =
+                format!("*** Begin Patch\n*** Add File: {path}\n+x\n*** End Patch\n");
+            for request in [
+                synthetic("Write", json!({"file_path": path})),
+                synthetic("Edit", json!({"file_path": path})),
+                synthetic("MultiEdit", json!({"file_path": path, "edits": []})),
+                synthetic("NotebookEdit", json!({"notebook_path": path})),
+                synthetic("write", json!({"path": path})),
+                synthetic("search_replace", json!({"path": path})),
+                synthetic("apply_patch", json!(request_text)),
+            ] {
+                for level in [PolicyLevel::Block, PolicyLevel::Off] {
+                    assert!(refused(&request, level), "{path}");
+                }
+            }
+        }
+        let own = f.root.join("notes");
+        std::fs::create_dir_all(own.join("session-env")).unwrap();
+        for path in [
+            f.home.join(".claude/notes.md"),
+            f.home.join(".config/herdr-core/config.toml"),
+            own.join("session-env/x.sh"),
+            own.join("shell_snapshots/s.sh"),
+        ] {
+            let path = path.to_str().unwrap().to_string();
+            for request in [
+                synthetic("MultiEdit", json!({"file_path": path, "edits": []})),
+                synthetic("NotebookEdit", json!({"notebook_path": path})),
+            ] {
+                assert!(!refused(&request, PolicyLevel::Block), "{path}");
+            }
         }
     }
 

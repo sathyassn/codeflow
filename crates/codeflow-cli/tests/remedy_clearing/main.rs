@@ -2356,7 +2356,8 @@ fn clears_doctor_guard_timeouts() {
                 }
             }
         }
-        assert_eq!(stripped, 2, "{text}");
+        // The two shell guards and the native edit guard.
+        assert_eq!(stripped, 3, "{text}");
         serde_json::to_string_pretty(&value).unwrap()
     };
     write(
@@ -2391,6 +2392,7 @@ fn clears_doctor_guard_timeouts() {
     let before = doctor(&root, "guard-timeouts");
     for named in [
         ".claude/settings.json: git-guard has no `timeout` and no `\"onFailure\": \"block\"`",
+        ".claude/settings.json: edit-guard has no `timeout` and no `\"onFailure\": \"block\"`",
         ".grok/hooks/codeflow.json: edit-guard has `timeout` 10, not the shipped 30",
         ".codex/hooks.json: exec-guard has `timeout` 10, not the shipped 30",
     ] {
@@ -3346,14 +3348,20 @@ fn clears_doctor_root_checkout() {
     );
 }
 
-/// `doctor --check startup-files` with `home` as the home and neither
-/// startup directory moved (TSK-242).
+/// `doctor --check startup-files` with `home` as the home and no startup
+/// directory or saved shell state location moved (TSK-242, TSK-1461), so a
+/// session that runs the tests with its own moved folders gets the same
+/// report.
 fn startup_doctor(root: &Path, home: &Path) -> String {
     text(
         &command(exe().to_str().unwrap(), root)
             .env("HOME", home)
             .env_remove("ZDOTDIR")
             .env_remove("XDG_CONFIG_HOME")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env_remove("APPDATA")
+            .env_remove("CLAUDE_ENV_FILE")
             .args(["doctor", "--check", "startup-files"])
             .output()
             .unwrap(),
@@ -3371,6 +3379,36 @@ fn clears_doctor_startup_presets() {
     prove(
         "DOCTOR_STARTUP_PRESETS",
         "the harness sandboxes do not deny every shell startup write",
+        || startup_doctor(&root, home.path()),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_STARTUP_PRESETS", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_startup_presets_for_the_edit_hook() {
+    // Claude settings that send native edits to no edit-guard hook
+    // (TSK-1461 AC-11): `codeflow update` adds the shipped group back.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let home = tempfile::tempdir().unwrap();
+    let path = root.join(".claude/settings.json");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let groups = settings["hooks"]["PreToolUse"].as_array_mut().unwrap();
+    let before = groups.len();
+    groups.retain(|group| !group.to_string().contains("codeflow hook edit-guard"));
+    assert_eq!(groups.len() + 1, before, "no edit-guard group to remove");
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&settings).unwrap() + "\n",
+    )
+    .unwrap();
+    prove(
+        "DOCTOR_STARTUP_PRESETS",
+        "calls to no edit-guard hook",
         || startup_doctor(&root, home.path()),
         |printed| {
             let step = printed_command(printed, "DOCTOR_STARTUP_PRESETS", None);

@@ -251,6 +251,14 @@ pub(crate) struct Class {
     homes: Vec<String>,
     /// The text floor's needles: each entry's spelling below its anchor.
     needles: Vec<String>,
+    /// Variables the guard holds values for besides the startup ones,
+    /// which a word may expand ([`Line::vars`]); empty for the startup and
+    /// git configuration classes.
+    held: Vec<(String, String)>,
+    /// Whether a class folder itself, and every folder inside it, counts as
+    /// a place a placing program could fill ([`Class::placement`]), as each
+    /// class's builder sets it.
+    folders_place: bool,
 }
 
 impl Class {
@@ -350,6 +358,8 @@ impl Class {
                 .map(|h| key(&lexical(h)))
                 .collect(),
             needles,
+            held: Vec::new(),
+            folders_place: false,
         }
     }
 
@@ -417,6 +427,29 @@ impl Class {
         })
     }
 
+    /// The label of the first location that lies below `folder`, read as
+    /// written and as the kernel reaches it.
+    fn holds(&self, folder: &Path) -> Option<String> {
+        let mut readings = vec![key(&lexical(folder))];
+        if let Ok(real) = resolve(folder) {
+            readings.push(key(&real));
+        }
+        self.entries.iter().find_map(|entry| match entry {
+            Entry::At {
+                label,
+                readings: at,
+                ..
+            } => readings
+                .iter()
+                .any(|reading| {
+                    let below = format!("{}/", reading.trim_end_matches('/'));
+                    at.iter().any(|p| p.starts_with(&below))
+                })
+                .then(|| label.clone()),
+            Entry::Name(_) => None,
+        })
+    }
+
     /// Whether `path` is a directory a placing program could fill with a
     /// startup file it does not name: the home, `/etc`, the root, or any
     /// directory above a class entry.
@@ -434,6 +467,9 @@ impl Class {
         readings.iter().find_map(|reading| {
             let reading = reading.trim_end_matches('/');
             if reading.is_empty() || self.homes.iter().any(|h| h == reading) || reading == "/etc" {
+                return Some(shown(path));
+            }
+            if self.folders_place && self.entry_of(reading).is_some() {
                 return Some(shown(path));
             }
             let below = format!("{reading}/");
@@ -791,6 +827,9 @@ enum Judged {
 enum Kind {
     Startup,
     GitConfig,
+    /// The shell state a harness saves for its later commands, judged in a
+    /// run of its own after every other check (TSK-1461).
+    SavedState,
 }
 
 impl Kind {
@@ -799,6 +838,7 @@ impl Kind {
         match self {
             Self::Startup => "shell startup file",
             Self::GitConfig => "user or system git config file",
+            Self::SavedState => "saved shell state file",
         }
     }
 
@@ -807,6 +847,33 @@ impl Kind {
         match self {
             Self::Startup => "shell startup files",
             Self::GitConfig => "user or system git config files",
+            Self::SavedState => "saved shell state files",
+        }
+    }
+
+    /// The folders a call that places files it does not name is refused
+    /// near, as a refusal names them.
+    fn places(self) -> &'static str {
+        match self {
+            Self::Startup | Self::GitConfig => "the home, `/etc` or a startup directory",
+            Self::SavedState => "the home, `/etc` or a folder that holds saved shell state",
+        }
+    }
+
+    /// What a line names when a placing call runs where the guard cannot
+    /// tell the directory.
+    fn line_places(self) -> &'static str {
+        match self {
+            Self::Startup | Self::GitConfig => "the home or `/etc`",
+            Self::SavedState => self.places(),
+        }
+    }
+
+    /// The sanctioned path printed with a refusal of this class.
+    fn sanctioned(self) -> &'static str {
+        match self {
+            Self::Startup | Self::GitConfig => SANCTIONED,
+            Self::SavedState => saved_state::STATE_SANCTIONED,
         }
     }
 }
@@ -856,7 +923,9 @@ impl Line<'_> {
     /// `git config --global` write of a code-running key refuses under.
     fn finding(&self, message: String) -> Violation {
         match self.kind {
-            Kind::Startup => finding(message),
+            Kind::Startup | Kind::SavedState => {
+                Violation::always_blocking(RULE, message, self.kind.sanctioned())
+            }
             Kind::GitConfig => Violation::new(
                 "git.hook_integrity",
                 self.integrity,
@@ -869,6 +938,20 @@ impl Line<'_> {
     /// The class file, as a refusal names it.
     fn noun(&self) -> &'static str {
         self.kind.noun()
+    }
+
+    /// For saved state, the clause that names the location a folder holds
+    /// below it (` which holds the saved shell state location `L`,`), so a
+    /// refusal of a program that places files there says what makes the
+    /// folder one. Empty for the other classes, whose refusals keep their
+    /// words, and for a folder that is a location itself.
+    fn holds(&self, folder: &Path) -> String {
+        if self.kind != Kind::SavedState {
+            return String::new();
+        }
+        self.class.holds(folder).map_or_else(String::new, |label| {
+            format!(" which holds the saved shell state location `{label}`,")
+        })
     }
 
     /// The protected file `text` names, read as written and with the line's
@@ -932,8 +1015,17 @@ impl Line<'_> {
     }
 
     /// The path `word` names from `dir`, or `None` when part of it is
-    /// filled in at run time.
+    /// filled in at run time. For saved state, a zsh modifier or subscript
+    /// on a variable the guard fills, or one the word reads inside another
+    /// changed expansion, is filled in at run time too, and so is a changed
+    /// expansion the guard cannot read to the end.
     fn expand(&self, word: &str, dir: &Path) -> Option<PathBuf> {
+        if self.kind == Kind::SavedState {
+            let changed = saved_state::modified_variables(word, &self.vars());
+            if changed.unread || !changed.vars.is_empty() {
+                return None;
+            }
+        }
         let text = self.substitute(word);
         if unresolved_word(&text) {
             return None;
@@ -1027,6 +1119,11 @@ impl Line<'_> {
                 }
             }
         }
+        for (name, value) in &self.class.held {
+            if !vars.iter().any(|(known, _)| known == name) {
+                vars.push((name.clone(), value.clone()));
+            }
+        }
         // Longer names first, so `$HOMEDIR` is never read as `$HOME`.
         vars.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
         vars
@@ -1037,11 +1134,57 @@ impl Line<'_> {
     /// assignment can come after the use, so the inherited value may be
     /// the one the shell expands (review round two).
     fn judge(&self, word: &str, dirs: &[PathBuf]) -> Judged {
-        let judged = self.judge_literal(word, dirs);
+        let judged = match self.alternative_readings(word) {
+            Some(readings) => self.judge_readings(word, &readings, dirs),
+            None => self.judge_literal(word, dirs),
+        };
         if matches!(judged, Judged::Ordinary) && self.uses_assigned(word) {
             return Judged::Unresolved(word.to_string());
         }
         judged
+    }
+
+    /// For saved state, the readings of `word` with each default,
+    /// assignment or alternate-value form replaced by each value it can
+    /// give ([`saved_state::alternatives`]). `None` when the word holds no
+    /// such form, and when the word fails closed as a whole (an expansion
+    /// the guard cannot read, or more readings than it makes), which the
+    /// word's own reading then refuses.
+    fn alternative_readings(&self, word: &str) -> Option<Vec<String>> {
+        if self.kind != Kind::SavedState {
+            return None;
+        }
+        let vars = self.vars();
+        if saved_state::modified_variables(word, &vars).unread {
+            return None;
+        }
+        match saved_state::alternatives(word, &vars) {
+            saved_state::Alternatives::Readings(readings) => Some(readings),
+            saved_state::Alternatives::None | saved_state::Alternatives::Unread => None,
+        }
+    }
+
+    /// Judge `word` by its alternative `readings`, each as its own path: a
+    /// class entry when any reading is one, unresolved when any reading is
+    /// (its own reading then says whether it is near the class), and
+    /// otherwise the first placement.
+    fn judge_readings(&self, word: &str, readings: &[String], dirs: &[PathBuf]) -> Judged {
+        let mut placement = None;
+        let mut unresolved = false;
+        for reading in readings {
+            match self.judge(reading, dirs) {
+                Judged::Class(label) => return Judged::Class(label),
+                Judged::Placement(p) => {
+                    placement.get_or_insert(p);
+                }
+                Judged::Unresolved(_) => unresolved = true,
+                Judged::Ordinary => {}
+            }
+        }
+        if unresolved {
+            return Judged::Unresolved(word.to_string());
+        }
+        placement.map_or(Judged::Ordinary, Judged::Placement)
     }
 
     /// Whether `word` expands a variable the line assigns.
@@ -1177,10 +1320,81 @@ impl Line<'_> {
         })
     }
 
+    /// Why an unresolved word may name saved state, by what its changed
+    /// expansions give. A word with a default, assignment or
+    /// alternate-value form is judged by each value the form can give, as
+    /// its own path: it is near when any value is or holds a location, or
+    /// is itself near by the rules below. Otherwise a word that changes
+    /// any variable whose value is or holds a location with a zsh flag,
+    /// modifier or subscript, or reads one inside another changed
+    /// expansion at any depth, is near, whatever other variables it
+    /// changes before it. A changed expansion the guard cannot read to the
+    /// end, and a word with more alternatives than the guard reads, fail
+    /// closed.
+    fn saved_state_near(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
+        const UNREAD: &str = "a changed expansion in it is one the guard cannot read, so its value may be or hold saved shell state";
+        let vars = self.vars();
+        let changed = saved_state::modified_variables(word, &vars);
+        if !changed.unread {
+            match saved_state::alternatives(word, &vars) {
+                saved_state::Alternatives::Unread => return Some(UNREAD.to_string()),
+                saved_state::Alternatives::Readings(readings) => {
+                    let noun = self.noun();
+                    let judged: Vec<Judged> = readings
+                        .iter()
+                        .map(|reading| self.judge(reading, dirs))
+                        .collect();
+                    // What the values themselves give comes first, then
+                    // the rules for any unresolved word.
+                    return judged
+                        .iter()
+                        .find_map(|judged| match judged {
+                            Judged::Class(label) => {
+                                Some(format!("one value it can take is the {noun} `{label}`"))
+                            }
+                            Judged::Placement(label) => Some(format!(
+                                "one value it can take is `{label}`, which can hold a {noun}"
+                            )),
+                            Judged::Unresolved(w) => self.saved_state_near(w, dirs),
+                            Judged::Ordinary => None,
+                        })
+                        .or_else(|| {
+                            judged.iter().find_map(|judged| match judged {
+                                Judged::Unresolved(w) => self.unresolved_near_class(w, dirs),
+                                _ => None,
+                            })
+                        });
+                }
+                saved_state::Alternatives::None => {}
+            }
+        }
+        for (name, value) in changed.vars {
+            let near = dirs.iter().any(|dir| {
+                let path = dir.join(&value);
+                self.class
+                    .target(&path)
+                    .or_else(|| self.class.placement(&path))
+                    .is_some()
+            });
+            if near {
+                return Some(format!(
+                    "it changes `${name}` with a zsh flag, modifier or subscript, and its value `{value}` is or holds saved shell state"
+                ));
+            }
+        }
+        changed.unread.then(|| UNREAD.to_string())
+    }
+
     /// Whether an unresolved word may name a startup file: the line names
     /// one, or the literal directory before the part the shell fills in is
-    /// the home, `/etc` or a startup directory.
+    /// the home, `/etc` or a startup directory. For saved state, see
+    /// [`Line::saved_state_near`].
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
+        if self.kind == Kind::SavedState {
+            if let Some(why) = self.saved_state_near(word, dirs) {
+                return Some(why);
+            }
+        }
         if let Some(name) = self.class.named_in(self.text) {
             return Some(format!("the line names the {} `{name}`", self.noun()));
         }
@@ -3124,7 +3338,8 @@ impl super::unresolved::WriterGuard for ExecWriter<'_> {
         }
         call_names_place(self.args, Some(&effects.read), line, dirs).then(|| {
             line.finding(format!(
-                "`{name}` is given `{option}`, an option the guard does not read, with the home, `/etc` or a startup directory, where it can place a {noun} it does not name"
+                "`{name}` is given `{option}`, an option the guard does not read, with {}, where it can place a {noun} it does not name",
+                line.kind.places()
             ))
         })
     }
@@ -3142,6 +3357,22 @@ impl super::unresolved::WriterGuard for ExecWriter<'_> {
         };
         placement_violation(self.name, self.args, self.line, self.dirs, &shift)
     }
+}
+
+/// The folders a symbolic link made at `dest` can be in, from which the
+/// kernel reads its relative text: `dest` whatever it is now, since an
+/// earlier command on the line may make it a folder, unless `-T` makes it
+/// the link itself, and the folder that holds it.
+fn link_folders(dest: &str, whole: bool, line: &Line<'_>, dirs: &[PathBuf]) -> Vec<PathBuf> {
+    dirs.iter()
+        .filter_map(|d| line.expand(dest, d))
+        .flat_map(|path| {
+            let folder = (!whole).then(|| path.clone());
+            folder
+                .into_iter()
+                .chain(path.parent().map(Path::to_path_buf))
+        })
+        .collect()
 }
 
 /// A copy, link or move judged as a whole: the destination and each
@@ -3164,6 +3395,17 @@ fn copy_judgment(
     let moves = name == "mv";
     let links =
         name == "ln" || (name == "cp" && flagged(&["-s", "-l", "--symbolic-link", "--link"]));
+    // For saved state, relative symbolic link text is read from the folder
+    // the link is made in, as the kernel reads it: the destination when it
+    // may be a folder whatever it is now, unless `-T` makes it the link
+    // itself, and the folder that holds it.
+    let symbolic_from_its_folder =
+        line.kind == Kind::SavedState && name == "ln" && flagged(&["-s", "--symbolic"]);
+    let text_folders = if symbolic_from_its_folder {
+        link_folders(dest, flagged(&["-T", "--no-target-directory"]), line, dirs)
+    } else {
+        Vec::new()
+    };
     let dest_judged = line.judge(dest, dirs);
     match &dest_judged {
         Judged::Class(label) => {
@@ -3181,6 +3423,11 @@ fn copy_judgment(
     for source in sources {
         if moves || links {
             if let Some(v) = word_violation(name, source, line, dirs) {
+                return Some(v);
+            }
+        }
+        if symbolic_from_its_folder && !source.starts_with(['/', '~', '$']) {
+            if let Some(v) = word_violation(name, source, line, &text_folders) {
                 return Some(v);
             }
         }
@@ -3264,7 +3511,8 @@ fn placing_violation(
         // told to place into a directory the call names (review round 19).
         Err(()) if call_names_place(args, None, line, dirs) => {
             return Some(line.finding(format!(
-                "`{name}` puts files where its options say, the guard does not read its options, and the call names the home, `/etc` or a startup directory"
+                "`{name}` puts files where its options say, the guard does not read its options, and the call names {}",
+                line.kind.places()
             )));
         }
         Err(()) => Vec::new(),
@@ -3328,21 +3576,24 @@ fn placement_violation(
             continue;
         }
         if let Judged::Placement(dir) = line.judge(value, placed) {
+            let holds = line.holds(Path::new(&dir));
             return Some(line.finding(format!(
-                "`{name}` writes into `{dir}`, where it can place a {noun} it does not name"
+                "`{name}` writes into `{dir}`,{holds} where it can place a {noun} it does not name"
             )));
         }
     }
     for dir in placed {
         if let Some(p) = line.class.placement(dir) {
+            let holds = line.holds(dir);
             return Some(line.finding(format!(
-                "`{name}` runs in `{p}`, where it can place a {noun} it does not name"
+                "`{name}` runs in `{p}`,{holds} where it can place a {noun} it does not name"
             )));
         }
     }
     if unknown && (line_spells_place(line) || call_names_place(args, None, line, dirs)) {
         return Some(line.finding(format!(
-            "`{name}` runs where the guard cannot tell the directory, on a line that names the home or `/etc`"
+            "`{name}` runs where the guard cannot tell the directory, on a line that names {}",
+            line.kind.line_places()
         )));
     }
     None
@@ -3482,6 +3733,11 @@ fn placing_dirs(name: &str, args: &[String]) -> Result<Option<Vec<String>>, ()> 
 pub fn class_target(path: &Path, env: &StartupEnv) -> Option<String> {
     Class::new(env).target(path)
 }
+
+/// The saved shell state's removals, copies, moves, extractions and writes,
+/// judged in a pass of their own after every other finding (TSK-1461).
+#[path = "saved_state.rs"]
+pub(crate) mod saved_state;
 
 #[cfg(test)]
 #[path = "startup_tests.rs"]

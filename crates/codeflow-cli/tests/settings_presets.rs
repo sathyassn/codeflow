@@ -15,11 +15,13 @@ use codeflow_core::security::actions;
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
-/// `exec-guard` security stage added in ADR-0008). `session-orient` also
-/// carries the TSK-128 prompt reminder, dispatched on the event.
-const HOOK_NAMES: [&str; 4] = [
+/// `exec-guard` security stage added in ADR-0008, and `edit-guard` on the
+/// native edit tools, TSK-1461). `session-orient` also carries the TSK-128
+/// prompt reminder, dispatched on the event.
+const HOOK_NAMES: [&str; 5] = [
     "git-guard",
     "exec-guard",
+    "edit-guard",
     "session-orient",
     "session-summary",
 ];
@@ -347,7 +349,7 @@ fn every_hook_command_is_a_known_codeflow_hook() {
                 "{name}: hook command {command:?} names unknown subcommand {sub:?}"
             );
         }
-        // All three hooks are wired in every preset.
+        // Every known hook is wired in every preset.
         for hook in HOOK_NAMES {
             assert!(
                 commands
@@ -465,6 +467,75 @@ fn exec_guard_wired_in_every_preset() {
                 .any(|c| c.starts_with("codeflow hook exec-guard --contract 3")),
             "{name}: exec-guard hook not wired"
         );
+    }
+}
+
+/// Whether a hook group runs edit-guard.
+fn runs_edit_guard(group: &serde_json::Value) -> bool {
+    let mut commands = Vec::new();
+    collect_hook_commands(&group["hooks"], &mut commands);
+    commands
+        .iter()
+        .any(|c| c.starts_with("codeflow hook edit-guard --contract 3"))
+}
+
+/// The `PreToolUse` groups of a hook file whose hooks run edit-guard.
+fn edit_guard_groups(value: &serde_json::Value) -> Vec<&serde_json::Value> {
+    value["hooks"]["PreToolUse"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|group| runs_edit_guard(group))
+        .collect()
+}
+
+/// TSK-1461 part 5: every Claude preset sends Claude Code's native `Edit`,
+/// `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard, as the Codex
+/// and Grok hook files send
+/// theirs: one group, its own matcher, and the same command and bounds as
+/// the shipped shell guards.
+#[test]
+fn edit_guard_wired_in_every_preset() {
+    let shell_guard = |value: &serde_json::Value| -> serde_json::Value {
+        value["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .find(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
+            })
+            .expect("exec-guard entry")
+            .clone()
+    };
+    for other in ["../codex/hooks.json", "../grok/hooks.json"] {
+        let text = std::fs::read_to_string(settings_dir().join(other)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(edit_guard_groups(&value).len(), 1, "{other}");
+    }
+    for name in preset_files() {
+        let value = load(&name);
+        let groups = edit_guard_groups(&value);
+        assert_eq!(groups.len(), 1, "{name}: one edit-guard group");
+        let group = groups[0];
+        assert_eq!(
+            group["matcher"].as_str(),
+            Some("^(Edit|MultiEdit|Write|NotebookEdit)$"),
+            "{name}: edit-guard takes Claude Code's native edit tools"
+        );
+        let hooks = group["hooks"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1, "{name}: edit-guard alone in its group");
+        // The same entry as the shell guards, with the guard's name.
+        let mut expected = shell_guard(&value);
+        let command =
+            expected["command"]
+                .as_str()
+                .unwrap()
+                .replacen("hook exec-guard", "hook edit-guard", 1);
+        expected["command"] = command.into();
+        assert_eq!(hooks[0], expected, "{name}");
     }
 }
 
@@ -606,12 +677,13 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             "{name}: the sandbox may add only the cf-present state directory and the gate's lock directory as write roots"
         );
         // The write denies are the enforcement paths (TSK-397 design D,
-        // H-4), the shell startup class and the default git configuration
-        // files (TSK-242).
+        // H-4), the shell startup class, the saved shell state (TSK-1461)
+        // and the default git configuration files (TSK-242).
         let table = actions::table();
         // The generator appends what a preset lacks, so the entries the
         // presets already carried come first.
         let mut denied = table.startup_paths.sandbox_write_denies();
+        denied.extend(table.saved_state_paths.sandbox_write_denies());
         denied.extend(table.git_config_paths.sandbox_write_denies());
         denied.extend(
             table
@@ -622,9 +694,74 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
         assert_eq!(
             value["sandbox"]["filesystem"]["denyWrite"],
             serde_json::json!(denied),
-            "{name}: the sandbox denies writes only to the enforcement paths, the shell startup class and the default git configuration files"
+            "{name}: the sandbox denies writes only to the enforcement paths, the shell startup class, the saved shell state and the default git configuration files"
         );
     }
+}
+
+/// The shell state a harness or terminal tool saves for its later commands,
+/// by hand and not from the action table, so a dropped table entry fails
+/// here: Claude Code's `session-env` and `shell-snapshots`, Codex's
+/// `shell_snapshots` and herdr-core's templates.
+const SAVED_STATE_PATHS: [&str; 5] = [
+    "~/.claude/session-env",
+    "~/.claude/shell-snapshots",
+    "~/.codex/shell_snapshots",
+    "~/.config/herdr-core/templates",
+    "~/AppData/Roaming/herdr-core/templates",
+];
+
+fn assert_saved_state_denied(name: &str, value: &serde_json::Value) {
+    let deny = perm_array(value, "deny");
+    let sandbox: Vec<&str> = value["sandbox"]["filesystem"]["denyWrite"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{name}: sandbox.filesystem.denyWrite missing"))
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    for path in SAVED_STATE_PATHS {
+        let rule = format!("Edit({path}/**)");
+        assert!(deny.contains(&rule), "{name}: no `{rule}` deny");
+        assert!(
+            sandbox.contains(&path),
+            "{name}: the sandbox does not deny writes to {path}"
+        );
+    }
+}
+
+/// Every shipped preset denies the native edit tools and sandboxed Bash a
+/// write to the saved shell state, in every permission mode its `Edit`
+/// denies hold in (a deny rule holds in `bypassPermissions` too).
+#[test]
+fn every_preset_denies_writes_to_the_saved_shell_state() {
+    for name in preset_files() {
+        assert_saved_state_denied(&name, &load(&name));
+    }
+}
+
+/// What `codeflow init` writes carries the same denies, so a new project
+/// is covered from its first session.
+#[test]
+fn init_writes_the_saved_shell_state_denies() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    succeeded(
+        &run_codeflow(&root, &home, &["init", "--yes", "--minimal"]),
+        "init --minimal",
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert_saved_state_denied("init --minimal", &written);
+    // AC-11: the installed settings send native edits to edit-guard.
+    assert_eq!(
+        edit_guard_groups(&written).len(),
+        1,
+        "init --minimal: no edit-guard group"
+    );
 }
 
 /// TSK-1044 AC-4, decided by the operator on 2026-10-30: no Claude preset
@@ -1133,6 +1270,7 @@ fn the_generator_reproduces_the_reference_samples() {
         let mut generated = read_json(&evidence(&format!("current/{name}")));
         table.apply_to_claude_preset(&mut generated);
         let mut startup = table.startup_paths.claude_edit_denies();
+        startup.extend(table.saved_state_paths.claude_edit_denies());
         startup.extend(table.git_config_paths.claude_edit_denies());
         let deny = generated["permissions"]["deny"].as_array_mut().unwrap();
         deny.retain(|rule| !startup.iter().any(|s| rule == s));
@@ -1714,12 +1852,21 @@ fn rule_matcher_follows_the_documented_bash_rule_syntax() {
 /// the scaffold installs run it too, with an isolated home and host git
 /// configuration neutralized.
 fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    codeflow_command(root, home, args)
+        .output()
+        .expect("codeflow runs")
+}
+
+/// The command [`run_codeflow`] runs, for a caller that sets more of its
+/// environment.
+fn codeflow_command(root: &Path, home: &Path, args: &[&str]) -> std::process::Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    std::process::Command::new(&exe)
+    let mut command = std::process::Command::new(&exe);
+    command
         .args(args)
         .current_dir(root)
         .env("CODEFLOW_HOME", home)
@@ -1734,9 +1881,8 @@ fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .output()
-        .expect("codeflow runs")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    command
 }
 
 fn succeeded(out: &std::process::Output, what: &str) -> String {
@@ -1915,6 +2061,202 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
             "{case}: validate is not clean:\n{validate}"
         );
     }
+}
+
+// --- The upgrade from 4.0.0: saved shell state denies (TSK-1461) ---------
+
+/// Whether a line of a shipped preset or Codex profile is one of the saved
+/// shell state entries 4.0.0 did not ship: an `Edit` deny, a sandbox
+/// `denyWrite` path or a read-only profile path.
+fn saved_state_line(line: &str) -> bool {
+    let line = line.trim().trim_end_matches(',');
+    SAVED_STATE_PATHS.iter().any(|path| {
+        line == format!("\"Edit({path}/**)\"")
+            || line == format!("\"{path}\"")
+            || line == format!("\"{path}\" = \"read\"")
+    })
+}
+
+/// A doctor or update run as an adopter would make it, with an isolated
+/// home and none of the variables that move the locations, so the report
+/// reads only the project.
+fn run_in_home(root: &Path, home: &Path, args: &[&str]) -> String {
+    let mut command = codeflow_command(root, home, args);
+    command
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("ZDOTDIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("APPDATA")
+        .env_remove("CLAUDE_ENV_FILE");
+    succeeded(
+        &command.output().expect("codeflow runs"),
+        args.join(" ").as_str(),
+    )
+}
+
+/// The Claude settings, Codex profile and their baselines of an install.
+const MANAGED_SETTINGS: [&str; 4] = [
+    ".claude/settings.json",
+    ".codex/config.toml",
+    ".codeflow/.baseline/.claude/settings.json",
+    ".codeflow/.baseline/.codex/config.toml",
+];
+
+/// Turn a fresh install in `root` into what 4.0.0 shipped: the saved shell
+/// state entries and the edit-guard group removed from the settings, the
+/// profile and their baselines. Then add a deny and an edit hook of the
+/// adopter's own to the settings, and return that hook.
+fn plant_a_4_0_0_install(root: &Path) -> serde_json::Value {
+    for rel in MANAGED_SETTINGS {
+        let path = root.join(rel);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let kept: String = text
+            .split_inclusive('\n')
+            .filter(|line| !saved_state_line(line))
+            .collect();
+        assert_ne!(kept, text, "{rel}: no saved shell state entry to remove");
+        std::fs::write(&path, kept).unwrap();
+    }
+    // 4.0.0 shipped no edit-guard group in the Claude presets.
+    for rel in MANAGED_SETTINGS {
+        if !rel.ends_with("settings.json") {
+            continue;
+        }
+        let path = root.join(rel);
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let groups = value["hooks"]["PreToolUse"].as_array_mut().unwrap();
+        let before = groups.len();
+        groups.retain(|group| !runs_edit_guard(group));
+        assert_eq!(
+            groups.len() + 1,
+            before,
+            "{rel}: no edit-guard group to remove"
+        );
+        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap() + "\n").unwrap();
+    }
+    let settings = root.join(".claude/settings.json");
+    let mut project: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    project["permissions"]["deny"]
+        .as_array_mut()
+        .unwrap()
+        .push(ADOPTER_DENIES[0].into());
+    let own_hook = serde_json::json!({"matcher": "Edit", "hooks": [
+        {"type": "command", "command": "./scripts/check-edit.sh"}
+    ]});
+    project["hooks"]["PreToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .push(own_hook.clone());
+    std::fs::write(
+        &settings,
+        serde_json::to_string_pretty(&project).unwrap() + "\n",
+    )
+    .unwrap();
+    own_hook
+}
+
+/// AC-3, AC-4 and AC-11 journey: a project whose Claude settings, Codex
+/// profile and their baselines hold what 4.0.0 shipped, without the saved
+/// shell state entries and without the edit-guard group, plus a deny and an
+/// edit hook of the adopter's own. Doctor warns about both; update adds the
+/// entries and the group, keeps the adopter's deny and hook and changes no
+/// other file; doctor is then clean, and a second update changes nothing.
+#[test]
+fn a_4_0_0_project_gains_the_saved_state_denies_on_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    run_in_home(&root, &home, &["init", "--yes"]);
+    let own_hook = plant_a_4_0_0_install(&root);
+    let settings = root.join(".claude/settings.json");
+
+    let before = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
+    assert!(
+        before.contains("warn") && before.contains("saved shell state"),
+        "doctor does not report the missing entries:\n{before}"
+    );
+    assert!(
+        before.contains(".claude/settings.json") && before.contains("no edit-guard hook"),
+        "doctor does not report the missing edit-guard group:\n{before}"
+    );
+    let planted = snapshot(&root);
+    let first = run_in_home(&root, &home, &["update"]);
+    let updated = snapshot(&root);
+    let changed: BTreeSet<String> = planted
+        .iter()
+        .chain(&updated)
+        .map(|(path, _)| path)
+        .filter(|path| {
+            planted.iter().find(|(p, _)| p == *path) != updated.iter().find(|(p, _)| p == *path)
+        })
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    // Besides the four files, update writes only its own docs-portal lock.
+    let allowed: BTreeSet<String> = MANAGED_SETTINGS
+        .iter()
+        .chain(&[".codeflow/.docs-portal.lock"])
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        changed.is_subset(&allowed),
+        "update changed files beyond the settings and profile: {changed:?}\n{first}"
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_saved_state_denied("updated settings", &written);
+    assert!(
+        perm_array(&written, "deny").contains(&ADOPTER_DENIES[0].to_string()),
+        "update dropped the adopter's own deny"
+    );
+    assert_eq!(
+        edit_guard_groups(&written).len(),
+        1,
+        "update did not add the edit-guard group"
+    );
+    assert!(
+        written["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .contains(&own_hook),
+        "update dropped the adopter's own hook"
+    );
+    let profile = std::fs::read_to_string(root.join(".codex/config.toml")).unwrap();
+    for path in SAVED_STATE_PATHS {
+        assert!(
+            profile.contains(&format!("\"{path}\" = \"read\"")),
+            "the Codex profile does not keep {path} read only"
+        );
+    }
+    assert_eq!(
+        edit_guard_groups(&written)[0]["matcher"].as_str(),
+        Some("^(Edit|MultiEdit|Write|NotebookEdit)$"),
+        "update did not add the matcher for every native edit tool"
+    );
+    let after = run_in_home(&root, &home, &["doctor", "--check", "startup-files"]);
+    // The check's own line passes and says the edit hook takes every tool.
+    let passed = after.lines().any(|line| {
+        line.contains("startup-files")
+            && line.contains("ok")
+            && line.contains(
+                "send native `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard",
+            )
+    });
+    assert!(
+        passed && !after.contains("saved shell state") && !after.contains("no edit-guard hook"),
+        "doctor still reports after the update:\n{after}"
+    );
+    run_in_home(&root, &home, &["update"]);
+    assert!(
+        snapshot(&root) == updated,
+        "the second update changed a file"
+    );
 }
 
 // ---- The shipped status line (TSK-1028, issue 351) ----------------------

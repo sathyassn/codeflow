@@ -770,6 +770,17 @@
    ".envrc"
   ]
  },
+ "saved_state_paths": {
+  "why": "The shell state a harness or terminal tool saves for its later commands (TSK-1461): Claude Code's `session-env` and `shell-snapshots` folders, which it runs before each Bash command, Codex's `shell_snapshots` folder, which it sources before each command, and herdr-core's template folder, which sets what a later `hc run` starts. A function, alias or variable planted in one is loaded by every later command, and every command-text guard then judges the name it sees, not what runs. No policy key relaxes the class. An entry ending in `/` is a directory and everything below it. `home` entries are relative to the home; the `.claude/` entries also apply under `CLAUDE_CONFIG_DIR`, the `.codex/` entries under `CODEX_HOME`, the `.config/` entries under `XDG_CONFIG_HOME` and the `AppData/Roaming/` entries under `APPDATA` when those are set for the guard, and the file `CLAUDE_ENV_FILE` names is one more location when it is set. The guards judge these locations in a pass of their own after every other check.",
+  "home": [
+   ".claude/session-env/",
+   ".claude/shell-snapshots/",
+   ".codex/shell_snapshots/",
+   ".config/herdr-core/templates/",
+   "AppData/Roaming/herdr-core/templates/"
+  ],
+  "absolute": []
+ },
  "git_config_paths": {
   "why": "The default user and system git configuration files (TSK-242). A key planted in one, such as an alias or `core.fsmonitor`, runs a program in every repository on a later git command the guards judge by name. These are the default paths only: git reads its system file under the prefix it was built with and every file a configuration includes, so another prefix, a relocated `XDG_CONFIG_HOME` or `GIT_CONFIG_GLOBAL`, and an include target are named residuals that git-guard and edit-guard judge instead. Grok gets no entry: a Grok deny blocks reads as well as writes, and git reads these files on every command.",
   "home": [

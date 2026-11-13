@@ -2743,6 +2743,232 @@ fn repair2_git_directory_parents() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn shell_reading_levels_keep_guard_verdicts() {
+    let f = Fixture::new();
+    super::write_policy(
+        &f.root,
+        r#"{"git":{"protected_branches":["main","master"],"root_checkout_commits":"off"},"security":{"text_guard":"relaxed"}}"#,
+    );
+    git(&f.root, &["add", ".codeflow/policy.json"]);
+    git(
+        &f.root,
+        &["commit", "-m", "chore: fixture published text policy"],
+    );
+    git(
+        &f.root,
+        &["remote", "add", "origin", "file:///nonexistent/levels.git"],
+    );
+    git(&f.root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        &f.root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    git(&f.root, &["checkout", "-b", "task/levels"]);
+    let rows = [
+        (
+            "F=$HOME/.zshrc git -c core.fsmonitor='echo pwned >> $F' status",
+            false,
+        ),
+        ("F=$HOME/.zshrc; git -c core.pager='cat >> $F' log", false),
+        (
+            "F=$HOME/.zshrc FSM='echo >> $F' git --config-env=core.fsmonitor=FSM status",
+            false,
+        ),
+        ("sed -n -e 1p -e '$p' ~/.zshrc", true),
+        ("sed -ne '1,20p;$=' ~/.zshrc", true),
+        (
+            "F=$HOME/.zshrc; git -c core.pager='sh -c \"cat > $F\"' log",
+            false,
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (command, allowed) in rows {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = f.command(&f.root, hook, command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            let correct = if allowed {
+                out.status.success()
+            } else {
+                refused(&out) && (hook != "exec-guard" || err.contains("security.shell_startup"))
+            };
+            if !correct {
+                wrong.push(format!("{hook}: allowed={allowed}: {command}: {err}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+// TSK-1461: the built hooks read the saved shell state's locations from the
+// environment the harness gives them, and both refuse a write there.
+#[cfg(unix)]
+#[test]
+fn saved_shell_state_writes_refuse_from_the_hook_environment() {
+    let f = Fixture::new();
+    let home = f.temp.path();
+    let elsewhere = home.join("elsewhere");
+    let rows: Vec<(Option<(&str, PathBuf)>, String)> = vec![
+        (None, "~/.claude/session-env/abc/hook.sh".to_string()),
+        (None, "~/.codex/shell_snapshots/s.sh".to_string()),
+        (
+            Some(("CLAUDE_CONFIG_DIR", elsewhere.join("claude"))),
+            "\"$CLAUDE_CONFIG_DIR/shell-snapshots/snapshot-zsh-1.sh\"".to_string(),
+        ),
+        (
+            Some(("CODEX_HOME", elsewhere.join("codex"))),
+            shell_path(&elsewhere.join("codex/shell_snapshots/s.sh")),
+        ),
+        (
+            Some(("CLAUDE_ENV_FILE", elsewhere.join("env/hook-1.sh"))),
+            "\"$CLAUDE_ENV_FILE\"".to_string(),
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (var, target) in &rows {
+        for command in [
+            format!("echo 'export PATH=/tmp/x:$PATH' >> {target}"),
+            format!("cp evil.sh {target}"),
+        ] {
+            for hook in ["exec-guard", "git-guard"] {
+                let mut cmd = f.guard_command(&f.linked, hook);
+                cmd.env_remove("CLAUDE_CONFIG_DIR")
+                    .env_remove("CODEX_HOME")
+                    .env_remove("CLAUDE_ENV_FILE")
+                    .env_remove("XDG_CONFIG_HOME");
+                match var {
+                    Some(("CLAUDE_CONFIG_DIR", value)) => cmd.env("CLAUDE_CONFIG_DIR", value),
+                    Some(("CODEX_HOME", value)) => cmd.env("CODEX_HOME", value),
+                    Some(("CLAUDE_ENV_FILE", value)) => cmd.env("CLAUDE_ENV_FILE", value),
+                    Some((other, _)) => panic!("no row sets {other}"),
+                    None => &mut cmd,
+                };
+                let out = run_with_stdin(&mut cmd, &guard_payload(&command, &f.linked));
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2)
+                    || !err.contains("security.shell_startup")
+                    || !err.contains("saved shell state")
+                {
+                    wrong.push(format!("{hook} {var:?} {command}: {err}"));
+                }
+            }
+        }
+    }
+    // The configuration folder beside the saved state stays ordinary.
+    for hook in ["exec-guard", "git-guard"] {
+        let mut cmd = f.guard_command(&f.linked, hook);
+        cmd.env("CLAUDE_CONFIG_DIR", elsewhere.join("claude"));
+        let command = "printf x > \"$CLAUDE_CONFIG_DIR/notes.md\"";
+        let out = run_with_stdin(&mut cmd, &guard_payload(command, &f.linked));
+        if String::from_utf8_lossy(&out.stderr).contains("saved shell state") {
+            wrong.push(format!("{hook} refused: {command}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Claude Code's native tools that write a file.
+const NATIVE_EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+
+// TSK-1461 AC-2: Claude Code's native `Edit`, `MultiEdit`, `Write` and
+// `NotebookEdit` calls, which every preset sends to edit-guard, refuse below
+// a Claude configuration folder that `CLAUDE_CONFIG_DIR` moves out of the
+// home, and at the file `CLAUDE_ENV_FILE` names, where no preset deny
+// reaches. A file of the moved folder that is not saved state stays
+// ordinary.
+#[cfg(unix)]
+#[test]
+fn native_edits_below_a_moved_claude_folder_refuse_through_edit_guard() {
+    let f = Fixture::new();
+    let moved = f.temp.path().join("elsewhere/claude");
+    std::fs::create_dir_all(moved.join("session-env/abc")).unwrap();
+    std::fs::create_dir_all(moved.join("shell-snapshots")).unwrap();
+    let env_file = f.temp.path().join("elsewhere/env/hook-1.sh");
+    std::fs::create_dir_all(env_file.parent().unwrap()).unwrap();
+    let edit = |tool: &str, target: &Path| {
+        let mut cmd = f.guard_command(&f.linked, "edit-guard");
+        cmd.env_remove("CODEX_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .env("CLAUDE_CONFIG_DIR", &moved)
+            .env("CLAUDE_ENV_FILE", &env_file);
+        let input = match tool {
+            "Edit" => {
+                serde_json::json!({"file_path": target, "old_string": "a", "new_string": "b"})
+            }
+            "MultiEdit" => serde_json::json!({"file_path": target, "edits": [
+                {"old_string": "a", "new_string": "b"}
+            ]}),
+            "NotebookEdit" => serde_json::json!({
+                "notebook_path": target, "new_source": "x", "edit_mode": "replace"
+            }),
+            _ => serde_json::json!({"file_path": target, "content": "export PATH=/tmp/x:$PATH\n"}),
+        };
+        run_with_stdin(
+            &mut cmd,
+            &serde_json::json!({"tool_name": tool, "cwd": f.linked, "tool_input": input})
+                .to_string(),
+        )
+    };
+    let mut wrong = Vec::new();
+    // Each Claude preset sends every native edit tool to edit-guard: the
+    // matcher of its edit-guard group matches the whole tool name.
+    let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
+    for preset in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(presets.join(preset)).unwrap()).unwrap();
+        let matchers: Vec<regex::Regex> = value["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|group| {
+                group["hooks"].as_array().is_some_and(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook["command"]
+                            .as_str()
+                            .is_some_and(|c| c.starts_with("codeflow hook edit-guard "))
+                    })
+                })
+            })
+            .filter_map(|group| group["matcher"].as_str())
+            .map(|m| regex::Regex::new(&format!("^(?:{m})$")).unwrap())
+            .collect();
+        for tool in NATIVE_EDIT_TOOLS {
+            if !matchers.iter().any(|m| m.is_match(tool)) {
+                wrong.push(format!("{preset} does not send {tool} to edit-guard"));
+            }
+        }
+    }
+    for target in [
+        moved.join("session-env/abc/hook-2.sh"),
+        moved.join("session-env/new.sh"),
+        moved.join("shell-snapshots/snapshot-zsh-1.sh"),
+        env_file.clone(),
+    ] {
+        for tool in NATIVE_EDIT_TOOLS {
+            let out = edit(tool, &target);
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2)
+                || !err.contains("security.shell_startup")
+                || !err.contains("saved shell state")
+            {
+                wrong.push(format!("{tool} {}: {err}", target.display()));
+            }
+        }
+    }
+    for tool in NATIVE_EDIT_TOOLS {
+        let out = edit(tool, &moved.join("notes.md"));
+        if String::from_utf8_lossy(&out.stderr).contains("saved shell state") {
+            wrong.push(format!("{tool} refused the folder's own notes: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn repair2_separate_git_directory_container() {
     let f = Fixture::new();

@@ -203,8 +203,30 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
     }
 }
 
-/// TSK-242: every shell startup path and default git configuration path in
-/// the action table is read only in `cf-guard`, which `cf-builder` extends
+/// The shell state a harness saves for its later commands is read only in
+/// `cf-guard`, named here by hand and not from the action table.
+#[test]
+fn cf_guard_keeps_the_saved_shell_state_read_only() {
+    let cfg = shipped_config();
+    let fs = cf_guard(&cfg, "filesystem");
+    for path in [
+        "~/.claude/session-env",
+        "~/.claude/shell-snapshots",
+        "~/.codex/shell_snapshots",
+        "~/.config/herdr-core/templates",
+        "~/AppData/Roaming/herdr-core/templates",
+    ] {
+        assert_eq!(
+            fs.get(path).and_then(toml::Value::as_str),
+            Some("read"),
+            "cf-guard leaves {path} writable"
+        );
+    }
+}
+
+/// TSK-242: every shell startup path, saved shell state path (TSK-1461) and
+/// default git configuration path in the action table is read only in
+/// `cf-guard`, which `cf-builder` extends
 /// without reopening any of them, and the workspace root's `.envrc` is read
 /// only.
 #[test]
@@ -213,7 +235,7 @@ fn cf_guard_and_cf_builder_keep_shell_startup_files_read_only() {
     let fs = cf_guard(&cfg, "filesystem");
     let actions = codeflow_core::security::actions::table();
     let table = &actions.startup_paths;
-    let expected: Vec<String> = [table, &actions.git_config_paths]
+    let expected: Vec<String> = [table, &actions.saved_state_paths, &actions.git_config_paths]
         .iter()
         .flat_map(|class| {
             class

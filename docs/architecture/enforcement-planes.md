@@ -127,7 +127,7 @@ Three PreToolUse handlers add fast, pre-git feedback.
 |---|---|---|
 | `git-guard` | git policy | blocks the git rows above, the PR-content checks, structural override-token laundering, discards of local-only work, and changes to the tracking refs and transport settings that decide policy authority |
 | `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads, interpreter literals and enforcement paths given to an interpreter as arguments refuse at their rule's level |
-| `edit-guard` | the action table's enforcement paths and shell startup files | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths or shell startup files refuse, including patch move sources and destinations |
+| `edit-guard` | the action table's enforcement paths and shell startup files | native file edits (Claude Code `Edit`, `MultiEdit`, `Write` and `NotebookEdit`, Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths or shell startup files refuse, including patch move sources and destinations |
 
 The handlers are wired per harness.
 
@@ -293,6 +293,11 @@ TSK-242).
   directories in the home, the system ones under `/etc`, and `.envrc` in
   any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME` move the matching
   entries; a relative `ZDOTDIR` protects the zsh names in every directory.
+- **Saved shell state.** The table's `saved_state_paths`: the shell state
+  harnesses run before later commands, and a file a harness setting names
+  for it. exec-guard and git-guard judge writes to it as they judge
+  startup files, and by the node on disk; edit-guard judges the native
+  edits the table below names.
 - **The git configuration files.** The table's `git_config_paths`: the
   default user and system files (`~/.gitconfig`, `~/.config/git/config`,
   `/etc/gitconfig` and the `/usr/local` and Homebrew ones), whose keys can
@@ -304,7 +309,7 @@ TSK-242).
 
 | Harness | Native containment | Guards |
 |---|---|---|
-| Claude Code | `Edit` denies for every entry, and sandbox `denyWrite` entries for the home and `/etc` ones, which also hold Bash writes in the sandbox | exec-guard on Bash |
+| Claude Code | `Edit` denies for every entry, and sandbox `denyWrite` entries for the home and `/etc` ones, which also hold Bash writes in the sandbox | exec-guard on Bash; through the preset's edit-guard entry, edit-guard on `Edit`, `MultiEdit`, `Write` and `NotebookEdit`. Settings without that entry keep only the `Edit` denies, which name the default folders |
 | Codex | `cf-guard` and `cf-builder` keep every home and `/etc` entry and the workspace root's `.envrc` read only | exec-guard on Bash, edit-guard on `apply_patch`, `Edit` and `Write` |
 | Grok Build | the `workspace` sandbox leaves the home unwritable | exec-guard on Bash, edit-guard on `write` and `search_replace` |
 
@@ -315,10 +320,8 @@ setting that can run a program in every repository. The
 [policy reference](../policy-reference.md#rules-with-no-key) lists the
 forms, their cost and what stays open per harness.
 
-`codeflow doctor --check startup-files` reports settings that leave a class
-path writable, a moved `ZDOTDIR` or `XDG_CONFIG_HOME`, and files the home's
-startup files source from outside the class; the
-[troubleshooting](../troubleshooting.md) table lists each warning.
+`codeflow doctor --check startup-files` reports gaps in this protection;
+the [troubleshooting](../troubleshooting.md) table lists each warning.
 
 ### how far each plane reaches
 

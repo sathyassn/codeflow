@@ -1422,6 +1422,12 @@ pub(crate) fn has_writer_entry(name: &str) -> bool {
     known_options(writer_name(name)).is_some()
 }
 
+/// Whether the guards list `name` as a program that writes the files it
+/// names ([`WRITERS`]) or read its options with the writer table.
+pub(crate) fn is_listed_writer(name: &str) -> bool {
+    WRITERS.contains(&writer_name(name)) || has_writer_entry(name)
+}
+
 /// Every writer the table lists, each with a call that writes `file` (or,
 /// for one that writes no named file, places into `dir`), for the test
 /// that both guards judge every entry (review round 23). A new entry
