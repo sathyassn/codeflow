@@ -1207,14 +1207,14 @@ fn nested_findings_name_the_kind_the_path_and_the_line_to_add() {
             format!(
                 "workspace.nested_repositories: {label} contains the nested CodeFlow project \
                  'proj', which no tracked .gitignore ignores, so git add . would embed it. \
-                 Next: add the line /proj/ to .gitignore (codeflow init --workspace adds one \
-                 for every nested repository)"
+                 Next: add the line /proj/ to .gitignore (the operator's codeflow init \
+                 --workspace adds one for every nested repository)"
             ),
             format!(
                 "workspace.nested_repositories: {label} contains the nested git repository \
                  'group/deep', which no tracked .gitignore ignores, so git add . would embed \
-                 it. Next: add the line /group/deep/ to .gitignore (codeflow init --workspace \
-                 adds one for every nested repository)"
+                 it. Next: add the line /group/deep/ to .gitignore (the operator's codeflow \
+                 init --workspace adds one for every nested repository)"
             ),
             format!(
                 "workspace.nested_repositories: {label} tracks 'tools/x' as a gitlink that \
@@ -1524,7 +1524,7 @@ fn an_umbrella_without_a_root_branch_gets_the_recommendation() {
         report[1].to_string(),
         format!(
             "git.root_branch: {} contains 2 nested repositories (1 with CodeFlow) (plain, proj) \
-             and sets no git.root_branch, so it looks like a workspace; nothing was switched. Next: for an umbrella workspace, run codeflow init --workspace (root \
+             and sets no git.root_branch, so it looks like a workspace; nothing was switched. Next: for an umbrella workspace, the operator runs codeflow init --workspace (root \
              branch integration/workspace); a single project can ignore this",
             root.display()
         )
@@ -1540,8 +1540,8 @@ fn a_root_branch_the_repository_lacks_is_reported() {
     assert!(
         warns.contains(&format!(
             "git.root_branch: git.root_branch names 'integration/workspace', but {} has no local \
-         branch 'integration/workspace'. Next: create it from the default branch (codeflow init \
-         --workspace does this for an umbrella), or correct git.root_branch in \
+         branch 'integration/workspace'. Next: create it from the default branch (the operator's \
+         codeflow init --workspace does this for an umbrella), or correct git.root_branch in \
          .codeflow/policy.json",
             root.display()
         )),

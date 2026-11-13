@@ -1078,8 +1078,8 @@ pub fn nested_findings(
                     n.path
                 ),
                 next_step: format!(
-                    "add the line {} to .gitignore (codeflow init --workspace adds one for \
-                     every nested repository)",
+                    "add the line {} to .gitignore (the operator's codeflow init --workspace \
+                     adds one for every nested repository)",
                     n.ignore_line()
                 ),
             }),
@@ -1436,8 +1436,8 @@ fn missing_branch_finding(
             root_branch.name, root_branch.name
         ),
         next_step: format!(
-            "create it from the default branch (codeflow init --workspace does this for an \
-             umbrella), or correct {ROOT_BRANCH_KEY} in .codeflow/policy.json"
+            "create it from the default branch (the operator's codeflow init --workspace \
+             does this for an umbrella), or correct {ROOT_BRANCH_KEY} in .codeflow/policy.json"
         ),
     })
 }
@@ -1561,8 +1561,8 @@ fn workspace_hint_finding(repo_label: &str, nested: &[NestedRepo]) -> Finding {
             nested_list(nested)
         ),
         next_step: format!(
-            "for an umbrella workspace, run codeflow init --workspace (root branch \
-             {WORKSPACE_ROOT_BRANCH}); a single project can ignore this"
+            "for an umbrella workspace, the operator runs codeflow init --workspace (root \
+             branch {WORKSPACE_ROOT_BRANCH}); a single project can ignore this"
         ),
     }
 }
@@ -1615,8 +1615,8 @@ pub fn workspace_hint_shown(root: &Path, policy: &GitPolicy) -> Option<Shown> {
     });
     Some(shown!(
         "{}: {} contains {} {} ({} with CodeFlow) ({}) and sets no {}, so it looks like a \
-         workspace; nothing was switched. Next: for an umbrella workspace, run codeflow init \
-         --workspace (root branch {}); a single project can ignore this",
+         workspace; nothing was switched. Next: for an umbrella workspace, the operator runs \
+         codeflow init --workspace (root branch {}); a single project can ignore this",
         Shown::fixed(ROOT_BRANCH_KEY),
         Shown::path(canonical(workdir)),
         Shown::count(nested.len()),

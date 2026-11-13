@@ -212,8 +212,8 @@ fn plain_init_and_update_in_an_umbrella_print_the_hint_and_switch_nothing() {
     );
     let hint = format!(
         "so it looks like a workspace; nothing was switched. Next: for an umbrella workspace, \
-         run codeflow init --workspace (root branch {WORKSPACE_ROOT_BRANCH}); a single project \
-         can ignore this"
+         the operator runs codeflow init --workspace (root branch {WORKSPACE_ROOT_BRANCH}); a \
+         single project can ignore this"
     );
     let hint = hint.as_str();
     assert!(stdout(&init).contains(hint), "{}", stdout(&init));

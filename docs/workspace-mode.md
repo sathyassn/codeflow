@@ -109,7 +109,7 @@ Do not use it for:
 ## Set it up
 
 1. At the umbrella's root, with no uncommitted changes to tracked files,
-   run `codeflow init --workspace`. It:
+   the operator runs `codeflow init --workspace`. It:
    - creates `integration/workspace` from the default branch (or reuses it)
      and puts the root checkout on it;
    - writes `git.root_branch`;

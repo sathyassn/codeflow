@@ -2615,7 +2615,7 @@ fn codex_gate_grants(project: &Path, home: Option<&Path>) -> Option<String> {
         .is_some_and(|grants| grants[0] != CodexGrant::Write)
     {
         report.push_str(
-            " (the shipped cf-builder writes ~/.codeflow/locks; a builder seat still gets it from its launch override, and `codeflow update` restores the shipped profile)",
+            " (the shipped cf-builder writes ~/.codeflow/locks; a builder seat still gets it from its launch override, and the operator's `codeflow update` restores the shipped profile)",
         );
     }
     if [&builder, &guard]
