@@ -466,6 +466,9 @@ fn command_valued_options_refuse_through_launchers() {
         "gh gist clone abc123 -- -c core.sshCommand='env codeflow update'",
         "ACK_PAGER=sh ack --nocolor -h 'codeflow update' notes.txt",
         "export GH_PAGER='bash -s'; gh search issues 'codeflow update'",
+        "export ACK_PAGER=sh; true; ack --nocolor -h 'codeflow update' notes.txt",
+        "export GH_PAGER=sh; cd docs && gh search issues 'codeflow update'",
+        "export GH_EDITOR=sh; bash -c \"gh pr create --title 'codeflow init'\"",
     ]
     .iter()
     .map(ToString::to_string)
@@ -492,6 +495,9 @@ fn command_valued_options_refuse_through_launchers() {
         "gh pr list --search x -- 'codeflow update'",
         "ACK_PAGER=less ack 'codeflow update' docs",
         "PAGER='less -R' gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; unset GH_PAGER; gh search issues 'codeflow update'",
+        "export GH_PAGER=sh; GH_PAGER=less; true; gh search issues 'codeflow update'",
+        "export NOTE=sh; true; gh search issues 'codeflow update'",
     ]
     .iter()
     .map(ToString::to_string)
