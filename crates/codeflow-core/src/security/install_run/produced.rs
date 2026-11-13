@@ -14,8 +14,9 @@
 //!    conversion but a bare `%s` (whose arguments are written as they
 //!    are), no width, precision or flag, no more arguments than
 //!    conversions, no backslash in what `echo` or `print` without `-r`
-//!    writes, and no value expanded into them that may hold an escape the
-//!    composer did not resolve, since zsh decodes escapes in a value too.
+//!    writes, and no value expanded into them that holds a backslash or may
+//!    hold one the composer did not resolve, since zsh decodes escapes in a
+//!    value too.
 //!    A `$'...'` word
 //!    that holds an escape is not settled either;
 //! 3. the texts the guard's shell composer resolves for bash and zsh: a
@@ -50,13 +51,16 @@ pub(crate) const UNSETTLED: &str = "printed text the guard cannot settle";
 /// produces.
 pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
     let texts = composed_texts(command);
-    // A value expanded into `echo` or `print` is settled when the line
-    // holds no backslash, or when the composer resolves every value the
-    // line builds: a value from outside the line is the named residual.
-    let values_unsettled = command.contains('\\')
-        && texts
-            .iter()
-            .any(|text| matches!(text, Composed::Unresolved(_)));
+    // A value expanded into `echo` or `print` is settled only when no value
+    // the composer resolves holds a backslash, and, where the line holds a
+    // backslash, the composer resolves every value the line builds: a value
+    // from outside the line is the named residual.
+    let values_unsettled = texts.iter().any(|text| match text {
+        Composed::Resolved(value) => {
+            value.render().contains('\\') || value.without_open().render().contains('\\')
+        }
+        Composed::Unresolved(_) => command.contains('\\'),
+    });
     let form = match read(command, 0, values_unsettled) {
         Some(form) => form,
         None if composed(&texts) => FORM,

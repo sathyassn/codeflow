@@ -1053,6 +1053,7 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"echo -e 'a\tb' > notes.txt",
         r"printf '\x63odeflow\n' > notes.txt",
         r"printf '%x\n' 255 > notes.txt",
+        r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
     ]
     .iter()
     .map(ToString::to_string)
