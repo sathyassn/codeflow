@@ -706,16 +706,16 @@ mod tests {
             "grep -e 'codeflow init' -A 2 notes.md",
             "rg --no-config 'codeflow init' docs",
             "rg --no-config -n -g '*.md' 'codeflow update' docs",
-            "git --no-pager log --grep='codeflow update'",
-            "git -P log -1 --format='%h %s' --grep='codeflow update'",
-            "git --no-pager log --oneline -n 5 --grep 'codeflow init'",
-            "git -C docs --no-pager log -5 --pretty=oneline --grep='codeflow update'",
-            "git --no-pager grep -n 'codeflow update' -- docs",
+            "rg --no-config -e 'codeflow update' -i docs",
+            "rg --no-config --regexp='codeflow init' -- docs",
             "echo 'run codeflow update'",
             "echo the operator runs codeflow update",
             "printf 'codeflow update\\n' > notes.txt",
             "printf -- '%s\\n' 'codeflow update'",
+            "printf '%s\\n' 'run codeflow update'",
+            "printf '%s %s\\t100%%\\n' codeflow update",
             "echo 'codeflow update' >> notes.txt",
+            "echo 'codeflow update' > /dev/null",
             "cat notes.md | grep -c 'codeflow update'",
             "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
             "grep -n 'codeflow update' notes.md 2> errors.txt",
@@ -724,7 +724,6 @@ mod tests {
             "echo 'codeflow update'\n",
             "codeflow update --help",
             "codeflow help init",
-            "./target/debug/codeflow update --help",
         ] {
             assert!(admitted(line), "{line:?}");
         }
@@ -754,6 +753,71 @@ mod tests {
             "rg -- --no-config 'codeflow update'",
             "printf -v x 'codeflow update'",
             "cat -Q notes.md",
+        ] {
+            assert!(!admitted(line), "{line:?}");
+        }
+    }
+
+    /// A listed program whose own grammar can run code, read a network
+    /// connection or run another file is admitted only in the forms that
+    /// prove every argument inert.
+    #[test]
+    fn forms_a_listed_program_can_run_code_through_are_not_admitted() {
+        for line in [
+            // The binary by a path: any file can sit there.
+            "./target/debug/codeflow update --help",
+            "/usr/local/bin/codeflow update --help",
+            // A printf format with a conversion other than `%s` or `%%`,
+            // or an escape that can spell one.
+            "printf '%d' 'argv[$(codeflow update)]'",
+            "printf '%i\\n' 'a[$(codeflow update)]'",
+            "printf '%n' 'codeflow update'",
+            "printf '%*s' 'a[$(codeflow update)]' x",
+            "printf '%.1s' 'codeflow update'",
+            "printf '%5s' 'codeflow update'",
+            "printf '%1$s' 'codeflow update'",
+            "printf '%b' 'codeflow update'",
+            "printf '%x %s' 1 'codeflow update'",
+            "printf '%' 'codeflow update'",
+            "printf '\\045d' 'a[$(codeflow update)]'",
+            "printf '\\u0025d' 'a[$(codeflow update)]'",
+            "printf '\\x25d' 'a[$(codeflow update)]'",
+            "printf \"%d\" 'a[$(codeflow update)]'",
+            "printf",
+            "printf --",
+            // `--no-config` that is not ripgrep's first argument, or is an
+            // option's value.
+            "rg -e --no-config 'codeflow update'",
+            "rg -e --no-config input.txt; echo 'codeflow update'",
+            "rg --regexp --no-config 'codeflow update'",
+            "rg --regexp=--no-config 'codeflow update'",
+            "rg -e--no-config 'codeflow update'",
+            "rg -ie --no-config 'codeflow update'",
+            "rg -g --no-config 'codeflow update' docs",
+            "rg -i --no-config 'codeflow update' docs",
+            "rg --no-config=1 'codeflow update' docs",
+            "rg --no-config -j 2 'codeflow update' docs",
+            "rg --no-config --type-add 'x:*.x' 'codeflow update' docs",
+            // A redirection that opens a network connection in bash, or
+            // any other device.
+            "echo 'codeflow update' > /dev/tcp/127.0.0.1/9",
+            "cat < /dev/udp/127.0.0.1/9; echo 'codeflow update'",
+            "echo 'codeflow update' > '/dev/tcp/127.0.0.1/9'",
+            "echo 'codeflow update' > dev/tcp/127.0.0.1/9",
+            "echo 'codeflow update' > /dev/fd/3",
+            // Git: an object read can fetch through a promisor remote.
+            "git --no-pager grep -e 'codeflow update' HEAD -- ordinary.txt",
+            "git --no-pager log --grep='codeflow update'",
+            "git -P log -1 --format='%h %s' --grep='codeflow update'",
+            "git --no-pager --no-lazy-fetch log --grep='codeflow update'",
+        ] {
+            assert!(!admitted(line), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn git_calls_and_constructs_outside_the_model_are_not_admitted() {
+        for line in [
             // Git outside its listed form.
             "git log --grep='codeflow update'",
             "git -c core.pager=less --no-pager log --grep='codeflow update'",

@@ -848,6 +848,76 @@ fn every_line_outside_the_closed_subset_that_names_the_verbs_refuses() {
     tally.finish();
 }
 
+/// A listed program is admitted only where its own grammar proves every
+/// argument inert. A printf format that reads an argument as a number,
+/// directly or through an escape that spells a conversion, a ripgrep
+/// `--no-config` that is not its first argument or that an option takes as
+/// its value, a Git search (an object read can fetch through a configured
+/// transport), the binary by a path, and a redirection to a device each
+/// leave the line to its raw text. The guard judges a line the same way for
+/// bash, zsh and sh, so one row covers each shell.
+#[test]
+fn listed_programs_whose_own_grammar_can_run_code_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let rows: Vec<String> = [
+        "printf '%d' 'argv[$(codeflow update)]'",
+        "printf '%i\\n' 'a[$(codeflow update)]'",
+        "printf '%n' 'codeflow update'",
+        "printf '%*s' 'a[$(codeflow update)]' x",
+        "printf '%5s' 'codeflow update'",
+        "printf '%1$s' 'codeflow update'",
+        "printf '%b' 'codeflow update'",
+        "printf '\\045d' 'a[$(codeflow update)]'",
+        "printf '\\u0025d' 'a[$(codeflow update)]'",
+        "printf -- '%d' 'a[$(codeflow update)]'",
+        "printf '%s\\n' 'codeflow update' > input.txt; rg -e --no-config input.txt",
+        "rg -e --no-config 'codeflow update'",
+        "rg --regexp --no-config 'codeflow update'",
+        "rg --regexp=--no-config 'codeflow update'",
+        "rg -e--no-config 'codeflow update'",
+        "rg -ie --no-config 'codeflow update'",
+        "rg -g --no-config 'codeflow update' docs",
+        "rg -i --no-config 'codeflow update' docs",
+        "git --no-pager grep -e 'codeflow update' HEAD -- ordinary.txt",
+        "git --no-pager log --grep='codeflow update'",
+        "git -P log -1 --format='%h %s' --grep='codeflow update'",
+        "git --no-pager --no-lazy-fetch log --grep='codeflow update'",
+        "./target/debug/codeflow update --help",
+        "echo 'codeflow update' > /dev/tcp/127.0.0.1/9",
+        "cat < /dev/udp/127.0.0.1/9; echo 'codeflow update'",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    // A Git search refuses whatever the repository configures, the filters
+    // `git lfs install` writes and a promisor remote with a command
+    // transport alike.
+    let line = "git --no-pager grep -e 'codeflow update' HEAD -- notes.txt".to_string();
+    for (key, value) in [
+        ("filter.lfs.process", "git-lfs filter-process"),
+        ("filter.lfs.clean", "git-lfs clean -- %f"),
+        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
+        ("remote.origin.promisor", "true"),
+        ("remote.origin.url", "ext::sh -c true"),
+        ("protocol.ext.allow", "always"),
+    ] {
+        git(&root, &["config", key, value]);
+    }
+    tally.refused(
+        &[EXEC],
+        &line,
+        &shell(&line, &root),
+        &root,
+        operator_refusal,
+    );
+    tally.finish();
+}
+
 /// AC-2 by the closed subset: its listed forms that name the binary with a
 /// verb draw no install finding, and lines that do not name it stay clean
 /// whatever form they take.
@@ -858,10 +928,12 @@ fn the_closed_subset_and_lines_not_naming_the_binary_stay_clean() {
     let rows: Vec<String> = [
         "grep -n 'codeflow update' notes.md",
         "rg --no-config 'codeflow init' docs",
-        "git --no-pager log --grep='codeflow update'",
+        "rg --no-config -n -e 'codeflow update' -- docs",
         "echo 'run codeflow update'",
-        "git -P log -1 --format='%h %s' --grep='codeflow update'",
-        "git --no-pager grep -n 'codeflow update' -- docs",
+        "printf '%s\\n' 'run codeflow update'",
+        "printf -- '%s %s\\n' codeflow update > notes.txt",
+        "echo 'codeflow update' > /dev/null",
+        "git --no-pager log --grep=update --grep=codeflow --all-match",
         "grep -rn 'codeflow update' docs | head -n 5",
         "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
         "echo 'codeflow update' >> notes.txt",
@@ -882,25 +954,14 @@ fn the_closed_subset_and_lines_not_naming_the_binary_stay_clean() {
     tally.finish();
 }
 
-/// A listed Git call that names the binary with a verb is data only when
-/// every program the repository's configuration has it run is one of the
-/// Git LFS filters in the exact form `git lfs install` writes; any other
-/// configured program, an interpreter above all, has the line judged on
-/// its raw text.
+/// A Git call that names the binary with a verb refuses whatever programs
+/// the repository's configuration has it run, an interpreter above all.
 #[test]
-fn only_the_git_lfs_filters_leave_a_listed_git_call_as_data() {
+fn a_git_call_naming_the_verbs_refuses_whatever_git_runs() {
     let temp = tempfile::tempdir().unwrap();
     let root = project(temp.path());
     let line = "git --no-pager log -1 --grep='codeflow update'".to_string();
     let mut tally = Tally::default();
-    for (key, value) in [
-        ("filter.lfs.process", "git-lfs filter-process"),
-        ("filter.lfs.clean", "git-lfs clean -- %f"),
-        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
-    ] {
-        git(&root, &["config", key, value]);
-    }
-    tally.install_allowed(std::slice::from_ref(&line), &root);
     for (key, value) in [
         ("filter.x.clean", "lua -e \"\" -"),
         (
@@ -957,6 +1018,10 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "git -c core.pager='less -R' log -1 --format='codeflow update'",
         "git commit -m 'docs: say the operator runs codeflow update'",
         "git commit -F - <<'EOF'\ndocs: say the operator runs codeflow update\nEOF",
+        "git --no-pager log --grep='codeflow update'",
+        "git --no-pager grep -n 'codeflow update' -- docs",
+        "rg -i --no-config 'codeflow update' docs",
+        "./target/debug/codeflow update --help",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1057,7 +1122,7 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "codeflow --version",
         "codeflow -V",
         "codeflow --help",
-        "./target/debug/codeflow update --help",
+        "./target/debug/codeflow --version",
         // Other codeflow verbs, and names of the binary as data.
         "codeflow doctor",
         "codeflow orient",

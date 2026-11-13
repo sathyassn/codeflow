@@ -1094,6 +1094,31 @@ mod tests {
         }
     }
 
+    /// A listed program's own grammar can still run code or reach the
+    /// network: a printf format that reads an argument as a number (zsh
+    /// evaluates it, substitutions in subscripts included), a ripgrep
+    /// `--no-config` that an option takes as its value, and a Git search
+    /// that can fetch a missing object through a configured transport.
+    /// Each such line is outside the subset and judged on its raw text.
+    #[test]
+    fn programs_whose_own_grammar_can_run_code_refuse() {
+        for command in [
+            "printf '%d' 'argv[$(codeflow update)]'",
+            "printf '%n' 'codeflow update'",
+            "printf '\\045d' 'a[$(codeflow update)]'",
+            "printf '%b' 'codeflow update'",
+            "printf '%s\\n' 'codeflow update' > input.txt; rg -e --no-config input.txt",
+            "rg --regexp=--no-config 'codeflow update'",
+            "rg -i --no-config 'codeflow update' docs",
+            "git --no-pager grep -e 'codeflow update' HEAD -- ordinary.txt",
+            "git --no-pager log --grep='codeflow update'",
+            "./target/debug/codeflow update --help",
+            "echo 'codeflow update' > /dev/tcp/127.0.0.1/9",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+    }
+
     /// The brief's controls: the admitted lines that name the binary with
     /// a verb draw no finding, and lines that do not name it stay clean
     /// whatever form they take.
@@ -1102,7 +1127,8 @@ mod tests {
         for command in [
             "grep -n 'codeflow update' notes.md",
             "rg --no-config 'codeflow init' docs",
-            "git --no-pager log --grep='codeflow update'",
+            "printf '%s\\n' 'run codeflow update'",
+            "git --no-pager log --grep=update --grep=codeflow --all-match",
             "echo 'run codeflow update'",
             "ACK_PAGER=less ack foo",
             "GIT_PAGER=less git log",
@@ -1119,8 +1145,8 @@ mod tests {
 
     /// Data that names the verbs outside the admitted subset is judged on
     /// its raw text: the over-refusal the closed list accepts, each with a
-    /// listed form that says the same thing (a file, `grep`, `rg
-    /// --no-config`, `git --no-pager log`).
+    /// listed form that says the same thing (`echo`, `printf '%s'`, `grep`,
+    /// `rg --no-config`).
     #[test]
     fn data_off_the_closed_list_that_names_the_verbs_refuses() {
         for command in [
@@ -1139,6 +1165,7 @@ mod tests {
             "jq '.steps[] | select(. == \"codeflow update\")' plan.json",
             "git commit -m 'docs: the operator runs codeflow update'",
             "git log --grep='codeflow update'",
+            "git --no-pager grep -n 'codeflow update' -- docs",
         ] {
             assert!(runs(command), "{command}");
         }
@@ -1343,7 +1370,7 @@ mod tests {
             "codeflow --help",
             "codeflow --version",
             "codeflow -V",
-            "./target/debug/codeflow update --help",
+            "./target/debug/codeflow --version",
             "codeflow",
             "codeflow doctor",
             "codeflow test --mode quick",
