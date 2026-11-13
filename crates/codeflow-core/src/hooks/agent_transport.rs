@@ -309,7 +309,7 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
         Form::Fetch { named: false } => {
             // A bare fetch goes to the current branch's remote, which must
             // be `origin` when one is set.
-            if let Some(current) = current? {
+            if let Head::Branch(current) = current? {
                 let key = format!("branch.{current}.remote");
                 if let Some((_, _, remote)) = config.get_all(&key).last() {
                     if *remote != b"origin" {
@@ -324,7 +324,7 @@ fn repository_allows(target: &Path, form: &Form<'_>, bodies: &[GitRunnerBody]) -
                 source_allowed(&repo, src)?;
                 (*name).to_string()
             } else {
-                let Some(Some(current)) = current else {
+                let Some(Head::Branch(current)) = current else {
                     return None;
                 };
                 let name = if *src == "HEAD" {
@@ -466,17 +466,24 @@ fn unrewritten(target: &Path, url: &str) -> Option<()> {
     Some(())
 }
 
-/// The current branch's name: `Some(None)` when `HEAD` is detached, and
-/// `None` when `HEAD` is unborn or unreadable or names a branch whose name
-/// is not UTF-8, which the forms never admit.
-fn current_branch(repo: &git2::Repository) -> Option<Option<String>> {
+/// Where `HEAD` points, as the admission reads it.
+enum Head {
+    /// A branch, by its name under `refs/heads/`.
+    Branch(String),
+    /// A detached `HEAD`.
+    Detached,
+}
+
+/// Where `HEAD` points, or `None` when `HEAD` is unborn or unreadable or
+/// names a branch whose name is not UTF-8, which the forms never admit.
+fn current_branch(repo: &git2::Repository) -> Option<Head> {
     let head = repo.head().ok()?;
     if !head.is_branch() {
-        return Some(None);
+        return Some(Head::Detached);
     }
     let name = crate::git::name::reference_name(&head);
     let name = name.rule_text().ok()?.strip_prefix("refs/heads/")?;
-    Some(Some(name.to_string()))
+    Some(Head::Branch(name.to_string()))
 }
 
 /// Whether `reference`'s full name is `refs/heads/<name>`, compared as bytes.
