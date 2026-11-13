@@ -70,7 +70,11 @@ pub(super) fn read(words: &Words<'_>, place: &Place, input: Option<&str>, out: &
         ),
         (Some("terminal"), Some("read" | "list" | "wait" | "close")) => {
             let grammar = Grammar {
-                flags: &["--all", "--full"],
+                flags: if pair.1 == Some("read") {
+                    &["--all", "--full", "--screen"]
+                } else {
+                    &["--all", "--full"]
+                },
                 valued: &[
                     "--terminal",
                     "--worktree",

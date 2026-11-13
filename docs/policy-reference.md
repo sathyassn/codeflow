@@ -819,9 +819,23 @@ delivered text meets the restrictions below (TSK-1344). The code holds the progr
 - Terminal and app input carriers form one class: a program that types
   into, or starts a command in, another terminal or app is a carrier.
   The class inventory is `security/terminal_carriers/inventory.rs`.
+  A listed program is admitted only in its modeled forms. Every other
+  use refuses under the carrier rule. The reader follows the receiving
+  program's grammar before judging the delivered text.
   Every carried text is checked as a command line. Text naming a guarded
   command refuses; shell commands also meet the bare-command rules.
   An unread command, input, buffer or execution directory refuses.
+  Every carried command is checked again before re-entry, including its
+  program word. Script input outside a modeled inline statement refuses.
+  The modeled admissions include terminal screen reads, a literal child
+  process launch, one string-return statement, and terminal text sent as
+  one argument. `orca terminal read --screen --json` delivers no text.
+  `expect spawn` admits only literal arguments and judges the child
+  command as a bare command. `osascript`
+  admits `return` of one string in one `-e` statement. `tmux send-keys`
+  admits a single word with `-l`, or a word classified as text by its
+  key-name check; unknown key forms refuse. Other statements and options
+  remain subject to the closed forms above.
   The accepted form is a file pointer: keep instructions in a brief file
   and send its literal path to an interactive seat.
 - Interactive seats remain available. A startup command must name an
@@ -895,18 +909,12 @@ delivered text meets the restrictions below (TSK-1344). The code holds the progr
   `connect`, the other `machine` commands, `--skill`, `--help` and
   `--version`, when their options parse.
 
-Text typed into a terminal is not judged: `hc send`, `hc keys`, `herdr
-pane send-text`, `herdr pane send-keys`, `herdr agent send-keys`, `herdr
-agent prompt`. The guard
-cannot know whether the program in that terminal reads the text as a
-prompt or runs it as a command, and `hc keys` can spell any line one key at
-a time, so a filter would stop only some spellings and is not offered as
-protection. Their options are still read. The floor for typed text is the
-program that receives it: an agent session runs its own guards before it
-runs a command, and a plain shell has none. Then the Git hooks in each
-repository, CI, and the remote branch protection hold, as they do for a
-command a person types. `hc send --if idle` types only into a program that
-reports idle status; a plain shell reports none.
+Legacy terminal text follows the same admission rule. A modeled text
+argument is judged before delivery; an unmodeled key sequence refuses.
+The guard does not attest the receiving program or its current state.
+The receiving agent's guards judge commands that agent then runs. Git
+hooks, CI and remote branch protection remain later checks. A file-pointer
+prompt does not make its brief file part of this text rule.
 
 An `hc` terminal runs outside the harness's Bash sandbox. A command it
 starts can write wherever the user can, read files the sandbox denies and

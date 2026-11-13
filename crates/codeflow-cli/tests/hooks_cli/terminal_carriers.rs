@@ -26,7 +26,12 @@ fn judge(hook: &str, command: &str, cwd: &Path, config: Option<&Path>) -> Output
 const HC_RUN_REFUSAL: &str = "can start a template";
 
 fn refused(out: &Output, rule: &str) -> bool {
-    out.status.code() == Some(2) && String::from_utf8_lossy(&out.stderr).contains(rule)
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let deadline = "the guard reached no decision within 20 seconds";
+    out.status.code() == Some(2)
+        && stderr.contains(rule)
+        && !stderr.contains(deadline)
+        && !String::from_utf8_lossy(&out.stdout).contains(deadline)
 }
 
 fn passed(out: &Output) -> bool {
@@ -589,6 +594,191 @@ fn applescript_shell_bodies_and_terminal_input_keep_their_boundaries() {
         );
         assert!(refused(&out, rule), "{hook}: {out:?}");
     }
+}
+
+#[test]
+fn carrier_delivery_uses_only_modeled_statements_and_text() {
+    let fixture = Fixture::new();
+    for command in [
+        "tmux send-keys git Space push Enter",
+        "tmux send-keys 'C- ' Enter",
+        "tmux send-keys 'M- x' Enter",
+        "tmux send-keys 'S- ' Enter",
+        "tmux send-keys -t seat \"Read /literal/brief.txt in full and follow it.\" Space git Space status Enter",
+        "osascript -e 'tell application \"Terminal\" to do  script \"git status\"'",
+        "osascript -e 'tell application \"Terminal\" to do' -e 'script \"git status\"'",
+        "osascript <<'APPLESCRIPT'\ntell application \"Terminal\" to do script \"git status\"\nAPPLESCRIPT",
+        "osascript -e 'tell application \"System Events\" to key code 36'",
+        "hc exec /usr/bin/gi[t] status",
+        "/opt/bin/[h]c ls",
+        "screen -S seat -X stuff 'g^Mit status'",
+        "screen -S seat -X stuff 'g\\nit status'",
+        "screen -S seat -X stuff '\\147it status'",
+        "screen -S seat -X stuff hello world",
+        "expect -c 'send \"g\\rit status\"'",
+        "expect -c 'send \"\\x67it status\"'",
+        "expect -c 'send \"[format %c 103]it status\"'",
+        "expect -c 'send \"$cmd\"'",
+        "expect -c 'send -re \"hello\"'",
+        "expect script.exp",
+        "hc send seat 'git status'",
+        "hc keys seat g i t Space status Enter",
+        "herdr-core send seat 'git status'",
+        "herdr-core keys seat g i t Space status Enter",
+        "herdr pane send-text seat 'git status'",
+        "herdr pane send-keys seat g i t Space status Enter",
+        "herdr agent send-keys seat g i t Space status Enter",
+        "herdr agent prompt seat 'git status'",
+        "osascript script.scpt",
+        "osascript -l JavaScript -e '1'",
+        "osascript -e 'do shell script \"cat README.md\"' -e 'tell application \"Terminal\" to do script \"git status\"'",
+    ] {
+        for (hook, rule) in [
+            ("git-guard", "git.hook_integrity"),
+            ("exec-guard", "security.dangerous_commands"),
+        ] {
+            let out = fixture.judge(hook, command);
+            assert!(refused(&out, rule), "{hook}: {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn carried_reentry_checks_program_readability() {
+    let fixture = Fixture::new();
+    for command in [
+        "hc exec /usr/bin/gi[t] status",
+        "hc machine add --via '/usr/bin/gi[t] status'",
+        "herdr-core exec /usr/bin/gi[t] status",
+        "herdr pane run seat '/usr/bin/gi[t] status'",
+        "orca terminal create --command '/usr/bin/gi[t] status'",
+        "tmux new-session '/usr/bin/gi[t] status'",
+        "screen -dm /usr/bin/gi[t] status",
+        "osascript -e 'do shell script \"/usr/bin/gi[t] status\"'",
+    ] {
+        for (hook, rule) in [
+            ("git-guard", "git.hook_integrity"),
+            ("exec-guard", "security.dangerous_commands"),
+        ] {
+            let out = fixture.judge(hook, command);
+            assert!(refused(&out, rule), "{hook}: {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn shell_tests_do_not_select_a_terminal_carrier() {
+    let fixture = Fixture::new();
+    for command in [
+        "if [ -f notes.txt ]; then true; fi",
+        "if [[ -f notes.txt ]]; then true; fi",
+    ] {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = fixture.judge(hook, command);
+            assert!(passed(&out), "{hook}: {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn operator_seat_forms_remain_available() {
+    let fixture = Fixture::new();
+    let dir = shell_path(&fixture.session);
+    let brief = "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/coordination/coordinators/parallel/briefs/pr706-r13-build-codex.md";
+    let mut commands = vec![
+        format!("orca terminal create --worktree active --title \"cf-codex-builder\" --command \"cd '{dir}' && nice -n 10 codex --ask-for-approval never -c default_permissions=\\\"cf-builder\\\"\" --json"),
+        format!("orca terminal create --worktree active --title \"cf-grok-review\" --command \"cd '{dir}' && grok --always-approve -m grok-4.7 --effort high\""),
+        format!("orca terminal send --terminal term_abc --text \"Read {brief} in full and do exactly what it says.\" --enter --wait-submit 20"),
+        "orca terminal read --terminal term_abc --screen --json".to_string(),
+        "orca terminal wait --terminal term_abc --for tui-idle --timeout-ms 300000 --json".to_string(),
+        "orca terminal list --json".to_string(),
+        "orca terminal close --terminal term_abc".to_string(),
+        "hc ls".to_string(),
+        "hc read seat".to_string(),
+        format!("hc send seat \"Read {brief} in full and do exactly what it says.\""),
+        "hc keys seat Enter".to_string(),
+        "osascript -e 'do shell script \"cat README.md\"'".to_string(),
+    ];
+    for enter in ["Enter", "C-m"] {
+        commands.push(format!(
+            "tmux send-keys -t seat \"Read {brief} in full and do exactly what it says.\" {enter}"
+        ));
+    }
+    let mut wrong = Vec::new();
+    for command in commands {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = fixture.judge(hook, &command);
+            if !passed(&out) {
+                wrong.push(format!(
+                    "{hook}: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn modeled_admissions_keep_their_bounds() {
+    let fixture = Fixture::new();
+    for command in [
+        "orca terminal read --terminal term_abc --screen --json",
+        "expect -c 'spawn python3 tool.py {notes.txt}'",
+        "expect -c 'spawn python3 tool.py notes.txt'",
+        "osascript -e 'return \"a\"'",
+        "osascript -l AppleScript -e 'return \"a\"'",
+        "tmux send-keys -t seat hello Enter",
+        "tmux send-keys -t seat -l Space",
+    ] {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = fixture.judge(hook, command);
+            assert!(passed(&out), "{hook}: {command}: {out:?}");
+        }
+    }
+    for command in [
+        "orca terminal wait --terminal term_abc --screen --json",
+        "orca terminal read --terminal term_abc --screen=yes",
+        "expect -c 'spawn $x tool.py'",
+        "expect -c 'spawn [exec which python3] tool.py'",
+        "expect -c 'spawn python3 tool\\.py'",
+        "expect -c 'spawn python3 tool.py; send hi'",
+        "expect -c 'spawn python3 tool.py\nexit'",
+        "osascript -e 'return \"a\" & \"b\"'",
+        "osascript -l JavaScript -e 'return \"a\"'",
+        "osascript -e 'return \"a\"' -e 'return \"b\"'",
+        "osascript -e 'return \"a\"\nreturn \"b\"'",
+        "tmux send-keys Space",
+        "tmux send-keys space",
+        "tmux send-keys C-c",
+        "tmux send-keys m-x",
+        "tmux send-keys S-Tab",
+        "tmux send-keys '^C'",
+        "tmux send-keys 0x67",
+        "tmux send-keys F12",
+        "tmux send-keys KPEnter",
+        "tmux send-keys unknown-key",
+    ] {
+        for (hook, rule) in [
+            ("git-guard", "git.hook_integrity"),
+            ("exec-guard", "security.dangerous_commands"),
+        ] {
+            let out = fixture.judge(hook, command);
+            assert!(refused(&out, rule), "{hook}: {command}: {out:?}");
+        }
+    }
+    let out = fixture.judge(
+        "git-guard",
+        "expect -c 'spawn git push --force origin main'",
+    );
+    assert!(refused(&out, "git.force_push_protected"), "{out:?}");
+    for hook in ["git-guard", "exec-guard"] {
+        let bare = fixture.judge(hook, "git push --force origin main");
+        let carried = fixture.judge(hook, "expect -c 'spawn git push --force origin main'");
+        assert_eq!(bare.status.code(), carried.status.code(), "{hook}");
+    }
+    let out = fixture.judge("exec-guard", "expect -c 'spawn rm -rf /'");
+    assert!(refused(&out, "security.dangerous_commands"), "{out:?}");
 }
 
 /// Catalog rows are only passed to guard code; none of the payloads run.

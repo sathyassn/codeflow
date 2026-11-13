@@ -52,57 +52,120 @@ fn guarded(value: &str, depth: usize, carriers_only: bool) -> bool {
     })
 }
 
-pub(super) fn read(name: &str, words: &Words<'_>, place: &Place, out: &mut Carried) {
-    let args = words.args;
+pub(super) fn read(
+    name: &str,
+    words: &Words<'_>,
+    place: &Place,
+    input: Option<&str>,
+    stdin_bound: bool,
+    out: &mut Carried,
+) {
     match name {
         "tmux" => {
             tmux(words, place, out);
         }
-        "screen" => {
-            let stuff = args
-                .windows(2)
-                .any(|pair| pair[0] == "-X" && pair[1] == "stuff");
-            let rest = super::super::headless::skip_options(args, &["-S", "-t", "-c", "-p", "-s"]);
-            let command = !args.iter().any(|word| word == "-X") && !rest.is_empty();
-            if args.iter().any(|word| word == "-X") && !stuff {
-                out.unread("screen", "this text route is not in the carrier inventory");
-            }
-            if stuff || command {
-                let route = if stuff { "stuff" } else { "command" };
-                if super::inventory::contains(name, route) {
-                    let body = if stuff {
-                        let at = args
-                            .iter()
-                            .position(|word| word == "-X")
-                            .unwrap_or_default();
-                        args.get(at + 2..).unwrap_or_default()
-                    } else {
-                        rest
-                    };
-                    for value in body {
-                        text(value, "screen terminal input", out);
-                    }
-                    // Read the complete text too, including adjacent operands.
-                    text(&body.concat(), "screen terminal input", out);
-                    text(&body.join(" "), "screen terminal input", out);
-                }
-            }
-        }
-        "osascript" => {
-            for script in args {
-                let lower = script.to_ascii_lowercase();
-                if lower.contains("keystroke") || lower.contains("do script") {
-                    text(script, "osascript terminal input", out);
-                }
-            }
-        }
-        "expect" => {
-            for script in args {
-                text(script, "expect terminal input", out);
-            }
-        }
+        "screen" => screen(words, place, out),
+        "osascript" => super::applescript::read(words.args, place, input, stdin_bound, out),
+        "expect" => expect(words.args, place, out),
         _ => {}
     }
+}
+
+fn screen(words: &Words<'_>, place: &Place, out: &mut Carried) {
+    let args = words.args;
+    let mut at = 0;
+    if args.first().is_some_and(|word| word == "-S") && args.get(1).is_some() {
+        at = 2;
+    }
+    match &args[at..] {
+        [option, verb, value] if option == "-X" && verb == "stuff" => {
+            if value.contains(['^', '\\']) {
+                out.unread(
+                    "screen stuff",
+                    "the terminal input is outside the modeled literal form",
+                );
+            } else {
+                text(value, "screen stuff", out);
+            }
+        }
+        [option, body @ ..] if option == "-dm" && !body.is_empty() => {
+            match super::quote(words, at + 1) {
+                Ok(line) => {
+                    text(&line, "screen command", out);
+                    out.runs.push(Run {
+                        form: "screen command",
+                        line,
+                        directory: place.cwd.clone(),
+                    });
+                }
+                Err(why) => out.unread("screen command", why),
+            }
+        }
+        _ => out.unread("screen", "the call is outside the modeled forms"),
+    }
+}
+
+fn expect(args: &[String], place: &Place, out: &mut Carried) {
+    let [option, script] = args else {
+        out.unread("expect", "only a modeled inline send statement is admitted");
+        return;
+    };
+    if option == "-c" && script.starts_with("spawn ") {
+        return expect_spawn(script, place, out);
+    }
+    let value = script
+        .strip_prefix("send \"")
+        .and_then(|body| body.strip_suffix('"'));
+    match value.filter(|body| option == "-c" && !body.contains(['"', '\\', '$', '[', ']'])) {
+        Some(value) => text(value, "expect send", out),
+        None => out.unread(
+            "expect",
+            "the call is outside the modeled literal send form",
+        ),
+    }
+}
+
+fn expect_spawn(script: &str, place: &Place, out: &mut Carried) {
+    let literal = |word: &str| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "_./:+-=,@%".contains(ch))
+    };
+    let words: Option<Vec<_>> = script.strip_prefix("spawn ").and_then(|body| {
+        if body.contains(['\n', '\r']) {
+            return None;
+        }
+        body.split_ascii_whitespace()
+            .map(|word| {
+                let word = if word.starts_with('{') {
+                    word.strip_prefix('{')?.strip_suffix('}')?
+                } else {
+                    word
+                };
+                literal(word).then_some(word)
+            })
+            .collect()
+    });
+    let Some(words) =
+        words.filter(|words| words.first().is_some_and(|word| !word.starts_with('-')))
+    else {
+        out.unread(
+            "expect spawn",
+            "the spawned command is outside the modeled literal form",
+        );
+        return;
+    };
+    let line = words
+        .iter()
+        .map(|word| super::shell_word(word, false))
+        .collect::<Vec<_>>()
+        .join(" ");
+    out.runs.push(Run {
+        form: "expect spawn",
+        line,
+        directory: place.cwd.clone(),
+    });
 }
 
 #[allow(clippy::too_many_lines)] // Keep each command's options beside its carried text.
@@ -124,9 +187,16 @@ fn tmux(words: &Words<'_>, place: &Place, out: &mut Carried) {
         }
     };
     let Some(verb) = args.get(root.operands).map(String::as_str) else {
+        out.unread("tmux", "the call is outside the modeled forms");
         return;
     };
     if matches!(verb, "list-sessions" | "list-windows" | "list-panes") {
+        if args.len() != root.operands + 1 {
+            out.unread(
+                "tmux",
+                "the terminal management call has unmodeled arguments",
+            );
+        }
         return;
     }
     if !super::inventory::contains("tmux", verb) {
@@ -142,34 +212,7 @@ fn tmux(words: &Words<'_>, place: &Place, out: &mut Carried) {
     }
     match verb {
         "send-keys" | "send" => {
-            let parsed = match options(
-                args,
-                root.operands + 1,
-                &Grammar {
-                    flags: &["-l"],
-                    valued: &["-t"],
-                },
-                false,
-            ) {
-                Ok(parsed) => parsed,
-                Err(why) => {
-                    out.unread("tmux send-keys", why);
-                    return;
-                }
-            };
-            let mut keys = &args[parsed.operands..];
-            if keys.last().is_some_and(|key| key == "Enter") {
-                keys = &keys[..keys.len() - 1];
-            }
-            if keys.is_empty()
-                || keys
-                    .iter()
-                    .any(|key| key.starts_with("C-") || key.starts_with("M-") || key == "Escape")
-            {
-                out.unread("tmux send-keys", "the terminal input cannot be established");
-            } else {
-                text(&keys.concat(), "tmux send-keys", out);
-            }
+            tmux_send(&args[root.operands + 1..], out);
         }
         "paste-buffer" => out.unread("tmux paste-buffer", "the buffered text cannot be read"),
         "run-shell" | "new-session" | "new-window" | "split-window" => {
@@ -229,3 +272,102 @@ fn tmux(words: &Words<'_>, place: &Place, out: &mut Carried) {
         _ => out.unread("tmux", "this text route has no reader"),
     }
 }
+
+fn tmux_send(args: &[String], out: &mut Carried) {
+    let mut at = 0;
+    if args.first().is_some_and(|word| word == "-t") {
+        if args
+            .get(1)
+            .is_none_or(|word| word.is_empty() || word.starts_with('-'))
+        {
+            out.unread("tmux send-keys", "the target cannot be read");
+            return;
+        }
+        at = 2;
+    }
+    let literal = args.get(at).is_some_and(|word| word == "-l");
+    if literal {
+        at += 1;
+    }
+    let tail = &args[at..];
+    let value = match tail {
+        [value] => Some(value),
+        [value, enter] if matches!(enter.as_str(), "Enter" | "C-m") => Some(value),
+        _ => None,
+    };
+    let Some(value) = value.filter(|value| !value.starts_with('-') && tmux_text(value, literal))
+    else {
+        out.unread(
+            "tmux send-keys",
+            "only one text argument and an optional final submit key are modeled",
+        );
+        return;
+    };
+    text(value, "tmux send-keys", out);
+}
+
+fn tmux_text(value: &str, literal: bool) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    if literal {
+        return true;
+    }
+    let name = value.to_ascii_lowercase();
+    if value.trim() != value
+        || ["c-", "m-", "s-", "^", "0x", "kp"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        || name
+            .strip_prefix('f')
+            .is_some_and(|tail| !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit()))
+        || TMUX_KEYS.contains(&name.as_str())
+    {
+        return false;
+    }
+    value.chars().any(char::is_whitespace) || value.chars().all(|ch| ch.is_ascii_alphabetic())
+}
+
+const TMUX_KEYS: &[&str] = &[
+    "space",
+    "tab",
+    "bspace",
+    "backspace",
+    "btab",
+    "enter",
+    "return",
+    "escape",
+    "esc",
+    "up",
+    "down",
+    "left",
+    "right",
+    "home",
+    "end",
+    "ppage",
+    "npage",
+    "pageup",
+    "pagedown",
+    "pgup",
+    "pgdn",
+    "insert",
+    "delete",
+    "ic",
+    "dc",
+    "backtab",
+    "begin",
+    "find",
+    "select",
+    "cancel",
+    "clear",
+    "help",
+    "break",
+    "print",
+    "scrolllock",
+    "numlock",
+    "pause",
+    "mouse",
+    "paste",
+    "user",
+    "none",
+];

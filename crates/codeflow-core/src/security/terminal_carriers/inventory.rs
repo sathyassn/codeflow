@@ -32,6 +32,7 @@ pub(super) const ROUTES: &[(&str, &str)] = &[
     ("screen", "command"),
     ("osascript", "keystroke"),
     ("osascript", "do script"),
+    ("osascript", "do shell script"),
     ("expect", "send"),
 ];
 

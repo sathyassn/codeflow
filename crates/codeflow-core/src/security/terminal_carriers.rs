@@ -20,11 +20,8 @@
 //! command. Its carried command is still judged, so a rule it breaks is
 //! named too.
 //!
-//! Text typed into a terminal (`hc send`, `hc keys`, `herdr pane
-//! send-text`, `herdr pane send-keys`, `herdr agent prompt`) is not judged:
-//! the guard cannot know whether the receiving program reads it as a prompt
-//! or runs it as a command, so a filter would be partial and is not offered
-//! as protection. Their options are still read, and an unknown one refuses.
+//! Typed text follows the shared delivery rule. A modeled text form is
+//! checked before delivery, and an unmodeled key sequence refuses.
 //! `docs/policy-reference.md` ("Terminal carriers the guards model") states
 //! the forms and the floor that holds for typed text.
 //!
@@ -35,6 +32,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
+mod applescript;
 mod inventory;
 mod orca;
 mod terminal_inputs;
@@ -188,6 +186,20 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
             };
             let name = carrier_name(program);
             let name = name.as_str();
+            if !matches!(name, "[" | "[[")
+                && call.expands.as_ref().is_some_and(|words| words[0])
+                && globset::Glob::new(name).map_or(true, |glob| {
+                    let matcher = glob.compile_matcher();
+                    HC_PROGRAMS
+                        .iter()
+                        .chain(HERDR_PROGRAMS)
+                        .chain(INPUT_PROGRAMS)
+                        .any(|name| matcher.is_match(name))
+                })
+            {
+                out.unread("terminal carrier", "the program word cannot be read");
+                continue;
+            }
             let words = Words {
                 args: &call.args[1..],
                 patterns: call
@@ -218,7 +230,14 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
             } else if name == "orca" {
                 orca::read(&words, &place, call.input.as_deref(), &mut out);
             } else if INPUT_PROGRAMS.contains(&name) {
-                terminal_inputs::read(name, &words, &place, &mut out);
+                terminal_inputs::read(
+                    name,
+                    &words,
+                    &place,
+                    call.input.as_deref(),
+                    call.stdin_bound,
+                    &mut out,
+                );
             } else {
                 continue;
             }
@@ -243,18 +262,34 @@ pub(crate) fn carried(command: &str, cwd: &Path) -> Carried {
     out.writes
         .sort_by(|a, b| a.path.cmp(&b.path).then(a.directory.cmp(&b.directory)));
     out.writes.dedup();
-    unknown_directories(&mut out);
+    unread_runs(&mut out);
     out.unread.sort();
     out.unread.dedup();
     out
 }
 
-/// Marks unread each run whose directory the guard cannot establish: on
+/// Marks unread each run whose program or directory cannot be established: on
 /// another machine (`--on`, with or without `--cwd`), in a `herdr` pane's
 /// shell, or after a `cd` it cannot follow. A relative path in such a
 /// command names files the guard cannot see, so judging the words where
 /// the line runs would judge a different tree; the form refuses instead.
-fn unknown_directories(out: &mut Carried) {
+fn unread_runs(out: &mut Carried) {
+    let unread: Vec<_> = out
+        .runs
+        .iter()
+        .filter(|run| {
+            crate::hooks::git_guard::command_segments(&run.line)
+                .iter()
+                .any(|segment| {
+                    segment == crate::hooks::git_guard::NESTING_UNREAD
+                        || crate::hooks::git_guard::unread_carried_program(segment)
+                })
+        })
+        .map(|run| run.form)
+        .collect();
+    for form in unread {
+        out.unread(form, "the carried program word cannot be read");
+    }
     let forms: Vec<&'static str> = out
         .runs
         .iter()
@@ -419,14 +454,7 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
         "exec" => hc_exec(words, place, out),
         "file" => hc_file(args, place, out),
         "machine" => hc_machine(args, place, out),
-        "send" => simple(
-            &Grammar {
-                flags: &["--force", "--wait"],
-                valued: &["--if", "--timeout"],
-            },
-            "hc send",
-            out,
-        ),
+        "send" => hc_send(args, out),
         "wait" => simple(
             &Grammar {
                 flags: &[],
@@ -506,7 +534,11 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
             "hc connect",
             out,
         ),
-        "keys" => simple(&NONE, "hc keys", out),
+        "keys" => match &args[1..] {
+            [_, key] if matches!(key.as_str(), "Enter" | "enter") => {}
+            [_, down, enter] if down == "down" && enter == "enter" => {}
+            _ => out.unread("hc keys", "the key sequence is outside the modeled forms"),
+        },
         "get" => simple(&NONE, "hc get", out),
         "kill" => simple(&NONE, "hc kill", out),
         "rm" => simple(&NONE, "hc rm", out),
@@ -539,6 +571,23 @@ fn hc(words: &Words<'_>, place: &Place, out: &mut Carried) {
             );
         }
         other => out.unread("hc", format!("the subcommand `{other}` is unknown")),
+    }
+}
+
+fn hc_send(args: &[String], out: &mut Carried) {
+    let grammar = Grammar {
+        flags: &["--force", "--wait"],
+        valued: &["--if", "--timeout"],
+    };
+    match options(args, 1, &grammar, true) {
+        Ok(parsed) => match operands(args, parsed.operands, &grammar).as_slice() {
+            [_, value] => terminal_inputs::text(value, "hc send", out),
+            _ => out.unread(
+                "hc send",
+                "the call does not name one terminal and one text argument",
+            ),
+        },
+        Err(why) => out.unread("hc send", why),
     }
 }
 
@@ -813,7 +862,7 @@ pub(crate) fn fully_read(args: &[String]) -> bool {
     } else {
         return false;
     }
-    unknown_directories(&mut out);
+    unread_runs(&mut out);
     out.unread.is_empty()
 }
 
@@ -1040,9 +1089,39 @@ fn herdr(words: &Words<'_>, out: &mut Carried) {
                          commands in that pane run under"
                     ),
                 );
+            } else {
+                let grammar = Grammar {
+                    flags: &["--current"],
+                    valued: &["--direction"],
+                };
+                match options(args, 2, &grammar, true) {
+                    Ok(parsed) if operands(args, parsed.operands, &grammar).is_empty() => {}
+                    _ => out.unread("herdr pane split", "the call is outside the modeled form"),
+                }
             }
         }
-        _ => {}
+        _ => herdr_delivery(args, out),
+    }
+}
+
+fn herdr_delivery(args: &[String], out: &mut Carried) {
+    match (
+        args.first().map(String::as_str),
+        args.get(1).map(String::as_str),
+    ) {
+        (Some("pane"), Some("send-text")) | (Some("agent"), Some("prompt")) => match &args[2..] {
+            [_, value] => terminal_inputs::text(value, "herdr text", out),
+            _ => out.unread("herdr text", "the call is outside the modeled text form"),
+        },
+        (Some("pane"), Some("send-keys")) => match &args[2..] {
+            [_, key] if matches!(key.as_str(), "Enter" | "enter") => {}
+            _ => out.unread(
+                "herdr pane send-keys",
+                "the key sequence is outside the modeled forms",
+            ),
+        },
+        (Some("pane"), Some("list")) if args.len() == 2 => {}
+        _ => out.unread("herdr", "the call is outside the modeled forms"),
     }
 }
 

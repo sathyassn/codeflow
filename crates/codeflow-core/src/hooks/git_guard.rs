@@ -8900,14 +8900,31 @@ fn ends_with_pipe(chars: &[char], i: usize) -> bool {
     j > 0 && chars[j - 1] == '|' && (j < 2 || chars[j - 2] != '|')
 }
 
-/// Programs that read a heredoc body, or a substitution's output, as data and
-/// never run it. Tools that can execute their input (`awk` `system()`, GNU
+/// Programs whose input is not shell code. Their own language and carrier
+/// readers still judge that input. Tools that can execute their input (`awk` `system()`, GNU
 /// `sed e`, `perl`) are left out. `python`/`python3`/`node` run their input
 /// in their own language, outside the guard's model: the documented
 /// interpreter residual.
 const HEREDOC_DATA_READERS: &[&str] = &[
-    "cat", "tee", "echo", "printf", "grep", "sort", "head", "tail", "wc", "tr", "cut", "uniq",
-    "diff", "jq", "base64", "python", "python3", "node",
+    "cat",
+    "tee",
+    "echo",
+    "printf",
+    "grep",
+    "sort",
+    "head",
+    "tail",
+    "wc",
+    "tr",
+    "cut",
+    "uniq",
+    "diff",
+    "jq",
+    "base64",
+    "python",
+    "python3",
+    "node",
+    "osascript",
 ];
 
 /// `true` when `segment` reads its input as data: it only assigns, or runs one of
