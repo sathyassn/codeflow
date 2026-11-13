@@ -2184,7 +2184,7 @@ pub(super) fn runs_alias(
 ) -> Result<bool, String> {
     alias_where_run(
         args,
-        tokens,
+        &noted(tokens)?,
         &Literals::default(),
         starts,
         &Inputs::default(),
@@ -2192,16 +2192,34 @@ pub(super) fn runs_alias(
     .map(|alias| alias.is_some())
 }
 
+/// The words of the simple command `tokens` as runner resolution reads
+/// them ([`note_literals`]): a program-search assignment (`PATH`,
+/// `GIT_EXEC_PATH`) that extends a value the guard's own process holds has
+/// that value filled in. git-guard's alias readings start from these words,
+/// so an assignment that keeps or extends the inherited search path reads
+/// as it does for the Git runner reader; a value still unfilled is an error
+/// in [`launched_environment`], as there (TSK-1456).
+fn noted(tokens: &[String]) -> Result<Vec<String>, String> {
+    let mut tokens = tokens.to_vec();
+    note_literals(&mut Literals::default(), &mut tokens)?;
+    Ok(tokens)
+}
+
 /// The configuration environment Git reads its aliases with when it runs
 /// as the program of the simple command `tokens`: the guard's own
 /// variables its launchers keep, and its assignments as its launchers
-/// leave them ([`launched_environment`]). git-guard expands an alias with
+/// leave them ([`launched_environment`]), read from the words runner
+/// resolution reads ([`noted`]). git-guard expands an alias with
 /// this environment, the one [`alias_where_run`] finds the alias in, so
 /// the alias it judges is the alias Git runs (TSK-1456).
 pub(super) fn alias_environment(
     tokens: &[String],
 ) -> Result<crate::security::git_config::Environment, String> {
-    alias_environment_of(&launched(tokens)?, &Literals::default(), &Inputs::default())
+    alias_environment_of(
+        &launched(&noted(tokens)?)?,
+        &Literals::default(),
+        &Inputs::default(),
+    )
 }
 
 fn alias_environment_of(

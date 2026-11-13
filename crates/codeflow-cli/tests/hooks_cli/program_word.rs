@@ -592,6 +592,65 @@ fn launchers_that_remove_variables_judge_the_alias_git_runs() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// A program-search assignment in front of Git (`PATH`, `GIT_EXEC_PATH`)
+/// that extends or keeps a value the session holds is read as the Git
+/// runner reader reads it, with the session's value filled in, so a
+/// harmless alias keeps `main`'s verdict at both guards. A value the guard
+/// cannot fill in stays refused, as `main` refuses it.
+#[test]
+fn program_search_assignments_keep_the_alias_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "task/x");
+    write_agent_policy(dir.path(), MEASURED_POLICY);
+    git(dir.path(), &["config", "alias.inspect", "status"]);
+    let integrity = Some("git.hook_integrity");
+    let both = [
+        // Controls: the plain alias call, and the prefix on a builtin.
+        ("git inspect", None),
+        ("PATH=\"$PATH\" git status", None),
+        ("PATH=\"$PATH\" git inspect", None),
+        ("PATH=\"$PATH:$HOME/bin\" git inspect", None),
+        ("PATH=/usr/bin:/bin git inspect", None),
+        ("GIT_EXEC_PATH=\"$HOME/libexec\" git inspect", None),
+        ("PATH=\"$PATH\" $G inspect", None),
+        ("G=git; PATH=\"$PATH\" $G inspect", None),
+        // A value the guard cannot fill in is refused, as on `main`.
+        ("PATH=\"$K18_UNSET\" git inspect", integrity),
+        ("GIT_EXEC_PATH=\"$K18_UNSET\" git inspect", integrity),
+        ("PATH=\"$(pwd)\" git inspect", integrity),
+    ];
+    let mut rows: Vec<(&str, &str, Option<&str>)> = Vec::new();
+    for (command, rule) in both {
+        rows.push(("git-guard", command, rule));
+        rows.push(("exec-guard", command, rule));
+    }
+    // `main` refuses an assignment behind `env` at exec-guard by the text
+    // rule, and allows it at git-guard.
+    rows.push(("git-guard", "env PATH=\"$PATH\" git inspect", None));
+    rows.push((
+        "exec-guard",
+        "env PATH=\"$PATH\" git inspect",
+        Some("security.text_guard"),
+    ));
+    // With the search path filled in, git-guard judges the alias Git runs.
+    git(
+        dir.path(),
+        &["config", "alias.ship", "push --force origin main"],
+    );
+    let force = Some("git.force_push_protected");
+    for command in [
+        "git ship",
+        "PATH=\"$PATH\" git ship",
+        "GIT_EXEC_PATH=\"$HOME/libexec\" git ship",
+        "PATH=\"$PATH\" nice git ship",
+        "PATH=\"$PATH\" $G ship",
+    ] {
+        rows.push(("git-guard", command, force));
+    }
+    let wrong = check_env(dir.path(), &rows, &[("G", "git")]);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The variable naming the file `git config` reads is removed from every
 /// configuration reading, so a launcher that removes it from the session
 /// leaves an ordinary command's verdict as literal `git` has it.
