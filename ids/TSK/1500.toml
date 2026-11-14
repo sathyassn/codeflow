@@ -1,0 +1,11 @@
+id = "TSK-1500"
+uid = "5637b069-cdef-4955-addb-ba2e6ddaeded"
+kind = "TSK"
+title = "A main sync into a line is not refused for main's own reviewed history"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:47:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
