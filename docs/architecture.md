@@ -65,34 +65,13 @@ Core modules grouped by responsibility.
 | Records and knowledge | `models/`, `ledger/`, `workgraph/`, `validate/`, `capability.rs`, `recall.rs`, `registry.rs` | frontmatter models, the JSONL ledger, the work graph, `validate` and its `--docs` referential-integrity lint, including structural task dependency identity, reference and cycle checks, the capability registry parser, full-text search (FTS5) recall, and the cross-repo registry |
 | Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs`, `reading.rs` | the doctor check table (26 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, config, permissions, policy-source, secret-engine, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit), the progressive reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers, the orphan check and the advisory size guidelines with their bases (ADR-0083), shared with `artifact_budget_contract`), including bidirectional delegate readiness (Codex auth and Model Context Protocol (MCP) servers, Claude MCP, and Herdr with tmux as the last fallback, the Codex plugin reported only as an optional fallback (ADR-0077); live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
 
-The shell plane reads a composed deletion as scoped shell.
+Three hook-plane mechanisms have their own rules:
 
-- Each variable, positional parameter and the working directory carry every
-  value they may hold through subshells, branches, loops and function calls.
-- The deletion is refused when any of them reaches a protected location.
-- The reader is closed-world. Its module doc lists the grammar it models, traps
-  and zsh hook functions included.
-- Anything else in command position or between commands makes the state
-  unknown: a sourced file, a name reference, an unmodelled builtin or option,
-  zsh-only syntax, or a command named by an unknown value. A deletion that
-  depends on it is refused as unproven (TSK-141).
-
-`session-orient` is also the advisory entry for `UserPromptSubmit`.
-
-- It reads the payload's event. After a compaction, resume or fork it adds the
-  kernel guidance block. For a prompt that asks for a duration, a status or a
-  complex explanation it adds one rule line (`hooks/guidance.rs`, TSK-128).
-- Contract 3 refuses an older binary on either event.
-- The guards never pass through it. Grok Build ignores these events' output, so
-  it wires only the guards.
-
-A git-hook shim runs the `codeflow` binary whose command started git.
-
-- That command names itself in `CODEFLOW_HOOK_BINARY` for its git children
-  only. The shim fails when the named binary is missing or not executable.
-- Git run outside codeflow uses the `codeflow` on PATH. The shim refuses the
-  operation, prints repair instructions and exits 1 when there is none or the
-  binary is too old (SPC-013 R-85).
+| Mechanism | Rule |
+|---|---|
+| Composed deletion (TSK-141) | The shell plane reads it as scoped shell. Each variable, positional parameter and the working directory carry every value they may hold through subshells, branches, loops and function calls, and the deletion is refused when any of them reaches a protected location. The reader is closed-world; its module doc lists the grammar it models, traps and zsh hook functions included. Anything else in command position or between commands makes the state unknown: a sourced file, a name reference, an unmodelled builtin or option, zsh-only syntax, or a command named by an unknown value. A deletion that depends on it is refused as unproven |
+| `session-orient` on `UserPromptSubmit` (TSK-128) | The advisory entry reads the payload's event. After a compaction, resume or fork it adds the kernel guidance block; for a prompt that asks for a duration, a status or a complex explanation it adds one rule line (`hooks/guidance.rs`). Contract 3 refuses an older binary on either event. The guards never pass through it. Grok Build ignores these events' output, so it wires only the guards |
+| Git-hook shim (SPC-013 R-85) | Runs the `codeflow` binary whose command started git: that command names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and the shim fails when the named binary is missing or not executable. Git run outside codeflow uses the `codeflow` on PATH; the shim refuses the operation, prints repair instructions and exits 1 when there is none or the binary is too old |
 
 The test gate evaluates file and aggregate coverage rules through one verdict.
 
@@ -147,17 +126,18 @@ Records follow the Markdown-truth design.
 | `work start` preflight | read-only; it proves the task and its applicable graph at the merge-base with the declared target, or at HEAD for a standalone task whose record arrives in its own PR (ADR-0076); a code predecessor that is reviewed but not complete is accepted only through a tip pin (`--on TSK-NNN@<sha>`), reviewed directly or followed only by changes to its own record's status and Closeout, and CI still requires it complete at the merge-base when the task lands. The CLI and detached CI share the structural core of that check; only `work start` applies the start gate (status, Blocker, awaiting selection), so CI admits a standalone record that arrives complete with a valid acceptance block |
 | out of scope | scheduling and status mutation remain Plan and native-harness concerns (ADR-0040, ADR-0046) |
 
-Judging parent and ancestry reads use `workgraph::history` (TSK-287).
-It reports `cannot verify` for grafts, every ref under a replacement prefix
-and graph caches inconsistent with commit objects. Ordinary monolithic and
-split graphs remain allowed, including in alternates. Each read-only
-judgment takes one metadata snapshot, discarded on return. Walks refuse
-reached common/private shallow boundaries; a boundary hidden below a range
-base does not truncate it. Spawned queries require full history, disable
-commit-graphs and clear repository/object-store redirects. Relative graft
-and shallow overrides resolve in the query directory. Landing inventory
-retains branches whose history cannot be verified. Display-only reads have
-counted exceptions in `history_read_scan.rs`.
+Judging parent and ancestry reads use `workgraph::history` (TSK-287):
+
+| History read | Rule |
+|---|---|
+| Reported `cannot verify` | grafts, every ref under a replacement prefix and graph caches inconsistent with commit objects |
+| Allowed | ordinary monolithic and split graphs, including in alternates |
+| Snapshot | each read-only judgment takes one metadata snapshot, discarded on return |
+| Shallow boundaries | walks refuse reached common/private shallow boundaries; a boundary hidden below a range base does not truncate it |
+| Spawned queries | require full history, disable commit-graphs and clear repository/object-store redirects; relative graft and shallow overrides resolve in the query directory |
+| Landing inventory | retains branches whose history cannot be verified |
+| Display-only reads | counted exceptions in `history_read_scan.rs` |
+
 The [history-read sweep](https://github.com/sathyassn/codeflow/blob/main/docs/verification/tsk-287-history-reads.md)
 lists guarded callers, graph checks and limits.
 

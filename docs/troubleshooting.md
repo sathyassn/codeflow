@@ -147,35 +147,14 @@ gate keeps other heavy runs out until its process group exits. A run under
 `codeflow reserve` cannot run a host-exclusive target. Nothing else runs
 alone.
 
-Two runs that share a build output folder, such as two gates in one
-worktree, would write the same report or coverage file. nextest fixes its
-JUnit path in its profile, cargo-llvm-cov merges every profile file in its
-target folder, and a configured report is written wherever the target's
-command writes it, so a target with such an output holds a lease on it
-(`codeflow-gate/leases/` under the build output) from before its command
-starts until its report is saved in the run folder. The other run's same
-target waits for it; other targets run at once.
+The rest of the host's sharing rules, by what you are doing:
 
-Declare `"heavy": true` on quick targets that compile or run substantial
-parallel work, or `"heavy": false` for light checks. Undeclared targets in
-a configured quick mode use `execution.quick_default_class`, which accepts
-`"light"` (the default) or `"heavy"`. An explicit target declaration takes
-precedence. When there are no quick targets and quick falls back to
-essential, undeclared targets are heavy. Light targets take no slot.
-
-Read the holders of the host lock, the fence and each slot with
-`codeflow test --lock-status`. This reads the records without taking a lock, changing a
-record or starting a target. A killed gate can leave a stale record; the
-next run that takes that slot reclaims it. A free slot whose record names a
-live target group counts as busy, so a target that outlived its gate still
-counts as a run and keeps a host-exclusive target out.
-
-Run a direct heavy command with `codeflow reserve -- cargo build` to take a
-slot the same way. `--wait-seconds` bounds the wait for a host-exclusive
-target, and `--timeout-seconds` sets the command deadline. Arguments after
-`--` reach the executable unchanged. The wrapper ends its command's process
-group when it exits or is killed. Use the worktree's own Cargo target
-directory.
+| Situation | Rule |
+|---|---|
+| Two runs share a build output folder, such as two gates in one worktree | They would write the same report or coverage file: nextest fixes its JUnit path in its profile, cargo-llvm-cov merges every profile file in its target folder, and a configured report is written wherever the target's command writes it. So a target with such an output holds a lease on it (`codeflow-gate/leases/` under the build output) from before its command starts until its report is saved in the run folder. The other run's same target waits for it; other targets run at once |
+| Classing quick targets | Declare `"heavy": true` on quick targets that compile or run substantial parallel work, or `"heavy": false` for light checks. Undeclared targets in a configured quick mode use `execution.quick_default_class`, which accepts `"light"` (the default) or `"heavy"`. An explicit target declaration takes precedence. When there are no quick targets and quick falls back to essential, undeclared targets are heavy. Light targets take no slot |
+| Reading the holders | `codeflow test --lock-status` reads the holders of the host lock, the fence and each slot without taking a lock, changing a record or starting a target. A killed gate can leave a stale record; the next run that takes that slot reclaims it. A free slot whose record names a live target group counts as busy, so a target that outlived its gate still counts as a run and keeps a host-exclusive target out |
+| A direct heavy command | `codeflow reserve -- cargo build` takes a slot the same way. `--wait-seconds` bounds the wait for a host-exclusive target, and `--timeout-seconds` sets the command deadline. Arguments after `--` reach the executable unchanged. The wrapper ends its command's process group when it exits or is killed. Use the worktree's own Cargo target directory |
 
 On Unix, `codeflow reserve -- codeflow test --mode quick` runs the quick
 run's heavy targets under the reserve's slot. The reserve hands its lock

@@ -362,19 +362,14 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 The version-skew warning is gone and no `.new` file remains.
 
 **CI pins its binary too.** The scaffolded workflows install the release
-named by `scaffold_version` in the target branch's `.codeflow/project.toml`
-and verify it against that release's `sha256.sum` and the target's
-pinned digests (below). A mismatch fails the job and installs nothing
-unverified.
+named by `scaffold_version` in the target branch's `.codeflow/project.toml`.
 
-- The commit and PR-body standards run in `codeflow-policy.yml` on
-  `pull_request_target`.
-- GitHub runs that workflow from the default branch, so a pull request cannot
-  edit the job that judges it.
-- The job checks out the default branch's commit, whose pin and policy judge
-  every pull request (ADR-0091); it fails without `.codeflow/policy.json`.
-- Other events check the id registry in `codeflow-registry.yml`, never under
-  a `trusted:` name.
+| Pinned CI part | Behavior |
+|---|---|
+| Verification | The release is checked against its `sha256.sum` and the target's pinned digests (below). A mismatch fails the job and installs nothing unverified |
+| Commit and PR-body standards | Run in `codeflow-policy.yml` on `pull_request_target`. GitHub runs that workflow from the default branch, so a pull request cannot edit the job that judges it |
+| The judging commit | The job checks out the default branch's commit, whose pin and policy judge every pull request (ADR-0091); it fails without `.codeflow/policy.json` |
+| Other events | Check the id registry in `codeflow-registry.yml`, never under a `trusted:` name |
 
 An upgrade therefore takes two pull requests, in order:
 
@@ -420,17 +415,12 @@ Details: `assets/base/ci/README.md`.
 | Bitbucket | `BITBUCKET_PR_DESTINATION_COMMIT`. Atlassian does not list that variable, so when it is unset the step fetches `BITBUCKET_PR_DESTINATION_BRANCH` from `origin` and fails when it cannot. Bitbucket merges the destination branch into the working tree before the step, so `codeflow test` and `validate --docs` run on that merge while `codeflow ci` judges `BITBUCKET_COMMIT` against the target |
 | `ci-generic.sh` | Its first argument; it refuses to run without one |
 
-The pin does not defend the CI file itself.
+The pin does not defend the CI file itself:
 
-- On a GitHub `pull_request` event, and on every GitLab and Bitbucket
-  pipeline, the job file runs from the pull request, so a pull request that
-  edits it can change its own install step.
-- Only `codeflow-policy.yml` runs from the default branch.
-
-Require review of your CI files (`.github/workflows/`, `.gitlab-ci.yml`,
-`bitbucket-pipelines.yml`) and `.codeflow/` in your host's rules, for example
-with a code owners file and a branch rule that requires code owner review.
-CodeFlow does not configure those settings.
+| CI file limit | Detail |
+|---|---|
+| Where the job file runs from | The pull request, on a GitHub `pull_request` event and on every GitLab and Bitbucket pipeline, so a pull request that edits it can change its own install step. Only `codeflow-policy.yml` runs from the default branch |
+| What you set | Require review of your CI files (`.github/workflows/`, `.gitlab-ci.yml`, `bitbucket-pipelines.yml`) and `.codeflow/` in your host's rules, for example with a code owners file and a branch rule that requires code owner review. CodeFlow does not configure those settings |
 
 **Keys `codeflow update` adds for records and checks.** A value the project
 set is kept.
@@ -443,10 +433,13 @@ set is kept.
 
 ### Refusals and operator relief
 
-Agent sessions are judged by the landed policy on the remote, so a local
-edit cannot relax it. A refusal names the rule and the operator's route.
-Relief means setting that rule's level in a reviewed change. Install the new
-binary before `codeflow update`. Detail is in
+| Question | Answer |
+|---|---|
+| Which policy judges an agent session | The landed policy on the remote, so a local edit cannot relax it |
+| What a refusal names | The rule and the operator's route |
+| How relief works | Set that rule's level in a reviewed change. Install the new binary before `codeflow update` |
+
+Detail is in
 [enforcement planes](architecture/enforcement-planes.md#in-session-guards)
 and, for Codex hook trust, [harness posture](harness-posture.md).
 

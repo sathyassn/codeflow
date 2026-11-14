@@ -201,12 +201,16 @@ adrs: [ADR-0057, ADR-0079]
 ```
 
 SPC-007 defines the optional `cf-estimate` method; adoption is opt-in.
-Estimates carry evidence-anchored grades, full-delivery scenarios and
-resource-feasible allocations. Standard and full tiers manage the skill.
-Profiles, forecasts and outcomes stay project-owned. EPC-006 supplies the
-read-only allocation checker; `estimate outcomes` compares git-derived task
-timings with frozen forecasts (ADR-0079). This registry does not
-establish calibrated delivery predictions.
+
+| Part | What it holds |
+|---|---|
+| Estimates | evidence-anchored grades, full-delivery scenarios and resource-feasible allocations |
+| The skill | managed by the standard and full tiers |
+| Profiles, forecasts and outcomes | project-owned |
+| Allocation checker | read-only, supplied by EPC-006 |
+| `estimate outcomes` | compares git-derived task timings with frozen forecasts (ADR-0079) |
+| Limit | this registry does not establish calibrated delivery predictions |
+
 Detail: [commands](cli.md).
 
 ### Enforce
@@ -394,13 +398,16 @@ adrs: []
 ```
 
 `codeflow integrate <branch> [--into <target>]` is the sanctioned local landing
-path for protected branches. Under a file lock it rebases and fast-forwards
-by default. With `--merge`, it gates a no-fast-forward merge commit that
-preserves the reviewed source head and its acceptance binding. Both modes
-advance only the local target ref after every stage succeeds; neither pushes.
-Merge mode runs from a linked worktree. A gate-context token lets the
-protected ref advance only through integrate or a human-merged PR. Detail:
-[commands](cli.md) and
+path for protected branches.
+
+| Mode or rule | Behaviour |
+|---|---|
+| Default | under a file lock, rebases and fast-forwards |
+| `--merge` | gates a no-fast-forward merge commit that preserves the reviewed source head and its acceptance binding; runs from a linked worktree |
+| Both modes | advance only the local target ref after every stage succeeds; neither pushes |
+| Gate-context token | lets the protected ref advance only through integrate or a human-merged PR |
+
+Detail: [commands](cli.md) and
 [enforcement planes](architecture/enforcement-planes.md).
 
 ### Remember
@@ -457,12 +464,15 @@ epics: [EPC-001]
 adrs: [ADR-0045]
 ```
 
-`codeflow recall [--all] "<query>"` searches project memory: ledger events,
-session summaries, ADRs, epics, tasks, frozen specs and capabilities. It uses
-bundled SQLite full-text search (FTS5) and discloses coverage gaps. The
-cross-repository view comes from `~/.codeflow/registry.json`, a locked
-registry updated on every command run and read lazily at query time, with no
-daemon. Detail: [commands](cli.md).
+`codeflow recall [--all] "<query>"` searches project memory.
+
+| Part | Behaviour |
+|---|---|
+| What it searches | ledger events, session summaries, ADRs, epics, tasks, frozen specs and capabilities |
+| Search engine | bundled SQLite full-text search (FTS5); it discloses coverage gaps |
+| Cross-repository view | from `~/.codeflow/registry.json`, a locked registry updated on every command run and read lazily at query time, with no daemon |
+
+Detail: [commands](cli.md).
 
 ### Delegate
 
@@ -479,14 +489,16 @@ adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059, ADR-0077]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
-process boundary, each under its own subscription auth. CodeFlow's gates judge
-the output whoever wrote it (ADR-0005). Transport is interactive only and
-stated once, in `cf-model-orchestrator/resources/routing/transport.md`
-(ADR-0077): another family runs its own interactive CLI in a Herdr tab that
-`cf-herdr` hosts, Codex on its app-server; the Codex plugin is an optional
-fallback and tmux the last. Headless task execution is prohibited. Delegates
-edit only inside a worktree on a feature branch, under the same gates. Detail:
-[delegation](delegation.md).
+process boundary, each under its own subscription auth.
+
+| Rule | Behaviour |
+|---|---|
+| Gates | CodeFlow's gates judge the output whoever wrote it (ADR-0005) |
+| Transport | interactive only, stated once in `cf-model-orchestrator/resources/routing/transport.md` (ADR-0077): another family runs its own interactive CLI in a Herdr tab that `cf-herdr` hosts, Codex on its app-server; the Codex plugin is an optional fallback and tmux the last |
+| Headless task execution | prohibited |
+| Where delegates edit | only inside a worktree on a feature branch, under the same gates |
+
+Detail: [delegation](delegation.md).
 
 #### duo-model-orchestration
 
