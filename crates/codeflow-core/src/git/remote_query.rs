@@ -249,9 +249,137 @@ pub const AUTHENTICATION_FAILED: &str = "remote authentication failed";
 /// names the limits used, the time measured and the policy keys that set
 /// them.
 pub fn ls_remote(root: &Path, args: &[&str], limits: QueryLimits) -> Result<String, String> {
+    ls_remote_with(root, args, limits, None)
+}
+
+/// As [`ls_remote`], sending `auth` with every request to its destination
+/// (TSK-1252).
+///
+/// # Errors
+///
+/// As [`ls_remote`].
+pub fn ls_remote_with(
+    root: &Path,
+    args: &[&str],
+    limits: QueryLimits,
+    auth: Option<&HttpAuth>,
+) -> Result<String, String> {
     let mut all = vec!["ls-remote"];
     all.extend_from_slice(args);
-    ls_remote_attempts(args, limits, || run(root, &all, limits.timeout))
+    ls_remote_attempts(args, limits, || run(root, &all, limits.timeout, auth))
+}
+
+/// A read credential for one destination: the hosted run's token, sent as
+/// an HTTP `Authorization` header to that destination's URL only (TSK-1252).
+///
+/// Git receives it through its configuration environment for one process,
+/// as `http.<url>.extraHeader`, so it is never written to git config, the
+/// credential store or a file, and it never appears in a command line. The
+/// header is scoped to the exact destination URL, and redirects are not
+/// followed, so no other host receives it. `Debug` never shows the token.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HttpAuth {
+    url: String,
+    header: String,
+}
+
+impl std::fmt::Debug for HttpAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpAuth")
+            .field("url", &self.url)
+            .field("header", &"***")
+            .finish()
+    }
+}
+
+impl HttpAuth {
+    /// The run's `token` for `url`, bound to the repository the run
+    /// belongs to: `url` must be `<server>/<repository>` (or with `.git`),
+    /// where `server` and `repository` are the values the hosted runner
+    /// sets (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`), and it must use
+    /// HTTPS. Plain HTTP is accepted only for a loopback host, where the
+    /// token never leaves the machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the token is not sent to `url`. No message contains the
+    /// token.
+    pub fn for_run(url: &str, token: &str, server: &str, repository: &str) -> Result<Self, String> {
+        if token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err("the token is empty or holds a character a token cannot hold".into());
+        }
+        let server = server.trim_end_matches('/');
+        let repository = repository.trim_matches('/');
+        if server.is_empty() || repository.is_empty() {
+            return Err("the run names no server URL or repository".into());
+        }
+        let expected = format!("{server}/{repository}");
+        if url != expected && url != format!("{expected}.git") {
+            return Err(format!(
+                "the destination {} is not this run's repository {expected}",
+                display_url(url)
+            ));
+        }
+        let host = url
+            .split_once("://")
+            .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+            .unwrap_or_default();
+        let loopback = host.rsplit_once(':').map_or(host, |(name, port)| {
+            if port.bytes().all(|byte| byte.is_ascii_digit()) {
+                name
+            } else {
+                host
+            }
+        });
+        let secure = url.starts_with("https://")
+            || (url.starts_with("http://")
+                && matches!(loopback, "127.0.0.1" | "localhost" | "[::1]"));
+        if !secure || host.contains('@') {
+            return Err(format!(
+                "the destination {} is not an HTTPS URL without user information",
+                display_url(url)
+            ));
+        }
+        let basic = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            format!("x-access-token:{token}").as_bytes(),
+        );
+        Ok(Self {
+            url: url.to_string(),
+            header: format!("AUTHORIZATION: basic {basic}"),
+        })
+    }
+
+    /// The destination URL this credential is for.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Give `command` the credential for this destination only: the
+    /// header scoped to its URL, no redirect followed, and no inherited
+    /// trace variable that could print request headers.
+    fn apply(&self, command: &mut std::process::Command) {
+        for name in [
+            "GIT_TRACE",
+            "GIT_TRACE_CURL",
+            "GIT_TRACE_CURL_NO_DATA",
+            "GIT_TRACE_PACKET",
+            "GIT_CURL_VERBOSE",
+            "GIT_TRACE2",
+            "GIT_TRACE2_EVENT",
+            "GIT_TRACE2_PERF",
+        ] {
+            command.env_remove(name);
+        }
+        command
+            .env("GIT_TRACE_REDACT", "1")
+            .env("GIT_CONFIG_COUNT", "2")
+            .env("GIT_CONFIG_KEY_0", format!("http.{}.extraHeader", self.url))
+            .env("GIT_CONFIG_VALUE_0", &self.header)
+            .env("GIT_CONFIG_KEY_1", "http.followRedirects")
+            .env("GIT_CONFIG_VALUE_1", "false");
+    }
 }
 
 /// A duration as messages show it: whole seconds without a fraction.
@@ -320,6 +448,23 @@ pub fn fetch_objects(
     refs: &[&str],
     limits: QueryLimits,
 ) -> Result<(), String> {
+    fetch_objects_with(root, url, refs, limits, None)
+}
+
+/// As [`fetch_objects`], sending `auth` with every request when it is the
+/// credential for `url` (TSK-1252).
+///
+/// # Errors
+///
+/// As [`fetch_objects`].
+pub fn fetch_objects_with(
+    root: &Path,
+    url: &str,
+    refs: &[&str],
+    limits: QueryLimits,
+    auth: Option<&HttpAuth>,
+) -> Result<(), String> {
+    let auth = auth.filter(|auth| auth.url() == url);
     let mut all = vec![
         "fetch",
         "--quiet",
@@ -329,7 +474,7 @@ pub fn fetch_objects(
         url,
     ];
     all.extend_from_slice(refs);
-    run(root, &all, limits.fetch_timeout)
+    run(root, &all, limits.fetch_timeout, auth)
         .map(|_| ())
         .map_err(|why| match why {
             Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
@@ -480,7 +625,12 @@ fn is_local_path(url: &str) -> bool {
     }
 }
 
-fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure> {
+fn run(
+    root: &Path,
+    args: &[&str],
+    deadline: Duration,
+    auth: Option<&HttpAuth>,
+) -> Result<String, Failure> {
     let mut command = crate::git::judging_command();
     command
         .arg("-C")
@@ -492,6 +642,9 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("SSH_ASKPASS", "false")
         .env("SSH_ASKPASS_REQUIRE", "never")
         .env("GIT_SSH_COMMAND", batch_ssh_command(root)?);
+    if let Some(auth) = auth {
+        auth.apply(&mut command);
+    }
     bounded(command, deadline)
 }
 
@@ -776,6 +929,7 @@ mod tests {
                 Path::new(&root),
                 &["ls-remote", "stub"],
                 Duration::from_millis(200),
+                None,
             );
             assert!(matches!(result, Err(Failure::Timeout(_))));
             assert!(started.elapsed() < Duration::from_secs(5));
@@ -804,6 +958,81 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&out.stdout)
         );
+    }
+
+    /// TSK-1252 AC-3: the run's token is bound to the run's own repository
+    /// over HTTPS (plain HTTP only on loopback), refuses a token that could
+    /// inject a header, and never shows itself.
+    #[test]
+    fn the_run_token_binds_only_to_the_run_repository_over_https() {
+        let token = "ghs_fakeToken123";
+        let ok = HttpAuth::for_run(
+            "https://github.com/owner/repo",
+            token,
+            "https://github.com",
+            "owner/repo",
+        )
+        .unwrap();
+        assert!(!format!("{ok:?}").contains(token));
+        assert!(HttpAuth::for_run(
+            "https://github.com/owner/repo.git",
+            token,
+            "https://github.com/",
+            "owner/repo"
+        )
+        .is_ok());
+        assert!(HttpAuth::for_run(
+            "http://127.0.0.1:8080/owner/repo.git",
+            token,
+            "http://127.0.0.1:8080",
+            "owner/repo"
+        )
+        .is_ok());
+        for (url, server, repository, token) in [
+            (
+                "https://evil.example/owner/repo",
+                "https://github.com",
+                "owner/repo",
+                token,
+            ),
+            (
+                "https://github.com/other/repo",
+                "https://github.com",
+                "owner/repo",
+                token,
+            ),
+            (
+                "http://github.com/owner/repo",
+                "http://github.com",
+                "owner/repo",
+                token,
+            ),
+            (
+                "https://x@github.com/owner/repo",
+                "https://x@github.com",
+                "owner/repo",
+                token,
+            ),
+            ("https://github.com/owner/repo", "", "", token),
+            (
+                "https://github.com/owner/repo",
+                "https://github.com",
+                "owner/repo",
+                "",
+            ),
+            (
+                "https://github.com/owner/repo",
+                "https://github.com",
+                "owner/repo",
+                "a\r\nX: y",
+            ),
+        ] {
+            let refused = HttpAuth::for_run(url, token, server, repository);
+            assert!(refused.is_err(), "{url} {server} {repository}");
+            if !token.is_empty() {
+                assert!(!refused.unwrap_err().contains(token));
+            }
+        }
     }
 
     #[test]

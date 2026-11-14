@@ -41,10 +41,10 @@ The flow from brief to review:
   host records both outputs, disagreements kept
                     |
                     v
-  Claude drafts one plan; Codex challenges it
+  Claude drafts one plan; Codex or a different lineage challenges it
                     |
                     v
-  both seats approve one version, or the host stops for the operator
+  Claude and the challenger approve one version, or the host stops
                     |
                     v
   executor first-verifies -> primary inspects and accepts
@@ -65,12 +65,15 @@ scope is where each starts, and neither sees the other's findings first. Each se
 The host records both outputs without collapsing disagreements. Then:
 
 - Claude drafts the one plan from its native session, and Codex challenges it
-  against its own findings. There is no second plan and no reconciliation round.
+  against its own findings. Codex is the preferred cross-family seat, not a
+  required one: when it is unavailable, any other family's seat takes the
+  challenge and review, and reduced assurance means no other family was
+  available. There is no second plan and no reconciliation round.
 - The plan names each task's responsible primary, actual binding-or-route
   executor, execution mode, routing reason and provenance, and cross-lineage
   reviewer.
-- Settlement ends when both seats approve one version or the host stops for the
-  operator. Approval of an older version does not carry forward.
+- Settlement ends when Claude and the challenging seat approve one version or
+  the host stops for the operator. Approval of an older version does not carry forward.
 - A task inside an approved epic does not repeat discovery. It starts from the
   epic plan.
 
@@ -104,7 +107,8 @@ Grok and extra families:
 - Grok-hosted lane canaries are in the repository at
   `docs/verification/grok-host-duo-canary-2026-09-07.md`. They are not a
   qualified binding.
-- The standing pair remains the quality floor.
+- Claude and one cross-family seat remain the quality floor; any other family
+  can take the cross-family seat.
 - Extra catalog families (today Grok) are named when a routing-policy trigger
   fires and the family is available. Unavailable is an evidenced limitation,
   never a silent third vote (architecture decision record ADR-0054).

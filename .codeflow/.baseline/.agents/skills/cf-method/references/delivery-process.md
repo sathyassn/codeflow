@@ -306,7 +306,7 @@ reviewer; another task's criteria are never changed from this PR.
 | Blocked by something outside the task | Mark it blocked; escalate an external dependency or an operator-owned choice with evidence, options and a recommendation |
 | An approved spec needs a change | Before it ships: amended in place, reviewed. After: frozen, a new record carries the change |
 | One decision changes several epics | One planning amendment names each epic on its `Task:` line and carries its docs and the `AGENTS.md` project section; it lands on `main` once and each integration line merges `main` (ADR-0078) |
-| A reviewer seat is unavailable | Bounded recovery first; then recorded as reduced assurance naming the review that is missing; never faked, never silently waived, never turned into a finding |
+| A reviewer seat is unavailable | Bounded recovery first; then another model family's seat takes the review (any other family counts as cross-family); only when none is available, recorded as reduced assurance naming the review that is missing; never faked, never silently waived, never turned into a finding |
 | Recorded nits at epic close | Folded into the next breakdown or dropped with a reason |
 
 ## 6. Review

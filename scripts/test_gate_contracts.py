@@ -13,8 +13,76 @@ ROOT = Path(os.environ.get('CODEFLOW_GATE_CONTRACT_ROOT', Path(__file__).resolve
 _SPEC = importlib.util.spec_from_file_location('gate_parity', Path(__file__).resolve().parent / 'gate-parity.py')
 PARITY = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(PARITY)
+# Run the target-cache adversarial and shell tests with the existing gate.
+_CACHE_SPEC = importlib.util.spec_from_file_location('policy_cache', Path(__file__).resolve().parent / 'test_policy_cache.py')
+_CACHE = importlib.util.module_from_spec(_CACHE_SPEC)
+_CACHE_SPEC.loader.exec_module(_CACHE)
+_CACHE.ROOT = ROOT
+_CACHE.WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
+_CACHE.REGISTRY = ROOT / '.github/workflows/codeflow-registry.yml'
+PolicyCache = _CACHE.PolicyCache
 def read(path):
+    if path == '.github/workflows/codeflow-policy.yml':
+        return _CACHE.policy_workflow()
+    if path == '.github/workflows/codeflow-registry.yml':
+        return _CACHE.registry_workflow()
     return (ROOT / path).read_text()
+
+
+def uncommented(text):
+    return '\n'.join(line.rstrip() for line in text.splitlines()
+                     if line.strip() and not line.lstrip().startswith('#'))
+
+
+def gate_steps(workflow):
+    """(job name, the job's text, its uncommented steps, the gate step's
+    index) for each step named `codeflow test...` in `workflow`."""
+    parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+    found = []
+    for name, job in zip(parts[1::2], parts[2::2]):
+        if '\n    steps:\n' not in job:
+            continue
+        steps = [uncommented(step) for step in re.split(r'\n(?= {6}- )', job.split('\n    steps:\n', 1)[1])]
+        found += [(name, job, steps, index) for index, step in enumerate(steps)
+                  if step.startswith('      - name: codeflow test')]
+    return found
+
+
+def run_record_upload_problems(workflow):
+    """What keeps each gate step's run record from reaching the GitHub API
+    (TSK-1305 AC-5): the step right after it must upload
+    <build output>/codeflow-gate/*/run.json, pass or fail, without changing
+    the job's result, under a name unique per job, part and attempt, kept for
+    at most 14 days."""
+    problems = []
+    for name, job, steps, index in gate_steps(workflow):
+        upload = steps[index + 1] if index + 1 < len(steps) else ''
+        lines = upload.splitlines()
+        if not upload.startswith("      - name: Keep the gate") or not any(
+                re.fullmatch(r'        uses: actions/upload-artifact@[0-9a-f]{40} # v\d+\.\d+\.\d+', line) for line in lines):
+            problems.append(f'{name}: no upload-artifact step named "Keep the gate..." follows the gate step')
+            continue
+        if '        if: always()' not in lines:
+            problems.append(f'{name}: the upload must run with `if: always()`, so a failed gate keeps its record')
+        if '        continue-on-error: true' not in lines:
+            problems.append(f'{name}: the upload must set continue-on-error: true, so it never changes the result')
+        path = next((line.split(': ', 1)[1] for line in lines if line.startswith('          path: ')), '')
+        if not path.endswith('/codeflow-gate/*/run.json'):
+            problems.append(f'{name}: the upload path must be <build output>/codeflow-gate/*/run.json; found {path!r}')
+        artifact = next((line.split(': ', 1)[1] for line in lines if line.startswith('          name: ')), '')
+        unique = ['${{ github.job }}', '-attempt-${{ github.run_attempt }}']
+        if '\n      matrix:\n' in job:
+            unique.append('${{ matrix.part }}')
+        if not all(part in artifact for part in unique):
+            problems.append(f'{name}: the artifact name must be unique per job, part and attempt '
+                            f'({", ".join(unique)}); found {artifact!r}')
+        days = next((line.split(': ', 1)[1] for line in lines if line.startswith('          retention-days: ')), '')
+        if not days.isdigit() or int(days) > 14:
+            problems.append(f'{name}: the record\'s retention must be at most 14 days; found {days!r}')
+        if '          if-no-files-found: warn' not in lines and '          if-no-files-found: ignore' not in lines:
+            problems.append(f'{name}: the upload needs if-no-files-found: warn or ignore, so a gate that '
+                            'wrote no record keeps its own result')
+    return problems
 
 
 def github_expression(text, context):
@@ -266,6 +334,8 @@ class GateContracts(unittest.TestCase):
         # refuse another producer of a trusted name; nothing is written.
         self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n'
                       '      actions: read\n      checks: read\n      statuses: read\n    steps:\n', workflow)
+        self.assertEqual(workflow.split('\npermissions:\n', 1)[1].split('\nconcurrency:', 1)[0],
+                         '  contents: read\n')
         self.assertNotIn(': write', workflow)
         self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
@@ -285,11 +355,14 @@ class GateContracts(unittest.TestCase):
         for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
             self.assertNotIn(event, workflow.split('\njobs:\n', 1)[0])
         registry = read('.github/workflows/codeflow-registry.yml')
-        self.assertEqual(registry.count('cargo build --release'), 1)
+        # One build for the registry check and one for the main-only cache
+        # writer (TSK-1240), which is not a verdict and creates no `trusted:`
+        # check.
+        self.assertEqual(registry.count('cargo build --release'), 2)
         self.assertNotIn('concurrency:', registry)
-        # Its one job is the registry check, never a `trusted:` verdict; its
-        # comments may name the prefix to say why.
-        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check'])
+        # Its jobs are the registry check and the cache writer, never a
+        # `trusted:` verdict; its comments may name the prefix to say why.
+        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check', 'cache main build'])
         self.assertIn('run: codeflow ids check\n', registry)
 
     def test_commit_standards_admits_once_and_never_waits(self):
@@ -306,7 +379,13 @@ class GateContracts(unittest.TestCase):
         self.assertIn('python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
         self.assertIn('          BASE_REF: ${{ github.event.pull_request.base.ref }}\n', step)
-        self.assertIn('--base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        # Rulings of 2026-11-11: no pull request runs the verdicts (into a
+        # line until the line gate ships, the Director's; into main while main
+        # is relaxed, the operator's), so every base is admitted on the two
+        # security jobs, which run on every pull request.
+        self.assertIn('--base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "secret scan" --require "security review"\n', step)
+        self.assertNotIn('--require "codeflow gates"', step)
+        self.assertEqual(step.count('python3 -I scripts/policy-admission.py admit '), 1)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
         self.assertNotIn('pull_request.head.ref', step)
         for polling in ('--wait', 'wait=', 'sleep', 'ci-reuse.py admit'):
@@ -396,7 +475,9 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(named('gates-release'), set(release_targets))
         condition = re.search(r'^    if: (.+)$', jobs['gates-release'], re.M).group(1)
         self.assertNotIn('integration/', condition)
-        self.assertIn("contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref)", condition)
+        # Temporary relaxation (operator decision, 2026-11-11): the release
+        # parts run only on the daily schedule and a manual dispatch.
+        self.assertNotIn('pull_request', condition)
         for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
             self.assertIn(event, condition)
         self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
@@ -426,6 +507,36 @@ class GateContracts(unittest.TestCase):
                         'cargo nextest run --archive-file'):
             self.assertIn(command, runs)
 
+    def test_every_gate_run_keeps_its_run_record_as_an_artifact(self):
+        # TSK-1305 AC-5 (issue 546): right after each step that runs
+        # `codeflow test`, in this repository's workflow and the one adopters
+        # get, a step uploads target/codeflow-gate/*/run.json whether the
+        # gate passed or failed, without changing the job's result, under a
+        # name unique per job (and part) and attempt, kept a short time.
+        for path in ('.github/workflows/codeflow-ci.yml', 'assets/base/ci/codeflow-ci.yml'):
+            with self.subTest(workflow=path):
+                text = read(path)
+                self.assertEqual(run_record_upload_problems(text), [])
+                # Each control below breaks one property, and the check names it.
+                gate_jobs = len(gate_steps(text))
+                self.assertGreater(gate_jobs, 0)
+                for broken, needle in (
+                    (text.replace('      - name: Keep the gate', '      - name: Drop the gate'), 'no upload'),
+                    (text.replace('        if: always()\n        continue-on-error: true\n        uses: actions/upload',
+                                  '        continue-on-error: true\n        uses: actions/upload'), 'if: always()'),
+                    (text.replace('        if: always()\n        continue-on-error: true\n',
+                                  '        if: always()\n'), 'continue-on-error'),
+                    (text.replace('codeflow-gate/*/run.json', 'codeflow-gate/*/report.xml'), 'run.json'),
+                    (text.replace('-attempt-${{ github.run_attempt }}', ''), 'attempt'),
+                    (text.replace('          retention-days: 7\n', '          retention-days: 90\n'), 'retention'),
+                    (text.replace('          if-no-files-found: warn\n', '          if-no-files-found: error\n'),
+                     'if-no-files-found'),
+                ):
+                    with self.subTest(control=needle):
+                        problems = run_record_upload_problems(broken)
+                        self.assertEqual(len(problems), gate_jobs, problems)
+                        self.assertTrue(all(needle in problem for problem in problems), problems)
+
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
         self.assert_policy_queues_every_pull_request_run(read('assets/base/ci/codeflow-policy.yml'))
         # Marking a draft ready reruns the standards, so a check that reads
@@ -440,23 +551,21 @@ class GateContracts(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
-    # TSK-1313: a newer first-attempt push to an integration line cancels the
-    # older push run on that line, because no check requires a superseded line
-    # commit's verdict. Pull request runs, reruns included, keep one group per
-    # ref and cancel. Main and master pushes, schedule and dispatch runs are
-    # never cancelled in progress and cancel nothing. The event is in the
-    # group, so a dispatch on a line shares no group with that line's pushes.
-    # A push rerun (run_attempt above 1) gets a group of its own run id and
-    # attempt and cancels nothing. The exact text is pinned so a later edit
-    # cannot widen what cancels, and each case is evaluated from the
-    # workflow's own text with GitHub's rules for the subset it uses.
+    # Pull request runs, reruns included, keep one group per ref and cancel.
+    # Main and master pushes, schedule and dispatch runs are never cancelled
+    # in progress and cancel nothing. A push to an integration line starts no
+    # run (permanent placement, operator ruling 2026-11-11), so no push is
+    # cancelled. The event is in the group. A push rerun (run_attempt above
+    # 1) gets a group of its own run id and attempt and cancels nothing. The
+    # exact text is pinned so a later edit cannot widen what cancels, and
+    # each case is evaluated from the workflow's own text with GitHub's rules
+    # for the subset it uses.
     CI_CONCURRENCY = (
         "\nconcurrency:\n"
         "  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && "
         "format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || "
         "format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}\n"
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && "
-        "github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}\n\n"
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n\n"
     )
     LINE = 'refs/heads/integration/EPC-001-a-line'
 
@@ -497,15 +606,13 @@ class GateContracts(unittest.TestCase):
             with self.subTest(outside=outside), self.assertRaises(AssertionError):
                 evaluate(outside, context)
 
-    def test_ci_cancels_only_pull_request_runs_and_superseded_line_pushes(self):
+    def test_ci_cancels_only_pull_request_runs(self):
         cases = (
-            ('push', self.LINE, True),
-            ('push', 'refs/heads/integration/EPC-002-another-line', True),
             ('pull_request', 'refs/pull/7/merge', True),
             ('push', 'refs/heads/main', False),
             ('push', 'refs/heads/master', False),
-            ('push', 'refs/heads/integration', False),
-            ('push', 'refs/heads/integration-not-a-line', False),
+            # The trigger runs no line push; were one to run, it would not cancel.
+            ('push', self.LINE, False),
             ('schedule', 'refs/heads/main', False),
             ('workflow_dispatch', 'refs/heads/main', False),
             ('workflow_dispatch', self.LINE, False),
@@ -520,13 +627,18 @@ class GateContracts(unittest.TestCase):
                 # these cases can replace each other's runs.
                 self.assertNotIn(group.casefold(), groups)
                 groups[group.casefold()] = (event, ref)
-        # Two first-attempt pushes to one line share its group, and the newer cancels.
-        older, newer = self.ci_concurrency('push', self.LINE, '1'), self.ci_concurrency('push', self.LINE, '2')
-        self.assertEqual(older[0], newer[0])
-        self.assertIs(newer[1], True)
+
+    def test_ci_concurrency_names_no_integration_line(self):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        head, tail = workflow.split('\nconcurrency:\n', 1)
+        block = head.rsplit('\n\n', 1)[1] + tail.split('\n\n', 1)[0]
+        self.assertNotIn('integration', block.lower())
+        push = re.search(r'^  push:\n    branches: \[(.*)\]$', workflow, re.M)
+        self.assertIsNotNone(push, 'the push trigger lists its branches on one line')
+        self.assertEqual(push.group(1), 'main, master')
 
     def test_a_push_rerun_runs_alone_and_cancels_nothing(self):
-        for ref in (self.LINE, 'refs/heads/main'):
+        for ref in ('refs/heads/main', 'refs/heads/master'):
             newest = self.ci_concurrency('push', ref, '9', '1')
             for attempt in ('2', '3'):
                 with self.subTest(ref=ref, attempt=attempt):
@@ -543,35 +655,12 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(self.ci_concurrency('workflow_dispatch', self.LINE, '5', '2'),
                          (f'codeflow-ci-workflow_dispatch-{self.LINE}', False))
 
-    def test_integration_line_names_never_differ_only_in_case(self):
-        # GitHub compares group names without regard to case, and no function
-        # available to a top-level concurrency group can keep case, so two
-        # lines whose names differ only in case would cancel each other's
-        # runs. `codeflow epic new --integration` names a line
-        # `integration/EPC-NNN-<lower-case slug>`, so two lines it makes
-        # never form such a pair. This checks the lines the records name.
-        lower = 'refs/heads/integration/epc-001-a-line'
-        self.assertNotEqual(self.ci_concurrency('push', lower)[0], self.ci_concurrency('push', self.LINE)[0])
-        self.assertEqual(self.ci_concurrency('push', lower)[0].casefold(),
-                         self.ci_concurrency('push', self.LINE)[0].casefold(), 'GitHub treats them as one group')
-        lines = set()
-        for path in sorted((ROOT / 'project-management').rglob('*.md')):
-            lines.update(re.findall(r'(?m)^(?:integration_target|parent_line):\s*"?(integration/[^"\s#]+)',
-                                    path.read_text()))
-        self.assertIn('integration/EPC-022-the-3-2-0-milestone-fixes', lines, 'the scan must find the records')
-        by_folded = {}
-        for line in sorted(lines):
-            by_folded.setdefault(line.casefold(), []).append(line)
-        self.assertEqual([names for names in by_folded.values() if len(names) > 1], [],
-                         'integration lines that differ only in case share a concurrency group')
-
-    def test_the_ci_concurrency_comment_states_the_rule_and_its_limits(self):
+    def test_the_ci_concurrency_comment_states_the_rule(self):
         workflow = read('.github/workflows/codeflow-ci.yml')
         block = workflow.split('\nconcurrency:\n', 1)[0].rsplit('\n\n', 1)[1]
         comment = ' '.join(line.removeprefix('#').strip() for line in block.splitlines())
-        for needle in ('newer push to an integration line', 'push rerun', 'run_attempt',
-                       'does not promise that runs start in push order', "Recovery: rerun the newest tip's run",
-                       'without regard to case', 'must not form such a pair', 'never a reuse source'):
+        for needle in ('Pull request runs, reruns included', 'No other run is cancelled in progress',
+                       'push rerun', 'run_attempt', 'never a reuse source'):
             with self.subTest(needle=needle):
                 self.assertIn(needle, comment)
 

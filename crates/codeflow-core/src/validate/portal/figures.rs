@@ -1997,6 +1997,110 @@ mod tests {
         ));
     }
 
+    /// The decision map as one more decision would leave it: a row added
+    /// to the decision table and the count sentence moved on by one, as
+    /// every pull request that lands a decision does.
+    fn with_one_more_decision(map: &str) -> String {
+        let (count, _) = decision_count(map);
+        let row = "| Written content | [ADR-9999](decisions/ADR-9999-fixture.md) | a fixture decision | accepted | none |";
+        let mut grown = map.replacen(
+            &format!("{count} decisions, "),
+            &format!("{} decisions, ", count + 1),
+            1,
+        );
+        if !grown.ends_with('\n') {
+            grown.push('\n');
+        }
+        grown.push_str(row);
+        grown.push('\n');
+        grown
+    }
+
+    /// The map's count sentence: the number it states and the line itself.
+    fn decision_count(map: &str) -> (u32, &str) {
+        map.lines()
+            .find_map(|line| {
+                let (number, _) = line.split_once(" decisions, ")?;
+                Some((number.parse().ok()?, line))
+            })
+            .expect("docs/decision-map.md states a decision count")
+    }
+
+    /// TSK-1465: a decision that lands leaves every decision-map figure
+    /// true. A planning pull request adds the decision's row and moves the
+    /// count sentence on, carries no figure edit and does not run the
+    /// portal check, so a figure fact that repeats the count goes stale on
+    /// `main` unseen. The facts read the map's table and its stable
+    /// sentences instead; a fact whose text the map loses, or whose
+    /// section is gone, is still refused.
+    #[test]
+    fn decision_map_figures_hold_when_a_decision_lands() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let map = std::fs::read_to_string(root.join("docs/decision-map.md")).expect("decision map");
+        let grown = with_one_more_decision(&map);
+        let (count, _) = decision_count(&grown);
+        assert_eq!(count, decision_count(&map).0 + 1);
+        assert!(grown.contains("[ADR-9999]"));
+
+        // The count fact the technical figure carried before: true on the
+        // map as it stands, stale once one more decision lands.
+        let source = "docs/decision-map.md#technical";
+        let stale = serde_json::json!({
+            "kind": "contains",
+            "text": format!("{} decisions, ", decision_count(&map).0),
+        });
+        assert_eq!(derive_fact(source, &stale, map.as_bytes()), Ok(true.into()));
+        assert_eq!(
+            derive_fact(source, &stale, grown.as_bytes()),
+            Ok(false.into())
+        );
+
+        let mut checked = 0;
+        for name in ["concept", "architecture", "technical"] {
+            let path = format!("docs-portal/figures/decision-map/{name}.json");
+            let text = std::fs::read_to_string(root.join(&path)).expect("figure declaration");
+            let declaration: serde_json::Value =
+                serde_json::from_str(&text).expect("figure declaration is JSON");
+            for fact in declaration["figure"]["facts"]
+                .as_array()
+                .expect("figure facts")
+            {
+                let source = fact["source"].as_str().expect("fact source");
+                if !source.starts_with("docs/decision-map.md") {
+                    continue;
+                }
+                for (state, bytes) in [("as it stands", &map), ("with one more decision", &grown)] {
+                    assert_eq!(
+                        derive_fact(source, &fact["check"], bytes.as_bytes()).as_ref(),
+                        Ok(&fact["value"]),
+                        "{path}: fact {} must hold on the map {state}",
+                        fact["claim"]
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "the decision-map figures declare their facts");
+
+        // Fails closed: the superseded row gone is a false fact, and the
+        // section gone is a fact that cannot be derived.
+        let superseded =
+            serde_json::json!({ "kind": "contains", "text": "| superseded | ADR-0006 |" });
+        assert_eq!(
+            derive_fact(source, &superseded, grown.as_bytes()),
+            Ok(true.into())
+        );
+        let without_row = grown.replace("| superseded | ADR-0006 |", "| accepted | none |");
+        assert_eq!(
+            derive_fact(source, &superseded, without_row.as_bytes()),
+            Ok(false.into())
+        );
+        let without_section = grown.replace("## Technical", "## Details");
+        assert!(derive_fact(source, &superseded, without_section.as_bytes())
+            .unwrap_err()
+            .contains("fact anchor does not exist"));
+    }
+
     #[test]
     fn the_region_starts_after_a_title_heading_only() {
         assert_eq!(

@@ -755,7 +755,7 @@ const AUTONOMY_POINTERS: &[(&str, &[&str])] = &[
         "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
         &[
             "A request for a change selects implementation and runs to the readiness report",
-            "both seats approve its shape once or record settled dissent per `autonomy.md`",
+            "Claude and the challenging seat approve its shape once or record settled dissent per `autonomy.md`",
             "`autonomy.md` says which merges the primary takes and which stay with a human",
         ],
     ),
@@ -1326,7 +1326,7 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ("ladder hard-gate class", "contract's hard-gate class"),
             (
                 "missing credit is not a purchase",
-                "2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback",
+                "2: do not purchase; name the gap;",
             ),
             ("spend waits", "4: wait for the operator; do not spend"),
             (

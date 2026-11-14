@@ -22,7 +22,8 @@ security review; this file is its checklist.
   reachability (confirm vs false-positive with a concrete path) and weighs
   the classes scanners structurally cannot see.
 - **Attacker lens — a second vendor, read-only.** The one other-lineage
-  whole-unit review carries this checklist. Assume breach: *you have a
+  whole-unit review carries this checklist: another family's attacker lens,
+  Codex preferred, any other family counting. Assume breach: *you have a
   foothold; find a flow from an untrusted source to a dangerous sink; try to
   exfiltrate a secret or PII, bypass an authz check, or inject a command, query,
   or prompt. Every finding needs a concrete trigger.* The second vendor is
@@ -176,7 +177,7 @@ human merger. Do not assume a non-overridable severity floor.
   finding one vendor raised and the other cleared.
 - Degrade legibly: the deterministic floor is always mandatory. When the
   second vendor is absent at flow start or lost mid-review, try its bounded
-  recovery first; if it stays unavailable, run the defender lens alone and
+  recovery first, then another family's seat; if none is available, run the defender lens alone and
   record reduced assurance that names the missing attacker review, in the
   `attack_log` and in your report to the human merger. A lost seat is never
   a finding and never a severity, never faked and never silently waived;

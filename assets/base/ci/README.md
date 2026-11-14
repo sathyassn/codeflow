@@ -284,6 +284,63 @@ Limits:
   collaborators (the repository's Actions settings) limits who can start such
   a workflow.
 
+## Checkout credentials and private repositories
+
+Every shipped checkout sets `persist-credentials: false`, so no token stays
+in the checkout's git config for a later step or for repository code to
+read. A step that still needs the repository over the network gets the
+run's token for itself:
+
+- The fetch steps in `codeflow-policy.yml` and `codeflow-registry.yml` read
+  `${{ github.token }}` into their own environment and hand it to git as a
+  header scoped to this repository's URL, through git's configuration
+  environment, masked in the log. Nothing is written to git config or a
+  file, and the header ends with the step.
+- The `codeflow ci` step in `codeflow-policy.yml` gets the token as
+  `CODEFLOW_CI_TOKEN`. `codeflow ci` asks the destination for its default
+  branch and that branch's policy, which decide release scope, and on a
+  private repository that lookup needs read access. It sends the token
+  only when the destination is this run's own repository
+  (`GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`, which no earlier step can
+  change) over HTTPS, follows no redirect with it, never writes it, and
+  removes it from its own environment before starting any process.
+- The job keeps `permissions: contents: read` (plus `pull-requests: read`
+  for the body step). No personal access token, App key or repository
+  secret is used; GitHub issues the token for the run and it expires when
+  the job ends.
+
+When the token is missing, rejected or lacks read access, the lookup fails
+closed: `codeflow ci` names the missing input and never takes the default
+branch from the event, an environment value or a flag. A fork pull request
+on a private repository that gets no token fails the same way.
+
+## Reading a hosted gate's results
+
+The job log prints one line per target and a target's captured output only
+when it failed. After `codeflow test`, the GitHub gates job uploads the
+gate's run record, `target/codeflow-gate/<run id>/run.json` (or under a
+`CARGO_TARGET_DIR` the setup hook wrote to `GITHUB_ENV`), as the artifact
+`codeflow-gate-<job>-attempt-<n>`, kept for 7 days. Its `outcomes` list
+names every target the run was given with its state and duration, failed,
+unrun and skipped ones included, and its `results` hold each target's
+captured output. The upload runs whether the gate passed or failed, never
+changes the job's result, and only warns when no record was written, for
+example when the install failed. Read it through the API:
+
+```sh
+gh api repos/<owner>/<repo>/actions/runs/<run id>/artifacts --jq '.artifacts[].name'
+gh run download <run id> -n codeflow-gate-gates-attempt-1
+jq '.outcomes' */run.json
+```
+
+The record holds whatever the targets print, and anyone who can read the
+repository's Actions runs can download it, as they can read the job log. A
+target that prints a credential puts it in the record, where GitHub's log
+masking does not reach. Classify such a variable as `sensitive` in the
+target's `evidence.environment` in `.codeflow/test-config.json`; the gate
+then redacts its value from the captured output before the record is
+written.
+
 ## Project setup hook
 
 The gate runs on the runner's default toolchain unless the project sets up
@@ -448,10 +505,12 @@ the base and waits for the fresh run first.
 It never writes a ruleset with another name, and an update never lowers an
 approval count, removes a rule or widens a bypass list; reducing a rule is
 an administrator's edit on the host. It refuses the checks rulesets until
-the default branch's `codeflow-policy.yml` declares the `trusted:` names,
-then the operator retires any older ruleset that requires the old names
-(`commit standards`, `secret scan`, `release impact`), which `doctor`
-names. The Mode A App and environment setup, the enablement order and the
+the default branch's `codeflow-policy.yml` declares the trusted verdicts
+(`commit standards`, and `trusted: release impact` where it declares it).
+An older ruleset that requires `commit standards` or `secret scan` can stay,
+since the shipped workflows still produce both. `doctor` names any ruleset
+that requires a name no workflow on the default branch produces; retire
+that one on the host. The Mode A App and environment setup, the enablement order and the
 recovery window are in the policy reference's "Remote protection" section.
 
 ## Optional external add-ons

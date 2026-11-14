@@ -1315,6 +1315,15 @@ pub struct AcceptanceBlock {
     pub reason: Option<String>,
     pub reviewed: String,
     pub review: String,
+    /// The lineage that built the task (`built_by`, TSK-1433): one lineage
+    /// id of the shipped model catalog, which a task landing on a marked
+    /// epic's line with no pull request must name. Optional elsewhere.
+    pub built_by: Option<String>,
+    /// The recorded reduced-assurance statement (`reduced_assurance`,
+    /// TSK-1433): which other lineages were probed and found unavailable,
+    /// which a same-lineage review on a marked epic's line must carry.
+    /// Optional elsewhere.
+    pub reduced_assurance: Option<String>,
     pub criteria: Vec<(String, CriterionResult)>,
     pub journey: String,
     pub not_verified: String,
@@ -1337,10 +1346,12 @@ impl fmt::Display for AcceptanceError {
 
 impl std::error::Error for AcceptanceError {}
 
-const BLOCK_KEYS: [&str; 8] = [
+const BLOCK_KEYS: [&str; 10] = [
     "reason",
     "reviewed",
     "review",
+    "built_by",
+    "reduced_assurance",
     "criteria",
     "journey",
     "not_verified",
@@ -1502,6 +1513,8 @@ fn parse_acceptance_lines<'a>(
         reason,
         reviewed: get("reviewed")?,
         review: get("review")?,
+        built_by: get("built_by").ok(),
+        reduced_assurance: get("reduced_assurance").ok(),
         criteria,
         journey: get("journey")?,
         not_verified: get("not_verified")?,
@@ -1525,6 +1538,12 @@ pub fn render_acceptance(block: &AcceptanceBlock) -> String {
     }
     lines.push(format!("  reviewed: {}", block.reviewed));
     lines.push(format!("  review: {}", block.review));
+    if let Some(built_by) = &block.built_by {
+        lines.push(format!("  built_by: {built_by}"));
+    }
+    if let Some(statement) = &block.reduced_assurance {
+        lines.push(format!("  reduced_assurance: {statement}"));
+    }
     lines.push("  criteria:".to_string());
     for (id, result) in &block.criteria {
         lines.push(format!(
@@ -1826,6 +1845,8 @@ mod tests {
             reason: None,
             reviewed: "a".repeat(40),
             review: "https://example.test/pr/1#review".into(),
+            built_by: None,
+            reduced_assurance: None,
             criteria: vec![
                 (
                     "AC-1".into(),
@@ -2452,6 +2473,8 @@ their sources, or the `init_e2e` case that renders them (journey).";
                 reason: superseded.then(|| rng.value()),
                 reviewed: rng.value(),
                 review: rng.value(),
+                built_by: (rng.pick(&["y", "n"]) == "y").then(|| rng.value()),
+                reduced_assurance: (rng.pick(&["y", "n"]) == "y").then(|| rng.value()),
                 criteria,
                 journey: rng.value(),
                 not_verified: rng.value(),
