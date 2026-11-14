@@ -2354,6 +2354,177 @@ mod tests {
         ));
     }
 
+    /// TSK-1402 r2: a configured git configuration file behind a link to a
+    /// place that does not exist yet. A volume may store another spelling of
+    /// the missing name as the same entry, so that spelling is refused too;
+    /// an unrelated name beside it is not.
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_a_missing_git_configuration_file_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let dotfiles = temp.path().join("dotfiles");
+        let plain = temp.path().join("plain-link");
+        let accented = temp.path().join("accented-link");
+        std::os::unix::fs::symlink(dotfiles.join("config"), &plain).unwrap();
+        std::os::unix::fs::symlink(dotfiles.join("caf\u{e9}"), &accented).unwrap();
+        let paths = [plain, accented];
+        for name in ["CONFIG", "Config", "cafe\u{301}", "CAF\u{c9}"] {
+            assert_eq!(
+                git_config_target_in(&dotfiles.join(name), &paths),
+                Ok(true),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            git_config_target_in(&dotfiles.join("notes"), &paths),
+            Ok(false)
+        );
+    }
+
+    /// TSK-1402 r2: the same for the coordination ledger behind a link.
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_a_missing_ledger_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let destination = dir.path().join("l\u{e9}dger");
+        std::os::unix::fs::symlink(&destination, repo.commondir().join("codeflow")).unwrap();
+        for name in ["L\u{c9}DGER", "le\u{301}dger"] {
+            let target = dir.path().join(name).join("coord/events.jsonl");
+            assert!(
+                repository_authority_target(&target, dir.path(), false),
+                "{}",
+                target.display()
+            );
+        }
+        assert!(!repository_authority_target(
+            &destination.join("registry-state.json"),
+            dir.path(),
+            false
+        ));
+    }
+
+    /// TSK-1402 r2: the same for the operator-authority directory.
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_a_missing_authority_directory_is_refused() {
+        let f = Fixture::new();
+        let destination = f.temp.path().join("d\u{e9}st");
+        std::os::unix::fs::symlink(&destination, f.home.join(".codeflow")).unwrap();
+        for name in ["D\u{c9}ST", "de\u{301}st"] {
+            let target = f.temp.path().join(name).join("authority/config.toml");
+            assert!(
+                refused_under(&f, &f.home, &target),
+                "{}",
+                target.display()
+            );
+        }
+        assert!(!refused_under(
+            &f,
+            &f.home,
+            &destination.join("config.toml")
+        ));
+    }
+
+    /// TSK-1402 r2: the same for a protected home file of the action table.
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_a_missing_protected_home_file_is_refused() {
+        let f = Fixture::new();
+        let destination = f.temp.path().join("cl\u{e9}-dest");
+        std::os::unix::fs::symlink(&destination, f.home.join(".claude")).unwrap();
+        for target in [
+            destination.join("SETTINGS.json"),
+            f.temp.path().join("CL\u{c9}-DEST/settings.json"),
+            f.temp.path().join("cle\u{301}-dest/settings.json"),
+        ] {
+            assert!(
+                refused_under(&f, &f.home, &target),
+                "{}",
+                target.display()
+            );
+        }
+        assert!(!refused_under(&f, &f.home, &destination.join("notes.md")));
+    }
+
+    /// TSK-1402 r2: a protected repository file that does not exist yet is
+    /// compared the same way, by the action-table patterns and by the
+    /// repository's enforcement paths.
+    #[test]
+    fn another_spelling_of_a_missing_repository_settings_file_is_refused() {
+        let f = Fixture::new();
+        git2::Repository::init(&f.root).unwrap();
+        std::fs::create_dir_all(f.root.join(".claude")).unwrap();
+        for name in [".claude/Settings.json", ".claude/SETTINGS.JSON"] {
+            assert!(f.refused(name), "{name}");
+            assert!(
+                repository_enforcement_target(&f.root.join(name), &f.root, false).unwrap(),
+                "{name}"
+            );
+        }
+        assert!(!f.refused(".claude/notes.md"));
+    }
+
+    /// TSK-1402 r2: a target the walk cannot resolve is not judged ordinary
+    /// by the git configuration and authority checks; each names it.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_that_cannot_be_resolved_is_not_judged_ordinary() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        git2::Repository::init(&root).unwrap();
+        let dangling = temp.path().join("dangling");
+        std::os::unix::fs::symlink(temp.path().join("nowhere"), &dangling).unwrap();
+        let target = dangling.join("notes.md");
+        let shown = dangling.display().to_string();
+        let error = git_config_target_in(&target, &[temp.path().join(".gitconfig")])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&shown), "{error}");
+        let error = authority_target_checked(&target, &root, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&shown), "{error}");
+    }
+
+    /// TSK-1402 r2: a session repository that cannot be opened is not read
+    /// as holding no authority files.
+    #[test]
+    fn a_session_repository_that_cannot_be_opened_is_named() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".git"), "garbage").unwrap();
+        let error = authority_target_checked(&root.join("notes.md"), &root, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("cannot open the repository"), "{error}");
+        assert!(error.contains(&root.display().to_string()), "{error}");
+    }
+
+    /// TSK-1402 r2: a repository holding the target that cannot be opened
+    /// refuses an edit it could protect, at any level, naming its marker; an
+    /// ordinary file of the session repository stays writable (TSK-379).
+    #[test]
+    fn a_repository_holding_the_target_that_cannot_be_opened_is_named() {
+        let f = Fixture::new();
+        git2::Repository::init(&f.root).unwrap();
+        std::fs::write(f.temp.path().join(".git"), "garbage").unwrap();
+        let target = f.temp.path().join(".claude/settings.json");
+        let error = authority_target_checked(&target, &f.root, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(".git"), "{error}");
+        let ctx = EditContext {
+            level: PolicyLevel::Off,
+            ..f.ctx()
+        };
+        let judge = |target: &Path| evaluate(&synthetic("write", json!({ "path": target })), &ctx);
+        let error = judge(&target).unwrap_err().to_string();
+        assert!(error.contains(".git"), "{error}");
+        assert!(judge(&f.root.join("README.md")).unwrap().is_empty());
+    }
+
     /// TSK-1400: the same coverage under the path spellings Windows accepts
     /// for one directory. Volumes with short names disabled give the long
     /// spelling back, which still runs every other form.
