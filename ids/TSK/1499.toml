@@ -1,0 +1,11 @@
+id = "TSK-1499"
+uid = "c827dc84-d071-4675-b18a-6779a6a29255"
+kind = "TSK"
+title = "A main sync into a line is judged in bounded time"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:46:22Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
