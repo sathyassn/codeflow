@@ -505,7 +505,7 @@ catalog! {
         "reword it with `git commit --amend` and add a ticket-reference footer trailer (key one of: {keys})";
     /// AI attribution in a commit message.
     COMMIT_AI_ATTRIBUTION = Step::Git("git commit"),
-        "reword it with `git commit --amend` without it; project policy forbids AI attribution in commits and PR bodies (charter §6.4)";
+        "reword it with `git commit --amend` without it; project policy forbids AI attribution in commits and PR bodies; in Claude settings set includeCoAuthoredBy to false and attribution.commit and attribution.pr to empty strings";
     /// Emoji in a commit subject.
     COMMIT_EMOJI = Step::Git("git commit"),
         "reword it with `git commit --amend` without emoji in the subject (charter §6.4)";

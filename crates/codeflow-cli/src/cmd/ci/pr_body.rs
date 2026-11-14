@@ -1701,13 +1701,13 @@ mod tests {
         }
     }
 
-    /// `summary` draws exactly one blocking `git.pr_summary` finding that
+    /// `summary` draws exactly one warn-level `git.pr_summary` finding that
     /// says `said` and names the expected shape.
-    fn assert_refused(case: &str, summary: &str, said: &str) {
+    fn assert_warned(case: &str, summary: &str, said: &str) {
         let found = shape(summary);
         assert_eq!(found.len(), 1, "{case}: {found:?}");
         assert_eq!(found[0].rule, "git.pr_summary", "{case}");
-        assert_eq!(found[0].level, PolicyLevel::Block, "{case}");
+        assert_eq!(found[0].level, PolicyLevel::Warn, "{case}");
         assert!(
             found[0].message.contains(said),
             "{case}: {}",
@@ -1784,7 +1784,7 @@ mod tests {
                 "it has no visible prose lead",
             ),
         ] {
-            assert_refused(case, summary, said);
+            assert_warned(case, summary, said);
         }
     }
 
@@ -1925,7 +1925,7 @@ mod tests {
                 "no list or table follows the lead",
             ),
         ] {
-            assert_refused(case, summary, said);
+            assert_warned(case, summary, said);
         }
     }
 

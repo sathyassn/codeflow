@@ -235,5 +235,13 @@ fn unsupported_keys_are_accepted_and_described_without_a_control_claim() {
             spec.purpose.starts_with("Not supported, has no effect."),
             "{path}"
         );
+        if *path != "git.direct_changes" {
+            assert!(
+                codeflow_core::hooks::policy_schema::schema()
+                    .iter()
+                    .all(|active| active.path != *path),
+                "retired key {path} must not reappear as an effective control"
+            );
+        }
     }
 }

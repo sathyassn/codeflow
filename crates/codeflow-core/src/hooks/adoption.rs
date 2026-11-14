@@ -460,18 +460,20 @@ mod tests {
     /// The cap follows the mapping's state, not the section check's
     /// origin: an explicit `pr_sections` key keeps that check at its level,
     /// but the Summary in a template still awaiting a decision only warns,
-    /// and a level already below warn stays where the project set it.
+    /// and a level already below warn stays where the project set it. The
+    /// shipped default is already `warn` (TSK-450), so the cap shows only on
+    /// a file that sets `pr_summary` to `block`.
     #[test]
     fn summary_cap_follows_the_mapping_state_whatever_pr_sections_says() {
         let mapping = serde_json::json!({"state": "diagnosed", "headings": {}, "decided": "none"});
         for (policy, expected) in [
             (
                 serde_json::json!({"git": {"pr_sections": "block", "pr_section_mapping": mapping}}),
-                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+                (PolicyLevel::Warn, LevelOrigin::ShippedDefault),
             ),
             (
                 serde_json::json!({"git": {"pr_section_mapping": mapping}}),
-                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+                (PolicyLevel::Warn, LevelOrigin::ShippedDefault),
             ),
             (
                 serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "block", "pr_section_mapping": mapping}}),
@@ -491,11 +493,11 @@ mod tests {
             ),
             (
                 serde_json::json!({"git": {"pr_sections": "block", "pr_section_mapping": {"state": "accepted", "headings": {}, "decided": "2026-10-03"}}}),
-                (PolicyLevel::Block, LevelOrigin::ShippedDefault),
+                (PolicyLevel::Warn, LevelOrigin::ShippedDefault),
             ),
             (
                 serde_json::json!({"git": {}}),
-                (PolicyLevel::Block, LevelOrigin::ShippedDefault),
+                (PolicyLevel::Warn, LevelOrigin::ShippedDefault),
             ),
         ] {
             let git = serde_json::from_value::<Policy>(policy.clone())

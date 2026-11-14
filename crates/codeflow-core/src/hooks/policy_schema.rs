@@ -138,16 +138,7 @@ pub struct KeySpec {
 
 /// Accepted compatibility keys with no enforcement reader. This list grants
 /// no behavior; it makes the absence explicit in diagnostics and the contract.
-pub const UNSUPPORTED_KEYS: &[&str] = &[
-    "git.direct_changes",
-    "git.clean_regenerable",
-    "security.script_bypass",
-    "security.interpreter_scan",
-    "security.enforcement_baseline",
-    "security.workflow_pushes",
-    "security.sandbox_retry",
-    "security.sandbox_retry_allow",
-];
+pub use super::policy_compat::UNSUPPORTED_KEYS;
 
 impl KeySpec {
     /// Whether this accepted key has no implementation.
@@ -163,7 +154,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 87] = [
+pub const SCHEMA: [KeySpec; 82] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -509,8 +500,7 @@ pub const SCHEMA: [KeySpec; 87] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Conventional-commit subject shape: `type(scope): description`.",
-        notes: "Governs three checks: commit_types, commit_desc_max_len, and \
-                commit_subject_max_len; off/allow disables all of them.",
+        notes: "Governs commit_types and commit_subject_max_len; off/allow disables both.",
     },
     KeySpec {
         path: "git.commit_types",
@@ -520,11 +510,18 @@ pub const SCHEMA: [KeySpec; 87] = [
         notes: "Enforced under commit_format.",
     },
     KeySpec {
+        path: "git.commit_description",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "The commit description length guideline.",
+        notes: "Defaults to warn independently of commit_format. The subject length stays under commit_format. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
         path: "git.commit_desc_max_len",
         kind: KeyKind::UInt,
         valid: "a non-negative integer (character count)",
         purpose: "Max length of the description, the text after `type(scope): `.",
-        notes: "Enforced under commit_format.",
+        notes: "Enforced under commit_description.",
     },
     KeySpec {
         path: "git.commit_subject_max_len",
@@ -539,9 +536,8 @@ pub const SCHEMA: [KeySpec; 87] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers.",
-        notes: "Governs the whole body family: the bullet caps, footer \
-                tokens, required footers, and ticket trailers; off/allow \
-                disables them all. Merge/revert/fixup/squash commits are exempt.",
+        notes: "Governs body shape and allowed trailer tokens. Required footers and tickets \
+                have separate levels. Merge/revert/fixup/squash commits are exempt.",
     },
     KeySpec {
         path: "git.commit_body_max_bullets",
@@ -571,7 +567,14 @@ pub const SCHEMA: [KeySpec; 87] = [
         valid: "an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by)",
         purpose: "Footer trailers that MUST appear on every non-exempt commit (e.g. DCO).",
         notes: "A required token is implicitly allowed; a commit missing one \
-                blocks under commit_body.",
+                is judged under commit_footer_required.",
+    },
+    KeySpec {
+        path: "git.commit_footer_required",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Missing required footer trailers, independently of body style.",
+        notes: "Default block. An empty commit_required_footers list imposes no requirement.",
     },
     KeySpec {
         path: "git.commit_ticket_keys",
@@ -672,7 +675,7 @@ pub const SCHEMA: [KeySpec; 87] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "The shape of the PR body's Summary: one prose paragraph that anchors the reader, then a list or table, then at most one closing paragraph (ADR-0071).",
-        notes: "Defaults to block independently of pr_sections. Judges the visible \
+        notes: "Defaults to warn independently of pr_sections. Judges the visible \
                 blocks of the one Summary section, never a word or sentence \
                 count; HTML comments and the `Task:` line are skipped, and a \
                 code block, quote, heading or HTML block in the Summary fails. \
@@ -954,13 +957,6 @@ pub const SCHEMA: [KeySpec; 87] = [
         notes: "Default block. The in-session guard judges it; a human \
                 terminal and the git hooks are unaffected.",
     },
-    KeySpec {
-        path: "git.clean_regenerable",
-        kind: KeyKind::StringList,
-        valid: "an array of directory paths, each ending with `/`",
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
-    },
     // ---- security ----------------------------------------------------------
     KeySpec {
         path: "security.dangerous_commands",
@@ -990,13 +986,6 @@ pub const SCHEMA: [KeySpec; 87] = [
                 update` moves a project still at the old warn default to block.",
     },
     KeySpec {
-        path: "security.script_bypass",
-        kind: KeyKind::Level,
-        valid: LEVEL_VALID,
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
-    },
-    KeySpec {
         path: "security.text_guard",
         kind: KeyKind::Enum(&["strict", "relaxed"]),
         valid: "strict | relaxed",
@@ -1018,46 +1007,11 @@ pub const SCHEMA: [KeySpec; 87] = [
         notes: "Default block.",
     },
     KeySpec {
-        path: "security.interpreter_scan",
-        kind: KeyKind::Level,
-        valid: LEVEL_VALID,
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
-    },
-    KeySpec {
         path: "security.secret_reads",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Shell reads of the secret stores the presets deny to the file tools (ADR-0075).",
         notes: "Default block.",
-    },
-    KeySpec {
-        path: "security.enforcement_baseline",
-        kind: KeyKind::Level,
-        valid: LEVEL_VALID,
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
-    },
-    KeySpec {
-        path: "security.workflow_pushes",
-        kind: KeyKind::Enum(&["queue", "allow"]),
-        valid: "queue | allow",
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
-    },
-    KeySpec {
-        path: "security.sandbox_retry",
-        kind: KeyKind::Enum(&["allowlist", "block"]),
-        valid: "allowlist | block",
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
-    },
-    KeySpec {
-        path: "security.sandbox_retry_allow",
-        kind: KeyKind::RetryEntries,
-        valid: "an array of entry objects, each naming its `program`",
-        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
-        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     // ---- guidance ----------------------------------------------------------
     KeySpec {
@@ -1076,10 +1030,14 @@ pub fn schema() -> &'static [KeySpec] {
     &SCHEMA
 }
 
-/// Find one key's spec by its dotted leaf path.
+/// Find an accepted key's spec, including retired compatibility keys.
+/// Use [`schema`] to enumerate only the effective policy controls.
 #[must_use]
 pub fn spec_for(path: &str) -> Option<&'static KeySpec> {
-    SCHEMA.iter().find(|s| s.path == path)
+    SCHEMA
+        .iter()
+        .find(|s| s.path == path)
+        .or_else(|| super::policy_compat::spec_for(path))
 }
 
 /// [`Policy::default`] serialized to JSON — the live source `explain`/`show`
@@ -1253,13 +1211,10 @@ pub fn unsupported_control_warnings(value: &Value) -> Vec<crate::remedy::Finding
 /// `CodeFlow` defines, never one the project wrote.
 #[must_use]
 pub fn unsupported_control_paths(value: &Value) -> Vec<&'static str> {
-    schema()
+    UNSUPPORTED_KEYS
         .iter()
-        .filter(|spec| {
-            spec.path.contains('.') && spec.path != "git.direct_changes" && spec.is_unsupported()
-        })
-        .filter(|spec| lookup(value, spec.path).is_some())
-        .map(|spec| spec.path)
+        .copied()
+        .filter(|path| *path != "git.direct_changes" && lookup(value, path).is_some())
         .collect()
 }
 
@@ -1958,20 +1913,13 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 13] = [
+        const OPTIONAL: [&str; 6] = [
             "security.text_guard",
             "security.trusted_client_configs",
             "git.pr_section_mapping",
             "git.ignored_files",
             "git.max_file_bytes",
             "git.release_branch_pattern",
-            "git.clean_regenerable",
-            "security.interpreter_scan",
-            "security.enforcement_baseline",
-            "security.workflow_pushes",
-            "security.script_bypass",
-            "security.sandbox_retry",
-            "security.sandbox_retry_allow",
         ];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new

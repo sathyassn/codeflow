@@ -450,7 +450,13 @@ fn presentation_keeps_defect_warnings_without_size_budgets() {
         "## Summary\n<!-- empty -->",
         "## Summary\nfirst\n## Summary\nsecond",
     ] {
-        let bad = BODY.replace("## Summary\nMake the command easier to use.", replacement);
+        // The whole Summary is replaced: a Summary left with only its list is a
+        // shape warning (TSK-450), not a missing or empty section.
+        let bad = BODY.replace(
+            "## Summary\nMake the command easier to use.\n\n- Explain the result.\n",
+            &format!("{replacement}\n"),
+        );
+        assert_ne!(bad, BODY, "{replacement}");
         let output = ci_with_body(dir.path(), &bad);
         assert_eq!(output.status.code(), Some(1), "{replacement}");
         assert!(String::from_utf8_lossy(&output.stderr).contains("'## Summary'"));

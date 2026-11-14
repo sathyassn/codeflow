@@ -746,18 +746,21 @@ fn git_ok_env(dir: &Path, args: &[&str], envs: &[(&str, &str)], what: &str) {
     );
 }
 
-/// The restored v1 commit standard (ADR-0020) is enforced by the floor: after
-/// `init --minimal`, the commit-msg hook rejects a story-body commit — a
-/// conventional subject followed by a prose paragraph — both as a direct hook
-/// invocation naming `git.commit_body` and as a real `git commit` on a feature
-/// branch, while a bullet-body commit of the same change passes.
+/// The v1 commit standard (ADR-0020) at the minimal floor, as TSK-450 AC-1
+/// sets it: after `init --minimal`, a story-body commit (a conventional
+/// subject followed by a prose paragraph) lands with a `git.commit_body`
+/// warning, both as a direct hook invocation and as a real `git commit` on a
+/// feature branch, while the floor still refuses kept rules: a subject over
+/// 72 characters and an AI attribution trailer.
 #[test]
-fn minimal_floor_blocks_a_story_body_commit() {
+fn minimal_floor_warns_on_a_story_body_and_blocks_kept_rules() {
     let (_tmp, root) = project();
     init(&root, "--minimal");
 
-    // Direct hook invocation: a prose body is rejected and names the body rule.
-    let story = root.join("story-msg.txt");
+    // Direct hook invocation: a prose body warns, names the body rule and
+    // does not stop the commit. The hook scans a message file that is not
+    // this worktree's COMMIT_EDITMSG for secrets, so the message goes there.
+    let story = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(
         &story,
         "feat: add a thing\n\nThis is a story paragraph about why the thing was added.\n",
@@ -770,12 +773,26 @@ fn minimal_floor_blocks_a_story_body_commit() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        !out.status.success(),
-        "commit-msg hook accepted a story-body commit: {msg}"
+        out.status.success(),
+        "commit-msg hook refused a story-body commit, which only warns: {msg}"
     );
     assert!(
-        msg.contains("commit_body"),
-        "commit-msg block did not name the commit_body rule:\n{msg}"
+        msg.contains("warning") && msg.contains("commit_body"),
+        "commit-msg hook did not warn under the commit_body rule:\n{msg}"
+    );
+
+    // A kept rule still refuses: a subject over 72 characters.
+    let long = root.join(".git/COMMIT_EDITMSG");
+    std::fs::write(&long, format!("feat: {}\n", "a".repeat(70))).unwrap();
+    let out = codeflow(&root, &["git-hook", "commit-msg", long.to_str().unwrap()]);
+    let msg = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success() && msg.contains("BLOCKED"),
+        "commit-msg hook accepted a subject over 72 characters:\n{msg}"
     );
 
     // The same change with a bullet body passes.
@@ -791,8 +808,8 @@ fn minimal_floor_blocks_a_story_body_commit() {
         "commit-msg hook rejected a conforming bullet-body commit"
     );
 
-    // End-to-end: a real story-body commit on a feature branch is blocked by the
-    // wired hook.
+    // End-to-end: a real story-body commit on a feature branch lands with a
+    // warning through the wired hook.
     assert!(git(&root, &["checkout", "-b", "feat/body-shape"])
         .status
         .success());
@@ -808,9 +825,32 @@ fn minimal_floor_blocks_a_story_body_commit() {
             "This is a story paragraph, not a bullet.",
         ],
     );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&commit.stdout),
+        String::from_utf8_lossy(&commit.stderr)
+    );
     assert!(
-        !commit.status.success(),
-        "a story-body commit was accepted by the wired commit-msg hook"
+        commit.status.success(),
+        "the wired commit-msg hook refused a story-body commit:\n{combined}"
+    );
+    assert!(
+        combined.contains("warning") && combined.contains("commit_body"),
+        "the story-body commit landed without a commit_body warning:\n{combined}"
+    );
+
+    // End-to-end: an AI attribution trailer is still refused by the wired hook.
+    std::fs::write(root.join("body.txt"), "hello again\n").unwrap();
+    assert!(git(&root, &["add", "body.txt"]).status.success());
+    let commit = git(
+        &root,
+        &[
+            "commit",
+            "-m",
+            "feat: add another thing",
+            "-m",
+            "Co-Authored-By: Claude <noreply@anthropic.com>",
+        ],
     );
     let combined = format!(
         "{}{}",
@@ -818,36 +858,40 @@ fn minimal_floor_blocks_a_story_body_commit() {
         String::from_utf8_lossy(&commit.stderr)
     );
     assert!(
-        combined.contains("BLOCKED") && combined.contains("commit_body"),
-        "commit rejection did not report a commit_body BLOCK:\n{combined}"
+        !commit.status.success()
+            && combined.contains("BLOCKED")
+            && combined.contains("ai_attribution"),
+        "an AI attribution trailer was not refused by the wired hook:\n{combined}"
     );
 }
 
-/// The footer/ticket amendment (ADR-0020): the shipped floor is STRICT by
-/// default — a standard git-trailer footer (`Refs:`) blocks because no trailer is
-/// opted in, and the same trailer commits cleanly only after the project adds the
-/// token to `commit_footer_tokens`. Proven end-to-end through the wired
-/// commit-msg hook and a real `git commit`.
+/// The footer/ticket amendment (ADR-0020) under TSK-450 AC-1: an unlisted
+/// standard git-trailer footer (`Refs:`) warns under `git.commit_body` and
+/// does not stop the commit; once the project adds the token to
+/// `commit_footer_tokens` the same trailer commits with no body warning. An
+/// AI attribution trailer is refused whatever the opt-ins. Proven end-to-end
+/// through the wired commit-msg hook and a real `git commit`.
 #[test]
-fn minimal_floor_is_strict_then_opt_in_for_trailers() {
+fn minimal_floor_warns_on_unlisted_trailers_then_opt_in() {
     let (_tmp, root) = project();
     init(&root, "--minimal");
 
-    // Direct hook invocation: a Refs footer BLOCKS at the shipped strict default.
+    // Direct hook invocation: a Refs footer warns at the shipped default.
     let msg = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: add a thing\n\n- wire it\n\nRefs: PROJ-142\n").unwrap();
-    let blocked = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
+    let warned = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
     let text = format!(
         "{}{}",
-        String::from_utf8_lossy(&blocked.stdout),
-        String::from_utf8_lossy(&blocked.stderr)
+        String::from_utf8_lossy(&warned.stdout),
+        String::from_utf8_lossy(&warned.stderr)
     );
     assert!(
-        !blocked.status.success() && text.contains("commit_body"),
-        "an unopted `Refs:` trailer must block at the strict floor:\n{text}"
+        warned.status.success() && text.contains("warning") && text.contains("commit_body"),
+        "an unopted `Refs:` trailer must warn under commit_body and not stop the commit:\n{text}"
     );
 
-    // Opt `Refs` into the project's policy, then the same trailer is accepted.
+    // Opt `Refs` into the project's policy, then the same trailer is accepted
+    // with no body warning.
     let policy_path = root.join(".codeflow/policy.json");
     let mut policy: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
@@ -855,11 +899,33 @@ fn minimal_floor_is_strict_then_opt_in_for_trailers() {
     std::fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
 
     let allowed = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
-    assert!(
-        allowed.status.success(),
-        "an opted-in `Refs:` trailer must pass: {}{}",
+    let text = format!(
+        "{}{}",
         String::from_utf8_lossy(&allowed.stdout),
         String::from_utf8_lossy(&allowed.stderr)
+    );
+    assert!(
+        allowed.status.success() && !text.contains("commit_body"),
+        "an opted-in `Refs:` trailer must pass without a body warning:\n{text}"
+    );
+
+    // A kept rule still refuses with the opt-in in place: an AI attribution
+    // trailer.
+    let ai = root.join(".git/COMMIT_EDITMSG");
+    std::fs::write(
+        &ai,
+        "feat: add a thing\n\n- wire it\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+    )
+    .unwrap();
+    let refused = codeflow(&root, &["git-hook", "commit-msg", ai.to_str().unwrap()]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success() && text.contains("ai_attribution"),
+        "an AI attribution trailer must be refused:\n{text}"
     );
 
     // End-to-end: with the opt-in in place, a real Refs-trailer commit lands.

@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use codeflow_core::hooks::policy_schema::{schema, DEPRECATED_KEYS};
+use codeflow_core::hooks::policy_schema::{schema, DEPRECATED_KEYS, UNSUPPORTED_KEYS};
 use codeflow_core::scaffold::{
     self, AssetSource, DirSource, InitAnswers, InitOptions, Tier, UpdateOptions,
 };
@@ -287,6 +287,7 @@ fn the_pinned_schema_is_well_formed() {
         .iter()
         .map(|spec| spec.path)
         .chain(DEPRECATED_KEYS.iter().map(|(key, _)| *key))
+        .chain(UNSUPPORTED_KEYS.iter().copied())
         .collect();
     for key in keys {
         assert!(

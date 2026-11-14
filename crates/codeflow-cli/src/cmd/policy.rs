@@ -17,7 +17,7 @@ use codeflow_core::hooks::policy_schema::{
 #[derive(Debug, Args)]
 pub struct PolicyArgs {
     #[command(subcommand)]
-    pub command: PolicyCommand,
+    pub command: Option<PolicyCommand>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -34,8 +34,8 @@ pub enum PolicyCommand {
 #[must_use]
 pub fn run(args: &PolicyArgs) -> i32 {
     match args.command {
-        PolicyCommand::Explain => explain(),
-        PolicyCommand::Show => match super::repo_root() {
+        Some(PolicyCommand::Explain) => explain(),
+        Some(PolicyCommand::Show) | None => match super::repo_root() {
             Ok(root) => show(&root),
             Err(error) => {
                 eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
@@ -133,6 +133,10 @@ fn show(root: &Path) -> i32 {
     }
     for e in &errors {
         eprintln!("codeflow policy: error: {e}", e = crate::cmd::shown(&e));
+    }
+
+    for warning in policy_schema::deprecation_warnings(root) {
+        eprintln!("codeflow policy: {}", crate::cmd::shown(&warning.text));
     }
 
     let defaults = default_policy_value();

@@ -934,6 +934,18 @@ fn loosen(root: &Path) {
     );
 }
 
+/// A destination whose default branch blocks the commit-body rule. The
+/// shipped default only warns on it (TSK-450 AC-1), and these tests use the
+/// rule as the probe of which policy judges a push, so the target opts it
+/// back in to `block`, landed as a merged pull request would land it.
+fn strict_destination(root: &Path) -> PathBuf {
+    let dest = with_destination(root);
+    land_on_default(root, &dest, |root| {
+        set_policy(root, &[("commit_body", "block".into())]);
+    });
+    dest
+}
+
 /// Commit a four-bullet change, which the working copy's policy lets in.
 fn four_bullets(root: &Path) {
     write(root, "y.txt", "y\n");
@@ -1078,7 +1090,7 @@ fn head_sha(root: &Path) -> String {
 fn a_push_is_judged_by_the_policy_the_destination_holds() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
@@ -1095,7 +1107,7 @@ fn a_push_is_judged_by_the_policy_the_destination_holds() {
 fn a_second_push_is_not_judged_by_the_branch_s_own_last_push() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
@@ -1113,7 +1125,7 @@ fn a_second_push_is_not_judged_by_the_branch_s_own_last_push() {
 fn a_push_is_judged_by_the_target_s_tip_not_the_fork_point() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     land_on_default(&root, &dest, loosen);
     let target = default_branch(&dest);
     git(
@@ -1143,7 +1155,7 @@ fn a_head_cannot_lower_or_turn_off_the_target_s_push_gate() {
     for level in ["warn", "off"] {
         let dir = scaffolded("--standard");
         let root = project(&dir);
-        let dest = with_destination(&root);
+        let dest = strict_destination(&root);
         write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
         loosen(&root);
         set_policy(&root, &[("test_gate_on_push", level.into())]);
@@ -1162,7 +1174,7 @@ fn a_head_cannot_lower_or_turn_off_the_target_s_push_gate() {
 fn a_declared_target_the_default_does_not_protect_is_not_trusted() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     land_branch(&root, &dest, "integration/lenient", loosen);
     git(
         &root,
@@ -1188,7 +1200,7 @@ fn a_declared_target_the_default_does_not_protect_is_not_trusted() {
 fn a_branch_cannot_protect_itself_into_its_own_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
@@ -1209,7 +1221,7 @@ fn a_branch_cannot_protect_itself_into_its_own_authority() {
 fn a_new_integration_branch_is_not_its_own_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     let target = default_branch(&dest);
     git(
         &root,
@@ -1238,7 +1250,7 @@ fn a_new_integration_branch_is_not_its_own_authority() {
 fn an_unknown_declared_target_does_not_let_the_head_skip_the_check() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     git(&root, &["switch", "-q", "-c", "task/TSK-001-work"]);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     declare(&root, "TSK-001", "integration/nonexistent");
@@ -1257,7 +1269,7 @@ fn an_unknown_declared_target_does_not_let_the_head_skip_the_check() {
 fn a_push_to_a_fork_is_judged_by_a_named_candidate_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     let upstream = root.parent().unwrap().join("upstream.git");
     git(
         &root,
@@ -1382,7 +1394,7 @@ fn an_invalid_default_policy_refuses_a_push_with_no_range() {
 fn a_protected_wildcard_does_not_make_a_branch_its_own_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     land_on_default(&root, &dest, |root| protect(root, "integration/*"));
     // The landed policy keeps a protected name from being made here, so
     // the line is pushed to it from a branch of another name.
@@ -1418,7 +1430,7 @@ fn a_protected_wildcard_does_not_make_a_branch_its_own_authority() {
 fn a_protected_alias_does_not_lend_its_referent_s_policy() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     land_on_default(&root, &dest, |root| protect(root, "integration/*"));
     land_branch(&root, &dest, "feat/lenient", |root| {
         loosen(root);
@@ -1557,7 +1569,7 @@ fn a_default_policy_that_is_not_utf8_refuses_the_push() {
 fn a_commit_published_as_a_tag_is_still_checked_on_its_branch() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
@@ -1577,7 +1589,7 @@ fn a_commit_published_as_a_tag_is_still_checked_on_its_branch() {
 fn an_earlier_push_is_checked_again_after_the_default_tightens() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     land_on_default(&root, &dest, loosen);
     let target = default_branch(&dest);
     git(
@@ -1613,7 +1625,7 @@ fn an_earlier_push_is_checked_again_after_the_default_tightens() {
 fn a_declared_line_does_not_hide_its_commits_from_the_default_s_policy() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
+    let dest = strict_destination(&root);
     land_on_default(&root, &dest, loosen);
     let target = default_branch(&dest);
     git(

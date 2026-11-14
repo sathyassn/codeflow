@@ -66,7 +66,8 @@ advisory and follow `pr_sections`; off/allow disables them. The length
 warning has no policy key of its own and never blocks, at any `pr_sections`
 level.
 
-`git.pr_summary` defaults to block independently. It checks the shape of the
+`git.pr_summary` defaults to warn independently; a project can select block or
+off. It checks the shape of the
 one Summary section: one prose paragraph, then a list or a table, then at
 most one closing paragraph. Only visible blocks count, so text in an HTML
 comment never supplies the lead or the list, and a heading, code block,
@@ -335,9 +336,10 @@ its reviewer sees it. The job fails when the policy file is missing at that
 commit, when either key is missing or unreadable, or when a value is not
 `block`, `warn` or `off`. The `osv-scanner.toml` suppressions come from the
 trusted commit too, and osv-scanner runs with `--no-ignore`, so a
-`.gitignore` the change edits cannot hide a lockfile. The verdict comes
-from osv-scanner's exit status, so a file path in its output cannot turn
-an advisory into a pass, and a lockfile it cannot read is a scan error. A
+`.gitignore` the change edits cannot hide a lockfile. The common verdict table below judges the base and head findings. A lockfile
+the scanner cannot read is a scan error and fails at both warn and block.
+Suppressions require nonempty `id` and `reason` and a valid `ignoreUntil`;
+a missing or malformed field fails the job. Expired suppressions do not apply. A
 new suppression takes effect once its own pull request lands. In `block` mode, an advisory
 that already blocks every pull request is cleared by fixing the dependency,
 or by an administrator merging the suppression's pull request over the
@@ -348,65 +350,65 @@ Since 3.1.0 a policy without both keys fails this job. Because the job reads
 the keys from the base, land them first under your current workflow, then
 land the 3.1.0 workflow; keys added alongside it are not on the base yet.
 Add a missing key by hand: `codeflow update` adds the keys only to a policy
-from before 3.0.0 and does not restore a key a later policy deleted. A first CodeFlow adoption has no policy on its base, so its security
-review fails until the policy lands; merge that pull request over the
-failing check, or land the policy alone first.
+from before 3.0.0 and does not restore a key a later policy deleted. A first
+CodeFlow adoption has no policy or workflow on its base, so its security
+review fails until both land; merge that pull request over the failing
+check, or land the policy and workflow first.
 
 ## Project exception hook
 
-A project that records dependency-audit exceptions in its own reviewed
-register, with an owner, an expiry and a reason per row, commits
-`.codeflow/audit-exceptions.sh` instead of editing the managed step. The
-hook is optional, project-owned, and never written by `codeflow update`. It
-runs in the GitHub `security review` job after the managed audit, only when
-the audit finds advisories, and may accept findings that a trusted file
-records.
+A project with its own reviewed dependency register can commit
+`.codeflow/audit-exceptions.sh`. This optional, project-owned hook runs with
+`bash` in an exported copy of the trusted commit: the pull request's base,
+or the pushed commit. The hook and every register it reads come from that
+copy. A pull request cannot change the exceptions that judge it.
 
-- **Trusted commit only.** The step reads the hook from the trusted commit
-  (the pull request's base, or the pushed commit) and exports that commit's
-  files to a folder outside the checkout. The hook runs there with `bash`,
-  so a path it reads, such as `docs/dependency-register.csv`, is the trusted
-  commit's copy. A pull request that adds or changes the hook or the
-  register is judged by the base, and takes effect once it lands; the step
-  prints a notice when the change holds a hook the trusted commit does not.
-  A hook that is not a regular file on the trusted commit fails the job.
-- **Inputs.** The working folder is the exported trusted commit.
-  `CODEFLOW_AUDIT_FINDINGS` is the path of a file with one finding per line,
-  tab separated: advisory id, package, version, ecosystem, lockfile path,
-  and the advisory's aliases joined by commas. `CODEFLOW_TRUSTED_SHA` is the
-  trusted commit and `CODEFLOW_TRUSTED_ROOT` is the exported folder. The
-  scan runs with `--verbosity error --format json` when the trusted commit
-  holds the hook, so its log holds only errors.
-- **Exit contract.** The hook prints the findings it accepts to standard
-  output, one per line, copied unchanged from the findings file. Exit 0 with
-  those lines is a verdict; any other exit status makes the hook accept
-  nothing, as does a printed line that is not a finding. The step passes
-  when every finding is accepted and lists each as `accepted by the project
-  exception hook: <finding>`; otherwise it lists the rest as `not accepted:
-  <finding>` and applies the policy level as before (`block` fails, `warn`
-  reports). The hook runs only when osv-scanner exits 1 for advisories and
-  logged no error. osv-scanner exits 1 even when it could not read a
-  lockfile, so any logged error means the scan may be incomplete: the hook
-  is not run, the logged errors are printed, and the policy level applies as
-  if nothing were accepted.
-- **Advice.** When the trusted commit holds the hook, the failure message
-  tells the reader to accept a justified finding through it. Without the
-  hook, the message and the `osv-scanner.toml` route are as in 3.1.0, and
-  the `osv-scanner.toml` suppressions still come from the trusted commit.
-- **Match on the advisory, not the path.** The lockfile path is chosen by
-  the change under test. Key a register row on the advisory id, package and
-  version, and check its expiry in the hook.
+The hook receives `CODEFLOW_TRUSTED_SHA`, `CODEFLOW_TRUSTED_ROOT` and
+`CODEFLOW_AUDIT_FINDINGS`. The last names a tab-separated input file with
+advisory id, package, version, ecosystem, lockfile path and comma-separated
+aliases. Backslashes, tabs and newlines in fields are escaped. The hook
+must not execute these fields as shell commands.
 
-Example: accept the advisories whose id is the first column of a register
-row that has not expired (`docs/dependency-register.tsv`, columns id, owner,
-expiry as `YYYY-MM-DD`, reason):
+The hook prints one JSON triage entry per line and exits 0. Entries use the
+same validator as the base commit's `.codeflow/audit-triage.json` array.
+Every entry needs `id`, `package`, `ecosystem`, `owner`, `rationale` and
+`expiry` (inclusive UTC date). High or critical findings also need
+`reachability: "not-reachable"` and nonempty `evidence`. A nonzero hook exit,
+malformed output or duplicate entry fails the job at both `warn` and
+`block`. An expired entry fails if its advisory is present in the completed
+head scan; otherwise a notice names the entry and expiry. Invalid entries
+always fail. A scan error or unparseable output also fails at either level;
+missing scan evidence never proves that an advisory is absent.
+
+Scanner version and checksum come from the base workflow. Both scans use
+the same explicit empty scanner configuration; the table reads exceptions
+from base. Each scan receives only committed dependency inputs in an
+isolated directory. Head scripts, executables, ignore rules and scanner
+configuration cannot change the scan. Dependency symlinks and submodules
+fail closed. Custom input names need a reviewed input-list update.
+
+For example, a hook may print this reviewed entry from its trusted register:
 
 ```sh
-today=$(date -u +%Y-%m-%d)
-awk -F'\t' -v today="$today" \
-  'NR == FNR { if ($3 >= today) ok[$1] = 1; next } ($1 in ok)' \
-  docs/dependency-register.tsv "$CODEFLOW_AUDIT_FINDINGS"
+printf '%s\n' '{"id":"GHSA-example","package":"demo","ecosystem":"crates.io","owner":"platform","rationale":"Reviewed call paths","expiry":"2099-01-01","reachability":"not-reachable","evidence":"No caller reaches the affected API"}'
 ```
+
+The common verdict table judges every entry. Trusted unexpired suppressions
+apply first. Otherwise, a new advisory fails at any severity, even with
+triage. An existing high or critical advisory needs not-reachable evidence;
+an existing medium advisory needs valid triage; an existing low or
+informational advisory is reported. At `warn`, failing advisory rows warn;
+invalid exceptions and scan errors still fail.
+
+Migration: replace the old hook output of unchanged tab-separated finding
+lines with JSON entries before adopting this workflow. Bare finding lines
+are refused. The hook cannot waive a finding without ownership, expiry or
+required reachability evidence. Land the migration on the base first.
+Renewing expired triage while its advisory is still live requires an
+operator merge over the failing check: the renewal PR still uses the
+expired base entry. Fixing or removing the vulnerable dependency can pass
+when a complete head scan proves absence. Invalid base entries always
+require an operator merge to repair, even when their advisory is absent.
 
 Only the GitHub workflow runs the hook. The GitLab, Bitbucket and generic
 wrappers carry the audit only as an optional add-on you run yourself.
