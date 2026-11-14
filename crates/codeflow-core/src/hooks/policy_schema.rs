@@ -292,15 +292,23 @@ pub const SCHEMA: [KeySpec; 82] = [
                 hands text it produces to a shell or interpreter on the line (through a pipe, \
                 a here-string, a here-document it expands, a process substitution, `eval`, a \
                 `-c` or `-e` value it expands, a command word it fills in, or a supplier that \
-                runs a command built from what it reads), or hands text it spells to a \
-                program the guard does not know to read only data (through a pipe, a \
-                here-string, a here-document or a process substitution), that text counts \
-                only as one `printf`, `echo` or `print` of plain literal text, or a literal \
-                here-string or here-document, and is judged as the executor reads it; a \
+                runs a command built from what it reads), that text counts only as one \
+                `printf`, `echo` or `print` of plain literal text, or a literal here-string \
+                or here-document, and is judged as the executor reads it. Text the line \
+                spells that any other program on the line receives, by its input, a file \
+                operand, an argument or an output stream (a pipe, a redirection, \
+                here-string or here-document on any descriptor, an `exec` redirection, a \
+                process substitution in either direction, a file the line writes named as \
+                an operand or an option's value, a command substitution, a \
+                `$'...'` quote with an escape, or a name the line binds, in an argument, \
+                in an assignment to a variable that gives a program a command or a startup \
+                file, or in a value the line may export), is judged \
+                the same way unless the guard knows the program only reads it as data. A \
                 plain file counts as that file run directly on a line that writes no file, \
-                and a line of more than one command that writes a file and also runs one (a script given to a shell, \
-                `source` or an interpreter, a file fed to one, or a path run as a program) \
-                refuses; any other such line refuses whatever it names. A run whose program word \
+                and a line of more than one command that writes a file and also runs one \
+                (a script given to a shell, `source` or an interpreter, a file fed to \
+                one, or a path run as a program) refuses; any other such line refuses \
+                whatever it names. A run whose program word \
                 or first operand the guard cannot resolve, and a run inside a quoted argument \
                 or an assigned value, refuse too (TSK-1476). The guard's checks on printed \
                 text are partial. Text a line writes to a process started earlier that \
@@ -308,7 +316,9 @@ pub const SCHEMA: [KeySpec; 82] = [
                 named residual, in the same class as the verb's words written to a file and \
                 run later. So are a binary an agent renames or copies, text a program on the \
                 line runs through its own command language when it is not a shell or \
-                interpreter reading code, and state the line does not show (a file's \
+                interpreter reading code, the output of a program the line runs (other \
+                than `printf`, `echo` and `print`) when a program the guard does not know \
+                receives it, and state the line does not show (a file's \
                 contents, output a program hands to a shell it starts itself such as a Git \
                 pager, an exported variable, a shell alias or function from a profile, a \
                 program put first on the path): none of them is named on the line. Other \
