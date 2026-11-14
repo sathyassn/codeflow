@@ -1,0 +1,11 @@
+id = "TSK-1492"
+uid = "07ea5e13-719b-495c-b7e3-c1d1684fc8af"
+kind = "TSK"
+title = "An opt-in exec-guard setting refuses a line whose output leaves the session"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T01:47:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
