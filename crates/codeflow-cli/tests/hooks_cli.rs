@@ -2370,7 +2370,9 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
 
 /// TSK-1400: with `HOME` given through a linked ancestor and the authority
 /// directory's parent not listable, an edit that reaches the directory
-/// through another link is still refused by the built binary.
+/// through another link is still refused by the built binary. On macOS,
+/// where a walk lists each parent, it refuses because that parent cannot be
+/// listed, the same whatever the guard resolved first (TSK-1402 AC-4).
 #[cfg(unix)]
 #[test]
 fn the_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
@@ -2402,7 +2404,13 @@ fn the_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
             &payload,
         );
         let err = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !err.contains("enforcement path") {
+        let cause = if cfg!(target_os = "macos") {
+            err.contains("cannot read directory")
+                && err.contains(&*canonical.parent().unwrap().to_string_lossy())
+        } else {
+            err.contains("enforcement path")
+        };
+        if out.status.code() != Some(2) || !cause {
             wrong.push(format!(
                 "edit-guard {tool}: exit {:?}, wanted 2: {err}",
                 out.status.code()

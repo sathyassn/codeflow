@@ -282,7 +282,14 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
             let text = path_text(candidate)?;
-            let authority = repository_authority_target(candidate, ctx.root, false);
+            // An authority file that cannot be placed refuses every edit,
+            // naming the file and the cause (TSK-1402).
+            let authority =
+                authority_target_checked(candidate, ctx.root, false).map_err(|error| {
+                    EditError(format!(
+                        "no edit can be checked against the repository's authority files, so every edit is refused: {error}"
+                    ))
+                })?;
             let enforcement = ctx.level.is_active()
                 && !authority
                 && repository_enforcement_target(candidate, ctx.root, false).map_err(EditError)?;
@@ -330,11 +337,13 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
 /// when that walk fails, through [`crate::portable_path::canonicalize`],
 /// which lists no directory), and onto the canonical home whenever that
 /// call succeeds; each of those directories is then kept as given, lexically
-/// normalized and, when its own walk succeeds, resolved. The resolved home
-/// is always kept, because a target that reaches the directory through a
-/// link is judged in that spelling. A home that cannot be resolved either
-/// way refuses every edit, and so does a lexical spelling that cannot be
-/// made. A home that does not exist resolves to its written spelling.
+/// normalized and placed by [`protected_spelling`], which follows a link
+/// inside the home to a destination that does not exist yet (TSK-1402).
+/// The resolved home is always kept, because a target that reaches the
+/// directory through a link is judged in that spelling. A home that cannot
+/// be resolved either way refuses every edit, and so does a directory that
+/// cannot be spelled lexically or placed. A home that does not exist
+/// resolves to its written spelling.
 fn authority_directories(home: &Path) -> Result<Vec<PathBuf>, EditError> {
     let mut homes = vec![home.to_path_buf()];
     homes.extend(crate::git::remote_identity::account_home().ok());
@@ -357,9 +366,12 @@ fn authority_directories(home: &Path) -> Result<Vec<PathBuf>, EditError> {
             let dir = base.join(".codeflow").join("authority");
             dirs.insert(folded_path(&dir));
             dirs.insert(folded_path(&normalized(&dir, false)?));
-            if let Ok(resolved) = normalized(&dir, true) {
-                dirs.insert(folded_path(&resolved));
-            }
+            let placed = protected_spelling(&dir, true).map_err(|error| {
+                EditError(format!(
+                    "no edit can be checked against the operator-authority directory, so every edit is refused: {error}"
+                ))
+            })?;
+            dirs.insert(folded_path(&placed));
         }
     }
     Ok(dirs.into_iter().collect())
@@ -415,6 +427,14 @@ fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError>
             // Patterns name literal enforcement directories followed by globs.
             // Resolve their literal prefix as well, so a protected directory or
             // file which is a symlink cannot be edited through its other spelling.
+            // A prefix that cannot be placed (TSK-1402 AC-2, decided): this set
+            // alone keeps its written spelling, with the warning below, and does
+            // not refuse unrelated edits. Placing already follows a link to a
+            // missing destination and reads a folder it cannot list through
+            // `canonicalize`, so what is left is a link loop or a folder that
+            // cannot be searched. No spelling passes either, so no other
+            // spelling reaches the protected path, and a target named through
+            // it cannot be resolved and is refused on its own.
             match resolved_pattern(base, relative, resolve) {
                 Ok(pattern) => {
                     result.insert(pattern);
@@ -463,7 +483,7 @@ fn resolved_pattern(base: &Path, relative: &str, resolve: bool) -> Result<String
     for part in &parts[..split] {
         literal.push(part);
     }
-    let literal = normalized(&literal, resolve)?;
+    let literal = protected_spelling(&literal, resolve)?;
     let mut pattern = path_text(&literal)?;
     for part in &parts[split..] {
         if !pattern.ends_with('/') {
@@ -574,7 +594,43 @@ pub(crate) fn normalize_case(
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
 pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
-    let key = (path.to_path_buf(), resolve);
+    let kind = if resolve {
+        Lookup::Resolved
+    } else {
+        Lookup::Lexical
+    };
+    memoized(path, kind, || {
+        normalize_uncached(path, resolve).map(|path| (path, false))
+    })
+    .map(|(path, _)| path)
+}
+
+/// What one cached [`normalized`] entry answers. Each kind of lookup is
+/// cached under its own key, so a result read for one kind never answers
+/// another and a path resolves the same whatever was resolved before it in
+/// the invocation (TSK-1402).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Lookup {
+    /// A whole path, read lexically.
+    Lexical,
+    /// A whole path, read through symbolic links.
+    Resolved,
+    /// The last name of a path whose parent is already resolved, one step
+    /// of a [`Lookup::Resolved`] walk ([`resolved_component`]).
+    Step,
+    /// A protected path as [`protected_spelling`] places it.
+    Protected,
+}
+
+/// `read`'s result for `path`, kept for the invocation snapshot under its
+/// [`Lookup`] kind, errors included. The flag is the step's proof that
+/// nothing can exist at the path; other kinds keep it `false`.
+fn memoized(
+    path: &Path,
+    kind: Lookup,
+    read: impl FnOnce() -> Result<(PathBuf, bool), EditError>,
+) -> Result<(PathBuf, bool), EditError> {
+    let key = (path.to_path_buf(), kind);
     if let Some(cached) = NORMALIZED.with(|cache| {
         cache
             .borrow()
@@ -583,13 +639,89 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
     }) {
         return cached;
     }
-    let result = normalize_uncached(path, resolve);
+    let result = read();
     NORMALIZED.with(|cache| {
         if let Some(paths) = cache.borrow_mut().as_mut() {
             paths.insert(key, result.clone());
         }
     });
     result
+}
+
+/// How many links [`protected_spelling`] follows to a missing destination
+/// before it treats the chain as a loop; Linux allows the same number.
+const PROTECTED_LINK_HOPS: usize = 40;
+
+/// A protected path in the spelling an edit that reaches it resolves to.
+/// Read lexically when `resolve` is false. Otherwise the path is walked
+/// through symbolic links as [`normalized`] walks a target; when that walk
+/// fails, it is read through [`crate::portable_path::canonicalize`], which
+/// lists no directory; and when that fails at a link whose destination does
+/// not exist yet, it is placed at that destination, where a write would
+/// create the protected file (TSK-1402). The error names the path and the
+/// walk's cause when none of these gives a spelling: a link loop, or a
+/// folder that cannot be searched, which no other spelling can pass either.
+fn protected_spelling(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    if !resolve {
+        return normalized(path, false);
+    }
+    memoized(path, Lookup::Protected, || {
+        placed(path, PROTECTED_LINK_HOPS).map(|path| (path, false))
+    })
+    .map(|(path, _)| path)
+}
+
+fn placed(path: &Path, hops: usize) -> Result<PathBuf, EditError> {
+    let walk = match normalized(path, true) {
+        Ok(resolved) => return Ok(resolved),
+        Err(error) => error,
+    };
+    if let Ok(canonical) = crate::portable_path::canonicalize(path) {
+        return Ok(canonical);
+    }
+    let unplaced = || {
+        EditError(format!(
+            "cannot resolve the protected path {}: {walk}",
+            path.display()
+        ))
+    };
+    if hops == 0 {
+        return Err(unplaced());
+    }
+    // The first name, from the root down, that the walk cannot resolve. Each
+    // prefix is walked as a whole, so a `..` in it climbs out of a link as
+    // the file system climbs, and the link's own text is walked the same way
+    // from the resolved folder that holds the link.
+    let mut prefix = PathBuf::new();
+    let mut parent = None;
+    let mut failed = false;
+    let mut rest = path.components();
+    for component in rest.by_ref() {
+        prefix.push(component);
+        if let Ok(resolved) = normalized(&prefix, true) {
+            parent = Some(resolved);
+        } else {
+            failed = true;
+            break;
+        }
+    }
+    let is_link = failed
+        && std::fs::symlink_metadata(&prefix)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    let (Some(parent), true) = (parent, is_link) else {
+        return Err(unplaced());
+    };
+    let Ok(destination) = std::fs::read_link(&prefix) else {
+        return Err(unplaced());
+    };
+    // `parent` is the resolved spelling of the link's own folder.
+    let mut next = if destination.is_absolute() {
+        destination
+    } else {
+        parent.join(destination)
+    };
+    next.extend(rest);
+    placed(&next, hops - 1).map_err(|_| unplaced())
 }
 
 fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
@@ -660,44 +792,33 @@ fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> 
 }
 
 /// Branch alternatives commonly share all but their last component. Resolve
-/// those prefixes once in the same invocation snapshot as complete operands.
-/// The flag says this read proved that nothing can exist at the path. A cached
-/// path gives `false`, which costs the caller one more read at most.
-fn resolved_component(mut path: PathBuf) -> Result<(PathBuf, bool), EditError> {
-    let key = (path.clone(), true);
-    if let Some(cached) = NORMALIZED.with(|cache| {
-        cache
-            .borrow()
-            .as_ref()
-            .and_then(|paths| paths.get(&key).cloned())
-    }) {
-        return cached.map(|path| (path, false));
+/// each such step once in the invocation snapshot, kept apart from whole
+/// paths ([`Lookup::Step`]): a step trusts that its parent is resolved and
+/// skips the checks a whole path gets first, so it never answers one. The
+/// flag says the read proved that nothing can exist at the path.
+fn resolved_component(path: PathBuf) -> Result<(PathBuf, bool), EditError> {
+    let key = path.clone();
+    memoized(&key, Lookup::Step, move || resolve_step(path))
+}
+
+fn resolve_step(mut path: PathBuf) -> Result<(PathBuf, bool), EditError> {
+    if crate::absence::cannot_exist(&path)
+        .map_err(|e| EditError(format!("cannot inspect {}: {e}", path.display())))?
+    {
+        return Ok((path, true));
     }
-    let result = (|| {
-        if crate::absence::cannot_exist(&path)
-            .map_err(|e| EditError(format!("cannot inspect {}: {e}", path.display())))?
-        {
-            return Ok((path, true));
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            crate::portable_path::canonicalize(&path)
+                .map(|path| (path, false))
+                .map_err(|e| EditError(format!("cannot resolve {}: {e}", path.display())))
         }
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                crate::portable_path::canonicalize(&path)
-                    .map(|path| (path, false))
-                    .map_err(|e| EditError(format!("cannot resolve {}: {e}", path.display())))
-            }
-            Ok(metadata) => {
-                normalize_case(&mut path, &metadata).map_err(EditError)?;
-                Ok((path, false))
-            }
-            Err(e) => Err(EditError(format!("cannot inspect {}: {e}", path.display()))),
+        Ok(metadata) => {
+            normalize_case(&mut path, &metadata).map_err(EditError)?;
+            Ok((path, false))
         }
-    })();
-    NORMALIZED.with(|cache| {
-        if let Some(paths) = cache.borrow_mut().as_mut() {
-            paths.insert(key, result.clone().map(|(path, _)| path));
-        }
-    });
-    result
+        Err(e) => Err(EditError(format!("cannot inspect {}: {e}", path.display()))),
+    }
 }
 
 pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
@@ -746,8 +867,19 @@ pub(crate) fn holds_global_git_config(target: &Path, root: &Path) -> bool {
 
 // File edits cannot establish which config keys are safe. The Git command
 // checker still permits ordinary `git config --global user.name ...` updates.
+// A configured file that cannot be placed counts as a match (TSK-1402).
 pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
-    let paths = global_git_config_paths(root);
+    global_git_config_checked(target, root).unwrap_or(true)
+}
+
+/// Whether `target` is a user or system git configuration file, with each
+/// configured file placed by [`protected_spelling`]. A file that cannot be
+/// placed is the error, unless another file matches.
+fn global_git_config_checked(target: &Path, root: &Path) -> Result<bool, String> {
+    git_config_target_in(target, &global_git_config_paths(root))
+}
+
+fn git_config_target_in(target: &Path, paths: &[PathBuf]) -> Result<bool, String> {
     // git reads its system file under the prefix it was built with
     // (`/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`, a source build's
     // `~/etc/gitconfig`), so a `gitconfig` in any `etc` directory counts
@@ -760,14 +892,25 @@ pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
                 .and_then(Path::file_name)
                 .is_some_and(|dir| dir.eq_ignore_ascii_case("etc"))
     };
-    [false, true].into_iter().any(|resolve| {
-        normalized(target, resolve).is_ok_and(|target| {
-            system_file(&target)
-                || paths
-                    .iter()
-                    .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
-        })
-    })
+    let mut unplaced = None;
+    for resolve in [false, true] {
+        let Ok(target) = normalized(target, resolve) else {
+            continue;
+        };
+        if system_file(&target) {
+            return Ok(true);
+        }
+        for path in paths {
+            match protected_spelling(path, resolve) {
+                Ok(path) if path == target => return Ok(true),
+                Ok(_) => {}
+                Err(error) => {
+                    unplaced.get_or_insert_with(|| error.to_string());
+                }
+            }
+        }
+    }
+    unplaced.map_or(Ok(false), Err)
 }
 
 /// `path` is `prefix` or lies below it, each component compared without
@@ -806,13 +949,26 @@ fn same_ignoring_case(a: &Path, b: &Path) -> bool {
 }
 
 /// Authority metadata cannot be relaxed by a policy read from that metadata.
+/// An authority file that cannot be placed counts as a match (TSK-1402).
 pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
-    let read = |root: &Path| {
-        if global_git_config_target(target, root) {
-            return true;
+    authority_target_checked(target, root, ancestors).unwrap_or(true)
+}
+
+/// Whether `target` is authority metadata of the repository at `root` or of
+/// a repository holding it, or a user or system git configuration file. Each
+/// authority file is placed by [`protected_spelling`], so one behind a link
+/// is also judged where the link points. A file that cannot be placed is
+/// the error, naming it and the cause, unless another file matches.
+fn authority_target_checked(target: &Path, root: &Path, ancestors: bool) -> Result<bool, String> {
+    let read = |root: &Path| -> Result<bool, String> {
+        let mut unplaced = None;
+        match global_git_config_checked(target, root) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => unplaced = Some(error),
         }
         let Ok(repo) = git2::Repository::discover(root) else {
-            return false;
+            return unplaced.map_or(Ok(false), Err);
         };
         let mut paths = vec![
             (PathBuf::from("refs/remotes"), true),
@@ -832,7 +988,7 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
                 // A folder the platform cannot hold as a path cannot be listed, so
                 // the target is judged protected rather than left out.
                 let Ok(folder) = name.os_path() else {
-                    return true;
+                    return Ok(true);
                 };
                 paths.push((
                     Path::new("worktrees").join(folder).join("config.worktree"),
@@ -841,36 +997,59 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
             }
         }
         for resolve in [false, true] {
-            let (Ok(target), Ok(common)) = (
-                normalized(target, resolve),
-                normalized(repo.commondir(), resolve),
-            ) else {
+            let Ok(target) = normalized(target, resolve) else {
                 continue;
             };
-            if !under_ignoring_case(&target, &common) {
-                continue;
-            }
-            if non_ascii_below(&target, &common) {
-                return true;
+            let common = match protected_spelling(repo.commondir(), resolve) {
+                Ok(common) => common,
+                Err(error) => {
+                    unplaced.get_or_insert_with(|| error.to_string());
+                    continue;
+                }
+            };
+            let inside = under_ignoring_case(&target, &common);
+            if inside && non_ascii_below(&target, &common) {
+                return Ok(true);
             }
             for (name, directory) in &paths {
-                let Ok(protected) = normalized(&common.join(name), resolve) else {
-                    continue;
+                let protected = match protected_spelling(&common.join(name), resolve) {
+                    Ok(protected) => protected,
+                    Err(error) => {
+                        unplaced.get_or_insert_with(|| error.to_string());
+                        continue;
+                    }
                 };
+                // A file inside the common directory is compared only with a
+                // target inside it; one a link places elsewhere is compared
+                // where it lies.
+                if !inside && under_ignoring_case(&protected, &common) {
+                    continue;
+                }
                 if same_ignoring_case(&target, &protected)
                     || (*directory && under_ignoring_case(&target, &protected))
                     || (ancestors && under_ignoring_case(&protected, &target))
                 {
-                    return true;
+                    return Ok(true);
                 }
             }
         }
-        false
+        unplaced.map_or(Ok(false), Err)
     };
-    if read(root) {
-        return true;
+    let mut unplaced = match read(root) {
+        Ok(true) => return Ok(true),
+        Ok(false) => None,
+        Err(error) => Some(error),
+    };
+    for owner in super::repo::target_roots(target, root).unwrap_or_default() {
+        match read(&owner) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => {
+                unplaced.get_or_insert(error);
+            }
+        }
     }
-    super::repo::target_roots(target, root).is_ok_and(|roots| roots.iter().any(|owner| read(owner)))
+    unplaced.map_or(Ok(false), Err)
 }
 
 /// Inventory includes outside the guard's fixed protected-path class.
@@ -1071,7 +1250,8 @@ pub(super) fn registration_at(admin: &Path) -> Result<super::repo::CheckedRegist
     })
 }
 
-type NormalizedCache = std::collections::HashMap<(PathBuf, bool), Result<PathBuf, EditError>>;
+type NormalizedCache =
+    std::collections::HashMap<(PathBuf, Lookup), Result<(PathBuf, bool), EditError>>;
 
 thread_local! {
     static NORMALIZED: std::cell::RefCell<Option<NormalizedCache>> =
@@ -1932,7 +2112,14 @@ mod tests {
     /// TSK-1400: the home is given through a linked ancestor, the authority
     /// directory's parent cannot be listed, and the target names the
     /// directory through another link, so it is judged in the canonical
-    /// spelling. The canonical home keeps that spelling covered.
+    /// spelling. The canonical home keeps that spelling in the protected set.
+    ///
+    /// TSK-1402 AC-4: on macOS a walk lists each parent, so the canonical
+    /// spelling cannot be walked again when the repository's paths are
+    /// checked, and the edit refuses with that cause. It refused only as an
+    /// enforcement path while an earlier step of the walk through the link
+    /// answered for the whole canonical path; a path now resolves the same
+    /// whatever was resolved before it. Elsewhere it refuses as before.
     #[cfg(unix)]
     #[test]
     fn the_canonical_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
@@ -1950,10 +2137,32 @@ mod tests {
         let _restore = ModeGuard(parent, 0o755);
         // The hook judges inside one invocation snapshot; so does this test.
         let _facts = RepoFactsScope::enter();
+        let dirs = authority_directories(&home).unwrap();
+        assert!(
+            dirs.contains(&folded_path(&canonical)),
+            "{}: {dirs:?}",
+            canonical.display()
+        );
         // Named directly, the canonical path cannot be walked either, so
         // that edit refuses with an error; through `door` it resolves.
         let target = door.join("config.toml");
-        assert!(refused_under(&f, &home, &target), "{}", target.display());
+        if cfg!(target_os = "macos") {
+            let ctx = EditContext {
+                cwd: &f.root,
+                root: &f.root,
+                home: &home,
+                git_common_dir: None,
+                level: PolicyLevel::Block,
+            };
+            let error = evaluate(&synthetic("write", json!({ "path": target })), &ctx)
+                .unwrap_err()
+                .to_string();
+            let unlisted = canonical.parent().unwrap().display().to_string();
+            assert!(error.contains("cannot read directory"), "{error}");
+            assert!(error.contains(&unlisted), "{error}");
+        } else {
+            assert!(refused_under(&f, &home, &target), "{}", target.display());
+        }
     }
 
     /// TSK-1400: a home that does not exist still lets an ordinary edit
@@ -2057,15 +2266,13 @@ mod tests {
         let f = Fixture::new();
         let repo = git2::Repository::init(&f.root).unwrap();
         let destination = f.temp.path().join("worktree-config");
-        std::os::unix::fs::symlink(&destination, repo.commondir().join("config.worktree"))
-            .unwrap();
+        std::os::unix::fs::symlink(&destination, repo.commondir().join("config.worktree")).unwrap();
         let ctx = EditContext {
             level: PolicyLevel::Off,
             ..f.ctx()
         };
-        let judge = |target: &Path| {
-            evaluate(&synthetic("write", json!({ "path": target })), &ctx).unwrap()
-        };
+        let judge =
+            |target: &Path| evaluate(&synthetic("write", json!({ "path": target })), &ctx).unwrap();
         let refused = judge(&destination);
         assert!(
             refused
@@ -2074,6 +2281,77 @@ mod tests {
             "{refused:?}"
         );
         assert!(judge(&f.temp.path().join("notes.md")).is_empty());
+    }
+
+    /// TSK-1402: a configured git configuration file behind a link to a
+    /// missing place is matched at that place; one that is a link loop cannot
+    /// be placed, so the check reports it by name instead of passing.
+    #[cfg(unix)]
+    #[test]
+    fn a_git_configuration_file_is_placed_or_named() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("dotfiles/gitconfig");
+        let link = temp.path().join("gitconfig-link");
+        std::os::unix::fs::symlink(&destination, &link).unwrap();
+        // A relative link that climbs out of its folder, as a dotfile manager
+        // writes one, and a chain of two links, are placed the same way.
+        let home = temp.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        std::os::unix::fs::symlink("../dotfiles/gitconfig", home.join(".gitconfig")).unwrap();
+        std::os::unix::fs::symlink(&link, temp.path().join("second-link")).unwrap();
+        for entry in [home.join(".gitconfig"), temp.path().join("second-link")] {
+            assert_eq!(
+                git_config_target_in(&destination, &[entry.clone()]),
+                Ok(true),
+                "{}",
+                entry.display()
+            );
+        }
+        let paths = [link];
+        assert_eq!(git_config_target_in(&destination, &paths), Ok(true));
+        assert_eq!(
+            git_config_target_in(&temp.path().join("dotfiles/notes"), &paths),
+            Ok(false)
+        );
+        let looping = temp.path().join("looping");
+        std::os::unix::fs::symlink(&looping, &looping).unwrap();
+        let error =
+            git_config_target_in(&temp.path().join("notes"), &[looping.clone()]).unwrap_err();
+        assert!(error.contains(&looping.display().to_string()), "{error}");
+        // A match still wins over another entry that cannot be placed.
+        assert_eq!(
+            git_config_target_in(&destination, &[looping, paths[0].clone()]),
+            Ok(true)
+        );
+    }
+
+    /// TSK-1402 AC-1: an authority file in the common git directory that is a
+    /// link loop cannot be placed, so every edit is refused with the file and
+    /// the cause named, whatever the level.
+    #[cfg(unix)]
+    #[test]
+    fn an_authority_file_that_cannot_be_placed_refuses_every_edit() {
+        let f = Fixture::new();
+        let repo = git2::Repository::init(&f.root).unwrap();
+        let looping = repo.commondir().join("config.worktree");
+        std::os::unix::fs::symlink(&looping, &looping).unwrap();
+        let ctx = EditContext {
+            level: PolicyLevel::Off,
+            ..f.ctx()
+        };
+        let error = evaluate(
+            &synthetic("write", json!({ "path": f.root.join("notes.md") })),
+            &ctx,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("config.worktree"), "{error}");
+        assert!(error.contains("every edit is refused"), "{error}");
+        assert!(repository_authority_target(
+            &f.root.join("notes.md"),
+            &f.root,
+            false
+        ));
     }
 
     /// TSK-1400: the same coverage under the path spellings Windows accepts
