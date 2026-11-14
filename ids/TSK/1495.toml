@@ -1,0 +1,11 @@
+id = "TSK-1495"
+uid = "619b8eed-2693-4f66-977b-3377c6f49a61"
+kind = "TSK"
+title = "The guard's ** expansion follows symbolic links as the shells do"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:34:39Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
