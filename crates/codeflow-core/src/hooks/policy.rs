@@ -1010,7 +1010,16 @@ pub struct SecuritySection {
     /// operator's choice, applies the line's rule and verifies nothing.
     #[serde(skip_serializing_if = "TextGuard::is_strict")]
     pub text_guard: TextGuard,
+    /// The HTTP clients whose config files the project trusts (TSK-1346):
+    /// `curl`, `wget`, `httpie`, `xh` and `gh_aliases`. A listed tool's
+    /// config-file refusal is lifted; its GitHub destination checks stay.
+    /// Empty by default, so every config-file refusal stays on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trusted_client_configs: Vec<String>,
 }
+
+/// The tools `security.trusted_client_configs` may list.
+pub const TRUSTED_CLIENT_CONFIG_TOOLS: &[&str] = &["curl", "wget", "httpie", "xh", "gh_aliases"];
 
 /// The `security.text_guard` values.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1047,6 +1056,7 @@ impl Default for SecuritySection {
             sandbox_retry: None,
             sandbox_retry_allow: None,
             text_guard: TextGuard::Strict,
+            trusted_client_configs: Vec::new(),
         }
     }
 }

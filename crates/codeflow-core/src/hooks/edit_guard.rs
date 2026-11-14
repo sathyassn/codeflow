@@ -260,7 +260,7 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         Vec::new()
     };
     let authority_dirs = if ctx.level.is_active() {
-        authority_directories(ctx.home)
+        authority_directories(ctx.home)?
     } else {
         Vec::new()
     };
@@ -319,23 +319,50 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
 
 /// The operator-authority directory, `.codeflow/authority`, under the
 /// guard's home and under the account's home from the password database,
-/// each as given and resolved, with ASCII case folded. The SSH
-/// configuration allow (TSK-1184) is read under the account's home, which
-/// can differ from `HOME`, and a volume that folds case opens
-/// `.codeflow/Authority` for `.codeflow/authority`, so the exact-spelling
-/// pattern under `HOME` alone does not cover it.
-fn authority_directories(home: &Path) -> Vec<PathBuf> {
+/// with ASCII case folded. The SSH configuration allow (TSK-1184) is read
+/// under the account's home, which can differ from `HOME`, and a volume
+/// that folds case opens `.codeflow/Authority` for `.codeflow/authority`,
+/// so the exact-spelling pattern under `HOME` alone does not cover it.
+///
+/// Each directory is spelled as [`evaluate`] spells a target, so both
+/// sides of the comparison use one spelling (TSK-1400). It is joined onto
+/// the home as given, onto the home resolved through [`normalized`] (or,
+/// when that walk fails, through [`crate::portable_path::canonicalize`],
+/// which lists no directory), and onto the canonical home whenever that
+/// call succeeds; each of those directories is then kept as given, lexically
+/// normalized and, when its own walk succeeds, resolved. The resolved home
+/// is always kept, because a target that reaches the directory through a
+/// link is judged in that spelling. A home that cannot be resolved either
+/// way refuses every edit, and so does a lexical spelling that cannot be
+/// made. A home that does not exist resolves to its written spelling.
+fn authority_directories(home: &Path) -> Result<Vec<PathBuf>, EditError> {
     let mut homes = vec![home.to_path_buf()];
     homes.extend(crate::git::remote_identity::account_home().ok());
-    let resolved: Vec<PathBuf> = homes
-        .iter()
-        .filter_map(|home| std::fs::canonicalize(home).ok())
-        .collect();
-    homes.extend(resolved);
-    homes
-        .iter()
-        .map(|home| folded_path(&home.join(".codeflow/authority")))
-        .collect()
+    let mut dirs = BTreeSet::new();
+    for home in &homes {
+        let canonical = crate::portable_path::canonicalize(home).ok();
+        let resolved = match normalized(home, true) {
+            Ok(resolved) => resolved,
+            Err(error) => canonical.clone().ok_or_else(|| {
+                EditError(format!(
+                    "the home {} cannot be resolved, so no edit can be checked against the operator-authority directory under it and every edit is refused: {error}",
+                    home.display()
+                ))
+            })?,
+        };
+        for base in [Some(home.clone()), Some(resolved), canonical]
+            .into_iter()
+            .flatten()
+        {
+            let dir = base.join(".codeflow").join("authority");
+            dirs.insert(folded_path(&dir));
+            dirs.insert(folded_path(&normalized(&dir, false)?));
+            if let Ok(resolved) = normalized(&dir, true) {
+                dirs.insert(folded_path(&resolved));
+            }
+        }
+    }
+    Ok(dirs.into_iter().collect())
 }
 
 /// `path` with ASCII letters lowercased, compared by component.
@@ -1846,6 +1873,175 @@ mod tests {
                     path.display()
                 );
             }
+        }
+    }
+
+    /// Whether `target` is refused with `home` as the guard's home. An error
+    /// refuses at the hook adapter, but it is not the precise refusal these
+    /// tests want, so it fails the test with its message.
+    fn refused_under(f: &Fixture, home: &Path, target: &Path) -> bool {
+        let ctx = EditContext {
+            cwd: &f.root,
+            root: &f.root,
+            home,
+            git_common_dir: None,
+            level: PolicyLevel::Block,
+        };
+        let request = synthetic("write", json!({ "path": target }));
+        match evaluate(&request, &ctx) {
+            Ok(violations) => !violations.is_empty(),
+            Err(error) => panic!("home {}: {}: {error}", home.display(), target.display()),
+        }
+    }
+
+    /// TSK-1400: the authority directory is covered under any spelling of
+    /// the home, in any case, and an ordinary file beside it stays writable.
+    #[test]
+    fn the_authority_directory_is_covered_whatever_the_homes_spelling() {
+        let f = Fixture::new();
+        let spelled = f.temp.path().join("absent").join("..").join("home");
+        for name in [
+            ".codeflow/authority/config.toml",
+            ".codeflow/Authority/config.toml",
+            ".CODEFLOW/AUTHORITY/new",
+        ] {
+            for target in [f.home.join(name), spelled.join(name)] {
+                assert!(refused_under(&f, &spelled, &target), "{}", target.display());
+            }
+        }
+        assert!(!refused_under(
+            &f,
+            &spelled,
+            &f.home.join(".codeflow/config.toml")
+        ));
+    }
+
+    /// Restores a directory's mode when a test ends, so its temporary tree
+    /// can be removed even after a failed assertion.
+    #[cfg(unix)]
+    struct ModeGuard(PathBuf, u32);
+
+    #[cfg(unix)]
+    impl Drop for ModeGuard {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(self.1));
+        }
+    }
+
+    /// TSK-1400: the home is given through a linked ancestor, the authority
+    /// directory's parent cannot be listed, and the target names the
+    /// directory through another link, so it is judged in the canonical
+    /// spelling. The canonical home keeps that spelling covered.
+    #[cfg(unix)]
+    #[test]
+    fn the_canonical_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = Fixture::new();
+        let real = f.temp.path().join("real");
+        std::fs::create_dir_all(real.join("home/.codeflow/authority")).unwrap();
+        std::os::unix::fs::symlink(&real, f.temp.path().join("link")).unwrap();
+        let home = f.temp.path().join("link/home");
+        let canonical = std::fs::canonicalize(real.join("home/.codeflow/authority")).unwrap();
+        let door = f.temp.path().join("door");
+        std::os::unix::fs::symlink(&canonical, &door).unwrap();
+        let parent = real.join("home/.codeflow");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o100)).unwrap();
+        let _restore = ModeGuard(parent, 0o755);
+        // The hook judges inside one invocation snapshot; so does this test.
+        let _facts = RepoFactsScope::enter();
+        // Named directly, the canonical path cannot be walked either, so
+        // that edit refuses with an error; through `door` it resolves.
+        let target = door.join("config.toml");
+        assert!(refused_under(&f, &home, &target), "{}", target.display());
+    }
+
+    /// TSK-1400: a home that does not exist still lets an ordinary edit
+    /// through and covers the directory under it; a home that is a broken
+    /// link cannot be resolved, so every edit refuses.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_home_is_judged_and_an_unresolvable_home_refuses() {
+        let f = Fixture::new();
+        let missing = f.temp.path().join("missing-home");
+        assert!(!refused_under(&f, &missing, &f.root.join("notes.md")));
+        assert!(refused_under(
+            &f,
+            &missing,
+            &missing.join(".codeflow/Authority/config.toml")
+        ));
+        let broken = f.temp.path().join("broken-home");
+        std::os::unix::fs::symlink(f.temp.path().join("nowhere"), &broken).unwrap();
+        let ctx = EditContext {
+            cwd: &f.root,
+            root: &f.root,
+            home: &broken,
+            git_common_dir: None,
+            level: PolicyLevel::Block,
+        };
+        let request = synthetic("write", json!({ "path": f.root.join("notes.md") }));
+        let error = evaluate(&request, &ctx).unwrap_err().to_string();
+        assert!(error.contains(&broken.display().to_string()), "{error}");
+        assert!(error.contains("operator-authority directory"), "{error}");
+        assert!(error.contains("every edit is refused"), "{error}");
+    }
+
+    /// TSK-1400: the same coverage under the path spellings Windows accepts
+    /// for one directory. Volumes with short names disabled give the long
+    /// spelling back, which still runs every other form.
+    #[cfg(windows)]
+    #[test]
+    fn the_authority_directory_is_covered_under_windows_spellings_of_the_home() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let f = Fixture::new();
+        let home = f.temp.path().join("Long home directory name");
+        std::fs::create_dir_all(home.join(".codeflow")).unwrap();
+        let long = crate::portable_path::canonicalize(&home).unwrap();
+        let wide: Vec<u16> = long.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: the input is terminated; a null output queries the size.
+        let size = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+        assert!(size > 0, "{}", std::io::Error::last_os_error());
+        let mut short = vec![0; size as usize];
+        // SAFETY: the output has the exact size returned by the first call.
+        let written = unsafe { GetShortPathNameW(wide.as_ptr(), short.as_mut_ptr(), size) };
+        assert!(written > 0 && written < size);
+        short.truncate(written as usize);
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&short));
+        let text = |path: &Path| path.to_str().unwrap().to_string();
+        let homes = [
+            home.clone(),
+            long.clone(),
+            short.clone(),
+            PathBuf::from(text(&short).replace('\\', "/")),
+            PathBuf::from(text(&long).replace('\\', "/")),
+            PathBuf::from(text(&long).to_lowercase()),
+            PathBuf::from(text(&long).to_uppercase()),
+            PathBuf::from(format!(r"\\?\{}", text(&long))),
+            PathBuf::from(format!("{}.", text(&long))),
+        ];
+        for spelling in &homes {
+            for target in [
+                spelling.join(r".codeflow\Authority\config.toml"),
+                spelling.join(".codeflow/AUTHORITY/config.toml"),
+                spelling.join(r".codeflow\authority.\config.toml"),
+                long.join(r".codeflow\Authority\config.toml"),
+                short.join(".codeflow/Authority/config.toml"),
+                home.join(".codeflow/Authority/new"),
+            ] {
+                assert!(
+                    refused_under(&f, spelling, &target),
+                    "home {}: {}",
+                    spelling.display(),
+                    target.display()
+                );
+            }
+            assert!(
+                !refused_under(&f, spelling, &spelling.join(".codeflow/config.toml")),
+                "home {}",
+                spelling.display()
+            );
         }
     }
 

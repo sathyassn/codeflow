@@ -880,6 +880,12 @@ fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
     assert_eq!(ls_remote_calls(&a), asked, "{took:?}: {text}");
 }
 
+/// `url` as a refusal shows it: each backslash escaped, as every message
+/// shows text a configuration or a remote supplies (TSK-388).
+fn shown(url: &str) -> String {
+    codeflow_core::git::display_text(url)
+}
+
 /// TSK-1184 AC-1, AC-3 and AC-5: a fresh adopter whose remote is empty and
 /// configured as git uses it is labelled initialization, and its first push
 /// passes the guard and the pre-push hook. When an `insteadOf` rewrite makes
@@ -888,8 +894,16 @@ fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
 #[test]
 fn a_rewritten_empty_remote_refuses_and_a_matching_fresh_remote_pushes() {
     let a = Adopter::new();
-    let empty = a.temp.path().join("empty.git");
-    let populated = a.temp.path().join("populated.git");
+    // A directory name holding a backslash gives every host what Windows
+    // paths always carry: messages show each backslash escaped (TSK-1400).
+    let remotes = a.temp.path().join(if cfg!(windows) {
+        "remotes"
+    } else {
+        r"back\slash"
+    });
+    std::fs::create_dir(&remotes).unwrap();
+    let empty = remotes.join("empty.git");
+    let populated = remotes.join("populated.git");
     let empty = empty.to_str().unwrap();
     let populated = populated.to_str().unwrap();
     for bare in [empty, populated] {
@@ -923,19 +937,23 @@ fn a_rewritten_empty_remote_refuses_and_a_matching_fresh_remote_pushes() {
     a.git(&["config", &format!("url.{populated}.insteadOf"), empty]);
     let text = a.doctor();
     println!("rewritten remote:\n{text}");
-    assert!(text.contains(empty) && text.contains(populated), "{text}");
+    let (shown_empty, shown_populated) = (shown(empty), shown(populated));
+    assert!(
+        text.contains(&shown_empty) && text.contains(&shown_populated),
+        "{text}"
+    );
     assert!(text.contains("never read from HEAD"), "{text}");
     assert!(!text.contains("initialization"), "{text}");
     let guard = a.guard("git commit -m 'docs: x'");
     let text = said(&guard);
     println!("git-guard, rewritten remote:\n{text}");
     assert_eq!(guard.status.code(), Some(2), "{text}");
-    assert!(text.contains(populated), "{text}");
+    assert!(text.contains(&shown_populated), "{text}");
     a.write("README.md", "second\n");
     a.git(&["add", "README.md"]);
     let commit = a.codeflow(&["git-hook", "pre-commit"], "");
     let text = said(&commit);
     println!("pre-commit, rewritten remote:\n{text}");
     assert_ne!(commit.status.code(), Some(0), "{text}");
-    assert!(text.contains(populated), "{text}");
+    assert!(text.contains(&shown_populated), "{text}");
 }
