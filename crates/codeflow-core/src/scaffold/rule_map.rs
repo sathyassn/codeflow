@@ -108,6 +108,185 @@ pub fn codex_instruction_limit(root: &std::path::Path) -> std::io::Result<(usize
     ))
 }
 
+/// Which Codex config supplied the budget an override is held to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetSource {
+    /// Codex's default, [`CODEX_INSTRUCTION_LIMIT_BYTES`].
+    Default,
+    /// A lower `project_doc_max_bytes` in the project's `.codex/config.toml`.
+    ProjectConfig,
+    /// A lower `project_doc_max_bytes` in the user's Codex config.
+    UserConfig,
+}
+
+/// The Codex home a user config would load from: `CODEX_HOME` when it is
+/// set and not empty, else `.codex` under the user's home; `None` when
+/// neither can be determined.
+#[must_use]
+pub fn codex_home() -> Option<std::path::PathBuf> {
+    codex_home_from(
+        std::env::var_os("CODEX_HOME"),
+        crate::portable_path::user_home(),
+    )
+}
+
+/// [`codex_home`] from the values it reads.
+#[must_use]
+pub fn codex_home_from(
+    codex_home: Option<std::ffi::OsString>,
+    user_home: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    codex_home
+        .filter(|home| !home.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| user_home.map(|home| home.join(".codex")))
+}
+
+/// The Codex config a limit is read from.
+#[derive(Clone, Copy)]
+enum ConfigLayer {
+    Project,
+    User,
+}
+
+/// The `project_doc_max_bytes` the Codex config at `path` sets: `None` when
+/// the file or the key is absent, and a fixed reason when the file is not a
+/// regular, readable, parseable file or the key is not a positive integer.
+fn strict_config_limit(
+    path: &std::path::Path,
+    layer: ConfigLayer,
+) -> Result<Option<usize>, &'static str> {
+    let (absent, not_regular, unreadable, unparsed, not_positive) = match layer {
+        ConfigLayer::Project => (
+            "the project's Codex config file's absence cannot be proven",
+            "the project's Codex config file is not a readable regular file",
+            "the project's Codex config file cannot be read",
+            "the project's Codex config file does not parse",
+            "project_doc_max_bytes in the project's Codex config file is not a positive integer",
+        ),
+        ConfigLayer::User => (
+            "the user's Codex config file's absence cannot be proven",
+            "the user's Codex config file is not a readable regular file",
+            "the user's Codex config file cannot be read",
+            "the user's Codex config file does not parse",
+            "project_doc_max_bytes in the user's Codex config file is not a positive integer",
+        ),
+    };
+    if crate::absence::proven_absent(path).map_err(|_| absent)? {
+        return Ok(None);
+    }
+    if !std::fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return Err(not_regular);
+    }
+    let text = std::fs::read_to_string(path).map_err(|_| unreadable)?;
+    let value: toml::Value = text.parse().map_err(|_| unparsed)?;
+    let Some(setting) = value.get("project_doc_max_bytes") else {
+        return Ok(None);
+    };
+    setting
+        .as_integer()
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .filter(|bytes| *bytes > 0)
+        .map(Some)
+        .ok_or(not_positive)
+}
+
+/// The most instruction bytes an override may leave Codex to load in the
+/// project under `root`: [`CODEX_INSTRUCTION_LIMIT_BYTES`], lowered by a
+/// smaller `project_doc_max_bytes` in the project's `.codex/config.toml` or
+/// in `codex_home`'s `config.toml`. A configured value never raises the
+/// budget. Codex's order, highest first, is command line flags, project
+/// config, profile, user config, cloud-managed config, system config; it
+/// skips an untrusted project's config, and a nested project config can set
+/// its own value. A flag or nested project config can replace the project
+/// value and a profile the user value, so an override must hold under every
+/// value a session may run with, not under the most generous. Flags,
+/// profiles, nested project configs, cloud-managed and system config are
+/// not read, so a limit lower than the budget that only they set is not
+/// seen.
+///
+/// Fails closed: a config that is not a regular, readable, parseable file,
+/// or whose `project_doc_max_bytes` is not a positive integer, leaves the
+/// budget undetermined. A `codex_home` of `None` (no home can be found)
+/// means no user config.
+///
+/// # Errors
+///
+/// A fixed reason, naming no path, when the budget cannot be determined.
+pub fn instruction_budget(
+    root: &std::path::Path,
+    codex_home: Option<&std::path::Path>,
+) -> Result<(usize, BudgetSource), &'static str> {
+    let mut budget = (CODEX_INSTRUCTION_LIMIT_BYTES, BudgetSource::Default);
+    let project = strict_config_limit(&root.join(".codex/config.toml"), ConfigLayer::Project)?;
+    if let Some(bytes) = project.filter(|bytes| *bytes < budget.0) {
+        budget = (bytes, BudgetSource::ProjectConfig);
+    }
+    if let Some(home) = codex_home {
+        let user = strict_config_limit(&home.join("config.toml"), ConfigLayer::User)?;
+        if let Some(bytes) = user.filter(|bytes| *bytes < budget.0) {
+            budget = (bytes, BudgetSource::UserConfig);
+        }
+    }
+    Ok(budget)
+}
+
+/// The instruction file Codex loads from `dir` and its size: the override
+/// file when it is not empty, else `AGENTS.md`; `None` when neither holds
+/// bytes.
+///
+/// # Errors
+///
+/// A candidate's absence cannot be proven or its metadata cannot be read.
+pub(crate) fn instruction_file(
+    dir: &std::path::Path,
+) -> std::io::Result<Option<(&'static str, usize)>> {
+    for name in ["AGENTS.override.md", "AGENTS.md"] {
+        let path = dir.join(name);
+        if crate::absence::proven_absent(&path)? {
+            continue;
+        }
+        let bytes = std::fs::metadata(path)?.len();
+        if bytes > 0 {
+            return Ok(Some((name, usize::try_from(bytes).unwrap_or(usize::MAX))));
+        }
+    }
+    Ok(None)
+}
+
+/// The bytes Codex loads before the instruction file in the directory of
+/// `dest` (a path relative to `root`): the instruction files of every
+/// directory above it, from the project root down.
+///
+/// # Errors
+///
+/// An ancestor's instruction file cannot be inspected ([`instruction_file`]).
+pub(crate) fn ancestor_instruction_bytes(
+    root: &std::path::Path,
+    dest: &str,
+) -> std::io::Result<usize> {
+    let parts: Vec<_> = std::path::Path::new(dest)
+        .parent()
+        .map(|parent| parent.components().collect())
+        .unwrap_or_default();
+    // `dest` in the root has no ancestor. Otherwise the root, then every
+    // directory of its path except the last, which holds `dest` itself.
+    let Some((_, above)) = parts.split_last() else {
+        return Ok(0);
+    };
+    let mut total = 0;
+    let mut dir = root.to_path_buf();
+    for part in std::iter::once(None).chain(above.iter().map(Some)) {
+        if let Some(part) = part {
+            dir.push(part);
+        }
+        if let Some((_, bytes)) = instruction_file(&dir)? {
+            total += bytes;
+        }
+    }
+    Ok(total)
+}
+
 /// The bytes by which a complete `AGENTS.md` (managed block and project
 /// section together) passes Codex's instruction limit, or `None` when the
 /// whole document fits. The whole document is measured because Codex cuts
@@ -206,15 +385,48 @@ pub enum BlockKind {
 }
 
 /// One always rule: a single line with at least one pointer.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
+    /// What the project override route may do with this rule (TSK-1302);
+    /// `None` is never overridden, and the shipped kernel has none.
+    #[serde(default)]
+    pub class: Option<UnitClass>,
+    /// Why a `fixed` rule is not an override target.
+    #[serde(default)]
+    pub fixed_reason: Option<String>,
     #[serde(default)]
     pub tiers: Option<Vec<Tier>>,
     pub title: String,
     pub text: String,
     pub see: Vec<String>,
+}
+
+/// The class a managed instruction unit declares for the project override
+/// route (TSK-1302). Only `Overridable` can be the target of an override;
+/// a unit with no class is treated like `Fixed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitClass {
+    /// States a floor named in `instruction-floors.toml`.
+    Floor,
+    /// Not a text-override target, for a recorded reason.
+    Fixed,
+    /// A project may replace it through `.codeflow/overrides.toml`.
+    Overridable,
+}
+
+impl UnitClass {
+    /// The class's name as the kernel and the section markers spell it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Floor => "floor",
+            Self::Fixed => "fixed",
+            Self::Overridable => "overridable",
+        }
+    }
 }
 
 /// Which of the map's two tables a moment row belongs to.
@@ -234,10 +446,16 @@ pub const DELIVERY_LEAD: &str = "Delivery, in the order work moves:";
 pub const SITUATION_LEAD: &str = "Situations that cut across stages:";
 
 /// One row of the "when you are about to" table.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Moment {
     pub key: String,
+    /// What the project override route may do with this row (TSK-1302).
+    #[serde(default)]
+    pub class: Option<UnitClass>,
+    /// Why a `fixed` row is not an override target.
+    #[serde(default)]
+    pub fixed_reason: Option<String>,
     pub group: Group,
     #[serde(default)]
     pub tiers: Option<Vec<Tier>>,
@@ -494,7 +712,14 @@ impl Kernel {
     /// pointer when that is the tier's shared home ([`Self::rule_home`]).
     #[must_use]
     pub fn render_rule_at(&self, tier: Tier, rule: &Rule) -> String {
-        let shared = matches!((self.rule_home(tier), rule.see.as_slice()), (Some(home), [only]) if only == home);
+        Self::render_rule_with_home(self.rule_home(tier), rule)
+    }
+
+    /// One always rule as the line a map whose shared home is `home`
+    /// carries ([`Self::render_rule_at`] for a known home).
+    #[must_use]
+    pub fn render_rule_with_home(home: Option<&str>, rule: &Rule) -> String {
+        let shared = matches!((home, rule.see.as_slice()), (Some(home), [only]) if only == home);
         if shared {
             format!("- **{}** {}", rule.title, rule.text)
         } else {
@@ -514,6 +739,17 @@ impl Kernel {
                 render_pointer(home)
             );
         }
+    }
+
+    /// One moment as its rendered table row.
+    #[must_use]
+    pub fn render_moment(moment: &Moment) -> String {
+        format!(
+            "| {} | {} | {} |",
+            moment.when,
+            moment.action,
+            render_moment_pointers(&moment.see)
+        )
     }
 
     fn render_moments(&self, tier: Tier, out: &mut String) {
@@ -537,13 +773,8 @@ impl Kernel {
                 "{lead}\n\n| About to | Do this | Read |\n|---|---|---|\n"
             );
             for moment in group_rows {
-                let _ = writeln!(
-                    out,
-                    "| {} | {} | {} |",
-                    moment.when,
-                    moment.action,
-                    render_moment_pointers(&moment.see)
-                );
+                out.push_str(&Self::render_moment(moment));
+                out.push('\n');
             }
         }
     }
@@ -609,6 +840,8 @@ mod tests {
     fn a_rule_renders_as_one_line_with_its_pointers() {
         let rule = Rule {
             id: "x".into(),
+            class: None,
+            fixed_reason: None,
             tiers: None,
             title: "Title.".into(),
             text: "Text.".into(),

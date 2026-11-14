@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-six checks fall into six groups by the surface they read, and only twelve of them can fail; the other fourteen warn at most.",
-    "title": "The twenty-six checks, by what they read",
+    "idea": "The twenty-seven checks fall into six groups by the surface they read, and only thirteen of them can fail; the other fourteen warn at most.",
+    "title": "The twenty-seven checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, project overrides, the id registry or adopter fit.",
     "states": [
       {
         "name": "canfail",
@@ -23,12 +23,12 @@
     ],
     "facts": [
       {
-        "claim": "twelve checks can fail",
+        "claim": "thirteen checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
+          "text": "Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
         },
         "value": true
       },
@@ -54,7 +54,7 @@
     ],
     "wide": {
       "width": 720,
-      "height": 382,
+      "height": 410,
       "draw": [
         {
           "text": "Hooks, CI, host rules",
@@ -481,12 +481,29 @@
           "cx": 568,
           "cy": 287,
           "r": 7,
+          "id": "g4c3"
+        },
+        {
+          "text": "overrides",
+          "x": 584,
+          "y": 292,
+          "style": "mono",
+          "for": [
+            "g4c3"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 239,
+          "cy": 315,
+          "r": 7,
           "id": "g4c2"
         },
         {
           "text": "id-registry",
-          "x": 584,
-          "y": 292,
+          "x": 255,
+          "y": 320,
           "style": "mono",
           "for": [
             "g4c2"
@@ -496,28 +513,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 310,
+          "y1": 338,
           "x2": 704,
-          "y2": 310
+          "y2": 338
         },
         {
           "text": "Customization, tests",
           "x": 16,
-          "y": 338,
+          "y": 366,
           "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
           "cx": 239,
-          "cy": 333,
+          "cy": 361,
           "r": 7,
           "id": "g5c0"
         },
         {
           "text": "customization",
           "x": 255,
-          "y": 338,
+          "y": 366,
           "style": "mono",
           "for": [
             "g5c0"
@@ -527,14 +544,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 399,
-          "cy": 333,
+          "cy": 361,
           "r": 7,
           "id": "g5c1"
         },
         {
           "text": "instructions",
           "x": 415,
-          "y": 338,
+          "y": 366,
           "style": "mono",
           "for": [
             "g5c1"
@@ -544,14 +561,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 239,
-          "cy": 361,
+          "cy": 389,
           "r": 7,
           "id": "g5c2"
         },
         {
           "text": "reading",
           "x": 255,
-          "y": 366,
+          "y": 394,
           "style": "mono",
           "for": [
             "g5c2"
@@ -561,14 +578,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 349,
-          "cy": 361,
+          "cy": 389,
           "r": 7,
           "id": "g5c3"
         },
         {
           "text": "test-config",
           "x": 365,
-          "y": 366,
+          "y": 394,
           "style": "mono",
           "for": [
             "g5c3"
@@ -1021,6 +1038,23 @@
           ]
         },
         {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 170,
+          "cy": 479,
+          "r": 7,
+          "id": "g4c3"
+        },
+        {
+          "text": "overrides",
+          "x": 184,
+          "y": 484,
+          "style": "mono",
+          "for": [
+            "g4c3"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1133,7 +1167,7 @@
         ],
         [
           "Repository, managed files",
-          "`repo-integrity`, `id-registry`",
+          "`repo-integrity`, `overrides`, `id-registry`",
           "`managed-drift`"
         ],
         [

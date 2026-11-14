@@ -153,6 +153,7 @@ or project document. The presentation history is not a second work authority.
 - Keep raw feedback and exports untracked unless the user explicitly promotes
   them to a named durable path.
 
+<!-- codeflow:section id=completion class=overridable -->
 ## Completion
 
 Return the handoff line, purpose, requested decision, durable outcomes

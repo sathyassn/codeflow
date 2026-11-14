@@ -36,6 +36,18 @@ impl PendingResolution {
         dest: &str,
         installed: &InstalledManifest,
     ) -> Result<Option<Self>, ScaffoldError> {
+        Self::read_projected(root, dest, installed, None)
+    }
+
+    /// As [`PendingResolution::read`], with `baseline` read in place of the
+    /// baseline on disk when an update has decided, but not yet written, a
+    /// new one (TSK-1302 recovery).
+    pub fn read_projected(
+        root: &Path,
+        dest: &str,
+        installed: &InstalledManifest,
+        baseline: Option<&str>,
+    ) -> Result<Option<Self>, ScaffoldError> {
         let text = read_beneath_root(root, &path(dest))?;
         // Preserve update's existing skip for an unsafe live destination when
         // it has no pending resolution. Pending paths always fail closed.
@@ -70,7 +82,10 @@ impl PendingResolution {
                 ),
             )
         })?;
-        let baseline = Baseline::read(root, dest)?;
+        let baseline = match baseline {
+            Some(text) => Some(text.to_string()),
+            None => Baseline::read(root, dest)?,
+        };
         let recorded = installed.files.get(dest).map(|file| file.sha256.as_str());
         let base_hash = baseline
             .as_ref()

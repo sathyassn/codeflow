@@ -360,6 +360,7 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 | Unparsable `scaffold_version` | Both commands refuse and name the value and `.codeflow/project.toml`; correct it and retry |
 | Binary released before this safeguard | Can still lower the pin and replace managed files with older assets |
 | Unmodified managed file | Replaced |
+| Project overrides in `.codeflow/overrides.toml` | Applies each declared replacement of a managed rule, table row or skill section and keeps it through later updates; see [override managed instructions](model-upgrades.md#override-managed-instructions) |
 | Managed file you changed | 3-way merged from the baseline; anything that cannot merge is written beside it as `<name>.new` with a report entry, never clobbered or skipped. `--force` replaces instead of merging |
 | Pending conflict resolution | Keep `.codeflow/.pending-update/` until update accepts the resolution. It holds pristine candidate content; the baseline and manifest always describe shipped content, never the resolved file |
 | Resolved file with no `.new` | Removing the proposal confirms the live resolution, including a choice to keep the original file. Update records the saved shipped baseline. The same release reports retained customisation as `kept (user-modified)`; later changes merge from that base |
