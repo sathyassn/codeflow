@@ -292,11 +292,15 @@ pub const SCHEMA: [KeySpec; 82] = [
                 hands text it produces to a shell or interpreter on the line (through a pipe, \
                 a here-string, a here-document it expands, a process substitution, `eval`, a \
                 `-c` or `-e` value it expands, a command word it fills in, or a supplier that \
-                runs a command built from what it reads), that text counts only as one \
-                `printf`, `echo` or `print` of plain literal text, or a literal here-string \
-                or here-document, and is judged as the executor reads it; a plain file the \
-                line does not otherwise name counts as that file run directly; any other \
-                such line refuses whatever it names. A run whose program word \
+                runs a command built from what it reads), or hands text it spells to a \
+                program the guard does not know to read only data (through a pipe, a \
+                here-string, a here-document or a process substitution), that text counts \
+                only as one `printf`, `echo` or `print` of plain literal text, or a literal \
+                here-string or here-document, and is judged as the executor reads it; a \
+                plain file counts as that file run directly on a line that writes no file, \
+                and a line of more than one command that writes a file and also runs one (a script given to a shell, \
+                `source` or an interpreter, a file fed to one, or a path run as a program) \
+                refuses; any other such line refuses whatever it names. A run whose program word \
                 or first operand the guard cannot resolve, and a run inside a quoted argument \
                 or an assigned value, refuse too (TSK-1476). The guard's checks on printed \
                 text are partial. Text a line writes to a process started earlier that \
