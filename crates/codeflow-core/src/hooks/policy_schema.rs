@@ -306,29 +306,39 @@ pub const SCHEMA: [KeySpec; 82] = [
                 and refuses whatever it names when it takes another form. No interpreter and no \
                 program with an option that runs a program, such as `sort`, is a data \
                 reader. A plain file counts as that file run directly on a line that writes \
-                no file. A line that writes text it spells to a file runs no other program \
-                except ones that never run file text: printers, data readers such as \
-                `cat`, `grep`, `head`, `tail`, `wc`, `diff` and `jq`, file programs such \
-                as `cp`, `mv`, `ln`, `chmod`, `rm` and `mkdir`, a few shell builtins, and \
-                `git add` with no configuration option, each by its plain name, with \
-                an assignment only where every program is a builtin. Any other such line \
-                of more than one command refuses whatever it names, since a program can \
-                run a file the line never names (a default file, a loader option, a \
-                configuration file); write the file on one line and run the program on \
-                the next. These refusals take this key's level: `warn` reports them and \
-                `off` drops them. A run whose program word \
+                no file. A line of more than one command that writes text it spells to a \
+                file refuses whatever else is on it, since a program can run a file the \
+                line never names (a default file, a loader option, a configuration file), \
+                the shell finds a program's name on the path, where the line may write a \
+                file of that name, and the shell itself runs text it evaluates. One simple \
+                command whose writes come after everything it runs, such as `printf x > \
+                notes.txt` or `echo \"$(date)\" > out.txt`, stays allowed, and so does a \
+                file written with a program's own output, such as `cargo build > build.log \
+                2>&1 && grep error build.log`; write the file on one line and run the next \
+                command on the next line. Text the shell evaluates as arithmetic is judged \
+                as command text, and where it reads a program's output or a value the \
+                guard cannot settle, the line refuses; compare a program's output with \
+                `test` or `[`, which do not evaluate it. A variable such text reads that \
+                the shell sets from text on the line, or that the line assigns in a way \
+                no word on it shows, counts as a value the guard cannot settle, and text \
+                the shell expands as a prompt has each substitution in it judged as a \
+                command line. These refusals take this key's \
+                level: `warn` reports them and `off` drops them. A run whose program word \
                 or first operand the guard cannot resolve, and a run inside a quoted argument \
                 or an assigned value, refuse too (TSK-1476). The guard's checks on printed \
                 text are partial. Text a line writes to a process started earlier that \
                 executes what it reads (a named pipe, a descriptor, a background shell) is a \
                 named residual, in the same class as the verb's words written to a file and \
-                run later. So are a binary an agent renames or copies, text a program on the \
+                run later. So are a file one line writes that a later line runs, a file \
+                one program's output writes that a later program on the same line reads or \
+                runs, a binary an agent renames or copies, text a program on the \
                 line runs through its own command language when it is not a shell or \
                 interpreter reading code, the output of a program the line runs (other \
                 than `printf`, `echo` and `print`) when a program the guard does not know \
                 receives it, and state the line does not show (a file's \
                 contents, output a program hands to a shell it starts itself such as a Git \
-                pager, an exported variable, a shell alias or function from a profile, a \
+                pager, an exported variable or a variable's attributes, a builtin name that \
+                a shell alias, function or loaded module from a profile redefines, a \
                 program put first on the path): none of them is named on the line. Other \
                 layers \
                 hold against these in part: once a repository's remote has a default branch, \
