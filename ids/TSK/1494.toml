@@ -1,0 +1,11 @@
+id = "TSK-1494"
+uid = "8291a2a0-e1df-4ac7-9f23-7f1fba487363"
+kind = "TSK"
+title = "The capabilities page renders in the docs portal and an unrendered page fails the gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:32:03Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
