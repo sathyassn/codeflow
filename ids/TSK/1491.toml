@@ -1,0 +1,11 @@
+id = "TSK-1491"
+uid = "c4366435-cac4-4eb2-b3ea-af8f3764bb45"
+kind = "TSK"
+title = "Certified prose skips the floor checks only when it writes to no named destination"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T01:46:22Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
