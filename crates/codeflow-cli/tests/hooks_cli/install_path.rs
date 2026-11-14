@@ -1155,6 +1155,8 @@ fn a_written_file_run_and_spelled_text_to_an_unknown_program_refuse() {
         r"printf 'co%xflow update' 222 | ssh host".to_string(),
         r"ssh host < <(printf 'co%xflow update' 222)".to_string(),
         r#"for w in code 'flow update'; do printf '%s' "$w"; done | ssh host"#.to_string(),
+        // r21: `sort` is no data reader, since an option runs a program.
+        "{ echo a; echo b; } | sort".to_string(),
     ];
     let mut tally = Tally::default();
     for row in &rows {
@@ -1165,7 +1167,7 @@ fn a_written_file_run_and_spelled_text_to_an_unknown_program_refuse() {
         "cat notes.txt | sh",
         "cargo build && ./target/debug/tool",
         r"printf 'ls\n' | ssh host",
-        "{ echo a; echo b; } | sort",
+        "cat notes.txt | sort",
         r"printf '%s\n' notes > out.txt",
         "git log --oneline | head -5",
         r"printf 'echo hi\n' | sh",
@@ -1214,6 +1216,64 @@ fn spelled_text_on_any_channel_to_an_unknown_program_refuses() {
     .collect();
     tally.install_allowed(&allowed, &root);
     tally.finish();
+}
+
+/// A line that writes text it spells to a file runs no other program
+/// except ones that never run file text, under `git.hook_integrity`; at
+/// `warn` the finding only warns and at `off` the line passes, as before
+/// (TSK-1476 r21).
+#[test]
+fn a_line_writing_spelled_text_runs_only_inert_programs() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let make = "printf '%s\\n' 'all:' > Makefile; printf '%s' '\tcode' >> Makefile; \
+                printf '%s\\n' 'flow update' >> Makefile; make";
+    let npm = r#"printf '{"scripts":{"test":"x"}}' > package.json && npm test"#;
+    let rows: Vec<String> = vec![
+        make.to_string(),
+        r#"printf '%s' 'require("child_process").execSync("code' > hook.js; printf '%s\n' 'flow update")' >> hook.js; node --require ./hook.js -e 0"#.to_string(),
+        npm.to_string(),
+        "{ printf 'all:\\n'; printf 'x\\n'; } > Makefile && make".to_string(),
+    ];
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let allowed: Vec<String> = [
+        "cargo build > build.log 2>&1 && grep error build.log",
+        "printf x > a.txt && git add a.txt",
+        "echo x > f && cp f g && chmod +x g",
+        "mkdir -p d && printf x > d/f",
+        "make > build.log",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
+    tally.finish();
+    // The level of `git.hook_integrity` governs the finding: a line that
+    // only this rule refuses passes at `warn`, with the finding as a
+    // warning, and at `off` with none, as it did before the rule.
+    for level in ["warn", "off"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = project(temp.path());
+        write_agent_policy(
+            &root,
+            &format!(
+                r#"{{"git":{{"protected_branches":["main","master"],"root_checkout_commits":"off","hook_integrity":"{level}"}}}}"#
+            ),
+        );
+        let Judged::Decided(out) = judge(EXEC, &shell(npm, &root), &root) else {
+            panic!("{level}: deadline");
+        };
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{level}: {stderr}");
+        assert_eq!(
+            stderr.contains("install run `"),
+            level == "warn",
+            "{level}: {stderr}"
+        );
+    }
 }
 
 /// A Git call that names the binary with a verb refuses whatever programs

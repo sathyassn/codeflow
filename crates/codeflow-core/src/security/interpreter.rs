@@ -7494,9 +7494,9 @@ mod tests {
                 "arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
             ],
         );
-        // The interpreter reads this output as data, not code (TSK-1476
-        // r18): an unsettled printer refuses only where its text runs.
-        assert_public_allowed(
+        // An interpreter is not a data reader (TSK-1476 r21): an unsettled
+        // printer it reads refuses as unsettled, and only so.
+        assert_only_unsettled(
             &repo,
             &["printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'"],
         );
@@ -7573,14 +7573,21 @@ mod tests {
                 // Program output is outside text (operator boundary, 2026-10-15).
                 "echo \"Done $(date)\"; python3 src/app.py",
                 // Ordinary globs an output builtin writes.
-                "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo *.txt; python3 src/app.py",
-                "echo ok src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$TAG\" *.txt; python3 src/app.py",
-                "echo notes$(/bin/cat /dev/null).txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo notes.txt \"$(/bin/cat /dev/null)\"; python3 src/app.py",
-                // Round 16: a quoted parameter named like a protected
-                // component is a name, not spelled text.
+            ],
+        );
+        // An interpreter is not a data reader (TSK-1476 r21): text the line
+        // spells that it reads, and the guard cannot settle, refuses as
+        // unsettled, and only so. A quoted parameter named like a protected
+        // component (round 16) and an ordinary glob are names, not paths.
+        assert_only_unsettled(
+            &repo,
+            &[
+                "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo ok src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo notes$(/bin/cat /dev/null).txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$config\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$hooks\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$policy.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
@@ -7591,8 +7598,9 @@ mod tests {
             &repo,
             &["source venv/bin/activate && echo ok && python3 src/app.py"],
         );
-        // Data on the interpreter's input, not code (TSK-1476 r18).
-        assert_public_allowed(
+        // Spelled text on an interpreter's input, allowed as data at r18,
+        // refuses as unsettled since no interpreter is a data reader (r21).
+        assert_only_unsettled(
             &repo,
             &["f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'"],
         );

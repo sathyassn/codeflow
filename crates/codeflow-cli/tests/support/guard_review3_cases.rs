@@ -54,7 +54,9 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
     (44, "exec-guard", "cat <<'E' > x.py; /usr/bin/python3 x.py\nopen(\"@HOME@/.codex/auth.json\").read()\nE", true),
     (44, "exec-guard", "ln -s clean l; cat <<'E' > l/x.py; python3 clean/x.py\nopen(\"@HOME@/.codex/auth.json\").read()\nE", true),
     (44, "exec-guard", "cat <<'E' > x.py; python3 x*.py\nopen(\"@HOME@/.codex/auth.json\").read()\nE", true),
-    (44, "", "cat <<'E' > notes.txt; python3 -c 'print(\"hello\")'\nordinary data\nE", false),
+    // TSK-1476 r21: a line that writes text it spells to a file runs only
+    // programs that never run file text.
+    (44, "exec-guard", "cat <<'E' > notes.txt; python3 -c 'print(\"hello\")'\nordinary data\nE", true),
     (44, "", "cat <<'E' > notes.txt\nopen(\".codeflow/policy.json\",\"w\")\nE", false),
     // TSK-1476: a line that writes a file and also runs one refuses, so
     // the two steps run on lines of their own.
@@ -105,7 +107,9 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
     (49, "exec-guard", "cp -r ~ out", true),
     (50, "", "declare -a arr=(1 2)", false),
     (50, "", "gzip -c < clean/notes.rs > out.gz", false),
-    (50, "", "cat ~/.zshrc | sort | uniq -c | head", false),
+    // TSK-1476 r21: `sort` is no data reader (an option runs a program),
+    // so text the guard does not settle refuses when piped into it.
+    (50, "exec-guard", "cat ~/.zshrc | sort | uniq -c | head", true),
     (50, "", "git -c core.pager=true diff ~", false),
     (50, "", "python3 -c 'print(\"/\")'", false),
     (50, "", "python3 -c 'print(\"~\")'", false),

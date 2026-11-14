@@ -1374,7 +1374,6 @@ mod tests {
             r"printf '\u0063odeflow update' > commands.fifo",
             r"printf '\U00000063odeflow update' > commands.fifo",
             r"printf 'cod\0eflow update' > commands.fifo",
-            r"printf '%s\n' '\143odeflow update' | xargs printf > commands.fifo",
             r"printf '%d %s\n' 1 '\143odeflow update' > commands.fifo",
             r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
             r"echo -n '\143odeflow update' > commands.fifo",
@@ -1427,10 +1426,6 @@ mod tests {
             "printf 'co%xflow update' 222 > tool; chmod +x tool; dir/tool".to_string(),
             "sh -c 'printf co > r.sh; printf \"flow update\" >> r.sh; sh r.sh'".to_string(),
             "case a in a) printf 'co%xflow update' 222 > r.sh; sh r.sh;; esac".to_string(),
-            // AC-6: the steps on lines of their own stay allowed.
-            "python3 gen.py > out.json; python3 use.py out.json".to_string(),
-            "/bin/ln src/app.py H && dd if=/dev/null of=H".to_string(),
-            "./scripts/check.sh 2>&1 | tee check.log".to_string(),
         ];
         let allow = [
             "sh scripts/test.sh",
@@ -1449,6 +1444,11 @@ mod tests {
             "gtee out.log < /dev/null",
             "python3 gen.py > out.json",
             "python3 use.py out.json",
+            // A file written with a program's output, not text the line
+            // spells, is the named residual (r21).
+            "python3 gen.py > out.json; python3 use.py out.json",
+            "/bin/ln src/app.py H && dd if=/dev/null of=H",
+            "./scripts/check.sh 2>&1 | tee check.log",
         ];
         let refuse: Vec<&str> = refuse.iter().map(String::as_str).collect();
         let wrong = misjudged(&refuse, &allow);
@@ -1487,10 +1487,13 @@ mod tests {
             r#"{ sh -c "printf 'co%xflow update' 222 | ssh host"; }"#,
             r"case a in a|b) printf 'co%xflow update' 222 | ssh host;; esac",
             r"case $x in (a) true;; *) printf 'co%xflow update' 222 | mytool; esac",
+            // AC-6 (r21): `sort` can hand what it reads to a program an
+            // option names, so it is not a data reader.
+            "{ echo a; echo b; } | sort",
+            r"printf '%x\n' 255 | sort",
         ];
         let allow = [
             r"printf 'ls\n' | ssh host",
-            "{ echo a; echo b; } | sort",
             "git log --oneline | head -5",
             r"printf 'echo hi\n' | sh",
             "git log | ssh host 'cat > log.txt'",
@@ -1500,7 +1503,6 @@ mod tests {
             r"printf 'a\nb\n' | while read -r l; do echo $l; done",
             "git ls-files | while read -r f; do wc -l \"$f\"; done",
             r#"for f in a b; do echo "== $f"; cargo test -p "$f" 2>&1 | tail -3; done"#,
-            r"printf '%x\n' 255 | sort",
             r"printf '%x\n' 255 | xargs echo",
             "diff <(printf 'a\\n') <(printf 'b\\n')",
             r"{ git log; git status; } | ssh host 'cat > log.txt'",
@@ -1583,7 +1585,6 @@ mod tests {
             "if true; then D=/; D=build; rm -rf \"$D\"; fi",
             "printf note > notes.txt && git add notes.txt",
             "ln -s src/app.py app && printf x > app",
-            "printf x > run; chmod +x run; env PATH=. ls",
             "echo x | tee \"$TMPDIR/run.log\" | grep -E \"SURVIVED|MISSING\"",
             "diff <(sort a.txt) <(sort b.txt)",
             "ssh host \"$(printf 'ls')\"",
@@ -1607,6 +1608,81 @@ mod tests {
             "for f in a b; do wc -l \"$f\"; done",
         ];
         let refuse: Vec<&str> = refuse.iter().map(String::as_str).collect();
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A line of more than one command that writes text it spells to a
+    /// file runs no other program except ones that never run file text,
+    /// whatever file the program would run and however it finds it: a
+    /// default file, a loader option, a configuration file (TSK-1476 r21).
+    #[test]
+    fn a_line_writing_spelled_text_to_a_file_runs_only_inert_programs() {
+        let refuse = [
+            // A default file, and a loader option, the line never names
+            // where the program runs.
+            "printf '%s\\n' 'all:' > Makefile; printf '%s' '\tcode' >> Makefile; printf '%s\\n' 'flow update' >> Makefile; make",
+            r#"printf '%s' 'require("child_process").execSync("code' > hook.js; printf '%s\n' 'flow update")' >> hook.js; node --require ./hook.js -e 0"#,
+            r#"printf '{"scripts":{"test":"x"}}' > package.json && npm test"#,
+            "printf 'import os' > mod.py && python -m mod",
+            "printf 'default:\\n\\tx\\n' > justfile && just",
+            "printf 'task :default' > Rakefile && rake",
+            "printf 'fn main(){}' > build.rs && cargo test",
+            "printf x > h.js; node h.js",
+            "printf 'all:' > Makefile; env make",
+            "printf 'all:' > Makefile; exec make",
+            // The writer inside a group, a subshell, a loop or a
+            // substitution, or a compound command's output to the file.
+            "{ printf 'all:\\n\\tx\\n' > Makefile; }; make",
+            "( printf 'all:\\n' > Makefile ); make",
+            "for f in Makefile; do printf 'all:\\n' > \"$f\"; done; make",
+            "for w in all: x; do printf '%s\\n' \"$w\"; done > Makefile; make",
+            "{ printf 'all:\\n'; printf 'x\\n'; } > Makefile && make",
+            "x=$(printf 'all:' > Makefile); make",
+            "printf 'all:\\n' | { cat; } > Makefile; make",
+            // Each writer: a pipe into tee or dd, a here-string, sed, an
+            // output process substitution, eval and a shell's code.
+            "printf 'all:\\n' | tee Makefile; make",
+            "printf 'all:\\n' | dd of=Makefile; make",
+            "cat <<< 'all:' > Makefile; make",
+            "sed -i '1i all:' Makefile; make",
+            "printf 'all:\\n' > >(tee Makefile); make",
+            "eval \"printf 'all:' > Makefile\"; make",
+            "bash -c \"printf 'all:' > Makefile\"; make",
+            "x=$(printf 'all:'); echo \"$x\" > Makefile; make",
+            // An assignment or option that changes what a listed program
+            // runs, and programs with such an option.
+            "printf x > cat; chmod +x cat; PATH=. cat f",
+            "printf x > cat; chmod +x cat; PATH=.; cat f",
+            "printf x > cat; chmod +x cat; printf -v PATH .; cat f",
+            "printf x > run; chmod +x run; env PATH=. ls",
+            "printf x > z; chmod +x z; sort --compress-program=./z a.txt",
+            "printf x > g; rsync -e ./g a host:b",
+            "printf x > s; chmod +x s; install -s a b",
+            "printf x > run; ./run",
+            // AC-6: a supplier beside the write, whatever it runs.
+            r"printf '%s\n' '\143odeflow update' | xargs printf > commands.fifo",
+        ];
+        let allow = [
+            "cargo build > build.log 2>&1 && grep error build.log",
+            "printf x > a.txt && git add a.txt",
+            "echo x > f && cp f g && chmod +x g",
+            "mkdir -p d && printf x > d/f",
+            "make > build.log",
+            "cargo test > test.log 2>&1; echo done",
+            "cargo test 2>&1 | tee test.log; grep FAILED test.log",
+            "printf '%s\\n' a b > list.txt && wc -l list.txt && cat list.txt",
+            "printf '{}' > a.json && jq . a.json",
+            "printf x | base64 > enc.txt && tail -n 1 enc.txt",
+            "cd out && printf x > f && head f",
+            "mytool > out.txt; echo done",
+            "for f in a b; do printf '%s\\n' \"$f\" > \"$f.txt\"; done",
+            "printf x > a; ln -s a b && rm a",
+            "echo x > f.txt; diff f.txt g.txt",
+            "curl -s https://example.com > out.json && jq . out.json",
+            "cargo build --target-dir \"$(pwd)/t\" > b.log 2>&1; grep error b.log",
+            "mytool > out.txt; mytool2 out.txt",
+        ];
         let wrong = misjudged(&refuse, &allow);
         assert!(wrong.is_empty(), "{wrong:#?}");
     }

@@ -8805,11 +8805,16 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     {
         wrong.push(format!("should refuse as unsettled only: {command}: {err}"));
     }
+    // TSK-1476 r21: no interpreter reads only data, so spelled text piped
+    // into one refuses as unsettled.
     let command = "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'";
     let out = exec_guard_contract_3(&root, command);
-    if out.status.code() != Some(0) {
-        let err = String::from_utf8_lossy(&out.stderr);
-        wrong.push(format!("should allow: {command}: {err}"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2)
+        || !err.contains("cannot settle")
+        || err.matches("BLOCKED").count() != err.matches("git.hook_integrity").count()
+    {
+        wrong.push(format!("should refuse as unsettled only: {command}: {err}"));
     }
     for cwd in [&root, &linked] {
         std::fs::create_dir_all(cwd.join("src")).unwrap();

@@ -1232,7 +1232,7 @@
   [
     "/bin/ln src/app.py H && dd if=/dev/null of=H",
     0,
-    2
+    0
   ],
   [
     "ln src/app.py H && dd if=/dev/null of=H",
@@ -1247,7 +1247,7 @@
   [
     "/bin/link src/app.py H && dd if=/dev/null of=H",
     0,
-    2
+    0
   ],
   [
     "link src/app.py H && dd if=/dev/null of=H",
@@ -1687,6 +1687,6 @@
   [
     "busybox ln -s src L && printf x > L/app.py",
     0,
-    0
+    2
   ]
 ]

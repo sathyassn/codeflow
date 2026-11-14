@@ -191,16 +191,33 @@ fn tsk1002_r12_tee_destinations_are_writes() {
         let line = format!(
             r#"echo x | {program} "$TMPDIR/run.log" | grep -E "SURVIVED|MISSING|^[0-9]+/""#
         );
+        // TSK-1476 r21: a line that writes text it spells to a file runs
+        // only programs that never run file text, each by its plain name,
+        // so the exec guard's install check refuses every other spelling
+        // of the writer.
+        let exec_ok = |out: &Output| {
+            if program == "tee" {
+                line_allows(out)
+            } else {
+                out.status.code() == Some(2)
+                    && String::from_utf8_lossy(&out.stderr).contains("install run `")
+            }
+        };
         for guard in ["git-guard", "exec-guard"] {
             let out = f.command_with_tmpdir(&f.linked, guard, &line, Some(&tmpdir));
-            if !line_allows(&out) {
+            let ok = if guard == "git-guard" {
+                line_allows(&out)
+            } else {
+                exec_ok(&out)
+            };
+            if !ok {
                 wrong.push(format!("known TMPDIR: {guard}: {line}: {out:?}"));
             }
             let out = f.command_with_tmpdir(&f.linked, guard, &line, None);
             let ok = if guard == "git-guard" {
                 out.status.code() == Some(2) && refused(&out)
             } else {
-                line_allows(&out)
+                exec_ok(&out)
             };
             if !ok {
                 wrong.push(format!("absent TMPDIR: {guard}: {line}: {out:?}"));
@@ -571,6 +588,9 @@ fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
         // Ruling 7: a UNC directory option is unknown.
         r"env -C '\\fixture-host\fixture-share\child\..' cat auth.json",
         "env -C '//fixture-host/fixture-share' cat notes.md",
+        // TSK-1476 r21: a line that writes text it spells to a file runs
+        // only programs that never run file text; `env` is not one.
+        "printf x > run; chmod +x run; env PATH=. ls",
     ] {
         if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
@@ -579,7 +599,6 @@ fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
     for line in [
         "grep -r --include='*.md' needle .",
         "cp -r src out; ls out",
-        "printf x > run; chmod +x run; env PATH=. ls",
         "cd \"$D\" && python3 tool.py",
         "git show HEAD~1:README.md",
         "deno eval -p '1 + 1'",
@@ -3760,11 +3779,10 @@ fn repair3_runner_sources_changed_earlier_on_the_line() {
             let out = f.command(&f.linked, hook, &command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
-        let ordinary = f.command(
-            &f.linked,
-            hook,
-            "printf note > notes.txt; git rebase --continue",
-        );
+        // A program's own output written to a file: TSK-1476 r21 refuses
+        // text the line spells written before any program but a few that
+        // never run file text, `git rebase` included.
+        let ordinary = f.command(&f.linked, hook, "date > notes.txt; git rebase --continue");
         assert_eq!(ordinary.status.code(), Some(0), "{hook}: {ordinary:?}");
     }
 }
@@ -3874,11 +3892,7 @@ fn runner_sources_preserve_spaces_and_case_in_redirects() {
         );
         let out = f.command(&linked, hook, &command);
         assert!(refused(&out), "{hook}: {out:?}");
-        let ordinary = f.command(
-            &linked,
-            hook,
-            "printf note > 'Mixed Notes'; git rebase --continue",
-        );
+        let ordinary = f.command(&linked, hook, "date > 'Mixed Notes'; git rebase --continue");
         assert_eq!(ordinary.status.code(), Some(0), "{hook}: {ordinary:?}");
     }
 }
@@ -4469,7 +4483,9 @@ fn earlier_writes_make_the_next_runner_state_unknown() {
             for command in [
                 "git -C . status",
                 "git config --file config user.name x",
-                "printf x > notes.txt && git -C . status",
+                // TSK-1476 r21: a program's own output; spelled text
+                // written before `git status` refuses.
+                "date > notes.txt && git -C . status",
             ] {
                 let out = run(&stage, command);
                 let passed = allowed_or_slow_child(&out)
