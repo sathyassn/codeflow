@@ -532,6 +532,11 @@
   [
     "mkdir L && echo src/app.py | cpio -pdl L && printf x > L/src/app.py",
     0,
+    2
+  ],
+  [
+    "mkdir L && echo src/app.py | cpio -pdl L",
+    0,
     0
   ],
   [

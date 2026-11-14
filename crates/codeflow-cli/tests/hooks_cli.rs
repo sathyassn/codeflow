@@ -10822,7 +10822,14 @@ fn gnu_prefixed_programs_share_the_plain_verdict() {
                     let line = line.replace("{}", &gnu);
                     let code = verdict(guard, &line);
                     println!("{guard}: plain={plain_code:?} gnu={code:?}: {line}");
-                    if code != plain_code {
+                    // TSK-1476: exec-guard refuses a line of more than one
+                    // command that writes a file and runs a path, so the
+                    // path form there is stricter than the bare name.
+                    let path_run = guard == "exec-guard"
+                        && gnu.starts_with('/')
+                        && line.contains(" && ")
+                        && code == Some(2);
+                    if code != plain_code && !path_run {
                         failures.push(format!("{guard} {line}: {code:?}, plain {plain_code:?}"));
                     }
                 }

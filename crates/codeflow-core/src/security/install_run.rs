@@ -1396,6 +1396,122 @@ mod tests {
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
+    /// A line that writes a file with text it spells and also runs a file
+    /// (a script operand, a file fed to a shell or interpreter, a path as
+    /// the program) refuses as unsettled, whatever the names: the guard
+    /// does not match the written file to the run one. A file the line does
+    /// not write keeps its handling as that file run directly, and a file a
+    /// program writes in its own way (a build) is state the line does not
+    /// show.
+    #[test]
+    fn a_file_the_line_writes_and_runs_is_unsettled() {
+        let split = "printf '%s' code > run.sh; printf '%s\\n' 'flow update' >> run.sh";
+        let refuse = [
+            format!("{split}; sh run.sh"),
+            format!("{split}; bash run.sh"),
+            format!("{split}; . run.sh"),
+            format!("{split}; source run.sh"),
+            format!("{split}; python3 run.sh"),
+            format!("{split}; chmod +x run.sh; ./run.sh"),
+            format!("{split}; sh < run.sh"),
+            format!("{split}; cat run.sh | ssh host sh"),
+            "printf 'co%xflow update' 222 > Run.sh; cat run.sh | sh".to_string(),
+            "printf '%s\\n' 'codeflow update' > Run.sh; cat run.sh | sh".to_string(),
+            r#"for w in code 'flow update'; do printf '%s' "$w"; done > run.sh; sh run.sh"#
+                .to_string(),
+            "{ printf '%s' code; printf '%s\\n' 'flow update'; } > run.sh && bash run.sh"
+                .to_string(),
+            "printf '%s' code | tee run.sh; printf '%s\\n' 'flow update' >> run.sh; sh run.sh"
+                .to_string(),
+            "dd of=run.sh <<< 'x'; sh run.sh".to_string(),
+            "printf 'co%xflow update' 222 > tool; chmod +x tool; dir/tool".to_string(),
+            "sh -c 'printf co > r.sh; printf \"flow update\" >> r.sh; sh r.sh'".to_string(),
+            "case a in a) printf 'co%xflow update' 222 > r.sh; sh r.sh;; esac".to_string(),
+            // AC-6: the steps on lines of their own stay allowed.
+            "python3 gen.py > out.json; python3 use.py out.json".to_string(),
+            "/bin/ln src/app.py H && dd if=/dev/null of=H".to_string(),
+            "./scripts/check.sh 2>&1 | tee check.log".to_string(),
+        ];
+        let allow = [
+            "sh scripts/test.sh",
+            "cat notes.txt | sh",
+            "cargo build && ./target/debug/tool",
+            r"printf '%s\n' notes > out.txt",
+            "git log --oneline > log.txt",
+            "sh scripts/test.sh > /dev/null 2>&1",
+            "./scripts/check.sh 2>&1 | tail -n 3",
+            "python3 tools/report.py",
+            // One simple command writes only its own output.
+            "./scripts/check.sh > check.log 2>&1",
+            "python3 tools/report.py > report.txt",
+            "gzip -c < data/in.txt > out.gz",
+            "/opt/homebrew/bin/gsed -i s/a/b/ notes.txt",
+            "gtee out.log < /dev/null",
+            "python3 gen.py > out.json",
+            "python3 use.py out.json",
+        ];
+        let refuse: Vec<&str> = refuse.iter().map(String::as_str).collect();
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Text the line spells that a program the guard does not know receives
+    /// (by pipe, here-string, here-document or process substitution) takes
+    /// the closed form: settled text is judged as a command line, anything
+    /// else refuses. A known data reader is not judged, and the output of a
+    /// program the line runs, fed to an unknown program, is the named
+    /// residual. Lines the reader does not take apart get the same result.
+    #[test]
+    fn spelled_text_fed_to_an_unknown_program_takes_the_closed_form() {
+        let refuse = [
+            r"{ printf '%s' code; printf '%s\n' 'flow update'; } | ssh host sh",
+            r"printf 'co%xflow update' 222 | ssh host sh",
+            r"printf 'co%xflow update' 222 | ssh host",
+            r"printf '%s\n' 'codeflow update' | ssh host",
+            r"printf '\143odeflow update\n' | mytool",
+            r#"x=code; printf '%s' "$x flow update" | ssh host"#,
+            r"ssh host <<< $'\143odeflow update'",
+            r#"ssh host <<< "$(printf 'co%xflow update' 222)""#,
+            r"ssh host < <(printf 'co%xflow update' 222)",
+            r"mytool <(printf 'co%xflow update' 222)",
+            "ssh host <<EOF\n$(printf 'co%xflow update' 222)\nEOF",
+            r#"for w in code 'flow update'; do printf '%s' "$w"; done | ssh host"#,
+            r"{ printf 'co%xflow update' 222; } | ssh host",
+            r"( printf 'co%xflow update' 222 ) | ssh host",
+            r"printf 'co%xflow update' 222 | read -r x",
+            // AC-6: a reused format is not settled, and `read` is not a
+            // data reader the guard knows.
+            r"printf '%s\n' a b | while read -r l; do echo $l; done",
+            r"echo hi && { printf 'co%xflow update' 222 | ssh host; }",
+            r#"for f in a; do echo "$(printf 'co%xflow update' 222 | ssh host)"; done"#,
+            r#"{ sh -c "printf 'co%xflow update' 222 | ssh host"; }"#,
+            r"case a in a|b) printf 'co%xflow update' 222 | ssh host;; esac",
+            r"case $x in (a) true;; *) printf 'co%xflow update' 222 | mytool; esac",
+        ];
+        let allow = [
+            r"printf 'ls\n' | ssh host",
+            "{ echo a; echo b; } | sort",
+            "git log --oneline | head -5",
+            r"printf 'echo hi\n' | sh",
+            "git log | ssh host 'cat > log.txt'",
+            "curl -s https://example.com/data.json | jq .name",
+            "ssh host <<< 'uptime'",
+            "ssh host <<'EOF'\nuptime\nEOF",
+            r"printf 'a\nb\n' | while read -r l; do echo $l; done",
+            "git ls-files | while read -r f; do wc -l \"$f\"; done",
+            r#"for f in a b; do echo "== $f"; cargo test -p "$f" 2>&1 | tail -3; done"#,
+            r"printf '%x\n' 255 | sort",
+            r"printf '%x\n' 255 | xargs echo",
+            "diff <(printf 'a\\n') <(printf 'b\\n')",
+            r"{ git log; git status; } | ssh host 'cat > log.txt'",
+            r"printf 'fix: x\n' | git commit -F -",
+            "case a in a) ls ./build | xargs wc -l;; esac",
+            "case $x in a|b) git log | head -3;; *) echo none;; esac",
+        ];
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     /// The brief's controls: the admitted lines that name the binary with
     /// a verb draw no finding, and lines that do not name it stay clean
     /// whatever form they take.

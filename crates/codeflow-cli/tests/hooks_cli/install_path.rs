@@ -1134,6 +1134,49 @@ fn text_handed_to_an_executor_on_the_line_must_be_settled() {
     tally.finish();
 }
 
+/// A line that writes a file and also runs one refuses, whatever the
+/// names; text the line spells and hands to a program the guard does not
+/// know to read only data takes the closed form, on lines the reader takes
+/// apart and on groups and loops alike (TSK-1476 r19).
+#[test]
+fn a_written_file_run_and_spelled_text_to_an_unknown_program_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let split = "printf '%s' code > run.sh; printf '%s\\n' 'flow update' >> run.sh";
+    let rows: Vec<String> = vec![
+        format!("{split}; sh run.sh"),
+        format!("{split}; source run.sh"),
+        format!("{split}; python3 run.sh"),
+        format!("{split}; chmod +x run.sh; ./run.sh"),
+        format!("{split}; cat run.sh | ssh host sh"),
+        "printf 'co%xflow update' 222 > Run.sh; cat run.sh | sh".to_string(),
+        r#"for w in code 'flow update'; do printf '%s' "$w"; done > run.sh; sh run.sh"#.to_string(),
+        r"{ printf '%s' code; printf '%s\n' 'flow update'; } | ssh host sh".to_string(),
+        r"printf 'co%xflow update' 222 | ssh host".to_string(),
+        r"ssh host < <(printf 'co%xflow update' 222)".to_string(),
+        r#"for w in code 'flow update'; do printf '%s' "$w"; done | ssh host"#.to_string(),
+    ];
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let allowed: Vec<String> = [
+        "sh scripts/test.sh",
+        "cat notes.txt | sh",
+        "cargo build && ./target/debug/tool",
+        r"printf 'ls\n' | ssh host",
+        "{ echo a; echo b; } | sort",
+        r"printf '%s\n' notes > out.txt",
+        "git log --oneline | head -5",
+        r"printf 'echo hi\n' | sh",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
+    tally.finish();
+}
+
 /// A Git call that names the binary with a verb refuses whatever programs
 /// the repository's configuration has it run, an interpreter above all.
 #[test]

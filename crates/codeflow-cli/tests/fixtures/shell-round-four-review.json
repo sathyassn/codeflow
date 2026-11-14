@@ -1232,6 +1232,11 @@
   [
     "/bin/ln src/app.py H && dd if=/dev/null of=H",
     0,
+    2
+  ],
+  [
+    "ln src/app.py H && dd if=/dev/null of=H",
+    0,
     0
   ],
   [
@@ -1241,6 +1246,11 @@
   ],
   [
     "/bin/link src/app.py H && dd if=/dev/null of=H",
+    0,
+    2
+  ],
+  [
+    "link src/app.py H && dd if=/dev/null of=H",
     0,
     0
   ],

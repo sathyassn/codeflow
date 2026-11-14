@@ -281,7 +281,10 @@ fn tsk1002_review01_classes_refuse_through_the_hooks() {
     let allow: Vec<&str> = [
         "rg -g 'visible/**' needle visible",
         "node --print='require(\"fs\").readFileSync(\"visible/note.txt\",\"utf8\")'",
-        "python3 gen.py > out.json; python3 use.py out.json",
+        // TSK-1476: a line that writes a file and also runs one refuses,
+        // so the two steps run on lines of their own.
+        "python3 gen.py > out.json",
+        "python3 use.py out.json",
         // Review 04: deno subcommands and permission flags are ordinary.
         "deno test",
         "deno task dev",
@@ -691,7 +694,10 @@ fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
         }
     }
     for line in [
-        "printf x > notes.txt; ruby -w tool.py",
+        // TSK-1476: a line that writes a file and also runs one refuses,
+        // so the two steps run on lines of their own.
+        "printf x > notes.txt",
+        "ruby -w tool.py",
         "git show HEAD:README.md",
         "git log --format=%H:%s",
         "git commit -m 'rotate:id_rsa'",
@@ -877,8 +883,12 @@ fn tsk1002_review08_unmodelled_shell_constructs_refuse() {
         "env SHELLOPTS=braceexpand bash -c 'cd visible && cat note.txt'",
         "HOME=visible; cd -P; cat note.txt",
         "cat visible/*.txt",
-        "printf x > s.sh; bash s.sh",
-        "printf 'echo x' > run.sh; sh run.sh",
+        // TSK-1476: a line that writes a file and also runs one refuses,
+        // so the two steps run on lines of their own.
+        "printf x > s.sh",
+        "bash s.sh",
+        "printf 'echo x' > run.sh",
+        "sh run.sh",
         "zsh --no-rcs -c 'cd alias/.. && cat auth.json'",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);

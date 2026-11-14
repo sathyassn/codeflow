@@ -56,7 +56,10 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
     (44, "exec-guard", "cat <<'E' > x.py; python3 x*.py\nopen(\"@HOME@/.codex/auth.json\").read()\nE", true),
     (44, "", "cat <<'E' > notes.txt; python3 -c 'print(\"hello\")'\nordinary data\nE", false),
     (44, "", "cat <<'E' > notes.txt\nopen(\".codeflow/policy.json\",\"w\")\nE", false),
-    (44, "", "cat <<'E' > x.sh; bash x.sh\nprintf hello\nE", false),
+    // TSK-1476: a line that writes a file and also runs one refuses, so
+    // the two steps run on lines of their own.
+    (44, "", "cat <<'E' > x.sh\nprintf hello\nE", false),
+    (44, "", "bash x.sh", false),
     (45, "exec-guard", "pwsh -NoProfile -Comm 'Get-Content ~/.codex/auth.json'", true),
     (45, "exec-guard", "pwsh /c 'Get-Content ~/.codex/auth.json'", true),
     (45, "exec-guard", "pwsh –c 'Get-Content ~/.codex/auth.json'", true),
