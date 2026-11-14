@@ -281,15 +281,25 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         }
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
-            let text = path_text(candidate)?;
-            // An authority file that cannot be placed refuses every edit,
-            // naming the file and the cause (TSK-1402).
-            let authority =
-                authority_target_checked(candidate, ctx.root, false).map_err(|error| {
-                    EditError(format!(
+            // Folded as the patterns are ([`folded_text`]).
+            let text = folded_text(&path_text(candidate)?);
+            // An authority file that cannot be placed refuses every edit, and
+            // a target or a repository holding it that cannot be read refuses
+            // this one, at any level, each naming the path and the cause
+            // (TSK-1402).
+            let authority = match authority_target_checked(candidate, ctx.root, false) {
+                Ok(authority) => authority,
+                Err(Unchecked::Protected(error)) => {
+                    return Err(EditError(format!(
                         "no edit can be checked against the repository's authority files, so every edit is refused: {error}"
-                    ))
-                })?;
+                    )))
+                }
+                Err(Unchecked::Target(error)) => {
+                    return Err(EditError(format!(
+                        "the edit cannot be checked against the repository's authority files: {error}"
+                    )))
+                }
+            };
             let enforcement = ctx.level.is_active()
                 && !authority
                 && repository_enforcement_target(candidate, ctx.root, false).map_err(EditError)?;
@@ -326,7 +336,7 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
 
 /// The operator-authority directory, `.codeflow/authority`, under the
 /// guard's home and under the account's home from the password database,
-/// with ASCII case folded. The SSH configuration allow (TSK-1184) is read
+/// folded by [`folded_path`]. The SSH configuration allow (TSK-1184) is read
 /// under the account's home, which can differ from `HOME`, and a volume
 /// that folds case opens `.codeflow/Authority` for `.codeflow/authority`,
 /// so the exact-spelling pattern under `HOME` alone does not cover it.
@@ -377,13 +387,35 @@ fn authority_directories(home: &Path) -> Result<Vec<PathBuf>, EditError> {
     Ok(dirs.into_iter().collect())
 }
 
-/// `path` with ASCII letters lowercased, compared by component.
+/// `path` as every comparison of a target with a protected path reads it:
+/// each name folded as [`super::repo::folded_ref_name`] folds a ref name,
+/// so two spellings one volume stores as the same entry compare equal. A
+/// name that does not exist yet keeps the spelling it was written in, and
+/// the guard cannot tell whether the volume that will hold it stores such
+/// spellings apart, so it compares them as one name, failing closed
+/// (TSK-1402). A name that is not valid UTF-8, and a drive prefix, have
+/// only their ASCII letters folded; the root is kept.
 fn folded_path(path: &Path) -> PathBuf {
-    PathBuf::from(path.as_os_str().to_ascii_lowercase())
+    path.components()
+        .map(|component| match component {
+            Component::Normal(name) => name.to_str().map_or_else(
+                || name.to_ascii_lowercase(),
+                |text| super::repo::folded_ref_name(text).into(),
+            ),
+            Component::Prefix(prefix) => prefix.as_os_str().to_ascii_lowercase(),
+            other => other.as_os_str().to_os_string(),
+        })
+        .collect()
 }
 
-/// Whether `candidate` is one of `dirs` or inside one, ignoring ASCII case,
-/// whether or not the directory exists yet.
+/// A path's text, or a pattern's, folded as [`folded_path`] folds each
+/// name. Folding leaves `/` and the glob characters as they are.
+fn folded_text(text: &str) -> String {
+    super::repo::folded_ref_name(text)
+}
+
+/// Whether `candidate` is one of `dirs` or inside one, compared as
+/// [`folded_path`] reads both, whether or not the directory exists yet.
 fn in_authority_directory(candidate: &Path, dirs: &[PathBuf]) -> bool {
     let candidate = folded_path(candidate);
     dirs.iter().any(|dir| candidate.starts_with(dir))
@@ -470,7 +502,8 @@ fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError>
             crate::git::display_message(&reduced.into_iter().collect::<Vec<_>>().join("; "))
         );
     }
-    Ok(result.into_iter().collect())
+    // Compared with a target's folded text ([`folded_text`]).
+    Ok(result.iter().map(|pattern| folded_text(pattern)).collect())
 }
 
 fn resolved_pattern(base: &Path, relative: &str, resolve: bool) -> Result<String, EditError> {
@@ -858,198 +891,293 @@ pub(crate) fn holds_global_git_config(target: &Path, root: &Path) -> bool {
     let paths = global_git_config_paths(root);
     [false, true].into_iter().any(|resolve| {
         normalized(target, resolve).map_or(true, |target| {
+            let target = folded_path(&target);
             paths.iter().any(|path| {
-                normalized(path, resolve).map_or(true, |path| path.starts_with(&target))
+                normalized(path, resolve)
+                    .map_or(true, |path| folded_path(&path).starts_with(&target))
             })
         })
     })
+}
+
+/// Why a protected-set check could not answer for a target (TSK-1402).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Unchecked {
+    /// A protected file that cannot be placed in any spelling, so no edit
+    /// can be checked against it.
+    Protected(String),
+    /// The target, or a repository that holds it, cannot be read, so this
+    /// edit cannot be checked.
+    Target(String),
+}
+
+impl Unchecked {
+    /// Keeps the first cause, except that a protected file that cannot be
+    /// placed replaces a target that cannot be read: it refuses more.
+    fn keep(slot: &mut Option<Self>, next: Self) {
+        if matches!(
+            (&*slot, &next),
+            (None, _) | (Some(Self::Target(_)), Self::Protected(_))
+        ) {
+            *slot = Some(next);
+        }
+    }
+
+    /// The answer of a shell reader's `bool` check. A protected file that
+    /// cannot be placed counts as a match. A target or a repository holding
+    /// it that cannot be read is left to the check each such caller runs
+    /// next on the same target, [`repository_enforcement_target`] or the
+    /// writer's own reading, which reads the same target and repositories
+    /// and refuses with that cause (TSK-379 settled that a repository the
+    /// guard cannot open refuses through that check). [`evaluate`] refuses
+    /// both at any level.
+    fn counts_as_match(result: &Result<bool, Self>) -> bool {
+        match result {
+            Ok(found) => *found,
+            Err(Self::Protected(_)) => true,
+            Err(Self::Target(_)) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for Unchecked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Protected(error) | Self::Target(error) => f.write_str(error),
+        }
+    }
+}
+
+/// The target spelled as `normalized` reads it, then folded
+/// ([`folded_path`]), or why it cannot be read.
+fn folded_target(target: &Path, resolve: bool) -> Result<PathBuf, Unchecked> {
+    normalized(target, resolve)
+        .map(|target| folded_path(&target))
+        .map_err(|error| {
+            Unchecked::Target(format!(
+                "cannot resolve the edit target {}: {error}",
+                target.display()
+            ))
+        })
 }
 
 // File edits cannot establish which config keys are safe. The Git command
 // checker still permits ordinary `git config --global user.name ...` updates.
 // A configured file that cannot be placed counts as a match (TSK-1402).
 pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
-    global_git_config_checked(target, root).unwrap_or(true)
+    Unchecked::counts_as_match(&global_git_config_checked(target, root))
 }
 
 /// Whether `target` is a user or system git configuration file, with each
 /// configured file placed by [`protected_spelling`]. A file that cannot be
 /// placed is the error, unless another file matches.
-fn global_git_config_checked(target: &Path, root: &Path) -> Result<bool, String> {
+fn global_git_config_checked(target: &Path, root: &Path) -> Result<bool, Unchecked> {
     git_config_target_in(target, &global_git_config_paths(root))
 }
 
-fn git_config_target_in(target: &Path, paths: &[PathBuf]) -> Result<bool, String> {
+fn git_config_target_in(target: &Path, paths: &[PathBuf]) -> Result<bool, Unchecked> {
     // git reads its system file under the prefix it was built with
     // (`/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`, a source build's
     // `~/etc/gitconfig`), so a `gitconfig` in any `etc` directory counts
-    // (TSK-242 review round eleven).
+    // (TSK-242 review round eleven). The target is folded already.
     let system_file = |path: &Path| {
-        path.file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("gitconfig"))
+        path.file_name().is_some_and(|name| name == "gitconfig")
             && path
                 .parent()
                 .and_then(Path::file_name)
-                .is_some_and(|dir| dir.eq_ignore_ascii_case("etc"))
+                .is_some_and(|dir| dir == "etc")
     };
-    let mut unplaced = None;
+    let mut unchecked = None;
     for resolve in [false, true] {
-        let Ok(target) = normalized(target, resolve) else {
-            continue;
+        // A target the walk cannot resolve may still reach a configured
+        // file, through a folder the guard cannot list, so it is never
+        // judged ordinary (TSK-1402).
+        let target = match folded_target(target, resolve) {
+            Ok(target) => target,
+            Err(error) => {
+                Unchecked::keep(&mut unchecked, error);
+                continue;
+            }
         };
         if system_file(&target) {
             return Ok(true);
         }
         for path in paths {
             match protected_spelling(path, resolve) {
-                Ok(path) if path == target => return Ok(true),
+                Ok(path) if folded_path(&path) == target => return Ok(true),
                 Ok(_) => {}
                 Err(error) => {
-                    unplaced.get_or_insert_with(|| error.to_string());
+                    Unchecked::keep(&mut unchecked, Unchecked::Protected(error.to_string()));
                 }
             }
         }
     }
-    unplaced.map_or(Ok(false), Err)
+    unchecked.map_or(Ok(false), Err)
 }
 
-/// `path` is `prefix` or lies below it, each component compared without
-/// regard to ASCII case. Git's administrative names are lower case, and on a
-/// case-insensitive filesystem a spelling such as `.git/Refs/Remotes` that
-/// does not exist yet, which [`normalize_case`] cannot correct, still
-/// creates the protected directory.
-fn under_ignoring_case(path: &Path, prefix: &Path) -> bool {
-    let mut parts = path.components();
-    prefix.components().all(|want| {
-        parts.next().is_some_and(|got| {
-            got.as_os_str()
-                .as_encoded_bytes()
-                .eq_ignore_ascii_case(want.as_os_str().as_encoded_bytes())
-        })
-    })
-}
-
-/// `path` lies under `dir` and a component below it holds a non-ASCII byte.
-/// A filesystem such as APFS may fold it onto a protected git name
-/// (`remoteſ` names the same entry as `remotes`), and a component that does
-/// not exist yet cannot be checked against the disk, so the path is judged
-/// protected, failing closed (TSK-381 SF-3).
+/// `path` lies under `dir` and a name below it holds a non-ASCII byte, both
+/// folded ([`folded_path`]). A filesystem such as APFS may fold such a name
+/// onto a protected git name (`remoteſ` names the same entry as `remotes`)
+/// in ways the fold does not, and a name that does not exist yet cannot be
+/// checked against the disk, so the path is judged protected, failing
+/// closed (TSK-381 SF-3).
 fn non_ascii_below(path: &Path, dir: &Path) -> bool {
-    under_ignoring_case(path, dir)
+    path.starts_with(dir)
         && path
             .components()
             .skip(dir.components().count())
             .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
 }
 
-/// `a` and `b` name one path, components compared as [`under_ignoring_case`]
-/// compares them.
-fn same_ignoring_case(a: &Path, b: &Path) -> bool {
-    a.components().count() == b.components().count() && under_ignoring_case(a, b)
-}
-
 /// Authority metadata cannot be relaxed by a policy read from that metadata.
-/// An authority file that cannot be placed counts as a match (TSK-1402).
+/// An authority file that cannot be placed counts as a match (TSK-1402);
+/// [`Unchecked::counts_as_match`] says where a target that cannot be read
+/// is judged.
 pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
-    authority_target_checked(target, root, ancestors).unwrap_or(true)
+    Unchecked::counts_as_match(&authority_target_checked(target, root, ancestors))
 }
 
 /// Whether `target` is authority metadata of the repository at `root` or of
 /// a repository holding it, or a user or system git configuration file. Each
 /// authority file is placed by [`protected_spelling`], so one behind a link
-/// is also judged where the link points. A file that cannot be placed is
-/// the error, naming it and the cause, unless another file matches.
-fn authority_target_checked(target: &Path, root: &Path, ancestors: bool) -> Result<bool, String> {
-    let read = |root: &Path| -> Result<bool, String> {
-        let mut unplaced = None;
-        match global_git_config_checked(target, root) {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
-            Err(error) => unplaced = Some(error),
-        }
-        let Ok(repo) = git2::Repository::discover(root) else {
-            return unplaced.map_or(Ok(false), Err);
-        };
-        let mut paths = vec![
-            (PathBuf::from("refs/remotes"), true),
-            (PathBuf::from("packed-refs"), false),
-            (PathBuf::from("config"), false),
-            (PathBuf::from("config.worktree"), false),
-            // The coordination ledger (ADR-0086): CodeFlow writes it from
-            // inside its own process; an agent's direct edit is refused.
-            (PathBuf::from("codeflow/coord"), true),
-        ];
-        if let Ok(names) = repo.worktrees() {
-            // OS text rule (issue 79, `docs/architecture.md`): the names are kept
-            // as bytes. A worktree whose folder name is not valid UTF-8 still has
-            // a `config.worktree` that authority rests on, so it must stay in the
-            // protected list instead of dropping out of it.
-            for name in crate::git::name::names_of(&names) {
-                // A folder the platform cannot hold as a path cannot be listed, so
-                // the target is judged protected rather than left out.
-                let Ok(folder) = name.os_path() else {
-                    return Ok(true);
-                };
-                paths.push((
-                    Path::new("worktrees").join(folder).join("config.worktree"),
-                    false,
-                ));
-            }
-        }
-        for resolve in [false, true] {
-            let Ok(target) = normalized(target, resolve) else {
-                continue;
-            };
-            let common = match protected_spelling(repo.commondir(), resolve) {
-                Ok(common) => common,
-                Err(error) => {
-                    unplaced.get_or_insert_with(|| error.to_string());
-                    continue;
-                }
-            };
-            let inside = under_ignoring_case(&target, &common);
-            if inside && non_ascii_below(&target, &common) {
-                return Ok(true);
-            }
-            for (name, directory) in &paths {
-                let protected = match protected_spelling(&common.join(name), resolve) {
-                    Ok(protected) => protected,
-                    Err(error) => {
-                        unplaced.get_or_insert_with(|| error.to_string());
-                        continue;
-                    }
-                };
-                // A file inside the common directory is compared only with a
-                // target inside it; one a link places elsewhere is compared
-                // where it lies.
-                if !inside && under_ignoring_case(&protected, &common) {
-                    continue;
-                }
-                if same_ignoring_case(&target, &protected)
-                    || (*directory && under_ignoring_case(&target, &protected))
-                    || (ancestors && under_ignoring_case(&protected, &target))
-                {
-                    return Ok(true);
-                }
-            }
-        }
-        unplaced.map_or(Ok(false), Err)
-    };
-    let mut unplaced = match read(root) {
+/// is also judged where the link points, and every comparison folds both
+/// sides ([`folded_path`]). A file that cannot be placed, a target that
+/// cannot be resolved, and a repository that cannot be opened are each the
+/// error, naming the path and the cause, unless another file matches.
+fn authority_target_checked(
+    target: &Path,
+    root: &Path,
+    ancestors: bool,
+) -> Result<bool, Unchecked> {
+    let read = |root: &Path| authority_target_at(target, root, ancestors);
+    let mut unchecked = match read(root) {
         Ok(true) => return Ok(true),
         Ok(false) => None,
         Err(error) => Some(error),
     };
-    for owner in super::repo::target_roots(target, root).unwrap_or_default() {
+    // A repository holding the target that cannot be opened may hold
+    // authority files the target reaches, so it is the error (TSK-1402).
+    let owners = match super::repo::target_roots(target, root) {
+        Ok(owners) => owners,
+        Err(error) => {
+            Unchecked::keep(
+                &mut unchecked,
+                Unchecked::Target(format!(
+                    "cannot read a repository holding {}: {error}",
+                    target.display()
+                )),
+            );
+            Vec::new()
+        }
+    };
+    for owner in owners {
         match read(&owner) {
             Ok(true) => return Ok(true),
             Ok(false) => {}
+            Err(error) => Unchecked::keep(&mut unchecked, error),
+        }
+    }
+    unchecked.map_or(Ok(false), Err)
+}
+
+/// [`authority_target_checked`] for the one repository discovered from
+/// `root`, and the user and system git configuration files.
+fn authority_target_at(target: &Path, root: &Path, ancestors: bool) -> Result<bool, Unchecked> {
+    let mut unchecked = None;
+    match global_git_config_checked(target, root) {
+        Ok(true) => return Ok(true),
+        Ok(false) => {}
+        Err(error) => unchecked = Some(error),
+    }
+    // Only a proven absence of a repository holds no authority files; a
+    // repository that cannot be opened is the error (TSK-1402).
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) => {
+            if error.code() != git2::ErrorCode::NotFound {
+                Unchecked::keep(
+                    &mut unchecked,
+                    Unchecked::Target(format!(
+                        "cannot open the repository at {}: {}",
+                        root.display(),
+                        error.message()
+                    )),
+                );
+            }
+            return unchecked.map_or(Ok(false), Err);
+        }
+    };
+    let mut paths = vec![
+        (PathBuf::from("refs/remotes"), true),
+        (PathBuf::from("packed-refs"), false),
+        (PathBuf::from("config"), false),
+        (PathBuf::from("config.worktree"), false),
+        // The coordination ledger (ADR-0086): CodeFlow writes it from
+        // inside its own process; an agent's direct edit is refused.
+        (PathBuf::from("codeflow/coord"), true),
+    ];
+    if let Ok(names) = repo.worktrees() {
+        // OS text rule (issue 79, `docs/architecture.md`): the names are kept
+        // as bytes. A worktree whose folder name is not valid UTF-8 still has
+        // a `config.worktree` that authority rests on, so it must stay in the
+        // protected list instead of dropping out of it.
+        for name in crate::git::name::names_of(&names) {
+            // A folder the platform cannot hold as a path cannot be listed, so
+            // the target is judged protected rather than left out.
+            let Ok(folder) = name.os_path() else {
+                return Ok(true);
+            };
+            paths.push((
+                Path::new("worktrees").join(folder).join("config.worktree"),
+                false,
+            ));
+        }
+    }
+    for resolve in [false, true] {
+        // A target the walk cannot resolve is never judged ordinary, as in
+        // [`git_config_target_in`].
+        let target = match folded_target(target, resolve) {
+            Ok(target) => target,
             Err(error) => {
-                unplaced.get_or_insert(error);
+                Unchecked::keep(&mut unchecked, error);
+                continue;
+            }
+        };
+        let common = match protected_spelling(repo.commondir(), resolve) {
+            Ok(common) => common,
+            Err(error) => {
+                Unchecked::keep(&mut unchecked, Unchecked::Protected(error.to_string()));
+                continue;
+            }
+        };
+        let folded_common = folded_path(&common);
+        let inside = target.starts_with(&folded_common);
+        if inside && non_ascii_below(&target, &folded_common) {
+            return Ok(true);
+        }
+        for (name, directory) in &paths {
+            let protected = match protected_spelling(&common.join(name), resolve) {
+                Ok(protected) => folded_path(&protected),
+                Err(error) => {
+                    Unchecked::keep(&mut unchecked, Unchecked::Protected(error.to_string()));
+                    continue;
+                }
+            };
+            // A file inside the common directory is compared only with a
+            // target inside it; one a link places elsewhere is compared where
+            // it lies.
+            if !inside && protected.starts_with(&folded_common) {
+                continue;
+            }
+            if target == protected
+                || (*directory && target.starts_with(&protected))
+                || (ancestors && protected.starts_with(&target))
+            {
+                return Ok(true);
             }
         }
     }
-    unplaced.map_or(Ok(false), Err)
+    unchecked.map_or(Ok(false), Err)
 }
 
 /// Inventory includes outside the guard's fixed protected-path class.
@@ -1200,17 +1328,19 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
 }
 
 /// One enforcement path, resolved both ways [`normalized`] reads paths
-/// (lexically, and through symbolic links): the path, whether it protects
-/// a whole directory, and the base its ancestors must lie in, resolved
-/// when first needed. `None` where that reading fails.
+/// (lexically, and through symbolic links): the path, the same folded for
+/// comparison with a target ([`folded_path`]), whether it protects a whole
+/// directory, and the base its ancestors must lie in, resolved and folded
+/// when first needed. The error where that reading fails.
 struct ProtectedPath {
     path: [Result<PathBuf, String>; 2],
+    folded: [Result<PathBuf, String>; 2],
     directory: bool,
-    /// Under the git administrative directory, so compared without ASCII
-    /// case ([`under_ignoring_case`]).
+    /// Under the git administrative directory, where a name below it
+    /// holding a non-ASCII byte is judged protected ([`non_ascii_below`]).
     git_owned: bool,
     base: PathBuf,
-    resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
+    folded_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
 }
 
 type Protected = std::rc::Rc<Vec<ProtectedPath>>;
@@ -1395,12 +1525,19 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
         };
         let resolved = protected_paths(&repo)?
             .iter()
-            .map(|(path, directory, base)| ProtectedPath {
-                path: both(path),
-                directory: *directory,
-                git_owned: path.starts_with(repo.commondir()),
-                base: base.clone(),
-                resolved_base: Default::default(),
+            .map(|(written, directory, base)| {
+                let path = both(written);
+                let folded = path
+                    .clone()
+                    .map(|reading| reading.map(|path| folded_path(&path)));
+                ProtectedPath {
+                    git_owned: written.starts_with(repo.commondir()),
+                    path,
+                    folded,
+                    directory: *directory,
+                    base: base.clone(),
+                    folded_base: Default::default(),
+                }
             })
             .collect();
         let value = Ok(Some(std::rc::Rc::new(resolved)));
@@ -1446,25 +1583,19 @@ pub(crate) fn repository_enforcement_target(
             return Ok(false);
         };
         for (reading, resolve) in [false, true].into_iter().enumerate() {
-            let target = normalized(target, resolve).map_err(|error| error.to_string())?;
+            // Both sides folded, so a name that does not exist yet matches
+            // in any spelling its volume may store as the same entry
+            // ([`folded_path`], TSK-1402).
+            let target =
+                folded_path(&normalized(target, resolve).map_err(|error| error.to_string())?);
             for entry in protected.iter() {
-                let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
-                let under = |inner: &Path, outer: &Path| {
-                    if entry.git_owned {
-                        under_ignoring_case(inner, outer)
-                    } else {
-                        inner.starts_with(outer)
-                    }
-                };
-                let same = if entry.git_owned {
-                    same_ignoring_case(&target, path)
-                } else {
-                    target == *path
-                };
+                let path = entry.folded[reading].as_ref().map_err(Clone::clone)?;
                 let base = || {
-                    entry.resolved_base[reading]
+                    entry.folded_base[reading]
                         .get_or_init(|| {
-                            normalized(&entry.base, resolve).map_err(|error| error.to_string())
+                            normalized(&entry.base, resolve)
+                                .map(|base| folded_path(&base))
+                                .map_err(|error| error.to_string())
                         })
                         .as_ref()
                         .map_err(Clone::clone)
@@ -1472,9 +1603,9 @@ pub(crate) fn repository_enforcement_target(
                 if entry.git_owned && non_ascii_below(&target, base()?) {
                     return Ok(true);
                 }
-                if same
-                    || (entry.directory && under(&target, path))
-                    || (ancestors && under(path, &target) && under(&target, base()?))
+                if target == *path
+                    || (entry.directory && target.starts_with(path))
+                    || (ancestors && path.starts_with(&target) && target.starts_with(base()?))
                 {
                     return Ok(true);
                 }
@@ -1656,9 +1787,9 @@ pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool
             return Ok(false);
         };
         for (reading, resolve) in [false, true].into_iter().enumerate() {
-            let target = normalized(target, resolve).map_err(|e| e.to_string())?;
+            let target = folded_path(&normalized(target, resolve).map_err(|e| e.to_string())?);
             for entry in protected.iter() {
-                if entry.path[reading]
+                if entry.folded[reading]
                     .as_ref()
                     .map_err(Clone::clone)?
                     .starts_with(&target)
@@ -2315,8 +2446,9 @@ mod tests {
         );
         let looping = temp.path().join("looping");
         std::os::unix::fs::symlink(&looping, &looping).unwrap();
-        let error =
-            git_config_target_in(&temp.path().join("notes"), &[looping.clone()]).unwrap_err();
+        let error = git_config_target_in(&temp.path().join("notes"), &[looping.clone()])
+            .unwrap_err()
+            .to_string();
         assert!(error.contains(&looping.display().to_string()), "{error}");
         // A match still wins over another entry that cannot be placed.
         assert_eq!(
@@ -2413,11 +2545,7 @@ mod tests {
         std::os::unix::fs::symlink(&destination, f.home.join(".codeflow")).unwrap();
         for name in ["D\u{c9}ST", "de\u{301}st"] {
             let target = f.temp.path().join(name).join("authority/config.toml");
-            assert!(
-                refused_under(&f, &f.home, &target),
-                "{}",
-                target.display()
-            );
+            assert!(refused_under(&f, &f.home, &target), "{}", target.display());
         }
         assert!(!refused_under(
             &f,
@@ -2438,11 +2566,7 @@ mod tests {
             f.temp.path().join("CL\u{c9}-DEST/settings.json"),
             f.temp.path().join("cle\u{301}-dest/settings.json"),
         ] {
-            assert!(
-                refused_under(&f, &f.home, &target),
-                "{}",
-                target.display()
-            );
+            assert!(refused_under(&f, &f.home, &target), "{}", target.display());
         }
         assert!(!refused_under(&f, &f.home, &destination.join("notes.md")));
     }
