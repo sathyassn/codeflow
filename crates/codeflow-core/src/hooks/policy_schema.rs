@@ -273,7 +273,8 @@ pub const SCHEMA: [KeySpec; 87] = [
                 directory a linked worktree shares) refuses like a write to hooks, refs or \
                 config, since an alternate store adds objects Git reads as its own; reading \
                 them stays allowed. Local-edit relief never disables protection \
-                of remote-tracking refs, packed-refs or Git config authority metadata. \
+                of remote-tracking refs, packed-refs or Git config authority metadata, \
+                with the one limit for shell writes stated below. \
                 The edit guard judges each protected path in the spelling an edit \
                 that reaches it resolves to, so a protected path behind a symbolic \
                 link is judged where the link points, also when nothing exists there \
@@ -286,9 +287,13 @@ pub const SCHEMA: [KeySpec; 87] = [
                 does not exist yet is compared in every spelling a volume may store as \
                 the same entry, so another spelling of a missing protected file is \
                 refused too; on a volume that stores those spellings apart, such a \
-                file is refused all the same. An edit whose target, or a repository \
-                holding it, the guard cannot read is refused at any level, naming the \
-                path and the cause. \
+                file is refused all the same. A native edit whose target, or a \
+                repository holding it, the edit guard cannot read is refused at any \
+                level, naming the path and the cause. git-guard and exec-guard leave \
+                such a target to their enforcement-path check, which does not run when \
+                `git.hook_integrity` is `off`: with the rule off, a shell write to a \
+                target or repository the guards cannot read is allowed, and the \
+                protection of authority metadata above does not reach it. \
                 git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
                 can change files when its command line names an enforcement \
                 path in any spelling the file system reads as one (a search \
