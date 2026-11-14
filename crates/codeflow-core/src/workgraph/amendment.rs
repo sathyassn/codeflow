@@ -306,6 +306,149 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
     })
 }
 
+/// Who judges a standalone cancellation, and with what it binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationJudge<'a> {
+    /// A pull request whose `Task:` line names this task on a `plan/`
+    /// branch: the range must be exactly that one cancellation.
+    PullRequest(&'a str),
+    /// A push, which has no `Task:` line yet. The same range may be an
+    /// epic's planning amendment, so only what no `Task:` line could make
+    /// valid is refused.
+    Push,
+}
+
+/// Identify a standalone cancellation carried by a planning branch: a
+/// standalone task record absent from the merge-base and added at
+/// `cancelled`. Any other change to a standalone record is an ordinary
+/// planning amendment and returns `None`, so it keeps its existing route.
+/// Callers restrict this check to `plan/` branches.
+///
+/// For a pull request ([`CancellationJudge::PullRequest`]) the range must
+/// be that one record, inside `project-management/`, with its reason and
+/// scope; the named task's record already on the target is refused toward
+/// the task status route. A push ([`CancellationJudge::Push`]) refuses
+/// only a new cancelled record without its reason or scope, or a range a
+/// planning amendment cannot carry, and always returns `None`.
+///
+/// # Errors
+/// Returns a diagnostic for unreadable history or an invalid cancellation
+/// range. Lifecycle validation still checks the record's full schema.
+pub fn cancelled_standalone(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+    paths: &[crate::git::GitName],
+    judge: CancellationJudge<'_>,
+) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|error| error.to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| error.to_string())
+    };
+    let (base, head) = (oid(base)?, oid(head)?);
+    let anchor = history::merge_base(&repo, base, head).map_err(|error| error.to_string())?;
+    let before = Graph::from_revision(&repo, &anchor.to_string())?;
+    let after = Graph::from_revision(&repo, &head.to_string())?;
+    let changed = |record: &&RecordView| {
+        paths
+            .iter()
+            .any(|path| path.bytes() == record.path.as_bytes())
+    };
+    let standalone =
+        |record: &&RecordView| record.kind == RecordKind::Task && record.epic_id.is_none();
+    let candidates: Vec<_> = after
+        .records
+        .values()
+        .filter(changed)
+        .filter(standalone)
+        .filter(|record| !before.records.contains_key(&record.id) && record.status == "cancelled")
+        .collect();
+    let task = match judge {
+        CancellationJudge::Push => {
+            if candidates.is_empty() {
+                return Ok(None);
+            }
+            for record in &candidates {
+                cancellation_lines(record)?;
+            }
+            return match range_problem(&repo, base, head, &rule_texts(paths)?) {
+                Some(problem) => Err(problem),
+                None => Ok(None),
+            };
+        }
+        CancellationJudge::PullRequest(task) => task,
+    };
+    if candidates.is_empty() {
+        let landed = after
+            .records
+            .values()
+            .filter(changed)
+            .filter(standalone)
+            .any(|record| {
+                record.id == task
+                    && record.status == "cancelled"
+                    && before.records.contains_key(&record.id)
+            });
+        if landed {
+            return Err(format!(
+                "{task} is already on the target, so this is not a new cancelled standalone record; cancel it with `codeflow task status {task} cancelled --reason <why> --scope <where it went>` in its own task pull request"
+            ));
+        }
+        return Ok(None);
+    }
+    let [record] = candidates.as_slice() else {
+        return Err("a standalone cancellation amendment names and adds one task record".into());
+    };
+    let id = &record.id;
+    cancellation_lines(record)?;
+    let texts = rule_texts(paths)?;
+    if texts
+        .iter()
+        .any(|path| !path.starts_with("project-management/"))
+    {
+        return Err("a standalone cancellation amendment changes only project-management/ paths; keep product changes on the task branch".into());
+    }
+    if let Some(problem) = range_problem(&repo, base, head, &texts) {
+        return Err(problem);
+    }
+    if before
+        .records
+        .values()
+        .chain(after.records.values())
+        .filter(changed)
+        .any(|other| other.id != *id)
+    {
+        return Err(format!(
+            "a standalone cancellation amendment for {id} cannot change another work record"
+        ));
+    }
+    Ok(Some(id.clone()))
+}
+
+/// A cancelled record carries its reason and scope in the Closeout.
+fn cancellation_lines(record: &RecordView) -> Result<(), String> {
+    let missing = super::record_text::parse_cancellation(&record.body).missing();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} needs Closeout lines `- cancelled: <reason>` and `- scope: <where it went>` (missing {})",
+        record.id,
+        missing.join(", ")
+    ))
+}
+
+fn rule_texts(paths: &[crate::git::GitName]) -> Result<Vec<String>, String> {
+    paths
+        .iter()
+        .map(|path| path.rule_text().map(str::to_string))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
 /// Why a planning amendment judged at `head` on the target `base` cannot
 /// name `epic`: it has no epic record at the head, or it was cancelled
 /// before this range. Cancelling it in this range is a planning change of
@@ -328,14 +471,67 @@ pub fn epic_problem(
     };
     match (status(base), status(head)) {
         (Err(error), _) | (_, Err(error)) => Some(format!(
-            "cannot read the epic records to check {epic}: {error}"
+            "cannot read the epic records to check the `Task:` line: {error}"
         )),
-        (_, Ok(None)) => Some(format!("`Task:` names {epic}, which has no epic record")),
+        // The epic is the pull request body's own text until a record
+        // vouches for it, so a message names it only once one does.
+        (_, Ok(None)) => Some("`Task:` names an epic that has no epic record".to_string()),
         (Ok(Some(status)), _) if status == "cancelled" => {
             Some(format!("`Task:` names {epic}, which is cancelled"))
         }
         _ => None,
     }
+}
+
+/// Whether a task record holds `task` on the target or at the head.
+///
+/// The caller judges a `Task:` line only where durable tracking is on (the
+/// classification's own decision), so a project with no record yet is not
+/// tracking off: a full-tier project tracks work before its first record.
+fn task_on_record(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    task: &str,
+) -> Result<bool, String> {
+    let read = |revision: &str| -> Result<bool, String> {
+        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+        let graph = Graph::from_revision(&repo, revision)?;
+        Ok(graph
+            .records
+            .get(task)
+            .is_some_and(|record| record.kind == RecordKind::Task))
+    };
+    Ok(read(base)? || read(head)?)
+}
+
+/// Why `task`, named by a pull request body's `Task:` line, cannot be
+/// trusted as written: no task record holds it on the target or at the
+/// head. The message never repeats the identifier, which is the body's own
+/// text until a record vouches for it (TSK-1040).
+#[must_use]
+pub fn task_problem(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    task: &str,
+) -> Option<String> {
+    match task_on_record(repo_root, base, head, task) {
+        Err(error) => Some(format!(
+            "cannot read the task records to check the `Task:` line: {error}"
+        )),
+        Ok(false) => Some(
+            "`Task:` names a task that has no task record on the target or at the head".to_string(),
+        ),
+        Ok(true) => None,
+    }
+}
+
+/// Whether a task record holds `task` on the target or at the head, so a
+/// message may repeat it (TSK-1040). A read failure is no vouching.
+#[must_use]
+pub fn task_recorded(repo_root: &std::path::Path, base: &str, head: &str, task: &str) -> bool {
+    task_on_record(repo_root, base, head, task).unwrap_or(false)
 }
 
 /// Why a planning amendment that changes `AGENTS.md`'s managed block is
@@ -470,6 +666,30 @@ pub(crate) fn special_entry_kind(mode: i32) -> Option<&'static str> {
     }
 }
 
+/// The first entry `diff` changes that a planning amendment cannot carry,
+/// read from the entry itself on both sides, so no name decoding stands
+/// between an entry and its check: with its kind for a symbolic link or
+/// submodule on either side (a transition to or from one included), or
+/// with no kind for a name that is not UTF-8 or holds a backslash. The
+/// planning pull request and every waiver's amendment share this rule.
+pub(crate) fn irregular_entry(diff: &git2::Diff<'_>) -> Option<(String, Option<&'static str>)> {
+    for delta in diff.deltas() {
+        for file in [delta.old_file(), delta.new_file()] {
+            let Some(name) = file.path_bytes() else {
+                continue;
+            };
+            let shown = crate::git::GitName::from_bytes(name).display().to_string();
+            if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
+                return Some((shown, None));
+            }
+            if let Some(kind) = special_entry_kind(i32::from(file.mode())) {
+                return Some((shown, Some(kind)));
+            }
+        }
+    }
+    None
+}
+
 /// Why an entry the range changes cannot ride in a planning amendment,
 /// read from the diff of the trees, from the merge-base of `base` and
 /// `head` to `head` as `codeflow ci` reads the range, so no name decoding
@@ -506,23 +726,18 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
             ))
         }
     };
-    for delta in diff.deltas() {
-        for file in [delta.old_file(), delta.new_file()] {
-            let Some(name) = file.path_bytes() else {
-                continue;
-            };
-            let shown = crate::git::GitName::from_bytes(name).display().to_string();
-            if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
-                let message = odd_name_problem(&shown);
-                return Some((shown, message));
-            }
-            if let Some(kind) = special_entry_kind(i32::from(file.mode())) {
-                let message = format!(
-                    "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
-                );
-                return Some((shown, message));
-            }
+    match irregular_entry(&diff) {
+        Some((shown, None)) => {
+            let message = odd_name_problem(&shown);
+            return Some((shown, message));
         }
+        Some((shown, Some(kind))) => {
+            let message = format!(
+                "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
+            );
+            return Some((shown, message));
+        }
+        None => {}
     }
     None
 }
@@ -577,7 +792,7 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
 /// The project's product and watched paths from the policy at `commit`: its
 /// `git.product_paths`, else the default for the stack its project file
 /// records, its `git.breaking_watch_paths` and its `git.document_indexes`.
-fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
+pub(super) fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let list =
         |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
             let Some(value) = value else { return Ok(None) };

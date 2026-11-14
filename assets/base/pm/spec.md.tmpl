@@ -55,6 +55,28 @@ created: {{DATE}}
 <!-- Signatures, schemas, file formats, CLI surfaces: only what the builder
      needs pinned down. -->
 
+<!-- Optional, only where the project adopted the estimation time-box
+     profile (`cf-estimate`); otherwise leave it out. `cf-plan` writes it
+     while the spec is brought to readiness, so the review of the pinned
+     commit covers it; until then it is provisional and no milestone uses
+     it. A spec with a scope-changing gap open is UNSIZED and carries no
+     hours. A feature gets a task mix, never one grade or band. Copy it out
+     of this comment as a `## Delivery size` section here:
+
+     ## Delivery size
+     Frozen at the pin commit.
+     - Epics: 1 (value line: <one sentence>); split trigger: <named, or none>
+     - Task mix: 7 to 9 tasks: 1 to 2 Easy, 4 to 6 Medium, 1 to 2 Hard
+     - Dependencies: <prerequisites, and which tasks wait on them>
+     - Budget envelope: 13 to 40 task-hours (fewest tasks at band floors to
+       most at band tops; a cross-check, never a date)
+     - Serial resources: <maintainer decisions, approvals, key reviews,
+       merges to the default branch>
+     - H: <hard human gates>; B: <start blockers>
+     - Basis: analogue epics <ids>
+
+     With two or more epics, split the mix and the envelope by epic. -->
+
 ## Edge cases
 
 <!-- The inputs and states most likely to be mishandled. -->

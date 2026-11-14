@@ -616,6 +616,75 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
     assert!(history.contains("\"event\": \"addressed\""));
 }
 
+/// Separate exports can cross a second boundary, especially under coverage.
+/// Validate the generated capture time before removing only that element
+/// from byte comparisons; authored times and all other HTML stay significant.
+fn export_without_capture_time(html: &str) -> String {
+    let marker = "<aside aria-label=\"Export status\">Review capture of the session at ";
+    assert_eq!(html.matches(marker).count(), 1, "one export capture status");
+    let start = html.find(marker).unwrap() + marker.len();
+    let end = html[start..]
+        .find("</time>")
+        .expect("a closed export capture time")
+        + "</time>".len();
+    let time = regex::Regex::new(
+        r#"^<time datetime="([0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z)" data-cf-unix="([0-9]+)">([^<]+)</time>$"#,
+    )
+    .unwrap();
+    let capture = time
+        .captures(&html[start..start + end])
+        .expect("a well-formed UTC export capture time and Unix seconds");
+    assert_eq!(
+        &capture[1], &capture[3],
+        "capture datetime matches its text"
+    );
+    capture[2]
+        .parse::<u64>()
+        .expect("capture Unix seconds fit u64");
+    let mut normalised = html.to_string();
+    normalised.replace_range(start..start + end, "<time>CAPTURE_TIME</time>");
+    normalised
+}
+
+#[test]
+fn export_comparison_ignores_only_the_capture_time() {
+    let first = "<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"2026-11-03T07:58:43Z\" data-cf-unix=\"1793692723\">2026-11-03T07:58:43Z</time>.</aside><p>Keep <time>12:34 UTC</time></p>";
+    let second = first
+        .replace("07:58:43", "07:58:44")
+        .replace("1793692723", "1793692724");
+    assert_ne!(first, second);
+    assert_eq!(
+        export_without_capture_time(first),
+        export_without_capture_time(&second)
+    );
+    assert_ne!(
+        export_without_capture_time(first),
+        export_without_capture_time(&second.replace("12:34 UTC", "12:35 UTC"))
+    );
+}
+
+#[test]
+#[should_panic(expected = "one export capture status")]
+fn export_comparison_refuses_a_missing_capture_time() {
+    export_without_capture_time("<p>No capture status</p>");
+}
+
+#[test]
+#[should_panic(expected = "a well-formed UTC export capture time and Unix seconds")]
+fn export_comparison_refuses_a_malformed_capture_time() {
+    export_without_capture_time(
+        "<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"2026-11-03T25:58:43Z\" data-cf-unix=\"1793692723\">2026-11-03T25:58:43Z</time>.</aside>",
+    );
+}
+
+#[test]
+#[should_panic(expected = "capture datetime matches its text")]
+fn export_comparison_refuses_mismatched_capture_text() {
+    export_without_capture_time(
+        "<aside aria-label=\"Export status\">Review capture of the session at <time datetime=\"2026-11-03T07:58:43Z\" data-cf-unix=\"1793692723\">2026-11-03T07:58:44Z</time>.</aside>",
+    );
+}
+
 fn export_theme_aliases_match_canonical_bytes(
     fixture: &TestProject,
     running: &RunningPresentation,
@@ -652,9 +721,12 @@ fn export_theme_aliases_match_canonical_bytes(
                 .contains("data-cf-typeface"),
             "a skin must not select a typeface"
         );
-        canonical.insert(skin, html);
+        canonical.insert(skin, export_without_capture_time(&html));
     }
-    assert_eq!(canonical["graphite"], graphite_export);
+    assert_eq!(
+        canonical["graphite"],
+        export_without_capture_time(graphite_export)
+    );
     for (alias, skin) in [
         ("instrument", "graphite"),
         ("technical", "graphite"),
@@ -678,7 +750,7 @@ fn export_theme_aliases_match_canonical_bytes(
             ],
         ));
         assert_eq!(
-            fs::read_to_string(path).unwrap(),
+            export_without_capture_time(&fs::read_to_string(path).unwrap()),
             canonical[skin],
             "{alias} maps to {skin}"
         );
@@ -698,7 +770,7 @@ fn export_theme_aliases_match_canonical_bytes(
         ],
     ));
     assert_eq!(
-        fs::read_to_string(path).unwrap(),
+        export_without_capture_time(&fs::read_to_string(path).unwrap()),
         canonical["slate"],
         "the retained default resolves to Slate"
     );
@@ -948,34 +1020,18 @@ fn close_stops_the_browser_open_launched() {
     assert!(named.is_empty(), "clear left state: {named:?}");
 }
 
-/// `present show` on a session whose browser still runs says the browser is
-/// already open and how to reach it, and exits 4. The running browser is a
-/// stand-in process that carries the session's profile and instance
-/// arguments, the identity `CodeFlow` checks, so no window opens.
+/// `present show --no-launch` on a session whose browser still runs prints the
+/// session's address and opens nothing. The running browser is a stand-in
+/// process that carries the session's profile and instance arguments, the
+/// identity `CodeFlow` checks. Without `--no-launch`, `show` opens a window in
+/// the running browser instead of refusing (TSK-441 AC-8); the real-browser
+/// lifecycle check proves that path, since it needs a real browser.
 #[test]
-fn show_says_the_browser_is_already_open() {
+fn show_no_launch_prints_the_address_while_the_browser_runs() {
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
     let browser = register_stand_in_browser(&fixture, &session_id);
 
-    let shown = codeflow(
-        &fixture.project,
-        &fixture.home,
-        &["present", "show", &session_id],
-    );
-    assert_eq!(shown.status.code(), Some(4), "{shown:?}");
-    let message = failure(&shown);
-    for expected in [
-        format!("the browser for presentation session {session_id} is already open"),
-        "Switch to its window, or quit that browser and run".to_string(),
-        "on macOS the browser can keep running after its last window closes".to_string(),
-        format!("`codeflow present show {session_id}` again"),
-        format!("`codeflow present show {session_id} --no-launch` prints the session's address"),
-    ] {
-        assert!(message.contains(&expected), "{message}");
-    }
-    assert!(!message.contains("not qualified"), "{message}");
-    // The named step works: --no-launch prints the address of the session.
     let address = require_success(&codeflow(
         &fixture.project,
         &fixture.home,
@@ -3619,4 +3675,116 @@ fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
         assert!(revision.get("snapshots").is_none());
     }
     close_and_clear(&fixture, id);
+}
+
+#[test]
+fn check_refuses_figures_with_json_contains_checks() {
+    assert_undrawable_figure_refused("json-fact", "JSON source takes the json check");
+}
+
+#[test]
+fn check_refuses_figures_wider_than_the_render_limit() {
+    assert_undrawable_figure_refused("wide", "wide.width must be 120 to 720");
+}
+
+fn assert_undrawable_figure_refused(name: &str, expected: &str) {
+    let project = setup_project();
+    let fixture =
+        include_str!("../../codeflow-present/tests/fixtures/contract-v2/documents/v2-framed.json");
+    let mut document: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    let figure = &mut document["blocks"][1]["declaration"]["figure"];
+    if name == "json-fact" {
+        figure["family"] = "sequence".into();
+        figure["facts"][0]["source"] = "facts.json".into();
+    } else {
+        figure["family"] = "coverage".into();
+        figure["wide"]["width"] = 760.into();
+    }
+    let path = project.project.join(format!("{name}.json"));
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(9), "{name}: {text}");
+    assert!(text.contains(expected), "{text}");
+}
+
+#[test]
+fn check_warns_when_an_explanation_has_no_figure() {
+    let project = setup_project();
+    let path = project.project.join("explanation.json");
+    fs::write(&path, r###"{"schema_version":2,"title":"How review works","blocks":[{"type":"narrative","id":"concept","markdown":"## Concept\nA change travels through review before it lands."}]}"###).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = require_success(&output);
+    assert!(text.contains("figure-balance"), "{text}");
+}
+
+#[test]
+fn check_warns_when_narrative_dominates_without_refusing() {
+    let project = setup_project();
+    let path = project.project.join("narrative.json");
+    let document = serde_json::json!({"schema_version": 2, "title": "An explanation", "blocks": [
+        {"type": "narrative", "id": "long", "markdown": "word ".repeat(501)}
+    ]});
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = require_success(&output);
+    assert!(text.contains("narrative text dominates"), "{text}");
+}
+
+/// End review's route (TSK-441 AC-6) refuses a request without the session's
+/// cookie, origin and marker, and with them closes the session as
+/// `present close` does: the session reads closed and its service exits.
+#[test]
+fn tsk441_end_review_route_closes_the_session() {
+    let fixture = setup_project();
+    let running = open_recover_and_bootstrap(&fixture);
+    let body = "{}";
+    let unauthenticated = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, body.len()));
+    assert!(
+        unauthenticated.starts_with("HTTP/1.1 401"),
+        "{unauthenticated}"
+    );
+    let foreign = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://example.invalid\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.cookie, body.len()));
+    assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["status"], "active", "{listed}");
+
+    let ended = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, running.cookie, body.len()));
+    assert!(ended.starts_with("HTTP/1.1 200"), "{ended}");
+    assert!(ended.contains(r#""state":"closed""#), "{ended}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "list"],
+        )))
+        .unwrap();
+        if listed[0]["status"] == "closed" && listed[0].get("service_pid").is_none() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "service still runs: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    close_and_clear(&fixture, &running.session_id);
 }

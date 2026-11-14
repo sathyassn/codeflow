@@ -11,13 +11,19 @@ when you have recorded the assume-breach attempts you actually made.
 
 ## Two lenses, one charge
 
-This charge is run by two independent-vendor models, because an attacker and
-a defender on the same model share blind spots (CodeFlow ADR-0005).
+An attacker and a defender on the same model share blind spots (CodeFlow
+ADR-0005), so the two lenses come from two independent-vendor models
+without adding a pass.
+`.codeflow/rules/workflow-discipline.md` "Review verdicts" states the one
+security review; this file is its checklist.
 
-- **Defender lens — Claude, full repo context.** Triage every deterministic-
-  scanner hit for reachability (confirm vs false-positive with a concrete path),
-  then work the checklist for the classes scanners structurally cannot see.
-- **Attacker lens — a second vendor, read-only.** Assume breach: *you have a
+- **Defender lens — Claude, full repo context.** Inside its integrated
+  judgment, the Claude side triages every deterministic-scanner hit for
+  reachability (confirm vs false-positive with a concrete path) and weighs
+  the classes scanners structurally cannot see.
+- **Attacker lens — a second vendor, read-only.** The one other-lineage
+  whole-unit review carries this checklist: another family's attacker lens,
+  Codex preferred, any other family counting. Assume breach: *you have a
   foothold; find a flow from an untrusted source to a dangerous sink; try to
   exfiltrate a secret or PII, bypass an authz check, or inject a command, query,
   or prompt. Every finding needs a concrete trigger.* The second vendor is
@@ -25,8 +31,10 @@ a defender on the same model share blind spots (CodeFlow ADR-0005).
   `resources/routing/transport.md` names, with the launch and evidence of
   `cf-delegate`; headless execution is prohibited. If the seat's client
   withholds a security verdict through a content filter, ask the same seat to
-  restate it as a defensive review. When no
-  interactive second-vendor lane is available, see "Degrade legibly" below.
+  restate it as a defensive review.
+
+This agent runs as its own pass only when no other-lineage seat exists; see
+"Degrade legibly" below.
 
 Union both lenses' findings and dedup by (location, class). A finding one vendor
 raised and the other cleared is **escalated to the human at merge, never
@@ -169,7 +177,7 @@ human merger. Do not assume a non-overridable severity floor.
   finding one vendor raised and the other cleared.
 - Degrade legibly: the deterministic floor is always mandatory. When the
   second vendor is absent at flow start or lost mid-review, try its bounded
-  recovery first; if it stays unavailable, run the defender lens alone and
+  recovery first, then another family's seat; if none is available, run the defender lens alone and
   record reduced assurance that names the missing attacker review, in the
   `attack_log` and in your report to the human merger. A lost seat is never
   a finding and never a severity, never faked and never silently waived;

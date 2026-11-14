@@ -10,6 +10,7 @@
 //! block) ships and is populated by stack detection, but the validator is not
 //! yet wired into the gate.
 
+pub mod capacity;
 pub mod config;
 pub mod coverage;
 mod delivery;

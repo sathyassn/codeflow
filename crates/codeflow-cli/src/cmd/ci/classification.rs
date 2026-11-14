@@ -25,6 +25,10 @@ use codeflow_core::workgraph::{
     durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
 };
 
+/// A proven sync's line and merges, or why the range is not one; `None`
+/// when the range does not target the epic's line.
+pub(super) type SyncProof = Option<Result<(String, Vec<String>), String>>;
+
 /// The value of one `Task:` line in a pull request body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TaskLine {
@@ -143,6 +147,16 @@ pub(super) enum Class {
     /// (ADR-0074); small edits land on it directly, and each nested project
     /// lands through its own repository.
     RootBranch(String),
+    /// A sync of the default branch into the epic's integration line
+    /// (TSK-1312): every commit beyond the line and the trusted default
+    /// branch commit is a clean two-parent merge of a commit on it
+    /// ([`codeflow_core::workgraph::main_sync::sync_merges`]). It starts no
+    /// work, and its criteria stay frozen.
+    MainSync {
+        epic: String,
+        line: String,
+        merges: Vec<String>,
+    },
 }
 
 /// The existing unit whose reviewed false positive an exemption names.
@@ -202,6 +216,11 @@ pub(super) struct Input<'a> {
     /// Why an epic a planning amendment names cannot be named: absent from
     /// the head, or cancelled at the target. `None` when it can.
     pub epic_problem: &'a dyn Fn(&str) -> Option<String>,
+    /// For an epic whose integration line the range targets: the merges of
+    /// a proven sync of the default branch, or why the range is not one.
+    /// `None` when the range does not target that epic's line. Asked only
+    /// when the range cannot be a planning amendment.
+    pub main_sync: &'a dyn Fn(&str) -> SyncProof,
 }
 
 /// Resolve the class, or the reason the pull request has none.
@@ -218,7 +237,7 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
             if let Some(carried) = input.branch_task.as_deref() {
                 if carried != task_id {
                     return Err(format!(
-                        "`Task: {task_id}` names another task than branch '{}' ({carried})",
+                        "the `Task:` line names another task than branch '{}' ({carried})",
                         input.branch
                     ));
                 }
@@ -236,9 +255,9 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
             if input.branch.starts_with("integration/") {
                 return match &input.epic_line {
                     Some(Ok(actual)) if actual == &epic => Ok(Class::EpicLine(epic)),
-                    Some(Ok(actual)) => {
-                        Err(format!("Task: {epic} does not match the line's {actual}"))
-                    }
+                    Some(Ok(actual)) => Err(format!(
+                        "the `Task:` line does not match the line's {actual}"
+                    )),
                     Some(Err(reason)) => Err(reason.clone()),
                     None => Err(format!("'{}' is not a verified epic line", input.branch)),
                 };
@@ -249,7 +268,7 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 }
                 Ok(Class::SecretScanExemption(ExemptionWork::Epic(epic)))
             } else {
-                planning(input, vec![epic])
+                planning_or_sync(input, epic)
             }
         }
         Some(TaskLine::Epics(epics)) => {
@@ -257,19 +276,18 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 return Err("a task branch must name its own task".into());
             }
             if input.branch.starts_with("integration/") {
-                return Err(format!(
-                    "an integration line lands one epic; `Task: {}` names several",
-                    epics.join(", ")
-                ));
+                return Err(
+                    "an integration line lands one epic; the `Task:` line names several".into(),
+                );
             }
             planning(input, epics)
         }
-        Some(TaskLine::Malformed(value)) if value.contains(',') => Err(format!(
-            "`Task: {value}` is not a list of distinct epics; only a planning amendment names several, as `Task: EPC-001, EPC-002`, and a task id never takes a list"
-        )),
-        Some(TaskLine::Malformed(value) | TaskLine::Unit(value)) => Err(format!(
-            "`Task: {value}` is neither `TSK-NNN` nor `EPC-NNN`"
-        )),
+        Some(TaskLine::Malformed(value)) if value.contains(',') => Err(
+            "the `Task:` line is not a list of distinct epics; only a planning amendment names several, as `Task: EPC-001, EPC-002`, and a task id never takes a list".into(),
+        ),
+        Some(TaskLine::Malformed(_) | TaskLine::Unit(_)) => {
+            Err("the `Task:` line is neither `TSK-NNN` nor `EPC-NNN`".into())
+        }
         None if input.root_branch => Ok(Class::RootBranch(input.branch.to_string())),
         None => Err(
             "no `Task:` line; name the task, or the epic for a planning change or integration line"
@@ -288,6 +306,26 @@ fn planning(input: &Input<'_>, epics: Vec<String>) -> Result<Class, String> {
     match (input.amendment_problem)(input.files) {
         Some(problem) => Err(problem),
         None => Ok(Class::PlanningOnly { epics }),
+    }
+}
+
+/// One epic named off its line: a planning amendment when the range carries
+/// only what one may, else a sync of the default branch into the epic's
+/// line when its history proves one (TSK-1312). A range that is neither is
+/// refused with both reasons when it targets the epic's line.
+fn planning_or_sync(input: &Input<'_>, epic: String) -> Result<Class, String> {
+    if let Some(problem) = (input.epic_problem)(&epic) {
+        return Err(problem);
+    }
+    let Some(problem) = (input.amendment_problem)(input.files) else {
+        return Ok(Class::PlanningOnly { epics: vec![epic] });
+    };
+    match (input.main_sync)(&epic) {
+        None => Err(problem),
+        Some(Ok((line, merges))) => Ok(Class::MainSync { epic, line, merges }),
+        Some(Err(reason)) => Err(format!(
+            "{problem}; nor is it a sync of the default branch into the line: {reason}"
+        )),
     }
 }
 
@@ -322,12 +360,13 @@ pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, 
 /// Whether durable work tracking is on at the head or at the target, so a
 /// pull request cannot switch it off for itself.
 pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
-    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
-    match (durable_work_tracking_enabled(root), at_target) {
-        (Err(error), _) => Err(error.to_string()),
-        (_, Some(Err(error))) => Err(error),
-        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
+    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
+    if let Some(range) = range {
+        for revision in [range.base, range.head] {
+            enabled |= durable_work_tracking_enabled_at(root, revision)?;
+        }
     }
+    Ok(enabled)
 }
 
 /// With durable tracking on, an `integration/*` head that is not a release
@@ -585,6 +624,7 @@ pub(super) fn dispatch(
     branch: &str,
     range: Option<&Range<'_>>,
     release: Option<&ReleaseHead>,
+    trusted: Option<&str>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -621,7 +661,10 @@ pub(super) fn dispatch(
     let amendment_problem =
         |files: &[GitName]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
-    let branch_task = match task_id_from_branch(root, branch) {
+    // The branch's task from the judged head under the run's policy
+    // (TSK-350 AC-1), so the class does not depend on the checkout.
+    let judged = codeflow_core::workgraph::judged_task_id;
+    let branch_task = match judged(root, &git.branch_prefixes, branch, range.head) {
         Ok(task) => task,
         Err(error) => {
             push(tagged, RULE, error.to_string(), HINT);
@@ -647,10 +690,15 @@ pub(super) fn dispatch(
         root_branch: root_branch.as_deref() == Some(branch),
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
+        main_sync: &|epic: &str| main_sync(root, range, trusted, epic),
     };
     let class = match classify(&input)
+        .and_then(|class| cancellation_entry(root, branch, range, &files, class))
         .and_then(|class| exemption_entry(root, range, &changes, class))
         .map(|class| release_class(release, class))
+        // Last, so every class a later step produces (a demoted exemption, a
+        // release integration) is judged as the task it finally names.
+        .and_then(|class| named_task_entry(&input, (root, range), class))
     {
         Ok(class) => class,
         Err(reason) => {
@@ -663,14 +711,12 @@ pub(super) fn dispatch(
             return None;
         }
     };
-    announce(&class, epic_line.as_ref());
+    announce(&class, epic_line.as_ref(), &task_shown(root, range, &input));
     match &class {
         Class::Tracked { task_id } | Class::SecretScanExemption(ExemptionWork::Task(task_id)) => {
-            let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
-            let level = git.work_planning_level();
             let anchor = Anchor {
-                own_branch,
-                level,
+                own_branch: input.branch_task.as_deref() == Some(task_id.as_str()),
+                level: git.work_planning_level(),
                 branch,
                 base: range.base,
                 head: range.head,
@@ -687,6 +733,25 @@ pub(super) fn dispatch(
     Some(class)
 }
 
+/// Whether the range is a sync of the default branch into `epic`'s line
+/// (TSK-1312). Only a range that targets that line can be one. The default
+/// branch is the commit the run's authority names (`--policy-from`, the
+/// default branch's own commit in the hosted check), bound by id; a run
+/// without one has nothing to trust and is refused.
+fn main_sync(root: &Path, range: &Range<'_>, trusted: Option<&str>, epic: &str) -> SyncProof {
+    let line = range.target;
+    if codeflow_core::workgraph::line_adoption::epic_id(line).ok()? != epic {
+        return None;
+    }
+    Some(match trusted {
+        None => Err("there is no default branch commit to trust; the run names none with --policy-from, as the hosted policy check does".to_string()),
+        Some(trusted) => {
+            codeflow_core::workgraph::main_sync::sync_merges(root, range.base, range.head, trusted)
+                .map(|merges| (line.to_string(), merges))
+        }
+    })
+}
+
 type EpicLineResult = Result<(String, AdoptionReport), String>;
 
 fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
@@ -694,6 +759,114 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
         .as_ref()
         .map(|(epic, _)| epic.clone())
         .map_err(Clone::clone)
+}
+
+/// Whether a message may repeat `task`: the branch spells it out, or a task
+/// record holds it (TSK-1040).
+fn task_shown<'a>(
+    root: &'a Path,
+    range: &'a Range<'a>,
+    input: &'a Input<'a>,
+) -> impl Fn(&str) -> bool + 'a {
+    move |task| {
+        branch_spells(input.branch, task)
+            || input.branch_task.as_deref() == Some(task)
+            || amendment::task_recorded(root, range.base, range.head, task)
+    }
+}
+
+/// Whether the branch name spells out `task` as a path segment or its prefix.
+fn branch_spells(branch: &str, task: &str) -> bool {
+    branch.split('/').any(|part| {
+        part == task
+            || part
+                .strip_prefix(task)
+                .is_some_and(|rest| rest.starts_with('-'))
+    })
+}
+
+/// A task the body names, and the branch does not carry, must have a task
+/// record before any message repeats it: until then the identifier is the
+/// body's own text, and the policy run's log carries none of the body
+/// (TSK-1040).
+fn named_task_entry(
+    input: &Input<'_>,
+    (root, range): (&Path, &Range<'_>),
+    class: Class,
+) -> Result<Class, String> {
+    let (Class::Tracked { task_id: named }
+    | Class::ReleaseIntegration { task_id: named }
+    | Class::SecretScanExemption(ExemptionWork::Task(named))) = &class
+    else {
+        return Ok(class);
+    };
+    // The branch name is not the body: a task it spells out is already in
+    // every context line, whether or not its record is visible yet.
+    let spelled = branch_spells(input.branch, named);
+    if spelled || input.branch_task.as_deref() == Some(named.as_str()) {
+        return Ok(class);
+    }
+    match amendment::task_problem(root, range.base, range.head, named) {
+        Some(problem) => Err(problem),
+        None => Ok(class),
+    }
+}
+
+/// The task-named cancellation is an amendment and starts no work. Both
+/// entry points use the same merge-base and range validation.
+fn cancellation_entry(
+    root: &Path,
+    branch: &str,
+    range: &Range<'_>,
+    files: &[GitName],
+    class: Class,
+) -> Result<Class, String> {
+    if branch.starts_with("plan/") {
+        if let Class::Tracked { task_id } = &class {
+            if let Some(cancelled) = amendment::cancelled_standalone(
+                root,
+                range.base,
+                range.head,
+                files,
+                amendment::CancellationJudge::PullRequest(task_id),
+            )? {
+                if cancelled != *task_id {
+                    return Err(format!(
+                        "the `Task:` line does not name the cancelled task {cancelled}"
+                    ));
+                }
+                return Ok(Class::PlanningOnly { epics: Vec::new() });
+            }
+        }
+    }
+    Ok(class)
+}
+
+/// A push has no Task line yet, and the same `plan/` range may be an
+/// epic's planning amendment. Refuse only a new cancelled standalone record
+/// that no `Task:` line could make valid; the PR binds the rest.
+pub(super) fn cancellation_push_check(
+    root: &Path,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let Some(range) = range.filter(|_| branch.starts_with("plan/")) else {
+        return;
+    };
+    let result = range_changes(root, range.base, range.head).and_then(|changes| {
+        let paths: Vec<_> = changes.into_iter().map(|(_, path)| path).collect();
+        amendment::cancelled_standalone(
+            root,
+            range.base,
+            range.head,
+            &paths,
+            amendment::CancellationJudge::Push,
+        )
+    });
+    if let Err(problem) = result {
+        push(tagged, RULE, problem, HINT);
+    }
 }
 
 /// An exemption adds or edits the regular file; it cannot remove or replace it.
@@ -721,17 +894,22 @@ fn exemption_entry(
 }
 
 /// Print the class and the direct commits its reviewer is accepting.
-fn announce(class: &Class, line: Option<&EpicLineResult>) {
+fn announce(class: &Class, line: Option<&EpicLineResult>, shown: &dyn Fn(&str) -> bool) {
     let adoptions = line
         .and_then(|result| result.as_ref().ok())
         .map(|(_, report)| report);
     match class {
-        Class::SecretScanExemption(ExemptionWork::Task(id) | ExemptionWork::Epic(id)) => println!(
+        // The task is the body's own text unless a record vouches for it, so
+        // only the epic, which `epic_problem` has checked, is named.
+        Class::SecretScanExemption(ExemptionWork::Task(_)) => println!(
+            "codeflow ci: pull request class: secret-scan exemption for the named task (only .gitleaksignore; dependency readiness is not required)"
+        ),
+        Class::SecretScanExemption(ExemptionWork::Epic(id)) => println!(
             "codeflow ci: pull request class: secret-scan exemption for {id} (only .gitleaksignore; dependency readiness is not required)"
         ),
         Class::PlanningOnly { epics } => println!(
             "codeflow ci: pull request class: planning-only amendment of {}",
-            epics.join(", ")
+            if epics.is_empty() { "no epic".to_string() } else { epics.join(", ") }
         ),
         Class::EpicLine(epic) => {
             print!("codeflow ci: pull request class: epic integration line of {epic}");
@@ -763,11 +941,25 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
         }
+        Class::MainSync {
+            epic,
+            line,
+            merges,
+        } => {
+            let merges: Vec<&str> = merges.iter().map(|merge| &merge[..9]).collect();
+            println!(
+                "codeflow ci: pull request class: sync of the default branch into {} for {epic} (clean merges {}; the criteria stay frozen)",
+                codeflow_core::git::display_text(line),
+                merges.join(", ")
+            );
+        }
         Class::Tracked { task_id } => println!(
-            "codeflow ci: pull request class: tracked {task_id} (from the Task: line)"
+            "codeflow ci: pull request class: tracked {} (from the Task: line)",
+            if shown(task_id) { task_id } else { "the named task" }
         ),
         Class::ReleaseIntegration { task_id } => println!(
-            "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
+            "codeflow ci: pull request class: release integration {} (from the Task: line)",
+            if shown(task_id) { task_id } else { "the named task" }
         ),
     }
 }
@@ -877,26 +1069,7 @@ fn tracked(
     if branch.starts_with("spike/") {
         spike_paths(task_id, files, tagged);
     }
-    // Matched as bytes: an added record whose name is not valid UTF-8 is
-    // never this task's own record, so it counts against the task.
-    let added_records: Vec<&GitName> = changes
-        .iter()
-        .filter(|(status, _)| status == "A")
-        .map(|(_, path)| path)
-        .filter(|path| is_added_work_record(path.bytes()))
-        .collect();
-    if added_records.iter().any(|path| {
-        path.rule_text()
-            .map_or(true, |path| !is_record_of(path, task_id))
-    }) || (added_records.len() > 1)
-    {
-        push(
-            tagged,
-            RULE,
-            "a task PR may add only its own standalone task record".into(),
-            "put the other records in the epic amendment",
-        );
-    }
+    task_record_additions(root, task_id, anchor, changes, tagged);
     // A range of planning records only that corrects a completed
     // standalone task, named by the Task line or followed up by the task
     // it names in any status, starts no work, so there is nothing to admit
@@ -966,13 +1139,61 @@ fn tracked(
             });
         }
         Err(_) if anchor.own_branch => {}
-        Err(error) => anchor_failure(
+        Err(error) => {
+            let remedy = error.admission_remedy(&target, task_id);
+            anchor_failure(tagged, anchor.level, error.to_string(), remedy);
+        }
+    }
+}
+
+/// Imported records keep their proven source; new records belong to this task.
+fn task_record_additions(
+    root: &Path,
+    task_id: &str,
+    anchor: Anchor<'_>,
+    changes: &[(String, GitName)],
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let imported_paths = match codeflow_core::workgraph::acceptance::imported_record_paths(
+        root,
+        anchor.base,
+        anchor.head,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            push(
+                tagged,
+                codeflow_core::workgraph::acceptance::IMPORT_RULE,
+                error,
+                "fetch and verify the named source history before classifying imported records",
+            );
+            return;
+        }
+    };
+    // Matched as bytes: an added record whose name is not valid UTF-8 is
+    // never this task's own record, so it counts against the task.
+    let added_records: Vec<&GitName> = changes
+        .iter()
+        .filter(|(status, _)| status == "A")
+        .map(|(_, path)| path)
+        .filter(|path| is_added_work_record(path.bytes()))
+        .filter(|path| {
+            !imported_paths
+                .iter()
+                .any(|imported| imported.as_bytes() == path.bytes())
+        })
+        .collect();
+    if added_records.iter().any(|path| {
+        path.rule_text()
+            .map_or(true, |path| !is_record_of(path, task_id))
+    }) || (added_records.len() > 1)
+    {
+        push(
             tagged,
-            anchor.level,
-            error.to_string(),
-            codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                .with(&[("target", &target), ("id", task_id)]),
-        ),
+            RULE,
+            "a task PR may add only its own standalone task record".into(),
+            "put the other records in the epic amendment",
+        );
     }
 }
 
@@ -1391,7 +1612,12 @@ mod tests {
             root_branch: false,
             amendment_problem: &path_problem,
             epic_problem: &no_problem,
+            main_sync: &no_sync,
         }
+    }
+
+    fn no_sync(_: &str) -> SyncProof {
+        None
     }
 
     fn planning(epics: &[&str]) -> Class {

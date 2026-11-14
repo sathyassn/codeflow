@@ -54,9 +54,10 @@ inside an approved node remain execution evidence.
 Discovery, the one plan and its approval are the orchestrator's workflow:
 both primary families independently research, analyze and identify risks;
 Claude produces design direction and real design work and drafts the one
-plan; Codex challenges it; both seats approve its shape once or record
-settled dissent per `autonomy.md`. Missing seats are recorded as reduced
-assurance after qualified routes are exhausted, never fabricated as
+plan; Codex, or any other family when Codex is unavailable, challenges it;
+Claude and the challenging seat approve its shape once or record settled
+dissent per `autonomy.md`. Missing seats are recorded as reduced assurance
+only after qualified routes to every other family are exhausted, never fabricated as
 completion.
 
 Use `cf-plan` to materialize only warranted records. Where CodeFlow durable
@@ -76,6 +77,44 @@ rules' "Write only what earns its keep" says. An ADR may be drafted and
 revised while its decision is unresolved and unaccepted; once accepted it is
 append-only, and a reversal is a new ADR that supersedes it.
 
+## Planned work keeps to its band
+
+This section is the one home of the pace of planned work; `cf-develop`,
+`cf-model-orchestrator`, `cf-estimate` and the map's build row point here.
+
+Exploration, research and planning stay deliberate. Once work is planned
+into an epic and tasks with criteria, builders execute it without
+re-planning, re-litigating settled decisions or confirmation work for its
+own sake. Where the project adopted the `cf-estimate` time-box profile, each
+task's budget is its band, frozen at breakdown: the clock runs from the
+claim to the later of the bound approval and the end of verification, less
+recorded blocked spans. The band replaces the operator's throughput decision of
+2026-10-23. Quality is not traded for speed: the criteria, the tests that
+prove them and real security stay.
+
+A claim means work begins now. A lane that cannot start, or that waits on
+something outside the task, records `blocked` with its reason, owner and
+revisit; a busy reviewer is not a block. An abandoned claim is handed over
+on its branch, never deleted.
+
+A builder keeps to these practices:
+
+- run targeted tests in the worktree and the quick gate once before ready,
+  and never run the full gate locally;
+- push once, at ready, and never rerun a check on an unchanged tree;
+- keep the PR body lean: the criteria with file:line and the test evidence;
+- report any stop longer than 15 minutes at once;
+- decide reversible choices and disclose them;
+- where the profile is adopted, on a Hard task, log one line at half the
+  band top; at the top, stop new work and choose a finish of at most 30
+  minutes, a split or a re-plan, with a cause line.
+
+The coordinator starts every task whose edges allow, up to host capacity.
+Where the profile is adopted, it reads each lane's time on its task against
+its band at every sweep and acts on any task past its band top. Estimates
+come from the `cf-estimate` scenarios and, where adopted, the task's band,
+never extrapolated from a slow pace.
+
 ## Execute and integrate
 
 Follow the approved responsible-primary, executor, and cross-lineage reviewer
@@ -85,11 +124,9 @@ keep".
 Each task owns its branch and worktree, and the work-start check in the
 worktree rules runs before the first mutation. For multiple tasks, load the
 task-graph and parallel-execution contracts and parallelize only independent
-work that shortens the critical path. Landing runs as the delivery process
-states: the task merges the current line in before review, reviewed heads
-land as a batch candidate under one full gate, a red candidate is diagnosed
-before a member is dropped, and a shared integration branch is never rebased.
-Task-local green is not integrated evidence.
+work that shortens the critical path. The task merges the current line in
+before review; batch landing is stated once in the `cf-method` skill,
+"Managing a body of work". Task-local green is not integrated evidence.
 
 Cancellation stops execution and preserves approvals, evidence, unfinished
 state, and owned dirty resources for authorized disposition. A mid-run seat or
@@ -115,7 +152,8 @@ evidence returns to its owning stage for repair and proportional re-verification
   version;
 - implementation defect -> responsible primary and executor via `cf-develop`,
   a reported one first through `issue-handling.md`;
-- review concern -> the affected producer, then independent re-review;
+- review concern -> the affected producer, then the finder's delta
+  confirmation the discipline rules' "Review verdicts" states;
 - documentation or PR evidence gap -> `cf-ship` or the standalone docs owner;
 - deterministic gate failure -> fix or honor the gate, never bypass it;
 - unavailable required capability -> bounded recovery, then an explicit

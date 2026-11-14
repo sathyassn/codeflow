@@ -18,7 +18,7 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0ee00ddd28dd3ced03a8edea64d9f6d2d025fb851e4b9875c22acae2d35f9cb3"
+      "pristine_sha256": "d34144e3a181a43878fdd9c2afe6da0b2fed04da4c70308478826fca9bb1d264"
     },
     "osv-scanner.toml": {
       "ownership": "user-owned",
@@ -26,11 +26,11 @@
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "12d1e2f7205acbb3d823bc4743b86ff8c820d372fa087aae4e92bbcb1ae9f469"
+      "pristine_sha256": "0c6150b21da548d06df8c54802384799750dddbed9f16a6141eac6948edd056e"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "20f925ffec31aaa6bf8859da467541624fec82b63361dac48c3dcb3941ab8aa6"
+      "pristine_sha256": "bc373cc0f50f7c101dc93797c964f379b01d71b4501210da53da66aabac06d03"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -46,7 +46,7 @@
     },
     "public/portal-chrome.js": {
       "ownership": "managed",
-      "pristine_sha256": "6daa5664769185201c7bdb5360146d71196f83c9cd96aa7c41896734edb03e17"
+      "pristine_sha256": "5e77b20083b2cdb05ef68e4f8b9feeaea8729ebcb5193f126454915e75328dc1"
     },
     "public/portal-preview.js": {
       "ownership": "managed",
@@ -58,7 +58,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2eed048cd630cbc4be203b62e4341d3f75feda14a00cfcb9a4413235c65862c0"
+      "pristine_sha256": "9e1137936caa7738630301c470f8c10001d4fb6aca7726186b83d515064018de"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -80,9 +80,13 @@
       "ownership": "managed",
       "pristine_sha256": "37087b488dfbd010322197279510e487d3403384b33d21d6a93963ab6757e927"
     },
+    "scripts/figure-declaration-rules.json": {
+      "ownership": "managed",
+      "pristine_sha256": "cedb2a8103d4c51a85f89800734dbd8ad5f9f38e41afcfdd9d8c40fa2468bedb"
+    },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ff99a7531837ed8bbb2d024303e4717bb87904bae4573504e6cb0cce2c610d97"
+      "pristine_sha256": "28d470972621736f0049c49f5f17245d56fa8a5a4bfb226097d17a8d5a40e407"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -98,7 +102,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2115d1ba684e41d820cf09c79f0ede3074be59c2672889d5952511a491681459"
+      "pristine_sha256": "732f42b8a31cbddec434488a9a967857bed1c52b24993633f6aa92e59e50dacf"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -118,11 +122,11 @@
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "09e1d85e61241cf88a8f34d5144548d4ef1bf04521019ebf50396a1053f54b37"
+      "pristine_sha256": "496b41ca73ea9c07ea5baf3a24341776add6c271cea3217ee1af43a5624f15fc"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ca23ba9ece998b02fa687cafea5a402369df17f299665e7aa37eec05332df588"
+      "pristine_sha256": "084072fb5006edc72a3deec3abec93bbfbae227e54dd794514bdb5956f60da7f"
     },
     "scripts/site-server.mjs": {
       "ownership": "managed",
@@ -162,7 +166,7 @@
     },
     "src/components/PortalTitle.astro": {
       "ownership": "managed",
-      "pristine_sha256": "59119adef7276880edc6fb74a006b2343a40c8ae6b20c2ad6802ca15571874b4"
+      "pristine_sha256": "08c612b7e59524fbac2183dd4fda8200d32d44b2fd978ba4aca9e5c4ccaef7de"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -198,23 +202,23 @@
     },
     "src/styles/figure-roles.css": {
       "ownership": "managed",
-      "pristine_sha256": "58a75d1e0a419f4fc59cdd7475ee78001339e883ee03beacdea10c9579daf748"
+      "pristine_sha256": "ec979b16b368acea944881b01ab1af610ad8bfc1317cfab694819377af6a7edd"
     },
     "src/styles/figure.css": {
       "ownership": "managed",
-      "pristine_sha256": "81dbe4a3de3b4daa76a23d8429711ef3c498169f0a5d9c9ec0a7773b546b8c4b"
+      "pristine_sha256": "3fd6ad4da9f0a5879663e07732f050d30c59e4e43b36ad0c1681b3f33c78acfe"
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "7e4a9d6c4eb9e5eb711616f325885b69fdf41d6331ee9f068f9b4eb2da1f3f29"
+      "pristine_sha256": "fdbefc97b3f441f8d4b818b1c43df9e631ae8eb33df8bd6c5024da4eae3b0094"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
-      "pristine_sha256": "225dfbad0c1e64fb1bb1e4429adee226200f1714edc550bf657ff0ae64830930"
+      "pristine_sha256": "152f3298b0cdd1fc1d2540df50f45289a3a41e756ad3197c7ebdb54b8130079e"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "63f997dca4d408e0c48f1db5ad94c75de0e6af41beaa475c26e63bbf85012af1"
+      "pristine_sha256": "283928f8cec78316cde490ec1ef2439f5387e3ee5ca62ab778899580c798c580"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -222,11 +226,11 @@
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "771822f257533ab48ac3d4e47017ccd7320af22df1b39e43ef557e489d8eed54"
+      "pristine_sha256": "96a65c878596234bab7725d9a732542fbc53946efefb3faba96fae67954f9694"
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "17407d3ceaa3296685197171b17ae1033d085f3e38e4eecd2a005550f780ed1f"
+      "pristine_sha256": "11bc305840024e60e7300d802d92d50a81bf1f244ee4e1fb6d6cbf83d5979e49"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
@@ -234,15 +238,15 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6fb4e47a8bbc8e05a602844c056bfe32df3bf3208ae5218f1ad48698ed2488ec"
+      "pristine_sha256": "9ce179a7df2a6a59ead88ea418a83e640449de07857d2ff474e8c3ea6fd374b7"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "629cd26c4fccf563749ce9cb182dbeb05b93c441e7f584dc269dece7e5e6b567"
+      "pristine_sha256": "7f7ea3d441734e7305aeb1f816a6b80490a643b851f63a7f1a2507fa7bda8152"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "7cb2977870e204f348598e6c51a56efc7a9629debc37a98ea4a75ea7820f34fb"
+      "pristine_sha256": "213605683f6acf75385fe469037e67e910a1ddc355b7cdcdfc486e6b3904e144"
     },
     "tests/fixtures/altitude-words.json": {
       "ownership": "managed",
@@ -312,6 +316,10 @@
       "ownership": "managed",
       "pristine_sha256": "25127563f551486841e34893f54ad0caa4eed3843419adc89a93f4079459d722"
     },
+    "tests/fixtures/figures/controls/layering-toned.json": {
+      "ownership": "managed",
+      "pristine_sha256": "d141e5370b9399a01fd2f7ab6dcdc4feefb02c7f3da32063588c5d770cfe1452"
+    },
     "tests/fixtures/figures/controls/one-channel.json": {
       "ownership": "managed",
       "pristine_sha256": "3585376015b90a25afa728f4faaa4a4697dc042d23402bee1be609256e3ca465"
@@ -368,9 +376,25 @@
       "ownership": "managed",
       "pristine_sha256": "a1daaf9ab208e0fb41bfb3ea3aec7ea3bebc85c8e143556a0de0a39196c752d0"
     },
+    "tests/fixtures/figures/rendered/controls/layering-toned.html": {
+      "ownership": "managed",
+      "pristine_sha256": "abe8f1c9144fddb587d6f65d3ddc6e851f392d0ca4b379c2658fd68cd45d48b5"
+    },
+    "tests/fixtures/pre-paint-script.json": {
+      "ownership": "managed",
+      "pristine_sha256": "e096b671d83f682e7616e22dc109585f9c883e6a627dc834d031b1498971be2e"
+    },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
       "pristine_sha256": "0b442af14a23ccd4a3636d0c1cb7e3c43f24aab07313bda13ea136fcf5cd290a"
+    },
+    "tests/fixtures/runtime-scripts-cases.json": {
+      "ownership": "managed",
+      "pristine_sha256": "7d9d62ed6a8c7b45fb90005e0ab337e1b44d9e319557c5f2454cc670c6ceb5ec"
+    },
+    "tests/page-anatomy-browser.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "cba4340436a7694c21dc2c9b232ffc8996407b335399c1d7b173ab8990f86b16"
     },
     "tests/page-shapes.mjs": {
       "ownership": "managed",
@@ -380,6 +404,10 @@
       "ownership": "managed",
       "pristine_sha256": "d0c2d9b6570ee0c2cce20ea78bc377737a1796d889e6259166da85aa862d975b"
     },
+    "tests/present-parity.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "19b677c926547414e7e7358f44674dcabf46e5c7c1ca7efaa3fbaf40db6c64ab"
+    },
     "tests/site-server.test.mjs": {
       "ownership": "managed",
       "pristine_sha256": "0a68fbea09e98573ce4c1414602b076f1cf5b0861090ced11b51d819df97c6e8"
@@ -387,6 +415,18 @@
     "tsconfig.json": {
       "ownership": "managed",
       "pristine_sha256": "974b0a3b37e52f3649d9df63e72e374794e9e797c8ae61eca4812f844406f7ef"
+    },
+    "public/tokens.js": {
+      "ownership": "managed",
+      "pristine_sha256": "dd8b92feec0fecde2fc4815036a16e30907801126ce2238c233f2b2145fc589c"
+    },
+    "src/tokens.ts": {
+      "ownership": "managed",
+      "pristine_sha256": "c8a09c7721a0a3796038bb7a1362cd65436a0870862b40a7c87356b6500dee7c"
+    },
+    "src/components/PortalThemeProvider.astro": {
+      "ownership": "managed",
+      "pristine_sha256": "9feb61b0448a72e57d4a8fd22daeb6314ce4ce5e8ff7a0a7ac0f877a6f1362e2"
     }
   }
 }

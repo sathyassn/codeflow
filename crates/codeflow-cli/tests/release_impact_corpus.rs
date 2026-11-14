@@ -2,10 +2,10 @@
 //! Release impact block alike, over a seeded corpus of Markdown structures,
 //! not only the hand-picked cases in `scripts/fixtures/release_impact_cases.json`.
 //!
-//! Both read the body with one parser, this binary
-//! (`codeflow ci --read-release-impact`); release.py adds its own rules to
-//! the fields it reads. The corpus keeps the two verdicts, and the fields
-//! each reports, equal. Before the readers were one, this corpus compared
+//! Both read the body with one parser and one evaluator, this binary
+//! (`codeflow ci --read-release-impact`); release.py judges nothing of its
+//! own on the block (TSK-451). The corpus keeps the two verdicts, and the
+//! fields each reports, equal. Before the readers were one, this corpus compared
 //! release.py's own Markdown reader with this one; that reader's readings of
 //! these 5,000 bodies equal the binary's (TSK-147 round 4 record).
 
@@ -181,10 +181,8 @@ fn codeflow() -> &'static str {
     env!("CARGO_BIN_EXE_codeflow")
 }
 
-/// `codeflow ci`'s side: the binary's reading and its findings. Its check
-/// leaves out release.py's CodeFlow-only rules (one `Unit: codeflow` and one
-/// substantive `Evidence`), so they are applied here to the fields it read;
-/// the corpus writes only plain values for both.
+/// `codeflow ci`'s side: the binary's reading and its findings, the one
+/// evaluator's verdict (TSK-451).
 fn ci_readings(bodies: &[String]) -> Vec<Reading> {
     let mut child = Command::new(codeflow())
         .args(["ci", "--read-release-impact"])
@@ -209,19 +207,8 @@ fn ci_readings(bodies: &[String]) -> Vec<Reading> {
         .iter()
         .map(|reading| {
             let fields = corpus_fields(&reading["release_impact"]);
-            let only = |name: &str| -> Vec<&str> {
-                fields
-                    .iter()
-                    .flatten()
-                    .filter(|(key, _)| key == name)
-                    .map(|(_, value)| value.as_str())
-                    .collect()
-            };
-            let codeflow_rules = only("unit") == ["codeflow"]
-                && matches!(only("evidence").as_slice(), [value] if value.chars().any(char::is_alphanumeric));
-            let clean = reading["findings"].as_array().unwrap().is_empty();
             Reading {
-                valid: clean && codeflow_rules,
+                valid: reading["findings"].as_array().unwrap().is_empty(),
                 fields,
             }
         })

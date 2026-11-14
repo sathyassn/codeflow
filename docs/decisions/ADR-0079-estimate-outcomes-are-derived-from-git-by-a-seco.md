@@ -60,3 +60,22 @@ estimates line only where `.codeflow/estimate.json` exists.
 
 The optional estimation row of `docs/architecture.md` names the read-only
 outcomes report beside the allocation checker.
+
+## Note of 2026-11-04: the clock's start and end points
+
+ADR-0096 amends three consequences; the read-only derivation is unchanged.
+
+- Started (lines 42-44): a `claimed:` line written by `work claim` is the
+  start when the record carries it, and it survives a squash. For an
+  adopted or renamed branch, started is the earlier of that line and the
+  first commit after the claim base.
+- Landed (lines 45-47): the end may be the later of a bound approval point
+  and a verification point when the task's Estimate block carries them.
+  The landing stands in for the end only by ancestry, when a records change
+  wrote the completion later.
+- What the report reads (lines 51-53): it gains `--ref <line>`, and a
+  landing found from commits reachable from `HEAD` when a target ref is
+  gone. Waits are still never inferred (line 50).
+
+TSK-1173, TSK-1172 and TSK-1012 build these; until they land, the report
+behaves as written above.

@@ -821,31 +821,31 @@ class ReleaseImpactFieldTests(unittest.TestCase):
                         )
                     )
 
-    def test_major_with_breaking_no_is_rejected(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
-            self.parse(self.body("major", breaking="no", migration="docs/migrate.md"))
-        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
-            self.parse(self.body("major", contract="compatible", migration="docs/migrate.md"))
+    def test_major_with_breaking_no_is_judged_against_the_entries(self) -> None:
+        """TSK-451: the block alone passes the one evaluator; a major entry
+        without Breaking: yes is refused by the tree rule in `pr_verdict`."""
+        self.parse(self.body("major", breaking="no", migration="docs/migrate.md"))
+        self.parse(self.body("major", contract="compatible", migration="docs/migrate.md"))
 
     def test_breaking_yes_below_major_is_rejected(self) -> None:
         for impact in ["none", "patch", "minor"]:
             with self.subTest(impact=impact):
-                with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+                with self.assertRaisesRegex(release.ReleaseError, "requires Impact of at least major"):
                     self.parse(self.body(impact, breaking="yes", migration="docs/migrate.md"))
 
     def test_migration_is_required_and_substantive_when_breaking(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "migration is required"):
+        with self.assertRaisesRegex(release.ReleaseError, "non-empty migration field"):
             self.parse(self.body("minor", breaking="no", migration=None))
         for placeholder in ["none", "", "N/A"]:
             with self.subTest(migration=placeholder):
                 with self.assertRaisesRegex(
-                    release.ReleaseError, "migration guidance|migration is required"
+                    release.ReleaseError, "substantive Migration|non-empty migration field"
                 ):
                     self.parse(self.body("major", breaking="yes", migration=placeholder))
         reference = self.body("major", breaking="yes", migration="see Breaking change")
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
             self.parse(reference)
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
             self.parse(reference + "\n## Breaking change\n\n<!-- steps -->\n")
         self.parse(reference + BREAKING_CHANGE)
 
@@ -853,21 +853,21 @@ class ReleaseImpactFieldTests(unittest.TestCase):
         for impact, breaking in [("minor", "no"), ("major", "yes")]:
             for value in [UNRESOLVED_MIGRATION, "none, steps, or see Breaking change", "steps"]:
                 with self.subTest(impact=impact, migration=value):
-                    with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+                    with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
                         self.parse(self.body(impact, breaking=breaking, migration=value))
 
     def test_breaking_rejects_empty_and_placeholder_migration(self) -> None:
         for value in ["``", " NONE ", "n/a", "na", "TODO", "TBD", "-", "`none`", "<steps>"]:
             with self.subTest(migration=value):
                 with self.assertRaisesRegex(
-                    release.ReleaseError, "migration guidance|migration is required"
+                    release.ReleaseError, "substantive Migration|non-empty migration field"
                 ):
                     self.parse(self.body("major", breaking="yes", migration=value))
 
     def test_quoted_migration_placeholders_are_rejected(self) -> None:
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
                     self.parse(self.body("major", breaking="yes", migration=value))
 
     def test_filled_template_parses_for_every_ordinary_level(self) -> None:
@@ -879,11 +879,11 @@ class ReleaseImpactFieldTests(unittest.TestCase):
             filled_template("major", "yes", "see Breaking change") + BREAKING_CHANGE
         )
         self.assertEqual("yes", fields["breaking"])
-        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+        with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
             release.parse_release_impact(filled_template("major", "yes"))
 
     def test_missing_or_unresolved_breaking_is_rejected(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "breaking is required"):
+        with self.assertRaisesRegex(release.ReleaseError, "non-empty breaking field"):
             self.parse(self.body("minor", breaking="no").replace("- Breaking: no\n", ""))
         with self.assertRaisesRegex(release.ReleaseError, "yes or no"):
             self.parse(self.body("minor", breaking="`yes | no`"))
@@ -960,6 +960,47 @@ class PullRequestTests(unittest.TestCase):
                 body_env=None,
             )
         )
+
+    def check_exact_body(self, body: str) -> list[list[str]]:
+        """Judge a body file holding exactly these bytes, on a range whose one
+        pending entry is minor; return every list of bodies the evaluator read."""
+        base = self.repo.target
+        self.repo.pending("2.1.0", [("minor", "feature")])
+        head = self.repo.commit("feat: implementation marker")
+        body_path = self.repo.root / "body.md"
+        body_path.write_bytes(body.encode("utf-8"))
+        with mock.patch.object(release, "read_pr_bodies", wraps=release.read_pr_bodies) as reader:
+            try:
+                release.check_pr(
+                    self.repo.args(
+                        base=base, head=head, target_ref=base, body_file=body_path, body_env=None
+                    )
+                )
+            finally:
+                self.seen_bodies = [call.args[0] for call in reader.call_args_list]
+        return self.seen_bodies
+
+    def test_a_crlf_body_reaches_the_evaluator_byte_for_byte(self) -> None:
+        # GitHub stores a body typed in its web editor with CRLF line ends, and
+        # `codeflow ci` reads them as they are, so this verdict reads them too.
+        body = self.repo.body("minor").replace("\n", "\r\n")
+        seen = self.check_exact_body(body)
+        self.assertTrue(any(body in bodies for bodies in seen), seen)
+
+    def test_a_lone_cr_in_a_bullet_reaches_the_evaluator_byte_for_byte(self) -> None:
+        body = self.repo.body("minor").replace("\n- Breaking", "\r- Breaking")
+        seen = self.check_exact_body(body)
+        self.assertTrue(any(body in bodies for bodies in seen), seen)
+
+    def test_a_lone_cr_before_the_section_gets_the_verdict_codeflow_ci_gives(self) -> None:
+        # A lone CR ends no line where `codeflow ci` looks for the section's
+        # heading, so it finds no section here. Text mode would fold the CR
+        # into a line end and accept a body `codeflow ci` refuses.
+        body = "Lead.\r" + self.repo.body("minor")
+        self.assertIsNone(release.read_pr_bodies([body])[0]["release_impact"])
+        with self.assertRaisesRegex(release.ReleaseError, "exactly one '## Release impact' section"):
+            self.check_exact_body(body)
+        self.assertTrue(any(body in bodies for bodies in self.seen_bodies), self.seen_bodies)
 
     def test_marker_floor_is_minimum_not_second_calculator(self) -> None:
         base = self.repo.target
@@ -1042,7 +1083,7 @@ class PullRequestTests(unittest.TestCase):
                 head,
                 self.repo.body("patch", withdrawal="Existing break was narrowed."),
             )
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
             self.run_check(
                 base,
                 head,
@@ -1068,7 +1109,7 @@ class PullRequestTests(unittest.TestCase):
         self.repo.pending("3.0.0", [("major", "break")])
         self.repo.write("docs/releasing.md", "changed\n")
         head = self.repo.commit("feat!: break")
-        with self.assertRaisesRegex(release.ReleaseError, "migration"):
+        with self.assertRaisesRegex(release.ReleaseError, "(?i)migration"):
             self.run_check(base, head, self.repo.body("major", contract="breaking"))
         self.run_check(base, head, self.repo.body("major", contract="breaking", migration="docs/migrate.md"))
 
@@ -1085,12 +1126,16 @@ class PullRequestTests(unittest.TestCase):
         base = self.repo.target
         self.repo.pending("3.0.0", [("major", "replace old command")])
         head = self.repo.commit("feat!: replace old command")
-        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+        with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
             self.run_check(base, head, filled_template("major", "yes"))
         # The binary reads a lone "``" as that text, which is no guidance.
-        with self.assertRaisesRegex(release.ReleaseError, "requires migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|requires migration guidance"):
             self.run_check(base, head, filled_template("major", "yes", "``"))
         self.run_check(base, head, filled_template("major", "yes", "run the new command"))
+        # TSK-451: the block passes the evaluator; the major entry it adds
+        # still needs the break declared.
+        with self.assertRaisesRegex(release.ReleaseError, "major entry requires Breaking: yes"):
+            self.run_check(base, head, filled_template("major", "no", "run the new command"))
 
     def test_declared_breaking_normalizes_quoted_migration_guidance(self) -> None:
         base = self.repo.target
@@ -1098,7 +1143,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("feat!: replace old command")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
                     self.run_check(base, head, filled_template("major", "yes", value))
         for value in SUBSTANTIVE_MIGRATIONS:
             with self.subTest(migration=value):
@@ -1113,7 +1158,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("docs: clarify breaking note")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration"):
+                with self.assertRaisesRegex(release.ReleaseError, "(?i)migration"):
                     self.run_check(base, head, filled_template("major", "yes", value))
         for value in SUBSTANTIVE_MIGRATIONS:
             with self.subTest(migration=value):
@@ -1126,7 +1171,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("docs: clarify breaking note")
         with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(major\)"):
             self.run_check(base, head, filled_template("none", "no", "docs/migrate.md"))
-        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+        with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
             self.run_check(base, head, filled_template("major", "yes"))
         self.run_check(base, head, filled_template("major", "yes", "docs/migrate.md"))
 
@@ -1136,38 +1181,79 @@ class PullRequestTests(unittest.TestCase):
         self.repo.pending("3.0.0", [("major", "earlier break"), ("minor", "new command")])
         head = self.repo.commit("feat: new command")
         self.run_check(base, head, self.repo.body("minor", breaking="no"))
-        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+        with self.assertRaisesRegex(release.ReleaseError, "requires Impact of at least major"):
             self.run_check(base, head, self.repo.body("minor", breaking="yes"))
 
-    def test_concurrent_clean_stale_merges_fail_in_both_orders(self) -> None:
-        for work_name, target_name in [("alpha", "beta"), ("beta", "alpha")]:
+    def behind_target(self, repo: Repository, work_name: str, advance: dict[str, str]) -> tuple[str, str, str]:
+        """A head forked from the target that adds one patch entry, and a
+        target then advanced by `advance` (path to text); return the fork
+        point, the head and the advanced target."""
+        base = repo.target
+        command(repo.root, "git", "switch", "-q", "-c", work_name)
+        repo.pending("2.0.1", [("patch", f"{work_name} fix")])
+        head = repo.commit(f"fix: {work_name}")
+        command(repo.root, "git", "switch", "-q", "main")
+        for path, text in advance.items():
+            repo.write(path, text)
+        target = repo.commit("chore: land other work first")
+        merged = command(repo.root, "git", "merge-tree", "--write-tree", target, head)
+        self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
+        return base, head, target
+
+    def check_behind(self, repo: Repository, base: str, head: str, target: str) -> None:
+        body_path = repo.root / "body.md"
+        body_path.write_text(repo.body("patch"))
+        release.check_pr(
+            repo.args(base=base, head=head, target_ref=target, body_file=body_path, body_env=None)
+        )
+
+    def test_a_head_behind_an_unrelated_landing_is_judged_on_its_merge(self) -> None:
+        # Pull requests landed together on a line: one lands, the other's
+        # check reruns with the event base at the old or the new tip, and
+        # its verdict is computed on the merge with the current tip.
+        for work_name, other_name in [("alpha", "beta"), ("beta", "alpha")]:
             repo = Repository(self.carrier)
             try:
-                base = repo.target
-                command(repo.root, "git", "switch", "-q", "-c", work_name)
-                repo.pending("2.0.1", [("patch", f"{work_name} fix")])
-                head = repo.commit(f"fix: {work_name}")
-                command(repo.root, "git", "switch", "-q", "main")
-                repo.write(f"{target_name}.txt", "other work advanced main\n")
-                target = repo.commit(f"chore: merge {target_name} first")
-                merged = command(repo.root, "git", "merge-tree", "--write-tree", target, head)
-                self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
+                base, head, target = self.behind_target(
+                    repo, work_name, {f"{other_name}.txt": "other work advanced main\n"}
+                )
+                for event_base in [base, target]:
+                    with self.subTest(first=other_name, second=work_name, event_base=event_base):
+                        self.check_behind(repo, event_base, head, target)
                 body_path = repo.root / "body.md"
-                body_path.write_text(repo.body("patch"))
-                with self.subTest(first=target_name, second=work_name), self.assertRaisesRegex(
-                    release.ReleaseError, "stale"
-                ):
-                    release.check_pr(
-                        repo.args(
-                            base=base,
-                            head=head,
-                            target_ref=target,
-                            body_file=body_path,
-                            body_env=None,
-                        )
-                    )
+                body_path.write_text(repo.body("none"))
+                with self.assertRaisesRegex(release.ReleaseError, "must equal|below marker floor"):
+                    release.check_pr(repo.args(
+                        base=target, head=head, target_ref=target, body_file=body_path, body_env=None
+                    ))
             finally:
                 repo.cleanup()
+
+    def test_a_target_whose_release_record_moved_stays_stale(self) -> None:
+        for path in ["CHANGELOG.md", ".release/config.json"]:
+            repo = Repository(self.carrier)
+            try:
+                moved = (repo.root / path).read_text() + "\n"
+                base, head, target = self.behind_target(repo, "alpha", {path: moved})
+                for event_base in [base, target]:
+                    with self.subTest(path=path, event_base=event_base), self.assertRaisesRegex(
+                        release.ReleaseError, f"stale.*{re.escape(path)}"
+                    ):
+                        self.check_behind(repo, event_base, head, target)
+            finally:
+                repo.cleanup()
+
+    def test_a_base_the_target_no_longer_contains_stays_stale(self) -> None:
+        repo = Repository(self.carrier)
+        try:
+            base, head, target = self.behind_target(repo, "alpha", {"beta.txt": "other work\n"})
+            command(repo.root, "git", "switch", "-q", "-c", "elsewhere", base)
+            repo.write("gamma.txt", "a base the target never took\n")
+            foreign = repo.commit("chore: unrelated base")
+            with self.assertRaisesRegex(release.ReleaseError, "stale.*no longer contains"):
+                self.check_behind(repo, foreign, head, target)
+        finally:
+            repo.cleanup()
 
     def test_withdrawal_requires_rationale_and_can_lower_remaining_state(self) -> None:
         self.repo.pending("3.0.0", [("major", "withdraw me"), ("patch", "keep me")])
@@ -1430,6 +1516,46 @@ class PublicationTests(unittest.TestCase):
             state.write_text(json.dumps(changed))
             with self.subTest(changed=changed), self.assertRaises(release.ReleaseError):
                 release.verify_host_state(args)
+
+    def test_a_tag_created_at_the_source_before_dispatch_resumes(self) -> None:
+        source = "c" * 40
+        notes = self.repo.root / "notes.md"
+        notes.write_text("reviewed\n")
+        state = self.repo.root / "state.json"
+        args = argparse.Namespace(state=state, source=source, tag="v3.0.0", notes=notes)
+        shapes = [
+            ({"tag_target": source, "release": None}, {"tag_target": "d" * 40, "release": None}),
+            (
+                {"schema_version": 1, "drafts_visible": True, "tags": {"v3.0.0": source}, "releases": []},
+                {"schema_version": 1, "drafts_visible": True, "tags": {"v3.0.0": "d" * 40}, "releases": []},
+            ),
+        ]
+        for at_source, elsewhere in shapes:
+            with self.subTest(state=at_source):
+                state.write_text(json.dumps(at_source))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    release.verify_host_state(args)
+                self.assertEqual(json.loads(output.getvalue()), {"status": "resume-tag"})
+                state.write_text(json.dumps(elsewhere))
+                with self.assertRaisesRegex(release.ReleaseError, "does not target selected source"):
+                    release.verify_host_state(args)
+
+    def test_publication_accepts_the_requested_tag_at_the_dispatched_main_commit(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "reviewed fix")])
+        head = self.repo.commit("fix: pending release")
+        args = self.repo.args(source=head, main_source=head, main_ref=None, tag="v2.0.1")
+        self.repo.write_host(tags={"v2.0.0": self.repo.baseline, "v2.0.1": head})
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.verify_publication(args)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"status": "authorized", "source": head, "tag": "v2.0.1"},
+        )
+        self.repo.write_host(tags={"v2.0.0": self.repo.baseline, "v2.0.1": self.repo.target})
+        with self.assertRaisesRegex(release.ReleaseError, "without a verified public release"):
+            release.verify_publication(args)
 
     def test_publication_attempt_uses_one_write_visible_paginated_inventory(self) -> None:
         source = "c" * 40

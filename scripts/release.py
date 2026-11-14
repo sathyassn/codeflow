@@ -148,11 +148,6 @@ def guidance_text(value: str) -> str:
     return " ".join(re.sub(r"[`\"']", "", value).split()).translate(ASCII_LOWER)
 
 
-def is_unresolved_alternative(value: str) -> bool:
-    """The PR template's choice text left in place instead of a chosen value."""
-    return guidance_text(value) in UNRESOLVED_ALTERNATIVES
-
-
 def substantive_text(value: str, rejected: list[str] | set[str]) -> bool:
     """Real text: not empty, not a whole `<placeholder>`, not a placeholder
     word, and not one of `rejected`. The Rust PR-body check applies the same
@@ -174,10 +169,6 @@ def substantive_text(value: str, rejected: list[str] | set[str]) -> bool:
 def lacks_migration_guidance(value: str) -> bool:
     return not substantive_text(value, UNRESOLVED_ALTERNATIVES | {"see breaking change"})
 
-
-RELEASE_FIELDS = {
-    "unit", "impact", "breaking", "contract", "rationale", "migration", "evidence", "withdrawal",
-}
 
 # A PR body is read by the codeflow binary, the same reader `codeflow ci`
 # uses (`codeflow ci --read-release-impact`), so the two can never read a
@@ -262,55 +253,32 @@ def release_impact_fields(reading: dict[str, Any]) -> list[tuple[str, str]] | No
 def parse_release_impact(
     body: str, binary: Path | None = None, *, reading: dict[str, Any] | None = None
 ) -> dict[str, str]:
+    """The Release impact fields as the one evaluator reads them (TSK-451).
+
+    Every rule on the block itself is `codeflow ci`'s policy-controlled
+    evaluator, which this reads through `codeflow ci --read-release-impact`:
+    any finding it reports rejects the block, and this function judges
+    nothing of its own. The rules that compare the declared impact with the
+    tree and its history (marker floor, pending entries, withdrawal) stay in
+    `pr_verdict`, since no PR-body reading can see them."""
     reading = reading or read_pr_bodies([body], binary)[0]
+    # A body without exactly one section is named as such before the
+    # evaluator's findings, which then say the same thing in other words.
     pairs = release_impact_fields(reading)
     if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
+    if reading["findings"]:
+        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     fields: dict[str, str] = {}
     for key, value in pairs:
-        if key in fields:
-            if key in RELEASE_FIELDS:
-                fail(f"release impact field {key} is duplicated")
-            continue
-        fields[key] = value
+        fields.setdefault(key, value)
     for key in ["impact", "breaking", "contract"]:
         if key in fields:
             fields[key] = fields[key].translate(ASCII_LOWER)
-    for key in ["unit", "impact", "rationale", "evidence"]:
-        if key not in fields or (
-            key in {"rationale", "evidence"} and is_placeholder(fields[key])
-        ):
-            fail(f"release impact field {key} is required and substantive")
-    if fields["unit"] != "codeflow" or fields["impact"] not in IMPACT_ORDER:
-        fail("release unit/impact must be codeflow and none, patch, minor, or major")
-    # Breaking replaces the legacy three-state Contract field. During the
-    # transition either is accepted; when both appear they must agree.
-    if "breaking" not in fields and "contract" not in fields:
-        fail("release impact field breaking is required")
-    if "contract" in fields and fields["contract"] not in CONTRACT_BREAKING:
-        fail("release contract must be not-applicable, compatible, or breaking")
-    if "breaking" in fields:
-        if fields["breaking"] not in {"yes", "no"}:
-            fail("release breaking must be yes or no")
-        if "contract" in fields and CONTRACT_BREAKING[fields["contract"]] != fields["breaking"]:
-            fail("legacy contract disagrees with breaking")
-        if not fields.get("migration"):
-            fail("release impact field migration is required")
-    else:
-        fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
-    if "migration" in fields and is_unresolved_alternative(fields["migration"]):
-        fail("release impact field migration still holds the template alternatives")
+    # A legacy Contract-only block states its break through Contract.
+    if "breaking" not in fields:
+        fields["breaking"] = CONTRACT_BREAKING.get(fields.get("contract", ""), "no")
     fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(reading, fields.get("migration", "")) else "no"
-    if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
-        fail("breaking must be yes if and only if impact is major")
-    if fields["breaking"] == "yes" and fields[MIGRATION_GUIDANCE] != "yes":
-        fail("a breaking change requires migration guidance")
-    # The rules `codeflow ci` applies are this check's too, whatever this
-    # file adds (TSK-147 round 5): a finding it reports rejects the block.
-    # It reads a legacy Contract-only block with the transition rules above
-    # (round 6), so no declaration is exempt.
-    if reading["findings"]:
-        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     return fields
 
 
@@ -1285,6 +1253,35 @@ def validate_published_sections(
         fail("published changelog sections differ from their exact public source")
 
 
+STALE = "PR base is stale relative to current target; refresh and recompute"
+
+
+def current_base(event_base: str, target: str, head: str, *, cwd: Path) -> str:
+    """The base a pull request is judged against: always the current target.
+
+    A head that does not contain the target tip is judged against that tip
+    and the exact merge it would produce, so pull requests landed together on
+    a line need no refresh after each other's landing. `commit_impact` and
+    `changed_paths` read only the head's own commits and paths against it.
+    It refuses, as stale, a base the target no longer contains (rewritten
+    history or a retarget) and a target whose release record moved since the
+    head's fork point: the written changelog or the release configuration.
+    An unclean merge is refused where the merge tree is built."""
+    contained = run(["git", "merge-base", "--is-ancestor", event_base, target], cwd=cwd, check=False)
+    if contained.returncode != 0:
+        fail(f"{STALE}: the target no longer contains the base")
+    fork = git("merge-base", target, head, cwd=cwd)
+    if fork != target:
+        moved = [
+            path
+            for path in ["CHANGELOG.md", CONFIG_PATH]
+            if file_at_optional(fork, path, cwd=cwd) != file_at_optional(target, path, cwd=cwd)
+        ]
+        if moved:
+            fail(f"{STALE}: the target changed {', '.join(moved)} since the head's fork point")
+    return target
+
+
 def check_pr(args: argparse.Namespace) -> None:
     print(json.dumps(pr_verdict(args), sort_keys=True))
 
@@ -1297,12 +1294,11 @@ def pr_verdict(
     if state is None:
         state = get_host_state(args)
     target = git("rev-parse", f"{args.target_ref or args.base}^{{commit}}", cwd=args.root)
-    base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
+    event_base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
-    if base != target or git("merge-base", base, head, cwd=args.root) != base:
-        fail("PR base is stale relative to current target; refresh and recompute")
+    base = current_base(event_base, target, head, cwd=args.root)
     body = (
-        args.body_file.read_text(encoding="utf-8")
+        read_source(args.body_file)
         if args.body_file
         else os.getenv(args.body_env, "")
     )
@@ -1399,10 +1395,12 @@ def pr_verdict(
         )
     if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("an added or edited major entry requires migration guidance")
+    if assessed_impact == "major" and fields["breaking"] != "yes":
+        fail("an added or edited major entry requires Breaking: yes")
     if fields["impact"] != "none":
         curated = "CHANGELOG.md" in paths or any(is_fragment_path(path) for path in paths)
-        if not curated or "changelog" not in fields["evidence"].casefold():
-            fail("non-none impact requires curated changelog change and evidence")
+        if not curated:
+            fail("non-none impact requires a curated changelog change")
     lowered = [
         after.label
         for before, after in change.edited
@@ -1925,7 +1923,7 @@ def preflight(args: argparse.Namespace) -> None:
             notes.append("marker floor and entry equality not checked: no PR body; set CODEFLOW_PR_DRAFT")
         else:
             try:
-                intent = parse_release_impact(draft.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
+                intent = parse_release_impact(read_source(draft), codeflow_bin(args))["impact"]
                 verdict_args = argparse.Namespace(**{
                     **vars(args), "base": base, "target_ref": base, "body_file": draft,
                 })

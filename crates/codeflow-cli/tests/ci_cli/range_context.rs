@@ -1,6 +1,27 @@
 //! Range spelling and context regressions for issues 130, 141 and 165.
-use super::line_adoption::fixture::{output, passes, Line, LINE};
+use super::line_adoption::fixture::{blocks, output, passes, Line, LINE};
 use std::process::Output;
+
+/// A run with no role whose base is its declared line's fetched tip cannot
+/// tell a pull request head from the line's next tip (TSK-1155): the head's
+/// own commit is the only refusal, and the remedy names both routes. Every
+/// other check passes, so base selection is judged on its own.
+fn refused_only_for_its_role(out: &Output) {
+    let text = output(out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    let blocked: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("BLOCKED"))
+        .collect();
+    assert!(
+        !blocked.is_empty() && blocked.iter().all(|line| line.contains("work.epic_line")),
+        "{text}"
+    );
+    assert!(
+        text.contains("cannot tell how the head reaches it"),
+        "{text}"
+    );
+}
 
 fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
     let mut command = f.command(env!("CARGO_BIN_EXE_codeflow"));
@@ -57,6 +78,7 @@ fn sync_merge() -> (Line, String, String) {
     f.commit("docs: complete main work");
     f.git(&["switch", "-q", "main"]);
     f.merge("task/TSK-002-work");
+    f.git(&["push", "-q", "origin", "main"]);
     f.git(&["switch", "-q", LINE]);
     f.merge("main");
     let head = f.git(&["rev-parse", "HEAD"]);
@@ -127,8 +149,8 @@ fn planning_branch_uses_its_epic_line_before_protected_fallback() {
         &["--branch", "plan/EPC-001-amend", "--base", LINE],
         None,
     );
-    passes(&explicit);
-    passes(&automatic);
+    refused_only_for_its_role(&explicit);
+    refused_only_for_its_role(&automatic);
     let text = output(&automatic);
     assert!(
         text.contains("declared target") && text.contains(LINE),
@@ -196,7 +218,7 @@ fn unknown_commit_target_uses_repository_default() {
 }
 
 #[test]
-fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
+fn explicit_head_reports_context_without_blame_for_imported_work() {
     let (f, base, head) = sync_merge();
     for source in ["GITHUB_HEAD_REF", "checkout HEAD"] {
         let env = if source == "checkout HEAD" {
@@ -212,8 +234,11 @@ fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
             "{text}"
         );
         let guidance = text.find("pass --branch").expect(&text);
-        let finding = text.find("reopen").expect(&text);
-        assert!(guidance < finding, "{text}");
+        assert!(!text.contains("reopen"), "{text}");
+        assert!(!text.contains("work.acceptance_binding"), "{text}");
+        if let Some(finding) = text.find("BLOCKED") {
+            assert!(guidance < finding, "{text}");
+        }
     }
 }
 
@@ -233,7 +258,7 @@ fn task_target_selects_base_from_flag_ci_or_checkout() {
         (vec![], None),
     ] {
         let out = ci(&f, &args, env);
-        passes(&out);
+        refused_only_for_its_role(&out);
         let text = output(&out);
         assert!(text.contains(&format!("range {}..", &base[..8])), "{text}");
         assert!(
@@ -275,13 +300,14 @@ fn unresolved_declared_target_warns_before_findings() {
 #[test]
 fn integration_branch_uses_default_target_and_ci_base_keeps_precedence() {
     let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
     let main = f.git(&["rev-parse", "main"]);
     f.land_task();
     let out = ci(&f, &["--branch", LINE], None);
     passes(&out);
     let text = output(&out);
     assert!(text.contains(&format!("range {}..", &main[..8])), "{text}");
-    assert!(text.contains("declared target 'main'"), "{text}");
+    assert!(text.contains("declared target 'origin/main'"), "{text}");
 
     let tip = f.git(&["rev-parse", "HEAD"]);
     let out = ci(
@@ -519,7 +545,13 @@ fn unresolved_explicit_and_ci_targets_name_their_source() {
         ),
     ] {
         let out = ci(&f, &args, env);
-        passes(&out);
+        // The range falls back to the protected branches, but the Outcome
+        // marker is judged only against the target's own tip, so a target
+        // that does not resolve refuses (TSK-435).
+        blocks(
+            &out,
+            "the tip of the target branch 'integration/missing' cannot be resolved",
+        );
         let text = output(&out);
         assert!(
             text.contains(&format!("{source} 'integration/missing' does not resolve")),
@@ -708,7 +740,7 @@ fn records_only_on_the_remote_line() -> (Line, String) {
 fn round_four_remote_line_records_bind_the_declared_line() {
     let (f, tip) = records_only_on_the_remote_line();
     let out = ci(&f, &[], None);
-    passes(&out);
+    refused_only_for_its_role(&out);
     let text = output(&out);
     assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
     assert!(
@@ -722,7 +754,7 @@ fn round_four_remote_line_records_bind_the_declared_line() {
     // A stale local branch of the same name never replaces the remote ref.
     f.git(&["branch", "-f", LINE, &format!("{tip}~1")]);
     let out = ci(&f, &[], None);
-    passes(&out);
+    refused_only_for_its_role(&out);
     let text = output(&out);
     assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
     assert!(
@@ -951,7 +983,7 @@ fn standalone_task_uses_remote_bound_line_in_ci_and_work_start() {
         "{text}"
     );
     assert!(!text.contains("warning: branch declared target"), "{text}");
-    passes(&out);
+    refused_only_for_its_role(&out);
 }
 
 #[test]
@@ -1056,6 +1088,123 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
         let main = f.git(&["rev-parse", "origin/main"]);
         let fallback_range = format!("range {}..", &main[..8]);
         assert!(text.contains(&fallback_range), "{case}: {text}");
+    }
+}
+
+/// TSK-1286: a task of an epic that declares the line as its `parent_line` in
+/// the line's fetched records is judged on that line; the same declaration
+/// made only in the head binds nothing, and a head that changes the trusted
+/// declaration is refused. Before the change every case was refused as
+/// "not the epic of branch".
+#[test]
+fn declared_parent_line_binds_only_from_the_line_records() {
+    const SECOND: &str = "project-management/epics/EPC-002.md";
+    let epic = |parent: &str| {
+        format!("---\nid: EPC-002\ntitle: Feature\nstatus: planning\nwork_type: feat\nspecs: []\n{parent}created: 2026-10-06\n---\n\n# Feature\n\n## Summary\n\nDeliver a feature.\n\n## Acceptance Criteria\n\n- AC-1 The feature runs.\n")
+    };
+    let declared = epic(&format!("parent_line: {LINE}\n"));
+    let plain = epic("");
+    let elsewhere = epic("parent_line: integration/EPC-009-elsewhere\n");
+    // (case, EPC-002 on the line, EPC-002 at the head, a text the run shows)
+    for (case, anchor, head, expected) in [
+        (
+            "declared",
+            &declared,
+            &declared,
+            format!("acceptance target '{LINE}' (branch declared target)"),
+        ),
+        ("head only", &plain, &declared, "is not trusted".to_string()),
+        (
+            "head changes",
+            &declared,
+            &elsewhere,
+            "a branch cannot change the line".to_string(),
+        ),
+    ] {
+        let (f, tip) = Line::standalone_on_remote_line();
+        let path = "project-management/tasks/TSK-002.md";
+        let record = std::fs::read_to_string(f.root().join(path)).unwrap();
+        f.git(&["switch", "-qc", "fixture/anchor", &tip]);
+        f.write(SECOND, anchor);
+        let anchor_tip = f.commit("docs: plan the feature epic");
+        f.git(&[
+            "update-ref",
+            &format!("refs/remotes/origin/{LINE}"),
+            &anchor_tip,
+        ]);
+        f.git(&["switch", "-q", "task/TSK-002-repair"]);
+        f.git(&["merge", "-q", "--no-edit", "fixture/anchor"]);
+        f.write(SECOND, head);
+        f.write(
+            path,
+            &record.replace("epic_id: null", "epic_id: EPC-002").replace(
+                "standalone_reason: Bounded repair",
+                "standalone_reason: null",
+            ),
+        );
+        f.commit("docs: move the repair to the feature epic");
+        let text = output(&ci(&f, &[], None));
+        assert!(text.contains(&expected), "{case}: {text}");
+        if case == "declared" {
+            assert!(
+                text.contains(&format!("range {}..", &anchor_tip[..8])),
+                "{case}: {text}"
+            );
+        } else {
+            assert!(
+                !text.contains(&format!("acceptance target '{LINE}'")),
+                "{case}: {text}"
+            );
+            assert!(
+                text.contains("base falls back to the policy protected branches"),
+                "{case}: {text}"
+            );
+        }
+    }
+}
+
+/// TSK-1286 review: when the protected branch binds the line, the line's
+/// fetched tip is still read, and a refusal or an unreadable record there
+/// wins. At 5dcc8d8ce the protected binding returned before the tip was
+/// read, so both cases selected the line.
+#[test]
+fn a_refusing_or_unreadable_line_tip_outweighs_the_protected_binding() {
+    for case in ["cancelled", "unreadable"] {
+        let f = Line::new();
+        f.git(&["push", "-q", "origin", "main"]);
+        let epic = std::fs::read_to_string(f.root().join(super::line_adoption::fixture::EPIC_PATH))
+            .unwrap();
+        let changed = if case == "cancelled" {
+            epic.replace("status: planning", "status: cancelled")
+        } else {
+            "---\nid: [unclosed\n---\n".to_string()
+        };
+        f.write(super::line_adoption::fixture::EPIC_PATH, &changed);
+        f.commit("docs: change the line's records");
+        f.git(&["push", "-q", "origin", LINE]);
+        f.git(&["switch", "-qc", "task/TSK-001-work", "main"]);
+        f.write("src/lib.rs", "pub fn work() {}\n");
+        f.commit("feat: work");
+        let out = ci(&f, &[], None);
+        let text = output(&out);
+        assert!(
+            !text.contains(&format!(
+                "acceptance target '{LINE}' (branch declared target)"
+            )),
+            "{case}: {text}"
+        );
+        if case == "cancelled" {
+            // The rejection is a warning: the run falls back to the
+            // protected branch instead of judging the head on the line.
+            assert!(
+                text.contains(&format!("which is cancelled on 'origin/{LINE}'"))
+                    && text.contains("base falls back to the policy protected branches"),
+                "{case}: {text}"
+            );
+        } else {
+            // An unreadable record at the tip stops the run.
+            assert_ne!(out.status.code(), Some(0), "{case}: {text}");
+        }
     }
 }
 

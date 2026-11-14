@@ -286,6 +286,9 @@ confirms the final content.
   Claude context/compaction: init writes a compaction default; to change or
   remove it so update keeps the choice, read
   [policy](references/claude-context-policy.md).
+  Status line and effort: init ships a status line and no effort setting;
+  for a person's own line or effort, or a project opt-in to a shared effort
+  with its tradeoff, read [personal settings](references/personal-settings.md).
 - **Presentation utility**: leave `.codeflow/present/config.toml` and primitive
   tokens absent unless the project explicitly wants different closed-session
   retention or a one-way adaptation of project primitives into `cf-present`.

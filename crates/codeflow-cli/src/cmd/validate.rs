@@ -146,7 +146,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
 fn validate_policy(root: &Path) -> bool {
     match policy_schema::validate_policy(root) {
         Ok(()) => {
-            for warning in policy_schema::deprecation_warnings(root) {
+            for warning in policy_schema::deprecation_warnings(root)
+                .into_iter()
+                .filter(|warning| policy_schema::first_unsupported_warning(&warning.text))
+            {
                 eprintln!("{}", warning.line("validate", "warning"));
             }
             if root.join(".codeflow").join("policy.json").exists() {
@@ -285,7 +288,7 @@ fn collect_record_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut paths = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
+    paths.sort_by(|a, b| codeflow_core::ids::compare_id_paths(a, b));
     for path in paths {
         if std::fs::metadata(&path)?.is_dir() {
             out.extend(collect_record_files(&path)?);

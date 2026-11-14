@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Targeted structural checks for the candidate gate and CI trust boundaries."""
+import ast
 import importlib.util
 import json
 import os
@@ -12,8 +13,179 @@ ROOT = Path(os.environ.get('CODEFLOW_GATE_CONTRACT_ROOT', Path(__file__).resolve
 _SPEC = importlib.util.spec_from_file_location('gate_parity', Path(__file__).resolve().parent / 'gate-parity.py')
 PARITY = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(PARITY)
+# Run the target-cache adversarial and shell tests with the existing gate.
+_CACHE_SPEC = importlib.util.spec_from_file_location('policy_cache', Path(__file__).resolve().parent / 'test_policy_cache.py')
+_CACHE = importlib.util.module_from_spec(_CACHE_SPEC)
+_CACHE_SPEC.loader.exec_module(_CACHE)
+_CACHE.ROOT = ROOT
+_CACHE.WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
+_CACHE.REGISTRY = ROOT / '.github/workflows/codeflow-registry.yml'
+PolicyCache = _CACHE.PolicyCache
 def read(path):
+    if path == '.github/workflows/codeflow-policy.yml':
+        return _CACHE.policy_workflow()
+    if path == '.github/workflows/codeflow-registry.yml':
+        return _CACHE.registry_workflow()
     return (ROOT / path).read_text()
+
+
+def uncommented(text):
+    return '\n'.join(line.rstrip() for line in text.splitlines()
+                     if line.strip() and not line.lstrip().startswith('#'))
+
+
+def gate_steps(workflow):
+    """(job name, the job's text, its uncommented steps, the gate step's
+    index) for each step named `codeflow test...` in `workflow`."""
+    parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+    found = []
+    for name, job in zip(parts[1::2], parts[2::2]):
+        if '\n    steps:\n' not in job:
+            continue
+        steps = [uncommented(step) for step in re.split(r'\n(?= {6}- )', job.split('\n    steps:\n', 1)[1])]
+        found += [(name, job, steps, index) for index, step in enumerate(steps)
+                  if step.startswith('      - name: codeflow test')]
+    return found
+
+
+def run_record_upload_problems(workflow):
+    """What keeps each gate step's run record from reaching the GitHub API
+    (TSK-1305 AC-5): the step right after it must upload
+    <build output>/codeflow-gate/*/run.json, pass or fail, without changing
+    the job's result, under a name unique per job, part and attempt, kept for
+    at most 14 days."""
+    problems = []
+    for name, job, steps, index in gate_steps(workflow):
+        upload = steps[index + 1] if index + 1 < len(steps) else ''
+        lines = upload.splitlines()
+        if not upload.startswith("      - name: Keep the gate") or not any(
+                re.fullmatch(r'        uses: actions/upload-artifact@[0-9a-f]{40} # v\d+\.\d+\.\d+', line) for line in lines):
+            problems.append(f'{name}: no upload-artifact step named "Keep the gate..." follows the gate step')
+            continue
+        if '        if: always()' not in lines:
+            problems.append(f'{name}: the upload must run with `if: always()`, so a failed gate keeps its record')
+        if '        continue-on-error: true' not in lines:
+            problems.append(f'{name}: the upload must set continue-on-error: true, so it never changes the result')
+        path = next((line.split(': ', 1)[1] for line in lines if line.startswith('          path: ')), '')
+        if not path.endswith('/codeflow-gate/*/run.json'):
+            problems.append(f'{name}: the upload path must be <build output>/codeflow-gate/*/run.json; found {path!r}')
+        artifact = next((line.split(': ', 1)[1] for line in lines if line.startswith('          name: ')), '')
+        unique = ['${{ github.job }}', '-attempt-${{ github.run_attempt }}']
+        if '\n      matrix:\n' in job:
+            unique.append('${{ matrix.part }}')
+        if not all(part in artifact for part in unique):
+            problems.append(f'{name}: the artifact name must be unique per job, part and attempt '
+                            f'({", ".join(unique)}); found {artifact!r}')
+        days = next((line.split(': ', 1)[1] for line in lines if line.startswith('          retention-days: ')), '')
+        if not days.isdigit() or int(days) > 14:
+            problems.append(f'{name}: the record\'s retention must be at most 14 days; found {days!r}')
+        if '          if-no-files-found: warn' not in lines and '          if-no-files-found: ignore' not in lines:
+            problems.append(f'{name}: the upload needs if-no-files-found: warn or ignore, so a gate that '
+                            'wrote no record keeps its own result')
+    return problems
+
+
+def github_expression(text, context):
+    """Evaluate a GitHub Actions expression in the small subset the workflow
+    concurrency block uses, with GitHub's rules for that subset: `||` and `&&`
+    return an operand; `==` and `!=` compare two strings without regard to
+    case and convert other mixed types to numbers; `startsWith` ignores case;
+    `format` fills `{n}` placeholders. `context` maps the `github.*` names the
+    expression may read. Any other token, name or function is refused, so a
+    widened expression fails the test instead of being guessed at. This is a
+    model of GitHub's documented rules, not GitHub itself."""
+    tokens = re.findall(r"\s*(\|\||&&|==|!=|\(|\)|,|'(?:[^']|'')*'|[0-9]+|[A-Za-z_][A-Za-z0-9_.]*|\S)", text)
+    position = 0
+
+    def peek():
+        return tokens[position] if position < len(tokens) else None
+
+    def take(expected=None):
+        nonlocal position
+        token = peek()
+        if token is None or (expected is not None and token != expected):
+            raise AssertionError(f'expected {expected or "a token"} at {token!r} in: {text}')
+        position += 1
+        return token
+
+    def truthy(value):
+        return value not in (False, 0, '', None)
+
+    def number(value):
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value.strip()) if value.strip() else 0.0
+        except ValueError:
+            return float('nan')
+
+    def equal(left, right):
+        if isinstance(left, str) and isinstance(right, str):
+            return left.casefold() == right.casefold()
+        return number(left) == number(right)
+
+    def call(name, args):
+        if name == 'startsWith' and len(args) == 2:
+            return str(args[0]).casefold().startswith(str(args[1]).casefold())
+        if name == 'format' and args:
+            template = args[0]
+            if re.search(r'[{}]', re.sub(r'\{[0-9]+\}', '', template)):
+                raise AssertionError(f'unsupported format template {template!r} in: {text}')
+            return re.sub(r'\{([0-9]+)\}', lambda found: str(args[1 + int(found.group(1))]), template)
+        raise AssertionError(f'function {name}({len(args)} arguments) is outside the modelled subset: {text}')
+
+    def operand():
+        token = take()
+        if token == '(':
+            value = either()
+            take(')')
+            return value
+        if token.startswith("'"):
+            return token[1:-1].replace("''", "'")
+        if token.isdigit():
+            return int(token)
+        if token in context:
+            return context[token]
+        if re.fullmatch(r'[A-Za-z]+', token) and peek() == '(':
+            take('(')
+            args = [either()]
+            while peek() == ',':
+                take(',')
+                args.append(either())
+            take(')')
+            return call(token, args)
+        raise AssertionError(f'{token!r} is outside the modelled subset: {text}')
+
+    def comparison():
+        left = operand()
+        if peek() in ('==', '!='):
+            operator = take()
+            right = operand()
+            return equal(left, right) if operator == '==' else not equal(left, right)
+        return left
+
+    def both():
+        value = comparison()
+        while peek() == '&&':
+            take()
+            right = comparison()
+            value = right if truthy(value) else value
+        return value
+
+    def either():
+        value = both()
+        while peek() == '||':
+            take()
+            right = both()
+            value = value if truthy(value) else right
+        return value
+
+    result = either()
+    if peek() is not None:
+        raise AssertionError(f'unexpected {peek()!r} in: {text}')
+    return result
 
 class GateContracts(unittest.TestCase):
     def test_publication_requires_the_five_existing_floors(self):
@@ -35,8 +207,20 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier', 'windows-tier-journeys'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
+        # TSK-1242: the tier only applies to pull requests. Neither job is a
+        # publication check; `scripts/gate-parity.py` pins their text.
+        for key in ('windows-tier', 'windows-tier-journeys'):
+            self.assertNotIn(windows[key].split('name: ', 1)[1].split('\n', 1)[0], checks)
+        self.assertIn("    if: github.event_name == 'pull_request'\n", windows['windows-tier'])
+        # TSK-359: `windows-image` only reads the push's Windows runner image
+        # for the reuse decision. It runs on pushes alone and is no gate.
+        image = windows['windows-image']
+        self.assertIn("    if: github.event_name == 'push'\n", image)
+        self.assertNotIn('needs:', image)
+        self.assertNotIn('continue-on-error', image)
+        self.assertNotIn(image.split('name: ', 1)[1].split('\n', 1)[0], checks)
         for key in gated:
             with self.subTest(job=key):
                 job = windows[key]
@@ -69,7 +253,8 @@ class GateContracts(unittest.TestCase):
         # `codeflow gates` is: one accepted body, so no edit can add another
         # way for it to pass.
         self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
-        self.assertEqual(windows['windows-verdict'].count('exit 0'), 1)
+        # Two ways to pass: the reduced tier (TSK-1242) and a reused or full run.
+        self.assertEqual(windows['windows-verdict'].count('exit 0'), 2)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
@@ -105,59 +290,259 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
-        for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
+        for key in ('gates', 'windows', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
-                self.assertIn('    needs: reuse\n', jobs[key])
+                self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
+        # TSK-1242: the build also follows the tier, and still follows the reuse decision.
+        self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (", jobs['windows-build'])
+        self.assertIn('    needs: [reuse, windows-tier]\n', jobs['windows-build'])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
-    # TSK-254: pull request runs share one group per pull request and cancel
-    # the run they supersede; push, schedule and dispatch runs each get a
-    # group of their own run id and are never cancelled, so a registry run is
-    # never replaced. The exact text is pinned: a group keyed on the ref, or a
-    # cancel that is not limited to pull_request_target, would cancel
-    # registry runs.
+    # TSK-1040: pull request runs share one group per pull request and queue
+    # (`queue: max`, no cancellation), so no event cancels or replaces a run.
+    # The policy workflow runs only on pull_request_target (TSK-336); push,
+    # schedule and dispatch start codeflow-registry.yml, which has no group.
+    # The exact text is pinned: a group keyed on the ref, or any cancellation,
+    # would cancel the run that judges a pushed head.
     POLICY_CONCURRENCY = (
         "\nconcurrency:\n"
-        "  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, "
-        "github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}\n"
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}\n\n"
+        "  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}\n"
+        "  cancel-in-progress: false\n"
+        "  queue: max\n\n"
     )
-    # The judging run reads the body when it runs, so the newest body is
-    # judged whichever event's run survives the group.
+    # The judging run reads the body when it runs, so a run that waited in
+    # the queue judges the newest body, whichever event started it.
     POLICY_BODY = (
         "          curl -fsSL --retry 3 --max-time 60 \\\n"
         "            -H \"Authorization: Bearer ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \\\n"
         "            \"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\"\n"
     )
 
-    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow):
+    def assert_policy_queues_every_pull_request_run(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
         self.assertIn(self.POLICY_CONCURRENCY, workflow)
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
         self.assertIn(self.POLICY_BODY, workflow)
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
-        self.assertIn('          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}\n', workflow)
+        self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)
+        self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
+        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
-        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n    steps:\n', workflow)
+        # TSK-1177: the verdict jobs read actions, checks and statuses to
+        # refuse another producer of a trusted name; nothing is written.
+        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n'
+                      '      actions: read\n      checks: read\n      statuses: read\n    steps:\n', workflow)
+        self.assertEqual(workflow.split('\npermissions:\n', 1)[1].split('\nconcurrency:', 1)[0],
+                         '  contents: read\n')
         self.assertNotIn(': write', workflow)
-        self.assertIn('    timeout-minutes: 20\n', workflow)
+        self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
-    def test_one_target_source_build_judges_policy_and_registry_and_cancels_only_pr_runs(self):
+    def test_each_verdict_job_builds_the_authority_and_the_registry_runs_apart(self):
+        # TSK-336: each trusted verdict job builds the default branch's own
+        # source once; push, schedule and dispatch check the registry in their
+        # own workflow, which builds the event commit once and has no group.
         workflow = read('.github/workflows/codeflow-policy.yml')
         self.assertIn('pull_request_target:', workflow)
         self.assertIn('github.event.pull_request.base.sha', workflow)
-        self.assertEqual(workflow.count('cargo build --release'), 1)
+        self.assertEqual(workflow.count('cargo build --release'), 2, 'commit standards and trusted: release impact')
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
-        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow)
+        self.assert_policy_queues_every_pull_request_run(workflow, admission=True)
         self.assertIn('Swatinem/rust-cache@', workflow)
         self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
-        self.assertFalse((ROOT / '.github/workflows/codeflow-registry.yml').exists())
+        for event in ('  push:', '  schedule:', '  workflow_dispatch:'):
+            self.assertNotIn(event, workflow.split('\njobs:\n', 1)[0])
+        registry = read('.github/workflows/codeflow-registry.yml')
+        # One build for the registry check and one for the main-only cache
+        # writer (TSK-1240), which is not a verdict and creates no `trusted:`
+        # check.
+        self.assertEqual(registry.count('cargo build --release'), 2)
+        self.assertNotIn('concurrency:', registry)
+        # Its jobs are the registry check and the cache writer, never a
+        # `trusted:` verdict; its comments may name the prefix to say why.
+        self.assertEqual(re.findall(r'^    name: (.+)$', registry, re.M), ['registry check', 'cache main build'])
+        self.assertIn('run: codeflow ids check\n', registry)
+
+    def test_commit_standards_admits_once_and_never_waits(self):
+        # TSK-449 AC-6, TSK-1239 AC-2: merge admission is the required
+        # `commit standards` check. It reads run records with a read-only
+        # token from the trusted target checkout and judges once: a pending
+        # run refuses at once, holding no runner, and the run's completion
+        # starts the job again (codeflow-admission.yml).
+        workflow = read('.github/workflows/codeflow-policy.yml')
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
+        job = workflow.split('  commit-lint:\n', 1)[1].split('\n  release-impact:\n', 1)[0]
+        step = job.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1].split('      - name:', 1)[0]
+        self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
+        self.assertIn('python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
+        self.assertIn('          BASE_REF: ${{ github.event.pull_request.base.ref }}\n', step)
+        # Rulings of 2026-11-11: no pull request runs the verdicts (into a
+        # line until the line gate ships, the Director's; into main while main
+        # is relaxed, the operator's), so every base is admitted on the two
+        # security jobs, which run on every pull request.
+        self.assertIn('--base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "secret scan" --require "security review"\n', step)
+        self.assertNotIn('--require "codeflow gates"', step)
+        self.assertEqual(step.count('python3 -I scripts/policy-admission.py admit '), 1)
+        self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
+        self.assertNotIn('pull_request.head.ref', step)
+        for polling in ('--wait', 'wait=', 'sleep', 'ci-reuse.py admit'):
+            self.assertNotIn(polling, step, 'the admission step judges once and never waits')
+        self.assertNotIn('sleep ', job)
+        # The job's token stays read-only; it never writes a check.
+        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n      actions: read\n', job)
+        self.assertNotIn(': write', job)
+        # The script it runs holds no wait either.
+        script = read('scripts/policy-admission.py')
+        self.assertNotIn('sleep', script)
+        self.assertNotIn('--wait', script)
+
+    def test_ci_completion_reruns_the_native_commit_standards_job(self):
+        # TSK-1239 AC-2 and AC-4: codeflow-admission.yml starts on a
+        # completed codeflow-ci run, runs only the default branch's script,
+        # shares the policy workflow's per-pull-request concurrency group
+        # without cancelling, and writes no check or status.
+        admission = read('.github/workflows/codeflow-admission.yml')
+        policy = read('.github/workflows/codeflow-policy.yml')
+        self.assertEqual(re.search(r'^name: (.+)$', read('.github/workflows/codeflow-ci.yml'), re.M).group(1),
+                         'codeflow-ci')
+        self.assertEqual(re.search(r'^name: (.+)$', policy, re.M).group(1), 'codeflow-policy')
+        self.assertIn('on:\n  workflow_run:\n    workflows: [codeflow-ci]\n    types: [completed]\n\n', admission)
+        self.assertIn('\npermissions: {}\n', admission)
+        self.assertIn("format('{0}-pr-{1}', github.workflow, github.event.pull_request.number)", policy)
+        self.assertIn("format('codeflow-policy-pr-{0}', github.event.workflow_run.pull_requests[0].number)", admission)
+        self.assertIn("format('codeflow-admission-run-{0}', github.event.workflow_run.id)", admission)
+        for text in (admission, policy):
+            self.assertIn('  cancel-in-progress: false\n  queue: max\n', text)
+        self.assertIn("    if: github.event.workflow_run.event == 'pull_request'\n", admission)
+        self.assertIn('    permissions:\n      actions: write\n      contents: read\n      pull-requests: read\n    steps:',
+                      admission)
+        self.assertEqual(re.findall(r'(?m)^\s+([\w-]+): write$', admission), ['actions'],
+                         'actions: write is the only write scope')
+        self.assertNotIn('checks:', admission)
+        self.assertNotIn('statuses:', admission)
+        # Only the authority is checked out, without credentials; nothing of
+        # the pull request is fetched, downloaded or expanded into a script.
+        self.assertIn('          ref: ${{ github.sha }}\n          persist-credentials: false\n', admission)
+        self.assertEqual(admission.count('uses: '), 1)
+        for untrusted in ('download-artifact', 'git fetch', 'head_branch', 'display_title', 'head_commit',
+                          'pull_requests[0].head', 'refs/pull'):
+            self.assertNotIn(untrusted, admission)
+        for line in admission.splitlines():
+            if line.lstrip().startswith(('run:', 'python3', 'if ', 'echo')):
+                self.assertNotIn('${{', line, f'event data reaches a script only through env: {line}')
+        self.assertIn('python3 -I scripts/policy-admission.py rerun --repo "$REPOSITORY" --run "$RUN_ID" --head "$HEAD_SHA"',
+                      admission)
+        self.assertIn('--job "commit standards"', admission)
+        self.assertIn('    name: "commit standards"\n', policy)
+        self.assertNotRegex(admission, r'(?m)^    name: "?trusted:', 'the re-run job is never a trusted name')
+
+    def test_the_consumer_scaffold_gains_no_admission_mechanism(self):
+        # TSK-1239 AC-5: CI completion admission is this repository's own;
+        # the scaffold's policy workflow neither waits for nor re-runs on
+        # codeflow-ci, and ships no admission workflow. The trigger is matched
+        # as a word, so the API field `workflow_runs` in the Mode B producer
+        # check is not a trigger, and the inline forms `on: [workflow_run]`
+        # and `on: workflow_run` still are.
+        trigger = r'\bworkflow_run\b'
+        self.assertNotRegex('[(.workflow_runs[0].event // "(no run)")]', trigger)
+        with self.assertRaises(AssertionError):
+            self.assertNotRegex('on: [workflow_run]\n', trigger)
+        for path in ('assets/base/ci/codeflow-policy.yml', '.codeflow/.baseline/.github/workflows/codeflow-policy.yml'):
+            scaffold = read(path)
+            self.assertNotRegex(scaffold, trigger, f'{path} holds a workflow_run trigger')
+            for mechanism in ('policy-admission', 'ci-reuse.py', '--wait', 'actions: write',
+                              'codeflow-admission'):
+                self.assertNotIn(mechanism, scaffold, f'{path} holds {mechanism}')
+        self.assertFalse((ROOT / 'assets' / 'base' / 'ci' / 'codeflow-admission.yml').exists())
+        self.assertFalse(any('admission' in p.name for p in (ROOT / 'assets').rglob('*.yml')))
+
+    def test_release_tier_targets_leave_the_hosted_landing_gate(self):
+        # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
+        # present-binary-delta run in gates-release, which runs on the release
+        # candidate (a pull request into main or master), pushes to main or
+        # master, the weekly schedule and manual runs, and never on a pull
+        # request into integration/**. The landing gate parts name none of them.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        release_targets = ('prose-exhaustive', 'read-benchmark', 'present-browser', 'present-binary-delta')
+        def named(job):
+            return {n for line in re.findall(r'^\s*only:\s*(\S+)$', jobs[job], re.M) for n in line.split(',')}
+        self.assertFalse(set(release_targets) & named('gates'))
+        self.assertEqual(named('gates-release'), set(release_targets))
+        condition = re.search(r'^    if: (.+)$', jobs['gates-release'], re.M).group(1)
+        self.assertNotIn('integration/', condition)
+        # Temporary relaxation (operator decision, 2026-11-11): the release
+        # parts run only on the daily schedule and a manual dispatch.
+        self.assertNotIn('pull_request', condition)
+        for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
+            self.assertIn(event, condition)
+        self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
+                      jobs['gates-verdict'])
+        # The local full gate keeps them: the test config still gives them a
+        # full mode, since a schedule tier would change the adopter schema.
+        config = json.loads(read('.codeflow/test-config.json'))
+        modes = {t['name']: set(t['modes']) for t in config['targets']}
+        for name in release_targets:
+            self.assertEqual(modes[name], {'full'}, name)
+
+    def test_the_release_binary_is_built_once_and_windows_skips_fmt(self):
+        # TSK-449 AC-5: one release build per workflow, shared by every gate
+        # part; Windows runs clippy, doctests, rustdoc and the partitions,
+        # and no fmt.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        builds = [name for name, text in jobs.items() if re.search(r'^\s*run: cargo build --release', text, re.M)]
+        self.assertEqual(builds, ['gates-build'])
+        self.assertIn('name: codeflow-release', jobs['gates'])
+        self.assertNotIn('cargo build', jobs['gates'])
+        windows = [name for name in jobs if name.startswith('windows')]
+        runs = '\n'.join(re.findall(r'^\s*run: (.+)$', ''.join(jobs[n] for n in windows), re.M))
+        self.assertNotIn('cargo fmt', runs)
+        for command in ('cargo clippy --workspace --all-targets -- -D warnings', 'cargo test --workspace --doc',
+                        'cargo nextest run --archive-file'):
+            self.assertIn(command, runs)
+
+    def test_every_gate_run_keeps_its_run_record_as_an_artifact(self):
+        # TSK-1305 AC-5 (issue 546): right after each step that runs
+        # `codeflow test`, in this repository's workflow and the one adopters
+        # get, a step uploads target/codeflow-gate/*/run.json whether the
+        # gate passed or failed, without changing the job's result, under a
+        # name unique per job (and part) and attempt, kept a short time.
+        for path in ('.github/workflows/codeflow-ci.yml', 'assets/base/ci/codeflow-ci.yml'):
+            with self.subTest(workflow=path):
+                text = read(path)
+                self.assertEqual(run_record_upload_problems(text), [])
+                # Each control below breaks one property, and the check names it.
+                gate_jobs = len(gate_steps(text))
+                self.assertGreater(gate_jobs, 0)
+                for broken, needle in (
+                    (text.replace('      - name: Keep the gate', '      - name: Drop the gate'), 'no upload'),
+                    (text.replace('        if: always()\n        continue-on-error: true\n        uses: actions/upload',
+                                  '        continue-on-error: true\n        uses: actions/upload'), 'if: always()'),
+                    (text.replace('        if: always()\n        continue-on-error: true\n',
+                                  '        if: always()\n'), 'continue-on-error'),
+                    (text.replace('codeflow-gate/*/run.json', 'codeflow-gate/*/report.xml'), 'run.json'),
+                    (text.replace('-attempt-${{ github.run_attempt }}', ''), 'attempt'),
+                    (text.replace('          retention-days: 7\n', '          retention-days: 90\n'), 'retention'),
+                    (text.replace('          if-no-files-found: warn\n', '          if-no-files-found: error\n'),
+                     'if-no-files-found'),
+                ):
+                    with self.subTest(control=needle):
+                        problems = run_record_upload_problems(broken)
+                        self.assertEqual(len(problems), gate_jobs, problems)
+                        self.assertTrue(all(needle in problem for problem in problems), problems)
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
-        self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))
+        self.assert_policy_queues_every_pull_request_run(read('assets/base/ci/codeflow-policy.yml'))
+        # Marking a draft ready reruns the standards, so a check that reads
+        # the pull request at ready (its Testing citation) judges it then.
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
+                      read('assets/base/ci/codeflow-policy.yml'))
 
     def test_release_reuses_cache_and_only_cancels_pr_events(self):
         workflow = read('.github/workflows/codeflow-release.yml')
@@ -165,6 +550,119 @@ class GateContracts(unittest.TestCase):
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
         self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
+
+    # Pull request runs, reruns included, keep one group per ref and cancel.
+    # Main and master pushes, schedule and dispatch runs are never cancelled
+    # in progress and cancel nothing. A push to an integration line starts no
+    # run (permanent placement, operator ruling 2026-11-11), so no push is
+    # cancelled. The event is in the group. A push rerun (run_attempt above
+    # 1) gets a group of its own run id and attempt and cancels nothing. The
+    # exact text is pinned so a later edit cannot widen what cancels, and
+    # each case is evaluated from the workflow's own text with GitHub's rules
+    # for the subset it uses.
+    CI_CONCURRENCY = (
+        "\nconcurrency:\n"
+        "  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && "
+        "format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || "
+        "format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}\n"
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n\n"
+    )
+    LINE = 'refs/heads/integration/EPC-001-a-line'
+
+    def ci_concurrency(self, event, ref, run_id='42', run_attempt='1'):
+        """The group and the cancel value for one run, from the workflow's own
+        text. `run_attempt` is a string, as in GitHub's `github` context."""
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        self.assertEqual(len(re.findall(r'^\s*concurrency:', workflow, re.M)), 1,
+                         'one top-level concurrency block and no job-level one')
+        self.assertIn(self.CI_CONCURRENCY, workflow)
+        self.assertLess(workflow.index(self.CI_CONCURRENCY), workflow.index('\njobs:\n'))
+        name = re.search(r'^name: (\S+)$', workflow, re.M).group(1)
+        context = {'github.workflow': name, 'github.event_name': event, 'github.ref': ref,
+                   'github.run_id': run_id, 'github.run_attempt': run_attempt}
+        group = re.search(r'^  group: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        cancel = re.search(r'^  cancel-in-progress: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        return github_expression(group, context), github_expression(cancel, context)
+
+    def test_the_expression_model_follows_githubs_rules_for_its_subset(self):
+        context = {'github.ref': 'refs/heads/Integration/x', 'github.event_name': 'push',
+                   'github.run_attempt': '1', 'github.workflow': 'codeflow-ci'}
+        evaluate = github_expression
+        # Strings compare and startsWith matches without regard to case.
+        self.assertIs(evaluate("startsWith(github.ref, 'refs/heads/integration/')", context), True)
+        self.assertIs(evaluate("github.event_name == 'PUSH'", context), True)
+        self.assertIs(evaluate("github.event_name != 'Push'", context), False)
+        # A string and a number compare as numbers.
+        self.assertIs(evaluate('github.run_attempt == 1', context), True)
+        self.assertIs(evaluate('github.run_attempt == 1', {**context, 'github.run_attempt': '2'}), False)
+        # && and || return an operand.
+        self.assertEqual(evaluate("github.event_name == 'push' && 'b' || 'c'", context), 'b')
+        self.assertEqual(evaluate("github.event_name == 'schedule' && 'b' || 'c'", context), 'c')
+        self.assertEqual(evaluate("format('{0}-{1}', github.workflow, github.run_attempt)", context), 'codeflow-ci-1')
+        # Anything outside the subset is refused, never guessed.
+        for outside in ("contains(github.ref, 'x')", 'github.run_attempt > 1', 'github.run_attempt == 1 + 1',
+                        "github.head_ref == 'x'", "!startsWith(github.ref, 'x')", "format('{0:>3}', 'x')",
+                        "github.ref == 'x' 'y'"):
+            with self.subTest(outside=outside), self.assertRaises(AssertionError):
+                evaluate(outside, context)
+
+    def test_ci_cancels_only_pull_request_runs(self):
+        cases = (
+            ('pull_request', 'refs/pull/7/merge', True),
+            ('push', 'refs/heads/main', False),
+            ('push', 'refs/heads/master', False),
+            # The trigger runs no line push; were one to run, it would not cancel.
+            ('push', self.LINE, False),
+            ('schedule', 'refs/heads/main', False),
+            ('workflow_dispatch', 'refs/heads/main', False),
+            ('workflow_dispatch', self.LINE, False),
+        )
+        groups = {}
+        for event, ref, cancels in cases:
+            with self.subTest(event=event, ref=ref):
+                group, cancel = self.ci_concurrency(event, ref)
+                self.assertIs(cancel, cancels)
+                self.assertEqual(group, f'codeflow-ci-{event}-{ref}')
+                # GitHub compares groups without regard to case; no two of
+                # these cases can replace each other's runs.
+                self.assertNotIn(group.casefold(), groups)
+                groups[group.casefold()] = (event, ref)
+
+    def test_ci_concurrency_names_no_integration_line(self):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        head, tail = workflow.split('\nconcurrency:\n', 1)
+        block = head.rsplit('\n\n', 1)[1] + tail.split('\n\n', 1)[0]
+        self.assertNotIn('integration', block.lower())
+        push = re.search(r'^  push:\n    branches: \[(.*)\]$', workflow, re.M)
+        self.assertIsNotNone(push, 'the push trigger lists its branches on one line')
+        self.assertEqual(push.group(1), 'main, master')
+
+    def test_a_push_rerun_runs_alone_and_cancels_nothing(self):
+        for ref in ('refs/heads/main', 'refs/heads/master'):
+            newest = self.ci_concurrency('push', ref, '9', '1')
+            for attempt in ('2', '3'):
+                with self.subTest(ref=ref, attempt=attempt):
+                    group, cancel = self.ci_concurrency('push', ref, '5', attempt)
+                    self.assertIs(cancel, False)
+                    self.assertEqual(group, f'codeflow-ci-push-rerun-5-{attempt}')
+                    self.assertNotEqual(group.casefold(), newest[0].casefold(),
+                                        'a rerun in the line group could cancel or replace the newest run')
+                    self.assertNotEqual(group, self.ci_concurrency('push', ref, '6', attempt)[0])
+        # A pull request rerun keeps the pull request rule.
+        self.assertEqual(self.ci_concurrency('pull_request', 'refs/pull/7/merge', '5', '2'),
+                         ('codeflow-ci-pull_request-refs/pull/7/merge', True))
+        # A dispatch rerun is not a push rerun: its group and rule do not change.
+        self.assertEqual(self.ci_concurrency('workflow_dispatch', self.LINE, '5', '2'),
+                         (f'codeflow-ci-workflow_dispatch-{self.LINE}', False))
+
+    def test_the_ci_concurrency_comment_states_the_rule(self):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        block = workflow.split('\nconcurrency:\n', 1)[0].rsplit('\n\n', 1)[1]
+        comment = ' '.join(line.removeprefix('#').strip() for line in block.splitlines())
+        for needle in ('Pull request runs, reruns included', 'No other run is cancelled in progress',
+                       'push rerun', 'run_attempt', 'never a reuse source'):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, comment)
 
     def test_every_workflow_action_is_pinned_to_a_commit(self):
         # Issue 148: a tag can be moved, so a workflow with repository write
@@ -248,7 +746,9 @@ class GateContracts(unittest.TestCase):
         nextest = tomllib.loads(read('.config/nextest.toml'))
         profiles = nextest['profile']
         self.assertEqual(nextest['test-groups']['serial']['max-threads'], 1)
-        self.assertEqual(profiles['essential']['test-threads'], 8)
+        self.assertNotIn('test-threads', profiles['essential'])
+        self.assertEqual(json.loads(read('.codeflow/test-config.json'))['execution']['worker_budget'], 9)
+        self.assertEqual(workspace['workers'], 9)
         self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
@@ -271,12 +771,22 @@ class GateContracts(unittest.TestCase):
             return found
         for name in ['rust-build', 'codeflow-bin', 'rust-coverage', 'rust-doctest', 'rustdoc', 'docs-validation', 'docs-portal', 'journey-gate', 'cf-present-qualification', 'present-browser', 'read-benchmark']:
             self.assertIn('present-web-build', closure(name), name)
-        # The quick gate stays light: no quick target pulls in a build producer
-        # (fmt and clippy need no web build; there is no present build.rs).
+        self.assertIn('rust-build', closure('codeflow-bin'))
+        # The Python release journeys read PR bodies with the built binary at
+        # import time, so a cold checkout needs its producer too.
+        for name in ['rust-doctest', 'rustdoc', 'journey-python']:
+            self.assertIn('codeflow-bin', closure(name), name)
+        self.assertEqual(targets['rust-clippy']['env']['CARGO_TARGET_DIR'], 'target/clippy')
+        for name in ['rust-build', 'codeflow-bin', 'rust-clippy', 'rustdoc', 'rust-doctest', 'repository-update-noop', 'contract-scans', 'present-binary-delta']:
+            self.assertEqual(targets[name]['workers'], cfg['execution']['worker_budget'], name)
+        # Quick keeps its membership and does not pull in the web build.
+        # Its Cargo checks declare their need for heavy admission.
         quick = {name for name, t in targets.items() if 'quick' in t['modes']}
         self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'contract-scans', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
         for name in quick:
             self.assertLessEqual(closure(name), quick, name)
+        for name in ['rust-clippy', 'repository-update-noop', 'contract-scans']:
+            self.assertTrue(targets[name]['heavy'], name)
         # TSK-256: the push set replays `codeflow update` on this repository, so a
         # shipped asset changed without a resync fails before review. The replay
         # runs from the quick mode only (essential and full already reach it
@@ -285,7 +795,7 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(replay['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test repository_update_noop --quiet'}})
         self.assertEqual(replay.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/repository_update_noop.rs').is_file())
-        # TSK-385: preserve one light target while discovering core repository
+        # TSK-385: preserve one target while discovering core repository
         # contracts and checking the remedy catalogue and derived lookups.
         # Its runner controls use real Cargo and run in gate-parity too.
         scans = targets['contract-scans']
@@ -312,6 +822,302 @@ class GateContracts(unittest.TestCase):
         self.assertIn('npm run supply-chain', targets['present-supply-chain']['modes']['full']['command'])
         self.assertIn('check-present-binary-delta', targets['present-binary-delta']['modes']['full']['command'])
         self.assertIn('structural', cfg['_description'])
+
+UNITTEST_CASES = {'TestCase', 'IsolatedAsyncioTestCase'}
+UNITTEST_CLASS_DECORATORS = {'skip', 'skipIf', 'skipUnless', 'expectedFailure'}
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def collection_problems(source, label):
+    """Tests a module defines that unittest's loader might not run, read from
+    the source alone (TSK-359). Nothing is imported or executed, so checking
+    a file has no side effect such as a build.
+
+    The check fails closed: a test file must use one plain layout, and
+    anything outside it is refused rather than resolved.
+    - A `test*` name outside a function body is bound only by one plain
+      `def` directly in the body of a direct top-level class.
+    - Each top-level class name is bound once in the whole module, at any
+      depth, and is never the first argument of `setattr` or `delattr`.
+    - No attribute of a top-level class is assigned or deleted anywhere,
+      and no attribute named `test*` outside a function body.
+    The one exception is `test_x = None` directly in a top-level class
+    body, which drops a test that class inherits from another class in the
+    file and does not define itself.
+    - A class decorator is `unittest.skip*` or `unittest.expectedFailure`,
+      and a class takes no keywords such as a metaclass.
+    - No `load_tests` and no `from ... import *` anywhere.
+    Within that layout, a test counts as collected when a top-level class
+    whose bases reach `unittest.TestCase` resolves the test's name to that
+    very definition through its method resolution order, so a mixin
+    inherited by a concrete TestCase counts. Loader errors are not judged
+    here: each file runs through unittest.main, which fails on one."""
+    tree = ast.parse(source)
+    problems = []
+
+    def refuse(node, why):
+        problems.append(f'{label}:{node.lineno} {why}')
+
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    def in_function(node):
+        node = parents.get(node)
+        while node is not None and not isinstance(node, SCOPES):
+            node = parents.get(node)
+        return node is not None
+
+    def located(node):
+        while not hasattr(node, 'lineno'):
+            node = parents[node]
+        return node
+
+    unittest_modules, case_names = {'unittest'}, set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            unittest_modules |= {a.asname or a.name for a in node.names if a.name == 'unittest'}
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest':
+            case_names |= {a.asname or a.name for a in node.names if a.name in UNITTEST_CASES}
+
+    classes = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ClassDef) and stmt.name not in classes:
+            classes[stmt.name] = stmt
+    class_nodes = {id(stmt) for stmt in tree.body if isinstance(stmt, ast.ClassDef)}
+
+    def defined_tests(stmt):
+        return {item.name for item in stmt.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test')}
+
+    def inherited_tests(stmt, seen=()):
+        names = set()
+        for expr in stmt.bases:
+            if isinstance(expr, ast.Name) and expr.id in classes and expr.id not in seen:
+                base = classes[expr.id]
+                names |= defined_tests(base) | inherited_tests(base, seen + (expr.id,))
+        return names
+
+    # The one allowed exception: `test_x = None` directly in a top-level
+    # class body drops a test the class inherits from a class in this file
+    # and does not define itself. test_release.py uses it where a carrier
+    # has no case to run.
+    opt_outs = {}
+    for stmt in classes.values():
+        for item in stmt.body:
+            if (isinstance(item, ast.Assign) and len(item.targets) == 1
+                    and isinstance(item.targets[0], ast.Name)
+                    and isinstance(item.value, ast.Constant) and item.value.value is None
+                    and item.targets[0].id in inherited_tests(stmt) - defined_tests(stmt)):
+                opt_outs[id(item.targets[0])] = item.targets[0].id
+
+    def bound_names(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return [node.name]
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            return [node.id]
+        if isinstance(node, ast.alias):
+            return [node.asname or node.name.split('.')[0]]
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            return list(node.names)
+        if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+            return [node.name] if node.name else []
+        if isinstance(node, ast.MatchMapping):
+            return [node.rest] if node.rest else []
+        return []
+
+    def plain_method(node):
+        parent = parents.get(node)
+        return (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and id(parent) in class_nodes and node in parent.body)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == '*' for a in node.names):
+            refuse(node, 'imports * and may rebind any name')
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)) and (
+                (isinstance(node.value, ast.Name) and node.value.id in classes)
+                or (node.attr.startswith('test') and not in_function(node))):
+            refuse(node, f'assigns or deletes attribute {node.attr}')
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id in {'setattr', 'delattr'} and node.args \
+                and isinstance(node.args[0], ast.Name) and node.args[0].id in classes:
+            refuse(node, f'{node.func.id} changes class {node.args[0].id}')
+        for name in bound_names(node):
+            if name == 'load_tests':
+                refuse(located(node), 'binds load_tests; the guard cannot judge its collection')
+            elif name in classes and node is not classes[name]:
+                refuse(located(node), f'rebinds top-level class {name}')
+            elif name.startswith('test') and not in_function(node) and not plain_method(node) \
+                    and id(node) not in opt_outs:
+                refuse(located(node), f'{name} is not a plain method of a top-level class')
+
+    def is_unittest_case(expr):
+        if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+            return expr.value.id in unittest_modules and expr.attr in UNITTEST_CASES
+        return isinstance(expr, ast.Name) and expr.id in case_names
+
+    def allowed_decorator(expr):
+        target = expr.func if isinstance(expr, ast.Call) else expr
+        return (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                and target.value.id in unittest_modules and target.attr in UNITTEST_CLASS_DECORATORS)
+
+    base_case = type('TestCaseRoot', (), {})
+    built = {}
+    for name, stmt in classes.items():
+        for expr in stmt.decorator_list:
+            if not allowed_decorator(expr):
+                refuse(expr, f'class {name} has a decorator that may replace it')
+        if stmt.keywords:
+            refuse(stmt, f'class {name} takes keywords such as a metaclass')
+        methods = {}
+        for item in stmt.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
+                if item.name in methods:
+                    refuse(item, f'{name}.{item.name} replaces an earlier definition')
+                methods[item.name] = item
+            elif isinstance(item, ast.Assign) and id(item.targets[0]) in opt_outs:
+                methods[item.targets[0].id] = None
+        bases = [base_case if is_unittest_case(expr) else built[expr.id]
+                 for expr in stmt.bases
+                 if is_unittest_case(expr) or (isinstance(expr, ast.Name) and expr.id in built)]
+        try:
+            built[name] = type(name, tuple(dict.fromkeys(bases)) or (object,), methods)
+        except TypeError as error:
+            refuse(stmt, f'class {name} has no consistent order: {error}')
+    collected = set()
+    for cls in built.values():
+        if issubclass(cls, base_case):
+            collected |= {id(getattr(cls, n)) for n in dir(cls) if n.startswith('test')}
+    for name, stmt in classes.items():
+        for item in stmt.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    and item.name.startswith('test') and id(item) not in collected:
+                refuse(item, f'{name}.{item.name} is never collected')
+    return sorted(set(problems), key=lambda p: (int(p.split(':')[1].split()[0]), p))
+
+
+def probe_count(source):
+    """The number of tests unittest's own loader collects from probe text."""
+    namespace = {'__name__': 'probe'}
+    exec(compile(source, 'probe.py', 'exec'), namespace)
+    module = type(unittest)('probe')
+    module.__dict__.update(namespace)
+    return unittest.defaultTestLoader.loadTestsFromModule(module).countTestCases()
+
+
+CASE = 'import unittest\nclass Case(unittest.TestCase):\n'
+
+
+class TestCollection(unittest.TestCase):
+    """Every scripts/test_*.py file keeps the plain layout the collection
+    guard accepts, and the guard refuses every other layout probed here
+    (TSK-359). Each refused probe collects fewer tests than it defines when
+    unittest's own loader reads it."""
+
+    def problems(self, source):
+        return collection_problems(source, 'probe.py')
+
+    def assertRefused(self, source, expected, defined=1):
+        self.assertEqual(self.problems(source), expected)
+        self.assertLess(probe_count(source), defined)
+
+    def test_every_scripts_test_file_keeps_the_plain_layout(self):
+        files = sorted(Path(__file__).resolve().parent.glob('test_*.py'))
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(file=path.name):
+                self.assertEqual(collection_problems(path.read_text(), path.name), [])
+
+    def test_a_test_under_a_plain_class_is_refused(self):
+        self.assertRefused('import unittest\nclass Helper:\n    def test_lost(self):\n        pass\n',
+                           ['probe.py:3 Helper.test_lost is never collected'])
+
+    def test_a_nested_test_case_is_refused(self):
+        source = CASE + ('    def test_runs(self):\n        pass\n    class Inner(unittest.TestCase):\n'
+                         '        def test_lost(self):\n            pass\n')
+        self.assertRefused(source, ['probe.py:6 test_lost is not a plain method of a top-level class'], 2)
+
+    def test_a_class_inside_a_conditional_is_refused(self):
+        source = 'import unittest\nif True:\n    class Helper:\n        def test_lost(self):\n            pass\n'
+        self.assertRefused(source, ['probe.py:4 test_lost is not a plain method of a top-level class'])
+
+    def test_a_class_replaced_by_a_later_one_of_the_same_name_is_refused(self):
+        source = (CASE + '    def test_lost(self):\n        pass\n'
+                  'class Case(unittest.TestCase):\n    def test_kept(self):\n        pass\n')
+        self.assertRefused(source, ['probe.py:5 rebinds top-level class Case'], 2)
+
+    def test_a_method_replaced_in_its_own_class_is_refused(self):
+        source = CASE + '    def test_x(self):\n        pass\n    def test_x(self):\n        pass\n'
+        self.assertRefused(source, ['probe.py:3 Case.test_x is never collected',
+                                    'probe.py:5 Case.test_x replaces an earlier definition'], 2)
+
+    def test_a_test_name_rebound_in_the_class_body_is_refused(self):
+        source = CASE + '    def test_lost(self):\n        pass\n    test_lost = None\n'
+        self.assertRefused(source, ['probe.py:5 test_lost is not a plain method of a top-level class'])
+
+    def test_an_inherited_test_dropped_with_none_is_the_one_exception(self):
+        base = CASE + '    def test_x(self):\n        pass\n'
+        dropped = base + 'class Child(Case):\n    test_x = None\n'
+        self.assertEqual(self.problems(dropped), [])
+        self.assertEqual(probe_count(dropped), 1)
+        self.assertEqual(self.problems(base + 'class Child(Case):\n    test_y = None\n'),
+                         ['probe.py:6 test_y is not a plain method of a top-level class'])
+        self.assertEqual(self.problems(base + 'class Child(Case):\n    test_x = 1\n'),
+                         ['probe.py:6 test_x is not a plain method of a top-level class'])
+
+    def test_a_class_attribute_assigned_from_outside_is_refused(self):
+        source = CASE + '    def test_x(self):\n        pass\ndef f():\n    Case.test_x = None\n'
+        self.assertEqual(self.problems(source), ['probe.py:6 assigns or deletes attribute test_x'])
+
+    def test_a_class_rebound_at_top_level_is_refused(self):
+        source = CASE + '    def test_lost(self):\n        pass\nCase = None\n'
+        self.assertRefused(source, ['probe.py:5 rebinds top-level class Case'])
+
+    def test_a_class_rebound_inside_a_conditional_is_refused(self):
+        source = CASE + '    def test_lost(self):\n        pass\nif True:\n    Case = None\n'
+        self.assertRefused(source, ['probe.py:6 rebinds top-level class Case'])
+
+    def test_a_test_inside_an_except_handler_is_refused(self):
+        source = ('import unittest\ntry:\n    raise ValueError\nexcept ValueError:\n    pass\nelse:\n    pass\n'
+                  'try:\n    pass\nexcept ValueError:\n    class Case(unittest.TestCase):\n'
+                  '        def test_lost(self):\n            pass\n')
+        self.assertRefused(source, ['probe.py:12 test_lost is not a plain method of a top-level class'])
+
+    def test_a_test_inside_a_match_arm_is_refused(self):
+        source = ('import unittest\nmatch 0:\n    case 1:\n        class Case(unittest.TestCase):\n'
+                  '            def test_lost(self):\n                pass\n')
+        self.assertRefused(source, ['probe.py:5 test_lost is not a plain method of a top-level class'])
+
+    def test_a_module_level_test_function_is_refused(self):
+        self.assertRefused('def test_lost():\n    pass\n',
+                           ['probe.py:1 test_lost is not a plain method of a top-level class'])
+
+    def test_load_tests_is_refused(self):
+        source = CASE + '    def test_x(self):\n        pass\ndef load_tests(loader, tests, pattern):\n    return tests\n'
+        self.assertEqual(self.problems(source), ['probe.py:5 binds load_tests; the guard cannot judge its collection'])
+
+    def test_a_replacing_class_decorator_or_setattr_is_refused(self):
+        source = ('import unittest\ndef drop(cls):\n    return None\n@drop\nclass Case(unittest.TestCase):\n'
+                  '    def test_lost(self):\n        pass\nsetattr(Case, "x", 1)\n')
+        self.assertEqual(self.problems(source), ['probe.py:4 class Case has a decorator that may replace it',
+                                                 'probe.py:8 setattr changes class Case'])
+
+    def test_the_plain_layouts_in_use_are_accepted(self):
+        sources = [
+            ('import unittest\nclass Mixin:\n    def test_shared(self):\n        pass\n'
+             'class Concrete(Mixin, unittest.TestCase):\n    pass\n'),
+            ('import unittest as ut\nfrom unittest import TestCase as Base\nclass Root(ut.TestCase):\n    pass\n'
+             'class Child(Root):\n    def test_a(self):\n        pass\nclass Other(Base):\n'
+             '    def test_b(self):\n        pass\n'),
+            ('import unittest\n@unittest.skipIf(False, "reason")\nclass Case(unittest.TestCase):\n'
+             '    def test_x(self):\n        def test_inner():\n            pass\n'),
+        ]
+        for source in sources:
+            with self.subTest(source=source[:40]):
+                self.assertEqual(self.problems(source), [])
+                self.assertGreater(probe_count(source), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

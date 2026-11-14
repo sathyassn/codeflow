@@ -28,12 +28,12 @@
     ],
     "facts": [
       {
-        "claim": "70 decisions, 3 superseded",
+        "claim": "a superseded decision names the later decision that replaced it",
         "source": "docs/decision-map.md#technical",
-        "derive": "the count sentence",
+        "derive": "the ADR-0002 row of the decision table",
         "check": {
           "kind": "contains",
-          "text": "70 decisions, 3 with `status: superseded`."
+          "text": "| superseded | ADR-0006 |"
         },
         "value": true
       },

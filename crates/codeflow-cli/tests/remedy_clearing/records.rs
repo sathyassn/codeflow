@@ -72,12 +72,13 @@ impl Hosted {
         assert!(out.contains("TSK-001"), "{out}");
         let task = read(&self.root, TASK).replacen("- AC-1\n", CRITERION, 1);
         write(&self.root, TASK, &task);
+        state_outcome(&self.root, TASK);
         commit_all(&self.root, "docs: plan the work");
     }
 
-    /// Land `branch` on the destination's target, as a reviewed merge on
-    /// the platform does, then fast-forward the local target to it.
-    fn land(&self, branch: &str) {
+    /// Land `branch` on the destination and fetch its remote-tracking refs.
+    /// The local target branch stays where it was.
+    fn land_on_destination(&self, branch: &str) {
         git(
             &self.dest,
             &[
@@ -88,6 +89,11 @@ impl Hosted {
             ],
         );
         git(&self.root, &["fetch", "-q", "origin"]);
+    }
+
+    /// Land `branch`, then fast-forward the local target to it.
+    fn land(&self, branch: &str) {
+        self.land_on_destination(branch);
         git(
             &self.root,
             &[
@@ -576,6 +582,63 @@ fn clears_work_start_reconcile() {
 }
 
 #[test]
+fn clears_work_target_tip() {
+    const BRANCH: &str = "task/TSK-001-work";
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    let old_target = rev(root, &hosted.target);
+    hosted.branch(BRANCH);
+    commit(root, "x.txt", "feat: add x");
+    hosted.branch("plan/advance");
+    commit(root, "target.txt", "docs: advance target");
+    hosted.land_on_destination("plan/advance");
+    git(root, &["switch", "-q", BRANCH]);
+    // Fetching the remote does not keep the local target branch current.
+    // The printed fix must merge the verified remote commit, not this ref.
+    assert_eq!(rev(root, &hosted.target), old_target);
+    prove(
+        "WORK_TARGET_TIP",
+        "work.target_tip",
+        || hosted.ci(BRANCH, &["--into", &hosted.target]),
+        |printed| {
+            let step = printed_command(printed, "WORK_TARGET_TIP", None);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_work_target_unverified() {
+    const LINE: &str = "integration/x";
+    let dir = ci_repo("{}");
+    let root = dir.path();
+    git(root, &["branch", LINE, "main"]);
+    commit(root, "x.txt", "feat: add x");
+    // The target's tip cannot be read here, so containment is unverified.
+    git(root, &["branch", "-D", LINE]);
+    let args = [
+        "--base", "main", "--head", "HEAD", "--branch", "feat/x", "--into", LINE,
+    ];
+    prove(
+        "WORK_TARGET_UNVERIFIED",
+        "work.target_tip",
+        || {
+            let mut full = vec!["ci"];
+            full.extend(args);
+            codeflow(root, &full)
+        },
+        |printed| {
+            // Repair the target read as the finding says, then rerun.
+            git(root, &["branch", LINE, "main"]);
+            let step = printed_command(printed, "WORK_TARGET_UNVERIFIED", None);
+            run_printed(root, &step, &[], &args);
+        },
+    );
+}
+
+#[test]
 fn clears_work_start_merge_planning() {
     let hosted = Hosted::new();
     let root = &hosted.root;
@@ -585,6 +648,7 @@ fn clears_work_start_merge_planning() {
     hosted.seed();
     let out = codeflow(root, &["epic", "new", "an outcome"]);
     assert!(out.contains("EPC-001"), "{out}");
+    state_outcome(root, EPIC);
     set_field(root, TASK, "epic_id", "EPC-001");
     set_field(root, TASK, "standalone_reason", "null");
     commit_all(root, "docs: plan the epic");
@@ -598,6 +662,44 @@ fn clears_work_start_merge_planning() {
             hosted.land("plan/work");
             let step = printed_command(printed, "WORK_START_MERGE_PLANNING", None);
             run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+/// TSK-1036: a task blocked on the target is unblocked in its own pull
+/// request by the printed `task status` step.
+#[test]
+fn clears_work_start_unblock() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    let block = [
+        "task",
+        "status",
+        "TSK-001",
+        "blocked",
+        "--reason",
+        "waits on the host",
+        "--owner",
+        "ops",
+        "--revisit",
+        "the host is ready",
+    ];
+    let out = codeflow(root, &block);
+    assert!(out.contains("blocked"), "{out}");
+    commit_all(root, "docs: block the work");
+    hosted.seed();
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    commit(root, "x.txt", "feat: add x");
+    prove(
+        "WORK_START_UNBLOCK",
+        "is blocked",
+        || hosted.ci("task/TSK-001-work", &[]),
+        |printed| {
+            let step = printed_command(printed, "WORK_START_UNBLOCK", None);
+            run_printed(root, &step, &[], &[]);
+            commit_all(root, "chore: unblock the work");
         },
     );
 }
@@ -692,7 +794,7 @@ fn clears_acceptance_binding() {
     commit(root, "y.txt", "feat: add y");
     prove(
         "ACCEPTANCE_BINDING",
-        "changed after the reviewed commit",
+        "changed between the reviewed commit",
         || hosted.ci("task/TSK-001-work", &[]),
         |printed| {
             // Review the pull request head, then take the printed steps in
@@ -749,9 +851,16 @@ fn clears_review_row_binding() {
     assert!(out.contains("todo -> complete"), "{out}");
     commit_all(root, "chore: complete the work");
     let body = hosted.dir.path().join("review-row.md");
+    // A short form that holds a digit: the Reviews reader takes a hex word
+    // without one for prose, so an all-letter prefix such as `bbfbddbaa`
+    // names no commit and the section defers to the block (hosted run
+    // 40734999603).
+    let short = reviewed
+        .find(|c: char| c.is_ascii_digit())
+        .map_or(reviewed.len(), |at| (at + 1).max(9));
     let house = format!(
         "| Reviewer | whole unit at `{}` | approved, no findings |",
-        &reviewed[..9]
+        &reviewed[..short]
     );
     let table = format!("| Seat | Scope | Verdict |\n|---|---|---|\n{house}");
     std::fs::write(&body, BODY.replace("None: pending review.", &table)).unwrap();
@@ -779,6 +888,74 @@ fn clears_review_row_binding() {
             );
             let fixed = std::fs::read_to_string(&body).unwrap().replace(&house, row);
             std::fs::write(&body, fixed).unwrap();
+        },
+    );
+}
+
+/// ADR-0102, TSK-1433: a task that lands on its marked epic's line with no
+/// pull request records the lineage that built it and a reviewer of
+/// another lineage. A review reference that names neither does not; the
+/// printed steps record the review again, naming both.
+#[test]
+fn clears_landed_review() {
+    const LINE: &str = "integration/EPC-001-line";
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ntitle: \"the line\"\nstatus: planning\nmain_landing: whole-epic\nwork_type: feat\nspecs: []\ncreated: 2026-11-12\n---\n\n# EPC-001: the line\n\n## Summary\n\nA line.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n",
+    );
+    commit_all(root, "docs: mark the epic");
+    hosted.land("plan/work");
+    hosted.branch(LINE);
+    commit(root, "x.txt", "feat: add x");
+    let acceptance = review_head(root);
+    let out = codeflow(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            &acceptance,
+        ],
+    );
+    assert!(out.contains("todo -> complete"), "{out}");
+    commit_all(root, "chore: complete the work");
+    prove(
+        "LANDED_REVIEW",
+        "lands on its marked epic's line with no pull request",
+        || hosted.ci(LINE, &[]),
+        |printed| {
+            // A reviewer of another lineage reviews the head; take the
+            // printed steps in order, naming the builder's lineage and
+            // that reviewer first.
+            let acceptance = review_head(root);
+            let named = std::fs::read_to_string(&acceptance).unwrap().replace(
+                "session:proof@sha256:00",
+                "Codex GPT-6.1 Sol at medium, whole unit\n  built_by: claude",
+            );
+            std::fs::write(&acceptance, named).unwrap();
+            let steps: Vec<&str> = printed
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("codeflow task status"))
+                .collect();
+            assert_eq!(steps.len(), 2, "{printed}");
+            assert_eq!(steps[0], printed_command(printed, "LANDED_REVIEW", None));
+            for step in steps {
+                run_printed(
+                    root,
+                    step,
+                    &[("<id>", "TSK-001"), ("<file>", &acceptance)],
+                    &[],
+                );
+            }
+            commit_all(root, "chore: record the review by another lineage");
         },
     );
 }

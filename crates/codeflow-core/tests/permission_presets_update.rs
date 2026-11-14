@@ -472,7 +472,7 @@ fn notes_for(report: &scaffold::Report, dest: &str) -> Vec<String> {
         .files
         .iter()
         .find(|f| f.dest == dest)
-        .map(|f| f.notes.clone())
+        .map(|f| f.notes.iter().map(ToString::to_string).collect())
         .unwrap_or_default()
 }
 
@@ -515,7 +515,7 @@ fn update_moves_policy_scalars_still_at_the_prior_default() {
         assert!(
             notes
                 .iter()
-                .any(|n| n.starts_with(&format!("moved {key} from \"warn\" to \"block\""))),
+                .any(|n| n.starts_with(&format!("moved {key} to \"block\""))),
             "{key}: {notes:?}"
         );
     }
@@ -602,7 +602,14 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
     assert!(read_denied(&settings, SECRET_NAMED_SOURCE));
     let after = policy(&root);
     assert_eq!(after["security"]["privilege_escalation"], "block");
-    assert_eq!(after["security"]["script_bypass"], "warn", "new key added");
+    assert_eq!(
+        after["security"]["headless_peer_runs"], "block",
+        "new key added"
+    );
+    assert!(
+        after["security"].get("script_bypass").is_none(),
+        "a key with no reader is not added"
+    );
     for dest in [".claude/settings.json", ".codeflow/policy.json"] {
         let notes = notes_for(&report, dest);
         assert!(
@@ -614,9 +621,9 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
     }
     let notes = notes_for(&report, ".codeflow/policy.json");
     assert!(
-        notes.iter().any(
-            |n| n.starts_with("moved security.privilege_escalation from \"warn\" to \"block\"")
-        ),
+        notes
+            .iter()
+            .any(|n| n.starts_with("moved security.privilege_escalation to \"block\"")),
         "{notes:?}"
     );
     codeflow_core::hooks::policy_schema::validate_policy(&root).unwrap();

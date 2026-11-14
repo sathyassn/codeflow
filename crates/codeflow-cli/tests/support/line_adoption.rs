@@ -5,6 +5,12 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+// Public so `hooks_cli` reaches the one copy of this module through its
+// `line_adoption_fixture` instead of loading the file a second time.
+#[path = "git_isolation.rs"]
+pub mod git_isolation;
+use git_isolation::strip_host_git_state;
+
 pub const LINE: &str = "integration/EPC-001-outcome";
 pub const EPIC_PATH: &str = "project-management/epics/EPC-001.md";
 pub const ZERO: &str = "0000000000000000000000000000000000000000";
@@ -95,10 +101,9 @@ impl Line {
     }
     pub fn command(&self, program: &str) -> Command {
         let mut c = Command::new(program);
+        strip_host_git_state(&mut c);
         c.current_dir(self.root())
-            .env("CODEFLOW_HOME", self.home.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+            .env("CODEFLOW_HOME", self.home.path());
         for key in [
             "GIT_DIR",
             "GIT_WORK_TREE",
@@ -164,11 +169,18 @@ impl Line {
             .unwrap()
             .replace("AC-1 Work runs.", "AC-1 The planned work runs.");
         self.write(path, &record);
-        let reviewed = self.commit("feat: implement planned work");
-        self.write(path, &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/2\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete")));
-        self.commit("docs: complete planned work");
+        self.commit("feat: implement planned work");
+        self.complete_task();
         self.git(&["switch", "-q", LINE]);
         self.merge("task/TSK-001-work");
+    }
+    /// Record the review of the current task head before its line landing.
+    pub fn complete_task(&self) {
+        let reviewed = self.git(&["rev-parse", "HEAD"]);
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(self.root().join(path)).unwrap();
+        self.write(path, &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/2\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete")));
+        self.commit("docs: complete planned work");
     }
     pub fn direct(&self) -> String {
         self.write("src/lib.rs", "pub fn direct() {}\n");

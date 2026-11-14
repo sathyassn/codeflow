@@ -700,7 +700,10 @@ mod tests {
         ] {
             let reopened = shipped_text.replacen(
                 anchor,
-                &format!("[permissions.cf-builder.filesystem]\n{grant}\n\n{anchor}"),
+                // The shipped `[permissions.cf-builder.filesystem]` table
+                // (TSK-1003) ends right above the anchor, so a plain grant
+                // placed there joins it.
+                &format!("{grant}\n\n{anchor}"),
                 1,
             );
             std::fs::write(root.join(".codex/config.toml"), reopened).unwrap();

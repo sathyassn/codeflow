@@ -195,7 +195,7 @@ fn files_in(dir: &Path, extension: &str) -> std::io::Result<Vec<PathBuf>> {
             files.push(path);
         }
     }
-    files.sort();
+    files.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(files)
 }
 fn jsonl_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -236,7 +236,7 @@ fn md_files_under(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             }
         }
     }
-    files.sort();
+    files.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(files)
 }
 

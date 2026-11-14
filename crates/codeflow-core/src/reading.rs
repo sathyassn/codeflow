@@ -1030,6 +1030,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // A retention fixture's window setting (TSK-130), in the disposable
     // fixture only.
     ".claude/settings.local.json",
+    // A person's own Claude Code settings, named where cf-customize says
+    // where each person sets their effort (TSK-1028).
+    "~/.claude/settings.json",
     ".grok/hooks/codeflow.json",
     ".codeflow/estimate.json",
     ".codeflow/manifest.json",

@@ -77,10 +77,12 @@ missing automation for adoption rather than silently enabling publication.
 - **Secrets:** never stage credentials, API keys, tokens, or `.env` files.
   The pre-commit secret scan (and the CI secret-scan job) block them, and it
   is the one gate never relaxed, not even during bootstrap grace.
-- **Durability push:** with a remote configured, push the working branch
-  after each committed logical unit so work survives a machine failure; use
-  `git push --force-with-lease` (never bare `--force`) after a rewrite. It is
-  backup, not a merge: the secret scan and every merge gate still stand.
+- **One push at ready:** with a remote configured, push the working branch
+  once, when the unit is ready for review, and again only for a later change
+  to it, so the pre-push gate runs once per tree; use
+  `git push --force-with-lease` (never bare `--force`) after a rewrite. A
+  push is backup, not a merge: the secret scan and every merge gate still
+  stand.
   Forbid it with `git.force_push_unprotected` in `policy.json` (default
   allow).
 - When a gate blocks you, fix the cause; never bypass (`--no-verify`,
@@ -111,15 +113,19 @@ is refused; a human at their own terminal is warned. See `worktrees.md`.
 ## Bodies of work
 
 **Bodies of work:** a multi-task epic lands on a non-protected
-`integration/<epic>` branch (agents merge there) in small batches of
-reviewed task heads, each batch gated once as one candidate (see
-`worktrees.md`, "Parallel work and integration"). A red candidate is
+`integration/<epic>` branch (agents merge there) in batches: every
+reviewed task head ready when the line lands goes on one candidate, gated
+once, one candidate per line at a time (see `worktrees.md`, "Parallel work
+and integration"). A red candidate is
 diagnosed first, and a member and its dependents leave it only when
 evidence attributes the failure to it. Only the finished body
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 
-Direct commits on an epic line are refused at push. Move an unpushed one
+Direct commits on an epic line are refused at push. `codeflow ci` refuses
+them on a landing candidate before its gate when run with `--line-tip
+integration/EPC-NNN-<slug>`, which judges the candidate from the line's
+fetched tip. Move an unpushed one
 into a pull request: keep it on a task or planning branch, run
 `git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the
 default target on its first push), then open the pull request to the line.

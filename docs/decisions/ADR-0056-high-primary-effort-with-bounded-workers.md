@@ -73,3 +73,11 @@ medium trials or claim a full binding promotion from focused diagnostics.
 High increases baseline resource use. Evaluate total cost including workers,
 verification and rework, alongside missed escalation and final quality. Higher
 effort never relaxes scope discipline, proportionate code, or independent review.
+
+## Note of 2026-10-28: the settings pin is superseded
+
+[ADR-0087](ADR-0087-effort-is-each-person-s-setting-not-the-project.md)
+supersedes the sentence "Codex project settings pin high. Claude settings
+provide `effortLevel: high` as a starting default". The scaffold no longer
+ships either key, and effort in shared settings is a project opt-in. The rest
+of this record stands, including high as the primaries' launch effort.

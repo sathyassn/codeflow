@@ -186,6 +186,14 @@ pub(super) fn config_matches(key: &str, pattern: &str) -> bool {
     }
 }
 
+/// The environment variables whose value is a program Git runs.
+pub(super) fn environment_names() -> impl Iterator<Item = &'static str> {
+    SOURCES.iter().filter_map(|source| match source {
+        Environment(name, _) => Some(*name),
+        _ => None,
+    })
+}
+
 pub(super) fn environment(name: &str) -> bool {
     SOURCES
         .iter()

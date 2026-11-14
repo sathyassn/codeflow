@@ -19,3 +19,6 @@ const config = readChromeConfig(chromeRoot);
 enhanceDocument(documentRoot);
 enhanceForms(documentRoot, config);
 render(<Chrome config={config} documentRoot={documentRoot} />, chromeRoot);
+
+if (document.querySelector("#cf-stage-measuring")) void import("./stage-measuring").then(({ measureExportStages }) => measureExportStages())
+  .catch(() => { document.documentElement.dataset.cfStagesMeasured = "failed"; });

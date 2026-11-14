@@ -718,24 +718,28 @@ fn ci_templates_never_resolve_codeflow_through_a_cargo_bin() {
 
 /// Codex EPC-017 review, finding 5: the PR-body check (structure and the
 /// ADR-0067 characters) must rerun when the body is edited after opening,
-/// and the body keeps reaching `codeflow ci` through `env:`, never inline.
+/// and the body reaches `codeflow ci` as a file (TSK-1040), never inline
+/// and never through `env:`.
 #[test]
-fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
+fn shipped_ci_rechecks_an_edited_pr_body_through_a_file() {
     // The PR-body check runs in the enforcing workflow on
     // `pull_request_target` (TSK-107, SPC-013 R-113).
     let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-policy.yml"))
         .expect("shipped policy workflow is readable");
     assert!(
         workflow.contains(
-            "  pull_request_target:\n    types: [opened, synchronize, reopened, edited]\n"
+            "  pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]\n"
         ),
         "the enforcing workflow must subscribe pull_request_target to edited"
     );
     // TSK-254: the body is read from the API when the job runs, so the
-    // newest body is judged whichever run survives the concurrency group,
-    // and it reaches `codeflow ci` only through env, from a step output.
-    assert!(workflow.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
-    assert_eq!(workflow.matches("steps.body.outputs.text").count(), 1);
+    // newest body is judged even by a run that waited in the queue,
+    // and it reaches `codeflow ci` only as a file (TSK-1040): the runner
+    // prints a step's `env:` values, so the text is never an env value.
+    assert!(workflow.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
+    assert!(workflow.contains("--pr-body-file \"$BODY_FILE\""));
+    assert_eq!(workflow.matches("CODEFLOW_PR_BODY").count(), 0);
+    assert_eq!(workflow.matches("steps.body.outputs.text").count(), 0);
     assert_eq!(
         workflow.matches("github.event.pull_request.body").count(),
         0,
@@ -791,15 +795,16 @@ const UNSHIPPED_FILES: [&str; 6] = [
 /// The present review example stays: the visual guide line (EPC-016) made
 /// it the figure-block example that document-authoring and the present tests
 /// read, so the release line keeps it.
-const RETIRED_FILES: [&str; 7] = [
+const RETIRED_FILES: [&str; 6] = [
     "agents/skills/cf-model-orchestrator/references/other-hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
     "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
     "agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
     "agents/skills/cf-model-orchestrator/resources/routing/review.md",
     "agents/skills/cf-model-orchestrator/resources/routing/roles.md",
-    // Its registry check is a step of ci/codeflow-policy.yml now.
-    "ci/codeflow-registry.yml",
+    // ci/codeflow-registry.yml was retired by TSK-184 and is shipped again
+    // by TSK-336: push, schedule and dispatch check the registry there, so
+    // they create no check under a `trusted:` name.
 ];
 
 /// Directory prefixes under `assets/base` whose files are embedded and
@@ -2193,7 +2198,9 @@ fn presentation_chat_figures_defer_to_the_lifecycle_surface_rule() {
             .expect("writing reference is readable"),
     );
     for rule in [
-        "Where the current surface renders one, an inline figure is the default, such as an inline HTML figure in a desktop harness.",
+        "Where the current surface renders one and the answer is short, an inline figure is the default, such as an inline HTML figure in a desktop harness.",
+        "A figure or explanation that needs more than an inline reply goes to `cf-present` (standard and full tiers) by default;",
+        "use it only when the operator asks for it or the content must be shared, since `cf-present` is local and cannot be shared.",
         "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders.",
     ] {
         assert!(
@@ -2629,7 +2636,7 @@ fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
     );
 }
 
-/// Both products use the design kit's 27 colour roles in all six skin/mode
+/// Both products use the design kit's 31 colour roles in all six skin/mode
 /// pairs, with independent font preferences. The starter and live portal
 /// remain byte-identical; the kit JSON is the shared value authority.
 #[test]
@@ -2676,7 +2683,11 @@ fn portal_utility_tokens_match_present_skins() {
         for mode in ["light", "dark"] {
             let pair = format!("{skin}-{mode}");
             let roles = kit[&pair].as_object().expect("kit pair");
-            assert_eq!(roles.len(), 27, "complete kit role set");
+            assert_eq!(
+                roles.len(),
+                40,
+                "complete kit role set, including stage and accent-family roles"
+            );
             for (sheet, css, marker) in [
                 (
                     "portal",
@@ -3257,7 +3268,7 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
         problems.join("\n  ")
     );
     // Negative control (Codex review R1, finding 1): a section gutted to its
-    // heading, the Unit line and a comment that still names the release
+    // heading, one field line and a comment that still names the release
     // script and the changelog marker fails.
     let start = live
         .find("## Release impact\n")
@@ -3266,7 +3277,7 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
         .find("<!-- Conditional sections")
         .map_or(live.len(), |offset| start + offset);
     let gutted = format!(
-        "{}## Release impact\n\n- Unit: `codeflow`\n\n<!-- Read by `scripts/release.py`. Put a \
+        "{}## Release impact\n\n- Rationale:\n\n<!-- Read by `scripts/release.py`. Put a \
          codeflow:release-impact patch|minor|major HTML marker before each entry. -->\n\n{}",
         &live[..start],
         &live[end..]
@@ -3325,8 +3336,6 @@ fn release_impact_problems(template: &str) -> Vec<String> {
         "- Breaking: `yes | no`",
         "- Rationale:",
         "- Migration: `none`, steps, or \"see Breaking change\"",
-        "- Unit: `codeflow`",
-        "- Evidence:",
     ] {
         if !lines.contains(field) {
             problems.push(format!("field line missing from the section: {field}"));
@@ -3337,8 +3346,8 @@ fn release_impact_problems(template: &str) -> Vec<String> {
         "Breaking states compatibility",
         "Choose each value; never leave the alternatives",
         "Migration is normally `none` for nonbreaking work",
-        "Read by `scripts/release.py` with the fields above",
-        "Breaking is yes if and only if Impact is major",
+        "Judged by `codeflow ci`'s one evaluator, which `scripts/release.py`",
+        "A major pending entry needs Breaking: yes",
         "put a codeflow:release-impact patch|minor|major HTML marker directly before each pending changelog entry",
         "Impact must equal the highest one this PR adds or edits",
         "Declared impact cannot be below conventional commit markers",

@@ -27,14 +27,17 @@ async function fixture(action) {
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-test('archive includes source outside crates and passes revision to repeat builds', async () => {
+test('archive preserves source, revision and allocated Cargo jobs in repeat builds', async () => {
   await fixture(async (root, git) => {
+    await writeFile(join(root, 'crates/codeflow-cli/build.rs'), 'fn main() { assert_eq!(std::env::var("NUM_JOBS").unwrap(), "3", "nested Cargo must retain the allocated workers"); }');
+    git('add', '.'); git('commit', '-qm', 'test: verify nested worker allocation');
     const revision = git('rev-parse', 'HEAD').toString().trim();
-    const done = spawnSync(process.execPath, ['scripts/check-present-binary-delta.mjs', '--with-repeat'], { cwd: root, encoding: 'utf8', timeout: 120_000 });
+    const done = spawnSync(process.execPath, ['scripts/check-present-binary-delta.mjs', '--with-repeat'], { cwd: root, encoding: 'utf8', timeout: 120_000, env: { ...process.env, CARGO_BUILD_JOBS: '3' } });
     assert.equal(done.status, 0, done.stderr);
     const evidence = JSON.parse(done.stdout);
     assert.equal(evidence.source_revision, revision);
     assert.equal(evidence.exact_repeat, 'pass');
+    assert.equal(evidence.cargo_build_jobs, '3');
     const target = evidence.target_directory;
     assert.ok(target.startsWith(join(await realpath(root), 'target/binary-delta-')));
     assert.match(execFileSync(join(target, 'release', process.platform === 'win32' ? 'codeflow.exe' : 'codeflow'), { encoding: 'utf8' }), new RegExp(revision));

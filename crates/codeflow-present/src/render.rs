@@ -102,6 +102,7 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
     html.push_str("\" data-revision=\"");
     html.push_str(&options.revision.to_string());
     html.push_str("\">");
+    render_head(document, &mut html);
     html.push_str(&body);
     html.push_str("</main>");
     if options.interactive {
@@ -144,6 +145,45 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
     }
     html.push_str("</body></html>");
     html
+}
+
+/// The document head (TSK-444, anatomy A1): the title, the summary and the
+/// provenance meta open the document column, before the first block. It sits
+/// outside every block, so it carries no review anchor of its own.
+fn render_head(document: &PresentationDocument, html: &mut String) {
+    html.push_str("<header class=\"cf-doc-head\"><h1 class=\"cf-doc-title\">");
+    escape_html_to(&document.title, html);
+    html.push_str("</h1>");
+    if let Some(summary) = document
+        .summary
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        html.push_str("<p class=\"cf-doc-summary\">");
+        escape_html_to(summary, html);
+        html.push_str("</p>");
+    }
+    // Record ids name their own kind (TSK-, SPC-, ADR-), so the meta line
+    // carries the ids alone.
+    let provenance = &document.provenance;
+    let meta: Vec<&str> = [
+        provenance.task_id.as_deref(),
+        provenance.spec_id.as_deref(),
+        provenance.adr_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !meta.is_empty() {
+        html.push_str("<p class=\"cf-doc-meta\">");
+        for value in meta {
+            html.push_str("<span>");
+            escape_html_to(value, html);
+            html.push_str("</span>");
+        }
+        html.push_str("</p>");
+    }
+    html.push_str("</header>");
 }
 
 #[must_use]
@@ -259,26 +299,32 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
         output.push_str("</details></section>");
         return;
     }
-    if let Block::Tabs { tabs, .. } = block {
-        output.push_str(
-            "<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root data-cf-canonical-text=\"",
-        );
+    if let Block::Tabs { id, title, tabs } = block {
+        output.push_str("<div class=\"tabs\" data-cf-tabs>");
+        if let Some(title) = title {
+            output.push_str("<h2>");
+            escape_html_to(title, output);
+            output.push_str("</h2>");
+        }
+        output.push_str("<div class=\"tabs__labels\" role=\"tablist\" aria-label=\"");
+        escape_attr_to(&block.review_label(), output);
+        output.push_str("\" data-cf-review-text-root data-cf-canonical-text=\"");
         escape_attr_to(&block.canonical_review_text(framing), output);
         output.push_str("\">");
-        for tab in tabs {
-            output.push_str("<span>");
+        let prefix = format!("cf-tabs-{}", sandbox_id(options.session_id, id));
+        for (index, tab) in tabs.iter().enumerate() {
+            let selected = index == 0;
+            let _ = write!(output, "<button type=\"button\" role=\"tab\" id=\"{prefix}-tab-{index}\" aria-controls=\"{prefix}-panel-{index}\" aria-selected=\"{selected}\" tabindex=\"{}\">", if selected { 0 } else { -1 });
             escape_html_to(&tab.label, output);
-            output.push_str("</span>");
+            output.push_str("</button>");
         }
         output.push_str("</div>");
-        for tab in tabs {
-            output.push_str("<details><summary>");
-            escape_html_to(&tab.label, output);
-            output.push_str("</summary>");
+        for (index, tab) in tabs.iter().enumerate() {
+            let _ = write!(output, "<div role=\"tabpanel\" id=\"{prefix}-panel-{index}\" aria-labelledby=\"{prefix}-tab-{index}\" tabindex=\"0\"{}>", if index == 0 { "" } else { " hidden" });
             for child in &tab.blocks {
                 render_block(child, context, output);
             }
-            output.push_str("</details>");
+            output.push_str("</div>");
         }
         output.push_str("</div></section>");
         return;
@@ -553,7 +599,7 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
             } else {
                 output.push_str("<figure class=\"stage\"><iframe sandbox title=\"");
                 escape_attr_to(title.as_deref().unwrap_or("Sandboxed content"), output);
-                output.push_str("\" srcdoc=\"");
+                output.push_str("\" data-cf-export-stage srcdoc=\"");
                 escape_attr_to(html, output);
                 output.push_str("\"></iframe></figure>");
             }
@@ -1419,6 +1465,81 @@ pub(crate) mod tests {
         assert!(rendered.contains("Hello alert(1) world"));
     }
 
+    fn head_options() -> RenderOptions<'static> {
+        RenderOptions {
+            session_id: "00000000-0000-0000-0000-000000000000",
+            revision: 1,
+            event_sequence: 0,
+            response_sequence: 0,
+            answers: None,
+            script_path: None,
+            style_path: None,
+            prepaint_source: None,
+            utility_style: None,
+            identity: None,
+            feedback: None,
+            read_only_warning: None,
+            interactive: true,
+            retired: None,
+        }
+    }
+
+    /// Anatomy A1 (TSK-444): the title, the summary and the provenance meta
+    /// open the document column, escaped, before the first block and outside
+    /// every review anchor.
+    #[test]
+    fn the_document_head_opens_the_column_with_title_summary_and_meta() {
+        let document = PresentationDocument {
+            summary: Some("What <this> is & why".to_string()),
+            schema_version: 2,
+            title: "Design \"direction\"".to_string(),
+            language: None,
+            provenance: Provenance {
+                task_id: Some("TSK-444".to_string()),
+                spec_id: None,
+                adr_id: Some("ADR-0068".to_string()),
+            },
+            blocks: vec![Block::Narrative {
+                id: "intro".to_string(),
+                markdown: "## Part one\n\nThe lead.".to_string(),
+            }],
+        };
+        let html = render_document(&document, &head_options());
+        let main = &html[html.find("<main ").expect("main")..];
+        let open = &main[main.find('>').expect("main opens") + 1..];
+        assert!(
+            open.starts_with("<header class=\"cf-doc-head\"><h1 class=\"cf-doc-title\">Design &quot;direction&quot;</h1><p class=\"cf-doc-summary\">What &lt;this&gt; is &amp; why</p><p class=\"cf-doc-meta\"><span>TSK-444</span><span>ADR-0068</span></p></header><section"),
+            "the head must open the document column: {}",
+            &open[..open.len().min(400)]
+        );
+        let head = &open[..open.find("</header>").expect("head closes")];
+        assert!(
+            !head.contains("data-cf-block-id"),
+            "the head is not a review block"
+        );
+    }
+
+    /// Without a summary or provenance the head is the title alone.
+    #[test]
+    fn the_document_head_leaves_out_an_absent_summary_and_meta() {
+        let document = PresentationDocument {
+            summary: Some(String::new()),
+            schema_version: 1,
+            title: "Plain".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![Block::Narrative {
+                id: "intro".to_string(),
+                markdown: "Body".to_string(),
+            }],
+        };
+        let html = render_document(&document, &head_options());
+        assert!(html.contains(
+            "<header class=\"cf-doc-head\"><h1 class=\"cf-doc-title\">Plain</h1></header><section"
+        ));
+        assert!(!html.contains("cf-doc-summary") && !html.contains("cf-doc-meta"));
+    }
+
     #[test]
     fn markdown_links_and_images_cannot_navigate_to_unsafe_resources() {
         let mut rendered = String::new();
@@ -1470,6 +1591,7 @@ pub(crate) mod tests {
             },
             Block::Tabs {
                 id: "tabs".to_string(),
+                title: None,
                 tabs: vec![
                     Tab {
                         label: "Café".to_string(),

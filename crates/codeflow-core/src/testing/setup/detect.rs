@@ -115,6 +115,9 @@ fn build_rust_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        host_exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Cargo,
         modes: BTreeMap::from([
             (
@@ -135,6 +138,8 @@ fn build_rust_target() -> TargetConfig {
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
+        stall_timeout_seconds: None,
+        cleanup_grace_seconds: None,
         structural: None,
         tags: Vec::new(),
         test_files: Vec::new(),
@@ -154,6 +159,9 @@ fn build_vitest_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        host_exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Vitest,
         modes: BTreeMap::from([
             (
@@ -174,6 +182,8 @@ fn build_vitest_target() -> TargetConfig {
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
+        stall_timeout_seconds: None,
+        cleanup_grace_seconds: None,
         structural: None,
         tags: Vec::new(),
         test_files: Vec::new(),
@@ -193,6 +203,9 @@ fn build_jest_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        host_exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Jest,
         modes: BTreeMap::from([
             (
@@ -213,6 +226,8 @@ fn build_jest_target() -> TargetConfig {
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
+        stall_timeout_seconds: None,
+        cleanup_grace_seconds: None,
         structural: None,
         tags: Vec::new(),
         test_files: Vec::new(),
@@ -232,6 +247,9 @@ fn build_go_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        host_exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Go,
         modes: BTreeMap::from([
             (
@@ -252,6 +270,8 @@ fn build_go_target() -> TargetConfig {
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
+        stall_timeout_seconds: None,
+        cleanup_grace_seconds: None,
         structural: None,
         tags: Vec::new(),
         test_files: Vec::new(),
@@ -271,6 +291,9 @@ fn build_python_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        host_exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Pytest,
         modes: BTreeMap::from([
             (
@@ -291,6 +314,8 @@ fn build_python_target() -> TargetConfig {
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
+        stall_timeout_seconds: None,
+        cleanup_grace_seconds: None,
         structural: None,
         tags: Vec::new(),
         test_files: Vec::new(),

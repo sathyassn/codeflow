@@ -494,18 +494,174 @@ pub(super) fn recovery_args(root: &Path, args: &[String]) -> bool {
     configured && check(root, args).is_none()
 }
 
-/// A recovery fetch must be a single plain configured-remote fetch.
+/// Whether a command line is one plain fetch of a configured remote: `git
+/// fetch` or `git fetch <remote>`, and nothing else. Both guards let it
+/// through while the policy authority cannot be resolved, before their
+/// integrity checks run, so it is a closed form over the line as written and
+/// it never asks a shell parser. A parser removes what the shell would act
+/// on, such as redirections, launchers and quotes, and the words left would
+/// then speak for a line that does more. The line may hold only plain word
+/// characters and blanks, so anything the shell would do besides running
+/// those words fails it, and any doubt withholds the allowance.
 #[must_use]
 pub fn recovery_fetch(command: &str, root: &Path) -> bool {
-    let commands = super::git_guard::simple_commands(command);
-    if commands.len() != 1 || super::git_guard::transport_config_environment(command) {
+    let plain = |c: char| c.is_ascii_alphanumeric() || " \t._/-".contains(c);
+    if !command.chars().all(plain) || super::git_guard::transport_config_environment(command) {
         return false;
     }
-    let words = &commands[0];
-    words.first().is_some_and(|s| s == "git")
-        && words.get(1).is_some_and(|s| s == "fetch")
-        && words.len() <= 3
+    let words: Vec<String> = command
+        .split([' ', '\t'])
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect();
+    words.len() <= 3
+        && words.first().is_some_and(|word| word == "git")
+        && words.get(1).is_some_and(|word| word == "fetch")
         && recovery_args(root, &words[1..])
+}
+
+/// The git subcommands that stay allowed while the policy authority cannot
+/// be resolved (TSK-1104): the read-only set the guard already allows for an
+/// unresolved target, without `help`, which starts a configured viewer
+/// program. None of them writes refs, configuration, hooks or the working
+/// tree.
+const READ_ONLY_UNRESOLVED: &[&str] = &[
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "ls-tree",
+    "merge-base",
+    "for-each-ref",
+    "show-ref",
+    "cat-file",
+    "check-ignore",
+    "version",
+];
+
+/// Long options that can run a program, write a file or read outside the
+/// repository. A shortened spelling (`--ext`) counts as the full name.
+const REFUSED_LONG_OPTIONS: &[&str] = &[
+    "--help",
+    "--output",
+    "--ext-diff",
+    "--textconv",
+    "--paginate",
+    "--open-files-in-pager",
+    "--no-index",
+    "--exec-path",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+    "--filters",
+    "--show-signature",
+];
+
+fn refused_option(word: &str) -> bool {
+    let Some(long) = word.strip_prefix("--") else {
+        return word == "-O" || word.starts_with("-O");
+    };
+    let name = format!("--{}", long.split('=').next().unwrap_or(long));
+    REFUSED_LONG_OPTIONS
+        .iter()
+        .any(|full| (full.starts_with(&name) && name.len() >= 3) || name.starts_with(full))
+}
+
+/// Whether a command line is only read-only git, safe to run while the
+/// policy authority cannot be resolved. It is a closed form and it never
+/// asks a shell parser: the line may hold only plain word characters and
+/// the separators `;` and `&&`; every part must be `git <subcommand> ...`
+/// with a subcommand from `READ_ONLY_UNRESOLVED`, no git global option,
+/// and none of `REFUSED_LONG_OPTIONS`. Quotes, variables, substitutions,
+/// redirects, pipes, globs, leading assignments and launchers all fail it.
+#[must_use]
+pub fn read_only_git(command: &str) -> bool {
+    let plain = |c: char| c.is_ascii_alphanumeric() || " \t._/:=@%,+-~^;&".contains(c);
+    if command.trim().is_empty() || !command.chars().all(plain) {
+        return false;
+    }
+    let normalized = command.replace("&&", ";");
+    if normalized.contains('&') {
+        return false;
+    }
+    normalized.split(';').all(|part| {
+        let words: Vec<&str> = part.split_whitespace().collect();
+        let [first, sub, rest @ ..] = words.as_slice() else {
+            return false;
+        };
+        *first == "git"
+            && READ_ONLY_UNRESOLVED.contains(sub)
+            && rest
+                .iter()
+                .all(|word| !refused_option(word) && !word.starts_with('~') && !word.contains("%G"))
+    })
+}
+
+/// [`read_only_git`] plus the program reader: the line must also name no
+/// program that Git would run (a configured fsmonitor, external diff,
+/// textconv, pager or hook, an environment program variable, or a
+/// configuration injected through the environment, as the runner catalog
+/// lists them), read in `cwd` as the normal path reads them. Any read
+/// error refuses.
+#[must_use]
+pub fn read_only_git_runs_nothing(command: &str, cwd: &Path) -> bool {
+    read_only_git(command)
+        && super::git_guard::git_runner_bodies(command, cwd).is_ok_and(|bodies| bodies.is_empty())
+        && crate::security::git_preflight::program_runs(command, cwd)
+            .is_ok_and(|runs| runs.is_empty())
+        && no_index_change_hook(cwd)
+}
+
+/// Whether no `post-index-change` hook exists where Git looks for hooks: a
+/// read-only call that refreshes the index runs it, and the runner catalog
+/// does not list hook files. The hooks directory comes from the effective
+/// configuration Git itself lists, so a `core.hooksPath` set through the
+/// environment counts. A configuration that cannot be read, or a path
+/// spelling that cannot be resolved with certainty (`~user`, `%(prefix)`,
+/// an empty value), refuses.
+fn no_index_change_hook(cwd: &Path) -> bool {
+    let Ok(Some(repo)) = super::repo::open(cwd) else {
+        return false;
+    };
+    let Ok(config) = crate::security::git_config::read(
+        cwd,
+        &[],
+        &crate::security::git_config::Environment::new(),
+    ) else {
+        return false;
+    };
+    let hooks = match config.get_all("core.hooksPath").last() {
+        None => repo.commondir().join("hooks"),
+        Some((_, _, value)) => {
+            let Ok(value) = std::str::from_utf8(value) else {
+                return false;
+            };
+            let path = if let Some(rest) = value.strip_prefix("~/") {
+                let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
+                    return false;
+                };
+                std::path::PathBuf::from(home).join(rest)
+            } else if value.is_empty() || value.starts_with('~') || value.starts_with("%(") {
+                return false;
+            } else {
+                std::path::PathBuf::from(value)
+            };
+            // Git runs hooks from the top of the working tree (the git
+            // directory when bare), so a relative path starts there.
+            if path.is_absolute() {
+                path
+            } else {
+                repo.workdir().unwrap_or_else(|| repo.path()).join(path)
+            }
+        }
+    };
+    matches!(
+        std::fs::symlink_metadata(hooks.join("post-index-change")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 #[cfg(test)]
@@ -679,11 +835,18 @@ mod tests {
     /// configuration, written as bytes so the lines can hold text that is not
     /// valid UTF-8.
     fn repository_with_config(extra: &[u8]) -> tempfile::TempDir {
+        repository_with_url("https://example.invalid/origin.git", extra)
+    }
+
+    /// As [`repository_with_config`], with `url` as `origin`. A test that
+    /// lets the guard reach the remote uses a `file:` URL, so no lookup
+    /// leaves the machine (TSK-1156: a Codex builder seat's sandbox aborts
+    /// the whole process on a blocked lookup).
+    fn repository_with_url(url: &str, extra: &[u8]) -> tempfile::TempDir {
         use std::io::Write as _;
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
-        repo.remote("origin", "https://example.invalid/origin.git")
-            .unwrap();
+        repo.remote("origin", url).unwrap();
         let mut config = std::fs::OpenOptions::new()
             .append(true)
             .open(dir.path().join(".git").join("config"))
@@ -779,7 +942,7 @@ mod tests {
             report
                 .violations
                 .iter()
-                .any(|v| v.message.contains("missing policy source")),
+                .any(|v| v.message.contains("the policy authority is unset")),
             "{report:?}"
         );
         assert!(!recovery_fetch("git fetch origin", dir.path()));
@@ -787,16 +950,47 @@ mod tests {
 
     #[test]
     fn r20_fetch_mismatch_and_no_rewrite_controls() {
-        let rewritten = repository_with_config(
-            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        let rewritten = repository_with_url(
+            "file:///nonexistent/codeflow-origin.git",
+            b"[url \"file:///other/\"]\n\tinsteadOf = file:///nonexistent/\n",
         );
         assert!(r20_report(rewritten.path())
             .violations
             .iter()
             .any(|v| v.rule == "git.policy_authority"));
-        let plain = repository_with_config(b"");
+        // No rewrite and no lookup: the remote is a local path that does not
+        // exist, so the fetch check cannot reach any host.
+        let plain = repository_with_url("file:///nonexistent/codeflow-origin.git", b"");
         assert!(r20_report(plain.path()).violations.is_empty());
         assert!(recovery_fetch("git fetch origin", plain.path()));
+        assert!(recovery_fetch("git fetch", plain.path()));
+        for line in [
+            "",
+            "git",
+            "git fetch origin main",
+            "git fetch elsewhere",
+            "git fetch --all",
+            "git fetch origin > fetched.txt",
+            "git fetch origin 2> fetched.txt",
+            "git fetch origin < fetched.txt",
+            "git fetch origin | cat",
+            "git fetch origin; true",
+            "git fetch origin &",
+            "git fetch origin\ntrue",
+            "NAME=value git fetch origin",
+            "command git fetch origin",
+            "(git fetch origin)",
+            "git fetch \"origin\"",
+            "git fetch ori\\gin",
+            "git fetch $NAME",
+            "git fetch origin # note",
+            "git\u{a0}fetch origin",
+            "git fetch\u{2003}origin",
+            "git fetch origin\u{85}",
+            "git\u{3000}fetch\u{3000}origin",
+        ] {
+            assert!(!recovery_fetch(line, plain.path()), "{line}");
+        }
     }
 
     /// Round twelve on issue 79: an `insteadOf` rewrite that ends in a carriage

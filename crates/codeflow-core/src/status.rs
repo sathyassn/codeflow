@@ -147,6 +147,10 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
 
     let (branch, worktrees, cleanup_target, cleanup) =
         if let Ok(repo) = git2::Repository::open(repo_root) {
+            // Named first: a refused ref is what makes the branch below read
+            // as none and a worktree as detached. Refs only: opening every
+            // tracked file on each run belongs to `doctor`.
+            notes.extend(crate::git::unreadable::scan_refs(&repo).report_lines());
             let branch = repo.head().ok().map(|h| {
                 crate::git::name::reference_shorthand(&h)
                     .display()
@@ -314,7 +318,8 @@ fn collect_cleanup(
                 checked_out.insert(branch.clone());
             }
             let oid = head.as_ref().and_then(git2::Reference::target);
-            let (disposition, proof) = classify_cleanup(
+            let (dirty, only_refused) = working_state(path);
+            let (disposition, mut proof) = classify_cleanup(
                 repo_root,
                 repo,
                 oid,
@@ -322,8 +327,13 @@ fn collect_cleanup(
                 // proof by name, so it is classified as unproven.
                 branch.as_ref().and_then(|b| b.rule_text().ok()),
                 target,
-                repository_dirty(path),
+                dirty,
             );
+            // The worktree stays preserved, since its changes cannot be ruled
+            // out; only the stated reason is corrected.
+            if only_refused {
+                proof = "tracked files this process cannot read, so local changes cannot be ruled out; `codeflow doctor --check repo-integrity` in that worktree names them".to_string();
+            }
             out.push(CleanupInfo {
                 kind: "worktree".to_string(),
                 name: branch.unwrap_or_else(|| name.joined(b" (detached)")),
@@ -365,12 +375,18 @@ fn collect_cleanup(
         }
     }
 
-    out.sort_by(|left, right| {
+    sort_cleanup(&mut out);
+    out
+}
+
+/// Candidates by kind, then name with ids read as numbers (a branch for
+/// TSK-999 before one for TSK-1000).
+fn sort_cleanup(items: &mut [CleanupInfo]) {
+    items.sort_by(|left, right| {
         left.kind
             .cmp(&right.kind)
-            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| crate::ids::compare_id_bytes(left.name.bytes(), right.name.bytes()))
     });
-    out
 }
 
 fn target_matches_branch(target: Option<&CleanupTarget>, branch: &str) -> bool {
@@ -448,16 +464,29 @@ fn classify_cleanup(
     )
 }
 
-fn repository_dirty(path: &Path) -> Option<bool> {
-    let repo = git2::Repository::open(path).ok()?;
+/// Whether a checkout is dirty (`None` when unknown), and whether every path
+/// behind that is a file this process is refused. A sandbox that refuses a
+/// tracked file by name makes libgit2 count it as changed. Only the reported
+/// paths are read, and the check stops at the first one that is not refused.
+fn working_state(path: &Path) -> (Option<bool>, bool) {
+    let Ok(repo) = git2::Repository::open(path) else {
+        return (None, false);
+    };
     let mut options = git2::StatusOptions::new();
     options
         .include_untracked(true)
         .recurse_untracked_dirs(true)
         .include_ignored(false);
-    repo.statuses(Some(&mut options))
-        .ok()
-        .map(|statuses| !statuses.is_empty())
+    let Ok(statuses) = repo.statuses(Some(&mut options)) else {
+        return (None, false);
+    };
+    let only_refused = !statuses.is_empty()
+        && repo.workdir().is_some_and(|workdir| {
+            statuses
+                .iter()
+                .all(|entry| crate::git::unreadable::is_refused(workdir, entry.path_bytes()))
+        });
+    (Some(!statuses.is_empty()), only_refused)
 }
 
 fn patch_equivalent(repo_root: &Path, target: &str, branch: &str) -> bool {
@@ -772,6 +801,16 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
             crate::git::display_message(&entry.title)
         );
     }
+    for entry in backlog.in_state(State::Landed) {
+        let _ = writeln!(
+            out,
+            "  landed task: {} {} ({}; run `{}`)",
+            entry.task_id,
+            crate::git::display_message(&entry.title),
+            shown_branches(&entry.landed_branches),
+            readiness::landed_status_command(&entry.task_id)
+        );
+    }
     // A Blocker or an invalid record outranks a claim; the branch stays shown.
     for state in [State::Blocked, State::Invalid] {
         for entry in backlog
@@ -788,7 +827,7 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
             );
         }
     }
-    for (task_id, branches) in &backlog.conflicts {
+    for (task_id, branches) in crate::ids::sorted_by_id(&backlog.conflicts) {
         let _ = writeln!(
             out,
             "  conflict: {task_id} is carried by {} (claims are advisory; settle one owner)",
@@ -799,7 +838,7 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
         // In display form already, as the backlog holds it.
         let _ = writeln!(out, "  landed: {branch}");
     }
-    for (epic, progress) in &backlog.epics {
+    for (epic, progress) in crate::ids::sorted_by_id(&backlog.epics) {
         let _ = writeln!(
             out,
             "  epic {epic}: {}/{} complete, {} cancelled",
@@ -942,6 +981,28 @@ fn format_counts(counts: &BTreeMap<String, usize>) -> String {
 mod tests {
     use super::*;
     use crate::models::{Epic, EpicStatus, Task, TaskStatus};
+
+    #[test]
+    fn cleanup_candidates_order_by_id_number_past_three_digits() {
+        let branch = |name: &str| CleanupInfo {
+            kind: "branch".to_string(),
+            name: crate::git::GitName::from_text(name),
+            path: None,
+            disposition: CleanupDisposition::Removable,
+            proof: String::new(),
+        };
+        let mut items = vec![
+            branch("task/TSK-10000-c"),
+            branch("task/TSK-1000-b"),
+            branch("task/TSK-999-a"),
+        ];
+        sort_cleanup(&mut items);
+        let names: Vec<String> = items.iter().map(|i| i.name.display().to_string()).collect();
+        assert_eq!(
+            names,
+            ["task/TSK-999-a", "task/TSK-1000-b", "task/TSK-10000-c"]
+        );
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let output = crate::git::command()

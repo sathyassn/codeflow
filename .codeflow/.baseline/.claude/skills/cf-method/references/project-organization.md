@@ -293,8 +293,10 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
 ### Picking up and starting work
 
 - `codeflow work next --epic EPC-NNN --json` lists ready tasks first, then
-  waiting and blocked ones with their reasons, and names the fetched snapshot
-  it judged; both flags are optional.
+  landed ones (work merged, record still open, with the `codeflow task
+  status` command that settles it), then waiting and blocked ones with their
+  reasons, and names the fetched snapshot it judged; both flags are
+  optional.
 - `codeflow work claim TSK-NNN` checks readiness against the fetched target
   tip, creates `task/TSK-NNN-<slug>` from it (or from a named reviewed pin,
   `--on`) and pushes it; on a branch that already holds a new standalone
@@ -329,6 +331,37 @@ table does not list is refused, whoever writes it:
 | todo to complete | `codeflow task status TSK-NNN complete --acceptance <file>` | an acceptance block naming the reviewed code commit, as the task PR's last commit (`cf-ship`) |
 | todo or blocked to cancelled | `codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>` | the reason and scope disposition in the Closeout |
 | complete to todo (reopen) | `codeflow task status TSK-NNN todo --reason <why>` | the old acceptance block, kept and marked superseded |
+
+A task already blocked on the target is unblocked in its own pull request.
+`work claim` and `work next` read the target, where the task is still
+blocked, so cut the task branch from the target, run `codeflow task status
+TSK-NNN todo`, commit the record, then run `codeflow work start TSK-NNN`.
+`codeflow ci` shows the Blocker the range removes, for the reviewer to
+confirm, and the unblock never admits work whose `depends_on` predecessors
+are open. The same pull request may then complete or cancel the task.
+
+CI and pre-push judge a range one status step per commit, and a merge
+against each of its parents. `blocked -> todo -> complete` across commits
+passes; a direct `blocked -> complete` in one commit is refused, and so is
+a cancelled task revived inside one range. A merge that brings the other
+side's legal steps, such as a sync of `main` into a line, passes whether it
+is merged in one step or several. History that cannot be read (a shallow
+clone, a missing object, an unparsable record version) refuses and names
+its cause. A `plan/` amendment names the epics whose plan it changes, so it
+needs an epic on its `Task:` line; a standalone task's status rides in its
+own task pull request, and an unlanded standalone cancellation takes the
+route below.
+
+A standalone task cancelled before its record reached the target can leave
+its cancellation record through a `plan/` pull request. Run `codeflow task
+status TSK-NNN cancelled --reason <why> --scope <where it went>` on the task
+branch, then cut a fresh `plan/` branch from the target and copy only the
+cancelled record onto it. Keep the range inside `project-management/` and
+name that task with `Task: TSK-NNN`. The record must be absent from the
+merge-base and carry both Closeout lines. No `work start` claim is needed;
+the planning amendment reports the task under `no epic`. Product commits
+stay on the cancelled task's branch. A record already on the target uses
+the ordinary task status route above.
 
 `in_progress` stays readable on older records, but no verb writes it: a
 visible task branch shows the work in progress. The acceptance block is the
@@ -396,13 +429,29 @@ A waiver is a criterion result in the fenced `yaml` acceptance block under
 inside `acceptance.criteria`. The evidence after `|` is the commit alone,
 not a review URL or an explanation. The named commit must change that
 criterion and change planning records only. The completion must contain it.
+Other planning records in the same commit, such as the epic record, the epic
+plan or other task records, do not disqualify it. A planning record is a
+file under `project-management/` or `docs/plan/` that is not hidden, not a
+harness instruction file and not an adopter-facing path under the target's
+policy. The waiver accepts the commit for this criterion only: its other
+changes stay under their own rules, so a task pull request still changes no
+other task's criteria. A criterion the amendment removes leaves the record,
+so the completion has no row for it and needs no waiver.
 
 A task can name an amendment already on its integration target. Before its
 first landing, it can also name an amendment in its own task range. In that
-case the amendment changes only its record and is strictly after the range's
-merge-base and strictly before `reviewed` in commit ancestry. The amendment
-cannot be the reviewed commit or the completion commit. A reopened range
-cannot use that own-range allowance. An epic waiver names a planning
+case the amendment meets the same test and is strictly after the range's
+merge-base and strictly before `reviewed` in commit ancestry. In
+`codeflow task status`, a task whose declared integration line is not
+recorded at the default target's tip has no own range unless `--base` and
+`--into` pin that line. The amendment
+cannot be the reviewed commit or the completion commit. A range that
+reopens a completion that never landed keeps that own-range allowance,
+whatever caused the reopen. A range that reopens a landed completion cannot
+use it. A waiver refused as not on the target is told what that requires: a
+receiving line the run pins holds the commit. The refusal names the route: a
+planning pull request into the target that amends the criterion, merged into
+the branch before the review. An epic waiver names a planning
 amendment that its reviewed commit contains. A waiver changes a criterion's
 result; it does not authorize redacting an acceptance block.
 
@@ -619,10 +668,12 @@ Shared engineering, security, testing, design, and review doctrine stays in
 `AGENTS.md` and the relevant skills. Repeating it in every task creates stale
 checklist theater. A record instantiates only what is specific:
 
-- outcome, audience where relevant, scope, and non-goals;
+- outcome, audience where relevant, scope, and non-goals, with the value
+  line under `## Outcome`;
 - affected capabilities, surfaces, interfaces, and direct dependencies;
 - each task's deliverables and their homes as paths in the project's
-  structure (`## Deliverables`), and the homes an epic's tasks write;
+  structure (`## Deliverables`), and an epic's own `## Deliverables` with
+  the homes its tasks write;
 - testable acceptance criteria and selected evidence;
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in
@@ -667,8 +718,10 @@ a prototype is for an interaction or logic question that paper cannot settle.
 - **Unclear operator-owned decision:** ask before materialization. A
   discoverable or reversible technical detail is researched and decided by the
   agents.
-- **Duo seat unavailable:** record preflight evidence and reduced assurance,
-  then use the documented solo flow; never imply approval by both seats.
+- **Duo seat unavailable:** move its challenge or review to another model
+  family's seat when one is available; only when none is, record preflight
+  evidence and reduced assurance, then use the documented solo flow; never
+  imply an approval that did not happen.
 - **Allocation collision:** stop, renumber on the planning branch, repair links,
   and revalidate.
 - **Dangling link, cycle, orphan, draft spec, or incomplete predecessor:** fix

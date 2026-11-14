@@ -5,7 +5,8 @@
 **A CodeFlow release is one deliberate decision by a named human, taken after
 the evidence for it already exists.**
 
-Humans merge the normal work PR that carries the release state and dispatch
+Humans merge the normal work PR that carries the release state, create the
+release tag and dispatch
 the publishing workflow, and no agent merges, tags or publishes.
 
 This runbook covers two things:
@@ -43,8 +44,8 @@ The stages, in order, with the actor for each:
 | Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry, in the PR's own fragment under `changelog.d/` |
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor |
 | Merge | A human | PR CI checks the actual proposed merge tree; `main` requires an up-to-date branch (ADR-0081), and where `doctor` warns that it does not, the human merger requires the fresh check |
-| Dispatch | A human with current write, maintain or admin permission | A dry run passes, then a dispatch with the `vX.Y.Z` tag |
-| Local-artifact authority job | The generated workflow | Checks the dispatch rules, source, version, notes and prior results, then creates or resumes an empty draft |
+| Dispatch | The operator, with admin permission, creates the tag; a human with current write, maintain or admin permission dispatches | A dry run passes; the operator creates the `vX.Y.Z` tag at the exact `main` commit; then a dispatch with that tag |
+| Local-artifact authority job | The generated workflow | Checks the dispatch rules, source, version, notes and prior results, then creates or resumes an empty draft on the existing tag |
 | Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing |
 | Upload and announce | cargo-dist | Uploads without `--clobber`, so a later host conflict is never overwritten, and announces last |
 | Post-announce verification | cargo-dist's verifier | Compares tag and source, and every asset name, size and SHA-256 digest, with the same-run files |
@@ -105,7 +106,10 @@ Dispatch:
 - First dispatch with `--ref main` and `tag=dry-run`. It builds every artifact
   and publishes nothing. Wait for it, and for current main's push runs of
   `codeflow-ci` and `codeflow-release`, to pass.
-- Then dispatch with `--ref main` and the `vX.Y.Z` tag.
+- The operator then creates and pushes the `vX.Y.Z` tag at the exact `main`
+  commit the dry run passed on; only an admin can create one.
+- Then dispatch with `--ref main` and that tag. The authority job resumes on it
+  and refuses a tag at any other commit.
 - The actor and any rerunning actor must both be GitHub Users with effective
   permission.
 - `GITHUB_SHA` must still equal current main and be the result of an ordinary
@@ -126,12 +130,19 @@ Local-artifact authority job:
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys.
-  - On a main push whose merge commit has exactly the tree of a pull request
-    head whose `codeflow-ci` run passed every job, both verdicts pass by
-    naming that run and the gate and Windows jobs are skipped
-    (`scripts/ci-reuse.py`, TSK-265). A push that changes a build cache
-    input (the CI workflow included), or for which main lacks the present
-    part's apt cache for the current runner image, runs every job instead.
+  - On a push to main or to an integration line whose merge commit has
+    exactly the tree of a pull request head whose `codeflow-ci` run passed
+    every job, both verdicts pass by naming that run and the gate and
+    Windows jobs are skipped (`scripts/ci-reuse.py`, TSK-265, TSK-359). The
+    run must be the one for the merged pull request into that line, and its
+    own recorded provenance (pull request number, base line, head, merge
+    tree, workflow file and Ubuntu and Windows runner images) must equal the
+    push's, with a recorded base the line already held. Every job the push
+    skips must have run on the push's runner image for its label, as
+    GitHub's job log records it. A push that changes a build cache
+    input (the CI workflow included), or for which neither the pushed line
+    nor main holds the present part's apt cache for the current runner
+    image, runs every job instead.
 - It checks write-visible host collisions. Its write-scoped token can see draft
   releases.
 - It fails closed on a wrong tag, source or public release, a foreign draft, or
@@ -163,7 +174,8 @@ Concurrency:
   must match it.
 - Conventional markers are conservative mismatch tripwires. They do not
   calculate a second version.
-- cargo-dist is the only tag, release and artifact publisher. It builds four
+- cargo-dist is the only release and artifact publisher; the operator creates
+  the tag. It builds four
   target binaries: macOS arm64 and x86-64, Linux x86-64 and Windows x86-64. It
   also builds shell and PowerShell installers. 3.0.0 published no Windows
   target.
@@ -178,9 +190,12 @@ Concurrency:
 Release impact rules for each PR:
 
 - The PR carries one `Release impact` section with `Impact`, `Breaking`,
-  `Rationale`, `Migration`, `Unit` and `Evidence`.
-- `Breaking: yes` holds if and only if `Impact: major`, and the checkers
-  enforce both directions. A break needs substantive migration guidance.
+  `Rationale` and `Migration`.
+- `codeflow ci`'s one evaluator judges the section's fields, and `check-pr`
+  calls it and judges nothing of the section separately (TSK-451).
+  `Breaking: yes` needs `Impact: major` and substantive migration guidance;
+  `check-pr` also refuses a major pending entry the PR adds or edits without
+  `Breaking: yes`.
 - An edit of a pending major entry is assessed at major, so it declares the
   break and keeps its migration guidance.
 - A field left at the template's alternatives fails.
@@ -207,6 +222,78 @@ Release impact rules for each PR:
   impact. A revert that changes supported behavior or a public contract uses
   the `fix:`, `feat:` or breaking marker that describes the resulting release,
   with matching PR impact and curated pending notes.
+
+### Where CI suites run
+
+The event that starts a hosted run decides which suites it runs. A push to
+an integration line starts no hosted run (permanent placement, operator
+ruling 2026-11-11). Until the line gate ships, a pull request into a line
+runs only the short checks below (Director ruling, 2026-11-11). While
+`main` is relaxed (operator decision, 2026-11-11), a pull request into
+`main` runs the same short checks, and the full Linux and Windows suites
+run only on the daily run of `main`'s tip and on a manual dispatch.
+[ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md) records the
+placement by event and its dated history. Changing where a suite runs is
+an operator decision; agents and Coordinators never rule on it.
+
+| Event | Short checks | Linux build, lint, tests and coverage | Windows checks, journeys and partitions | Release gates |
+|---|---|---|---|---|
+| Draft pull request, any base | yes; `commit standards` passes only on a ready run | no | no | no |
+| Ready pull request into an integration line | yes | no | no | no |
+| Push to an integration line | no run | no run | no run | no run |
+| Ready pull request into `main`, while `main` is relaxed | yes | no | no | no |
+| Push to `main` | secret scan, security review, image and reuse jobs, and `release state` | no | no | no |
+| Daily run, `main`'s tip | secret scan of the full history and dependency audit | yes | yes | yes |
+| Manual dispatch | as the daily run | yes | yes | yes |
+
+- The short checks are the security jobs in `codeflow-ci.yml` (`secret
+  scan`, the gitleaks canary and `security review`), provenance, the policy
+  check (`codeflow-policy.yml`, pull requests only) with its `commit
+  standards` and `trusted: release impact` jobs, and `release impact` in
+  `codeflow-release.yml`. Merge admission in `commit standards` passes only
+  on a successful ready run at the exact head whose `secret scan` and
+  `security review` jobs passed.
+- A suite that is not selected for an event never counts as a pass of a
+  required check, since GitHub treats a skipped required check as a
+  success. So a required list names only checks that run on every ready
+  pull request into that branch: `commit standards`, `release impact`,
+  `secret scan` and `security review`. `codeflow gates` and `windows`
+  return to `main`'s list only after their jobs run on pull requests into
+  `main` again.
+- A line has no hosted run of its own. A landing on a line is proven by the
+  local evidence on the landing candidate (quick and targeted tests and the
+  security scans, run locally and recorded in the pull request body)
+  together with the pull request checks of each member. The full gate runs
+  locally, alone, on `main`'s tip after each landed group. Windows proof
+  comes from the daily run or a manual dispatch on `main`.
+- Verdict reuse applies only to a push, and while `main` is relaxed a push
+  runs no suite, so nothing is reused for now. The daily run and a manual
+  dispatch run the suites.
+- A push to an integration line starts no run (permanent placement,
+  operator ruling 2026-11-11), so no line push run is cancelled. A newer
+  pull request run on a ref cancels the older one (the `concurrency` block
+  in `codeflow-ci.yml`). A run for a push to `main`, a scheduled run or a
+  dispatched run is never cancelled in progress; GitHub may still replace a
+  pending run in the same group.
+- Local full gates keep coverage instrumentation whatever the event.
+
+The workflows apply the table as follows:
+
+- `codeflow-ci.yml`, `codeflow-registry.yml` and `codeflow-release.yml`
+  name no `integration/**` branch under `push`, so a line push starts none
+  of them.
+- While `main` is relaxed, every Linux gate job, every full-suite Windows
+  job (the test build, the partitions, the checks and the journeys) and
+  both verdict jobs in `codeflow-ci.yml` run only on `schedule` and
+  `workflow_dispatch`, and the reduced Windows tier is off. The image, tier
+  and provenance helper jobs keep their other events. The workflow's
+  header lists what restoring `main`'s checks adds back; the restore adds
+  no clause for a line push or a line pull request.
+- The scheduled run of `codeflow-ci.yml` is daily (05:37 UTC), tests
+  `main`'s tip and does not block a merge. The separate daily Windows
+  workflows (`windows-daily.yml`, `windows-daily-verdict.yml`) are switched
+  off by the operator while `main` is relaxed, so no line has a scheduled
+  run.
 
 ## Technical
 
@@ -475,8 +562,8 @@ change.
    Read them twice, as a new user (what the release does) and as a user
    upgrading from the last release (what to do, in order). Record both reads in
    the release checklist.
-4. When the evidence is complete, a human dispatches cargo-dist's generated
-   Release workflow as the Dispatch row describes.
+4. When the evidence is complete, the operator tags and a human dispatches
+   cargo-dist's generated Release workflow, as the Dispatch row describes.
 5. The authority job, the recheck, and cargo-dist's upload, announcement and
    verification run as the remaining Architecture rows describe.
 
@@ -517,16 +604,18 @@ assets.
 
 | State after the stop | Next step |
 |---|---|
-| No tag and no release | Reverify current main and redispatch |
-| Exact empty draft, or exact tag-only attempt | Resume, only for the same source and notes |
-| Draft with assets, or a mismatched draft, and no tag | Delete the draft as described below, then reverify current main and redispatch |
+| No tag and no release | Reverify current main, create the tag at it and redispatch |
+| Exact empty draft, or the tag at the dispatched source with no release | Resume, only for the same source and notes |
+| Draft with assets, or a mismatched draft, and no tag or the tag at the dispatched source | Delete the draft as described below, then reverify that current main is still that source and redispatch |
 | Public release whose post-announce verification failed | Rerun only the failed job in the same run, which still holds the built files; never edit the release or its tag |
 | Tag with another source | Leave the tag as it is; the operator decides the recovery |
 
-A draft is not public and has no tag yet, so it can be deleted:
+A draft is not public, so it can be deleted:
 
-1. Confirm `gh api repos/sathyassn/codeflow/git/ref/tags/vX.Y.Z` answers 404.
-2. Delete the draft with `gh release delete vX.Y.Z --yes`.
+1. Confirm `gh api repos/sathyassn/codeflow/git/ref/tags/vX.Y.Z` answers 404,
+   or points to the dispatched source.
+2. Delete the draft with `gh release delete vX.Y.Z --yes`, without
+   `--cleanup-tag`.
 3. Reverify current main and redispatch.
 
 - A public version is spent forever. No tag or version is repurposed.

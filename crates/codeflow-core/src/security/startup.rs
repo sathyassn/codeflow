@@ -286,7 +286,7 @@ impl Class {
         let mut needles = Vec::new();
         let mut add = |label: String, path: PathBuf, dir: bool| {
             let mut readings = vec![key(&lexical(&path))];
-            if let Some(real) = resolve(&path) {
+            if let Ok(real) = resolve(&path) {
                 let real = key(&real);
                 if !readings.contains(&real) {
                     readings.push(real);
@@ -354,12 +354,16 @@ impl Class {
     }
 
     /// The class entry `path` is or lies in, read lexically and through
-    /// symbolic links. A path whose links cannot be followed is judged by
-    /// its lexical reading and by the link text it holds.
+    /// symbolic links. A path with a component that cannot be inspected is
+    /// judged by its lexical reading and by the link text it holds; one past
+    /// [`LINK_LIMIT`] may lead anywhere, so it counts as an entry.
     #[must_use]
     pub(crate) fn target(&self, path: &Path) -> Option<String> {
         let mut readings = vec![key(&lexical(path))];
-        let real = resolve(path);
+        let real = match resolve(path) {
+            Err(Unfollowed::PastLinkLimit) => return Some(past_link_limit(path)),
+            real => real.ok(),
+        };
         if let Some(real) = &real {
             readings.push(key(real));
         }
@@ -419,8 +423,10 @@ impl Class {
     #[must_use]
     pub(crate) fn placement(&self, path: &Path) -> Option<String> {
         let mut readings = vec![key(&lexical(path))];
-        if let Some(real) = resolve(path) {
-            readings.push(key(&real));
+        match resolve(path) {
+            Ok(real) => readings.push(key(&real)),
+            Err(Unfollowed::PastLinkLimit) => return Some(past_link_limit(path)),
+            Err(Unfollowed::Uninspected) => {}
         }
         if cfg!(windows) && shell_etc(&lexical(path)) {
             return Some(shown(path));
@@ -652,11 +658,26 @@ fn lexical(path: &Path) -> PathBuf {
     out
 }
 
+/// Why [`resolve`] gave no reading.
+enum Unfollowed {
+    /// More than [`LINK_LIMIT`] links: the path may lead anywhere.
+    PastLinkLimit,
+    /// A component could not be inspected, so a write cannot pass it either.
+    Uninspected,
+}
+
+/// How a refusal names a path the guard stopped following.
+fn past_link_limit(path: &Path) -> String {
+    format!(
+        "{} (it may be one: it sits behind more symbolic links than the guard follows)",
+        shown(path)
+    )
+}
+
 /// `path` with each symbolic link followed, one component at a time, a
 /// broken link included (its target is where a write lands). Missing
-/// components are kept. `None` past [`LINK_LIMIT`] links or when a
-/// component cannot be inspected.
-fn resolve(path: &Path) -> Option<PathBuf> {
+/// components are kept.
+fn resolve(path: &Path) -> Result<PathBuf, Unfollowed> {
     let mut pending: Vec<std::ffi::OsString> = path
         .components()
         .rev()
@@ -683,9 +704,9 @@ fn resolve(path: &Path) -> Option<PathBuf> {
             Ok(meta) if meta.file_type().is_symlink() => {
                 links += 1;
                 if links > LINK_LIMIT {
-                    return None;
+                    return Err(Unfollowed::PastLinkLimit);
                 }
-                let target = std::fs::read_link(&next).ok()?;
+                let target = std::fs::read_link(&next).map_err(|_| Unfollowed::Uninspected)?;
                 if target.is_absolute() {
                     out = PathBuf::new();
                 }
@@ -698,10 +719,10 @@ fn resolve(path: &Path) -> Option<PathBuf> {
             }
             Ok(_) => out = next,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => out = next,
-            Err(_) => return None,
+            Err(_) => return Err(Unfollowed::Uninspected),
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 /// A glob a word spells: a literal directory the shell does not expand,
@@ -814,9 +835,21 @@ struct Line<'a> {
     /// Every `NAME=value` the line sets, which a writer may read as options
     /// ([`super::unresolved::line_assignments`]).
     environment: Vec<(String, String)>,
+    /// Whether [`Line::text`] names `RIPGREP_CONFIG_PATH`, read once for
+    /// all its segments ([`Line::names_ripgrep_config`]).
+    ripgrep_config: std::cell::OnceCell<bool>,
 }
 
 impl Line<'_> {
+    /// Whether the line names `RIPGREP_CONFIG_PATH`. Reading it expands the
+    /// whole line, so it is read on first use and kept: asking once per
+    /// segment made a long chain quadratic.
+    fn names_ripgrep_config(&self) -> bool {
+        *self
+            .ripgrep_config
+            .get_or_init(|| super::search_pattern::names_ripgrep_config(self.text))
+    }
+
     /// A finding about this line's class: `security.shell_startup`, which
     /// always blocks, for a startup file; `git.hook_integrity` at its policy
     /// level for a user or system git configuration file, the rule a direct
@@ -1431,6 +1464,7 @@ fn judge_class(
         unknown: run.unknown.clone(),
         staged: false,
         environment: super::unresolved::line_assignments(segments),
+        ripgrep_config: std::cell::OnceCell::new(),
     };
     line.assigned = literal_assignments(segments);
     line.staged = staged_name(segments, &line).is_some();
@@ -1810,7 +1844,7 @@ fn produces_text(segments: &[String], text: &str) -> bool {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
         let tee = strip_launchers(&words).is_some_and(|(program, args)| {
-            basename(program) == "tee"
+            super::unresolved::writer_name(program) == "tee"
                 && args.iter().any(|a| !a.starts_with('-') && a != "/dev/null")
         });
         tee || redirects
@@ -2219,7 +2253,7 @@ fn system_program(program: &str) -> bool {
 /// facts: a listed data reader used as one, judged by operation. The
 /// closed rule of TSK-242 ([`super::unresolved`]) uses it on every guard.
 pub(crate) fn reader_program(program: &str, args: &[String]) -> bool {
-    let name = basename(program);
+    let name = super::unresolved::writer_name(program);
     if !system_program(program) {
         return false;
     }
@@ -2354,6 +2388,55 @@ fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Op
     crate::hooks::git_guard::checkout_config_write(rest, line.integrity)
 }
 
+/// Whether the whole line is nothing but the shell's own directory
+/// changes, the minimal shape the issue 342 exemption trusts (TSK-397
+/// Codex review round 7): every simple command is a bare, unquoted `cd`,
+/// `pushd` or `popd`, joined only by `&&`, `;` or newlines, and each
+/// argument is a literal or a plain `"$var"`. No other command,
+/// assignment, function, subscript or expansion appears anywhere, so
+/// nothing on the line can rebind those names.
+fn only_directory_builtins(text: &str) -> bool {
+    let lexed = crate::security::shell_lex::lex(text);
+    if lexed.opaque || lexed.current_shell {
+        return false;
+    }
+    let text = lexed.text;
+    if text.contains([
+        '|', '(', ')', '{', '}', '<', '>', '`', '\'', '\\', '#', '[', '=',
+    ]) || text.replace("&&", "").contains('&')
+    {
+        return false;
+    }
+    let argument = |word: &str| {
+        let literal = |w: &str| {
+            !w.is_empty()
+                && w.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(c, '/' | '.' | '_' | '-' | '~' | '+' | ':' | '@' | ',')
+                })
+        };
+        let plain_var = word
+            .strip_prefix("\"$")
+            .and_then(|w| w.strip_suffix('"'))
+            .is_some_and(|name| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+        literal(word) || plain_var
+    };
+    let mut any = false;
+    for command in text.split("&&").flat_map(|part| part.split([';', '\n'])) {
+        let mut words = command.split([' ', '\t']).filter(|word| !word.is_empty());
+        let Some(program) = words.next() else {
+            continue;
+        };
+        if !matches!(program, "cd" | "pushd" | "popd") || !words.all(argument) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 /// The writes one simple command makes.
 fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     let noun = line.noun();
@@ -2374,8 +2457,16 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     if let Some(finding) = segment_redirect_violation(segment, line, &dirs) {
         return Some(finding);
     }
+    // The shell's own directory change writes nothing (issue 342,
+    // TSK-397), but a launcher, a path, a rebinding or an external `cd`
+    // can run a file that does. So the exemption holds only for a line made
+    // of nothing but bare `cd`, `pushd` and `popd` builtins; anything else
+    // keeps the write judgment (Codex review round 7).
+    if only_directory_builtins(line.text) {
+        return None;
+    }
     let (program, args) = strip_launchers(&tokens)?;
-    let name = basename(program);
+    let name = super::unresolved::writer_name(program);
     if let Some(finding) = checkout_config_violation(name, args, line) {
         return Some(finding);
     }
@@ -2504,7 +2595,7 @@ fn search_words<'a>(
         .get(literal.len().saturating_sub(args.len())..)
         .filter(|tail| tail.len() == args.len())
         .map_or_else(|| vec![false; args.len()], <[bool]>::to_vec);
-    let configured = super::search_pattern::names_ripgrep_config(line.text);
+    let configured = line.names_ripgrep_config();
     if let Some(v) = preprocessor_violation(name, args, &literal, configured, line, dirs) {
         return Err(v);
     }

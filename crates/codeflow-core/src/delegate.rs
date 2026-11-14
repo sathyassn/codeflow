@@ -1834,7 +1834,22 @@ fn validate_owner_mode(
 #[cfg(unix)]
 fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino() && left.uid() == right.uid()
+    same_owned_file(
+        (left.dev(), left.ino(), left.uid()),
+        (right.dev(), right.ino(), right.uid()),
+    )
+}
+
+/// Whether two `(device, inode, owner)` observations name one file with one
+/// owner. A zero inode names no file reliably, so it never matches
+/// (TSK-1021).
+#[cfg(unix)]
+fn same_owned_file(left: (u64, u64, u32), right: (u64, u64, u32)) -> bool {
+    use crate::bounded_file::FileIdentity;
+    let identity = |(device, inode, _): (u64, u64, u32)| {
+        FileIdentity::from_device_and_inode(device, inode).ok()
+    };
+    left.2 == right.2 && identity(left).is_some_and(|left| Some(left) == identity(right))
 }
 
 #[cfg(not(unix))]
@@ -2022,9 +2037,19 @@ fn shell_quote(value: &str) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
     use tempfile::TempDir;
 
     const PROMPT_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
+
+    /// TSK-1021 review: two zero-inode observations are never one file.
+    #[test]
+    fn a_zero_inode_is_never_the_same_file() {
+        assert!(super::same_owned_file((1, 5, 501), (1, 5, 501)));
+        assert!(!super::same_owned_file((1, 0, 501), (1, 0, 501)));
+        assert!(!super::same_owned_file((1, 5, 501), (1, 5, 502)));
+        assert!(!super::same_owned_file((1, 5, 501), (2, 5, 501)));
+    }
 
     fn state() -> (TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();

@@ -160,8 +160,7 @@ try {
   await saveNote(page, "Stretched: keep this part as drawn.", stretched.label, stretched.name);
   expected.push({ where: stretched.name, target: stretched });
   await stretch(false);
-  // QA defect 5 in its figure form: a drag across a figure's label pins, or
-  // says why it cannot; it is never a dead gesture.
+  // TSK-443 AC-5: a figure-label drag pins its words as text.
   await armComment(page);
   const word = page.locator("[data-cf-block-id='stage-flow'] [data-cf-for]").filter({ visible: true }).first();
   await word.scrollIntoViewIfNeeded();
@@ -172,7 +171,7 @@ try {
   await page.mouse.up();
   const dragged = await page.getByTestId("float-chip").waitFor({ timeout: 5_000 }).then(() => page.getByTestId("float-chip").innerText(), () => null);
   const told = await page.getByRole("status").innerText().catch(() => "");
-  assert.ok(dragged !== null || told.trim().length > 0, "a drag across a figure label was a dead gesture");
+  assert.ok(dragged?.includes("Text"), `a figure label drag did not pin text: ${dragged ?? told}`);
   if (dragged !== null) {
     await page.getByTestId("float-comment").click();
     const quote = (await word.textContent()).trim();
@@ -204,7 +203,7 @@ try {
   expected.forEach(({ where, target, variant }, index) => {
     const note = stored[index];
     assert.equal(note.block_id, target.block, where);
-    if (target.drag) return;
+    if (target.drag) { assert.ok(note.selector?.exact, `${where}: no text anchor`); assert.equal(note.entity_selector, undefined); return; }
     assert.equal(note.entity_selector?.entity_id, target.entity, `${where}: ${JSON.stringify(note.entity_selector)}`);
     assert.equal(note.entity_selector.label, target.label, where);
     if (target.drawn) assert.equal(note.entity_selector.variant, variant, where);
@@ -265,7 +264,7 @@ try {
   const unnamed = await unnamedPartOnV1(page);
   const browserVersion = context.browser()?.version() ?? (await page.evaluate(() => navigator.userAgent));
   process.stdout.write(`cf-present entity checks ran in Chrome ${browserVersion} at ${VIEWPORT.width} x ${VIEWPORT.height}: ${stops.length} registry stops announced by their labels from the accessibility tree; figure marks entity_anchored and stage parts entity_reanchored after an update; ${unnamed}\n`);
-  process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that pins (QA defect 5), select enclosing, framing titles, the keyboard resuming after a highlight replaced its line, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
+  process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that anchors text (TSK-443 AC-5), select enclosing, framing titles, the keyboard resuming after a highlight replaced its line, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
 } finally {
   if (context) await context.close().catch(() => undefined);
   for (const id of [sessionId, v1SessionId].filter(Boolean)) {

@@ -39,7 +39,7 @@ The release chain is the longest. Some records in these chains still read
 
 ## Technical
 
-70 decisions, 3 with `status: superseded`. A
+75 decisions, 3 with `status: superseded`. A
 decision is proposed, then accepted, and may later be superseded; its
 content is never rewritten, and only `superseded_by` or a dated note is added.
 
@@ -61,8 +61,11 @@ Two pages link back to the decisions:
 | Git, merge, and CI policy | [ADR-0009](decisions/ADR-0009-human-authorization-out-of-band.md) | human authorization is out-of-band; local guards are the honest-agent floor | accepted | none |
 | Git, merge, and CI policy | [ADR-0017](decisions/ADR-0017-codeflow-ci-portable-verification.md) | codeflow ci: CI portable, binary sourced verification | accepted | none |
 | Git, merge, and CI policy | [ADR-0020](decisions/ADR-0020-restore-original-commit-standard.md) | restore the original commit standard: 50/72 subject, bullet only body, block enforced | accepted | none |
+| Git, merge, and CI policy | [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md) | CI suite placement by event | accepted | none |
+| Git, merge, and CI policy | [ADR-0102](decisions/ADR-0102-a-marked-epic-reaches-main-once-and-complete-and.md) | A marked epic reaches main once and complete, and line pushes start no hosted run | proposed | none |
 | Scaffold lifecycle and tiers | [ADR-0011](decisions/ADR-0011-update-orphan-reconciliation.md) | update reconciles orphaned managed files (prune on upstream rename/removal) | accepted | none |
 | Scaffold lifecycle and tiers | [ADR-0019](decisions/ADR-0019-enforcement-is-the-floor.md) | enforcement is the floor: tiers scale project management, not discipline | accepted | none |
+| Scaffold lifecycle and tiers | [ADR-0090](decisions/ADR-0090-retained-release-bases-and-a-sparse-pack-replace.md) | Retained release bases and a sparse pack replace the baseline tree and the manifest digest | accepted | none |
 | Release | [ADR-0010](decisions/ADR-0010-automated-release.md) | automated release: release-plz owns version, changelog and tag, cargo-dist owns artifacts | superseded | ADR-0012 |
 | Release | [ADR-0012](decisions/ADR-0012-git-cliff-releases.md) | version + changelog via git-cliff (replacing release-plz); cargo-dist releases | accepted | ADR-0061 |
 | Release | [ADR-0061](decisions/ADR-0061-human-authorized-release-candidates.md) | automate release candidates while keeping publication human-authorized | accepted | ADR-0062 |
@@ -83,6 +86,7 @@ Two pages link back to the decisions:
 | Cross-vendor transport and delegation | [ADR-0037](decisions/ADR-0037-canonical-delegate-prompt-boundary.md) | require a canonical delegate prompt boundary | accepted | none |
 | Cross-vendor transport and delegation | [ADR-0059](decisions/ADR-0059-qualified-native-transport-fallback.md) | qualify native transport by capabilities instead of plugin exclusivity | accepted | none |
 | Cross-vendor transport and delegation | [ADR-0077](decisions/ADR-0077-another-model-family-is-reached-through-an-inter.md) | Another model family is reached through an interactive seat in a Herdr tab | accepted | none |
+| Cross-vendor transport and delegation | [ADR-0094](decisions/ADR-0094-lanes-as-recorded-sessions.md) | Lanes as recorded sessions | accepted | none |
 | Duo orchestration and quality | [ADR-0015](decisions/ADR-0015-duo-model-orchestration.md) | duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator) | accepted | ADR-0023 |
 | Duo orchestration and quality | [ADR-0024](decisions/ADR-0024-stage-aware-duo-and-bounded-parallelism.md) | stage-aware duo default with bounded parallel worktrees | accepted | none |
 | Duo orchestration and quality | [ADR-0028](decisions/ADR-0028-evidence-routed-model-effort.md) | route model effort by evidence and task demand | accepted | none |
@@ -92,6 +96,7 @@ Two pages link back to the decisions:
 | Duo orchestration and quality | [ADR-0035](decisions/ADR-0035-capability-routed-duo-execution.md) | route duo execution by verified per-task capability | accepted | none |
 | Duo orchestration and quality | [ADR-0038](decisions/ADR-0038-critical-path-deferral-stewardship.md) | preserve critical-path focus without reflexive deferral or escalation | accepted | none |
 | Duo orchestration and quality | [ADR-0056](decisions/ADR-0056-high-primary-effort-with-bounded-workers.md) | High primary effort with bounded workers | accepted | none |
+| Duo orchestration and quality | [ADR-0087](decisions/ADR-0087-effort-is-each-person-s-setting-not-the-project.md) | Effort is each person's setting, not the project's | accepted | none |
 | Duo orchestration and quality | [ADR-0060](decisions/ADR-0060-accountable-worker-delegation.md) | separate primary accountability from worker execution | accepted | none |
 | Model and harness qualification | [ADR-0027](decisions/ADR-0027-native-interactive-model-evaluation.md) | qualify model and harness bindings with native-interactive evaluations | accepted | none |
 | Model and harness qualification | [ADR-0039](decisions/ADR-0039-qualified-model-harness-bindings.md) | separate durable orchestration doctrine from qualified model and harness bindings | accepted | none |

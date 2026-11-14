@@ -333,7 +333,17 @@ modes; blocks instead of prompts.
   or `git rebase`; `git pull` is refused there and unaffected in a human
   terminal. An agent merge whose changed paths use a custom merge driver or
   a defined filter is refused, and the operator runs it.
-- Residuals stated: hook timeouts; a harness-level hook disable by the
+- Residuals stated: hook timeouts, narrowed by TSK-1082 (2026-10-29): a
+  guard refuses on its own with exit 2 after 20 seconds, every shipped guard
+  entry carries a 30 second timeout and Claude's carry
+  `"onFailure": "block"`, but Codex and Grok have no fail-closed setting, so
+  a guard that cannot reach its own deadline (it does not start, or is
+  starved past 30 seconds) still fails open there, which `codeflow doctor
+  --check guard-timeouts` states; Codex runs the changed guard entries only
+  after they are approved again in `/hooks`, which `codeflow doctor --check
+  codex` warns about; a guard command copied into a user-level hook file
+  Grok loads, which CodeFlow does not read, can set the timeout Grok runs;
+  a harness-level hook disable by the
   operator; a hook trust change between guard-readiness preflights, which the next guard-readiness preflight
   catches; guard-readiness preflight receipts on Grok and on Codex under full access are
   seat-writable, so a seat, an unguarded file or MCP write tool, or a direct
@@ -353,8 +363,9 @@ whether Claude's hook payload carries `dangerouslyDisableSandbox`; whether an
 exported variable persists across Bash calls; spike 0; the D1 spike; Grok
 `read_only` precedence inside the cwd and its absolute-glob denies; Herdr
 calls inside the sandbox and `agent prompt` to an exited agent; whether
-`codex exec` and `claude -p` can start inside Claude's sandbox; Codex hook
-timeout behavior and re-trust of changed hooks; the Windows shell forms;
+`codex exec` and `claude -p` can start inside Claude's sandbox; Codex's live
+re-approval prompt for changed hooks (its timeout behavior is settled by
+TSK-1082); the Windows shell forms;
 minimum harness versions; sandbox handling of read carve-outs; the Grok
 reviewer in auto mode; the live argv of existing Herdr Codex
 seats; which posture fields each harness's hook payload carries; whether

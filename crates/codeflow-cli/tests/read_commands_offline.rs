@@ -16,6 +16,8 @@ use codeflow_core::security::git::GLOBAL_VALUE_OPTIONS;
 
 const LINE: &str = "integration/EPC-001-offline";
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -115,6 +117,8 @@ fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
         .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
     git(&root, &["switch", "-q", "-c", "plan/offline", LINE]);
     ok(&codeflow(&root, &["epic", "new", "Offline"]), "epic new");
@@ -141,6 +145,7 @@ fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
             &format!("{criterion}- AC-2 (journey) On a fresh project, the flow shall pass.\n"),
         );
     }
+    outcome::state_outcomes(&root);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-q", "-m", "chore: plan the line"]);
     git(&root, &["switch", "-q", LINE]);

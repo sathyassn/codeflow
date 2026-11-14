@@ -23,6 +23,14 @@ created: {{DATE}}
      public contracts or boundaries this task changes, and how to recover
      from an irreversible step, when a reviewer needs them. -->
 
+## Outcome
+
+<!-- One line saying what someone can do once this lands, in the form
+     "after this merges, <who> can <do what>". `codeflow validate --docs`
+     refuses an open record created after the project adopted this section
+     when the line is missing (`outcome_present_uids` in
+     `.codeflow/project.toml`), and warns for an older open record. -->
+
 ## Deliverables
 
 <!-- Each output this task produces and its home, one line each as
@@ -34,6 +42,28 @@ created: {{DATE}}
      and name what decides it. `codeflow validate --docs` warns about an open
      task with no entry here and no path in its Description. -->
 
+<!-- Optional, only where the project adopted the estimation time-box
+     profile (`cf-estimate`, `.codeflow/estimate.json`); otherwise leave it
+     out. `cf-plan` writes it at breakdown, from the rubric, and it is then
+     frozen with the profile revision. Copy it out of this comment as a
+     `## Estimate` section here:
+
+     ## Estimate
+     - Drivers: S2 1, S3 3 = 4, Medium
+     - Band: Medium (2 to 4 h), profile v1; moved: none
+     - Split: not needed
+     - H: none; B: none
+
+     A move names one step and its reason (proof volume, record volume or a
+     key review set). Grade tasks by judgement: most are Medium or Hard,
+     an Easy task usually belongs with a sibling that shares its cause, code
+     path or proof, and a Very Hard task is split before claim. Every task
+     carries its own outcome and proof.
+     During the
+     work a Hard task adds `- Half-top: <time> <one line>`, and a task past
+     its top adds `- Cause: <blocker | wrong estimate | scope | review wait
+     | host>; <finish | split | re-plan>`. Class stays in frontmatter. -->
+
 ## Acceptance Criteria
 
 <!-- The single home for this task's acceptance: testable statements,
@@ -44,7 +74,8 @@ created: {{DATE}}
      a hard-coded or meaningless test merely to satisfy the record. The
      reviewer checks the named evidence, and unsupported claims are defects.
      List each criterion as `- AC-n <criterion>` with no checkbox; ids are
-     unique and never renumbered. End a criterion with
+     unique and never renumbered. This task's own PR may amend them, with a
+     reason in its PR body for each one it removes. End a criterion with
      `(serves EPC-NNN AC-m)` when it serves an epic criterion, or with
      `(journey)` when it names the path exercised. -->
 

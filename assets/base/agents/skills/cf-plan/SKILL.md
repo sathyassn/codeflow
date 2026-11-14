@@ -1,6 +1,6 @@
 ---
 name: cf-plan
-description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
+description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground the settled plan already covers; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
 ---
 
 # cf-plan: plan work, do not build it
@@ -30,10 +30,11 @@ when a single outcome becomes one standalone task.
    approved. Still ask every *live* operator-owned question the brief and the
    plan do not answer, all unblocked ones in one round. Check the request
    against `product.md` non-goals; surface conflicts instead of planning
-   around them. Before materializing records, check that every task names
-   its deliverables and their homes (checklist item 6) against the project's
-   structure authority where one exists, and that an epic names the homes
-   its tasks write.
+   around them. Before materializing records, check that every epic and
+   task states its value line under `## Outcome` (checklist item 2), that
+   every task names its deliverables and their homes (checklist item 6)
+   against the project's structure authority where one exists, and that an
+   epic names its own `## Deliverables` and the homes its tasks write.
 4. Use the exact approved plan; never add scope or design silently. In a
    recorded solo degradation, perform the same clarity and evidence work and
    name the missing cross-vendor assurance.
@@ -48,8 +49,20 @@ when a single outcome becomes one standalone task.
    and clear, no mannered prose (see `.codeflow/rules/writing.md`), in short
    prose and bullets, with a fenced ASCII figure where a flow or structure
    carries the point. Partition a task set by coherent durable outcomes and
-   direct dependencies; a batch is not an epic boundary. When a work item is
-   planned, started, blocked, completed or cancelled, follow
+   direct dependencies; a batch is not an epic boundary. Size tasks by the
+   sizing test, which is guidance: a task is one noticeable outcome with its
+   own proof; siblings that share a cause, a code path or a proof merge,
+   keeping every criterion; a helper-only task folds into the task it helps;
+   a misfiled task moves to the epic that owns its outcome. No number caps a
+   task's size or a plan's task count, so each merge, fold or split is a
+   stated judgement. An epic is one coherent outcome built from meaningful
+   Medium-to-Hard tasks, small enough that its finished part reaches main
+   within a few days through checkpoint PRs; about 5 to 10 tasks is a
+   reference point for that, not a rule. Grade tasks by judgement: most are
+   Medium or Hard, an Easy task usually belongs with a sibling that shares its
+   cause, code path or proof, and a Very Hard task is split before claim.
+   Every task carries its own outcome and proof. When a work item is planned,
+   started, blocked, completed or cancelled, follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle):
    its standalone test decides between an epic and a standalone task, and it
    names the allocation verbs and dependency forms.
@@ -68,6 +81,26 @@ when a single outcome becomes one standalone task.
      criteria changes of other tasks ride together in one amendment on a
      `plan/` branch, reviewed by one other-lineage seat. A task's own criteria
      change rides in its own PR.
+   - **Retarget of records already on the default branch:** an amendment that
+     changes the integration target of records the default branch already holds
+     records the retarget on the line, in one planning pull request. The hooks
+     read nothing from task records (TSK-1077), so the retarget cannot refuse a
+     command, and `codeflow ci` reports the records whose target differs from
+     the default branch's copy. Example: the EPC-024 move of 2026-10-31.
+   - **Estimation, optional:** at the project's first breakdown, when no
+     `.codeflow/estimate.json` exists, offer the `cf-estimate` time-box
+     profile once: as the recommended choice when the project uses no other
+     proper estimation method, and without that recommendation when it has
+     one. On a decline, write `.codeflow/estimate.json` with status
+     `declined`, the reason and the re-offer event, add no block, and do not
+     offer again until that event. On acceptance, write the adopted record
+     and the version 1 profile file in its root (the `cf-estimate` records
+     reference). Under an adopted profile, write the spec's Delivery size
+     block while the spec is brought to readiness, and at
+     breakdown the epic's Estimate section and each task's Estimate block
+     from the shipped templates: the grade from the rubric, the band frozen
+     with the profile revision, a move of one step at most with its reason.
+     Split a Very Hard task before allocation.
    Add a spec only where interfaces, formats, or behavior need pinning down,
    and an ADR draft if a Tier-3 decision is involved. Do not hand-invent IDs.
    If another method owns product specs or task decomposition, link the
@@ -86,8 +119,10 @@ when a single outcome becomes one standalone task.
 Failure paths are explicit: repair allocation collisions and links on the
 planning branch; resolve cycles, missing parents, draft specs, and incomplete
 predecessors rather than bypassing validation; return a material discovery to
-the plan under the task-graph mutation rules; record a proved unavailable seat
-as reduced assurance, never as approval by both seats. If a CodeFlow task is
+the plan under the task-graph mutation rules; move a proved unavailable seat's
+challenge to another model family's seat when one is available, and only
+when none is, record a proved unavailable seat as reduced assurance, never
+as approval. If a CodeFlow task is
 cancelled, stop product work, preserve its evidence and cancel it as the work
 lifecycle states; never label cancellation complete or shipped. Close or
 cancel other work at its declared authority.

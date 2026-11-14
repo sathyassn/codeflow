@@ -1,0 +1,99 @@
+# codeflow admission: starts merge admission when a pull request's
+# codeflow-ci run completes (TSK-1239). This repository's own workflow; the
+# consumer scaffold has no admission mechanism.
+#
+# The required check `commit standards` (codeflow-policy.yml)
+# judges once and never waits for codeflow-ci, so while that run is pending
+# it refuses and holds no runner. When the run completes, `workflow_run`
+# starts this workflow from the default branch, and it re-runs the commit
+# standards job of the newest codeflow-policy run of that pull request at
+# that head. The native job then judges the completed run with its full
+# predicate. This workflow writes no check and no status, so it cannot make
+# the required check pass; at most it makes the native job judge again.
+#
+# Trust: GitHub runs this file from the default branch with GITHUB_SHA at its
+# tip, for any completed codeflow-ci run, a fork's included. The job checks
+# out exactly that commit, without persisted credentials, and runs only
+# scripts/policy-admission.py from it. It never checks out, fetches or runs
+# the pull request's code and never reads an artifact. The only event values
+# it uses are the run id and head commit, passed through `env:` and
+# validated by the script, which reads everything else from the API. The
+# token can re-run jobs (actions: write) and read pull requests; it has no
+# contents, checks or statuses write.
+#
+# Ordering: the job joins the policy workflow's per-pull-request concurrency
+# group with `queue: max` and no cancellation, so it starts only once a
+# policy run in progress for that pull request has ended, never cancels or
+# replaces one, and the re-run it requests waits behind it in the group. A
+# newest policy run that has not completed is left alone: it reads the
+# completed run itself. A run with no single pull request in this
+# repository (a fork's) gets its own group and re-runs nothing.
+#
+# Failure: any API error, unexpected record or refused write fails this job
+# and re-runs nothing, so the required check keeps its refusal until it is
+# re-run by hand.
+name: codeflow-admission
+
+on:
+  workflow_run:
+    workflows: [codeflow-ci]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.event.workflow_run.pull_requests[0] && format('codeflow-policy-pr-{0}', github.event.workflow_run.pull_requests[0].number) || format('codeflow-admission-run-{0}', github.event.workflow_run.id) }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  rerun:
+    name: "admission: re-run commit standards"
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Resolve the authority
+        env:
+          EVENT: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != workflow_run ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::this run is for ${GITHUB_REF} on ${EVENT}, not the default branch ${DEFAULT_BRANCH:-(unknown)} on workflow_run; nothing is re-run"; exit 1
+          fi
+          if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is re-run"; exit 1
+          fi
+          echo "run by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is re-run"; exit 1
+          fi
+
+      - name: re-run commit standards for the completed run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          python3 -I scripts/policy-admission.py rerun --repo "$REPOSITORY" --run "$RUN_ID" --head "$HEAD_SHA" \
+            --workflow .github/workflows/codeflow-ci.yml --policy-workflow .github/workflows/codeflow-policy.yml \
+            --job "commit standards"

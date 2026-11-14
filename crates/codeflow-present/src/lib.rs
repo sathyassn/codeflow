@@ -20,6 +20,7 @@ macro_rules! eprintln {
     };
 }
 
+mod colour;
 pub mod output;
 
 #[cfg(test)]
@@ -36,6 +37,7 @@ pub mod document;
 pub mod entity;
 pub mod error;
 pub mod export;
+mod figure_rules;
 pub mod form;
 mod fuzzy;
 pub mod limits;
@@ -48,6 +50,7 @@ pub mod revision;
 mod safe_html;
 mod scoped_css;
 pub mod service;
+mod stage_measurements;
 pub mod state;
 
 pub use document::PresentationDocument;

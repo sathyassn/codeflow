@@ -13,7 +13,7 @@ its duties and loads when its trigger fires.
 | [Plan fields](quality/plan.md) | every task |
 | [Design and implementation quality](quality/design-implementation.md) | every task |
 | [Materiality and prioritization](quality/materiality.md) | every task |
-| [Evidence ledger](quality/evidence.md) | every task |
+| [Evidence for claims](quality/evidence.md) | every task |
 | [Responsible authority and data](quality/authority.md) | every task |
 | [Required verification](quality/verification.md) | every task |
 | [Coverage](quality/coverage.md) | every task |

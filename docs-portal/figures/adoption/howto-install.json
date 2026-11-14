@@ -305,7 +305,7 @@
       "rows": [
         [
           "1",
-          "run the installer, `cargo install --path crates/codeflow-cli`, or `gh release download` one archive"
+          "run the installer, `cargo install --locked --path crates/codeflow-cli`, or `gh release download` one archive"
         ],
         [
           "2",

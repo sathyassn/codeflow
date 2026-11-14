@@ -14,10 +14,13 @@ const committedAssets = join(crateRoot, "assets");
 
 run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
-run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs"]);
+const tokenTests = (await readdir(join(repoRoot, "assets/base/agents/skills/cf-present/resources/design-system/source"))).filter(name => name.endsWith(".test.ts")).map(name => join(repoRoot, "assets/base/agents/skills/cf-present/resources/design-system/source", name));
+run("node", ["--test", ...tokenTests]);
+run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/token-lint.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs", "scripts/atomic-write.test.mjs", "scripts/export-stages.test.mjs", "scripts/export-paint.test.mjs", "scripts/export-capture.test.mjs"]);
 await checkSelectorOffsets();
 await checkEntityLabelParity();
 await checkAnswerRuleParity();
+await checkFigureRuleParity();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));
 try {
@@ -176,18 +179,18 @@ function checkExportGzipHeader(bytes) {
   }
 }
 
-// The app entry loads exactly three chunks lazily: syntax highlighting, the
-// figure grammar and the bundled fonts. Anything else is a new lazy path to
+// The app entry loads four reviewed chunks lazily: syntax highlighting,
+// figure grammar, bundled fonts and export stage measurement. Anything else is a new lazy path to
 // review, not a silent addition.
 function assertLazyEntryPaths(app) {
   const paths = [...new Set(app.imports
     .filter((item) => item.kind === "dynamic-import")
     .map((item) => item.request_path))].sort();
   const lazy = paths
-    .map((path) => path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? path)
+    .map((path) => path.match(/^\/app\/assets\/chunk-([a-z-]+)-[A-Z0-9]+\.js$/u)?.[1] ?? path)
     .sort();
-  if (lazy.join(",") !== "figure,fonts,syntax") {
-    throw new Error(`The app entry's dynamic imports must be exactly one syntax, one figure and one fonts chunk; found ${paths.join(", ")}`);
+  if (lazy.join(",") !== "figure,fonts,stage-measuring,syntax") {
+    throw new Error(`The app entry's dynamic imports must be exactly one syntax, figure, fonts and stage-measuring chunk; found ${paths.join(", ")}`);
   }
 }
 
@@ -240,4 +243,22 @@ async function treeDigest(root, ignoredNames = []) {
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: webRoot, encoding: "utf8", stdio: "pipe" });
   if (result.status !== 0) throw new Error(`${command} failed\n${result.stdout}\n${result.stderr}`);
+}
+
+async function checkFigureRuleParity() {
+  const { validateDeclaration } = await import("../src/figure-grammar.mjs");
+  const document = JSON.parse(await readFile(join(crateRoot, "tests/fixtures/contract-v2/documents/v2-framed.json"), "utf8"));
+  const original = document.blocks.find(block => block.type === "figure").declaration;
+  for (const [variant, width, valid] of [["wide", 119, false], ["wide", 120, true], ["wide", 720, true], ["wide", 721, false], ["narrow", 368, true], ["narrow", 369, false]]) {
+    const declaration = structuredClone(original);
+    declaration.figure[variant].width = width;
+    let accepted = true;
+    try { validateDeclaration(declaration); } catch { accepted = false; }
+    if (accepted !== valid) throw new Error(`${variant}.width ${width}: expected ${valid}, got ${accepted}`);
+  }
+  const bad = structuredClone(original);
+  bad.figure.facts[0].source = "facts.json";
+  let refused = false;
+  try { validateDeclaration(bad); } catch (error) { refused = error.message.includes("JSON source takes the json check"); }
+  if (!refused) throw new Error("the grammar accepted a contains check on JSON");
 }

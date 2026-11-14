@@ -1,3 +1,4 @@
+import { runtime } from "./tokens.ts";
 /** Visible excerpts for the calling harness. Gesture UX is unchanged. */
 
 const TEXT_CARRIERS = "p, h1, h2, h3, h4, li, td, th, blockquote, figcaption, text, tspan, span, strong, em, label";
@@ -50,6 +51,10 @@ export function visibleTextOf(element: Element): string {
  * read with a separator, never run together as one sentence (QA defect 8).
  */
 export function labelTextOf(element: Element): string {
+  if (element.localName === "svg") {
+    const title = element.querySelector(":scope > title")?.textContent;
+    return collapse(title ?? element.getAttribute("aria-label") ?? "");
+  }
   if (!(element instanceof HTMLElement) || element.querySelector("text, tspan")) return visibleTextOf(element);
   const parts = readableText(element).split(/[\n\t]+/u).map(collapse).filter(Boolean);
   // A part that ends in a colon introduces the next.
@@ -184,7 +189,7 @@ function groundOf(element: Element): string {
     const color = opaqueColor(getComputedStyle(node).backgroundColor);
     if (color) return color;
   }
-  return "#ffffff";
+  return runtime.paper;
 }
 
 /**
@@ -243,7 +248,7 @@ async function rasterizeDomSlice(root: HTMLElement, box: DOMRect): Promise<Excer
   const source = bestHtmlSource(root, box);
   ctx.fillStyle = opaqueColor(getComputedStyle(document.documentElement).backgroundColor)
     || opaqueColor(getComputedStyle(source).backgroundColor)
-    || "#ffffff";
+    || runtime.paper;
   ctx.fillRect(0, 0, width, height);
   const reference = ctx.getImageData(0, 0, 1, 1).data;
 
@@ -390,7 +395,7 @@ function paintTextNode(
   ctx.beginPath();
   ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.clip();
-  ctx.fillStyle = style.color || "#111111";
+  ctx.fillStyle = style.color || runtime.ink;
   const fontSize = Math.max(1, (parseFloat(style.fontSize) || 16) * scale);
   ctx.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   ctx.textAlign = "left";
