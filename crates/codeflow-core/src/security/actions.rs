@@ -161,6 +161,10 @@ pub struct ActionTable {
     pub sandbox_read_denies: Vec<String>,
     /// The shell startup class (issue 86, TSK-242).
     pub startup_paths: StartupPaths,
+    /// The shell state a harness or terminal tool saves for its later
+    /// commands (TSK-1461), in the same shape as the startup class. The
+    /// guards judge it in a pass of their own, not with the startup class.
+    pub saved_state_paths: StartupPaths,
     /// The default user and system git configuration files (TSK-242), in
     /// the same shape as the startup class.
     pub git_config_paths: StartupPaths,
@@ -170,8 +174,9 @@ pub struct ActionTable {
 
 /// A class of protected paths the presets generate denies from (TSK-242):
 /// the shell startup files and the files that run commands when a shell or
-/// terminal starts, and the default user and system git configuration
-/// files. An entry ending in `/` is a directory and everything below it.
+/// terminal starts, the shell state a harness saves for its later commands
+/// (TSK-1461), and the default user and system git configuration files. An
+/// entry ending in `/` is a directory and everything below it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartupPaths {
@@ -311,8 +316,8 @@ impl ActionTable {
 
     /// The Claude `permissions.deny` array, in its required order: the read
     /// groups (each group's denies, then its carve-outs), the `Edit` denies
-    /// of the enforcement paths, the shell startup class and the default git
-    /// configuration files, then the families.
+    /// of the enforcement paths, the shell startup class, the saved shell
+    /// state and the default git configuration files, then the families.
     #[must_use]
     pub fn claude_deny(&self) -> Vec<String> {
         self.claude_read_groups
@@ -321,6 +326,7 @@ impl ActionTable {
             .chain(&self.claude_edit_denies)
             .cloned()
             .chain(self.startup_paths.claude_edit_denies())
+            .chain(self.saved_state_paths.claude_edit_denies())
             .chain(self.git_config_paths.claude_edit_denies())
             .chain(self.family_rules(Decision::Deny))
             .collect()
@@ -377,6 +383,7 @@ impl ActionTable {
             .iter()
             .filter_map(|rule| edit_deny_write_path(rule))
             .chain(self.startup_paths.sandbox_write_denies())
+            .chain(self.saved_state_paths.sandbox_write_denies())
             .chain(self.git_config_paths.sandbox_write_denies())
         {
             let path = Value::String(path);

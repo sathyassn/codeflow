@@ -218,6 +218,11 @@
       "Edit(//etc/paths)",
       "Edit(//etc/paths.d/**)",
       "Edit(//**/.envrc)",
+      "Edit(~/.claude/session-env/**)",
+      "Edit(~/.claude/shell-snapshots/**)",
+      "Edit(~/.codex/shell_snapshots/**)",
+      "Edit(~/.config/herdr-core/templates/**)",
+      "Edit(~/AppData/Roaming/herdr-core/templates/**)",
       "Edit(~/.gitconfig)",
       "Edit(~/.config/git/config)",
       "Edit(//etc/gitconfig)",
@@ -517,6 +522,11 @@
         "/etc/environment",
         "/etc/paths",
         "/etc/paths.d",
+        "~/.claude/session-env",
+        "~/.claude/shell-snapshots",
+        "~/.codex/shell_snapshots",
+        "~/.config/herdr-core/templates",
+        "~/AppData/Roaming/herdr-core/templates",
         "~/.gitconfig",
         "~/.config/git/config",
         "/etc/gitconfig",
@@ -559,6 +569,17 @@
           {
             "type": "command",
             "command": "codeflow hook exec-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Edit|MultiEdit|Write|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codeflow hook edit-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }",
             "timeout": 30,
             "onFailure": "block"
           }

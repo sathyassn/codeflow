@@ -273,9 +273,9 @@ mod tests {
     #[test]
     fn every_shipped_guard_entry_carries_the_shared_bounds() {
         for (text, format, guards) in [
-            (CLAUDE_DEFAULT, Format::Claude, 2),
-            (CLAUDE_ACCEPT, Format::Claude, 2),
-            (CLAUDE_BYPASS, Format::Claude, 2),
+            (CLAUDE_DEFAULT, Format::Claude, 3),
+            (CLAUDE_ACCEPT, Format::Claude, 3),
+            (CLAUDE_BYPASS, Format::Claude, 3),
             (GROK, Format::Grok, 3),
             (CODEX, Format::Codex, 3),
         ] {

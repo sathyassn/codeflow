@@ -1,5 +1,6 @@
 //! The `startup-files` check (TSK-242): whether the shell startup class is
-//! in the harness settings this project ships, and which files the home's
+//! in the harness settings this project ships, whether its Claude settings
+//! send native edits to edit-guard (TSK-1461), and which files the home's
 //! startup files source from outside the class.
 //!
 //! The settings are read as listed rules; whether a harness enforces them
@@ -15,6 +16,7 @@ use std::time::Instant;
 use super::{CheckResult, Options, Status};
 use crate::remedy;
 use crate::security::actions;
+use crate::security::startup::saved_state::Places;
 use crate::security::startup::{class_target, StartupEnv};
 
 /// The home startup files read for `source` lines.
@@ -155,11 +157,13 @@ fn literal(word: &str, home: &Path) -> Option<PathBuf> {
 }
 
 /// The protected classes the presets carry, with the words a finding uses:
-/// the shell startup class and the default git configuration files.
-fn classes() -> [(&'static str, &'static actions::StartupPaths); 2] {
+/// the shell startup class, the saved shell state (TSK-1461) and the
+/// default git configuration files.
+fn classes() -> [(&'static str, &'static actions::StartupPaths); 3] {
     let table = actions::table();
     [
         ("shell startup", &table.startup_paths),
+        ("saved shell state", &table.saved_state_paths),
         ("git configuration", &table.git_config_paths),
     ]
 }
@@ -250,6 +254,60 @@ fn missing_rules(root: &Path) -> Vec<String> {
         },
     }
     missing
+}
+
+/// The native edit tools of Claude Code that the shipped presets send to
+/// edit-guard (TSK-1461 AC-11).
+const CLAUDE_EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+
+/// The Claude Code native edit tools that the project's
+/// `.claude/settings.json` sends to no edit-guard hook, as a finding that
+/// names the file; `None` when every one reaches edit-guard, or when the
+/// file is absent or does not parse, which [`missing_rules`] already
+/// reports. A group counts when one of its hooks runs edit-guard and its
+/// matcher takes the tool: an absent, empty or `*` matcher takes every
+/// tool, and any other is read as a pattern that must match the whole tool
+/// name. That is the stricter of the readings a harness may apply, so a
+/// matcher that passes here takes the tool under either; one that is not a
+/// valid pattern takes nothing.
+fn claude_edit_guard_gap(root: &Path) -> Option<String> {
+    let claude_file = ".claude/settings.json";
+    let text = std::fs::read_to_string(root.join(claude_file)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let groups = value["hooks"]["PreToolUse"].as_array();
+    let takes = |group: &serde_json::Value, tool: &str| {
+        let runs_guard = group["hooks"].as_array().is_some_and(|hooks| {
+            hooks.iter().any(|hook| {
+                hook["command"]
+                    .as_str()
+                    .and_then(crate::hooks::guard_deadline::guard_of)
+                    == Some("edit-guard")
+            })
+        });
+        let matches = match group.get("matcher") {
+            None | Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(m)) if m.is_empty() || m == "*" => true,
+            Some(serde_json::Value::String(m)) => {
+                regex::Regex::new(&format!("^(?:{m})$")).is_ok_and(|pattern| pattern.is_match(tool))
+            }
+            Some(_) => false,
+        };
+        runs_guard && matches
+    };
+    let open: Vec<String> = CLAUDE_EDIT_TOOLS
+        .iter()
+        .filter(|tool| !groups.is_some_and(|g| g.iter().any(|group| takes(group, tool))))
+        .map(|tool| format!("`{tool}`"))
+        .collect();
+    let (last, rest) = open.split_last()?;
+    let tools = if rest.is_empty() {
+        last.clone()
+    } else {
+        format!("{} and {last}", rest.join(", "))
+    };
+    Some(format!(
+        "{claude_file} sends Claude Code's native {tools} calls to no edit-guard hook"
+    ))
 }
 
 /// The class paths the selected Codex profile leaves writable, read
@@ -443,10 +501,13 @@ fn profile_grants(
     grants
 }
 
-/// `ZDOTDIR` or `XDG_CONFIG_HOME` set away from the defaults the generated
-/// rules name, so the relocated startup files have no native deny; the
+/// `ZDOTDIR`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or
+/// `APPDATA` set away from the defaults the generated rules name, and a
+/// `CLAUDE_ENV_FILE` outside the default Claude folder they name, so the
+/// relocated startup files and saved shell state have no native deny; the
 /// guards still follow them.
-fn relocated(env: &StartupEnv) -> Vec<String> {
+fn relocated(places: &Places) -> Vec<String> {
+    let env = &places.startup;
     let Some(home) = env.home.as_deref() else {
         return Vec::new();
     };
@@ -454,26 +515,59 @@ fn relocated(env: &StartupEnv) -> Vec<String> {
     if let Some(z) = env.zdotdir.as_deref().filter(|z| *z != home) {
         out.push(format!("ZDOTDIR is {}", crate::git::display_path(z)));
     }
-    if let Some(x) = env
-        .xdg_config
+    for (name, value, default) in [
+        ("XDG_CONFIG_HOME", &env.xdg_config, ".config"),
+        ("CLAUDE_CONFIG_DIR", &places.claude_config, ".claude"),
+        ("CODEX_HOME", &places.codex_home, ".codex"),
+        ("APPDATA", &places.appdata, "AppData/Roaming"),
+    ] {
+        if let Some(moved) = value.as_deref().filter(|v| *v != home.join(default)) {
+            out.push(format!("{name} is {}", crate::git::display_path(moved)));
+        }
+    }
+    if let Some(file) = places
+        .claude_env_file
         .as_deref()
-        .filter(|x| *x != home.join(".config"))
+        .filter(|file| !file.starts_with(home.join(".claude/session-env")))
     {
         out.push(format!(
-            "XDG_CONFIG_HOME is {}",
-            crate::git::display_path(x)
+            "CLAUDE_ENV_FILE is {}",
+            crate::git::display_path(file)
         ));
     }
     out
 }
 
+/// `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set to a folder inside the project.
+/// A command that changes the project's files, such as `git checkout` or
+/// `tar`, can then place a saved shell state file, so the guards refuse it
+/// there; the way through is to keep the configuration folder outside the
+/// project.
+fn inside_project(places: &Places, root: &Path) -> Vec<String> {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    [
+        ("CLAUDE_CONFIG_DIR", &places.claude_config),
+        ("CODEX_HOME", &places.codex_home),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| {
+        let folder = value.as_deref()?;
+        let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+        folder
+            .starts_with(&root)
+            .then(|| format!("{name} is {}", crate::git::display_path(&folder)))
+    })
+    .collect()
+}
+
 pub(super) fn check(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let env = StartupEnv::from_process();
+    let places = Places::from_process();
     let missing = missing_rules(&root);
-    let moved = relocated(&env);
-    let sourced = sourced_files(&env);
+    let unguarded = claude_edit_guard_gap(&root);
+    let moved = relocated(&places);
+    let sourced = sourced_files(&places.startup);
     // Every finding is reported together; the remedy is the first one's.
     let mut parts = Vec::new();
     let mut remedy = None;
@@ -484,10 +578,24 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         ));
         remedy.get_or_insert(remedy::DOCTOR_STARTUP_PRESETS.remedy());
     }
+    if let Some(gap) = &unguarded {
+        parts.push(format!(
+            "{gap}, so such an edit of a shell startup file or saved shell state is refused only where a preset `Edit` deny names it"
+        ));
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_PRESETS.remedy());
+    }
     if !moved.is_empty() {
         parts.push(format!(
-            "{}, so the startup files there have no generated deny; the guards still refuse visible writes to them",
+            "{}, so the startup files and saved shell state there have no generated deny; the guards still refuse visible writes to them",
             moved.join(" and ")
+        ));
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_RELOCATED.remedy());
+    }
+    let inside = inside_project(&places, &root);
+    if !inside.is_empty() {
+        parts.push(format!(
+            "{}, inside the project, so a command that changes the project's files, such as `git checkout` or `tar`, is refused where it can place saved shell state; keep the harness configuration folder outside the project",
+            inside.join(" and ")
         ));
         remedy.get_or_insert(remedy::DOCTOR_STARTUP_RELOCATED.remedy());
     }
@@ -527,7 +635,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Some(remedy) => (Status::Warn(remedy), parts.join("; ")),
         None => (
             Status::Pass,
-            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
+            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), the Claude settings send native `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to edit-guard, and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
         ),
     };
     CheckResult {
@@ -621,9 +729,16 @@ mod tests {
         std::fs::write(root.join(".codex/config.toml"), "").unwrap();
         let missing = missing_rules(root);
         // Edit denies, denyWrite and cf-guard entries of each class (the
-        // shell startup files and the default git configuration files),
-        // no profile selected, the workspace root `.envrc`.
-        assert_eq!(missing.len(), 8, "{missing:?}");
+        // shell startup files, the saved shell state and the default git
+        // configuration files), no profile selected, the workspace root
+        // `.envrc`.
+        assert_eq!(missing.len(), 11, "{missing:?}");
+        assert!(
+            missing
+                .iter()
+                .any(|m| m.contains("saved shell state `Edit` denies")),
+            "{missing:?}"
+        );
         assert!(
             missing
                 .iter()
@@ -722,24 +837,155 @@ mod tests {
         assert!(missing_rules(root).is_empty(), "{:?}", missing_rules(root));
     }
 
+    /// TSK-1461 AC-11: Claude settings that send a native edit tool to no
+    /// edit-guard hook are named, tool by tool; the shipped presets and the
+    /// matchers that take all four tools pass.
+    #[test]
+    fn claude_settings_without_the_edit_hook_are_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // No file is `missing_rules`' finding, not this one.
+        assert_eq!(claude_edit_guard_gap(root), None);
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings");
+        for name in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
+            std::fs::copy(shipped.join(name), root.join(".claude/settings.json")).unwrap();
+            assert_eq!(claude_edit_guard_gap(root), None, "{name}");
+        }
+        let guard = "codeflow hook edit-guard --contract 3 || exit 2";
+        let settings = |groups: serde_json::Value| {
+            std::fs::write(
+                root.join(".claude/settings.json"),
+                serde_json::json!({"hooks": {"PreToolUse": groups}}).to_string(),
+            )
+            .unwrap();
+            claude_edit_guard_gap(root)
+        };
+        let group = |matcher: serde_json::Value, command: &str| {
+            let mut group = serde_json::json!({"hooks": [{"type": "command", "command": command}]});
+            if !matcher.is_null() {
+                group["matcher"] = matcher;
+            }
+            group
+        };
+        let both = Some(
+            ".claude/settings.json sends Claude Code's native `Edit`, `MultiEdit`, `Write` and `NotebookEdit` calls to no edit-guard hook"
+                .to_string(),
+        );
+        assert_eq!(settings(serde_json::json!([])), both);
+        std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
+        assert_eq!(claude_edit_guard_gap(root), both);
+        // A guard under the shell tools' matcher, or another program under
+        // the edit tools' matcher, takes no edit.
+        assert_eq!(
+            settings(serde_json::json!([group(
+                "^(Bash|PowerShell)$".into(),
+                guard
+            )])),
+            both
+        );
+        assert_eq!(
+            settings(serde_json::json!([group(
+                "^(Edit|Write)$".into(),
+                "./check.sh"
+            )])),
+            both
+        );
+        assert_eq!(
+            settings(serde_json::json!([group("Edit".into(), guard)])),
+            Some(
+                ".claude/settings.json sends Claude Code's native `MultiEdit`, `Write` and `NotebookEdit` calls to no edit-guard hook"
+                    .to_string()
+            )
+        );
+        // The matcher part 5 first shipped leaves two tools out.
+        assert_eq!(
+            settings(serde_json::json!([group("^(Edit|Write)$".into(), guard)])),
+            Some(
+                ".claude/settings.json sends Claude Code's native `MultiEdit` and `NotebookEdit` calls to no edit-guard hook"
+                    .to_string()
+            )
+        );
+        // A pattern read as matching the whole name: `Edi` and `Writer` take
+        // neither tool, and an invalid pattern takes nothing.
+        for matcher in ["Edi|Writer", "(Edit"] {
+            assert_eq!(
+                settings(serde_json::json!([group(matcher.into(), guard)])),
+                both,
+                "{matcher}"
+            );
+        }
+        for matcher in [
+            serde_json::Value::Null,
+            "".into(),
+            "*".into(),
+            "^(Edit|MultiEdit|Write|NotebookEdit)$".into(),
+            "NotebookEdit|Write|MultiEdit|Edit".into(),
+            ".*".into(),
+        ] {
+            assert_eq!(
+                settings(serde_json::json!([group(matcher.clone(), guard)])),
+                None,
+                "{matcher}"
+            );
+        }
+        // Two groups that together take every tool pass.
+        assert_eq!(
+            settings(serde_json::json!([
+                group("Edit|MultiEdit".into(), guard),
+                group("Write|NotebookEdit".into(), guard)
+            ])),
+            None
+        );
+    }
+
     #[test]
     fn relocated_startup_directories_are_reported() {
         let home = PathBuf::from("/fixture/home");
-        let at_defaults = StartupEnv {
-            home: Some(home.clone()),
-            other_homes: Vec::new(),
-            zdotdir: Some(home.clone()),
-            xdg_config: Some(home.join(".config")),
-            etc_roots: Vec::new(),
+        let at_defaults = Places {
+            startup: StartupEnv {
+                home: Some(home.clone()),
+                other_homes: Vec::new(),
+                zdotdir: Some(home.clone()),
+                xdg_config: Some(home.join(".config")),
+                etc_roots: Vec::new(),
+            },
+            claude_config: Some(home.join(".claude")),
+            codex_home: Some(home.join(".codex")),
+            appdata: Some(home.join("AppData/Roaming")),
+            claude_env_file: Some(home.join(".claude/session-env/abc/hook-1.sh")),
         };
         assert!(relocated(&at_defaults).is_empty());
-        let moved = StartupEnv {
-            home: Some(home),
-            other_homes: Vec::new(),
-            zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
-            xdg_config: Some(PathBuf::from("/fixture/xdg")),
-            etc_roots: Vec::new(),
+        let moved = Places {
+            startup: StartupEnv {
+                home: Some(home),
+                other_homes: Vec::new(),
+                zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
+                xdg_config: Some(PathBuf::from("/fixture/xdg")),
+                etc_roots: Vec::new(),
+            },
+            claude_config: Some(PathBuf::from("/fixture/claude")),
+            codex_home: Some(PathBuf::from("/fixture/codex")),
+            appdata: None,
+            claude_env_file: Some(PathBuf::from("/fixture/env/hook-1.sh")),
         };
-        assert_eq!(relocated(&moved).len(), 2);
+        let found = relocated(&moved);
+        assert_eq!(found.len(), 5, "{found:?}");
+        assert!(found.iter().any(|f| f.starts_with("CLAUDE_CONFIG_DIR is ")));
+        assert!(found.iter().any(|f| f.starts_with("CODEX_HOME is ")));
+        assert!(found.iter().any(|f| f.starts_with("CLAUDE_ENV_FILE is ")));
+        // A configuration folder inside the project is reported on its own;
+        // one outside it, and the default home folders, are not.
+        let project = PathBuf::from("/fixture/work/project");
+        assert!(inside_project(&moved, &project).is_empty());
+        let inside = Places {
+            claude_config: Some(project.join(".harness/claude")),
+            codex_home: Some(PathBuf::from("/fixture/work/project-other/codex")),
+            ..moved
+        };
+        assert_eq!(
+            inside_project(&inside, &project),
+            ["CLAUDE_CONFIG_DIR is /fixture/work/project/.harness/claude"]
+        );
     }
 }

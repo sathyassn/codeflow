@@ -1772,13 +1772,14 @@ mod tests {
         assert!(hooks
             .iter()
             .any(|h| h["command"] == "./mine.sh" && h["timeout"] == 3));
+        // The two shell guards and edit-guard, in its own group (TSK-1461).
         assert_eq!(
             report
                 .iter()
                 .filter(|l| l.contains("updated hook PreToolUse:")
                     && l.contains("to its shipped fields"))
                 .count(),
-            2,
+            3,
             "{report:?}"
         );
         assert!(

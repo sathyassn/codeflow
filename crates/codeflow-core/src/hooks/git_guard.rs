@@ -509,7 +509,14 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 /// Evaluate a command using the tool payload's working directory for paths.
 #[must_use]
 pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
-    evaluate_report_with_runners(command, ctx, cwd, true)
+    // Saved shell state is judged in a pass of its own, whose findings come
+    // after every other finding of the call, its Git runner bodies'
+    // included (TSK-1461).
+    use crate::security::startup::saved_state::{Held, Hook};
+    let saved_state = Held::enter(Hook::Git);
+    let mut report = evaluate_report_with_runners(command, ctx, cwd, true);
+    Held::finish(saved_state, &mut report.violations);
+    report
 }
 
 thread_local! {
@@ -1214,6 +1221,13 @@ fn evaluate_report_with_runners(
             Err(_) => {}
         }
     }
+    // The saved-state pass for this command, held for the end of the call
+    // ([`evaluate_report_at`]).
+    crate::security::startup::saved_state::Held::run(
+        crate::security::startup::saved_state::Hook::Git,
+        command,
+        cwd,
+    );
 
     report.notes = notes;
     report

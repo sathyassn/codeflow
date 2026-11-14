@@ -14,6 +14,7 @@
 use crate::security::dangerous::DangerousModule;
 use crate::security::headless::{headless_peer_run, HeadlessRun};
 use crate::security::privilege::PrivilegeModule;
+use crate::security::startup::saved_state::{Held, Hook};
 use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
 
 use super::policy::{PolicyLevel, SecuritySection};
@@ -190,6 +191,8 @@ pub fn evaluate_ruled(
         violations.push(finding);
         return violations;
     }
+    // Saved shell state: a pass of its own, appended last (TSK-1461).
+    let saved_state = Held::enter(Hook::Exec);
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);
     let _home = super::git_guard::line_home::Scope::enter(command, &line_home);
@@ -200,6 +203,7 @@ pub fn evaluate_ruled(
     // certified prose line is judged here too: the startup check is a
     // write-target check, not a raw-text word check.
     if violations.is_empty() {
+        Held::run(Hook::Exec, command, cwd);
         violations.extend(crate::security::startup::evaluate_with(
             command,
             cwd,
@@ -269,6 +273,7 @@ pub fn evaluate_ruled(
             merge_strongest(&mut violations, finding);
         }
     }
+    Held::finish(saved_state, &mut violations);
     violations
 }
 
