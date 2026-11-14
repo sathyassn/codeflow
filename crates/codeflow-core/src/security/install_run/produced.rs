@@ -22,13 +22,34 @@
 //! program writes in its own way (a build) and a program word from outside
 //! the line are state the line does not show.
 //!
-//! A program the guard does not know to read its input only as data
-//! ([`inert`]) gets the same closed form for text the line spells and hands
-//! it by pipe, here-string, here-document or process substitution: settled
-//! text is judged as a command line, anything else refuses. The output of
-//! a program the line runs, fed to such a program, is the named residual.
-//! A line the reader does not take apart into simple commands is read
-//! token by token for the same feeds ([`unread`]).
+//! A program the guard does not know to read only data ([`inert`]) gets
+//! the same closed form for text the line spells that it receives, by any
+//! channel the shell grammar gives ([`judge_simple`]):
+//!
+//! - its input: a pipe or `|&`, a redirection, a here-string or a
+//!   here-document, or an input process substitution redirected in;
+//! - a file operand: a process substitution given as a word, a descriptor
+//!   path (`/dev/fd/N`, `/dev/stdin`) it is handed, or a file the line
+//!   writes, named as an operand or an option's value
+//!   ([`hands_a_written_file`]);
+//! - an argument: a word holding a command substitution (`$(...)` or
+//!   backquotes, quoted or joined with other text), a `$'...'` quote with
+//!   an escape, or a name the line binds ([`open_word`]);
+//! - an output stream: an output process substitution, set on a descriptor
+//!   or given as a word, reads what the command writes;
+//! - a descriptor other than 0 set on the command or on a compound command,
+//!   and an `exec` redirection set for the rest of the line
+//!   ([`descriptors`]);
+//! - an assignment to a variable a program reads as a command or a startup
+//!   file (`GIT_SSH_COMMAND`, `BASH_ENV`), before the program, given to
+//!   `env` or alone on the line, whatever the program, and any assignment
+//!   alone on a line that may export it ([`variable_kind`],
+//!   [`line_exports`]).
+//!
+//! Settled text is judged as a command line, anything else refuses. The
+//! output of a program the line runs, received by such a program, is the
+//! named residual. A line the reader does not take apart into simple
+//! commands is read token by token for the same channels ([`unread`]).
 //!
 //! On every line these texts are also judged for the binary with a verb:
 //!
@@ -58,14 +79,15 @@ use crate::hooks::git_guard::{
     strip_reserved_words, COMMAND_CARRIERS, READ_ONLY_PROGRAMS,
 };
 use crate::security::composed::{
-    bindings, composed_texts, compound, expanding_heredoc_readers, input_of, simple_commands,
-    Composed, Fed, Input, Simple, Source, Spelt,
+    bindings, composed_texts, compound, expanding_heredoc_readers, input_of, line_spells,
+    simple_commands, word_spells, Composed, Fed, Input, Simple, Source, Spelt,
 };
 use crate::security::headless::basename;
 use crate::security::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
 use crate::security::outward::{
     code_sources, interpreter_code_positions, interpreter_family, reads_stdin_code_words,
 };
+use crate::security::startup::{COMMAND_VARIABLES, STARTUP_VARS};
 
 /// Programs whose output this reader judges.
 const PRINTERS: &[&str] = &["printf", "echo", "print"];
@@ -98,7 +120,7 @@ pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
 /// inside writes a file.
 fn produced(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
     let writes = writes || (writes_a_file(command) && !lone(command));
-    if writes && runs_a_file(command) {
+    if writes && (runs_a_file(command) || hands_a_written_file(command)) {
         return Some(UNSETTLED);
     }
     if let Some(form) = executors(command, depth, &Stdin::Unseen, writes) {
@@ -401,7 +423,7 @@ fn executors(command: &str, depth: usize, stdin: &Stdin, writes: bool) -> Option
         } else {
             stdin.clone()
         };
-        if let Some(form) = judge_simple(command, &commands, at, &input, depth, writes) {
+        if let Some(form) = judge_simple(command, &commands, at, &input, stdin, depth, writes) {
             return Some(form);
         }
     }
@@ -409,75 +431,113 @@ fn executors(command: &str, depth: usize, stdin: &Stdin, writes: bool) -> Option
 }
 
 /// The judgment of a line [`simple_commands`] does not take apart (a
-/// group, a subshell, a loop, a conditional, a background job), or one
-/// nested past [`DEPTH`]: [`UNSETTLED`] when it executes text it produces
-/// at all ([`executes_produced_text`]); else each feed the line holds,
-/// read token by token ([`compound`]), judged as for a simple command:
-/// one simple command's output or literal text settled, text the line
-/// spells in a compound command unsettled, and other programs' output the
-/// named residual for a reader the guard does not know. Every command the
-/// line carries (`sh -c`, `eval`, `xargs`) is judged again. Grammar the
-/// token reading does not follow refuses when the line holds a pipe, a
-/// here-string, a here-document or a process substitution.
+/// group, a subshell, a loop, a conditional, a `case`, a background job),
+/// or one nested past [`DEPTH`]: [`UNSETTLED`] when it executes text it
+/// produces at all ([`executes_produced_text`]); else the line read token
+/// by token ([`compound`]). What each feed hands its readers (a pipe, a
+/// here-string, a here-document or a process substitution on any
+/// descriptor) is worked out as for a simple command: one simple
+/// command's output or literal text settled, text the line spells in a
+/// compound command unsettled, other programs' output the named residual.
+/// Each simple command is then judged with what it reads ([`judge_simple`]),
+/// on every channel, and so is each output process substitution's body
+/// with what the compound command writes. Grammar the token reading does
+/// not follow refuses when the line holds any channel: a pipe, a
+/// here-string, a here-document, a process substitution or a command
+/// substitution. Past [`DEPTH`], a line that holds any of them refuses.
 fn unread(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
     if executes_produced_text(command) {
         return Some(UNSETTLED);
     }
     let Some(found) = compound(command) else {
-        let feeds = command.contains('|') || command.contains("<<") || command.contains("<(");
-        return feeds.then_some(UNSETTLED);
-    };
-    let nested = depth <= DEPTH;
-    for feed in &found.feeds {
-        let readers: Vec<Vec<String>> = feed
-            .readers
+        let channels = ["|", "<<", "<(", ">(", "$(", "`"];
+        return channels
             .iter()
-            .map(|raw| {
-                let mut words = command_argv(raw);
-                strip_reserved_words(&mut words);
-                words
-            })
-            .collect();
-        if readers.iter().all(|words| inert(words)) {
-            continue;
-        }
+            .any(|channel| command.contains(channel))
+            .then_some(UNSETTLED);
+    };
+    if depth > DEPTH {
+        let channels = !found.feeds.is_empty()
+            || !found.sinks.is_empty()
+            || found.commands.iter().any(|simple| {
+                simple
+                    .words
+                    .iter()
+                    .any(|word| !matches!(word, Spelt::Plain(_)))
+                    || simple
+                        .redirects
+                        .iter()
+                        .any(|redirect| !matches!(redirect.source, Source::Path(_)))
+            });
+        return channels.then_some(UNSETTLED);
+    }
+    // What each feed hands over.
+    let mut handed = Vec::new();
+    for (at, feed) in found.feeds.iter().chain(&found.sinks).enumerate() {
         let fed = match &feed.fed {
             Fed::Command(simple) => {
-                output_of(std::slice::from_ref(simple), 0, &Stdin::Output, writes)
+                let mut simple = simple.clone();
+                simple.piped = false;
+                if at >= found.feeds.len() {
+                    // A sink reads what the command writes, wherever its
+                    // other output goes.
+                    simple.redirects.retain(|redirect| redirect.input);
+                }
+                output_of(std::slice::from_ref(&simple), 0, &Stdin::Output, writes)
             }
             Fed::Text(text) => Stdin::Text(text.clone()),
-            Fed::Body(body) if nested => {
+            Fed::Body(body) => {
                 if let Some(form) = executors(body, depth + 1, &Stdin::Output, writes) {
                     return Some(form);
                 }
                 body_output(body, &Stdin::Output, writes)
             }
-            Fed::Body(_) | Fed::Spelled => Stdin::Unsettled,
+            Fed::Spelled => Stdin::Unsettled,
             Fed::Output => Stdin::Output,
         };
-        let interpreter = readers.iter().any(|words| {
-            strip_launchers(words)
-                .is_some_and(|(program, _)| interpreter_family(&basename(program)).is_some())
-        });
-        let form = if readers.iter().any(|words| runs_its_input(words)) {
-            judge_fed(&fed, interpreter, None, depth, writes)
-        } else {
-            judge_unknown(&fed, depth, writes)
-        };
+        handed.push(fed);
+    }
+    let (feeds, sinks) = handed.split_at(found.feeds.len());
+    for (sink, fed) in found.sinks.iter().zip(sinks) {
+        let form = sink
+            .readers
+            .iter()
+            .find_map(|body| executors(body, depth + 1, fed, writes));
         if form.is_some() {
             return form;
         }
     }
-    if !nested {
-        return None;
-    }
+    // What each simple command reads: every feed it is a reader of.
     found.commands.iter().find_map(|simple| {
-        let mut words = command_argv(&simple.raw);
-        strip_reserved_words(&mut words);
-        carried_commands(&words)
+        let input = found
+            .feeds
             .iter()
-            .find_map(|body| executors(body, depth + 1, &Stdin::Output, writes))
+            .zip(feeds)
+            .filter(|(feed, _)| feed.readers.contains(&simple.raw))
+            .fold(Stdin::Unseen, |read, (_, fed)| worst(read, fed.clone()));
+        let mut simple = simple.clone();
+        simple.piped = false;
+        judge_simple(
+            command,
+            std::slice::from_ref(&simple),
+            0,
+            &input,
+            &input,
+            depth,
+            writes,
+        )
     })
+}
+
+/// What a reader receives from two sources: unsettled when either is, or
+/// when settled text meets other text.
+fn worst(one: Stdin, other: Stdin) -> Stdin {
+    match (one, other) {
+        (Stdin::Unseen, read) | (read, Stdin::Unseen) => read,
+        (Stdin::Text(one), Stdin::Text(other)) if one == other => Stdin::Text(one),
+        (Stdin::Output, Stdin::Output) => Stdin::Output,
+        _ => Stdin::Unsettled,
+    }
 }
 
 /// One simple command's words as the shell passes them, where the reader
@@ -490,8 +550,12 @@ struct Resolved {
     settled: Vec<bool>,
     /// A settled substitution's output, by word.
     texts: Vec<Option<String>>,
-    /// Each process substitution's position and output.
+    /// What a word that is one command substitution holds, by word.
+    outputs: Vec<Option<Stdin>>,
+    /// Each input process substitution's position and output.
     processes: Vec<(usize, Stdin)>,
+    /// The body of each output process substitution given as a word.
+    sinks: Vec<String>,
 }
 
 /// The words of `simple`, where `input` is what it reads from a pipe or
@@ -507,12 +571,20 @@ fn resolve(
         words: Vec::new(),
         settled: Vec::new(),
         texts: Vec::new(),
+        outputs: Vec::new(),
         processes: Vec::new(),
+        sinks: Vec::new(),
     };
     for piece in &simple.words {
+        let mut held = None;
         let (word, settled, text) = match piece {
             Spelt::Plain(text) => (text.clone(), true, None),
             Spelt::Open(raw) => (raw.clone(), false, None),
+            Spelt::Sink(body) => {
+                // Judged with what the command writes ([`judge_simple`]).
+                resolved.sinks.push(body.clone());
+                ("/dev/fd/63".to_string(), true, None)
+            }
             Spelt::Output(body) | Spelt::Process(body) => {
                 if let Some(form) = executors(body, depth + 1, input, writes) {
                     return Err(form);
@@ -521,20 +593,24 @@ fn resolve(
                 if matches!(piece, Spelt::Process(_)) {
                     resolved.processes.push((resolved.words.len(), output));
                     ("/dev/fd/63".to_string(), true, None)
-                } else if let Stdin::Text(mut value) = output {
-                    // The shell drops the trailing newlines.
-                    while value.ends_with('\n') {
-                        value.pop();
-                    }
-                    (value.clone(), true, Some(value))
                 } else {
-                    (format!("$({body})"), false, None)
+                    held = Some(output.clone());
+                    if let Stdin::Text(mut value) = output {
+                        // The shell drops the trailing newlines.
+                        while value.ends_with('\n') {
+                            value.pop();
+                        }
+                        (value.clone(), true, Some(value))
+                    } else {
+                        (format!("$({body})"), false, None)
+                    }
                 }
             }
         };
         resolved.words.push(word);
         resolved.settled.push(settled);
         resolved.texts.push(text);
+        resolved.outputs.push(held);
     }
     Ok(resolved)
 }
@@ -552,6 +628,7 @@ fn judge_simple(
     commands: &[Simple],
     at: usize,
     input: &Stdin,
+    stdin: &Stdin,
     depth: usize,
     writes: bool,
 ) -> Option<&'static str> {
@@ -560,12 +637,34 @@ fn judge_simple(
         words,
         settled,
         texts,
+        outputs,
         processes,
+        sinks,
     } = match resolve(simple, input, depth, writes) {
         Ok(resolved) => resolved,
         Err(form) => return Some(form),
     };
-    let (program, _) = strip_launchers(&words)?;
+    let Some((program, _)) = strip_launchers(&words) else {
+        // Assignments alone: a value the line exports, or one a program
+        // reads as a command or a startup file, reaches later programs.
+        let exports = line_exports(line);
+        for (index, piece) in simple.words.iter().enumerate() {
+            let Some((name, _)) = words[index].split_once('=') else {
+                continue;
+            };
+            let held = || held_by(piece, outputs[index].as_ref(), line);
+            let form = match variable_kind(name) {
+                Some(Variable::Command) => judge_fed(&held(), false, None, depth, writes),
+                Some(Variable::Startup) => judge_unknown(&held(), depth, writes),
+                None if exports => judge_unknown(&held(), depth, writes),
+                None => None,
+            };
+            if form.is_some() {
+                return form;
+            }
+        }
+        return descriptors(line, simple, input, depth, writes);
+    };
     let program = basename(program);
     for (at, code) in running_positions(&words) {
         if !settled.get(at).copied().unwrap_or(false) {
@@ -599,25 +698,23 @@ fn judge_simple(
         })
     });
     let interpreter = interpreter_family(&program).is_some();
+    let unknown = !inert(&words);
     let mut fed = input.clone();
     for redirect in simple.redirects.iter().filter(|redirect| redirect.input) {
-        let text = match &redirect.source {
-            Source::Text(text) => Stdin::Text(text.clone()),
-            Source::Path(path) if path == "/dev/null" => Stdin::Unseen,
-            Source::Path(_) => file(writes),
-            Source::Process(body) => {
-                if let Some(form) = executors(body, depth + 1, input, writes) {
-                    return Some(form);
-                }
-                body_output(body, input, writes)
-            }
-            Source::Spelled => Stdin::Unsettled,
-            Source::Open => Stdin::Output,
+        let text = match source_text(&redirect.source, input, depth, writes) {
+            Ok(text) => text,
+            Err(form) => return Some(form),
         };
         if redirect.fd == 0 {
             fed = text;
         } else if reads_code.is_some() {
             if let Some(form) = judge_fed(&text, interpreter, None, depth, writes) {
+                return Some(form);
+            }
+        } else if unknown {
+            // Another descriptor, which the program may read by its path
+            // or a copy.
+            if let Some(form) = judge_unknown(&text, depth, writes) {
                 return Some(form);
             }
         }
@@ -629,13 +726,71 @@ fn judge_simple(
             }
         }
     }
+    // Each output process substitution reads what the command writes: to
+    // the descriptor it is set on, or, given as a word, to that file, which
+    // for `tee` is what it reads.
+    let redirected = simple
+        .redirects
+        .iter()
+        .filter_map(|redirect| match &redirect.source {
+            Source::Process(body) if !redirect.input => Some((body, false)),
+            _ => None,
+        });
+    let sinks: Vec<(&String, bool)> = redirected
+        .chain(sinks.iter().map(|body| (body, true)))
+        .collect();
+    if !sinks.is_empty() {
+        let mut bare = commands.to_vec();
+        bare[at].redirects.retain(|redirect| redirect.input);
+        let written = output_of(&bare, at, stdin, writes);
+        for (body, word) in sinks {
+            let read = match (word, program_name(&program)) {
+                (false, _) => written.clone(),
+                (true, "tee") => fed.clone(),
+                (true, _) => worst(fed.clone(), written.clone()),
+            };
+            if let Some(form) = executors(body, depth + 1, &read, writes) {
+                return Some(form);
+            }
+        }
+    }
+    // Every other word, as an argument or an assignment: what a program
+    // the guard does not know receives, and the value of a variable a
+    // program reads as a command (`GIT_SSH_COMMAND`, `BASH_ENV`).
+    let code = running_positions(&words);
+    let first = program_span(&words).map_or(0, |(first, _)| first);
+    for (index, piece) in simple.words.iter().enumerate() {
+        if code.iter().any(|(position, _)| *position == index) {
+            continue;
+        }
+        // An assignment before the program, on it or given to `env`.
+        let variable = if index < first {
+            words[index]
+                .split_once('=')
+                .and_then(|(name, _)| variable_kind(name))
+        } else {
+            None
+        };
+        if !unknown && variable.is_none() {
+            continue;
+        }
+        let held = held_by(piece, outputs[index].as_ref(), line);
+        let form = if variable == Some(Variable::Command) {
+            judge_fed(&held, false, None, depth, writes)
+        } else {
+            judge_unknown(&held, depth, writes)
+        };
+        if form.is_some() {
+            return form;
+        }
+    }
     if runs_its_input(&words) {
         let supplier = matches!(program_name(&program), "xargs" | "parallel");
         let consumer = supplier.then_some(simple.raw.as_str());
         if let Some(form) = judge_fed(&fed, interpreter, consumer, depth, writes) {
             return Some(form);
         }
-    } else if !inert(&words) {
+    } else if unknown {
         let form = std::iter::once(&fed)
             .chain(processes.iter().map(|(_, output)| output))
             .find_map(|text| judge_unknown(text, depth, writes));
@@ -646,6 +801,341 @@ fn judge_simple(
     carried_commands(&words)
         .iter()
         .find_map(|body| executors(body, depth + 1, &fed, writes))
+}
+
+/// What the word `piece` hands a program as an argument or a value:
+/// `output`, a command substitution's output, for a word that is one; what
+/// an open word may hold ([`open_word`]); else nothing the line composes.
+fn held_by(piece: &Spelt, output: Option<&Stdin>, line: &str) -> Stdin {
+    match piece {
+        Spelt::Output(_) => output.cloned().unwrap_or(Stdin::Unsettled),
+        Spelt::Open(raw) => open_word(raw, line),
+        Spelt::Plain(_) | Spelt::Process(_) | Spelt::Sink(_) => Stdin::Unseen,
+    }
+}
+
+/// A variable whose value a program uses in a way the guard judges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Variable {
+    /// A command a program runs (`GIT_SSH_COMMAND`, `PROMPT_COMMAND`): its
+    /// value is judged as an executor reads it ([`judge_fed`]).
+    Command,
+    /// Where a shell finds its startup files (`HOME`, `ZDOTDIR`,
+    /// `BASH_ENV`): text the line spells takes the closed form, other
+    /// programs' output is the named residual ([`judge_unknown`]).
+    Startup,
+}
+
+/// How a program uses the variable `name`, where the guard judges it.
+fn variable_kind(name: &str) -> Option<Variable> {
+    if COMMAND_VARIABLES.contains(&name) || name == "PROMPT_COMMAND" {
+        Some(Variable::Command)
+    } else if STARTUP_VARS.contains(&name) {
+        Some(Variable::Startup)
+    } else {
+        None
+    }
+}
+
+/// Whether `line` may export a variable it assigns: `export`, `declare`,
+/// `typeset` or `local` with `-x`, or `set -a` (`allexport`).
+fn line_exports(line: &str) -> bool {
+    let set_a = line.match_indices("set -").any(|(at, found)| {
+        line[at + found.len()..]
+            .chars()
+            .take_while(char::is_ascii_alphabetic)
+            .any(|c| c == 'a')
+    });
+    set_a
+        || ["export", "allexport"]
+            .iter()
+            .any(|word| line.contains(word))
+        || line
+            .split(|c: char| shell_blank(c) || c == ';')
+            .any(|word| {
+                word.starts_with('-')
+                    && !word.starts_with("--")
+                    && word.contains('x')
+                    && word[1..].chars().all(|c| c.is_ascii_alphabetic())
+            })
+}
+
+/// What an input redirection hands its command, where `input` is what the
+/// command reads otherwise; `Err` with the form when a process
+/// substitution's body executes unsettled text itself.
+fn source_text(
+    source: &Source,
+    input: &Stdin,
+    depth: usize,
+    writes: bool,
+) -> Result<Stdin, &'static str> {
+    Ok(match source {
+        Source::Text(text) => Stdin::Text(text.clone()),
+        Source::Path(path) if path == "/dev/null" => Stdin::Unseen,
+        Source::Path(_) => file(writes),
+        Source::Process(body) => {
+            if let Some(form) = executors(body, depth + 1, input, writes) {
+                return Err(form);
+            }
+            body_output(body, input, writes)
+        }
+        Source::Spelled => Stdin::Unsettled,
+        Source::Open => Stdin::Output,
+    })
+}
+
+/// The judgment of a command with no program, such as `exec` given only
+/// redirections, which set descriptors for the rest of the line: what an
+/// input redirection hands over is judged for whatever reads it later
+/// ([`judge_unknown`]), and an output process substitution reads the
+/// rest of the line's output, unsettled when the line spells text
+/// anywhere.
+fn descriptors(
+    line: &str,
+    simple: &Simple,
+    input: &Stdin,
+    depth: usize,
+    writes: bool,
+) -> Option<&'static str> {
+    simple.redirects.iter().find_map(|redirect| {
+        if redirect.input {
+            match source_text(&redirect.source, input, depth, writes) {
+                Ok(text) => judge_unknown(&text, depth, writes),
+                Err(form) => Some(form),
+            }
+        } else if let Source::Process(body) = &redirect.source {
+            let read = if line_spells(line) {
+                Stdin::Unsettled
+            } else {
+                Stdin::Output
+            };
+            executors(body, depth + 1, &read, writes)
+        } else {
+            None
+        }
+    })
+}
+
+/// What the shell word `raw`, which it fills in, hands a program: text the
+/// line spells and does not settle when a substitution in it writes such
+/// text or it is a `$'...'` quote with an escape ([`word_spells`]), or
+/// when it expands a name the line binds to such text ([`bound_text`]);
+/// other programs' output for any other substitution; else nothing the
+/// line composes.
+fn open_word(raw: &str, line: &str) -> Stdin {
+    let channels = ["$(", "`", "<(", ">(", "$'"];
+    let mut held = if channels.iter().any(|channel| raw.contains(channel)) {
+        if word_spells(raw) {
+            Stdin::Unsettled
+        } else {
+            Stdin::Output
+        }
+    } else {
+        Stdin::Unseen
+    };
+    let bound = bindings(line);
+    let loose: Vec<String> = expanded_names(raw)
+        .into_iter()
+        .filter(|name| loosely_bound(name, &bound))
+        .collect();
+    if loose.is_empty() {
+        return held;
+    }
+    if matches!(held, Stdin::Unseen) {
+        if let Some(text) = filled(raw, line) {
+            return Stdin::Text(text);
+        }
+    }
+    for name in loose {
+        held = worst(held, bound_text(&name, line));
+    }
+    held
+}
+
+/// Every word `raw` may be as the program receives it, one per line,
+/// where every name it expands is bound on the line only to plain literal
+/// values ([`plain_values`]) and each fill stays one word: the text is then
+/// settled, each word judged as a command line of its own.
+fn filled(raw: &str, line: &str) -> Option<String> {
+    // Every word the values may give, at most this many.
+    const MOST: usize = 16;
+    let mut words = vec![String::new()];
+    let mut rest = raw;
+    while let Some(at) = rest.find('$') {
+        for word in &mut words {
+            word.push_str(&rest[..at]);
+        }
+        let after = &rest[at + 1..];
+        let (braced, body) = match after.strip_prefix('{') {
+            Some(body) => (true, body),
+            None => (false, after),
+        };
+        let name: String = body
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            return None;
+        }
+        let tail = &body[name.len()..];
+        rest = if braced {
+            tail.strip_prefix('}')?
+        } else {
+            tail
+        };
+        let values = plain_values(&name, line)?;
+        if words.len() * values.len() > MOST {
+            return None;
+        }
+        words = words
+            .iter()
+            .flat_map(|word| values.iter().map(move |value| format!("{word}{value}")))
+            .collect();
+    }
+    let mut texts = Vec::new();
+    for mut word in words {
+        word.push_str(rest);
+        if word.contains(['`', '\\']) {
+            return None;
+        }
+        match command_argv(&word).as_slice() {
+            [one] => texts.push(one.clone()),
+            _ => return None,
+        }
+    }
+    // Each on its own line, so each is judged as a command line alone.
+    Some(texts.join("\n"))
+}
+
+/// Every value the line binds `name` to, where every assignment to it is
+/// in a command of assignments only, each plain literal text with no
+/// quote, backslash, `$` or backquote, and the line names `name` nowhere
+/// else but in such an assignment, `$name` or `${name}` (so no loop,
+/// `read`, `printf -v`, `declare`, `export`, default expansion or
+/// assignment on a command binds it).
+fn plain_values(name: &str, line: &str) -> Option<Vec<String>> {
+    if names_otherwise(name, line) {
+        return None;
+    }
+    let found = compound(line)?;
+    let prefix = format!("{name}=");
+    let appended = format!("{name}+=");
+    let mut values: Vec<String> = Vec::new();
+    for simple in &found.commands {
+        let mut words: Vec<String> = simple
+            .words
+            .iter()
+            .map(|word| match word {
+                Spelt::Plain(text) | Spelt::Open(text) => text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+        strip_reserved_words(&mut words);
+        if !words
+            .iter()
+            .any(|word| word.starts_with(&prefix) || word.starts_with(&appended))
+        {
+            continue;
+        }
+        let offset = simple.words.len() - words.len();
+        for (at, word) in words.iter().enumerate() {
+            let assignment = word.split_once('=').is_some_and(|(left, _)| {
+                !left.is_empty() && left.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+            if !assignment || !matches!(simple.words[offset + at], Spelt::Plain(_)) {
+                return None;
+            }
+            let Some(assigned) = word.strip_prefix(&prefix) else {
+                continue;
+            };
+            if assigned.contains(['\'', '"', '\\', '$', '`']) {
+                return None;
+            }
+            if !values.iter().any(|value| value == assigned) {
+                values.push(assigned.to_string());
+            }
+        }
+    }
+    (!values.is_empty()).then_some(values)
+}
+
+/// Whether `line` names `name` other than as `name=`, `$name` or
+/// `${name}`.
+fn names_otherwise(name: &str, line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut at = 0;
+    while at < bytes.len() {
+        if !ident(bytes[at]) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && ident(bytes[at]) {
+            at += 1;
+        }
+        if &line[start..at] != name {
+            continue;
+        }
+        let before = start.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(at).copied();
+        let plain_ref = before == Some(b'$');
+        let braced =
+            before == Some(b'{') && start >= 2 && bytes[start - 2] == b'$' && after == Some(b'}');
+        let assigned = after == Some(b'=') && !matches!(before, Some(b) if ident(b));
+        if !(plain_ref || braced || assigned) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line binds `name` to a value the composer does not
+/// resolve exactly.
+fn loosely_bound(name: &str, bound: &[(String, Composed)]) -> bool {
+    bound.iter().any(|(bound, value)| {
+        bound == name && !matches!(value, Composed::Resolved(value) if value.exact().is_some())
+    })
+}
+
+/// What the line binds `name` to, where the composer does not resolve it:
+/// text it spells and does not settle when an assignment's value is
+/// literal text or spells such text ([`word_spells`]), or when no
+/// assignment binds it (a `read`, a loop or `printf -v`) on a line that
+/// spells text anywhere; else other programs' output.
+fn bound_text(name: &str, line: &str) -> Stdin {
+    let Some(found) = compound(line) else {
+        return Stdin::Unsettled;
+    };
+    let prefix = format!("{name}=");
+    let appended = format!("{name}+=");
+    let values: Vec<(bool, &str)> = found
+        .commands
+        .iter()
+        .flat_map(|simple| &simple.words)
+        .filter_map(|word| {
+            let (plain, raw) = match word {
+                Spelt::Plain(text) => (true, text.as_str()),
+                Spelt::Open(raw) => (false, raw.as_str()),
+                _ => return None,
+            };
+            raw.strip_prefix(&prefix)
+                .or_else(|| raw.strip_prefix(&appended))
+                .map(|value| (plain, value))
+        })
+        .collect();
+    let spelled = if values.is_empty() {
+        line_spells(line)
+    } else {
+        values
+            .iter()
+            .any(|(plain, value)| (*plain && !value.is_empty()) || word_spells(value))
+    };
+    if spelled {
+        Stdin::Unsettled
+    } else {
+        Stdin::Output
+    }
 }
 
 /// What a plain file hands a command that reads it: nothing the line
@@ -699,11 +1189,9 @@ fn produced_program(word: &str, line: &str) -> bool {
         return true;
     }
     let bound = bindings(line);
-    expanded_names(word).iter().any(|name| {
-        bound.iter().any(|(bound, value)| {
-            bound == name && !matches!(value, Composed::Resolved(value) if value.exact().is_some())
-        })
-    })
+    expanded_names(word)
+        .iter()
+        .any(|name| loosely_bound(name, &bound))
 }
 
 /// The names `word` expands with `$NAME` or `${NAME...}`.
@@ -822,6 +1310,18 @@ fn body_output(body: &str, input: &Stdin, writes: bool) -> Stdin {
     }
 }
 
+/// What `cat` writes from an input redirection's `source`, where `stdin`
+/// is what the line hands it otherwise.
+fn redirected(source: &Source, stdin: &Stdin, writes: bool) -> Stdin {
+    match source {
+        Source::Text(text) => Stdin::Text(text.clone()),
+        Source::Path(_) => file(writes),
+        Source::Process(body) => body_output(body, stdin, writes),
+        Source::Spelled => Stdin::Unsettled,
+        Source::Open => Stdin::Output,
+    }
+}
+
 /// What `commands[at]` writes to a pipe, where `stdin` is what it reads
 /// with no redirection. Settled text comes from a printer of plain literal
 /// text whose output is settled ([`printed`]), or `cat` given a literal
@@ -829,9 +1329,21 @@ fn body_output(body: &str, input: &Stdin, writes: bool) -> Stdin {
 /// line composes on a line that writes no file ([`file`]). A printer that
 /// is not settled, `eval` or a shell given a `-c` value writes text the
 /// line spells, unsettled. Any other program writes its own output
-/// ([`Stdin::Output`]).
+/// ([`Stdin::Output`]). An output process substitution set on the command
+/// that spells text makes the output unsettled, and `cat` reads a
+/// descriptor path (`/dev/fd/N`) as the redirection the command sets on it.
 fn output_of(commands: &[Simple], at: usize, stdin: &Stdin, writes: bool) -> Stdin {
     let simple = &commands[at];
+    // An output process substitution's body writes to the same output.
+    let sink_spells = simple.words.iter().any(|word| match word {
+        Spelt::Sink(body) => line_spells(body),
+        _ => false,
+    }) || simple.redirects.iter().any(|redirect| {
+        !redirect.input && matches!(&redirect.source, Source::Process(body) if line_spells(body))
+    });
+    if sink_spells {
+        return Stdin::Unsettled;
+    }
     let words: Option<Vec<String>> = simple
         .words
         .iter()
@@ -885,18 +1397,38 @@ fn output_of(commands: &[Simple], at: usize, stdin: &Stdin, writes: bool) -> Std
         return Stdin::Output;
     }
     let options = args.iter().any(|word| word.starts_with('-') && word != "-");
-    let read = if args.iter().any(|word| !word.starts_with('-')) {
-        file(writes)
+    let standard = || match input {
+        Some(source) => redirected(source, stdin, writes),
+        None if simple.piped && at > 0 => output_of(commands, at - 1, stdin, writes),
+        None => stdin.clone(),
+    };
+    let operands: Vec<&String> = args
+        .iter()
+        .filter(|word| !word.starts_with('-') || *word == "-")
+        .collect();
+    let read = if operands.is_empty() {
+        standard()
     } else {
-        match input {
-            Some(Source::Text(text)) => Stdin::Text(text.clone()),
-            Some(Source::Path(_)) => file(writes),
-            Some(Source::Process(body)) => body_output(body, stdin, writes),
-            Some(Source::Spelled) => Stdin::Unsettled,
-            Some(Source::Open) => Stdin::Output,
-            None if simple.piped && at > 0 => output_of(commands, at - 1, stdin, writes),
-            None => stdin.clone(),
-        }
+        operands.iter().fold(Stdin::Unseen, |read, operand| {
+            let one = match operand.as_str() {
+                "-" | "/dev/stdin" | "/dev/fd/0" => standard(),
+                // A descriptor the command sets reads what its redirection
+                // hands it; one set earlier is state the line does not
+                // show, or judged where `exec` set it.
+                path if path.starts_with("/dev/fd/") => {
+                    let fd = path["/dev/fd/".len()..].parse::<u32>().ok();
+                    simple
+                        .redirects
+                        .iter()
+                        .rfind(|redirect| redirect.input && Some(redirect.fd) == fd)
+                        .map_or(Stdin::Output, |redirect| {
+                            redirected(&redirect.source, stdin, writes)
+                        })
+                }
+                _ => file(writes),
+            };
+            worst(read, one)
+        })
     };
     // An option (`-v`, `-n`) changes the text it passes on.
     match read {
@@ -1036,6 +1568,190 @@ fn runs_a_file(command: &str) -> bool {
                     || fed_file
             })
         })
+}
+
+/// Whether `command`, on a line that writes a file ([`writes_a_file`]),
+/// hands a file it writes to a program the guard does not know to read
+/// only data ([`inert`]) as a file operand (TSK-1476), other than a program
+/// that copies a file or acts on it without reading it ([`COPIES`],
+/// [`FILE_ONLY`], `tee`, `dd`) and `git add` ([`git_adds`]): an operand,
+/// any word's value after its first `=` (an option's or an assignment's,
+/// such as `GIT_CONFIG_GLOBAL=file`) or an attached short option value
+/// (`-Ffile`) that names a written
+/// file by its last component ([`written_names`]) or as a pattern that may
+/// match it, or that holds a variable or a substitution. Where the line
+/// writes a file the guard cannot name, any operand of such a program
+/// counts.
+fn hands_a_written_file(command: &str) -> bool {
+    let written = written_names(command);
+    expand_commands_read(command)
+        .segments
+        .iter()
+        .any(|segment| {
+            let mut words = command_argv(segment);
+            strip_reserved_words(&mut words);
+            if inert(&words) {
+                return false;
+            }
+            let Some((program, args)) = strip_launchers(&words) else {
+                return false;
+            };
+            let name = program_name(program);
+            if FILE_ONLY.contains(&name)
+                || COPIES.contains(&name)
+                || matches!(name, "tee" | "dd")
+                || (name == "git" && git_adds(args))
+            {
+                return false;
+            }
+            // Every word but the program: an assignment before it, a
+            // launcher's words and its arguments.
+            let before = &words[..words.len() - args.len() - 1];
+            before.iter().chain(args).any(|arg| {
+                let value = arg.split_once('=').map_or(arg.as_str(), |(_, value)| value);
+                if value.contains(['$', '`']) {
+                    return true;
+                }
+                let Some(written) = &written else {
+                    return !arg.starts_with('-');
+                };
+                if arg.starts_with('-') && value == arg {
+                    // An attached short option value (`-Ffile`).
+                    return written
+                        .iter()
+                        .any(|name| arg.len() > 2 && arg.ends_with(name.as_str()));
+                }
+                let last = basename(value);
+                written
+                    .iter()
+                    .any(|name| *name == last || glob_matches(&last, name))
+            })
+        })
+}
+
+/// Whether the shell pattern `pattern` (`*`, `?` and a bracket read as
+/// any one character) may match `name`.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    if !pattern.contains(['*', '?', '[']) {
+        return false;
+    }
+    let mut simple = String::new();
+    let mut in_bracket = false;
+    for c in pattern.chars() {
+        match (in_bracket, c) {
+            (false, '[') => {
+                in_bracket = true;
+                simple.push('?');
+            }
+            (true, ']') => in_bracket = false,
+            (true, _) => {}
+            (false, c) => simple.push(c),
+        }
+    }
+    let pattern: Vec<char> = simple.chars().collect();
+    let name: Vec<char> = name.chars().collect();
+    // match[i][j]: pattern[..i] matches name[..j].
+    let mut row = vec![false; name.len() + 1];
+    row[0] = true;
+    for &p in &pattern {
+        let mut next = vec![false; name.len() + 1];
+        if p == '*' {
+            let mut seen = false;
+            for j in 0..=name.len() {
+                seen = seen || row[j];
+                next[j] = seen;
+            }
+        } else {
+            for j in 1..=name.len() {
+                next[j] = row[j - 1] && (p == '?' || p == name[j - 1]);
+            }
+        }
+        row = next;
+    }
+    row[name.len()]
+}
+
+/// Programs that move or copy a file's content without reading it as
+/// anything ([`written_names`] follows the copy).
+const COPIES: &[&str] = &["cp", "mv", "ln", "link", "install", "rsync", "ditto"];
+
+/// Programs that act on a file without reading its content.
+const FILE_ONLY: &[&str] = &[
+    "chmod", "chown", "chgrp", "chflags", "touch", "rm", "rmdir", "unlink", "mkdir", "truncate",
+];
+
+/// Whether `git` with `args` is `git add` with no option that sets
+/// configuration (`-c`, `--config-env`, `--exec-path`): it stores the
+/// content of the files it is given as data.
+fn git_adds(args: &[String]) -> bool {
+    let configures = args.iter().any(|arg| {
+        arg.starts_with("-c") || arg.starts_with("--config-env") || arg.starts_with("--exec-path")
+    });
+    !configures
+        && args
+            .iter()
+            .find(|arg| !arg.starts_with('-'))
+            .is_some_and(|arg| arg == "add")
+}
+
+/// The last component of every file `command` writes: an output
+/// redirection's target other than [`NOT_FILES`], a `tee` operand, a `dd`
+/// `of=` value, and every operand of a copy ([`COPIES`]) one of whose
+/// operands is already written. `None` when the line writes a target the
+/// guard cannot read, or `sed` may write a file its script names.
+fn written_names(command: &str) -> Option<Vec<String>> {
+    let read = expand_commands_read(command);
+    let mut names: Vec<String> = Vec::new();
+    let mut copies: Vec<Vec<String>> = Vec::new();
+    for text in std::iter::once(command.to_string()).chain(read.segments.iter().cloned()) {
+        let redirects = redirect_writes(&text);
+        if !redirects.unread.is_empty() {
+            return None;
+        }
+        names.extend(
+            redirects
+                .targets
+                .iter()
+                .filter(|target| !NOT_FILES.contains(&target.as_str()))
+                .map(|target| basename(target)),
+        );
+    }
+    for segment in &read.segments {
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let Some((program, args)) = strip_launchers(&words) else {
+            continue;
+        };
+        let operands = || args.iter().filter(|arg| !arg.starts_with('-'));
+        match program_name(program) {
+            "tee" => names.extend(operands().map(|arg| basename(arg))),
+            "dd" => names.extend(
+                args.iter()
+                    .filter_map(|arg| arg.strip_prefix("of="))
+                    .map(basename),
+            ),
+            "sed" if writes_content(segment) => return None,
+            name if COPIES.contains(&name) => {
+                copies.push(operands().map(|arg| basename(arg)).collect());
+            }
+            _ => {}
+        }
+    }
+    loop {
+        let before = names.len();
+        for operands in &copies {
+            if operands.iter().any(|operand| names.contains(operand)) {
+                for operand in operands {
+                    if !names.contains(operand) {
+                        names.push(operand.clone());
+                    }
+                }
+            }
+        }
+        if names.len() == before {
+            return Some(names);
+        }
+    }
 }
 
 /// The one judgment of a produced text: [`FORM`] when it names the binary

@@ -590,7 +590,7 @@ pub(crate) fn literal_input_script(line: &str) -> Option<String> {
                 target: Some(word), ..
             } if !matches!(token, Tok::Word(_)) || !stdin_option(args) => {
                 word.parts.iter().find_map(|part| match part {
-                    Part::ProcSubst(body) => {
+                    Part::ProcSubst(body, _) => {
                         run.approx.set(false);
                         let value = run.capture_stdout(body).ok().and_then(|v| v.exact());
                         (!run.approx.get()).then_some(value).flatten()
@@ -1210,7 +1210,7 @@ fn substitution_bodies(word: &Word, depth: usize) -> Vec<String> {
     let mut bodies = Vec::new();
     for part in &word.parts {
         match part {
-            Part::Subst { body, .. } | Part::ProcSubst(body) => bodies.push(body.clone()),
+            Part::Subst { body, .. } | Part::ProcSubst(body, _) => bodies.push(body.clone()),
             Part::Param {
                 body, braced: true, ..
             } => {
@@ -1901,7 +1901,7 @@ fn simple(
                         target: Some(word), ..
                     } if !matches!(token, Tok::Word(_)) || !stdin_option(args) => {
                         word.parts.iter().find_map(|part| match part {
-                            Part::ProcSubst(body) => {
+                            Part::ProcSubst(body, _) => {
                                 run.approx.set(false);
                                 let captured = run
                                     .capture_stdout(body)

@@ -436,11 +436,13 @@ pub(crate) fn install_violation(
                  through a pipe, a here-string, a here-document it expands, a process \
                  substitution, `eval`, a `-c` or `-e` value it expands, a command word it \
                  fills in or a supplier such as `xargs` running a command, or hands text it \
-                 spells to a program the guard does not know to read only data, and that \
+                 spells to a program the guard does not know to read only data, by its \
+                 input, a file operand, an argument or an output stream, and that \
                  text is not one `printf`, `echo` or `print` of plain literal text, a literal \
                  here-string or here-document, or a plain file on a line that writes no \
                  file; or the line holds more than one command and writes a file and also \
-                 runs one; so the guard cannot \
+                 runs one or names it to a program the guard does not know; so the guard \
+                 cannot \
                  tell whether it runs the binary with an install verb; write the commands \
                  literally, or put them in a file the line does not write and run that \
                  file on a line of its own)"

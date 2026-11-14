@@ -319,8 +319,11 @@ pub(crate) enum Spelt {
     Plain(String),
     /// A word that is one command substitution, with its body.
     Output(String),
-    /// A process substitution, with its body.
+    /// An input process substitution (`<(...)`), with its body.
     Process(String),
+    /// An output process substitution (`>(...)`), with its body, which
+    /// reads what the command writes there.
+    Sink(String),
     /// Any other word the shell fills in, as written.
     Open(String),
 }
@@ -432,7 +435,8 @@ pub(crate) fn simple_commands(line: &str) -> Option<Vec<Simple>> {
 fn spelt(word: &Word) -> Spelt {
     match word.parts.as_slice() {
         [Part::Subst { body, .. }] => return Spelt::Output(body.clone()),
-        [Part::ProcSubst(body)] => return Spelt::Process(body.clone()),
+        [Part::ProcSubst(body, false)] => return Spelt::Process(body.clone()),
+        [Part::ProcSubst(body, true)] => return Spelt::Sink(body.clone()),
         _ => {}
     }
     let mut text = String::new();
@@ -478,7 +482,7 @@ fn redirect(
         }
     } else {
         match target.map(spelt) {
-            Some(Spelt::Process(body)) => Source::Process(body),
+            Some(Spelt::Process(body) | Spelt::Sink(body)) => Source::Process(body),
             Some(Spelt::Plain(text)) if op == "<<<" => Source::Text(text),
             Some(_) if op == "<<<" => Source::Spelled,
             Some(Spelt::Plain(text))
@@ -526,13 +530,19 @@ pub(crate) struct Feed {
 pub(crate) struct Compound {
     /// Each pipe, here-string, here-document and process substitution.
     pub(crate) feeds: Vec<Feed>,
+    /// Each output process substitution written after a compound command:
+    /// what the command writes, and the body (the one reader) that reads
+    /// it.
+    pub(crate) sinks: Vec<Feed>,
     /// Every simple command, at every depth of substitution.
     pub(crate) commands: Vec<Simple>,
 }
 
 /// `line` read token by token, for grammar [`simple_commands`] does not
 /// take apart: each pipe, here-string, here-document and process
-/// substitution, with every simple command that may read it, through
+/// substitution on any descriptor, with every simple command that may read
+/// it, and each output process substitution set on a compound command
+/// with what that command writes ([`Compound::sinks`]), through
 /// groups, subshells, loops, conditionals and `case` branches and inside
 /// every substitution (TSK-1476). A pipe's readers are every simple
 /// command of the element after it; its text is that of the element before
@@ -768,21 +778,18 @@ fn compound_into(line: &str, depth: usize, out: &mut Compound) -> Option<()> {
             .filter(move |unit| unit.start >= start && unit.end <= end)
     };
     let reads_pipe = |unit: &Unit| !unit.simple.redirects.iter().any(|r| r.input && r.fd == 0);
-    for (at, tok) in tokens.iter().enumerate() {
-        if bound[at] || !matches!(tok, Tok::Op("|" | "|&")) {
-            continue;
-        }
-        let before = element(at, true);
-        let after = element(at, false);
+    // What the element `before` writes: one simple command's output, text
+    // it spells when a command in it spells or a compound command in it
+    // reads a here-string, a here-document or a process substitution, else
+    // its programs' output.
+    let text_of = |before: (usize, usize)| -> Fed {
         let producers: Vec<&Unit> = within(before).collect();
-        // A compound command in the element that reads a here-string, a
-        // here-document or a process substitution.
         let attached_spells = attached.iter().any(|(index, redirect)| {
             (before.0..before.1).contains(index)
                 && redirect.input
                 && fed_by(&redirect.source).is_some()
         });
-        let fed = match producers.as_slice() {
+        match producers.as_slice() {
             [unit] if unit.start == before.0 && unit.end == before.1 => {
                 Fed::Command(unit.simple.clone())
             }
@@ -793,7 +800,14 @@ fn compound_into(line: &str, depth: usize, out: &mut Compound) -> Option<()> {
                 Fed::Spelled
             }
             _ => Fed::Output,
-        };
+        }
+    };
+    for (at, tok) in tokens.iter().enumerate() {
+        if bound[at] || !matches!(tok, Tok::Op("|" | "|&")) {
+            continue;
+        }
+        let fed = text_of(element(at, true));
+        let after = element(at, false);
         let readers = within(after)
             .filter(|unit| reads_pipe(unit))
             .map(|unit| unit.simple.raw.clone())
@@ -820,13 +834,24 @@ fn compound_into(line: &str, depth: usize, out: &mut Compound) -> Option<()> {
         out.commands.push(simple.clone());
     }
     for (at, redirect) in &attached {
-        if !(redirect.input && redirect.fd == 0) {
+        let element = element(*at, true);
+        if !redirect.input {
+            // An output process substitution reads what the compound
+            // command writes.
+            if let Source::Process(body) = &redirect.source {
+                out.sinks.push(Feed {
+                    fed: text_of(element),
+                    readers: vec![body.clone()],
+                });
+            }
             continue;
         }
+        // Every descriptor, not only standard input: a command inside may
+        // read another one by its path or a copy.
         let Some(fed) = fed_by(&redirect.source) else {
             continue;
         };
-        let readers = within(element(*at, true))
+        let readers = within(element)
             .map(|unit| unit.simple.raw.clone())
             .collect();
         out.feeds.push(Feed { fed, readers });
@@ -870,10 +895,46 @@ fn spells_simple(simple: &Simple, depth: usize) -> bool {
                 || matches!(&redirect.source, Source::Process(body) if spells(body, depth + 1))
         })
         || simple.words.iter().any(|word| match word {
-            Spelt::Output(body) | Spelt::Process(body) => spells(body, depth + 1),
-            Spelt::Open(raw) => raw.contains("$(") || raw.contains('`') || raw.contains("<("),
+            // An output process substitution's body writes to the line's
+            // output too.
+            Spelt::Output(body) | Spelt::Process(body) | Spelt::Sink(body) => {
+                spells(body, depth + 1)
+            }
+            Spelt::Open(raw) => {
+                raw.contains("$(") || raw.contains('`') || raw.contains("<(") || raw.contains(">(")
+            }
             Spelt::Plain(_) => false,
         })
+}
+
+/// Whether the shell word `raw` holds text the line spells that this
+/// reading does not settle: a substitution whose command writes text it
+/// spells ([`spells`]), or a `$'...'` quote with an escape. `true` when
+/// `raw` is not one word this reading follows.
+pub(crate) fn word_spells(raw: &str) -> bool {
+    let Ok((tokens, _)) = lex(raw) else {
+        return true;
+    };
+    let [Tok::Word(word)] = tokens.as_slice() else {
+        return true;
+    };
+    word.parts.iter().any(|part| match part {
+        Part::Subst { body, .. } | Part::ProcSubst(body, _) => spells(body, 1),
+        Part::Ansi(body) => body.contains('\\'),
+        // A substitution or quote nested in `${...}` or arithmetic, or a
+        // construct the shells read differently.
+        Part::Param { body, .. } | Part::Arith { body, .. } => {
+            body.contains("$(") || body.contains('`') || body.contains("$'")
+        }
+        Part::Unmodelled(_) => true,
+        Part::Lit { .. } => false,
+    })
+}
+
+/// Whether the command line `text` writes text it spells anywhere
+/// ([`spells`]).
+pub(crate) fn line_spells(text: &str) -> bool {
+    spells(text, 0)
 }
 
 /// Whether the command line `text` writes text it spells
@@ -899,7 +960,7 @@ fn spells(text: &str, depth: usize) -> bool {
 /// Push the body of each substitution in `word` to `bodies`.
 fn substitution_bodies(word: &Word, bodies: &mut Vec<String>) {
     for part in &word.parts {
-        if let Part::Subst { body, .. } | Part::ProcSubst(body) = part {
+        if let Part::Subst { body, .. } | Part::ProcSubst(body, _) = part {
             bodies.push(body.clone());
         }
     }
@@ -939,7 +1000,7 @@ fn heredoc_readers(line: &str, depth: usize, found: &mut Vec<String>) -> Option<
     let mut nested = Vec::new();
     let mut substitutions = |word: &Word| {
         for part in &word.parts {
-            if let Part::Subst { body, .. } | Part::ProcSubst(body) = part {
+            if let Part::Subst { body, .. } | Part::ProcSubst(body, _) = part {
                 nested.push(body.clone());
             }
         }
@@ -1143,8 +1204,10 @@ enum Part {
     },
     /// Command or process substitution, with its body.
     Subst { body: String, quoted: bool },
-    /// Process substitution: a path the shell makes up.
-    ProcSubst(String),
+    /// Process substitution: a path the shell makes up, with its body and
+    /// whether it is an output one (`>(...)`), whose body reads what the
+    /// command writes there.
+    ProcSubst(String, bool),
     /// `$((...))` or `$[...]`, with its text.
     Arith { body: String, quoted: bool },
     /// A construct read differently by the shells, never resolved.
@@ -1276,11 +1339,11 @@ impl Lexer {
                         self.toks.push(Tok::Op("("));
                     }
                 }
-                '<' | '>' | '=' if self.peek_at(1) == Some('(') => {
+                sign @ ('<' | '>' | '=') if self.peek_at(1) == Some('(') => {
                     self.at += 2;
                     let body = self.balanced(1)?;
                     let mut word = Word::default();
-                    word.parts.push(Part::ProcSubst(body));
+                    word.parts.push(Part::ProcSubst(body, sign == '>'));
                     self.toks.push(Tok::Word(word));
                 }
                 '<' | '>' => self.redirection()?,
@@ -1371,10 +1434,11 @@ impl Lexer {
             return Ok(());
         }
         if self.starts("<(") || self.starts(">(") {
+            let output = self.starts(">(");
             self.at += 2;
             let body = self.balanced(1)?;
             let mut word = Word::default();
-            word.parts.push(Part::ProcSubst(body));
+            word.parts.push(Part::ProcSubst(body, output));
             self.toks.push(Tok::Redir {
                 op,
                 target: Some(word),
@@ -3225,7 +3289,7 @@ impl Run<'_> {
     fn word_side_effects(&mut self, word: &Word) {
         for part in &word.parts {
             match part {
-                Part::Subst { body, .. } | Part::ProcSubst(body) => {
+                Part::Subst { body, .. } | Part::ProcSubst(body, _) => {
                     let state = self.state.clone();
                     self.nested(body, state, self.dialect, true);
                 }
@@ -3370,7 +3434,7 @@ impl Run<'_> {
                     online = true;
                     (value, *quoted)
                 }
-                Part::ProcSubst(_) => (Ok(Value::open()), false),
+                Part::ProcSubst(..) => (Ok(Value::open()), false),
                 Part::Arith { body, quoted } => {
                     let (value, on) = self.arith_value(body);
                     online |= on;

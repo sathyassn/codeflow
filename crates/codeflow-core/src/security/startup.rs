@@ -1383,7 +1383,7 @@ const PLACING: &[&str] = &[
 const COPIERS: &[&str] = &["cp", "ln", "install", "mv", "rsync", "scp", "ditto"];
 
 /// The startup variables, and the shells each one changes.
-const STARTUP_VARS: &[&str] = &[
+pub(crate) const STARTUP_VARS: &[&str] = &[
     "ZDOTDIR",
     "HOME",
     "BASH_ENV",
