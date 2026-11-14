@@ -25,6 +25,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.hard_reset_protected` | Level | `block` | off \| warn \| allow \| block | A hard reset on a protected branch. |  |
 | `git.merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A merge commit landing on a protected branch. | PR merge and `codeflow integrate` are the sanctioned paths; a human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.pr_merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A `gh pr merge` whose base branch is protected (git-guard only). |  |
+| `git.pr_review_approval` | Level | `block` | off \| warn \| allow \| block | A pull request review approval or dismissal an agent session makes (git-guard only). | Covers `gh pr review --approve`, and a `gh api` or `curl` request that approves or dismisses through a REST review endpoint or GraphQL, with `.` and `..` resolved, whatever token it carries; also a review or GraphQL request whose body the guard cannot read, a writing request to an address it cannot settle, and a `curl` command with `-K`, `--config`, `--variable` or `--expand-*`. Other clients, such as wget or Python, are not judged, and GitHub still accepts these calls from outside the guard (docs/github-apps.md). On when absent. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
 | `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). A write to Git's alternate object lists (`objects/info/alternates`, `objects/info/http-alternates`, in the common directory a linked worktree shares) refuses like a write to hooks, refs or config, since an alternate store adds objects Git reads as its own; reading them stays allowed. Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. Resolved builtin output, shell here-strings and sourced process substitutions are also read as code. When an interpreter takes code from an external producer the guard cannot read, or a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
 | `git.line_sync_interval` | uint | `0` | days; 0 disables reminders | Orient flags integration lines past this interval since their last sync or evidenced creation. | Unknown creation without a sync and lines with no own commits are never flagged. The shipped policy file does not list it, so an older binary never meets the key. |
@@ -1246,34 +1247,217 @@ and reports B and C as not applied.
 
 ### Mode A setup (operator)
 
-Steps 1 to 5 can be done at any time and change nothing until the policy
-workflow uses them. Step 6 runs after TSK-336 is on the default branch, in
-one session. Step 7 has no ordering dependency.
+A repository administrator sets up Mode A with one command and two clicks
+per App (TSK-1348). The command can run at any time: what it creates changes
+nothing until the policy workflow uses it. Step 7 runs after TSK-336 is on
+the default branch, in one session.
 
-1. Settings, Developer settings, GitHub Apps, New GitHub App: a name such as
-   `codeflow-authority-<repo>`, no webhook, repository permission Checks
-   read and write only, "Only on this account".
-2. Install the App on this repository only; note the App id.
-3. Generate one private key on the App and download it.
-4. Repository Settings, Environments, New environment `codeflow-authority`;
-   deployment branches and tags: selected branches and tags, the default
-   branch only.
-5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
-   file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
-6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
-   as the administrator; run `codeflow doctor --check remote-perimeter`
-   and stop only when it is green with no recovery window open. Retire a
-   foreign ruleset only when that check names it for requiring a name no
-   workflow on the default branch produces.
-7. Create the agent principal: a non-administrator App installation or bot
-   account with Contents and Pull requests write and Actions read, and no
-   Workflows, Commit statuses, Checks, Administration, Environments or
-   secrets access. Install it, point every seat's `gh` and git at it, and
-   remove the operator's login from the seats' credential stores.
+1. As the administrator, under your own `gh auth login` (never an agent's
+   token), run `codeflow remote setup-apps` in the repository. Before it
+   writes anything it refuses a GitHub App token and an account that is not
+   the repository's administrator. Its first write, the environment, needs
+   Administration write, so a token without it is refused there, before any
+   App exists.
+2. The command creates the environment `codeflow-authority` with deployment
+   from selected branches, and one branch policy, the default branch. An
+   existing environment keeps its reviewers, self-review rule and wait
+   timer. The command refuses to go on while the environment also admits
+   another branch.
+3. Click one, for the authority App: the command prints a local address.
+   Open it, and the page sends the App's manifest to GitHub: a personal
+   account's `https://github.com/settings/apps/new`, or an organization's
+   `https://github.com/organizations/<org>/settings/apps/new`. Check the
+   name (`codeflow-authority-<repo>` by default, `--authority-name` to
+   change it) and the permission, Checks write only, then click "Create
+   GitHub App". GitHub returns to the command, which converts the code,
+   checks that the App has the name, owner and permissions asked for, no
+   events, and no webhook other than the repository page (it asks GitHub as
+   the new App), and otherwise drops the key and names the App to delete. It
+   stores
+   its key as the environment secret `CODEFLOW_AUTHORITY_APP_KEY` and its id
+   as the environment variable `CODEFLOW_AUTHORITY_APP_ID`.
+4. Click two: open the printed `https://github.com/apps/<slug>/installations/new`,
+   choose "Only select repositories", pick this repository and click
+   "Install".
+5. Steps 3 and 4 again for the agent App (`codeflow-agent-<repo>`,
+   `--agent-name`): Contents and Pull requests write, and no
+   Administration, Workflows, Environments, Deployments, Commit statuses or
+   Checks permission. Its key goes to the administrator's operating system
+   credential store, never to a file, the repository or an environment
+   variable (below). `--no-agent` skips it.
+6. The PR App (`codeflow-pr-<repo>`, `--pr-name`): Pull requests write and
+   Contents read, no webhook, not public. CodeFlow keeps none of its
+   secrets: GitHub creates a key with the App, and the run drops it. Its
+   slug, id and client id go to the repository variable `CODEFLOW_PR_APP`.
+   Click two installs it; a third click turns on its device flow.
+   `--no-pr-app` skips it.
+7. Run `codeflow remote protect --check-app <authority App id> --lines
+   "integration/**"` as the administrator; run `codeflow doctor --check
+   remote-perimeter` and stop only when it is green with no recovery window
+   open. Retire a foreign ruleset only when that check names it for
+   requiring a name no workflow on the default branch produces.
+8. Point the agent sessions at the Apps (below), and remove the
+   administrator's login from the sessions' credential stores. With the PR
+   App, pull requests show the developer as author: each developer runs the
+   `codeflow remote pr-login` line the run printed once, as the
+   [GitHub Apps guide](github-apps.md#pull-requests-as-you) describes.
 
-On GitHub Free, environment secrets exist only in public repositories; a
-private repository on Free uses Mode B, which does not close forgery by a
-later producer.
+Every write is printed with what undoes it: a `gh` command for the
+environment, its branch policy, the secret and the variable, a `security`
+or `secret-tool` command for the stored key, and, for each App, its
+settings page, where "Delete GitHub App" is a web step. A second run creates
+nothing for an App it finds, writes nothing to an environment that is already
+restricted, and reports each App by what it could check. The agent App is
+read as itself: the stored key signs a token for `GET /app`, and the answer
+must show the entry's id and slug, the repository's owner, the manifest's
+permissions and no events, or the run stops. The authority App's key is not
+local, so it is read through `gh api apps/<slug>`. When GitHub shows the App,
+it must have the id in the variable, the manifest's permissions and no
+events, and the run prints `authority App: already set up`. A private App
+answers 404 to a normal login, as a deleted App does, and this run cannot
+tell them apart. On that 404, with a valid id variable and the key secret
+present (checked by name only), the run prints `authority App: present but
+not verified`, names what it checked and the pages to check by hand, and
+goes on to the agent App. Any other failure stops the run. When only part is
+in place, the command stops with a non-zero exit and lists what is present
+and what is missing. When `codeflow` cannot listen on a local port, or
+the browser cannot open the local page, `--paste` writes the page to a file
+and reads back the address GitHub opens, which holds the code. The
+[GitHub Apps guide](github-apps.md) walks through both runs.
+
+Two steps stay in the browser, because GitHub has no API for them:
+registering an App from a manifest, and installing it. Whether an
+environment's administrator bypass can be turned off by API is being
+checked on a scratch repository (TSK-1348 Findings); until then, a
+repository that wants it off does it in Settings, Environments,
+`codeflow-authority`, "Allow administrators to bypass configured protection
+rules".
+
+**How a session uses the agent App.** `codeflow remote agent-token` reads
+the agent App's key from the credential store, signs the App's token with
+`openssl` reading the key from standard input, and asks GitHub for an
+installation token scoped to this repository, valid for one hour. It prints
+only that token. The key never reaches a file or a process argument list,
+and the command's errors are cleaned of the key. The helpers that see the
+key or a token run from fixed paths, `/usr/bin/openssl`, `/usr/bin/curl`
+and `/usr/bin/secret-tool`, never through `PATH`, and with an empty
+environment, so no `OPENSSL_CONF`, preloaded library or `.curlrc` applies to
+them (curl also gets `-q` first). curl keeps only the proxy variables
+(`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` and their lower-case
+forms), so a network or sandbox that needs a proxy to reach `api.github.com`
+works. Its certificate trust does not change: no variable such as
+`SSL_CERT_FILE` reaches it, so the proxy carries a TLS tunnel to GitHub and
+never sees the token. A proxy that must read that traffic with its own
+certificate authority is not supported. The agent App is
+optional: nothing in `codeflow doctor`, the hooks, the policy or `codeflow ci`
+requires it or its key, and the [GitHub Apps guide](github-apps.md) gives the
+levels a computer can sit at. The guide is where the setup is described;
+this section states how the tokens are handled.
+
+- `gh`: `TOKEN="$(codeflow remote pr-token)" && GH_TOKEN="$TOKEN" gh pr
+  create ...` opens the pull request with the developer's user access token
+  for the PR App, so the developer is its author. Without the PR App,
+  `codeflow remote agent-token` gives the installation token, which makes
+  `<slug>[bot]` the author. Keep the `&&`: a failed token must stop the
+  line, because an empty `GH_TOKEN` may leave `gh` on the stored login.
+- The PR token: `codeflow remote pr-login` runs GitHub's device flow once
+  per developer and computer, with no client secret, personal access token
+  or `gh` login. Before it stores anything it reads the grant's
+  installations and their repositories, every page, and refuses unless each
+  installation is the recorded PR App with exactly Pull requests write,
+  Contents read and Metadata read, and this repository, matched by its id,
+  is among them. The grant (an 8 hour access token and a six month refresh
+  token) is kept in the credential store under the service
+  `codeflow-pr-user`, account `owner/name`. `pr-token` checks a saved token
+  with `GET /user`, renews it near its end under a file lock, and stores the
+  new grant before it prints the token, because GitHub stops accepting a
+  used refresh token. Only an OAuth refusal or a passed expiry names
+  `pr-login` again; a network failure or a GitHub error names its cause and
+  keeps the grant. The form, which holds the device code or the refresh
+  token, goes to curl on standard input, never in its arguments. Neither
+  token appears in any output but the one `pr-token` prints. The PR token
+  has no Contents write, so it can neither push nor merge, and it is never a
+  git credential.
+- `git push`: name the command as the credential helper for this push only,
+  `git -c credential.helper= -c 'credential.helper=!codeflow remote
+  agent-token --git-credential' push`. It answers `get` for
+  `https://github.com` only, with the user `x-access-token` and the agent
+  App's installation token; any other host gets no answer.
+- Committer: `codeflow remote agent-token --committer name` and
+  `--committer email` print the two values below, one each, confirmed with
+  GitHub. They mint no token, and they print nothing on standard output when
+  they cannot confirm the identity. `setup-apps` prints the lines for each
+  harness's project settings and edits no settings file.
+- Another computer: `codeflow remote import-agent-key --key-file <path>
+  --client-id <id>` stores that computer's own key for the repository's App.
+  It needs no administrator role or `gh` login, refuses a file others can
+  read and an existing entry, and stores nothing until GitHub has answered as
+  the App with this repository's installation. It leaves the file for the
+  developer to delete, and says so.
+- The custody of the key and the grant rests on the session's sandbox: a
+  sandboxed session must not reach the credential store, and only `codeflow
+  remote agent-token` and `codeflow remote pr-token` run outside the
+  sandbox. On macOS the key is a login keychain item (service
+  `codeflow-agent-app`, account `owner/name`) and the PR grant another
+  (service `codeflow-pr-user`); on
+  Linux a Secret Service entry through `secret-tool`. Windows has no
+  supported store yet, so there the command refuses the agent App before
+  creating it and `--no-agent` sets up the authority App alone.
+
+**Attribution.** A commit keeps its human author under any token. A commit an
+agent session makes names the agent App as committer, `<slug>[bot]`, when the
+session sets `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` to the values
+`codeflow remote agent-token --committer` prints. The identity comes through
+the environment only: the setup changes no git identity, commit template or
+trailer setting. The agent App as committer is an identity that names the
+App, not a model vendor, and is not AI attribution under git.ai_attribution.
+Nothing about the commit rules relaxes: agent commits still pass conventional
+commits, the commit-msg hook and `git.ai_attribution` at block, and no policy,
+hook or check is special-cased for bot-committed commits. The committer field
+is a provenance record, not proof: git lets anyone set it, and proof of who
+pushed is the token. A pull request opened with the developer's user access
+token for the PR App is attributed to the developer: GitHub states that "API
+requests made by an app on behalf of a user will be attributed to that user",
+shown with the user's avatar and the app's badge; not yet observed for a pull
+request, until TSK-1348 AC-7 records it. GitHub records the agent App as
+`<slug>[bot]` on what it does through its installation token:
+
+- A pull request it opens: author `<slug>[bot]`.
+- A merge it makes: merged by `<slug>[bot]`.
+- A merge commit GitHub makes for that merge: author `<slug>[bot]`; accepted
+  by the operator on 2026-11-05; not yet observed, until TSK-1177's AC-3
+  fixture records it.
+- A push: the pusher is not yet observed (TSK-1348 AC-1, on the scratch
+  repository).
+- A commit made in an agent session and pushed: author the human, committer
+  `<slug>[bot]`; not yet observed, until TSK-1348 AC-7 records it.
+- A commit made without the two variables: the human author and committer.
+
+**Why a separate identity.** Rulesets, environments and Actions actor rules
+can tell agents from the human only when agents act under an identity of
+their own, such as this App. A personal access token, fine-grained or not,
+acts as the human. Reading ruleset bypass lists and Actions policies needs
+Administration write, so `codeflow doctor --check remote-perimeter` run
+under the agent App's token reports them as unknown, never as a pass.
+
+**Personal accounts and organizations.**
+
+- The App is created at `https://github.com/settings/apps/new` for a
+  personal account and at
+  `https://github.com/organizations/<org>/settings/apps/new` for an
+  organization, which needs a member allowed to create the organization's
+  Apps.
+- An organization may require an owner to approve an App's installation.
+  Whether it does is being checked (TSK-1348 Findings); where it does, the
+  "Install" click becomes a request the owner approves.
+- A personal repository has no `OrganizationAdmin` bypass actor.
+- An organization's own rulesets and Actions policies also apply to the
+  repository (`includes_parents`), and `remote protect` leaves them as they
+  are.
+- On GitHub Free, environment secrets exist only in public repositories,
+  so a private repository on Free uses Mode B, which does not close forgery
+  by a later producer: the setup's environment write fails there, and the
+  command says so.
 
 ### Recovery window
 

@@ -1,0 +1,16 @@
+{
+  "name": "",
+  "url": "",
+  "description": "Opens and edits this repository's agent pull requests as the developer who authorized it. Holds Pull requests write and Contents read only, so it cannot merge or push. Created by codeflow remote setup-apps.",
+  "hook_attributes": {
+    "url": "",
+    "active": false
+  },
+  "redirect_url": "",
+  "public": false,
+  "default_permissions": {
+    "contents": "read",
+    "pull_requests": "write"
+  },
+  "default_events": []
+}

@@ -510,8 +510,26 @@ the default branch's `codeflow-policy.yml` declares the trusted verdicts
 An older ruleset that requires `commit standards` or `secret scan` can stay,
 since the shipped workflows still produce both. `doctor` names any ruleset
 that requires a name no workflow on the default branch produces; retire
-that one on the host. The Mode A App and environment setup, the enablement order and the
-recovery window are in the policy reference's "Remote protection" section.
+that one on the host. The enablement order and the recovery window are in
+the policy reference's "Remote protection" section.
+
+Mode A's App and environment take one command and two clicks per App. A
+repository administrator runs `codeflow remote setup-apps` under their own
+`gh auth login`. It creates the authority App (Checks write only), the
+environment `codeflow-authority` restricted to the default branch with the
+App's key secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable
+`CODEFLOW_AUTHORITY_APP_ID`, and the agent App (Contents and Pull requests
+write only), whose key stays in the administrator's operating system
+credential store, and the PR App (Pull requests write and Contents read),
+whose secrets CodeFlow never keeps. The two clicks are "Create GitHub App" on
+GitHub and "Install" on the link the command prints. With the PR App, agent
+pull requests show the developer as author: each developer runs the printed
+`codeflow remote pr-login` line once, sessions open pull requests with
+`codeflow remote pr-token`, and pushes use the agent App's installation
+token. The setup, including the PR App's device flow click, is in
+`docs/github-apps.md`, the
+guide for an adopter; the policy reference's "Mode A setup" states how each
+token is handled.
 
 ## Optional external add-ons
 

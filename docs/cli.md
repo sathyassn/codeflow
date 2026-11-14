@@ -14,6 +14,8 @@ Every command in the `codeflow` binary does one of six jobs.
   that numbers them.
 - **Enforce** holds the git rules at each plane: the in-session guards, the
   git hooks, the CI check, the policy file and remote branch protection.
+  [Set up the GitHub Apps](github-apps.md) walks through the `codeflow remote`
+  commands for the authority and agent Apps.
 - **Verify** proves work before it lands: the test gate, record and document
   validation, local landing, health checks and the durable-work lifecycle.
 - **Remember** tells a session where things stand and why: the session
@@ -203,6 +205,29 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
 | | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B), a lower tier that does not close forgery by a later producer; only Mode A, the App authority, closes it. |
 | | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
+| `codeflow remote setup-apps` | | Create the GitHub Apps of `CodeFlow` for this repository: the authority App (Checks write only), with the environment `codeflow-authority` restricted to the default branch holding its key secret `CODEFLOW_AUTHORITY_APP_KEY` and id variable `CODEFLOW_AUTHORITY_APP_ID`; the optional agent App (Contents and Pull requests write only), whose key is kept in this computer's credential store; and the optional PR App (Pull requests write and Contents read only), whose key is dropped and whose ids go to the repository variable `CODEFLOW_PR_APP` |
+| | `--authority-name <NAME>` | The authority App's name (default `codeflow-authority-<repo>`); GitHub App names are unique across GitHub, at most 34 characters. |
+| | `--agent-name <NAME>` | The agent App's name (default `codeflow-agent-<repo>`). |
+| | `--no-agent` | Skip the agent App: no key is stored and no committer lines are printed; agents push with your own git credentials. |
+| | `--pr-name <NAME>` | The PR App's name (default `codeflow-pr-<repo>`). |
+| | `--no-pr-app` | Skip the PR App: agents open pull requests with the agent App's installation token where it exists, else with your own login. |
+| | `--paste` | Write each App's page to a file and read back the address GitHub opens, instead of serving the page on a local port. |
+| `codeflow remote agent-token` | | Print a GitHub installation token of this repository's agent App, valid for one hour, for `git push`, reads and `gh`. The App's key is read from this computer's credential store and never printed. Pull requests opened with it show the App's bot as author |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
+| | `--git-credential <OPERATION>` | Answer as a git credential helper: `get` for `https://github.com` prints the token as the password of `x-access-token`; another host or operation prints nothing. |
+| | `--committer <FIELD>` | Print the App's committer name or email instead of a token, confirmed with GitHub; nothing reaches standard output when it cannot be confirmed. No token is minted. One of `name`, `email`. |
+| `codeflow remote pr-login` | | Authorize the repository's PR App to open and edit pull requests for you, once per computer, through GitHub's device flow: open the printed address and enter the code. `codeflow remote setup-apps` prints this command with the App's ids. The grant is checked, then kept in this computer's credential store under its own service and renewed by `pr-token`. Uses no client secret, no personal access token and no `gh` login. The PR App needs "Enable Device Flow" turned on in its settings |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
+| | `--app <SLUG>` | The PR App's slug. Required. |
+| | `--app-id <ID>` | The PR App's id. Required. |
+| | `--client-id <ID>` | The PR App's Client ID. Required. |
+| | `--repository-id <ID>` | The repository's id, as `setup-apps` printed it. Required. |
+| `codeflow remote pr-token` | | Print your user access token for the repository's PR App, for `GH_TOKEN`: pull requests opened or edited with it show you as author, and it cannot merge or push. It is renewed first when near its end, and printed only after every installation it reaches is found to grant exactly Pull requests write, Contents read and Metadata read on the recorded repository. Only an authorization GitHub refuses or that has expired asks you to run `pr-login` again |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
+| `codeflow remote import-agent-key` | | Store this computer's own key for the repository's agent App, from a private key file generated on the App's settings page. Needs no administrator role and no `gh` login |
+| | `--key-file <PATH>` | The private key file; it must be readable only by you. Required. |
+| | `--client-id <ID>` | The App's Client ID, from its settings page. Required. |
+| | `--repo <OWNER/NAME>` | The repository, `owner/name` (default: the `origin` remote). |
 
 ### Verify
 

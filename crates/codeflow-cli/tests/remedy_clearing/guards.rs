@@ -311,6 +311,29 @@ fn clears_pr_merge_protected() {
     );
 }
 
+/// TSK-1348 AC-19: the review rule names the policy key a project turns off
+/// to let agents approve; once that policy lands, the approval passes.
+#[test]
+fn clears_pr_review_approval() {
+    let dir = with_origin();
+    let root = dir.path();
+    prove(
+        "PR_REVIEW_APPROVAL",
+        "git.pr_review_approval",
+        || guard(root, "git-guard", "gh pr review 1 --approve"),
+        |printed| {
+            assert!(printed.contains(".codeflow/policy.json"), "{printed}");
+            assert!(printed.contains("git.pr_review_approval"), "{printed}");
+            write(
+                root,
+                ".codeflow/policy.json",
+                r#"{"git": {"pr_review_approval": "off"}}"#,
+            );
+            land_policy(root);
+        },
+    );
+}
+
 #[test]
 fn clears_hook_integrity() {
     let dir = scaffolded("--standard");

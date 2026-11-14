@@ -277,6 +277,13 @@ pub struct GitPolicy {
     /// A `gh pr merge` whose base branch is protected (git-guard only). A
     /// human merges via the GitHub UI or their own terminal; agents do not.
     pub pr_merge_to_protected: PolicyLevel,
+    /// A pull request review approval or review dismissal an agent session
+    /// makes (git-guard only, TSK-1348 AC-19): `gh pr review --approve`, and
+    /// a `gh api` or `curl` request that posts an `APPROVE` review or event
+    /// or puts a review dismissal, whatever token it carries. On when the key
+    /// is absent; a project may turn it off. GitHub still accepts these
+    /// calls from outside the guard.
+    pub pr_review_approval: PolicyLevel,
     /// Any local update of a protected branch ref that did not come from the
     /// remote — the harness-agnostic backstop enforced by git's
     /// `reference-transaction` hook (ADR-0007). Catches what classic client
@@ -637,6 +644,7 @@ impl Default for GitPolicy {
             hard_reset_protected: PolicyLevel::Block,
             merge_to_protected: PolicyLevel::Block,
             pr_merge_to_protected: PolicyLevel::Block,
+            pr_review_approval: PolicyLevel::Block,
             local_ref_protection: PolicyLevel::Block,
             hook_integrity: PolicyLevel::Block,
             root_branch: String::new(),
@@ -1137,6 +1145,7 @@ impl GitPolicy {
         self.hard_reset_protected = PolicyLevel::Off;
         self.merge_to_protected = PolicyLevel::Off;
         self.pr_merge_to_protected = PolicyLevel::Off;
+        self.pr_review_approval = PolicyLevel::Off;
         self.local_ref_protection = PolicyLevel::Off;
         self.hook_integrity = PolicyLevel::Off;
         self.root_checkout_commits = PolicyLevel::Off;

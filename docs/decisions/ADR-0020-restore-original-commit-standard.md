@@ -208,3 +208,16 @@ unparseable pattern a loud, hard error at the commit-msg hook, `codeflow ci`, an
 the config before enforcement runs — effective behavior fails **closed**. The
 fail-open path survives only as the loader's fallback behind that pre-check.
 (Append-only note; the decision body above is unchanged.)
+
+## Note of 2026-11-06: the agent App as committer
+
+The agent App as committer is an identity that names the App, not a model vendor, and is not AI attribution under git.ai_attribution. Operator decision 2026-11-06.
+
+Nothing about the commit rules relaxes. Agent commits still pass every commit
+standard: conventional commits, the commit-msg hook, and `git.ai_attribution`
+at block, so no AI co-author, no "Generated with" line and no emoji. The bot
+committer changes only the committer identity field and is never a route
+around a message check. No policy, hook or check is loosened or special-cased
+for bot-committed commits.
+
+(Append-only note; the decision body above is unchanged.)
