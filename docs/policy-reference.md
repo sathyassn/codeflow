@@ -1486,8 +1486,8 @@ written: quoted, or free of unquoted glob, brace and `$` or backtick
 expansion. An unquoted `~/.*rc` in the pattern position expands into the
 pattern and more searched paths, so it is judged as before. GNU
 `parallel` without `-q` runs its command through a shell, so no word of
-it is a pattern word, and git-guard's `parallel` rule reads the commands
-it builds whole. `ag` has no `-e`, and a direct `git grep` is a read both
+it is a pattern word; both hooks refuse `parallel` in agent sessions
+(TSK-326). `ag` has no `-e`, and a direct `git grep` is a read both
 guards pass. Every other word is judged as before: a path operand after
 the pattern, a `-f` pattern file, a redirect and every word of a call
 with an option the reader does not know, so `rg x > ~/.zshrc` refuses.
@@ -1746,6 +1746,78 @@ checked, so a symlink does not remove the target owner's protection.
   otherwise remains unread. Exec-guard refuses such a line when a command
   that uses the reassigned home writes an enforcement path, as git-guard
   judges the write; a read-only use such as a Git pathspec passes.
+- Refs, remotes, programs and environment supplied as data are refused as
+  unresolved by both shell hooks (TSK-326). A word the shell fills in from
+  data the guard cannot read has no text to judge: a variable assigned
+  from a command substitution or `read`, an inherited variable, or the
+  input that `xargs` and `fd -x` or `-X` append or put in place of a
+  replacement string, and that `find -exec` puts in place of `{}`. The git command a launcher runs (`watch`, `flock`, `script -c`) is
+  read the same way. When one of those suppliers runs a shell `-c` script
+  or `eval`, the script is read as a command line in which the replacement
+  strings and the positional parameters (`$1`, `"$@"`, `$0`) are the
+  supplied input; input spliced into the script text, and a script the
+  guard cannot read (a file, standard input, a variable), refuse as well,
+  so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
+  GNU `parallel` and its front ends `sem` and `env_parallel` are refused
+  in every agent session. They build the commands they run from their
+  input, options, configuration files and environment, which neither hook
+  reads, so those commands can carry a git command or a deletion the
+  catastrophic floor cannot read. Both hooks refuse the three programs in
+  every literal spelling (a path, quotes, letter case, a `.exe` suffix, a
+  parameter the line assigns a literal) and behind the launchers,
+  privilege runners and suppliers the hooks unwrap, and exec-guard's
+  recursive-deletion check reports them unproven. No policy key relaxes
+  this: a person runs them outside the session. In the session, run each
+  command directly, or pass the input to a literal command with `xargs`,
+  which the hooks read. The hooks read these program words as a Unix shell
+  passes them. Three residuals remain: a native Windows shell was not
+  tested; an interpreter one-liner that starts a program is read only for
+  the families the interpreter check judges; and a program word that is a
+  parameter the line does not assign a literal is not judged as one of
+  these programs, except where the recursive-deletion check models the
+  parameter's value (TSK-1404). An
+  unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
+  git word refuses too, since the shell makes it several words; a quoted
+  or escaped brace is text. A word filled in from data the guard cannot
+  read, or one holding an unquoted brace list or sequence, in the program
+  position (`$V push origin HEAD:main`, `env "$V" git push`), in a `GIT_*`
+  or other git
+  configuration, location or program variable assigned for git, in a git
+  subcommand or `-c` value, or in an operand of a subcommand a decision
+  reads refuses before the push, alias, transport and release decisions
+  read it. Git-guard reads the operands of every subcommand it judges for
+  protected refs and of any alias; exec-guard reads `push`, `tag`,
+  `config`, `update-ref`, `remote`, `credential` and any alias. Git-guard
+  names the protected-ref rule the subcommand could break, and exec-guard
+  names `security.outward_actions`; the sanctioned path is to write the
+  value in the command, or to compute it first and pass it as a literal. A
+  variable the line assigned a literal before the word is filled in and
+  judged as that literal, so a tag name held in a variable is judged as a
+  tag push and `main` held in one as a push to `main`. Messages stay data
+  where `-m` takes one (`commit`, `tag`, `merge`, `notes add` and `append`,
+  and a `stash` that saves); on `git branch` the names after `-m` are
+  judged. A `$` in single quotes or escaped is text, in this check
+  and in the check before a forced branch delete. A program position
+  refuses under this rule only when the words after it show git (a git
+  subcommand or global option first, or a word naming `git`). In an agent
+  session, a program word that is a parameter the line does not assign a
+  literal, whose words show no git, is not judged as git or as one of the
+  programs above by either hook, except where exec-guard's
+  recursive-deletion check models the parameter's value; the pre-push hook
+  stays the floor for a push git runs with its hooks, and the fix is
+  tracked in TSK-1404. Git-guard refuses a command substitution, in `$(...)`
+  or backtick form, in a command's program word whose basename is neither
+  `git` nor `gh`, read after the prefix launchers and `env` it unwraps,
+  since its output decides which program runs. A command
+  substitution written on the git command itself stays with git-guard's
+  substitution reader and its alias and message rules. Git-guard reads
+  bracket arithmetic that holds only decimal integer arithmetic
+  (`HEAD:v$[2]`) as its value, on a line whose quoting it reads exactly;
+  any other `$[...]` and every `$((...))` stays unresolved and refuses.
+  Configuration or refs supplied as data through variables or `xargs` are
+  not judged except by this refusal, and the content of a data file is
+  never read; the pre-push hook and remote branch protection remain the
+  floors for a push that reaches a protected ref.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.

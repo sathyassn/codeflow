@@ -2551,6 +2551,208 @@ fn exec_guard_alone_refuses_environment_release_aliases() {
     }
 }
 
+/// TSK-326: each shell guard, run on its own, refuses git operands,
+/// programs and environment the line supplies as data, naming the rule and
+/// the sanctioned path, and lets a literal push through.
+#[test]
+fn each_guard_alone_refuses_git_operands_supplied_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    std::fs::write(dir.path().join("cmdfile"), "git\n").unwrap();
+    std::fs::write(dir.path().join("envpush3"), "GIT_DIR=/tmp/x\n").unwrap();
+    std::fs::write(dir.path().join("envpush2"), "GIT_DIR=/tmp/x\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "V=$(cat refs); git push origin \"$V\"",
+            "V=$(cat cmdfile); $V push origin HEAD:main",
+            "xargs git push origin < refs",
+            "V=$(cat envpush3); env \"$V\" git push origin",
+            "xargs -I{} env {} git push origin < envpush2",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            // Under active hook integrity git-guard's own `xargs` refusal
+            // names that form first; every other form is named as
+            // unresolved with the sanctioned path.
+            let xargs_integrity = hook == "git-guard"
+                && command.starts_with("xargs git")
+                && stderr.contains("xargs supplies operands to a guarded Git command");
+            assert!(
+                xargs_integrity
+                    || (stderr.contains("command unresolved:")
+                        && stderr.contains("filled in at run time")
+                        && stderr.contains("pass it as a literal")),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        let out = run_with_stdin(
+            codeflow().args(["hook", hook]).current_dir(dir.path()),
+            &guard_payload("git push origin HEAD", dir.path()),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{hook}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// TSK-326 siblings: `fd -x` and a launcher's git child are refused by each
+/// guard alone when their input or a variable supplies a git operand; their
+/// literal forms pass.
+#[test]
+fn each_guard_alone_refuses_fd_and_launcher_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "fd -x git push origin {}",
+            "V=$(cat refs); watch git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
+            "V=$(cat refs); script -q -c \"git push origin $V\" /dev/null",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("command unresolved:") && stderr.contains("filled in at run time"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        for command in [
+            "watch git push origin feat/x",
+            "flock /tmp/l git push origin feat/x",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
+/// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the commands
+/// they run at run time, so each guard alone refuses them in every literal
+/// spelling and behind a launcher, and names the human route.
+#[test]
+fn each_guard_alone_refuses_command_builders() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "parallel --plain echo ::: feat/x",
+            "parallel --plain git push origin :::: refs",
+            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel --plain rm -rf {} :::: refs",
+            "/usr/bin/PARALLEL.exe echo ::: a",
+            "nice -n 5 'parallel' echo ::: a",
+            "sem echo hi",
+            "timeout 5 env_parallel echo ::: a",
+            "printf '%s\\n' a | xargs sem echo",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("refused in agent sessions") && stderr.contains("a human runs"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+    }
+}
+
+/// TSK-326 review F1 and F3: a shell script a supplier runs with its input,
+/// and a brace list in a push refspec, are refused by each guard alone; a
+/// literal script and a quoted brace pass.
+#[test]
+fn each_guard_alone_refuses_supplied_scripts_and_brace_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            "fd -x sh -c 'git push --no-verify origin {}'",
+            "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
+            "git push --no-verify origin {feat/x,main}",
+            "V=main; git push origin {feat/x,$V}",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("command unresolved:") && stderr.contains("filled in at run time"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        for command in [
+            "git push origin 'feat/{x,y}'",
+            "git push origin \"feat/{x,y}\"",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
+/// TSK-326 AC-5: the over-refusals PR 195 (TSK-283) accepted on a line with
+/// a configuration-dependent push stay refused by each guard: non-Git data
+/// naming a configuration variable, a parameter read with an operator, an
+/// unresolved assignment destination and a command-local prefix on a
+/// non-Git command.
+#[test]
+fn tsk283_accepted_over_refusals_still_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "echo \"set GIT_CONFIG_GLOBAL in CI\" > notes.txt; git push origin feat/x",
+            "echo \"${HOME:-/tmp}\"; git push origin feat/x",
+            "export \"$NAME=/tmp/x\"; git push origin feat/x",
+            "HOME=/tmp/x cargo test; git push origin feat/x",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("cannot verify Git configuration after"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+    }
+}
+
 #[test]
 fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
     let dir = tempfile::tempdir().unwrap();
@@ -9942,10 +10144,6 @@ fn guards_read_a_search_pattern_as_text() {
         "rg --files | xargs rg --pre tee ~/.{a,zsh}rc",
         "find . -maxdepth 0 -exec rg --pre tee ~/.*rc {} +",
         "find . -maxdepth 0 -exec rg --pre tee ~/.?shrc {} +",
-        "parallel rg --pre tee ~/.*rc ::: x",
-        // GNU parallel runs its command through a shell unless `-q`.
-        "parallel rg --pre tee '~/.*rc' ::: x",
-        "parallel rg '~/.*rc' ::: x",
         // A ripgrep configuration the line sets may supply the pattern.
         "read -r RIPGREP_CONFIG_PATH <<< cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
         "printf -v RIPGREP_CONFIG_PATH cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
@@ -9961,6 +10159,23 @@ fn guards_read_a_search_pattern_as_text() {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
         if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
+    // `parallel` is refused in agent sessions (TSK-326), and the deletion
+    // floor reports it unproven, so the startup check after the floor does
+    // not run on these lines.
+    for command in [
+        "parallel --plain rg --pre tee ~/.*rc ::: x",
+        "parallel --plain rg --pre tee '~/.*rc' ::: x",
+        "parallel --plain rg '~/.*rc' ::: x",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2)
+            || !err.contains("security.dangerous_commands")
+            || !err.contains("refused in agent sessions")
+        {
             wrong.push(format!("exec-guard should refuse: {command}: {err}"));
         }
     }
