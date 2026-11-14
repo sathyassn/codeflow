@@ -274,6 +274,21 @@ pub const SCHEMA: [KeySpec; 87] = [
                 config, since an alternate store adds objects Git reads as its own; reading \
                 them stays allowed. Local-edit relief never disables protection \
                 of remote-tracking refs, packed-refs or Git config authority metadata. \
+                The edit guard judges each protected path in the spelling an edit \
+                that reaches it resolves to, so a protected path behind a symbolic \
+                link is judged where the link points, also when nothing exists there \
+                yet; a protected path it cannot place in any spelling (a link loop, \
+                or a folder it cannot search) refuses every edit, naming the path and \
+                the cause. The protected paths of the generated `Edit` denies are the \
+                one exception: such a path keeps its written spelling, and the guard \
+                warns that alias coverage is reduced, because no other spelling can \
+                reach it and an edit named through it cannot be resolved. A name that \
+                does not exist yet is compared in every spelling a volume may store as \
+                the same entry, so another spelling of a missing protected file is \
+                refused too; on a volume that stores those spellings apart, such a \
+                file is refused all the same. An edit whose target, or a repository \
+                holding it, the guard cannot read is refused at any level, naming the \
+                path and the cause. \
                 git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
                 can change files when its command line names an enforcement \
                 path in any spelling the file system reads as one (a search \
