@@ -13,11 +13,22 @@
 //! code for an interpreter. Any other feed refuses ([`UNSETTLED`]),
 //! whatever it names, and so does a line whose grammar the reader does not
 //! take apart (a group, a loop, a background job) when it executes such
-//! text ([`executes_produced_text`]). A plain file the line does not name
-//! elsewhere is the same as the file run directly (`cat file | sh` as
-//! `sh file`). Output a program hands to a shell it starts itself (a Git
-//! pager) and a program word from outside the line are state the line
-//! does not show.
+//! text ([`executes_produced_text`]). A plain file is the same as the file
+//! run directly (`cat file | sh` as `sh file`) on a line that writes no
+//! file; a line that writes a file and also runs one refuses
+//! ([`writes_a_file`], [`runs_a_file`]), whatever the names, unless it is
+//! one simple command, whose writes are its own output ([`lone`]). Output a
+//! program hands to a shell it starts itself (a Git pager), a file a
+//! program writes in its own way (a build) and a program word from outside
+//! the line are state the line does not show.
+//!
+//! A program the guard does not know to read its input only as data
+//! ([`inert`]) gets the same closed form for text the line spells and hands
+//! it by pipe, here-string, here-document or process substitution: settled
+//! text is judged as a command line, anything else refuses. The output of
+//! a program the line runs, fed to such a program, is the named residual.
+//! A line the reader does not take apart into simple commands is read
+//! token by token for the same feeds ([`unread`]).
 //!
 //! On every line these texts are also judged for the binary with a verb:
 //!
@@ -42,12 +53,13 @@
 use super::{find, raw_run, unresolved, InstallRun};
 use crate::hooks::git_guard::{
     carried_commands, command_argv, command_argv_expanding, command_argv_literal, command_segments,
-    expand_commands, expand_commands_read, is_shell, program_name, shell_blank, shell_c_argument,
-    strip_launchers, COMMAND_CARRIERS,
+    expand_commands, expand_commands_read, is_shell, program_name, reads_input_as_data,
+    reads_shell_stdin, redirect_writes, shell_blank, shell_c_argument, strip_launchers,
+    strip_reserved_words, COMMAND_CARRIERS, READ_ONLY_PROGRAMS,
 };
 use crate::security::composed::{
-    bindings, composed_texts, expanding_heredoc_readers, input_of, simple_commands, Composed,
-    Input, Simple, Source, Spelt,
+    bindings, composed_texts, compound, expanding_heredoc_readers, input_of, simple_commands,
+    Composed, Fed, Input, Simple, Source, Spelt,
 };
 use crate::security::headless::basename;
 use crate::security::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
@@ -74,7 +86,7 @@ pub(crate) const UNSETTLED: &str =
 /// The first install run, or unsettled text handed to an executor, that
 /// `command` produces.
 pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
-    let form = produced(command, 0)?;
+    let form = produced(command, 0, false)?;
     Some(InstallRun {
         form,
         parsed: false,
@@ -82,8 +94,14 @@ pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
     })
 }
 
-fn produced(command: &str, depth: usize) -> Option<&'static str> {
-    if let Some(form) = executors(command, depth, &Stdin::Unseen) {
+/// The judgment of `command`, where `writes` is whether a line it runs
+/// inside writes a file.
+fn produced(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
+    let writes = writes || (writes_a_file(command) && !lone(command));
+    if writes && runs_a_file(command) {
+        return Some(UNSETTLED);
+    }
+    if let Some(form) = executors(command, depth, &Stdin::Unseen, writes) {
         return Some(form);
     }
     let texts = composed_texts(command);
@@ -333,23 +351,29 @@ fn xargs_runs_text(args: &[String]) -> bool {
 /// What a command reads, as the install reader reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Stdin {
-    /// Nothing the line composes: the line's own input, or a plain file
-    /// the line does not name elsewhere.
+    /// Nothing the line composes: the line's own input, or a plain file on
+    /// a line that writes no file.
     Unseen,
-    /// Text the line produces that the reader settles.
+    /// Text the line spells that the reader settles.
     Text(String),
-    /// Text the line produces that the reader cannot settle.
+    /// Text the line spells that the reader cannot settle, or a file on a
+    /// line that writes one.
     Unsettled,
+    /// The output of a program the line runs that the reader does not
+    /// model, holding no text the line spells, or a descriptor: unsettled
+    /// for a shell or interpreter, the named residual for a program the
+    /// guard does not know.
+    Output,
 }
 
 /// The judgment of every text `command` hands to something on it that
 /// executes it, where `stdin` is what its commands read when nothing on
-/// the line redirects or pipes their input. A line the reader takes apart
-/// into simple commands ([`simple_commands`]) is judged command by command
-/// ([`judge_simple`]); any other line, or one nested past [`DEPTH`],
-/// refuses as [`UNSETTLED`] when it executes text it produces at all
-/// ([`executes_produced_text`]).
-fn executors(command: &str, depth: usize, stdin: &Stdin) -> Option<&'static str> {
+/// the line redirects or pipes their input and `writes` is whether the
+/// line writes a file. A line the reader takes apart into simple commands
+/// ([`simple_commands`]) is judged command by command ([`judge_simple`]);
+/// any other line, or one nested past [`DEPTH`], is read token by token
+/// ([`unread`]).
+fn executors(command: &str, depth: usize, stdin: &Stdin, writes: bool) -> Option<&'static str> {
     let commands = if depth > DEPTH {
         None
     } else if requoted(command) {
@@ -369,19 +393,91 @@ fn executors(command: &str, depth: usize, stdin: &Stdin) -> Option<&'static str>
         simple_commands(command)
     };
     let Some(commands) = commands else {
-        return executes_produced_text(command).then_some(UNSETTLED);
+        return unread(command, depth, writes);
     };
     for at in 0..commands.len() {
         let input = if commands[at].piped && at > 0 {
-            output_of(&commands, at - 1, stdin, None)
+            output_of(&commands, at - 1, stdin, writes)
         } else {
             stdin.clone()
         };
-        if let Some(form) = judge_simple(command, &commands, at, &input, depth) {
+        if let Some(form) = judge_simple(command, &commands, at, &input, depth, writes) {
             return Some(form);
         }
     }
     None
+}
+
+/// The judgment of a line [`simple_commands`] does not take apart (a
+/// group, a subshell, a loop, a conditional, a background job), or one
+/// nested past [`DEPTH`]: [`UNSETTLED`] when it executes text it produces
+/// at all ([`executes_produced_text`]); else each feed the line holds,
+/// read token by token ([`compound`]), judged as for a simple command:
+/// one simple command's output or literal text settled, text the line
+/// spells in a compound command unsettled, and other programs' output the
+/// named residual for a reader the guard does not know. Every command the
+/// line carries (`sh -c`, `eval`, `xargs`) is judged again. Grammar the
+/// token reading does not follow refuses when the line holds a pipe, a
+/// here-string, a here-document or a process substitution.
+fn unread(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
+    if executes_produced_text(command) {
+        return Some(UNSETTLED);
+    }
+    let Some(found) = compound(command) else {
+        let feeds = command.contains('|') || command.contains("<<") || command.contains("<(");
+        return feeds.then_some(UNSETTLED);
+    };
+    let nested = depth <= DEPTH;
+    for feed in &found.feeds {
+        let readers: Vec<Vec<String>> = feed
+            .readers
+            .iter()
+            .map(|raw| {
+                let mut words = command_argv(raw);
+                strip_reserved_words(&mut words);
+                words
+            })
+            .collect();
+        if readers.iter().all(|words| inert(words)) {
+            continue;
+        }
+        let fed = match &feed.fed {
+            Fed::Command(simple) => {
+                output_of(std::slice::from_ref(simple), 0, &Stdin::Output, writes)
+            }
+            Fed::Text(text) => Stdin::Text(text.clone()),
+            Fed::Body(body) if nested => {
+                if let Some(form) = executors(body, depth + 1, &Stdin::Output, writes) {
+                    return Some(form);
+                }
+                body_output(body, &Stdin::Output, writes)
+            }
+            Fed::Body(_) | Fed::Spelled => Stdin::Unsettled,
+            Fed::Output => Stdin::Output,
+        };
+        let interpreter = readers.iter().any(|words| {
+            strip_launchers(words)
+                .is_some_and(|(program, _)| interpreter_family(&basename(program)).is_some())
+        });
+        let form = if readers.iter().any(|words| runs_its_input(words)) {
+            judge_fed(&fed, interpreter, None, depth, writes)
+        } else {
+            judge_unknown(&fed, depth, writes)
+        };
+        if form.is_some() {
+            return form;
+        }
+    }
+    if !nested {
+        return None;
+    }
+    found.commands.iter().find_map(|simple| {
+        let mut words = command_argv(&simple.raw);
+        strip_reserved_words(&mut words);
+        carried_commands(&words)
+            .iter()
+            .find_map(|body| executors(body, depth + 1, &Stdin::Output, writes))
+    })
 }
 
 /// One simple command's words as the shell passes them, where the reader
@@ -398,9 +494,15 @@ struct Resolved {
     processes: Vec<(usize, Stdin)>,
 }
 
-/// The words of `simple`, a command on the line `commands`; `Err` with the
+/// The words of `simple`, where `input` is what it reads from a pipe or
+/// the enclosing line, which its substitutions read too; `Err` with the
 /// form when a substitution in them executes unsettled text itself.
-fn resolve(simple: &Simple, commands: &[Simple], depth: usize) -> Result<Resolved, &'static str> {
+fn resolve(
+    simple: &Simple,
+    input: &Stdin,
+    depth: usize,
+    writes: bool,
+) -> Result<Resolved, &'static str> {
     let mut resolved = Resolved {
         words: Vec::new(),
         settled: Vec::new(),
@@ -412,10 +514,10 @@ fn resolve(simple: &Simple, commands: &[Simple], depth: usize) -> Result<Resolve
             Spelt::Plain(text) => (text.clone(), true, None),
             Spelt::Open(raw) => (raw.clone(), false, None),
             Spelt::Output(body) | Spelt::Process(body) => {
-                if let Some(form) = executors(body, depth + 1, &Stdin::Unsettled) {
+                if let Some(form) = executors(body, depth + 1, input, writes) {
                     return Err(form);
                 }
-                let output = body_output(body, commands);
+                let output = body_output(body, input, writes);
                 if matches!(piece, Spelt::Process(_)) {
                     resolved.processes.push((resolved.words.len(), output));
                     ("/dev/fd/63".to_string(), true, None)
@@ -440,15 +542,18 @@ fn resolve(simple: &Simple, commands: &[Simple], depth: usize) -> Result<Resolve
 /// The judgment of the texts one simple command executes: a substitution
 /// in a word that runs (its program, `eval`'s words, a shell's `-c` value,
 /// an interpreter's code value), what it reads when it runs its input, a
-/// descriptor or process substitution a shell or interpreter reads, and
-/// every command it carries, read again with its input. `input` is what
-/// a pipe or the enclosing line hands it.
+/// descriptor or process substitution a shell or interpreter reads, text
+/// the line spells that a program it does not know to read only data
+/// receives ([`judge_unknown`]), and every command it carries, read again
+/// with its input. `input` is what a pipe or the enclosing line hands it.
+#[allow(clippy::too_many_lines)] // one command's routes, in order
 fn judge_simple(
     line: &str,
     commands: &[Simple],
     at: usize,
     input: &Stdin,
     depth: usize,
+    writes: bool,
 ) -> Option<&'static str> {
     let simple = &commands[at];
     let Resolved {
@@ -456,7 +561,7 @@ fn judge_simple(
         settled,
         texts,
         processes,
-    } = match resolve(simple, commands, depth) {
+    } = match resolve(simple, input, depth, writes) {
         Ok(resolved) => resolved,
         Err(form) => return Some(form),
     };
@@ -465,16 +570,17 @@ fn judge_simple(
     for (at, code) in running_positions(&words) {
         if !settled.get(at).copied().unwrap_or(false) {
             // A program word from outside the line (`$HOME/bin/tool`) is
-            // state the line does not show; it runs only what it is fed.
+            // state the line does not show; it runs only what it is fed,
+            // and may be a shell.
             if code == Code::Program && !produced_program(&words[at], line) {
-                return judge_fed(input, false, None, depth);
+                return judge_fed(input, false, None, depth, writes);
             }
             return Some(UNSETTLED);
         }
         if let Some(text) = texts.get(at).cloned().flatten() {
             let form = match code {
                 Code::Program => None,
-                Code::Line => judge_line(&text, depth),
+                Code::Line => judge_line(&text, depth, writes),
                 Code::Interpreter => raw_run(&text).map(|run| run.form),
             };
             if form.is_some() {
@@ -497,32 +603,28 @@ fn judge_simple(
     for redirect in simple.redirects.iter().filter(|redirect| redirect.input) {
         let text = match &redirect.source {
             Source::Text(text) => Stdin::Text(text.clone()),
-            Source::Path(path) => {
-                if unwritten(commands, Some(at), path) {
-                    Stdin::Unseen
-                } else {
-                    Stdin::Unsettled
-                }
-            }
+            Source::Path(path) if path == "/dev/null" => Stdin::Unseen,
+            Source::Path(_) => file(writes),
             Source::Process(body) => {
-                if let Some(form) = executors(body, depth + 1, &Stdin::Unsettled) {
+                if let Some(form) = executors(body, depth + 1, input, writes) {
                     return Some(form);
                 }
-                body_output(body, commands)
+                body_output(body, input, writes)
             }
-            Source::Open => Stdin::Unsettled,
+            Source::Spelled => Stdin::Unsettled,
+            Source::Open => Stdin::Output,
         };
         if redirect.fd == 0 {
             fed = text;
         } else if reads_code.is_some() {
-            if let Some(form) = judge_fed(&text, interpreter, None, depth) {
+            if let Some(form) = judge_fed(&text, interpreter, None, depth, writes) {
                 return Some(form);
             }
         }
     }
     for (at, output) in &processes {
         if reads_code.is_some_and(|first| first < *at) {
-            if let Some(form) = judge_fed(output, interpreter, None, depth) {
+            if let Some(form) = judge_fed(output, interpreter, None, depth, writes) {
                 return Some(form);
             }
         }
@@ -530,13 +632,61 @@ fn judge_simple(
     if runs_its_input(&words) {
         let supplier = matches!(program_name(&program), "xargs" | "parallel");
         let consumer = supplier.then_some(simple.raw.as_str());
-        if let Some(form) = judge_fed(&fed, interpreter, consumer, depth) {
+        if let Some(form) = judge_fed(&fed, interpreter, consumer, depth, writes) {
             return Some(form);
+        }
+    } else if !inert(&words) {
+        let form = std::iter::once(&fed)
+            .chain(processes.iter().map(|(_, output)| output))
+            .find_map(|text| judge_unknown(text, depth, writes));
+        if form.is_some() {
+            return form;
         }
     }
     carried_commands(&words)
         .iter()
-        .find_map(|body| executors(body, depth + 1, &fed))
+        .find_map(|body| executors(body, depth + 1, &fed, writes))
+}
+
+/// What a plain file hands a command that reads it: nothing the line
+/// composes on a line that writes no file, else unsettled text.
+fn file(writes: bool) -> Stdin {
+    if writes {
+        Stdin::Unsettled
+    } else {
+        Stdin::Unseen
+    }
+}
+
+/// Whether the command `words`, reading text the line spells, cannot
+/// execute it: only assignments, syntax words of a compound command, a
+/// printer, a program on the guard's read-only list, a data reader
+/// (`git_guard::reads_input_as_data`: the here-document data readers and
+/// `git` and `gh` subcommands that take a message or a body), or `xargs`
+/// building a command that is judged as a carried command.
+fn inert(words: &[String]) -> bool {
+    const SYNTAX: &[&str] = &["for", "in", "done", "fi", "{", "}"];
+    let Some((program, _)) = strip_launchers(words) else {
+        return true;
+    };
+    let name = program_name(program);
+    SYNTAX.contains(&name)
+        || PRINTERS.contains(&name)
+        || READ_ONLY_PROGRAMS.contains(&name)
+        || (name == "xargs" && !supplies_a_run(words))
+        || reads_input_as_data(words)
+}
+
+/// The judgment of text a program the guard does not know to read only
+/// data receives: as a command line when it is settled, [`UNSETTLED`] when
+/// it is text the line spells that the reader cannot settle, and nothing
+/// for a program's output or the line's own input (the named residual).
+fn judge_unknown(fed: &Stdin, depth: usize, writes: bool) -> Option<&'static str> {
+    match fed {
+        Stdin::Unseen | Stdin::Output => None,
+        Stdin::Unsettled => Some(UNSETTLED),
+        Stdin::Text(text) => judge_line(text, depth, writes),
+    }
 }
 
 /// Whether the program word `word`, which the shell fills in, may hold
@@ -629,61 +779,58 @@ fn program_span(words: &[String]) -> Option<(usize, usize)> {
 }
 
 /// The judgment of text handed to an executor: [`UNSETTLED`] when it is
-/// not settled, as code for an interpreter, and as a command line for a
-/// shell or, after the supplier's own words (`consumer`), for a supplier.
+/// not settled or is a program's output, as code for an interpreter, and
+/// as a command line for a shell or, after the supplier's own words
+/// (`consumer`), for a supplier.
 fn judge_fed(
     fed: &Stdin,
     interpreter: bool,
     consumer: Option<&str>,
     depth: usize,
+    writes: bool,
 ) -> Option<&'static str> {
     match fed {
         Stdin::Unseen => None,
-        Stdin::Unsettled => Some(UNSETTLED),
+        Stdin::Unsettled | Stdin::Output => Some(UNSETTLED),
         Stdin::Text(text) if interpreter => raw_run(text).map(|run| run.form),
         Stdin::Text(text) => match consumer {
-            Some(consumer) => judge_line(&format!("{consumer} {text}"), depth),
-            None => judge_line(text, depth),
+            Some(consumer) => judge_line(&format!("{consumer} {text}"), depth, writes),
+            None => judge_line(text, depth, writes),
         },
     }
 }
 
 /// The judgment of a command line an executor runs: the closed subset,
-/// the raw text, then everything this reader judges, read again.
-fn judge_line(line: &str, depth: usize) -> Option<&'static str> {
+/// the raw text, then everything this reader judges, read again, on a line
+/// that writes a file when `writes`.
+fn judge_line(line: &str, depth: usize, writes: bool) -> Option<&'static str> {
     find(line, 0)
         .or_else(|| raw_run(line))
         .map(|run| run.form)
-        .or_else(|| produced(line, depth + 1))
+        .or_else(|| produced(line, depth + 1, writes))
 }
 
-/// What a substitution's `body` writes, read on the line `commands`: one
-/// simple command ([`output_of`]), else [`Stdin::Unsettled`].
-fn body_output(body: &str, commands: &[Simple]) -> Stdin {
-    match simple_commands(body).as_deref() {
-        Some([simple]) => output_of(
-            std::slice::from_ref(simple),
-            0,
-            &Stdin::Unsettled,
-            Some((commands, body)),
-        ),
+/// What a substitution's `body` writes, where `input` is what it reads:
+/// the last command of one pipeline ([`output_of`]), else
+/// [`Stdin::Unsettled`].
+fn body_output(body: &str, input: &Stdin, writes: bool) -> Stdin {
+    match simple_commands(body) {
+        Some(commands) if !commands.is_empty() && commands[1..].iter().all(|c| c.piped) => {
+            output_of(&commands, commands.len() - 1, input, writes)
+        }
         _ => Stdin::Unsettled,
     }
 }
 
 /// What `commands[at]` writes to a pipe, where `stdin` is what it reads
-/// with no redirection and `outer` is the line and body a substitution
-/// sits in. Settled text comes from a printer of plain literal text whose
-/// output is settled ([`printed`]), or `cat` given a literal here-string
-/// or here-document; `cat` of plain files the line does not name
-/// elsewhere ([`unwritten`]) writes nothing the line composes. Anything
-/// else is [`Stdin::Unsettled`].
-fn output_of(
-    commands: &[Simple],
-    at: usize,
-    stdin: &Stdin,
-    outer: Option<(&[Simple], &str)>,
-) -> Stdin {
+/// with no redirection. Settled text comes from a printer of plain literal
+/// text whose output is settled ([`printed`]), or `cat` given a literal
+/// here-string or here-document; `cat` of plain files writes nothing the
+/// line composes on a line that writes no file ([`file`]). A printer that
+/// is not settled, `eval` or a shell given a `-c` value writes text the
+/// line spells, unsettled. Any other program writes its own output
+/// ([`Stdin::Output`]).
+fn output_of(commands: &[Simple], at: usize, stdin: &Stdin, writes: bool) -> Stdin {
     let simple = &commands[at];
     let words: Option<Vec<String>> = simple
         .words
@@ -693,16 +840,6 @@ fn output_of(
             _ => None,
         })
         .collect();
-    let Some(words) = words else {
-        return Stdin::Unsettled;
-    };
-    let Some(program) = words.first().map(|word| basename(word)) else {
-        return Stdin::Unsettled;
-    };
-    let unwritten_here = |path: &str| {
-        unwritten(commands, Some(at), path)
-            && outer.is_none_or(|(line, body)| unwritten_outside(line, body, path))
-    };
     let mut input = None;
     for redirect in &simple.redirects {
         match (redirect.input, redirect.fd) {
@@ -711,77 +848,194 @@ fn output_of(
             _ => {}
         }
     }
+    let Some(words) = words else {
+        // A word the shell fills in: a printer, a shell or `cat` named on
+        // the command may write text the line spells.
+        let names: Vec<String> = simple
+            .words
+            .iter()
+            .filter_map(|piece| match piece {
+                Spelt::Plain(text) => Some(basename(text)),
+                _ => None,
+            })
+            .collect();
+        let spells = names.iter().any(|name| {
+            PRINTERS.contains(&name.as_str()) || is_shell(name) || name == "eval" || name == "cat"
+        });
+        return if spells {
+            Stdin::Unsettled
+        } else {
+            Stdin::Output
+        };
+    };
+    let Some((program, args)) = strip_launchers(&words) else {
+        return Stdin::Text(String::new());
+    };
+    let program = basename(program);
     if PRINTERS.contains(&program.as_str()) {
         if shell_escaped(&simple.raw, &words) || escaped_dollar_quote(&simple.raw) {
             return Stdin::Unsettled;
         }
-        return printed(&program, &words[1..], false).map_or(Stdin::Unsettled, Stdin::Text);
+        return printed(&program, args, false).map_or(Stdin::Unsettled, Stdin::Text);
     }
-    if program != "cat" || words[1..].iter().any(|word| word.starts_with('-')) {
+    if program == "eval" || (is_shell(&program) && shell_c_argument(args).is_some()) {
         return Stdin::Unsettled;
     }
-    if words.len() > 1 {
-        return if words[1..].iter().all(|path| unwritten_here(path)) {
-            Stdin::Unseen
-        } else {
-            Stdin::Unsettled
-        };
+    if program != "cat" {
+        return Stdin::Output;
     }
-    match input {
-        Some(Source::Text(text)) => Stdin::Text(text.clone()),
-        Some(Source::Path(path)) if unwritten_here(path) => Stdin::Unseen,
-        Some(_) => Stdin::Unsettled,
-        None if simple.piped && at > 0 => output_of(commands, at - 1, stdin, outer),
-        None => stdin.clone(),
+    let options = args.iter().any(|word| word.starts_with('-') && word != "-");
+    let read = if args.iter().any(|word| !word.starts_with('-')) {
+        file(writes)
+    } else {
+        match input {
+            Some(Source::Text(text)) => Stdin::Text(text.clone()),
+            Some(Source::Path(_)) => file(writes),
+            Some(Source::Process(body)) => body_output(body, stdin, writes),
+            Some(Source::Spelled) => Stdin::Unsettled,
+            Some(Source::Open) => Stdin::Output,
+            None if simple.piped && at > 0 => output_of(commands, at - 1, stdin, writes),
+            None => stdin.clone(),
+        }
+    };
+    // An option (`-v`, `-n`) changes the text it passes on.
+    match read {
+        Stdin::Text(_) if options => Stdin::Unsettled,
+        read => read,
     }
 }
 
-/// Whether nothing on the line `commands`, but the command at `skip`,
-/// could write the file `path`: every word and redirection there is plain
-/// literal text, and none holds the file's name.
-fn unwritten(commands: &[Simple], skip: Option<usize>, path: &str) -> bool {
-    let name = basename(path);
-    commands
-        .iter()
-        .enumerate()
-        .filter(|(at, _)| Some(*at) != skip)
-        .all(|(_, simple)| {
-            simple.words.iter().all(|piece| match piece {
-                Spelt::Plain(text) => !text.contains(name.as_str()),
-                Spelt::Output(body) | Spelt::Process(body) => !body.contains(name.as_str()),
-                Spelt::Open(_) => false,
-            }) && simple
-                .redirects
-                .iter()
-                .all(|redirect| match &redirect.source {
-                    Source::Text(_) => true,
-                    Source::Path(target) => !target.contains(name.as_str()),
-                    Source::Process(body) => !body.contains(name.as_str()),
-                    Source::Open => false,
-                })
+/// Targets a redirection or a writing program can name that are not
+/// files.
+const NOT_FILES: &[&str] = &[
+    "/dev/null",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/tty",
+    "/dev/fd/1",
+    "/dev/fd/2",
+];
+
+/// Whether `command` writes a file with text it spells, in any command,
+/// group, loop or substitution on it (TSK-1476): an output redirection to
+/// a target other than [`NOT_FILES`] (descriptor copies are not writes),
+/// `tee` with a file operand, `dd` with `of=`, or `sed` that may write
+/// (`-i`, or a script that may hold a `w` command). The other writing
+/// programs (`cp`, `mv`, `ln`, `install`, `rsync`) copy content from
+/// files: one the line wrote is caught by the rule that wrote it, and
+/// another one is state the line does not show.
+fn writes_a_file(command: &str) -> bool {
+    let read = expand_commands_read(command);
+    std::iter::once(command.to_string())
+        .chain(read.segments)
+        .any(|text| {
+            let redirects = redirect_writes(&text);
+            !redirects.unread.is_empty()
+                || redirects
+                    .targets
+                    .iter()
+                    .any(|target| !NOT_FILES.contains(&target.as_str()))
+                || writes_content(&text)
         })
 }
 
-/// [`unwritten`] on the line a substitution sits in, its own `body` aside.
-fn unwritten_outside(commands: &[Simple], body: &str, path: &str) -> bool {
-    let name = basename(path);
-    commands.iter().all(|simple| {
-        simple.words.iter().all(|piece| match piece {
-            Spelt::Plain(text) => !text.contains(name.as_str()),
-            Spelt::Output(other) | Spelt::Process(other) => {
-                other == body || !other.contains(name.as_str())
-            }
-            Spelt::Open(_) => false,
-        }) && simple
+/// Whether `command` is one simple command that holds no substitution and
+/// carries no command. What such a command writes is its own output: the
+/// program starts and its input opens before any of it is written, so a
+/// file it runs or reads holds what was there before the line, plus at
+/// most that output.
+fn lone(command: &str) -> bool {
+    let Some(commands) = simple_commands(command) else {
+        return false;
+    };
+    let [simple] = commands.as_slice() else {
+        return false;
+    };
+    let mut words = command_argv(&simple.raw);
+    strip_reserved_words(&mut words);
+    simple
+        .words
+        .iter()
+        .all(|word| matches!(word, Spelt::Plain(_) | Spelt::Open(_)))
+        && !simple
             .redirects
             .iter()
-            .all(|redirect| match &redirect.source {
-                Source::Text(_) => true,
-                Source::Path(target) => !target.contains(name.as_str()),
-                Source::Process(other) => other == body || !other.contains(name.as_str()),
-                Source::Open => false,
+            .any(|redirect| matches!(redirect.source, Source::Process(_)))
+        && carried_commands(&words).is_empty()
+        && expand_commands_read(command).segments.len() <= 1
+}
+
+/// Whether the simple command `segment` is a program that writes a file
+/// with content from the line ([`writes_a_file`]).
+fn writes_content(segment: &str) -> bool {
+    let mut words = command_argv(segment);
+    strip_reserved_words(&mut words);
+    let Some((program, args)) = strip_launchers(&words) else {
+        return false;
+    };
+    let file = |target: &str| !NOT_FILES.contains(&target);
+    match program_name(program) {
+        "tee" => args.iter().any(|arg| !arg.starts_with('-') && file(arg)),
+        "dd" => args
+            .iter()
+            .any(|arg| arg.strip_prefix("of=").is_some_and(file)),
+        "sed" => args.iter().any(|arg| {
+            arg.starts_with("-i")
+                || arg.starts_with("--in-place")
+                || arg == "-I"
+                || (!arg.starts_with('-') && arg.contains(['w', 'W']))
+        }),
+        _ => false,
+    }
+}
+
+/// Whether `command` runs a file, in any command it holds or carries
+/// (TSK-1476): a program word that is a path (`./run.sh`, `dir/tool`), a
+/// script operand given to a shell, `source`, `.` or an interpreter, or a
+/// file given to a shell or interpreter as its input. A process
+/// substitution or `/dev/stdin` is not a file here.
+fn runs_a_file(command: &str) -> bool {
+    let not_file = |arg: &str| {
+        arg.starts_with('-')
+            || arg.starts_with('+')
+            || arg.starts_with("<(")
+            || arg.starts_with("/dev/fd/")
+            || arg == "/dev/stdin"
+    };
+    expand_commands_read(command)
+        .segments
+        .iter()
+        .any(|segment| {
+            let mut words = command_argv(segment);
+            strip_reserved_words(&mut words);
+            let Some((first, last)) = program_span(&words) else {
+                return false;
+            };
+            let input_file = input_of(segment) == Input::File;
+            (first..last).any(|at| {
+                let word = &words[at];
+                let rest = &words[at + 1..];
+                let name = basename(word);
+                let operand = rest.iter().find(|arg| !arg.starts_with(['-', '+']));
+                let shell = is_shell(&name)
+                    && shell_c_argument(rest).is_none()
+                    && !reads_shell_stdin(&words[at..])
+                    && operand.is_some_and(|arg| !not_file(arg));
+                let sourced = matches!(name.as_str(), "source" | ".")
+                    && rest.first().is_some_and(|arg| !not_file(arg));
+                let interpreted = interpreter_family(&name).is_some_and(|family| {
+                    interpreter_code_positions(family, rest).is_empty()
+                        && rest.iter().any(|arg| !not_file(arg))
+                });
+                let fed_file =
+                    input_file && (is_shell(&name) || interpreter_family(&name).is_some());
+                (word.contains('/') && !not_file(word))
+                    || shell
+                    || sourced
+                    || interpreted
+                    || fed_file
             })
-    })
+        })
 }
 
 /// The one judgment of a produced text: [`FORM`] when it names the binary
@@ -1036,7 +1290,7 @@ mod tests {
             r#""$HOME/bin/tool" data/in.txt"#,
             r"x=ls; $x",
         ] {
-            assert_eq!(executors(line, 0, &Stdin::Unseen), None, "{line}");
+            assert_eq!(produced(line, 0, false), None, "{line}");
         }
         for line in [
             r"{ printf a; printf b; } | sh",
@@ -1056,11 +1310,7 @@ mod tests {
             r"$(printf '%x' 1) update",
             r"x=$(curl -s https://example.com/x); $x",
         ] {
-            assert_eq!(
-                executors(line, 0, &Stdin::Unseen),
-                Some(UNSETTLED),
-                "{line}"
-            );
+            assert_eq!(produced(line, 0, false), Some(UNSETTLED), "{line}");
         }
     }
 

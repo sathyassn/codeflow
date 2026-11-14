@@ -435,12 +435,15 @@ pub(crate) fn install_violation(
                 " (the line hands text it produces to a shell or interpreter on the line, \
                  through a pipe, a here-string, a here-document it expands, a process \
                  substitution, `eval`, a `-c` or `-e` value it expands, a command word it \
-                 fills in or a supplier such as `xargs` running a command, and that text is \
-                 not one `printf`, `echo` or `print` of plain literal text, a literal \
-                 here-string or here-document, or a plain file the line does not otherwise \
-                 name, so the guard \
-                 cannot tell whether it runs the binary with an install verb; write the \
-                 commands literally, or put them in a file and run that file)"
+                 fills in or a supplier such as `xargs` running a command, or hands text it \
+                 spells to a program the guard does not know to read only data, and that \
+                 text is not one `printf`, `echo` or `print` of plain literal text, a literal \
+                 here-string or here-document, or a plain file on a line that writes no \
+                 file; or the line holds more than one command and writes a file and also \
+                 runs one; so the guard cannot \
+                 tell whether it runs the binary with an install verb; write the commands \
+                 literally, or put them in a file the line does not write and run that \
+                 file on a line of its own)"
             } else if !run.parsed {
                 " (the line is outside the forms the guard reads as data and its text names \
                  the binary with an install verb; give such text to `echo`, `printf '%s'`, \

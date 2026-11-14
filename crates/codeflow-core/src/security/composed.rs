@@ -334,8 +334,10 @@ pub(crate) enum Source {
     Path(String),
     /// A process substitution, with its body.
     Process(String),
-    /// Anything else: a target the shell fills in, a descriptor copy, or a
-    /// here-document the shell expands.
+    /// A here-string or here-document the shell fills in: text the line
+    /// spells that the reader does not settle.
+    Spelled,
+    /// Anything else: a target the shell fills in or a descriptor copy.
     Open,
 }
 
@@ -472,12 +474,13 @@ fn redirect(
         match body_text(&doc.body) {
             Some(text) => Source::Text(text),
             None if doc.quoted => Source::Text(doc.body.raw.clone()),
-            None => Source::Open,
+            None => Source::Spelled,
         }
     } else {
         match target.map(spelt) {
             Some(Spelt::Process(body)) => Source::Process(body),
             Some(Spelt::Plain(text)) if op == "<<<" => Source::Text(text),
+            Some(_) if op == "<<<" => Source::Spelled,
             Some(Spelt::Plain(text))
                 if matches!(op, "<" | "<>" | ">" | ">>" | ">|" | "&>" | "&>>")
                     && !crate::hooks::git_guard::expands(&text) =>
@@ -488,6 +491,434 @@ fn redirect(
         }
     };
     Some(Redirect { fd, input, source })
+}
+
+/// What a feed hands to the commands that read it, on a line read token by
+/// token ([`compound`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Fed {
+    /// What one simple command writes to a pipe.
+    Command(Simple),
+    /// A literal here-string or here-document.
+    Text(String),
+    /// What a process substitution writes, with its body.
+    Body(String),
+    /// Text the line spells that this reading does not settle: a pipe from
+    /// a group, loop or other compound command holding a printer, a
+    /// here-string, a here-document or a substitution that holds one, or a
+    /// here-string or here-document the shell fills in.
+    Spelled,
+    /// The output of programs the line runs, holding no text it spells.
+    Output,
+}
+
+/// One place a line hands text to the commands that read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Feed {
+    /// What it hands over.
+    pub(crate) fed: Fed,
+    /// Each simple command that may read it, as written.
+    pub(crate) readers: Vec<String>,
+}
+
+/// A line read token by token ([`compound`]).
+#[derive(Debug, Default)]
+pub(crate) struct Compound {
+    /// Each pipe, here-string, here-document and process substitution.
+    pub(crate) feeds: Vec<Feed>,
+    /// Every simple command, at every depth of substitution.
+    pub(crate) commands: Vec<Simple>,
+}
+
+/// `line` read token by token, for grammar [`simple_commands`] does not
+/// take apart: each pipe, here-string, here-document and process
+/// substitution, with every simple command that may read it, through
+/// groups, subshells, loops, conditionals and `case` branches and inside
+/// every substitution (TSK-1476). A pipe's readers are every simple
+/// command of the element after it; its text is that of the element before
+/// it. `None` when the line, or text nested in it, is outside the grammar
+/// this reading follows: a function, a coprocess, an unbalanced compound
+/// command or text the lexer refuses.
+pub(crate) fn compound(line: &str) -> Option<Compound> {
+    let mut out = Compound::default();
+    compound_into(line, 0, &mut out)?;
+    Some(out)
+}
+
+/// One simple command of a line read token by token: its token span, as
+/// read, and its words as written.
+struct Unit {
+    start: usize,
+    end: usize,
+    simple: Simple,
+}
+
+/// Separators that end an element of a pipeline or a list.
+fn separates(tok: &Tok) -> bool {
+    matches!(tok, Tok::Op("|" | "|&" | ";" | "&&" | "||" | "&" | "\n"))
+}
+
+#[allow(clippy::too_many_lines)] // one token walk
+fn compound_into(line: &str, depth: usize, out: &mut Compound) -> Option<()> {
+    if depth > 8 {
+        return None;
+    }
+    let (tokens, docs) = lex(line).ok()?;
+    let mut level = Vec::with_capacity(tokens.len());
+    let mut closers: Vec<&str> = Vec::new();
+    let mut units: Vec<Unit> = Vec::new();
+    let mut current: Option<Unit> = None;
+    // Redirections written after a compound command, by token.
+    let mut attached: Vec<(usize, Redirect)> = Vec::new();
+    let mut bodies = Vec::new();
+    // Tokens of a `case` header or pattern, which end an element and are
+    // never a pipe.
+    let mut bound = vec![false; tokens.len()];
+    // For each open `case`: whether a pattern is being read.
+    let mut patterns: Vec<bool> = Vec::new();
+    // The words of a `case` header still to read: its subject, then `in`.
+    let mut header = 0u8;
+    let finish = |current: &mut Option<Unit>, end: usize, units: &mut Vec<Unit>| {
+        if let Some(mut unit) = current.take() {
+            unit.end = end;
+            units.push(unit);
+        }
+    };
+    for (at, tok) in tokens.iter().enumerate() {
+        if header > 0 || patterns.last() == Some(&true) {
+            level.push(closers.len());
+            bound[at] = true;
+            let Tok::Word(word) = tok else {
+                match tok {
+                    Tok::Op(")") if header == 0 => {
+                        if let Some(top) = patterns.last_mut() {
+                            *top = false;
+                        }
+                    }
+                    Tok::Op("|" | "(") if header == 0 => {}
+                    _ => return None,
+                }
+                continue;
+            };
+            substitution_bodies(word, &mut bodies);
+            match header {
+                2 => header = 1,
+                1 if word.plain() == Some("in") => {
+                    header = 0;
+                    patterns.push(true);
+                }
+                1 => return None,
+                _ if word.plain() == Some("esac") => {
+                    if closers.pop() != Some("esac") {
+                        return None;
+                    }
+                    patterns.pop();
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match tok {
+            Tok::Word(word) => {
+                substitution_bodies(word, &mut bodies);
+                if current.is_none() {
+                    match word.raw.as_str() {
+                        "coproc" | "function" | "select" | "repeat" | "foreach" => return None,
+                        "case" => {
+                            level.push(closers.len());
+                            closers.push("esac");
+                            bound[at] = true;
+                            header = 2;
+                            continue;
+                        }
+                        "{" => {
+                            level.push(closers.len());
+                            closers.push("}");
+                            continue;
+                        }
+                        closer @ ("}" | "fi" | "done" | "esac") => {
+                            if closers.pop() != Some(closer) {
+                                return None;
+                            }
+                            if closer == "esac" {
+                                patterns.pop();
+                            }
+                            level.push(closers.len());
+                            continue;
+                        }
+                        "if" => closers.push("fi"),
+                        "while" | "until" | "for" => closers.push("done"),
+                        _ => {}
+                    }
+                }
+                level.push(closers.len());
+                let unit = current.get_or_insert_with(|| Unit {
+                    start: at,
+                    end: at,
+                    simple: Simple {
+                        words: Vec::new(),
+                        raw: String::new(),
+                        piped: false,
+                        redirects: Vec::new(),
+                    },
+                });
+                if !unit.simple.raw.is_empty() {
+                    unit.simple.raw.push(' ');
+                }
+                unit.simple.raw.push_str(&word.raw);
+                unit.simple.words.push(spelt(word));
+            }
+            Tok::Redir {
+                op,
+                target,
+                heredoc,
+            } => {
+                level.push(closers.len());
+                if let Some(word) = target {
+                    substitution_bodies(word, &mut bodies);
+                }
+                if let Some(doc) = heredoc.and_then(|index| docs.get(index)) {
+                    substitution_bodies(&doc.body, &mut bodies);
+                }
+                let redirect = redirect(op, target.as_ref(), *heredoc, &docs)?;
+                match current.as_mut() {
+                    Some(unit) => unit.simple.redirects.push(redirect),
+                    None => attached.push((at, redirect)),
+                }
+            }
+            Tok::Op(op) => {
+                finish(&mut current, at, &mut units);
+                match *op {
+                    "(" => {
+                        level.push(closers.len());
+                        closers.push(")");
+                    }
+                    ")" => {
+                        if closers.pop() != Some(")") {
+                            return None;
+                        }
+                        level.push(closers.len());
+                    }
+                    "|" | "|&" | ";" | "&&" | "||" | "&" | "\n" => level.push(closers.len()),
+                    ";;" | ";&" | ";;&" | ";|" if closers.last() == Some(&"esac") => {
+                        // The branch ends; the next pattern, or `esac`.
+                        level.push(closers.len());
+                        bound[at] = true;
+                        if let Some(top) = patterns.last_mut() {
+                            *top = true;
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            Tok::Array { name, elements, .. } => {
+                for element in elements {
+                    substitution_bodies(element, &mut bodies);
+                }
+                level.push(closers.len());
+                let unit = current.get_or_insert_with(|| Unit {
+                    start: at,
+                    end: at,
+                    simple: Simple {
+                        words: Vec::new(),
+                        raw: String::new(),
+                        piped: false,
+                        redirects: Vec::new(),
+                    },
+                });
+                unit.simple.words.push(Spelt::Open(format!("{name}=()")));
+            }
+            Tok::ArithCmd(body) => {
+                if body.contains("$(") || body.contains('`') {
+                    return None;
+                }
+                finish(&mut current, at, &mut units);
+                level.push(closers.len());
+            }
+        }
+    }
+    finish(&mut current, tokens.len(), &mut units);
+    if !closers.is_empty() {
+        return None;
+    }
+    // The span of the element of a pipeline or list around `at` at its own
+    // level: back to `from` or forward from it.
+    let element = |at: usize, back: bool| -> (usize, usize) {
+        let own = level[at];
+        let stops = |index: usize| {
+            bound[index] || level[index] < own || (level[index] == own && separates(&tokens[index]))
+        };
+        if back {
+            let mut start = at;
+            while start > 0 && !stops(start - 1) {
+                start -= 1;
+            }
+            (start, at)
+        } else {
+            let mut end = at + 1;
+            while end < tokens.len() && !stops(end) {
+                end += 1;
+            }
+            (at + 1, end)
+        }
+    };
+    let within = |(start, end): (usize, usize)| {
+        units
+            .iter()
+            .filter(move |unit| unit.start >= start && unit.end <= end)
+    };
+    let reads_pipe = |unit: &Unit| !unit.simple.redirects.iter().any(|r| r.input && r.fd == 0);
+    for (at, tok) in tokens.iter().enumerate() {
+        if bound[at] || !matches!(tok, Tok::Op("|" | "|&")) {
+            continue;
+        }
+        let before = element(at, true);
+        let after = element(at, false);
+        let producers: Vec<&Unit> = within(before).collect();
+        // A compound command in the element that reads a here-string, a
+        // here-document or a process substitution.
+        let attached_spells = attached.iter().any(|(index, redirect)| {
+            (before.0..before.1).contains(index)
+                && redirect.input
+                && fed_by(&redirect.source).is_some()
+        });
+        let fed = match producers.as_slice() {
+            [unit] if unit.start == before.0 && unit.end == before.1 => {
+                Fed::Command(unit.simple.clone())
+            }
+            units
+                if attached_spells
+                    || units.iter().any(|unit| spells_simple(&unit.simple, depth)) =>
+            {
+                Fed::Spelled
+            }
+            _ => Fed::Output,
+        };
+        let readers = within(after)
+            .filter(|unit| reads_pipe(unit))
+            .map(|unit| unit.simple.raw.clone())
+            .collect();
+        out.feeds.push(Feed { fed, readers });
+    }
+    for unit in &units {
+        let simple = &unit.simple;
+        let input = simple.redirects.iter().rfind(|r| r.input && r.fd == 0);
+        if let Some(fed) = input.and_then(|redirect| fed_by(&redirect.source)) {
+            out.feeds.push(Feed {
+                fed,
+                readers: vec![simple.raw.clone()],
+            });
+        }
+        for word in simple.words.iter().skip(1) {
+            if let Spelt::Process(body) = word {
+                out.feeds.push(Feed {
+                    fed: Fed::Body(body.clone()),
+                    readers: vec![simple.raw.clone()],
+                });
+            }
+        }
+        out.commands.push(simple.clone());
+    }
+    for (at, redirect) in &attached {
+        if !(redirect.input && redirect.fd == 0) {
+            continue;
+        }
+        let Some(fed) = fed_by(&redirect.source) else {
+            continue;
+        };
+        let readers = within(element(*at, true))
+            .map(|unit| unit.simple.raw.clone())
+            .collect();
+        out.feeds.push(Feed { fed, readers });
+    }
+    for body in bodies {
+        compound_into(&body, depth + 1, out)?;
+    }
+    Some(())
+}
+
+/// What an input redirection hands its command, where that is text the
+/// line spells or a process: a file or a descriptor is not a feed here.
+fn fed_by(source: &Source) -> Option<Fed> {
+    match source {
+        Source::Text(text) => Some(Fed::Text(text.clone())),
+        Source::Spelled => Some(Fed::Spelled),
+        Source::Process(body) => Some(Fed::Body(body.clone())),
+        Source::Path(_) | Source::Open => None,
+    }
+}
+
+/// Whether `simple` writes text the line spells: its program is a printer,
+/// `eval` or a shell given a `-c` value, it reads a here-string or
+/// here-document, or a substitution in it does.
+fn spells_simple(simple: &Simple, depth: usize) -> bool {
+    let program = simple.words.iter().find_map(|word| match word {
+        Spelt::Plain(text) if !LEADING_WORDS.contains(&text.as_str()) && !assignment(text) => {
+            Some(text.rsplit('/').next().unwrap_or(text).to_string())
+        }
+        Spelt::Plain(_) => None,
+        _ => Some(String::new()),
+    });
+    let program = program.unwrap_or_default();
+    let runs_code = program == "eval"
+        || (crate::hooks::git_guard::is_shell(&program)
+            && simple.words.iter().any(|word| matches!(word, Spelt::Plain(text) if text.starts_with('-') && text.contains('c'))));
+    matches!(program.as_str(), "printf" | "echo" | "print")
+        || runs_code
+        || simple.redirects.iter().any(|redirect| {
+            matches!(redirect.source, Source::Text(_) | Source::Spelled)
+                || matches!(&redirect.source, Source::Process(body) if spells(body, depth + 1))
+        })
+        || simple.words.iter().any(|word| match word {
+            Spelt::Output(body) | Spelt::Process(body) => spells(body, depth + 1),
+            Spelt::Open(raw) => raw.contains("$(") || raw.contains('`') || raw.contains("<("),
+            Spelt::Plain(_) => false,
+        })
+}
+
+/// Whether the command line `text` writes text it spells
+/// ([`spells_simple`]) anywhere; `true` when it cannot be read.
+fn spells(text: &str, depth: usize) -> bool {
+    if depth > 8 {
+        return true;
+    }
+    let mut found = Compound::default();
+    if compound_into(text, depth, &mut found).is_none() {
+        return true;
+    }
+    found
+        .commands
+        .iter()
+        .any(|simple| spells_simple(simple, depth))
+        || found
+            .feeds
+            .iter()
+            .any(|feed| matches!(feed.fed, Fed::Spelled | Fed::Text(_)))
+}
+
+/// Push the body of each substitution in `word` to `bodies`.
+fn substitution_bodies(word: &Word, bodies: &mut Vec<String>) {
+    for part in &word.parts {
+        if let Part::Subst { body, .. } | Part::ProcSubst(body) = part {
+            bodies.push(body.clone());
+        }
+    }
+}
+
+/// Reserved words that open a simple command of a compound one.
+const LEADING_WORDS: &[&str] = &[
+    "if", "then", "else", "elif", "do", "while", "until", "!", "time",
+];
+
+/// Whether `word` is a `NAME=value` assignment.
+fn assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        let mut chars = name.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// The commands on `line`, at every depth, that take a here-document the

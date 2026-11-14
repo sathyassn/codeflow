@@ -4512,7 +4512,7 @@ const WORKTREE_DIRS: &[&str] = &[".claude/worktrees", ".worktrees"];
 /// output-file or command-running mode: `sort -o`, `uniq IN OUT`, `xxd IN
 /// OUT`, `file -C` and `rg --pre` write files or run commands, so those
 /// programs are judged as writers (TSK-216 round 3).
-const READ_ONLY_PROGRAMS: &[&str] = &[
+pub(crate) const READ_ONLY_PROGRAMS: &[&str] = &[
     "echo",
     "printf",
     "grep",
@@ -8863,11 +8863,15 @@ const HEREDOC_DATA_READERS: &[&str] = &[
 /// a body. A body fed to anything else (a shell, `eval`, `ssh`, `sudo`,
 /// `make`, a `$VAR` or a function) is read as a script.
 fn reads_as_data(segment: &str) -> bool {
-    let words = command_argv(segment);
+    reads_input_as_data(&command_argv(segment))
+}
+
+/// [`reads_as_data`] for a command's words as the shell passes them.
+pub(crate) fn reads_input_as_data(words: &[String]) -> bool {
     // A segment of only assignments runs no program and reads nothing. A
     // segment with no words at all is a redirect attached to what came before
     // it (`(bash) <<EOF`), whose reader is unknown.
-    let Some((program, args)) = strip_launchers(&words) else {
+    let Some((program, args)) = strip_launchers(words) else {
         return !words.is_empty();
     };
     match basename(program) {
