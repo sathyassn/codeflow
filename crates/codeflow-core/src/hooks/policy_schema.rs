@@ -312,22 +312,26 @@ pub const SCHEMA: [KeySpec; 82] = [
                 the shell finds a program's name on the path, where the line may write a \
                 file of that name, and the shell itself runs text it evaluates. One simple \
                 command whose writes come after everything it runs, such as `printf x > \
-                notes.txt` or `echo \"$(date)\" > out.txt`, stays allowed, and so does a \
-                file written with a program's own output, such as `cargo build > build.log \
-                2>&1 && grep error build.log`; write the file on one line and run the next \
-                command on the next line. Text the shell evaluates as arithmetic is judged \
-                as command text, and where it reads a program's output or a value the \
-                guard cannot settle, the line refuses; compare a program's output with \
-                `test` or `[`, which do not evaluate it. A variable such text reads that \
-                the shell sets from text on the line, or that the line assigns in a way \
-                no word on it shows, counts as a value the guard cannot settle, and text \
-                the shell expands as a prompt has each substitution in it judged as a \
-                command line. These refusals take this key's \
-                level: `warn` reports them and `off` drops them. A run whose program word \
-                or first operand the guard cannot resolve, and a run inside a quoted argument \
-                or an assigned value, refuse too (TSK-1476). The guard's checks on printed \
-                text are partial. Text a line writes to a process started earlier that \
-                executes what it reads (a named pipe, a descriptor, a background shell) is a \
+                notes.txt`, stays allowed, and so does a file written with a program's own \
+                output, such as `cargo build > build.log 2>&1 && grep error build.log`; \
+                write the file on one line and run the next command on the next line. Text \
+                the shell evaluates as arithmetic is judged as command text, and where it \
+                reads a program's output or a value the guard cannot settle, the line \
+                refuses; run the program on its own line and compare the number it prints \
+                as literal text on the next, such as `[ 12 -gt 3 ]`; `test` or `[` on a \
+                program's output passes this check, but the strict text rule \
+                (`security.text_guard`) refuses it at its default `strict`. A variable such \
+                text reads that the shell sets from text on the line, or that the line \
+                assigns in a way no word on it shows, counts as a value the guard cannot \
+                settle, and text the shell expands as a prompt has each substitution in it \
+                judged as a command line. These refusals take this key's level: `warn` \
+                reports them and `off` drops them. A run whose program word or first \
+                operand the guard cannot resolve, and a run inside a quoted argument or an \
+                assigned value, refuse too (TSK-1476). The guard's checks on printed text \
+                are partial. A line these checks allow is still judged by the strict text \
+                rule, which at its default `strict` refuses a run-time value such as a \
+                command substitution in an argument. Text a line writes to a process \
+                started earlier that executes what it reads (a named pipe, a descriptor, a background shell) is a \
                 named residual, in the same class as the verb's words written to a file and \
                 run later. So are a file one line writes that a later line runs, a file \
                 one program's output writes that a later program on the same line reads or \
