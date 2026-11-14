@@ -1126,14 +1126,19 @@ fn two_lines(shape: &str) -> tempfile::TempDir {
         commit(root, "docs: plan a note");
     }
     plan_two_lines(root);
-    let extra = match shape {
-        "product" => Some("src/planned.rs"),
-        "instructions" => Some("project-management/AGENTS.md"),
-        _ => None,
+    let extra: &[&str] = match shape {
+        "product" => &["src/planned.rs"],
+        "instructions" => &["project-management/AGENTS.md"],
+        "adr shared" => &[ADR],
+        "adr docs shared" => &[ADR, "docs/note.md"],
+        "adr hook shared" => &[ADR, ".codeflow/git-hooks/pre-commit"],
+        _ => &[],
     };
     git(root, &["switch", "plan/lines"]);
-    if let Some(path) = extra {
-        write(root, path, "Not a record.\n");
+    if !extra.is_empty() {
+        for path in extra {
+            write(root, path, "Not a record.\n");
+        }
         commit(root, "docs: carry a file that is no record");
     }
     shape_planning_branch(root, shape);
@@ -1446,6 +1451,11 @@ fn move_versions(case: &str, reviewed: &str) -> (String, String) {
 /// whatever else the landing carries.
 fn write_move(root: &Path, case: &str, after: &str) {
     let path = record_path("TSK-002");
+    if case.starts_with("adr") {
+        write(root, &path, after);
+        write_decision_move(root, case);
+        return;
+    }
     if case == "executable" {
         index_entry(root, "100755", &path, after);
         return;
@@ -1484,7 +1494,7 @@ fn write_move(root: &Path, case: &str, after: &str) {
 /// Land `branch` on the current line as a planning merge, or, for `evil`,
 /// as a merge with a change neither parent holds.
 fn land_move(root: &Path, case: &str, branch: &str) {
-    if case == "evil" {
+    if case == "evil" || case == "adr evil" {
         git(root, &["merge", "--no-ff", "--no-commit", branch]);
         write(root, "project-management/plans/evil.md", "Unreviewed.\n");
         commit(root, "chore: land reviewed work");
@@ -1501,8 +1511,11 @@ fn land_move(root: &Path, case: &str, branch: &str) {
 /// makes the move on `LINE_B`, which `LINE_A` then merges. Returns the
 /// repository on `LINE_A`.
 fn home_move(case: &str) -> tempfile::TempDir {
-    let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
+    let dir = repo(&[], &decision_policy(case));
     let root = dir.path();
+    if case.starts_with("adr") {
+        seed_decisions(root);
+    }
     let reviewed = head(root);
     let (before, after) = move_versions(case, &reviewed);
     git(root, &["switch", "-c", "plan/home"]);
@@ -1642,6 +1655,12 @@ fn a_planning_merge_moves_a_todo_task_to_another_line() {
 /// Every case is refused by `rule` with `diagnostic`; `rule` is
 /// `work.import_authority` unless the case names an earlier guard.
 fn home_moves_refused(cases: &[(&str, &str)]) {
+    let failures = home_move_failures(cases);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The cases [`home_moves_refused`] would report, without asserting.
+fn home_move_failures(cases: &[(&str, &str)]) -> Vec<String> {
     let mut failures = Vec::new();
     for (case, diagnostic) in cases {
         let rule = if *case == "direct" {
@@ -1659,7 +1678,7 @@ fn home_moves_refused(cases: &[(&str, &str)]) {
             failures.push(format!("{case}: {}", result.1));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    failures
 }
 
 #[test]
@@ -1697,4 +1716,194 @@ fn a_home_move_through_no_planning_landing_stays_refused() {
 #[test]
 fn a_home_move_off_the_checked_line_stays_refused() {
     home_moves_refused(&[("second parent", MOVED), ("twice bad", MOVED)]);
+}
+
+// TSK-1478: a planning landing may carry decision documents (ADRs) next to
+// its records, and nothing else that records and plans do not already allow.
+const ADR: &str = "docs/decisions/ADR-0001-plan.md";
+const BASE_ADR: &str = "docs/decisions/ADR-0009-base.md";
+const BASE_NOTE: &str = "docs/decisions/notes.md";
+const DECISION: &str = "# ADR-0001: plan the work\n\n## Decision\n\nA decision.\n";
+const ROOT_AGENTS: &str = "# Project\n\n<!-- codeflow:managed:begin scaffold=2.0.0 -->\nManaged rules.\n<!-- codeflow:managed:end -->\n\n## Project-specific instructions\n\nOwn notes.\n";
+
+/// The policy entries inside `git` for a home-move `case`; a decision case
+/// may declare a document index, one of them shaped like an ADR outside
+/// `docs/decisions/`.
+fn decision_policy(case: &str) -> String {
+    let indexes = match case {
+        "adr index" => ",\"document_indexes\":[\"DOC-INDEX.md\"]",
+        "adr folder" => ",\"document_indexes\":[\"adr/ADR-0002-other.md\"]",
+        _ => "",
+    };
+    format!(",\"test_gate_on_push\":\"block\"{indexes}")
+}
+
+/// `main` holds an ADR, a note beside it and a root `AGENTS.md` with a
+/// managed block before any decision case plans its work.
+fn seed_decisions(root: &Path) {
+    write(root, BASE_ADR, &DECISION.replace("0001", "0009"));
+    write(root, BASE_NOTE, "Notes.\n");
+    write(root, "AGENTS.md", ROOT_AGENTS);
+    commit(root, "docs: record a decision");
+}
+
+/// The move of a decision `case` on the current branch: the task's new
+/// home, a decision document, and whatever else the case carries,
+/// committed, with an entry of another mode committed after it.
+fn write_decision_move(root: &Path, case: &str) {
+    let renamed = |from: &str, to: &str| git(root, &["mv", from, to]);
+    match case {
+        "adr bare" => write(root, "docs/decisions/ADR-0002.md", DECISION),
+        "adr renamed" => renamed(BASE_ADR, "docs/decisions/ADR-0009-renamed.md"),
+        "adr edited" => write(root, BASE_ADR, "# ADR-0009: base\n\nRevised.\n"),
+        _ => write(root, ADR, DECISION),
+    }
+    let other: Option<(&str, String)> = match case {
+        "adr nested" => Some(("docs/decisions/old/ADR-0002-nested.md", DECISION.into())),
+        "adr readme" => Some(("docs/decisions/README.md", "# Decisions\n".into())),
+        "adr template" => Some(("docs/decisions/template.md", "# ADR-NNNN\n".into())),
+        "adr docs" => Some(("docs/note.md", "A note.\n".into())),
+        "adr index" => Some(("DOC-INDEX.md", "# Index\n".into())),
+        "adr folder" => Some(("adr/ADR-0002-other.md", DECISION.into())),
+        "adr agents" => Some((
+            "AGENTS.md",
+            ROOT_AGENTS.replace("Own notes.", "Own notes, revised."),
+        )),
+        "adr managed" => Some((
+            "AGENTS.md",
+            ROOT_AGENTS.replace("Managed rules.", "Managed rules, revised."),
+        )),
+        "adr harness" => Some(("docs/decisions/CLAUDE.md", "Instructions.\n".into())),
+        "adr rules" => Some((".codeflow/rules/extra.md", "A rule.\n".into())),
+        "adr skill" => Some((".claude/skills/extra/SKILL.md", "A skill.\n".into())),
+        "adr hook" => Some((".codeflow/git-hooks/pre-commit", "exit 0\n".into())),
+        "adr policy" => Some((
+            ".codeflow/policy.json",
+            "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"lib/**\"],\"test_gate_on_push\":\"block\"}\n}\n".into(),
+        )),
+        "adr ci" => Some((".github/workflows/ci.yml", "on: push\n".into())),
+        _ => None,
+    };
+    if let Some((path, text)) = other {
+        write(root, path, &text);
+    }
+    match case {
+        "adr rename out" => renamed(BASE_ADR, "docs/decisions/kept.md"),
+        "adr rename in" => renamed(BASE_NOTE, "docs/decisions/ADR-0010-notes.md"),
+        _ => {}
+    }
+    commit(root, "docs: move the task with its decision");
+    match case {
+        "adr executable" => index_entry(root, "100755", ADR, DECISION),
+        "adr symlink" => index_entry(
+            root,
+            "120000",
+            "docs/decisions/ADR-0003-link.md",
+            "../../project-management/tasks/TSK-002.md",
+        ),
+        _ => {}
+    }
+}
+
+/// `codeflow ci` for the planning pull request `plan/move` into the line
+/// as it stood when the pull request was cut, as that pull request's check
+/// runs it.
+fn planning_pull_request(root: &Path) -> (i32, String) {
+    git(root, &["branch", "-f", "line-before-move", "before-move"]);
+    git(root, &["switch", "plan/move"]);
+    let result = ci_on(
+        root,
+        "line-before-move",
+        "plan/move",
+        "Task: EPC-001, EPC-002",
+    );
+    git(root, &["switch", LINE_A]);
+    result
+}
+
+#[test]
+fn a_planning_merge_with_a_decision_document_moves_a_task() {
+    let mut failures = Vec::new();
+    for case in ["adr", "adr bare", "adr renamed", "adr edited"] {
+        let dir = home_move(case);
+        let root = dir.path();
+        let result = line_into_main(root);
+        if result.0 != 0 || result.1.contains(MOVED) || result.1.contains("work.import_authority") {
+            failures.push(format!("{case}: {}", result.1));
+        }
+        // The planning pull request that carried it is admitted as one.
+        let planning = planning_pull_request(root);
+        if planning.0 != 0 || !planning.1.contains("class: planning-only") {
+            failures.push(format!("{case} (planning pull request): {}", planning.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn lines_that_share_a_planning_merge_with_a_decision_document_push_in_either_order() {
+    let refused = push_both("adr shared");
+    assert!(refused.is_empty(), "{}", refused.join("\n"));
+}
+
+/// Every path but records, plans and ADRs in the compiled layout keeps the
+/// landing inadmissible, on both import routes.
+#[test]
+fn a_decision_document_carries_no_other_path() {
+    let mut failures = home_move_failures(&[
+        ("adr nested", MOVED),
+        ("adr readme", MOVED),
+        ("adr template", MOVED),
+        ("adr docs", MOVED),
+        ("adr index", MOVED),
+        ("adr folder", MOVED),
+        ("adr agents", MOVED),
+        ("adr harness", MOVED),
+        ("adr executable", MOVED),
+        ("adr symlink", MOVED),
+        ("adr rename out", MOVED),
+        ("adr rename in", MOVED),
+        (
+            "adr evil",
+            "the home landing contains an unreviewed merge resolution",
+        ),
+    ]);
+    for shape in ["adr docs shared", "adr hook shared"] {
+        let dir = two_lines(shape);
+        let root = dir.path();
+        git(root, &["switch", LINE_A]);
+        let result = pre_push(root, LINE_A, &"0".repeat(40));
+        let needles = [
+            "work.import_authority",
+            LINE_B,
+            "exists only on unpublished local history",
+        ];
+        if result.0 == 0 || !needles.iter().all(|needle| result.1.contains(needle)) {
+            failures.push(format!("{shape}: {}", result.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Instructions, hooks, policy and CI carried next to an ADR stay refused by
+/// the planning pull request's own check and by the import check.
+#[test]
+fn a_decision_document_never_widens_the_instructions_admission() {
+    let cases = [
+        "adr managed",
+        "adr rules",
+        "adr skill",
+        "adr hook",
+        "adr policy",
+        "adr ci",
+    ];
+    let mut failures = home_move_failures(&cases.map(|case| (case, MOVED)));
+    for case in cases {
+        let dir = home_move(case);
+        let planning = planning_pull_request(dir.path());
+        if planning.0 == 0 || planning.1.contains("class: planning-only") {
+            failures.push(format!("{case} (planning pull request): {}", planning.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

@@ -856,6 +856,19 @@ exception. Files must be regular. When carrying documentation, indexes or
 names the excluded path and the admitted set; carry an excluded file in a
 task PR.
 
+Once a planning amendment lands, `work.import_authority` asks of its merge
+whether it is shared planning provenance (two lines that hold the same
+planning merge) or a planning move of a task's home. The merge counts only
+when it is a clean merge whose changes are records, plans and decision
+documents, each a regular, non-executable file. A decision document is an
+ADR directly in `docs/decisions/`, named `ADR-NNNN.md` or
+`ADR-NNNN-<slug>.md` with four or more digits; this layout is built into
+`codeflow`, and no policy value widens it. A landed planning merge that also
+carries other documentation, `docs/decisions/README.md` or `template.md`, a
+document index or `AGENTS.md` passed its own pull request check, but it does
+not count, and the import is judged as an unpublished import or a home
+change.
+
 ## Own-task criteria on an integration line
 
 `codeflow ci` and the pre-push hook judge a task's criteria this way

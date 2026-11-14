@@ -368,8 +368,17 @@ fn is_shared_planning(
 /// The first parent of `landing` when it is an admissible planning landing
 /// (TSK-1004): a merge whose tree is the clean merge of its parents, and
 /// whose change from its first parent passes the planning-amendment
-/// admissibility check, touches only records and plans (both names of a
-/// rename) and holds only regular, non-executable files on each side.
+/// admissibility check, touches only records, plans and decision documents
+/// (both names of a rename) and holds only regular, non-executable files on
+/// each side.
+///
+/// A decision document is an ADR in the record layout compiled into the
+/// binary (`docs/decisions/ADR-NNNN[-slug].md`, as [`record_id_from_path`]
+/// reads it), never a path a policy value or a file in the range declares
+/// (TSK-1478). Other documentation, document indexes, `AGENTS.md`,
+/// instructions, hooks, policy and CI keep the landing inadmissible.
+///
+/// [`record_id_from_path`]: crate::ids::record_id_from_path
 ///
 /// # Errors
 /// A commit, tree, diff or policy that cannot be read is an error, which
@@ -411,12 +420,23 @@ fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option
             let name = crate::git::GitName::from_bytes(file.path_bytes().unwrap_or_default());
             let path = name.rule_text().map_err(|odd| odd.display().to_string())?;
             let regular = i32::from(file.mode()) == 0o100_644;
-            if !regular || amendment_path(path, &project) != Some(AmendmentPath::Record) {
+            let admitted = match amendment_path(path, &project) {
+                Some(AmendmentPath::Record) => true,
+                Some(AmendmentPath::Doc) => is_decision_document(path),
+                _ => false,
+            };
+            if !regular || !admitted {
                 return Ok(None);
             }
         }
     }
     Ok(Some(*first))
+}
+
+/// Whether `path` is a decision document: an ADR at the top of
+/// `docs/decisions/` in the record layout compiled into the binary.
+fn is_decision_document(path: &str) -> bool {
+    crate::ids::record_id_from_path(path).is_some_and(|id| id.kind() == crate::ids::Kind::Adr)
 }
 
 /// Whether `landed` moved the task's declared home as reviewed planning
