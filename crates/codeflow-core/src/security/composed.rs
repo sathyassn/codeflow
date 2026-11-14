@@ -1242,6 +1242,1200 @@ fn assignment(word: &str) -> bool {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Text the shell evaluates as arithmetic (TSK-1476)
+// ---------------------------------------------------------------------------
+
+/// The reason given when text the shell evaluates as arithmetic cannot be
+/// placed.
+const UNPLACED: &str = "text the shell evaluates as arithmetic that the guard cannot place";
+
+/// How a word the shell evaluates is read: as an arithmetic expression, or
+/// as a variable name whose subscript is one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Expression,
+    Name,
+}
+
+/// Builtins of bash and zsh that evaluate none of their words as
+/// arithmetic, by the bash manual (SHELL BUILTIN COMMANDS) and
+/// zshbuiltins(1). Code the line hands `eval`, `source` or `trap` is judged
+/// by the rules on code. Every other builtin of the two shells and of the
+/// modules zsh ships ([`EVALUATING`]) has each word read as arithmetic.
+const NOT_EVALUATING: &[&str] = &[
+    "echo", "cd", "chdir", "pushd", "popd", "dirs", "pwd", "true", "false", ":", "source", ".",
+    "eval", "type", "which", "whence", "where", "hash", "rehash", "unhash", "jobs", "fg", "bg",
+    "disown", "kill", "times", "history", "fc", "r", "help", "trap", "shopt", "setopt", "unsetopt",
+    "emulate", "ulimit", "limit", "unlimit", "umask", "suspend", "bind", "bindkey", "complete",
+    "compgen", "compopt", "compctl", "zle", "ttyctl", "logout", "bye",
+];
+
+/// Builtins that run code the line hands them as a string or a file, now
+/// or later: what it assigns is not a word on the line.
+const CODE_RUNNERS: &[&str] = &["eval", "source", ".", "trap", "fc", "r", "emulate", "sched"];
+
+/// Variables the shell sets to text a command on the line gives it: the
+/// last argument, a match, a line `read` takes, an option argument, the
+/// command text, a function's or file's name, the directory stack, and
+/// the tables of zsh's parameter and mapfile modules (bash(1) Shell
+/// Variables, zshparam(1) PARAMETERS SET BY THE SHELL, zshmodules(1)). The
+/// line controls their text without a word that assigns them. `PWD` and
+/// `OLDPWD` hold an absolute path, whose leading `/` ends arithmetic with
+/// an error before anything after it is read.
+const SHELL_SET: &[&str] = &[
+    "_",
+    "REPLY",
+    "reply",
+    "MAPFILE",
+    "BASH_REMATCH",
+    "MATCH",
+    "match",
+    "OPTARG",
+    "BASH_COMMAND",
+    "BASH_ARGV",
+    "BASH_ARGV0",
+    "BASH_EXECUTION_STRING",
+    "BASH_SOURCE",
+    "BASH_ALIASES",
+    "BASH_CMDS",
+    "FUNCNAME",
+    "COPROC",
+    "COMP_LINE",
+    "COMP_WORDS",
+    "READLINE_LINE",
+    "DIRSTACK",
+    "dirstack",
+    "argv",
+    "ARGV0",
+    "ZSH_ARGZERO",
+    "ZSH_EXECUTION_STRING",
+    "ZSH_SCRIPT",
+    "zsh_scheduled_events",
+    "funcstack",
+    "functrace",
+    "funcfiletrace",
+    "funcsourcetrace",
+    "options",
+    "commands",
+    "functions",
+    "dis_functions",
+    "functions_source",
+    "dis_functions_source",
+    "builtins",
+    "dis_builtins",
+    "reswords",
+    "dis_reswords",
+    "patchars",
+    "dis_patchars",
+    "aliases",
+    "dis_aliases",
+    "galiases",
+    "dis_galiases",
+    "saliases",
+    "dis_saliases",
+    "parameters",
+    "modules",
+    "history",
+    "historywords",
+    "jobdirs",
+    "jobtexts",
+    "jobstates",
+    "nameddirs",
+    "userdirs",
+    "usergroups",
+    "mapfile",
+];
+
+/// zsh's arrays tied to a scalar (zshparam(1)): each reads the other's
+/// value.
+const TIED: &[(&str, &str)] = &[
+    ("path", "PATH"),
+    ("fpath", "FPATH"),
+    ("cdpath", "CDPATH"),
+    ("manpath", "MANPATH"),
+    ("mailpath", "MAILPATH"),
+    ("module_path", "MODULE_PATH"),
+    ("psvar", "PSVAR"),
+    ("watch", "WATCH"),
+    ("zsh_eval_context", "ZSH_EVAL_CONTEXT"),
+];
+
+/// Variables whose value the shell expands as a prompt (bash(1) PROMPTING,
+/// zshmisc(1) EXPANSION OF PROMPT SEQUENCES): `PS4` before each traced
+/// command, `PS3` for `select`, the others in an interactive shell; and
+/// `PROMPT_COMMAND`, which bash runs as a command.
+const PROMPTS: &[&str] = &[
+    "PS0",
+    "PS1",
+    "PS2",
+    "PS3",
+    "PS4",
+    "PROMPT",
+    "PROMPT2",
+    "PROMPT3",
+    "PROMPT4",
+    "RPROMPT",
+    "RPROMPT2",
+    "RPS1",
+    "RPS2",
+    "SPROMPT",
+    "PROMPT_COMMAND",
+];
+
+/// Builtins that define a function, an alias or a math function, or load
+/// or turn on builtins: on a line that runs one, any command may be one of
+/// these, so every word is read as arithmetic.
+const DEFINERS: &[&str] = &[
+    "alias",
+    "unalias",
+    "enable",
+    "disable",
+    "zmodload",
+    "autoload",
+    "functions",
+    "unfunction",
+    "function",
+];
+
+/// Words in front of a command that run it as a builtin or change how it
+/// runs.
+const PRECOMMANDS: &[&str] = &[
+    "builtin",
+    "command",
+    "noglob",
+    "nocorrect",
+    "-",
+    "exec",
+    "time",
+];
+
+/// Declaration builtins: an operand's subscript is arithmetic, and with
+/// the integer or float attribute (or a name reference) its value is too.
+const DECLARATION: &[&str] = &[
+    "declare", "typeset", "local", "export", "readonly", "private", "nameref", "integer", "float",
+];
+
+/// Builtins whose operands name a variable, which may be an array element
+/// with an arithmetic subscript.
+const NAMING: &[&str] = &[
+    "read",
+    "mapfile",
+    "readarray",
+    "getopts",
+    "unset",
+    "vared",
+    "zparseopts",
+    "zstat",
+    "strftime",
+    "sysread",
+    "sysopen",
+    "zselect",
+    "zsocket",
+    "ztcp",
+    "zpty",
+    "zformat",
+    "zregexparse",
+    "pcre_match",
+    "zgetattr",
+    "zlistattr",
+];
+
+/// The other builtins of bash, zsh and the modules zsh ships: each word is
+/// read as arithmetic (`shift`, `return`, `exit`, `break`, `continue`,
+/// `let` and the rest).
+const EVALUATING: &[&str] = &[
+    "let",
+    "shift",
+    "return",
+    "exit",
+    "break",
+    "continue",
+    "wait",
+    "set",
+    "printf",
+    "print",
+    "test",
+    "[",
+    "[[",
+    "caller",
+    "getln",
+    "pushln",
+    "sched",
+    "zcompile",
+    "zprof",
+    "zftp",
+    "zstyle",
+    "clone",
+    "cap",
+    "getcap",
+    "setcap",
+    "echotc",
+    "echoti",
+    "syswrite",
+    "sysseek",
+    "zsystem",
+    "syserror",
+    "zcurses",
+    "ztie",
+    "zuntie",
+    "zgdbmpath",
+    "zsetattr",
+    "zdelattr",
+    "pcre_compile",
+    "pcre_study",
+    "compadd",
+    "compset",
+    "compcall",
+    "comparguments",
+    "compdescribe",
+    "compfiles",
+    "compgroups",
+    "compquote",
+    "comptags",
+    "comptry",
+    "compvalues",
+];
+
+/// The `[[` operators whose operands are arithmetic expressions.
+const ARITH_OPERATORS: &[&str] = &["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
+
+/// What text the shell evaluates as arithmetic on a line holds.
+#[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // independent facts about one line
+struct Evaluated {
+    /// The command lines the shell runs from such text: for each command
+    /// substitution in arithmetic, one that hands its output to a shell;
+    /// for one in a prompt, its body.
+    feeds: Vec<String>,
+    /// Variables such text reads.
+    refs: Vec<String>,
+    /// The variables the first walk finds read in a context it places,
+    /// before every word is read as arithmetic.
+    certain: Vec<String>,
+    /// The positions in [`Self::refs`] of variables read only because a
+    /// program the shell fills in may be a builtin that evaluates them.
+    guessed: Vec<usize>,
+    /// For each word that assigns a variable literal text with no `$` or
+    /// backquote, or arithmetic expansions (a `name=value` word, a loop
+    /// word, an array element), the name and that literal text.
+    written: Vec<(String, String)>,
+    /// Variables the line assigns in any other way.
+    unwritten: Vec<String>,
+    /// The line may assign a variable in a way no word on it shows: code
+    /// it hands `eval`, `source`, `trap` or `mapfile -C`, a definer other
+    /// than a function the line spells, a loop over several names or the
+    /// positional parameters, a program or a variable name the shell fills
+    /// in.
+    hidden: bool,
+    /// The line defines a function, an alias or a builtin.
+    defines: bool,
+    /// The line gives a variable the integer, float or reference attribute.
+    integer: bool,
+    /// The line sets the positional parameters.
+    positional: bool,
+    /// Every word is read as arithmetic (set on the second walk when the
+    /// line defines a command or an attribute).
+    every: bool,
+}
+
+/// For each command substitution in text the shell evaluates as
+/// arithmetic on `line`, a command line that hands its output to a shell
+/// (`body | sh`): the shell runs the substitution and evaluates its output.
+/// The contexts, from the bash manual (ARITHMETIC EVALUATION and the
+/// sections it names) and zshmisc(1), zshparam(1), zshexpn(1) and
+/// zshbuiltins(1): `((...))` and the arithmetic `for`, `$((...))` and
+/// `$[...]`, `let`, the `[[` operators `-eq`, `-ne`, `-lt`, `-le`, `-gt`
+/// and `-ge`, the operand of `-v` in `[[`, `test` and `[`, an array
+/// subscript in an expansion, an assignment or a variable name a builtin
+/// is given (`read`, `printf -v`, `unset` and the rest), a value assigned
+/// with the integer or float attribute, a substring offset and length,
+/// zsh's `repeat` count, the numeric arguments of zsh's `printf`, the
+/// counts of zsh's `shift`, `return`, `exit`, `break` and `continue`, and
+/// an expansion that reads a variable's value as a name or expands it
+/// again (`${!name}`, zsh flags, bash `@P`). The `test` and `[` comparison
+/// operators take integers in both shells and are not evaluated. Text the
+/// shell expands as a prompt, a value assigned to a prompt variable
+/// ([`PROMPTS`]) or an argument of zsh's `print -P`, has each substitution
+/// run as a command line. `Err` when such text cannot be placed: a word
+/// that joins written substitution text with an expansion, a variable it
+/// reads that the line binds to text from outside the line or to text
+/// with a substitution, that the line assigns in a way no word shows or
+/// that the shell sets from the line's text, positional parameters the
+/// line sets, or text the lexer cannot read ([`Evaluated::settle`]).
+pub(crate) fn arithmetic_feeds(line: &str) -> Result<Vec<String>, &'static str> {
+    let mut found = Evaluated::default();
+    found.line(line, 0)?;
+    found.certain = found
+        .refs
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !found.guessed.contains(at))
+        .map(|(_, name)| name.clone())
+        .collect();
+    if found.defines || found.integer {
+        // The second walk reads every word; what the first found about
+        // the line's assignments stands.
+        let first = found;
+        found = Evaluated {
+            every: true,
+            ..Evaluated::default()
+        };
+        found.line(line, 0)?;
+        found.defines |= first.defines;
+        found.integer |= first.integer;
+        found.hidden |= first.hidden;
+        found.certain = first.certain;
+        for fed in &first.feeds {
+            found.runs(fed);
+        }
+        found.written.extend(first.written);
+        found.unwritten.extend(first.unwritten);
+    }
+    found.settle(line)?;
+    Ok(found.feeds)
+}
+
+impl Evaluated {
+    fn line(&mut self, line: &str, depth: usize) -> Result<(), &'static str> {
+        if depth > 8 {
+            return Err(UNPLACED);
+        }
+        let Ok((toks, docs)) = lex(line) else {
+            // With no expansion on it, nothing on the line can run text.
+            return if line.contains('$') || line.contains('`') {
+                Err(UNPLACED)
+            } else {
+                Ok(())
+            };
+        };
+        // Commands end at an operator, except inside `[[ ... ]]`.
+        let mut start = 0;
+        let mut in_test = false;
+        for at in 0..=toks.len() {
+            match toks.get(at) {
+                Some(Tok::Word(word)) => match word.plain() {
+                    Some("[[") => in_test = true,
+                    Some("]]") => in_test = false,
+                    _ => {}
+                },
+                Some(Tok::Op(_)) if !in_test => {}
+                Some(_) => continue,
+                None => {}
+            }
+            if matches!(toks.get(at), Some(Tok::Op(_)) | None) {
+                let segment = &toks[start..at];
+                // `name()` starts a function definition.
+                if segment.len() == 1
+                    && matches!(toks.get(at), Some(Tok::Op("(")))
+                    && matches!(toks.get(at + 1), Some(Tok::Op(")")))
+                {
+                    self.defines = true;
+                }
+                self.command(segment, &docs, depth)?;
+                start = at + 1;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // one dispatch over the builtins
+    fn command(
+        &mut self,
+        toks: &[Tok],
+        docs: &[Heredoc],
+        depth: usize,
+    ) -> Result<(), &'static str> {
+        let mut words: Vec<&Word> = Vec::new();
+        for tok in toks {
+            match tok {
+                Tok::Word(word) => {
+                    self.word(word, depth)?;
+                    words.push(word);
+                }
+                Tok::Array { name, elements, .. } => {
+                    self.record(name, Some(String::new()));
+                    for element in elements {
+                        self.record(name, settled_text(element, true));
+                        self.word(element, depth)?;
+                        if element.raw.starts_with('[') || self.every {
+                            self.evaluated(element, Reading::Expression, depth)?;
+                        }
+                    }
+                }
+                Tok::Redir {
+                    target, heredoc, ..
+                } => {
+                    if let Some(target) = target {
+                        self.word(target, depth)?;
+                    }
+                    if let Some(doc) = heredoc.and_then(|index| docs.get(index)) {
+                        self.word(&doc.body, depth)?;
+                    }
+                }
+                Tok::ArithCmd(body) => self.text(body, depth)?,
+                Tok::Op(_) => {}
+            }
+        }
+        // A prompt variable's value, wherever a word assigns one: the
+        // shell, or a shell the line starts, expands it as a prompt.
+        for word in &words {
+            if let Some(name) = assigned_name(&word.raw) {
+                if PROMPTS.contains(&name) {
+                    self.prompted(word, Some(name), depth)?;
+                }
+            }
+        }
+        let mut at = 0;
+        // Reserved words, assignments and a `repeat` count.
+        while let Some(word) = words.get(at) {
+            let plain = word.plain().unwrap_or("");
+            if LEADING_WORDS.contains(&plain) || matches!(plain, "{" | "}" | "coproc") {
+                at += 1;
+            } else if plain == "repeat" {
+                if let Some(count) = words.get(at + 1) {
+                    self.evaluated(count, Reading::Expression, depth)?;
+                }
+                at += 2;
+            } else if let Some(name) = assigned_name(&word.raw) {
+                self.assigns_word(name, word);
+                if name.contains('[') || self.every {
+                    self.evaluated(word, Reading::Expression, depth)?;
+                }
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        let rest = &words[at.min(words.len())..];
+        if let [keyword, after @ ..] = rest {
+            if matches!(keyword.plain(), Some("for" | "select" | "foreach")) {
+                match after {
+                    // `for name in words`: each word, as the loop gives it.
+                    [name, word, values @ ..]
+                        if keyword.plain() != Some("foreach") && word.plain() == Some("in") =>
+                    {
+                        self.record(&name.raw, Some(String::new()));
+                        for value in values {
+                            self.record(&name.raw, settled_text(value, true));
+                        }
+                    }
+                    // The positional parameters, several names, or zsh's
+                    // forms with the words in parentheses.
+                    _ => self.hidden = true,
+                }
+            }
+        }
+        if self.every {
+            return self.all(rest, Reading::Expression, depth);
+        }
+        let mut at = 0;
+        loop {
+            let Some(word) = rest.get(at) else {
+                return Ok(());
+            };
+            let Some(name) = word.plain() else {
+                // A program the shell fills in may be any builtin: its
+                // words may be arithmetic, and it may assign a variable.
+                self.hidden = true;
+                let start = self.refs.len();
+                self.all(rest, Reading::Expression, depth)?;
+                self.guessed.extend(start..self.refs.len());
+                return Ok(());
+            };
+            if !PRECOMMANDS.contains(&name) {
+                break;
+            }
+            at += 1;
+            while let Some(option) = rest.get(at).and_then(|word| word.plain()) {
+                if !option.starts_with('-') || option == "-" || name == "builtin" {
+                    break;
+                }
+                if name == "command" && (option.contains('v') || option.contains('V')) {
+                    return Ok(());
+                }
+                at += if name == "exec" && option == "-a" {
+                    2
+                } else {
+                    1
+                };
+            }
+        }
+        let name = rest[at].plain().unwrap_or("");
+        let args = &rest[at + 1..];
+        self.hidden |= CODE_RUNNERS.contains(&name);
+        // `mapfile -C` runs a callback the line hands it as a string.
+        self.hidden |= matches!(name, "mapfile" | "readarray")
+            && args.iter().any(|word| {
+                word.plain()
+                    .is_some_and(|option| option.starts_with('-') && option.contains('C'))
+            });
+        match name {
+            _ if DEFINERS.contains(&name) => {
+                self.defines = true;
+                // A function's body is on the line; an alias's text, a
+                // loaded function or a builtin turned on is not.
+                self.hidden |= name != "function";
+            }
+            _ if NOT_EVALUATING.contains(&name) => {}
+            "printf" => self.printf(args, depth)?,
+            "print" => self.print(args, depth)?,
+            "[[" => {
+                for (index, word) in args.iter().enumerate() {
+                    let operator = word.plain().unwrap_or("");
+                    if ARITH_OPERATORS.contains(&operator) {
+                        if let Some(before) = index.checked_sub(1).and_then(|i| args.get(i)) {
+                            self.evaluated(before, Reading::Expression, depth)?;
+                        }
+                    }
+                    if ARITH_OPERATORS.contains(&operator) || operator == "-v" {
+                        if let Some(after) = args.get(index + 1) {
+                            let reading = if operator == "-v" {
+                                Reading::Name
+                            } else {
+                                Reading::Expression
+                            };
+                            self.evaluated(after, reading, depth)?;
+                        }
+                    }
+                }
+            }
+            "test" | "[" => self.after_option(args, "-v", depth)?,
+            "wait" => self.after_option(args, "-p", depth)?,
+            "set" => {
+                for (index, word) in args.iter().enumerate() {
+                    match word.plain() {
+                        Some("-A" | "+A") => {
+                            if let Some(name) = args.get(index + 1) {
+                                self.evaluated(name, Reading::Name, depth)?;
+                            }
+                        }
+                        Some(option) if option.starts_with(['-', '+']) && option != "--" => {}
+                        _ => self.positional = true,
+                    }
+                }
+            }
+            _ if DECLARATION.contains(&name) => {
+                let mut attribute = matches!(name, "integer" | "float" | "nameref");
+                for word in args {
+                    match word.plain() {
+                        Some(option) if option.starts_with(['-', '+']) && option.len() > 1 => {
+                            // zsh's `-T` ties a scalar to an array.
+                            attribute |= option.contains(['i', 'E', 'F', 'n', 'T']);
+                        }
+                        _ if attribute => {
+                            if let Some(name) = assigned_name(&word.raw) {
+                                self.assigns_word(name, word);
+                            }
+                            self.evaluated(word, Reading::Expression, depth)?;
+                        }
+                        // Without the attribute only a subscript is
+                        // arithmetic; a value is not.
+                        _ => match assigned_name(&word.raw) {
+                            Some(name) => {
+                                self.assigns_word(name, word);
+                                if name.contains('[') {
+                                    self.evaluated(word, Reading::Expression, depth)?;
+                                }
+                            }
+                            // A bare name keeps its value or is emptied.
+                            None if word.plain().is_some_and(is_identifier) => {
+                                self.record(&word.raw, Some(String::new()));
+                            }
+                            None => self.evaluated(word, Reading::Name, depth)?,
+                        },
+                    }
+                }
+                self.integer |= attribute;
+            }
+            _ if NAMING.contains(&name) => self.all(args, Reading::Name, depth)?,
+            _ if EVALUATING.contains(&name) => self.all(args, Reading::Expression, depth)?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn all(&mut self, words: &[&Word], reading: Reading, depth: usize) -> Result<(), &'static str> {
+        for word in words {
+            self.evaluated(word, reading, depth)?;
+        }
+        Ok(())
+    }
+
+    /// The word after `option` (`test -v`, `wait -p`) names a variable.
+    fn after_option(
+        &mut self,
+        args: &[&Word],
+        option: &str,
+        depth: usize,
+    ) -> Result<(), &'static str> {
+        for (index, word) in args.iter().enumerate() {
+            if word.plain() == Some(option) {
+                if let Some(name) = args.get(index + 1) {
+                    self.evaluated(name, Reading::Name, depth)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `printf`: the `-v` name, and in zsh every argument after a format
+    /// with a numeric conversion, or after a format the shell fills in.
+    fn printf(&mut self, args: &[&Word], depth: usize) -> Result<(), &'static str> {
+        let mut at = 0;
+        while let Some(word) = args.get(at) {
+            match word.plain() {
+                Some("--") => {
+                    at += 1;
+                    break;
+                }
+                Some("-v") => {
+                    if let Some(name) = args.get(at + 1) {
+                        self.evaluated(name, Reading::Name, depth)?;
+                    }
+                    at += 2;
+                }
+                Some(option) if option.starts_with("-v") => {
+                    self.evaluated(word, Reading::Name, depth)?;
+                    at += 1;
+                }
+                _ => break,
+            }
+        }
+        self.formatted(
+            args.get(at).copied(),
+            &args[(at + 1).min(args.len())..],
+            depth,
+        )
+    }
+
+    /// The arguments of a zsh `printf` format: arithmetic when the format
+    /// has a numeric conversion or is not written out.
+    fn formatted(
+        &mut self,
+        format: Option<&Word>,
+        args: &[&Word],
+        depth: usize,
+    ) -> Result<(), &'static str> {
+        let numeric = format
+            .is_none_or(|format| literal_text(format).is_none_or(|text| numeric_conversion(&text)));
+        if numeric {
+            self.all(args, Reading::Expression, depth)?;
+        }
+        Ok(())
+    }
+
+    /// zsh `print`: the `-v` name, every argument with `-P` (prompt
+    /// expansion, which runs substitutions with `PROMPT_SUBST`), the
+    /// numeric values of `-C`, `-u`, `-x` and `-X`, and `-f` as `printf`.
+    fn print(&mut self, args: &[&Word], depth: usize) -> Result<(), &'static str> {
+        let mut at = 0;
+        let mut prompt = false;
+        let mut format: Option<&Word> = None;
+        while let Some(word) = args.get(at) {
+            let Some(option) = word.plain() else {
+                break;
+            };
+            if option == "--" || option == "-" {
+                at += 1;
+                break;
+            }
+            if !option.starts_with(['-', '+']) || option.len() < 2 {
+                break;
+            }
+            at += 1;
+            for (index, flag) in option.char_indices().skip(1) {
+                if flag == 'P' {
+                    prompt = true;
+                }
+                if matches!(flag, 'f' | 'v' | 'C' | 'u' | 'x' | 'X') {
+                    // The value is the rest of the word or the next word.
+                    let value = if index + 1 < option.len() {
+                        Some(*word)
+                    } else {
+                        at += 1;
+                        args.get(at - 1).copied()
+                    };
+                    if let Some(value) = value {
+                        if flag == 'f' {
+                            format = Some(value);
+                        } else {
+                            let reading = if flag == 'v' {
+                                Reading::Name
+                            } else {
+                                Reading::Expression
+                            };
+                            self.evaluated(value, reading, depth)?;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        let args = &args[at.min(args.len())..];
+        if prompt {
+            for word in args {
+                self.prompted(word, None, depth)?;
+            }
+        } else if let Some(format) = format {
+            self.formatted(Some(format), args, depth)?;
+        }
+        Ok(())
+    }
+
+    /// Any word on the line: each `$((...))`, a `${...}` subscript, offset
+    /// or flag, and each substitution's body as a command line.
+    fn word(&mut self, word: &Word, depth: usize) -> Result<(), &'static str> {
+        let mut subscripted = false;
+        for part in &word.parts {
+            match part {
+                Part::Arith { body, .. } => self.text(body, depth)?,
+                Part::Param {
+                    body, braced: true, ..
+                } => self.braced(body, false, depth)?,
+                Part::Param { zsh_tail, .. } => subscripted |= *zsh_tail,
+                Part::Subst { body, .. } | Part::ProcSubst(body, _) => {
+                    self.line(body, depth + 1)?;
+                }
+                Part::Lit { .. } | Part::Ansi(_) | Part::Unmodelled(_) => {}
+            }
+        }
+        // zsh reads `$name[...]` as a subscript.
+        if subscripted {
+            self.evaluated(word, Reading::Expression, depth)?;
+        }
+        Ok(())
+    }
+
+    /// A word the shell evaluates: its written text is read as arithmetic
+    /// (all of it, or a name's subscript), a substitution's output is fed to
+    /// a shell, and a variable it expands is read.
+    fn evaluated(
+        &mut self,
+        word: &Word,
+        reading: Reading,
+        depth: usize,
+    ) -> Result<(), &'static str> {
+        let mut written = String::new();
+        let mut expands = false;
+        for part in &word.parts {
+            match part {
+                Part::Lit { text, .. } => written.push_str(text),
+                Part::Ansi(body) => written.push_str(&decode(body, Escapes::Ansi)?),
+                Part::Param { body, braced, .. } => {
+                    expands = true;
+                    if *braced {
+                        self.braced(body, true, depth)?;
+                    } else {
+                        self.refs.push(body.clone());
+                    }
+                }
+                Part::Subst { body, .. } => {
+                    expands = true;
+                    self.feed(body);
+                }
+                Part::Arith { .. } | Part::ProcSubst(..) => expands = true,
+                Part::Unmodelled(reason) => return Err(reason),
+            }
+        }
+        if expands && (written.contains('$') || written.contains('`')) {
+            return Err(UNPLACED);
+        }
+        match reading {
+            Reading::Expression => self.text(&written, depth),
+            Reading::Name => {
+                // A name the shell fills in may be any variable.
+                self.hidden |= expands;
+                match (written.find('['), written.rfind(']')) {
+                    _ if !expands && is_identifier(&written) => {
+                        self.assigns(&written);
+                        Ok(())
+                    }
+                    (Some(open), Some(close)) if open < close => {
+                        self.assigns(&written[..open]);
+                        self.text(&written[open + 1..close], depth)
+                    }
+                    _ => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// Text the shell evaluates as arithmetic, as written: the variables it
+    /// names, and inside it, read as between double quotes (a single quote
+    /// is a character there), each substitution, expansion and nested
+    /// arithmetic.
+    fn text(&mut self, text: &str, depth: usize) -> Result<(), &'static str> {
+        self.refs.extend(identifiers(text).map(str::to_string));
+        if !text.contains('$') && !text.contains('`') {
+            return Ok(());
+        }
+        let mut lexer = Lexer {
+            chars: text.chars().collect(),
+            at: 0,
+            toks: Vec::new(),
+            heredocs: Vec::new(),
+            pending: Vec::new(),
+        };
+        let mut parts = Vec::new();
+        lexer.double_quoted(&mut parts, true)?;
+        for part in parts {
+            match part {
+                Part::Subst { body, .. } => {
+                    self.feed(&body);
+                    self.line(&body, depth + 1)?;
+                }
+                Part::Param {
+                    body, braced: true, ..
+                } => self.braced(&body, true, depth)?,
+                Part::Param { body, .. } => self.refs.push(body),
+                Part::Arith { body, .. } => self.text(&body, depth + 1)?,
+                Part::Unmodelled(reason) => return Err(reason),
+                Part::Lit { .. } | Part::Ansi(_) | Part::ProcSubst(..) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The body of `${...}`: a subscript, an offset and length, an
+    /// indirection, zsh flags or bash `@P` are evaluated; with `value`, the
+    /// variable's value is too (the expansion is itself in such text).
+    fn braced(&mut self, body: &str, value: bool, depth: usize) -> Result<(), &'static str> {
+        let mut rest = body;
+        let mut reads = value;
+        if let Some(flags) = rest.strip_prefix('(') {
+            let Some(close) = flags.find(')') else {
+                return Err(UNPLACED);
+            };
+            reads = true;
+            rest = &flags[close + 1..];
+        }
+        if let Some(name) = rest.strip_prefix('!') {
+            reads = true;
+            rest = name;
+        } else if rest.len() > 1 {
+            if let Some(name) = rest.strip_prefix('#') {
+                // A length is a number: the value is not read further.
+                reads = reads && body.starts_with('(');
+                rest = name;
+            }
+        }
+        let name_len = if rest.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+            rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len())
+        } else if rest.starts_with(|c: char| c.is_ascii_digit()) {
+            rest.find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len())
+        } else {
+            rest.chars().next().map_or(0, char::len_utf8)
+        };
+        let name = &rest[..name_len];
+        rest = &rest[name_len..];
+        if let Some(inner) = rest.strip_prefix('[') {
+            let mut level = 1;
+            let close = inner.char_indices().find_map(|(index, c)| {
+                match c {
+                    '[' => level += 1,
+                    ']' => level -= 1,
+                    _ => {}
+                }
+                (level == 0).then_some(index)
+            });
+            let Some(close) = close else {
+                return Err(UNPLACED);
+            };
+            self.text(&inner[..close], depth)?;
+            rest = &inner[close + 1..];
+        }
+        if rest.starts_with("@P") {
+            reads = true;
+        }
+        if reads {
+            self.refs.push(name.to_string());
+        }
+        // `${name=word}`, `${name:=word}` and zsh's `${name::=word}`
+        // assign the variable.
+        if rest.trim_start_matches(':').starts_with('=') {
+            self.assigns(name);
+        }
+        match rest.strip_prefix(':') {
+            Some(offset) if !offset.starts_with(['-', '=', '?', '+']) => self.text(offset, depth),
+            _ if rest.contains('$') || rest.contains('`') => {
+                // An operator's word: what is nested in it.
+                let mut lexer = Lexer {
+                    chars: rest.chars().collect(),
+                    at: 0,
+                    toks: Vec::new(),
+                    heredocs: Vec::new(),
+                    pending: Vec::new(),
+                };
+                let mut parts = Vec::new();
+                lexer.double_quoted(&mut parts, true)?;
+                self.word(
+                    &Word {
+                        parts,
+                        raw: rest.to_string(),
+                    },
+                    depth,
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Record that the line assigns the variable `name` (a subscript
+    /// dropped) a value no word on it shows.
+    fn assigns(&mut self, name: &str) {
+        self.record(name, None);
+    }
+
+    /// Record that the `name=value` word `word` assigns `name`: a value of
+    /// literal text with no `$` or backquote, and of arithmetic expansions,
+    /// which expand to numbers, is recorded with its literal text.
+    fn assigns_word(&mut self, name: &str, word: &Word) {
+        // A prompt variable's value is judged where it is assigned
+        // ([`Self::prompted`]).
+        if PROMPTS.contains(&name) {
+            self.record(name, Some(String::new()));
+            return;
+        }
+        let value = settled_text(word, false)
+            .and_then(|text| text.split_once('=').map(|(_, value)| value.to_string()));
+        self.record(name, value);
+    }
+
+    fn record(&mut self, name: &str, value: Option<String>) {
+        let base = name.split_once('[').map_or(name, |(base, _)| base);
+        if !is_identifier(base) {
+            return;
+        }
+        match value {
+            Some(value) => self.written.push((base.to_string(), value)),
+            None => self.unwritten.push(base.to_string()),
+        }
+    }
+
+    fn feed(&mut self, body: &str) {
+        let fed = if body.contains([';', '&', '\n']) || body.contains("||") {
+            format!("{{ {body}\n}} | sh")
+        } else {
+            format!("{body} | sh")
+        };
+        self.runs(&fed);
+    }
+
+    /// A command line the shell runs from such text.
+    fn runs(&mut self, line: &str) {
+        if !self.feeds.iter().any(|known| known == line) {
+            self.feeds.push(line.to_string());
+        }
+    }
+
+    /// A word the shell expands as a prompt: a value assigned to a prompt
+    /// variable (`assigned` names it) or an argument of zsh's `print -P`.
+    /// A variable it expands is read, a substitution's output is expanded
+    /// again, and its written text is read as the shell expands a prompt
+    /// ([`Self::expanded`]). `PROMPT_COMMAND`'s value is run as a command
+    /// line.
+    fn prompted(
+        &mut self,
+        word: &Word,
+        assigned: Option<&str>,
+        depth: usize,
+    ) -> Result<(), &'static str> {
+        let mut written = String::new();
+        let mut expands = false;
+        for part in &word.parts {
+            match part {
+                Part::Lit { text, .. } => written.push_str(text),
+                Part::Ansi(body) => written.push_str(&decode(body, Escapes::Ansi)?),
+                Part::Param { body, braced, .. } => {
+                    expands = true;
+                    if *braced {
+                        self.braced(body, true, depth)?;
+                    } else {
+                        self.refs.push(body.clone());
+                    }
+                }
+                Part::Subst { body, .. } => {
+                    expands = true;
+                    self.feed(body);
+                }
+                Part::Arith { .. } | Part::ProcSubst(..) => expands = true,
+                Part::Unmodelled(reason) => return Err(reason),
+            }
+        }
+        if expands && (written.contains('$') || written.contains('`')) {
+            return Err(UNPLACED);
+        }
+        let value = match assigned {
+            Some(_) => written.split_once('=').map_or("", |(_, value)| value),
+            None => written.as_str(),
+        };
+        if assigned == Some("PROMPT_COMMAND") {
+            if expands {
+                return Err(UNPLACED);
+            }
+            self.runs(value);
+            return self.line(value, depth + 1);
+        }
+        self.expanded(value, depth)
+    }
+
+    /// Text the shell expands once, as a prompt or between double quotes:
+    /// each substitution's body is run as a command line, each arithmetic
+    /// expansion is evaluated and each `${...}` subscript and offset.
+    fn expanded(&mut self, text: &str, depth: usize) -> Result<(), &'static str> {
+        if !text.contains('$') && !text.contains('`') {
+            return Ok(());
+        }
+        let mut lexer = Lexer {
+            chars: text.chars().collect(),
+            at: 0,
+            toks: Vec::new(),
+            heredocs: Vec::new(),
+            pending: Vec::new(),
+        };
+        let mut parts = Vec::new();
+        lexer.double_quoted(&mut parts, true)?;
+        for part in parts {
+            match part {
+                Part::Subst { body, .. } => {
+                    self.runs(&body);
+                    self.line(&body, depth + 1)?;
+                }
+                Part::Param {
+                    body, braced: true, ..
+                } => self.braced(&body, false, depth)?,
+                Part::Arith { body, .. } => self.text(&body, depth + 1)?,
+                Part::Unmodelled(reason) => return Err(reason),
+                Part::Param { .. } | Part::Lit { .. } | Part::Ansi(_) | Part::ProcSubst(..) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Every variable such text reads, and every variable those values
+    /// name, must hold a number, text the line writes with no substitution
+    /// in it, or what it held before the line. Refused: a variable the
+    /// shell sets from text on the line ([`SHELL_SET`]), a variable the
+    /// line assigns other than by a word whose value this walk records
+    /// ([`Self::unwritten`]), a variable read where the line may assign
+    /// one unseen ([`Self::hidden`]), a prompt variable the line assigns
+    /// unseen, and a value the composer resolves to outside or substituted
+    /// text. Where the composer cannot resolve a value, the words this
+    /// walk records settle it.
+    fn settle(&self, line: &str) -> Result<(), &'static str> {
+        let bound = bindings(line);
+        if PROMPTS.iter().any(|name| {
+            self.unwritten.iter().any(|known| known == name) || (self.hidden && line.contains(name))
+        }) {
+            return Err(UNPLACED);
+        }
+        if self.hidden && self.certain.iter().any(|name| !name.is_empty()) {
+            return Err(UNPLACED);
+        }
+        let mut pending: Vec<String> = self.refs.clone();
+        if self.integer {
+            pending.extend(bound.iter().map(|(name, _)| name.clone()));
+        }
+        let mut seen: Vec<String> = Vec::new();
+        while let Some(name) = pending.pop() {
+            if seen.contains(&name) {
+                continue;
+            }
+            seen.push(name.clone());
+            if name.is_empty() {
+                continue;
+            }
+            if name.chars().all(|c| c.is_ascii_digit()) || matches!(name.as_str(), "@" | "*") {
+                if self.defines || self.positional || self.hidden {
+                    return Err(UNPLACED);
+                }
+                continue;
+            }
+            if SHELL_SET.contains(&name.as_str()) || self.unwritten.contains(&name) {
+                return Err(UNPLACED);
+            }
+            for (array, scalar) in TIED {
+                if name == *array {
+                    pending.push((*scalar).to_string());
+                } else if name == *scalar {
+                    pending.push((*array).to_string());
+                }
+            }
+            for (_, value) in self.written.iter().filter(|(known, _)| *known == name) {
+                pending.extend(identifiers(value).map(str::to_string));
+            }
+            for (_, value) in bound.iter().filter(|(bound, _)| *bound == name) {
+                let value = match value {
+                    Composed::Resolved(value) => value,
+                    // Each assignment is a word this walk records.
+                    Composed::Unresolved(_) if !self.hidden => continue,
+                    Composed::Unresolved(_) => return Err(UNPLACED),
+                };
+                let text = value.render();
+                if value.has_open() || text.contains('$') || text.contains('`') {
+                    return Err(UNPLACED);
+                }
+                pending.extend(identifiers(&text).map(str::to_string));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The literal text of `word` when it holds only literal text with no `$`
+/// or backquote and arithmetic expansions, which expand to numbers. With
+/// `fields` (a loop word or an array element), an unquoted glob or brace
+/// character, which may make other words, also gives `None`.
+fn settled_text(word: &Word, fields: bool) -> Option<String> {
+    let mut literal = String::new();
+    for part in &word.parts {
+        match part {
+            Part::Lit { text, quoted } => {
+                if text.contains(['$', '`'])
+                    || (fields && !quoted && text.contains(['*', '?', '[', '{']))
+                {
+                    return None;
+                }
+                literal.push_str(text);
+            }
+            Part::Arith { .. } => {}
+            _ => return None,
+        }
+    }
+    Some(literal)
+}
+
+/// The variable name a `name=`, `name+=` or `name[...]=` word assigns, as
+/// written before the `=`.
+fn assigned_name(raw: &str) -> Option<&str> {
+    let (name, _) = raw.split_once('=')?;
+    let name = name.strip_suffix('+').unwrap_or(name);
+    let base = name.split_once('[').map_or(name, |(base, _)| base);
+    (is_identifier(base) && (base == name || name.ends_with(']'))).then_some(name)
+}
+
+/// Whether a `printf` format has a conversion that reads a number.
+fn numeric_conversion(format: &str) -> bool {
+    let mut chars = format.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            continue;
+        }
+        for spec in chars.by_ref() {
+            match spec {
+                '%' | 's' | 'b' | 'q' => break,
+                '-' | '+' | ' ' | '#' | '0'..='9' | '.' | '\'' => {}
+                // A `*` width reads a number too.
+                _ => return true,
+            }
+        }
+    }
+    false
+}
+
 /// The commands on `line`, at every depth, that take a here-document the
 /// shell expands (an unquoted delimiter and a body with an expansion), as
 /// their words are written; `None` when the line, or text nested in it, is

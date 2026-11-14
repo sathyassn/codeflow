@@ -15,14 +15,21 @@
 //! take apart (a group, a loop, a background job) when it executes such
 //! text ([`executes_produced_text`]). A plain file is the same as the file
 //! run directly (`cat file | sh` as `sh file`) on a line that writes no
-//! file. A line that writes text it spells to a file
-//! ([`writes_spelled_text`]) runs no other program except ones that never
-//! run file text ([`only_inert_programs`]), unless it is one simple
-//! command, whose writes are its own output ([`lone`]): no file or program
-//! name decides it, since a program can run a file the line never names.
-//! Output a program hands to a shell it starts itself (a Git pager), a
-//! file a program writes in its own way (a build) and a program word from
-//! outside the line are state the line does not show.
+//! file. A line of more than one command that writes text it spells to a
+//! file ([`writes_spelled_text`]) refuses, whatever else is on it, unless
+//! it is one simple command whose writes are its own output ([`lone`]) or
+//! come after everything else it runs ([`writes_last`]): no file, program
+//! or builtin name decides it, since a program can run a file the line
+//! never names, the shell finds a program's name on the path, where the
+//! line may write a file, and the shell itself runs text it evaluates as
+//! arithmetic. Output a program hands to a shell it starts itself (a Git
+//! pager), a file a program writes in its own way (a build) and a program
+//! word from outside the line are state the line does not show.
+//!
+//! Text the shell evaluates as arithmetic is judged as command text
+//! ([`evaluated`]): each command substitution in it is judged as a command
+//! whose output a shell runs, and a variable it reads that the line binds
+//! to text it cannot settle refuses.
 //!
 //! A program the guard does not know to read only data ([`inert`]) gets
 //! the same closed form for text the line spells that it receives, by any
@@ -80,9 +87,9 @@ use crate::hooks::git_guard::{
     COMMAND_CARRIERS, READ_ONLY_PROGRAMS,
 };
 use crate::security::composed::{
-    bindings, composed_texts, compound, expanding_heredoc_readers, input_of, line_spells,
-    operand_writer, simple_commands, substitutions_write, word_spells, writes_spelled_text,
-    Composed, Fed, Input, Simple, Source, Spelt, NOT_FILES,
+    arithmetic_feeds, bindings, composed_texts, compound, expanding_heredoc_readers, input_of,
+    line_spells, operand_writer, simple_commands, substitutions_write, word_spells,
+    writes_spelled_text, Composed, Fed, Input, Simple, Source, Spelt, NOT_FILES,
 };
 use crate::security::headless::basename;
 use crate::security::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
@@ -121,9 +128,19 @@ pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
 /// The judgment of `command`, where `writes` is whether a line it runs
 /// inside writes a file.
 fn produced(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
+    produced_in(command, depth, writes, true)
+}
+
+/// [`produced`], reading text the shell evaluates as arithmetic when
+/// `arithmetic` is set.
+fn produced_in(
+    command: &str,
+    depth: usize,
+    writes: bool,
+    arithmetic: bool,
+) -> Option<&'static str> {
     let own = writes_a_file(command) && !lone(command);
-    if own && writes_spelled_text(command) && !only_inert_programs(command) && !writes_last(command)
-    {
+    if own && writes_spelled_text(command) && !writes_last(command) {
         return Some(UNSETTLED);
     }
     let writes = writes || own;
@@ -135,12 +152,41 @@ fn produced(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
     if let Some(form) = read(command, 0, escape) {
         return Some(form);
     }
-    texts.iter().find_map(|text| match text {
-        Composed::Resolved(value) => [value.render(), value.without_open().render()]
-            .iter()
-            .find_map(|rendered| judge(rendered, 0, escape)),
-        Composed::Unresolved(_) => None,
-    })
+    texts
+        .iter()
+        .find_map(|text| match text {
+            Composed::Resolved(value) => [value.render(), value.without_open().render()]
+                .iter()
+                .find_map(|rendered| judge(rendered, 0, escape)),
+            Composed::Unresolved(_) => None,
+        })
+        .or_else(|| {
+            arithmetic
+                .then(|| evaluated(command, depth, writes))
+                .flatten()
+        })
+}
+
+/// Text the shell evaluates as arithmetic on `command`
+/// ([`arithmetic_feeds`]): the shell runs each command substitution in it
+/// and evaluates its output, so each is judged as a command whose output a
+/// shell runs, on the line with everything the line binds. Text the guard
+/// cannot place refuses ([`UNSETTLED`]).
+fn evaluated(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
+    let Ok(feeds) = arithmetic_feeds(command) else {
+        return Some(UNSETTLED);
+    };
+    if feeds.is_empty() {
+        return None;
+    }
+    if depth > DEPTH {
+        return Some(UNSETTLED);
+    }
+    let line = format!("{command}\n{}", feeds.join("\n"));
+    find(&line, depth + 1)
+        .or_else(|| raw_run(&line))
+        .map(|run| run.form)
+        .or_else(|| produced_in(&line, depth + 1, writes, false))
 }
 
 /// Whether a value expanded into `echo` or `print` may hold a backslash:
@@ -1489,83 +1535,6 @@ fn lone(command: &str) -> bool {
         && expand_commands_read(command).segments.len() <= 1
 }
 
-/// Whether every program `command` runs, in any command, group, loop or
-/// substitution on it, is one that never runs or loads file text under any
-/// option or variable ([`BUILTINS`], [`DATA_PROGRAMS`], [`COPIES`],
-/// [`FILE_ONLY`], `exec` with no program, and `git add` with no option that
-/// sets configuration, [`git_adds`]), named by its plain name (TSK-1476).
-/// A line that writes text it spells to a file runs nothing else: a
-/// program can run a file the line never names (a default file, a loader
-/// option, a configuration file it reads by convention), so no file name on
-/// the line decides it. An assignment (alone, before a program, a `for`
-/// name, `read`, `printf -v`) can change where a program word is looked up
-/// (`PATH`) or what a program loads, so a line that assigns runs only
-/// [`BUILTINS`]. A line the guard cannot read refuses.
-fn only_inert_programs(command: &str) -> bool {
-    let Some(found) = compound(command) else {
-        return false;
-    };
-    let mut assigns = false;
-    let mut builtins_only = true;
-    for simple in &found.commands {
-        let mut words: Vec<String> = simple
-            .words
-            .iter()
-            .map(|word| match word {
-                Spelt::Plain(text) | Spelt::Open(text) => text.clone(),
-                Spelt::Output(body) | Spelt::Process(body) | Spelt::Sink(body) => {
-                    format!("$({body})")
-                }
-            })
-            .collect();
-        strip_reserved_words(&mut words);
-        if words.first().is_some_and(|word| word == "for") {
-            assigns = true;
-            continue;
-        }
-        let at = words.iter().take_while(|word| assignment(word)).count();
-        assigns |= at > 0;
-        let Some(name) = words.get(at).map(String::as_str) else {
-            continue;
-        };
-        let args = &words[at + 1..];
-        if name.contains(['/', '$', '`', '=', '\'', '"', '\\']) {
-            return false;
-        }
-        // `read`, `printf -v` and `print -v` assign a variable.
-        assigns |= name == "read"
-            || (matches!(name, "printf" | "print")
-                && args
-                    .iter()
-                    .any(|word| word.starts_with('-') && word.contains('v')));
-        let builtin = BUILTINS.contains(&name) || (name == "exec" && args.is_empty());
-        if !(builtin
-            || DATA_PROGRAMS.contains(&name)
-            || COPIES.contains(&name)
-            || FILE_ONLY.contains(&name)
-            || (name == "git" && git_adds(args)))
-        {
-            return false;
-        }
-        builtins_only &= builtin;
-    }
-    !assigns || builtins_only
-}
-
-/// Whether `word` assigns a shell variable (`NAME=value`, `NAME+=value`,
-/// `NAME[index]=value`).
-fn assignment(word: &str) -> bool {
-    let Some((name, _)) = word.split_once('=') else {
-        return false;
-    };
-    let name = name.strip_suffix('+').unwrap_or(name);
-    let name = name.split_once('[').map_or(name, |(name, _)| name);
-    name.chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 /// Whether `command` is one simple command with no process substitution,
 /// no command substitution that writes a file ([`substitutions_write`])
 /// and no command it carries or runs as code: its substitutions finish
@@ -1593,48 +1562,6 @@ fn writes_last(command: &str) -> bool {
             .iter()
             .any(|redirect| matches!(redirect.source, Source::Process(_)))
         && !substitutions_write(command)
-}
-
-/// Shell builtins that never run or load file text and look nothing up
-/// on the path (TSK-1476).
-const BUILTINS: &[&str] = &[
-    "printf", "echo", "print", "cd", "pushd", "popd", "true", "false", ":", "test", "[", "[[",
-    "read", "wait",
-];
-
-/// Programs that read or print data and never run or load file text under
-/// any option or variable (TSK-1476). Left out: `sort`
-/// (`--compress-program`), `less` and `more` (`LESSOPEN`, `!`), `awk`,
-/// `sed` and `perl` (their scripts run commands), `find` and `xargs` (they
-/// run commands), `env`, `command` and every launcher, and every shell and
-/// interpreter.
-const DATA_PROGRAMS: &[&str] = &[
-    "cat", "grep", "egrep", "fgrep", "head", "tail", "wc", "tr", "cut", "uniq", "diff", "cmp",
-    "jq", "base64", "tee", "dd", "sleep",
-];
-
-/// Programs that move, copy or link a file without reading its content as
-/// anything. `install` (a strip program it runs) and `rsync` (`-e`,
-/// `--rsync-path`) are left out.
-const COPIES: &[&str] = &["cp", "mv", "ln", "link", "ditto"];
-
-/// Programs that act on a file without reading its content.
-const FILE_ONLY: &[&str] = &[
-    "chmod", "chown", "chgrp", "chflags", "touch", "rm", "rmdir", "unlink", "mkdir", "truncate",
-];
-
-/// Whether `git` with `args` is `git add` with no option that sets
-/// configuration (`-c`, `--config-env`, `--exec-path`): it stores the
-/// content of the files it is given as data.
-fn git_adds(args: &[String]) -> bool {
-    let configures = args.iter().any(|arg| {
-        arg.starts_with("-c") || arg.starts_with("--config-env") || arg.starts_with("--exec-path")
-    });
-    !configures
-        && args
-            .iter()
-            .find(|arg| !arg.starts_with('-'))
-            .is_some_and(|arg| arg == "add")
 }
 
 /// The one judgment of a produced text: [`FORM`] when it names the binary
