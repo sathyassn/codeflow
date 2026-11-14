@@ -1,0 +1,11 @@
+id = "TSK-1490"
+uid = "8b735ac6-ff9d-4b8c-a32d-6e8531985bac"
+kind = "TSK"
+title = "The guards read a command a program runs from an option value"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T01:45:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
