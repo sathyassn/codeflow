@@ -118,7 +118,9 @@ fn verify_branch(
     }
     let rules = super::branch_rules(gh, nwo, &encoded)?;
     for rule in rules.as_array().into_iter().flatten() {
-        let kind = rule["type"].as_str().unwrap_or("");
+        let Some(kind) = rule["type"].as_str() else {
+            continue;
+        };
         if kind != "non_fast_forward" && kind != "deletion" {
             continue;
         }
@@ -126,11 +128,10 @@ fn verify_branch(
             continue;
         };
         let binds_everyone = *bound.entry(id).or_insert_with(|| {
-            gh(&["api", &format!("repos/{nwo}/rulesets/{id}")])
-                .ok()
-                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                .and_then(|body| body["bypass_actors"].as_array().map(Vec::is_empty))
-                .unwrap_or(false)
+            gh(&["api", &format!("repos/{nwo}/rulesets/{id}")]).is_ok_and(|text| {
+                serde_json::from_str::<Value>(&text)
+                    .is_ok_and(|body| body["bypass_actors"].as_array().is_some_and(Vec::is_empty))
+            })
         });
         if binds_everyone {
             force |= kind == "non_fast_forward";
@@ -192,7 +193,7 @@ mod tests {
         })
     }
 
-    fn host(args: &[&str], rules: Value, classic: Option<Value>) -> Result<String, String> {
+    fn host(args: &[&str], rules: &Value, classic: Option<Value>) -> Result<String, String> {
         match args {
             ["api", url] if url.starts_with("repos/o/r/branches?") => {
                 Ok(json!([{"name":"main"},{"name":"release/1"},{"name":"feat/x"}]).to_string())
@@ -209,7 +210,7 @@ mod tests {
     #[test]
     fn missing_protection_names_each_protected_branch_and_the_gap() {
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
-            host(args, json!([]), None)
+            host(args, &json!([]), None)
         }
         let result = judge(exec);
         assert!(result.status.is_warn(), "{result:?}");
@@ -231,7 +232,7 @@ mod tests {
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
             host(
                 args,
-                json!([
+                &json!([
                     {"type":"non_fast_forward","ruleset_id":7},
                     {"type":"deletion","ruleset_id":7}
                 ]),
@@ -252,7 +253,7 @@ mod tests {
             {
                 return Err("HTTP 403".into());
             }
-            host(args, json!([]), None)
+            host(args, &json!([]), None)
         }
         let result = judge(exec);
         assert!(result.status.is_warn(), "{result:?}");
@@ -263,12 +264,13 @@ mod tests {
     #[test]
     fn classic_protection_can_verify_both_rules_without_readable_rulesets() {
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
-            if args.iter().any(|arg| arg.contains("/rules/branches/")) {
-                panic!("classic protection already proves both controls");
-            }
+            assert!(
+                !args.iter().any(|arg| arg.contains("/rules/branches/")),
+                "classic protection already proves both controls"
+            );
             host(
                 args,
-                json!([]),
+                &json!([]),
                 Some(json!({
                     "enforce_admins":{"enabled":true},
                     "allow_force_pushes":{"enabled":false},
@@ -288,7 +290,7 @@ mod tests {
                 } else {
                     host(
                         args,
-                        json!([
+                        &json!([
                             {"type":"non_fast_forward","ruleset_id":7},
                             {"type":"deletion","ruleset_id":7}
                         ]),
@@ -303,14 +305,14 @@ mod tests {
     #[test]
     fn one_control_or_checks_alone_do_not_verify_both_controls() {
         for kind in ["non_fast_forward", "deletion", "required_status_checks"] {
-            let gh = |args: &[&str]| host(args, json!([{"type":kind,"ruleset_id":7}]), None);
+            let gh = |args: &[&str]| host(args, &json!([{"type":kind,"ruleset_id":7}]), None);
             assert!(verify_branch(&gh, "o/r", "main", &mut BTreeMap::new()).is_err());
         }
         for classic in [
             json!({"enforce_admins":{"enabled":false}, "allow_force_pushes":{"enabled":false}, "allow_deletions":{"enabled":false}}),
             json!({"enforce_admins":{"enabled":true}}),
         ] {
-            let gh = |args: &[&str]| host(args, json!([]), Some(classic.clone()));
+            let gh = |args: &[&str]| host(args, &json!([]), Some(classic.clone()));
             assert!(verify_branch(&gh, "o/r", "main", &mut BTreeMap::new()).is_err());
         }
     }
