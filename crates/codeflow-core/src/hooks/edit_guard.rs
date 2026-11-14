@@ -1986,6 +1986,96 @@ mod tests {
         assert!(error.contains("every edit is refused"), "{error}");
     }
 
+    /// TSK-1402: `~/.codeflow` is a link to a place that does not exist yet.
+    /// A write at the link's destination creates the operator-authority
+    /// directory, so it is refused there; a file beside it is not.
+    #[cfg(unix)]
+    #[test]
+    fn the_authority_directory_behind_a_link_is_judged_where_it_points() {
+        let f = Fixture::new();
+        let destination = f.temp.path().join("codeflow-dest");
+        std::os::unix::fs::symlink(&destination, f.home.join(".codeflow")).unwrap();
+        assert!(refused_under(
+            &f,
+            &f.home,
+            &destination.join("authority/config.toml")
+        ));
+        assert!(!refused_under(
+            &f,
+            &f.home,
+            &destination.join("config.toml")
+        ));
+    }
+
+    /// TSK-1402 AC-2: a protected home folder named by an action-table
+    /// pattern is a link to a place that does not exist yet. The pattern is
+    /// judged at the link's destination too, so a write there is refused.
+    #[cfg(unix)]
+    #[test]
+    fn an_enforcement_pattern_behind_a_link_is_judged_where_it_points() {
+        let f = Fixture::new();
+        let destination = f.temp.path().join("claude-dest");
+        std::os::unix::fs::symlink(&destination, f.home.join(".claude")).unwrap();
+        assert!(refused_under(
+            &f,
+            &f.home,
+            &destination.join("settings.json")
+        ));
+        assert!(!refused_under(&f, &f.home, &destination.join("notes.md")));
+    }
+
+    /// TSK-1402: the coordination ledger's folder in the common git
+    /// directory is a link to a place that does not exist yet. A direct edit
+    /// at the destination writes the ledger, so it is an authority target;
+    /// other state there is not.
+    #[cfg(unix)]
+    #[test]
+    fn the_ledger_behind_a_link_is_judged_where_it_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let destination = dir.path().join("ledger-dest");
+        std::os::unix::fs::symlink(&destination, repo.commondir().join("codeflow")).unwrap();
+        assert!(repository_authority_target(
+            &destination.join("coord/events.jsonl"),
+            dir.path(),
+            false
+        ));
+        assert!(!repository_authority_target(
+            &destination.join("registry-state.json"),
+            dir.path(),
+            false
+        ));
+    }
+
+    /// TSK-1402: with the enforcement-path rule switched off only the
+    /// authority rule judges an edit. The worktree configuration file in the
+    /// common git directory is a link to a place that does not exist yet, so
+    /// a write at the destination is refused at block level all the same.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_worktree_configuration_is_judged_where_it_points_at_any_level() {
+        let f = Fixture::new();
+        let repo = git2::Repository::init(&f.root).unwrap();
+        let destination = f.temp.path().join("worktree-config");
+        std::os::unix::fs::symlink(&destination, repo.commondir().join("config.worktree"))
+            .unwrap();
+        let ctx = EditContext {
+            level: PolicyLevel::Off,
+            ..f.ctx()
+        };
+        let judge = |target: &Path| {
+            evaluate(&synthetic("write", json!({ "path": target })), &ctx).unwrap()
+        };
+        let refused = judge(&destination);
+        assert!(
+            refused
+                .iter()
+                .any(|violation| violation.level == PolicyLevel::Block),
+            "{refused:?}"
+        );
+        assert!(judge(&f.temp.path().join("notes.md")).is_empty());
+    }
+
     /// TSK-1400: the same coverage under the path spellings Windows accepts
     /// for one directory. Volumes with short names disabled give the long
     /// spelling back, which still runs every other form.
@@ -2553,6 +2643,69 @@ mod r22_tests {
         }
         let _next = RepoFactsScope::enter();
         assert_eq!(normalized(&target, true).unwrap(), second);
+    }
+
+    /// TSK-1402 AC-4: one name resolved as the last step of a longer walk is
+    /// cached apart from the whole path. A path past the glob bound refuses
+    /// when it is resolved whole, so it refuses the same after a walk that
+    /// read it as one step, which the kernel reports as a name it refuses.
+    #[cfg(unix)]
+    #[test]
+    fn a_step_of_a_walk_never_answers_a_whole_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let long = temp
+            .path()
+            .join("a/".repeat(crate::security::pattern::MAX_GLOB_PATH_BYTES / 2 + 8));
+        let cold = {
+            let _scope = RepoFactsScope::enter();
+            normalized(&long, true).map_err(|error| error.to_string())
+        };
+        let warm = {
+            let _scope = RepoFactsScope::enter();
+            let step = resolved_component(long.clone());
+            assert!(step.is_ok(), "{step:?}");
+            normalized(&long, true).map_err(|error| error.to_string())
+        };
+        assert!(cold.is_err(), "{cold:?}");
+        assert_eq!(cold, warm);
+    }
+
+    /// TSK-1402 AC-4: on macOS a walk lists each parent to recover a name's
+    /// spelling, so a path under a folder that cannot be listed refuses when
+    /// named directly, and resolves through a link to that path. Each gives
+    /// the same result whichever is resolved first in one invocation.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_path_resolves_the_same_whatever_was_resolved_before_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        std::fs::create_dir_all(real.join("closed/open")).unwrap();
+        let open = std::fs::canonicalize(real.join("closed/open")).unwrap();
+        let door = temp.path().join("door");
+        std::os::unix::fs::symlink(&open, &door).unwrap();
+        let closed = real.join("closed");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o100)).unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        let _restore = Restore(closed);
+        let direct = open.join("config.toml");
+        let through = door.join("config.toml");
+        let resolve = |first: &Path, then: &Path| {
+            let _scope = RepoFactsScope::enter();
+            let _ = normalized(first, true);
+            normalized(then, true).map_err(|error| error.to_string())
+        };
+        let direct_cold = resolve(&temp.path().join("unrelated"), &direct);
+        assert!(direct_cold.is_err(), "{direct_cold:?}");
+        assert_eq!(resolve(&through, &direct), direct_cold);
+        let through_cold = resolve(&temp.path().join("unrelated"), &through);
+        assert_eq!(through_cold, Ok(direct.clone()));
+        assert_eq!(resolve(&direct, &through), through_cold);
     }
 
     #[test]

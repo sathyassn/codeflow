@@ -2413,6 +2413,83 @@ fn the_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// TSK-1402: the global git configuration file git reads is a link to a
+/// place that does not exist yet, as a dotfile manager leaves it before its
+/// repository is cloned. A Write at the link's destination would create the
+/// file git reads, so the built binary refuses it; a file beside it stays
+/// writable. The guard only judges these paths; nothing is written.
+#[cfg(unix)]
+#[test]
+fn a_global_git_config_link_is_judged_where_it_points() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let link = tmp.path().join("gitconfig-link");
+    let destination = tmp.path().join("dotfiles/gitconfig");
+    std::os::unix::fs::symlink(&destination, &link).unwrap();
+    let mut wrong = Vec::new();
+    for (file, code) in [
+        (destination.clone(), 2),
+        (tmp.path().join("dotfiles/notes.md"), 0),
+    ] {
+        for tool in ["Write", "Edit"] {
+            let payload = serde_json::json!({"tool_name": tool, "tool_input":{
+                "file_path": file, "content": "[user]\n",
+                "old_string": "a", "new_string": "b"}, "cwd": root})
+            .to_string();
+            let out = run_with_stdin(
+                codeflow()
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .env("GIT_CONFIG_GLOBAL", &link)
+                    .args(["hook", "edit-guard"])
+                    .current_dir(&root),
+                &payload,
+            );
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(code) || (code == 2 && !err.contains("enforcement path")) {
+                wrong.push(format!(
+                    "edit-guard {tool} {}: exit {:?}, wanted {code}: {err}",
+                    file.display(),
+                    out.status.code()
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// TSK-1402 AC-2: a protected home directory that is a link loop has no
+/// spelling any edit can reach, so the action-table patterns keep their
+/// written spelling only, an ordinary edit is allowed, and the guard warns
+/// that alias coverage is reduced.
+#[cfg(unix)]
+#[test]
+fn a_looping_protected_home_folder_warns_and_allows_ordinary_edits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(".claude", home.join(".claude")).unwrap();
+    let payload = serde_json::json!({"tool_name": "Write", "tool_input":{
+        "file_path": root.join("notes.md"), "content": "notes\n"}, "cwd": root})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .args(["hook", "edit-guard"])
+            .current_dir(&root),
+        &payload,
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("reduced alias coverage"), "{err}");
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.
