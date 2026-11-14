@@ -1,0 +1,11 @@
+id = "TSK-1489"
+uid = "9d3ed65a-1c3b-47ef-9645-72e28acd3735"
+kind = "TSK"
+title = "The guards judge the transport program a remote URL selects"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T01:44:58Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
