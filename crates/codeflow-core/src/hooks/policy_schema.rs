@@ -298,17 +298,25 @@ pub const SCHEMA: [KeySpec; 82] = [
                 spells that any other program on the line receives, by its input, a file \
                 operand, an argument or an output stream (a pipe, a redirection, \
                 here-string or here-document on any descriptor, an `exec` redirection, a \
-                process substitution in either direction, a file the line writes named as \
-                an operand or an option's value, a command substitution, a \
+                process substitution in either direction, a command substitution, a \
                 `$'...'` quote with an escape, or a name the line binds, in an argument, \
                 in an assignment to a variable that gives a program a command or a startup \
                 file, or in a value the line may export), is judged \
-                the same way unless the guard knows the program only reads it as data. A \
-                plain file counts as that file run directly on a line that writes no file, \
-                and a line of more than one command that writes a file and also runs one \
-                (a script given to a shell, `source` or an interpreter, a file fed to \
-                one, or a path run as a program) refuses; any other such line refuses \
-                whatever it names. A run whose program word \
+                the same way unless the guard knows the program only reads it as data, \
+                and refuses whatever it names when it takes another form. No interpreter and no \
+                program with an option that runs a program, such as `sort`, is a data \
+                reader. A plain file counts as that file run directly on a line that writes \
+                no file. A line that writes text it spells to a file runs no other program \
+                except ones that never run file text: printers, data readers such as \
+                `cat`, `grep`, `head`, `tail`, `wc`, `diff` and `jq`, file programs such \
+                as `cp`, `mv`, `ln`, `chmod`, `rm` and `mkdir`, a few shell builtins, and \
+                `git add` with no configuration option, each by its plain name, with \
+                an assignment only where every program is a builtin. Any other such line \
+                of more than one command refuses whatever it names, since a program can \
+                run a file the line never names (a default file, a loader option, a \
+                configuration file); write the file on one line and run the program on \
+                the next. These refusals take this key's level: `warn` reports them and \
+                `off` drops them. A run whose program word \
                 or first operand the guard cannot resolve, and a run inside a quoted argument \
                 or an assigned value, refuse too (TSK-1476). The guard's checks on printed \
                 text are partial. Text a line writes to a process started earlier that \
