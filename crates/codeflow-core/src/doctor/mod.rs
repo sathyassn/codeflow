@@ -523,23 +523,96 @@ fn git_dir_hooks_finding(root: &Path) -> Option<Finding> {
     use crate::scaffold::detect::{self, CODEFLOW_HOOKS_PATH};
     // This optional note only names hooks displaced by a known setting.
     // The authoritative wiring check below reports configuration read errors.
-    if detect::configured_hooks_path(root)
-        .ok()
-        .flatten()
-        .as_deref()
-        != Some(CODEFLOW_HOOKS_PATH)
-    {
+    if !crate::scaffold::hooks_path::form(root).ok()?.is_codeflow() {
         return None;
     }
     let found = detect::git_dir_hooks(root)?;
     Some(Finding::new(
         format!(
-            "git does not run the hooks in {} while core.hooksPath = {CODEFLOW_HOOKS_PATH}: {}",
+            "git does not run the hooks in {} while core.hooksPath names CodeFlow's {CODEFLOW_HOOKS_PATH}: {}",
             found.dir,
             found.names.join(", ")
         ),
         remedy::DOCTOR_GIT_DIR_HOOKS.with(&[("path", &found.dir)]),
     ))
+}
+
+/// The finding for a hooks path `CodeFlow` wrote: none for the managed form
+/// (wired), a warning naming `codeflow update` for the earlier relative
+/// form and a stale path (ADR-0099). `None` for an unset or foreign path,
+/// which the wiring check reads further.
+fn codeflow_form_wiring(form: &crate::scaffold::hooks_path::HooksPathForm) -> Option<Wiring> {
+    use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
+    use crate::scaffold::hooks_path::HooksPathForm;
+    match form {
+        HooksPathForm::Managed => Some(Wiring::Read),
+        HooksPathForm::Relative => Some(Wiring::Broken(Finding::new(
+            format!(
+                "core.hooksPath is the relative `{CODEFLOW_HOOKS_PATH}`, which git reads from the directory each command runs in; CodeFlow writes the absolute path of the managed hooks"
+            ),
+            remedy::DOCTOR_HOOKS_PATH.remedy(),
+        ))),
+        HooksPathForm::Stale(value) => {
+            let value = crate::git::display_key(value);
+            Some(Wiring::Broken(Finding::new(
+                format!(
+                    "core.hooksPath ({value}) does not reach the managed hooks of a working tree of this repository (moved or renamed repository, or removed worktree?)"
+                ),
+                remedy::DOCTOR_HOOKS_PATH.remedy(),
+            )))
+        }
+        HooksPathForm::Unset | HooksPathForm::Foreign(_) => None,
+    }
+}
+
+/// `path` for a message: relative to `root` when it lies under it, else in
+/// full. Either side may be spelled through a symbolic link (a macOS
+/// temporary folder is), so the canonical spellings are compared too.
+fn shown_under_root(root: &Path, path: &Path) -> String {
+    let roots = [Some(root.to_path_buf()), root.canonicalize().ok()];
+    let paths = [Some(path.to_path_buf()), path.canonicalize().ok()];
+    let relative = paths.iter().flatten().find_map(|path| {
+        roots
+            .iter()
+            .flatten()
+            .find_map(|root| path.strip_prefix(root).ok().map(Path::to_path_buf))
+    });
+    crate::git::display_path(relative.as_deref().unwrap_or(path))
+}
+
+/// Another manager's relative `core.hooksPath`: git reads it from the
+/// directory each command runs in, so this is a note about the classes of
+/// invocation it misses (TSK-1395). The manager's own install step may
+/// write it back, so it never warns. `None` for any other form.
+fn manager_relative_hooks_path(
+    form: &crate::scaffold::hooks_path::HooksPathForm,
+    active: &Path,
+    path: &str,
+) -> Option<Finding> {
+    let crate::scaffold::hooks_path::HooksPathForm::Foreign(value) = form else {
+        return None;
+    };
+    if Path::new(value).is_absolute() {
+        return None;
+    }
+    let shown = crate::git::display_key(value);
+    let absolute = crate::git::display_path(active);
+    Some(Finding::new(
+        format!(
+            "core.hooksPath ({shown}) is relative, so git reads it from the directory each command runs in: commands run inside the git directory, or that name the repository by flag or environment from another directory, do not reach the hooks in {path}; reading those hooks also cannot show that they run the codeflow shims"
+        ),
+        remedy::DOCTOR_MANAGER_HOOKS_PATH_RELATIVE.with(&[("absolute", &absolute)]),
+    ))
+}
+
+/// The shims folder as a manager's hook should call it: the absolute path
+/// `CodeFlow` writes for `core.hooksPath` (ADR-0099), so the call does not
+/// depend on the directory a hook runs in. Falls back to `shims` itself.
+fn shims_absolute(root: &Path, shims: &Path) -> String {
+    crate::scaffold::hooks_path::target(root).map_or_else(
+        |_| crate::git::display_path(shims),
+        |target| crate::git::display_path(Path::new(&target)),
+    )
 }
 
 /// What reading the hook files shows about git calling the codeflow shims.
@@ -583,28 +656,18 @@ fn hooks_wiring(root: &Path) -> Wiring {
             ))
         }
     }
-    // Prefer the configured string: relative `.codeflow/git-hooks` is the
-    // contract so each worktree uses its own shims. An absolute path (often
-    // the main checkout) is a Warn even if the files happen to exist.
-    let configured = match crate::scaffold::detect::configured_hooks_path(root) {
-        Ok(configured) => configured,
+    // CodeFlow writes one absolute path to a working tree's managed hooks
+    // (ADR-0099). Its earlier relative form, and a path that no working tree
+    // of this repository holds (a moved repository, a removed worktree), are
+    // reported for `codeflow update` to rewrite.
+    let form = match crate::scaffold::hooks_path::form(root) {
+        Ok(form) => form,
         Err(error) => {
             return Wiring::Unreadable(format!("cannot read Git hook configuration: {error}"))
         }
     };
-    if let Some(configured) = configured {
-        if configured == CODEFLOW_HOOKS_PATH {
-            return Wiring::Read;
-        }
-        if std::path::Path::new(&configured).is_absolute() {
-            let configured = crate::git::display_key(&configured);
-            return Wiring::Broken(Finding::new(
-                format!(
-                    "core.hooksPath is absolute ({configured}); the project-relative `{CODEFLOW_HOOKS_PATH}` lets each worktree use its own shims"
-                ),
-                remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
-            ));
-        }
+    if let Some(wiring) = codeflow_form_wiring(&form) {
+        return wiring;
     }
     let active = match crate::hooks::orient::git_hooks_dir(root) {
         Ok(Some(active)) => active,
@@ -621,12 +684,15 @@ fn hooks_wiring(root: &Path) -> Wiring {
         return Wiring::Read;
     }
     // A path is a field in the message (TSK-388).
-    let path = crate::git::display_path(active.strip_prefix(root).unwrap_or(&active));
+    let path = shown_under_root(root, &active);
     let uncalled = match shims_not_called(&active, &shims) {
         Ok(names) => names,
         Err(error) => return Wiring::Unreadable(format!("cannot read hook wiring: {error}")),
     };
     if uncalled.is_empty() {
+        if let Some(note) = manager_relative_hooks_path(&form, &active, &path) {
+            return Wiring::Unverified(note);
+        }
         return Wiring::Unverified(Finding::new(
             format!(
                 "the hooks git runs in {path} are executable and name every codeflow shim (wiring not verified: reading a hook cannot show that it runs the shim)"
@@ -643,7 +709,11 @@ fn hooks_wiring(root: &Path) -> Wiring {
                 "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns {path}), and its hooks do not call: {}",
                 uncalled.join(", ")
             ),
-            remedy::DOCTOR_HOOK_MANAGER.with(&[("path", &path), ("hooks", &uncalled.join(", "))]),
+            remedy::DOCTOR_HOOK_MANAGER.with(&[
+                ("path", &path),
+                ("hooks", &uncalled.join(", ")),
+                ("shims", &shims_absolute(root, &shims)),
+            ]),
         )
     } else {
         Finding::new(
@@ -651,7 +721,7 @@ fn hooks_wiring(root: &Path) -> Wiring {
                 "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?), and the hooks git runs do not call: {}",
                 uncalled.join(", ")
             ),
-            remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
+            remedy::DOCTOR_HOOKS_PATH.remedy(),
         )
     })
 }
@@ -6404,8 +6474,58 @@ mod tests {
         assert_eq!(check_customization(&opts).status, Status::Fail);
     }
 
+    /// ADR-0099: the absolute path of a working tree's managed hooks is the
+    /// wired form, from the main working tree and from a linked one.
     #[test]
-    fn test_check_hooks_passes_when_hookspath_wired() {
+    fn check_hooks_passes_for_the_absolute_managed_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("a project");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-b", "main"]);
+        write_shims(&root);
+        git(&root, &["add", "-A"]);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "chore: init",
+            ],
+        );
+        let value = crate::scaffold::hooks_path::target(&root).unwrap();
+        git(&root, &["config", "core.hooksPath", &value]);
+        let r = check_hooks(&hooks_opts(&root));
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        let linked = dir.path().join("linked tree");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat/x",
+                linked.to_str().unwrap(),
+            ],
+        );
+        let r = check_hooks(&hooks_opts(&linked));
+        assert_eq!(
+            r.status,
+            Status::Pass,
+            "linked worktree, got: {}",
+            r.message
+        );
+    }
+
+    /// ADR-0099: the relative form earlier releases wrote is reported, with
+    /// `codeflow update` as the fix.
+    #[test]
+    fn check_hooks_warns_for_the_relative_form() {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
@@ -6414,35 +6534,46 @@ mod tests {
             &["config", "core.hooksPath", ".codeflow/git-hooks"],
         );
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
+        assert!(r.message.contains("relative"), "got: {}", r.message);
+        assert!(
+            warn_remedy(&r).contains("codeflow update"),
+            "{}",
+            warn_remedy(&r)
+        );
     }
 
+    /// ADR-0099: an absolute path that no working tree of this repository
+    /// holds (the repository moved, or another repository's hooks) is
+    /// reported, with `codeflow update` as the fix.
     #[test]
-    fn test_check_hooks_warns_when_hookspath_is_absolute() {
+    fn check_hooks_warns_for_a_stale_absolute_path() {
         let dir = tempfile::tempdir().unwrap();
-        git(dir.path(), &["init", "-b", "main"]);
-        write_shims(dir.path());
-        let absolute = dir.path().join(".codeflow/git-hooks");
-        git(
-            dir.path(),
-            &[
-                "config",
-                "core.hooksPath",
-                absolute.to_str().expect("utf-8 path"),
-            ],
-        );
-        let r = check_hooks(&hooks_opts(dir.path()));
+        let before = dir.path().join("before");
+        std::fs::create_dir_all(&before).unwrap();
+        git(&before, &["init", "-b", "main"]);
+        write_shims(&before);
+        let value = crate::scaffold::hooks_path::target(&before).unwrap();
+        git(&before, &["config", "core.hooksPath", &value]);
+        assert_eq!(check_hooks(&hooks_opts(&before)).status, Status::Pass);
+        let after = dir.path().join("after move");
+        std::fs::rename(&before, &after).unwrap();
+        let r = check_hooks(&hooks_opts(&after));
         assert!(r.status.is_warn(), "got: {}", r.message);
+        assert!(r.message.contains("does not reach"), "got: {}", r.message);
         assert!(
-            r.message.contains("absolute"),
-            "expected absolute-path warning, got: {}",
-            r.message
+            warn_remedy(&r).contains("codeflow update"),
+            "{}",
+            warn_remedy(&r)
         );
-        assert!(
-            warn_remedy(&r).contains("git config core.hooksPath .codeflow/git-hooks"),
-            "remedy: {}",
-            r.message
-        );
+        // Another repository's managed hooks are stale here too.
+        let other = tempfile::tempdir().unwrap();
+        git(other.path(), &["init", "-b", "main"]);
+        write_shims(other.path());
+        let foreign = crate::scaffold::hooks_path::target(other.path()).unwrap();
+        git(&after, &["config", "core.hooksPath", &foreign]);
+        let r = check_hooks(&hooks_opts(&after));
+        assert!(r.message.contains("does not reach"), "got: {}", r.message);
     }
 
     #[test]
@@ -6500,7 +6631,40 @@ mod tests {
             std::fs::write(&path, hook(&name)).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
         }
-        git(dir, &["config", "core.hooksPath", ".husky"]);
+        // The absolute form; the relative form is its own note (TSK-1395).
+        git(dir, &["config", "core.hooksPath", husky.to_str().unwrap()]);
+    }
+
+    /// TSK-1395: another manager's relative hooks path is a note naming the
+    /// invocation classes it misses and the absolute-path step, never a
+    /// warning (the manager's install step may write it back).
+    #[cfg(unix)]
+    #[test]
+    fn a_manager_relative_hooks_path_is_a_note_with_the_absolute_step() {
+        let dir = tempfile::tempdir().unwrap();
+        managed_hooks(
+            dir.path(),
+            |name| format!("#!/bin/sh\n.codeflow/git-hooks/{name} \"$@\"\n"),
+            0o755,
+        );
+        git(dir.path(), &["config", "core.hooksPath", ".husky"]);
+        let r = check_hooks(&hooks_opts(dir.path()));
+        let Status::Note(remedy) = &r.status else {
+            panic!("{:?} {}", r.status, r.message);
+        };
+        assert!(r.message.contains("(.husky) is relative"), "{}", r.message);
+        assert!(
+            r.message.contains("inside the git directory"),
+            "{}",
+            r.message
+        );
+        let text = remedy.to_string();
+        assert!(text.contains("git config core.hooksPath \""), "{text}");
+        assert!(text.contains("/.husky\""), "{text}");
+        assert!(
+            text.contains("install step may set the relative path again"),
+            "{text}"
+        );
     }
 
     /// TSK-147 round 3 F6: a manager hook calls its shim only when git runs
