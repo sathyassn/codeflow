@@ -1361,7 +1361,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "79f3a5d6d20644aae09671369fe9f1607271831149f14ae709b1451b3db7557a",
+      "sha256": "3d01cef22eb282b513e1f3c4ac7d0edfe568827d4b260b0b7f5f615c764cd488",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -2717,31 +2717,31 @@
     ".codeflow/git-hooks/commit-msg": {
       "src": "git-hooks/commit-msg",
       "ownership": "managed",
-      "sha256": "bd76b45017eb36591a582af77d941969cb8d58a721c1dd08754b493eccae50a4",
+      "sha256": "69d3320099e643a845600dc092f14370591b94827d52b058de9ab4b0072d32c1",
       "exec": true
     },
     ".codeflow/git-hooks/pre-commit": {
       "src": "git-hooks/pre-commit",
       "ownership": "managed",
-      "sha256": "a664eb2c6a00d9d79f922a903150ba28265cb7bef3d6e20843c501557d3f115e",
+      "sha256": "e846221a9f5ee57df12a14d910b3425847d64d6f07582b6281cc4e9efcb5f436",
       "exec": true
     },
     ".codeflow/git-hooks/pre-merge-commit": {
       "src": "git-hooks/pre-merge-commit",
       "ownership": "managed",
-      "sha256": "7400b38008971dd54d550100bc43abf87aed68e27ded5e9acbb8883d3bb9a66f",
+      "sha256": "e2297f79d24c88727d25cdae5dc6f09537e808b8ad9af8ebe2b1936b436fecb9",
       "exec": true
     },
     ".codeflow/git-hooks/pre-push": {
       "src": "git-hooks/pre-push",
       "ownership": "managed",
-      "sha256": "6340d9174a3134688768c11c6fbc39239729c2df7ec3e9ebf90f86ce10e45364",
+      "sha256": "078deb2b76a61f9a8224dac78b97f5083ffa6e34b1398ec7ebd89638a2bb8cad",
       "exec": true
     },
     ".codeflow/git-hooks/reference-transaction": {
       "src": "git-hooks/reference-transaction",
       "ownership": "managed",
-      "sha256": "bf2ac9bbcfbd94af340061171e992accdd0dc9b74c2a1c472f4585675ba53316",
+      "sha256": "5217c918df1908d368c0f2c2fadee6f53a5d5a18bff860bfba48e4ce7b928da8",
       "exec": true
     },
     ".codeflow/model-selection.json": {
@@ -2759,7 +2759,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "616e33de72b67be4a35471d4523210cc16124c61fc6239e2907b071779e4cf46",
+      "sha256": "99f5ef63aa69e06c28c81e5b4b093435828c1b67c2d03e26bc6f8eb88faeeb5c",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -2825,7 +2825,7 @@
     ".codex/hooks.json": {
       "src": "codex/hooks.json",
       "ownership": "managed",
-      "sha256": "19545c9158cd8a134d59147ae5f8e84a200274fa7a39214d9f687fa70c0fc587",
+      "sha256": "4122d60597bd6381b8512d6a879c99dfc9d679b6808d8aa299b77c89cbbeb2f0",
       "exec": false
     },
     ".codex/rules/codeflow.rules": {
@@ -2867,7 +2867,7 @@
     ".grok/hooks/codeflow.json": {
       "src": "grok/hooks.json",
       "ownership": "managed",
-      "sha256": "b598d84103461c5fcb5c4e3e3d81e6703ccf62ae5d57721b9ce194ba63013f91",
+      "sha256": "35b79736ad7969d65a75b1fe47cbaa9ba6d4ca1a3c40f8ad22b168707267b3c7",
       "exec": false
     },
     ".grok/sandbox.toml": {

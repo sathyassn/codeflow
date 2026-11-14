@@ -43,6 +43,14 @@ does not install its repository release pipeline or make scaffold metadata
 the project's version. Discover that policy before release work; propose
 missing automation for adoption rather than silently enabling publication.
 
+Only the operator runs `codeflow update` and `codeflow init`, whichever
+build of the binary: they write the files the guards enforce from (harness settings,
+hooks, policy and workflows), in the root checkout and in every worktree.
+An agent may run only a form that writes nothing, such as `codeflow update
+--help` or `codeflow --version`, and `codeflow doctor` to see what is out of
+date; exec-guard refuses any other run under `git.hook_integrity`. When a
+change needs one, ask the operator.
+
 ## The rules
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
