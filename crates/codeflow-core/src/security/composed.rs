@@ -340,7 +340,10 @@ pub(crate) enum Source {
     /// A here-string or here-document the shell fills in: text the line
     /// spells that the reader does not settle.
     Spelled,
-    /// Anything else: a target the shell fills in or a descriptor copy.
+    /// A copy or close of a descriptor by its number (`2>&1`, `<&3`,
+    /// `>&-`): no file is named.
+    Copy,
+    /// Anything else, such as a target the shell fills in.
     Open,
 }
 
@@ -351,6 +354,9 @@ pub(crate) struct Redirect {
     pub(crate) fd: u32,
     /// Whether the command reads from it.
     pub(crate) input: bool,
+    /// Whether the command may write to it (`>`, `>>`, `>|`, `>&`, `&>`,
+    /// `&>>`, `<>`).
+    pub(crate) writes: bool,
     /// What it reads or writes.
     pub(crate) source: Source,
 }
@@ -486,6 +492,13 @@ fn redirect(
             Some(Spelt::Plain(text)) if op == "<<<" => Source::Text(text),
             Some(_) if op == "<<<" => Source::Spelled,
             Some(Spelt::Plain(text))
+                if matches!(op, ">&" | "<&")
+                    && (text == "-"
+                        || (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))) =>
+            {
+                Source::Copy
+            }
+            Some(Spelt::Plain(text))
                 if matches!(op, "<" | "<>" | ">" | ">>" | ">|" | "&>" | "&>>")
                     && !crate::hooks::git_guard::expands(&text) =>
             {
@@ -494,7 +507,13 @@ fn redirect(
             _ => Source::Open,
         }
     };
-    Some(Redirect { fd, input, source })
+    let writes = !input || op == "<>";
+    Some(Redirect {
+        fd,
+        input,
+        writes,
+        source,
+    })
 }
 
 /// What a feed hands to the commands that read it, on a line read token by
@@ -536,6 +555,12 @@ pub(crate) struct Compound {
     pub(crate) sinks: Vec<Feed>,
     /// Every simple command, at every depth of substitution.
     pub(crate) commands: Vec<Simple>,
+    /// Whether a command on the line writes a file ([`writes_file`]), or a
+    /// compound command on it has its output redirected to one.
+    pub(crate) writes_file: bool,
+    /// Whether the line writes text it spells to a file
+    /// ([`writes_spelled_text`]).
+    pub(crate) spelled_write: bool,
 }
 
 /// `line` read token by token, for grammar [`simple_commands`] does not
@@ -856,6 +881,59 @@ fn compound_into(line: &str, depth: usize, out: &mut Compound) -> Option<()> {
             .collect();
         out.feeds.push(Feed { fed, readers });
     }
+    // Each write to a file, and whether what it writes is text the line
+    // spells: what the command spells, a feed it reads, a `sed` script, or
+    // code it runs that writes such text.
+    for unit in &units {
+        let simple = &unit.simple;
+        if writes_file(simple) {
+            out.writes_file = true;
+            let reads_spelled = out
+                .feeds
+                .iter()
+                .any(|feed| feed.readers.contains(&simple.raw) && feed_spells(&feed.fed, depth));
+            if spells_with(simple, depth, word_spells)
+                || reads_spelled
+                || operand_writer(&simple.raw) == Some("sed")
+            {
+                out.spelled_write = true;
+            }
+        }
+        if (spells_with(simple, depth, word_spells) && writes_through_sink(simple))
+            || runs_writing_code(simple)
+        {
+            out.writes_file = true;
+            out.spelled_write = true;
+        }
+    }
+    // A compound command's output redirected to a file, or to an output
+    // process substitution whose body writes one.
+    for (at, redirect) in &attached {
+        if redirect.input && !redirect.writes {
+            continue;
+        }
+        let span = element(*at, true);
+        let reads_spelled = within(span).any(|unit| {
+            out.feeds.iter().any(|feed| {
+                feed.readers.contains(&unit.simple.raw) && feed_spells(&feed.fed, depth)
+            })
+        });
+        let spelled = reads_spelled
+            || match text_of(span) {
+                Fed::Output => false,
+                Fed::Command(simple) => spells_with(&simple, depth, word_spells),
+                _ => true,
+            };
+        if let Source::Process(body) = &redirect.source {
+            if !redirect.input && spelled && body_writes(body) {
+                out.writes_file = true;
+                out.spelled_write = true;
+            }
+        } else if to_file(redirect) {
+            out.writes_file = true;
+            out.spelled_write |= spelled;
+        }
+    }
     for body in bodies {
         compound_into(&body, depth + 1, out)?;
     }
@@ -869,7 +947,7 @@ fn fed_by(source: &Source) -> Option<Fed> {
         Source::Text(text) => Some(Fed::Text(text.clone())),
         Source::Spelled => Some(Fed::Spelled),
         Source::Process(body) => Some(Fed::Body(body.clone())),
-        Source::Path(_) | Source::Open => None,
+        Source::Path(_) | Source::Copy | Source::Open => None,
     }
 }
 
@@ -877,19 +955,17 @@ fn fed_by(source: &Source) -> Option<Fed> {
 /// `eval` or a shell given a `-c` value, it reads a here-string or
 /// here-document, or a substitution in it does.
 fn spells_simple(simple: &Simple, depth: usize) -> bool {
-    let program = simple.words.iter().find_map(|word| match word {
-        Spelt::Plain(text) if !LEADING_WORDS.contains(&text.as_str()) && !assignment(text) => {
-            Some(text.rsplit('/').next().unwrap_or(text).to_string())
-        }
-        Spelt::Plain(_) => None,
-        _ => Some(String::new()),
-    });
-    let program = program.unwrap_or_default();
-    let runs_code = program == "eval"
-        || (crate::hooks::git_guard::is_shell(&program)
-            && simple.words.iter().any(|word| matches!(word, Spelt::Plain(text) if text.starts_with('-') && text.contains('c'))));
+    spells_with(simple, depth, |raw| {
+        raw.contains("$(") || raw.contains('`') || raw.contains("<(") || raw.contains(">(")
+    })
+}
+
+/// [`spells_simple`], where `open` says whether a word the shell fills in
+/// holds text the line spells.
+fn spells_with(simple: &Simple, depth: usize, open: fn(&str) -> bool) -> bool {
+    let program = program_of(simple);
     matches!(program.as_str(), "printf" | "echo" | "print")
-        || runs_code
+        || runs_code(simple)
         || simple.redirects.iter().any(|redirect| {
             matches!(redirect.source, Source::Text(_) | Source::Spelled)
                 || matches!(&redirect.source, Source::Process(body) if spells(body, depth + 1))
@@ -900,11 +976,195 @@ fn spells_simple(simple: &Simple, depth: usize) -> bool {
             Spelt::Output(body) | Spelt::Process(body) | Spelt::Sink(body) => {
                 spells(body, depth + 1)
             }
-            Spelt::Open(raw) => {
-                raw.contains("$(") || raw.contains('`') || raw.contains("<(") || raw.contains(">(")
-            }
+            Spelt::Open(raw) => open(raw),
             Spelt::Plain(_) => false,
         })
+}
+
+/// The last component of the program word of `simple`: empty when that
+/// word is one the shell fills in or there is none.
+fn program_of(simple: &Simple) -> String {
+    let program = simple.words.iter().find_map(|word| match word {
+        Spelt::Plain(text) if !LEADING_WORDS.contains(&text.as_str()) && !assignment(text) => {
+            Some(text.rsplit('/').next().unwrap_or(text).to_string())
+        }
+        Spelt::Plain(_) => None,
+        _ => Some(String::new()),
+    });
+    program.unwrap_or_default()
+}
+
+/// Whether `simple` runs code it is given as words: `eval`, or a shell
+/// given a `-c` option.
+fn runs_code(simple: &Simple) -> bool {
+    let program = program_of(simple);
+    program == "eval"
+        || (crate::hooks::git_guard::is_shell(&program)
+            && simple.words.iter().any(|word| matches!(word, Spelt::Plain(text) if text.starts_with('-') && text.contains('c'))))
+}
+
+/// Targets a redirection or a writing program can name that are not
+/// files.
+pub(crate) const NOT_FILES: &[&str] = &[
+    "/dev/null",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/tty",
+    "/dev/fd/1",
+    "/dev/fd/2",
+];
+
+/// Whether `redirect` writes a file: an output redirection to a target
+/// other than [`NOT_FILES`], a descriptor copy aside, or one the shell
+/// fills in.
+fn to_file(redirect: &Redirect) -> bool {
+    redirect.writes
+        && match &redirect.source {
+            Source::Path(path) => !NOT_FILES.contains(&path.as_str()),
+            Source::Open => true,
+            _ => false,
+        }
+}
+
+/// The program of the simple command `segment` when it writes a file named
+/// by its words (TSK-1476): `tee` with a file operand, `dd` with `of=`, or
+/// `sed` that may write (`-i`, or a script that may hold a `w` command).
+pub(crate) fn operand_writer(segment: &str) -> Option<&'static str> {
+    use crate::hooks::git_guard::{command_argv, program_name, strip_launchers};
+    let mut words = command_argv(segment);
+    crate::hooks::git_guard::strip_reserved_words(&mut words);
+    let (program, args) = strip_launchers(&words)?;
+    let file = |target: &str| !NOT_FILES.contains(&target);
+    match program_name(program) {
+        "tee" if args.iter().any(|arg| !arg.starts_with('-') && file(arg)) => Some("tee"),
+        "dd" if args
+            .iter()
+            .any(|arg| arg.strip_prefix("of=").is_some_and(file)) =>
+        {
+            Some("dd")
+        }
+        "sed"
+            if args.iter().any(|arg| {
+                arg.starts_with("-i")
+                    || arg.starts_with("--in-place")
+                    || arg == "-I"
+                    || (!arg.starts_with('-') && arg.contains(['w', 'W']))
+            }) =>
+        {
+            Some("sed")
+        }
+        _ => None,
+    }
+}
+
+/// Whether `simple` writes a file: by an output redirection ([`to_file`])
+/// or by naming it to a writing program ([`operand_writer`]).
+fn writes_file(simple: &Simple) -> bool {
+    simple.redirects.iter().any(to_file) || operand_writer(&simple.raw).is_some()
+}
+
+/// Whether a feed hands over text the line spells.
+fn feed_spells(fed: &Fed, depth: usize) -> bool {
+    match fed {
+        Fed::Command(simple) => spells_simple(simple, depth),
+        Fed::Text(_) | Fed::Spelled => true,
+        Fed::Body(body) => spells(body, depth + 1),
+        Fed::Output => false,
+    }
+}
+
+/// Whether the command line `body`, reading what another command writes,
+/// may write a file; `true` when it cannot be read.
+fn body_writes(body: &str) -> bool {
+    compound(body).is_none_or(|found| found.writes_file)
+}
+
+/// Whether `simple` writes text it spells to a file through an output
+/// process substitution whose body writes a file.
+fn writes_through_sink(simple: &Simple) -> bool {
+    simple.redirects.iter().any(|redirect| {
+        !redirect.input && matches!(&redirect.source, Source::Process(body) if body_writes(body))
+    }) || simple
+        .words
+        .iter()
+        .any(|word| matches!(word, Spelt::Sink(body) if body_writes(body)))
+}
+
+/// Whether `simple` runs or carries a command that writes text it spells
+/// to a file: a command the guard reads out of it (`eval`, a shell's `-c`
+/// code, a launcher's or a supplier's command) that does, or `eval` or a
+/// shell's `-c` code that this reading cannot follow.
+fn runs_writing_code(simple: &Simple) -> bool {
+    let read = crate::hooks::git_guard::expand_commands_read(&simple.raw);
+    read.segments
+        .iter()
+        .any(|segment| *segment != simple.raw && writes_spelled_text(segment))
+        || (runs_code(simple)
+            && (!read.unread_commands.is_empty()
+                || simple
+                    .words
+                    .iter()
+                    .any(|word| !matches!(word, Spelt::Plain(_)))))
+}
+
+/// Whether a command or process substitution anywhere in `line` writes a
+/// file; `true` when the line, or a substitution in it, cannot be read.
+pub(crate) fn substitutions_write(line: &str) -> bool {
+    let Ok((tokens, docs)) = lex(line) else {
+        return true;
+    };
+    let mut words: Vec<&Word> = Vec::new();
+    for tok in &tokens {
+        match tok {
+            Tok::Word(word) => words.push(word),
+            Tok::Redir {
+                target, heredoc, ..
+            } => {
+                words.extend(target.iter());
+                words.extend(
+                    heredoc
+                        .and_then(|index| docs.get(index))
+                        .map(|doc| &doc.body),
+                );
+            }
+            Tok::Array { elements, .. } => words.extend(elements.iter()),
+            Tok::ArithCmd(body) => {
+                if body.contains("$(") || body.contains('`') {
+                    return true;
+                }
+            }
+            Tok::Op(_) => {}
+        }
+    }
+    let mut bodies = Vec::new();
+    for word in words {
+        let nested = word.parts.iter().any(|part| match part {
+            Part::Param { body, .. } | Part::Arith { body, .. } => {
+                body.contains("$(") || body.contains('`')
+            }
+            Part::Unmodelled(_) => true,
+            _ => false,
+        });
+        if nested {
+            return true;
+        }
+        substitution_bodies(word, &mut bodies);
+    }
+    bodies.iter().any(|body| body_writes(body))
+}
+
+/// Whether the command line `line` writes text it spells to a file, in any
+/// command, group, loop or substitution on it (TSK-1476): a command that
+/// writes a file ([`to_file`], [`operand_writer`]) and writes text the
+/// line spells ([`spells_with`] with [`word_spells`]) or reads it from a
+/// feed, `sed` that may write a file (its script is text the line spells),
+/// a command that writes text it spells to an output process substitution
+/// whose body writes a file, `eval` or a shell's `-c` code that does any of
+/// these, and a compound command whose output goes to a file while a
+/// command in it writes text the line spells. `true` when the line cannot
+/// be read.
+pub(crate) fn writes_spelled_text(line: &str) -> bool {
+    compound(line).is_none_or(|found| found.spelled_write)
 }
 
 /// Whether the shell word `raw` holds text the line spells that this

@@ -440,12 +440,11 @@ pub(crate) fn install_violation(
                  input, a file operand, an argument or an output stream, and that \
                  text is not one `printf`, `echo` or `print` of plain literal text, a literal \
                  here-string or here-document, or a plain file on a line that writes no \
-                 file; or the line holds more than one command and writes a file and also \
-                 runs one or names it to a program the guard does not know; so the guard \
-                 cannot \
-                 tell whether it runs the binary with an install verb; write the commands \
-                 literally, or put them in a file the line does not write and run that \
-                 file on a line of its own)"
+                 file; or the line holds more than one command, writes text it spells to a \
+                 file and runs a program other than ones that never run file text; so the \
+                 guard cannot tell whether it runs the binary with an install verb; write \
+                 the commands literally, or write the file on one line and run the program \
+                 on the next)"
             } else if !run.parsed {
                 " (the line is outside the forms the guard reads as data and its text names \
                  the binary with an install verb; give such text to `echo`, `printf '%s'`, \

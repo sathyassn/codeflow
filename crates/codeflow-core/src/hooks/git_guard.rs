@@ -8847,26 +8847,41 @@ fn ends_with_pipe(chars: &[char], i: usize) -> bool {
 }
 
 /// Programs that read a heredoc body, or a substitution's output, as data and
-/// never run it. Tools that can execute their input (`awk` `system()`, GNU
-/// `sed e`, `perl`) are left out. `python`/`python3`/`node` run their input
-/// in their own language, outside the guard's model: the documented
-/// interpreter residual.
+/// never run it: no option, variable or default file makes one of them run or
+/// load text (TSK-1476). Tools that can execute their input (`awk`
+/// `system()`, GNU `sed e`, `perl`), `sort` (`--compress-program` runs a
+/// program) and every interpreter (`python`, `python3`, `node` and the rest
+/// run their input, and load modules named by options and variables) are
+/// left out.
 const HEREDOC_DATA_READERS: &[&str] = &[
-    "cat", "tee", "echo", "printf", "grep", "sort", "head", "tail", "wc", "tr", "cut", "uniq",
-    "diff", "jq", "base64", "python", "python3", "node",
+    "cat", "tee", "echo", "printf", "grep", "head", "tail", "wc", "tr", "cut", "uniq", "diff",
+    "jq", "base64",
 ];
 
-/// `true` when `segment` reads its input as data: it only assigns, or runs one of
+/// Interpreters whose heredoc body or substitution input this splitter
+/// leaves to the interpreter checks: it is code in their own language, not
+/// a shell script (the documented interpreter residual). They are not data
+/// readers ([`reads_input_as_data`]).
+const OWN_LANGUAGE_READERS: &[&str] = &["python", "python3", "node"];
+
+/// `true` when `segment` reads its input as something other than a shell
+/// script: data ([`reads_input_as_data`]), or code in an interpreter's own
+/// language ([`OWN_LANGUAGE_READERS`]). A body fed to anything else (a
+/// shell, `eval`, `ssh`, `sudo`, `make`, a `$VAR` or a function) is read as
+/// a script.
+fn reads_as_data(segment: &str) -> bool {
+    let words = command_argv(segment);
+    reads_input_as_data(&words)
+        || strip_launchers(&words)
+            .is_some_and(|(program, _)| OWN_LANGUAGE_READERS.contains(&basename(program)))
+}
+
+/// `true` when the command `words`, as the shell passes them, reads its
+/// input as data: it only assigns, or runs one of
 /// [`HEREDOC_DATA_READERS`], `git` in a subcommand that takes a message or
 /// patch on stdin with no `-c`/`--config-env` global (either can make any
 /// subcommand an alias that runs a shell), or `gh` in a subcommand that takes
-/// a body. A body fed to anything else (a shell, `eval`, `ssh`, `sudo`,
-/// `make`, a `$VAR` or a function) is read as a script.
-fn reads_as_data(segment: &str) -> bool {
-    reads_input_as_data(&command_argv(segment))
-}
-
-/// [`reads_as_data`] for a command's words as the shell passes them.
+/// a body.
 pub(crate) fn reads_input_as_data(words: &[String]) -> bool {
     // A segment of only assignments runs no program and reads nothing. A
     // segment with no words at all is a redirect attached to what came before

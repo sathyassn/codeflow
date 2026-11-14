@@ -15,12 +15,14 @@
 //! take apart (a group, a loop, a background job) when it executes such
 //! text ([`executes_produced_text`]). A plain file is the same as the file
 //! run directly (`cat file | sh` as `sh file`) on a line that writes no
-//! file; a line that writes a file and also runs one refuses
-//! ([`writes_a_file`], [`runs_a_file`]), whatever the names, unless it is
-//! one simple command, whose writes are its own output ([`lone`]). Output a
-//! program hands to a shell it starts itself (a Git pager), a file a
-//! program writes in its own way (a build) and a program word from outside
-//! the line are state the line does not show.
+//! file. A line that writes text it spells to a file
+//! ([`writes_spelled_text`]) runs no other program except ones that never
+//! run file text ([`only_inert_programs`]), unless it is one simple
+//! command, whose writes are its own output ([`lone`]): no file or program
+//! name decides it, since a program can run a file the line never names.
+//! Output a program hands to a shell it starts itself (a Git pager), a
+//! file a program writes in its own way (a build) and a program word from
+//! outside the line are state the line does not show.
 //!
 //! A program the guard does not know to read only data ([`inert`]) gets
 //! the same closed form for text the line spells that it receives, by any
@@ -30,8 +32,7 @@
 //!   here-document, or an input process substitution redirected in;
 //! - a file operand: a process substitution given as a word, a descriptor
 //!   path (`/dev/fd/N`, `/dev/stdin`) it is handed, or a file the line
-//!   writes, named as an operand or an option's value
-//!   ([`hands_a_written_file`]);
+//!   writes (no such program runs beside the write, above);
 //! - an argument: a word holding a command substitution (`$(...)` or
 //!   backquotes, quoted or joined with other text), a `$'...'` quote with
 //!   an escape, or a name the line binds ([`open_word`]);
@@ -75,12 +76,13 @@ use super::{find, raw_run, unresolved, InstallRun};
 use crate::hooks::git_guard::{
     carried_commands, command_argv, command_argv_expanding, command_argv_literal, command_segments,
     expand_commands, expand_commands_read, is_shell, program_name, reads_input_as_data,
-    reads_shell_stdin, redirect_writes, shell_blank, shell_c_argument, strip_launchers,
-    strip_reserved_words, COMMAND_CARRIERS, READ_ONLY_PROGRAMS,
+    redirect_writes, shell_blank, shell_c_argument, strip_launchers, strip_reserved_words,
+    COMMAND_CARRIERS, READ_ONLY_PROGRAMS,
 };
 use crate::security::composed::{
     bindings, composed_texts, compound, expanding_heredoc_readers, input_of, line_spells,
-    simple_commands, word_spells, Composed, Fed, Input, Simple, Source, Spelt,
+    operand_writer, simple_commands, substitutions_write, word_spells, writes_spelled_text,
+    Composed, Fed, Input, Simple, Source, Spelt, NOT_FILES,
 };
 use crate::security::headless::basename;
 use crate::security::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
@@ -119,10 +121,12 @@ pub(super) fn produced_run(command: &str) -> Option<InstallRun> {
 /// The judgment of `command`, where `writes` is whether a line it runs
 /// inside writes a file.
 fn produced(command: &str, depth: usize, writes: bool) -> Option<&'static str> {
-    let writes = writes || (writes_a_file(command) && !lone(command));
-    if writes && (runs_a_file(command) || hands_a_written_file(command)) {
+    let own = writes_a_file(command) && !lone(command);
+    if own && writes_spelled_text(command) && !only_inert_programs(command) && !writes_last(command)
+    {
         return Some(UNSETTLED);
     }
+    let writes = writes || own;
     if let Some(form) = executors(command, depth, &Stdin::Unseen, writes) {
         return Some(form);
     }
@@ -880,7 +884,7 @@ fn source_text(
             body_output(body, input, writes)
         }
         Source::Spelled => Stdin::Unsettled,
-        Source::Open => Stdin::Output,
+        Source::Copy | Source::Open => Stdin::Output,
     })
 }
 
@@ -1318,7 +1322,7 @@ fn redirected(source: &Source, stdin: &Stdin, writes: bool) -> Stdin {
         Source::Path(_) => file(writes),
         Source::Process(body) => body_output(body, stdin, writes),
         Source::Spelled => Stdin::Unsettled,
-        Source::Open => Stdin::Output,
+        Source::Copy | Source::Open => Stdin::Output,
     }
 }
 
@@ -1437,25 +1441,13 @@ fn output_of(commands: &[Simple], at: usize, stdin: &Stdin, writes: bool) -> Std
     }
 }
 
-/// Targets a redirection or a writing program can name that are not
-/// files.
-const NOT_FILES: &[&str] = &[
-    "/dev/null",
-    "/dev/stdout",
-    "/dev/stderr",
-    "/dev/tty",
-    "/dev/fd/1",
-    "/dev/fd/2",
-];
-
-/// Whether `command` writes a file with text it spells, in any command,
-/// group, loop or substitution on it (TSK-1476): an output redirection to
-/// a target other than [`NOT_FILES`] (descriptor copies are not writes),
-/// `tee` with a file operand, `dd` with `of=`, or `sed` that may write
-/// (`-i`, or a script that may hold a `w` command). The other writing
-/// programs (`cp`, `mv`, `ln`, `install`, `rsync`) copy content from
-/// files: one the line wrote is caught by the rule that wrote it, and
-/// another one is state the line does not show.
+/// Whether `command` writes a file, in any command, group, loop or
+/// substitution on it (TSK-1476): an output redirection to a target other
+/// than [`NOT_FILES`] (descriptor copies are not writes), `tee` with a file
+/// operand, `dd` with `of=`, or `sed` that may write ([`operand_writer`]).
+/// The other writing programs (`cp`, `mv`, `ln`) copy content from files:
+/// one the line wrote is caught by the rule that wrote it, and another one
+/// is state the line does not show.
 fn writes_a_file(command: &str) -> bool {
     let read = expand_commands_read(command);
     std::iter::once(command.to_string())
@@ -1467,7 +1459,7 @@ fn writes_a_file(command: &str) -> bool {
                     .targets
                     .iter()
                     .any(|target| !NOT_FILES.contains(&target.as_str()))
-                || writes_content(&text)
+                || operand_writer(&text).is_some()
         })
 }
 
@@ -1497,183 +1489,134 @@ fn lone(command: &str) -> bool {
         && expand_commands_read(command).segments.len() <= 1
 }
 
-/// Whether the simple command `segment` is a program that writes a file
-/// with content from the line ([`writes_a_file`]).
-fn writes_content(segment: &str) -> bool {
-    let mut words = command_argv(segment);
-    strip_reserved_words(&mut words);
-    let Some((program, args)) = strip_launchers(&words) else {
+/// Whether every program `command` runs, in any command, group, loop or
+/// substitution on it, is one that never runs or loads file text under any
+/// option or variable ([`BUILTINS`], [`DATA_PROGRAMS`], [`COPIES`],
+/// [`FILE_ONLY`], `exec` with no program, and `git add` with no option that
+/// sets configuration, [`git_adds`]), named by its plain name (TSK-1476).
+/// A line that writes text it spells to a file runs nothing else: a
+/// program can run a file the line never names (a default file, a loader
+/// option, a configuration file it reads by convention), so no file name on
+/// the line decides it. An assignment (alone, before a program, a `for`
+/// name, `read`, `printf -v`) can change where a program word is looked up
+/// (`PATH`) or what a program loads, so a line that assigns runs only
+/// [`BUILTINS`]. A line the guard cannot read refuses.
+fn only_inert_programs(command: &str) -> bool {
+    let Some(found) = compound(command) else {
         return false;
     };
-    let file = |target: &str| !NOT_FILES.contains(&target);
-    match program_name(program) {
-        "tee" => args.iter().any(|arg| !arg.starts_with('-') && file(arg)),
-        "dd" => args
+    let mut assigns = false;
+    let mut builtins_only = true;
+    for simple in &found.commands {
+        let mut words: Vec<String> = simple
+            .words
             .iter()
-            .any(|arg| arg.strip_prefix("of=").is_some_and(file)),
-        "sed" => args.iter().any(|arg| {
-            arg.starts_with("-i")
-                || arg.starts_with("--in-place")
-                || arg == "-I"
-                || (!arg.starts_with('-') && arg.contains(['w', 'W']))
-        }),
-        _ => false,
-    }
-}
-
-/// Whether `command` runs a file, in any command it holds or carries
-/// (TSK-1476): a program word that is a path (`./run.sh`, `dir/tool`), a
-/// script operand given to a shell, `source`, `.` or an interpreter, or a
-/// file given to a shell or interpreter as its input. A process
-/// substitution or `/dev/stdin` is not a file here.
-fn runs_a_file(command: &str) -> bool {
-    let not_file = |arg: &str| {
-        arg.starts_with('-')
-            || arg.starts_with('+')
-            || arg.starts_with("<(")
-            || arg.starts_with("/dev/fd/")
-            || arg == "/dev/stdin"
-    };
-    expand_commands_read(command)
-        .segments
-        .iter()
-        .any(|segment| {
-            let mut words = command_argv(segment);
-            strip_reserved_words(&mut words);
-            let Some((first, last)) = program_span(&words) else {
-                return false;
-            };
-            let input_file = input_of(segment) == Input::File;
-            (first..last).any(|at| {
-                let word = &words[at];
-                let rest = &words[at + 1..];
-                let name = basename(word);
-                let operand = rest.iter().find(|arg| !arg.starts_with(['-', '+']));
-                let shell = is_shell(&name)
-                    && shell_c_argument(rest).is_none()
-                    && !reads_shell_stdin(&words[at..])
-                    && operand.is_some_and(|arg| !not_file(arg));
-                let sourced = matches!(name.as_str(), "source" | ".")
-                    && rest.first().is_some_and(|arg| !not_file(arg));
-                let interpreted = interpreter_family(&name).is_some_and(|family| {
-                    interpreter_code_positions(family, rest).is_empty()
-                        && rest.iter().any(|arg| !not_file(arg))
-                });
-                let fed_file =
-                    input_file && (is_shell(&name) || interpreter_family(&name).is_some());
-                (word.contains('/') && !not_file(word))
-                    || shell
-                    || sourced
-                    || interpreted
-                    || fed_file
+            .map(|word| match word {
+                Spelt::Plain(text) | Spelt::Open(text) => text.clone(),
+                Spelt::Output(body) | Spelt::Process(body) | Spelt::Sink(body) => {
+                    format!("$({body})")
+                }
             })
-        })
-}
-
-/// Whether `command`, on a line that writes a file ([`writes_a_file`]),
-/// hands a file it writes to a program the guard does not know to read
-/// only data ([`inert`]) as a file operand (TSK-1476), other than a program
-/// that copies a file or acts on it without reading it ([`COPIES`],
-/// [`FILE_ONLY`], `tee`, `dd`) and `git add` ([`git_adds`]): an operand,
-/// any word's value after its first `=` (an option's or an assignment's,
-/// such as `GIT_CONFIG_GLOBAL=file`) or an attached short option value
-/// (`-Ffile`) that names a written
-/// file by its last component ([`written_names`]) or as a pattern that may
-/// match it, or that holds a variable or a substitution. Where the line
-/// writes a file the guard cannot name, any operand of such a program
-/// counts.
-fn hands_a_written_file(command: &str) -> bool {
-    let written = written_names(command);
-    expand_commands_read(command)
-        .segments
-        .iter()
-        .any(|segment| {
-            let mut words = command_argv(segment);
-            strip_reserved_words(&mut words);
-            if inert(&words) {
-                return false;
-            }
-            let Some((program, args)) = strip_launchers(&words) else {
-                return false;
-            };
-            let name = program_name(program);
-            if FILE_ONLY.contains(&name)
-                || COPIES.contains(&name)
-                || matches!(name, "tee" | "dd")
-                || (name == "git" && git_adds(args))
-            {
-                return false;
-            }
-            // Every word but the program: an assignment before it, a
-            // launcher's words and its arguments.
-            let before = &words[..words.len() - args.len() - 1];
-            before.iter().chain(args).any(|arg| {
-                let value = arg.split_once('=').map_or(arg.as_str(), |(_, value)| value);
-                if value.contains(['$', '`']) {
-                    return true;
-                }
-                let Some(written) = &written else {
-                    return !arg.starts_with('-');
-                };
-                if arg.starts_with('-') && value == arg {
-                    // An attached short option value (`-Ffile`).
-                    return written
-                        .iter()
-                        .any(|name| arg.len() > 2 && arg.ends_with(name.as_str()));
-                }
-                let last = basename(value);
-                written
+            .collect();
+        strip_reserved_words(&mut words);
+        if words.first().is_some_and(|word| word == "for") {
+            assigns = true;
+            continue;
+        }
+        let at = words.iter().take_while(|word| assignment(word)).count();
+        assigns |= at > 0;
+        let Some(name) = words.get(at).map(String::as_str) else {
+            continue;
+        };
+        let args = &words[at + 1..];
+        if name.contains(['/', '$', '`', '=', '\'', '"', '\\']) {
+            return false;
+        }
+        // `read`, `printf -v` and `print -v` assign a variable.
+        assigns |= name == "read"
+            || (matches!(name, "printf" | "print")
+                && args
                     .iter()
-                    .any(|name| *name == last || glob_matches(&last, name))
-            })
-        })
+                    .any(|word| word.starts_with('-') && word.contains('v')));
+        let builtin = BUILTINS.contains(&name) || (name == "exec" && args.is_empty());
+        if !(builtin
+            || DATA_PROGRAMS.contains(&name)
+            || COPIES.contains(&name)
+            || FILE_ONLY.contains(&name)
+            || (name == "git" && git_adds(args)))
+        {
+            return false;
+        }
+        builtins_only &= builtin;
+    }
+    !assigns || builtins_only
 }
 
-/// Whether the shell pattern `pattern` (`*`, `?` and a bracket read as
-/// any one character) may match `name`.
-fn glob_matches(pattern: &str, name: &str) -> bool {
-    if !pattern.contains(['*', '?', '[']) {
+/// Whether `word` assigns a shell variable (`NAME=value`, `NAME+=value`,
+/// `NAME[index]=value`).
+fn assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let name = name.strip_suffix('+').unwrap_or(name);
+    let name = name.split_once('[').map_or(name, |(name, _)| name);
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether `command` is one simple command with no process substitution,
+/// no command substitution that writes a file ([`substitutions_write`])
+/// and no command it carries or runs as code: its substitutions finish
+/// before its redirections open, and the program starts after them, so
+/// nothing on the line runs after the text is written.
+fn writes_last(command: &str) -> bool {
+    // The command and its substitutions, against those with every command
+    // the guard reads out of a carrier or code added.
+    let read = expand_commands_read(command);
+    if !read.unread_commands.is_empty() || read.segments.len() != command_segments(command).len() {
         return false;
     }
-    let mut simple = String::new();
-    let mut in_bracket = false;
-    for c in pattern.chars() {
-        match (in_bracket, c) {
-            (false, '[') => {
-                in_bracket = true;
-                simple.push('?');
-            }
-            (true, ']') => in_bracket = false,
-            (true, _) => {}
-            (false, c) => simple.push(c),
-        }
-    }
-    let pattern: Vec<char> = simple.chars().collect();
-    let name: Vec<char> = name.chars().collect();
-    // match[i][j]: pattern[..i] matches name[..j].
-    let mut row = vec![false; name.len() + 1];
-    row[0] = true;
-    for &p in &pattern {
-        let mut next = vec![false; name.len() + 1];
-        if p == '*' {
-            let mut seen = false;
-            for j in 0..=name.len() {
-                seen = seen || row[j];
-                next[j] = seen;
-            }
-        } else {
-            for j in 1..=name.len() {
-                next[j] = row[j - 1] && (p == '?' || p == name[j - 1]);
-            }
-        }
-        row = next;
-    }
-    row[name.len()]
+    let Some(commands) = simple_commands(command) else {
+        return false;
+    };
+    let [simple] = commands.as_slice() else {
+        return false;
+    };
+    !simple
+        .words
+        .iter()
+        .any(|word| matches!(word, Spelt::Process(_) | Spelt::Sink(_)))
+        && !simple
+            .redirects
+            .iter()
+            .any(|redirect| matches!(redirect.source, Source::Process(_)))
+        && !substitutions_write(command)
 }
 
-/// Programs that move or copy a file's content without reading it as
-/// anything ([`written_names`] follows the copy).
-const COPIES: &[&str] = &["cp", "mv", "ln", "link", "install", "rsync", "ditto"];
+/// Shell builtins that never run or load file text and look nothing up
+/// on the path (TSK-1476).
+const BUILTINS: &[&str] = &[
+    "printf", "echo", "print", "cd", "pushd", "popd", "true", "false", ":", "test", "[", "[[",
+    "read", "wait",
+];
+
+/// Programs that read or print data and never run or load file text under
+/// any option or variable (TSK-1476). Left out: `sort`
+/// (`--compress-program`), `less` and `more` (`LESSOPEN`, `!`), `awk`,
+/// `sed` and `perl` (their scripts run commands), `find` and `xargs` (they
+/// run commands), `env`, `command` and every launcher, and every shell and
+/// interpreter.
+const DATA_PROGRAMS: &[&str] = &[
+    "cat", "grep", "egrep", "fgrep", "head", "tail", "wc", "tr", "cut", "uniq", "diff", "cmp",
+    "jq", "base64", "tee", "dd", "sleep",
+];
+
+/// Programs that move, copy or link a file without reading its content as
+/// anything. `install` (a strip program it runs) and `rsync` (`-e`,
+/// `--rsync-path`) are left out.
+const COPIES: &[&str] = &["cp", "mv", "ln", "link", "ditto"];
 
 /// Programs that act on a file without reading its content.
 const FILE_ONLY: &[&str] = &[
@@ -1692,66 +1635,6 @@ fn git_adds(args: &[String]) -> bool {
             .iter()
             .find(|arg| !arg.starts_with('-'))
             .is_some_and(|arg| arg == "add")
-}
-
-/// The last component of every file `command` writes: an output
-/// redirection's target other than [`NOT_FILES`], a `tee` operand, a `dd`
-/// `of=` value, and every operand of a copy ([`COPIES`]) one of whose
-/// operands is already written. `None` when the line writes a target the
-/// guard cannot read, or `sed` may write a file its script names.
-fn written_names(command: &str) -> Option<Vec<String>> {
-    let read = expand_commands_read(command);
-    let mut names: Vec<String> = Vec::new();
-    let mut copies: Vec<Vec<String>> = Vec::new();
-    for text in std::iter::once(command.to_string()).chain(read.segments.iter().cloned()) {
-        let redirects = redirect_writes(&text);
-        if !redirects.unread.is_empty() {
-            return None;
-        }
-        names.extend(
-            redirects
-                .targets
-                .iter()
-                .filter(|target| !NOT_FILES.contains(&target.as_str()))
-                .map(|target| basename(target)),
-        );
-    }
-    for segment in &read.segments {
-        let mut words = command_argv(segment);
-        strip_reserved_words(&mut words);
-        let Some((program, args)) = strip_launchers(&words) else {
-            continue;
-        };
-        let operands = || args.iter().filter(|arg| !arg.starts_with('-'));
-        match program_name(program) {
-            "tee" => names.extend(operands().map(|arg| basename(arg))),
-            "dd" => names.extend(
-                args.iter()
-                    .filter_map(|arg| arg.strip_prefix("of="))
-                    .map(basename),
-            ),
-            "sed" if writes_content(segment) => return None,
-            name if COPIES.contains(&name) => {
-                copies.push(operands().map(|arg| basename(arg)).collect());
-            }
-            _ => {}
-        }
-    }
-    loop {
-        let before = names.len();
-        for operands in &copies {
-            if operands.iter().any(|operand| names.contains(operand)) {
-                for operand in operands {
-                    if !names.contains(operand) {
-                        names.push(operand.clone());
-                    }
-                }
-            }
-        }
-        if names.len() == before {
-            return Some(names);
-        }
-    }
 }
 
 /// The one judgment of a produced text: [`FORM`] when it names the binary
