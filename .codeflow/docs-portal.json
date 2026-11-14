@@ -26,11 +26,11 @@
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "0c6150b21da548d06df8c54802384799750dddbed9f16a6141eac6948edd056e"
+      "pristine_sha256": "54317e3233ab56d3a4627ab14355087776aa71b240f4ad869c4b69b39139e3ca"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "bc373cc0f50f7c101dc93797c964f379b01d71b4501210da53da66aabac06d03"
+      "pristine_sha256": "58a19731bdf78db6f25ff8a2e7c36f8fa49463551b3a046ce53f9576e0e3b3cf"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -122,7 +122,7 @@
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "496b41ca73ea9c07ea5baf3a24341776add6c271cea3217ee1af43a5624f15fc"
+      "pristine_sha256": "42a70c37fb8dbab41ef9ecccca87b67890e7086e82ed52c01dfe7f36180310b2"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
