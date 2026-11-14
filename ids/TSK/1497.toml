@@ -1,0 +1,11 @@
+id = "TSK-1497"
+uid = "0d1f9e1f-caea-42f7-b278-97f93fc2bfb4"
+kind = "TSK"
+title = "The docs portal takes the astro release that fixes two advisories"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:35:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
