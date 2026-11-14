@@ -286,11 +286,12 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
-- `codeflow doctor` runs twenty-six health checks on the repository and the
+- `codeflow doctor` runs twenty-seven health checks on the repository and the
   tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
+| Remote ref protection | a warning for each existing protected branch whose remote force-update and deletion protection is missing or cannot be verified; names the exposure when the push hook is skipped and the host settings or `codeflow remote protect` that clear it; separate from the merge-check assessment |
 | Sandbox configuration (ADR-0088) | the text rule the exec guard applies in this project, decided by the hook's own function: strict with its reason, or relaxed by operator choice with the ref it was read from; a failure when the policy cannot be read or when a Claude write grant reaches the CodeFlow state root; otherwise a note |
 | Git configuration includes | Included files that may be writable, and configuration the bounded reader cannot verify; include-file writes remain unguarded |
 | Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds Codex's instruction limit: `project_doc_max_bytes` from the project's `.codex/config.toml` when set, else 32 KiB |
