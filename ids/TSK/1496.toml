@@ -1,0 +1,11 @@
+id = "TSK-1496"
+uid = "ec74cbf0-ee9f-4c5a-8354-b4a6920f5ce4"
+kind = "TSK"
+title = "Every spelling that reads one tree from history gets one verdict"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:34:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
