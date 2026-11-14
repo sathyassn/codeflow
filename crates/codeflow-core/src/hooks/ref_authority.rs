@@ -649,12 +649,17 @@ fn no_index_change_hook(cwd: &Path) -> bool {
             } else {
                 std::path::PathBuf::from(value)
             };
-            // Git runs hooks from the top of the working tree (the git
-            // directory when bare), so a relative path starts there.
+            // Git reads a relative path from the directory it runs in after
+            // setup: the top of the working tree, or the git directory when
+            // the command runs inside one or the repository is bare. A
+            // directory that cannot be resolved refuses.
             if path.is_absolute() {
                 path
             } else {
-                repo.workdir().unwrap_or_else(|| repo.path()).join(path)
+                let Some(base) = relative_hooks_base(cwd, &repo) else {
+                    return false;
+                };
+                base.join(path)
             }
         }
     };
@@ -664,8 +669,44 @@ fn no_index_change_hook(cwd: &Path) -> bool {
     )
 }
 
+/// The directory git reads a relative `core.hooksPath` from for a command
+/// run in `cwd`: the git directory when `cwd` is inside it or there is no
+/// working tree, else the working tree's top. `None` when a path cannot be
+/// resolved.
+fn relative_hooks_base(cwd: &Path, repo: &git2::Repository) -> Option<std::path::PathBuf> {
+    let git_dir = repo.path().canonicalize().ok()?;
+    let Some(workdir) = repo.workdir() else {
+        return Some(git_dir);
+    };
+    let here = cwd.canonicalize().ok()?;
+    if here.starts_with(&git_dir) {
+        return Some(git_dir);
+    }
+    workdir.canonicalize().ok()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_relative_hooks_path_is_read_from_the_git_directory_inside_it() {
+        // TSK-1395: inside the git directory git reads a relative hooks path
+        // from the git directory, not the working tree's top.
+        let root = repository_with_config(b"[core]\n\thooksPath = rel-hooks\n");
+        let git_dir = root.path().join(".git");
+        assert!(no_index_change_hook(&git_dir));
+        let hooks = git_dir.join("rel-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("post-index-change"), "#!/bin/sh\n").unwrap();
+        assert!(!no_index_change_hook(&git_dir));
+        assert!(!no_index_change_hook(&git_dir.join("refs")));
+        // From the working tree the same value names the top's folder.
+        assert!(no_index_change_hook(root.path()));
+        let top = root.path().join("rel-hooks");
+        std::fs::create_dir_all(&top).unwrap();
+        std::fs::write(top.join("post-index-change"), "#!/bin/sh\n").unwrap();
+        assert!(!no_index_change_hook(root.path()));
+    }
+
     #[test]
     fn r21_unreadable_remote_candidate_is_not_skipped() {
         let root = repository_with_config(
