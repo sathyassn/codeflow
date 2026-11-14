@@ -98,7 +98,7 @@
     },
     "scripts/install-dependencies.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "acc6c7faec7016fad91cd7abd80c5764c3b8bccc5c85e754f6aa587777b85d8f"
+      "pristine_sha256": "b525072e666a1af99d70e8559bba6a592a19d86cfbc7483bb19f85f9edf70fb3"
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
