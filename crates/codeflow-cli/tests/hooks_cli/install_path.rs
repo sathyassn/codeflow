@@ -1041,6 +1041,15 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r#"a=code; printf '%sflow update' "$a" > commands.fifo"#,
         r#"x='\143'; printf '%s%s%s%s\n' '$' "'" "$x" "'odeflow update" > commands.fifo"#,
         r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
+        // A line of more than one command that writes text it spells to a
+        // file (TSK-1476 r22), whatever it names.
+        r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
+        r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
+        r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
+        r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
+        r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
+        r"( printf '%s' code; cat notes.txt; printf '%s\n' 'flow update' ) > commands.fifo",
+        r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
     ]
     .iter()
     .map(ToString::to_string)
@@ -1049,19 +1058,17 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
     for row in &rows {
         tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
     }
-    // Text written to a process started earlier that runs what it reads
-    // is the named residual where these checks do not settle the text
-    // (TSK-1476 r18); unsettled text written to a file refuses only where
-    // the line runs it. The sandbox, where it runs, holds against the
-    // writes the verbs make.
+    // Text one command writes to a process started earlier that runs what
+    // it reads is the named residual where these checks do not settle the
+    // text (TSK-1476 r18); a lone command writing to a file is its own
+    // output and refuses only where the line runs it. The sandbox, where it
+    // runs, holds against the writes the verbs make.
     let allowed: Vec<String> = [
         r"printf '%s\n' 'notes' > notes.txt",
         r"printf 'codeflow\n' > notes.txt",
-        r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
         "printf '%s' notes > out.txt",
         "echo notes > out.txt",
         r"printf '%s\n' notes > out.txt",
-        r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
         "printf '\\u0063odeflow update' > commands.fifo",
         r"printf '%.8s update' 'codeflowXYZ' > commands.fifo",
         r"echo -e co\de$'flow'' up\u0064ate' > commands.fifo",
@@ -1076,11 +1083,6 @@ fn text_the_shell_and_printing_programs_produce_refuses() {
         r"echo -e 'a\tb' > notes.txt",
         r"printf '\x63odeflow\n' > notes.txt",
         r"printf '%x\n' 255 > notes.txt",
-        r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
-        r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
-        r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
-        r"( printf '%s' code; cat notes.txt; printf '%s\n' 'flow update' ) > commands.fifo",
-        r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
     ]
     .iter()
     .map(ToString::to_string)
@@ -1218,12 +1220,13 @@ fn spelled_text_on_any_channel_to_an_unknown_program_refuses() {
     tally.finish();
 }
 
-/// A line that writes text it spells to a file runs no other program
-/// except ones that never run file text, under `git.hook_integrity`; at
-/// `warn` the finding only warns and at `off` the line passes, as before
-/// (TSK-1476 r21).
+/// A line of more than one command that writes text it spells to a file
+/// refuses under `git.hook_integrity`, whatever else is on it, and text
+/// the shell evaluates as arithmetic is judged as command text; at `warn`
+/// the finding only warns and at `off` the line passes, as before
+/// (TSK-1476 r21, r22).
 #[test]
-fn a_line_writing_spelled_text_runs_only_inert_programs() {
+fn a_line_writing_spelled_text_with_another_command_refuses() {
     let temp = tempfile::tempdir().unwrap();
     let root = project(temp.path());
     let make = "printf '%s\\n' 'all:' > Makefile; printf '%s' '\tcode' >> Makefile; \
@@ -1234,6 +1237,17 @@ fn a_line_writing_spelled_text_runs_only_inert_programs() {
         r#"printf '%s' 'require("child_process").execSync("code' > hook.js; printf '%s\n' 'flow update")' >> hook.js; node --require ./hook.js -e 0"#.to_string(),
         npm.to_string(),
         "{ printf 'all:\\n'; printf 'x\\n'; } > Makefile && make".to_string(),
+        "printf x > a.txt && git add a.txt".to_string(),
+        "echo x > f && cp f g && chmod +x g".to_string(),
+        "mkdir -p d && printf x > d/f".to_string(),
+        "printf x > f; echo done".to_string(),
+        "printf '%s' code > f; printf '%s\\n' 'flow update' >> f; [[ 1 -eq 'a[$(sh f)]' ]]"
+            .to_string(),
+        r#"[[ 1 -eq 'a[$(printf "co%xflow update" 222 | sh)]' ]]"#.to_string(),
+        // A variable the shell sets from text on the line, and text the
+        // shell expands as a prompt.
+        r#": 'a[$(printf "co%xflow update" 222 | sh)]'; (( _ ))"#.to_string(),
+        r#"PS4='$(printf "co%xflow update" 222 | sh)'; set -x; true"#.to_string(),
     ];
     let mut tally = Tally::default();
     for row in &rows {
@@ -1241,10 +1255,12 @@ fn a_line_writing_spelled_text_runs_only_inert_programs() {
     }
     let allowed: Vec<String> = [
         "cargo build > build.log 2>&1 && grep error build.log",
-        "printf x > a.txt && git add a.txt",
-        "echo x > f && cp f g && chmod +x g",
-        "mkdir -p d && printf x > d/f",
         "make > build.log",
+        "printf x > a.txt",
+        "(( 1 + 2 ))",
+        "[[ 3 -eq 3 ]]",
+        "i=0; while (( i < 3 )); do i=$((i + 1)); done",
+        "PS4='+ $(date) '; set -x; true",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1350,6 +1366,8 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "grep -n 'codeflow update' notes.md 2>&1 | wc -l",
         "ls codeflow 'update\\n'",
         "python3 <<< $'print(1)\\nprint(2)'",
+        // Two commands writing text they spell (TSK-1476 r22).
+        "echo -n code > a.txt; echo 'flow update' > b.txt",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1372,7 +1390,6 @@ fn words_that_name_the_verbs_outside_the_closed_subset_refuse() {
         "printf '%s\\n' a b > notes.txt",
         "printf '%d\\n' 5 > notes.txt",
         "echo -e 'a\\tb' > notes.txt",
-        "echo -n code > a.txt; echo 'flow update' > b.txt",
     ]
     .iter()
     .map(ToString::to_string)

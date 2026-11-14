@@ -191,17 +191,13 @@ fn tsk1002_r12_tee_destinations_are_writes() {
         let line = format!(
             r#"echo x | {program} "$TMPDIR/run.log" | grep -E "SURVIVED|MISSING|^[0-9]+/""#
         );
-        // TSK-1476 r21: a line that writes text it spells to a file runs
-        // only programs that never run file text, each by its plain name,
-        // so the exec guard's install check refuses every other spelling
-        // of the writer.
+        // TSK-1476 r22: a line of more than one command that writes text it
+        // spells to a file refuses, so the exec guard's install check
+        // refuses every spelling of the writer; the git guard's verdict is
+        // the subject here.
         let exec_ok = |out: &Output| {
-            if program == "tee" {
-                line_allows(out)
-            } else {
-                out.status.code() == Some(2)
-                    && String::from_utf8_lossy(&out.stderr).contains("install run `")
-            }
+            out.status.code() == Some(2)
+                && String::from_utf8_lossy(&out.stderr).contains("install run `")
         };
         for guard in ["git-guard", "exec-guard"] {
             let out = f.command_with_tmpdir(&f.linked, guard, &line, Some(&tmpdir));
@@ -487,7 +483,9 @@ fn tsk1002_review02_classes_refuse_through_the_hooks() {
         "cd \"$UNKNOWN\" && cat README.md",
         "cd \"$UNKNOWN\" && python3 tool.py",
         "cp tool.py out/; cat out/tool.py",
-        "printf x > notes.txt; cat notes.txt",
+        // A program's output read back: TSK-1476 r22 refuses spelled text
+        // written on a line of several commands.
+        "date > notes.txt; cat notes.txt",
         "f() { local x=id_rsa; }; f",
         "f() { local -r x=id_rsa; }; f",
     ] {
@@ -588,8 +586,8 @@ fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
         // Ruling 7: a UNC directory option is unknown.
         r"env -C '\\fixture-host\fixture-share\child\..' cat auth.json",
         "env -C '//fixture-host/fixture-share' cat notes.md",
-        // TSK-1476 r21: a line that writes text it spells to a file runs
-        // only programs that never run file text; `env` is not one.
+        // TSK-1476 r22: a line of more than one command that writes text
+        // it spells to a file refuses.
         "printf x > run; chmod +x run; env PATH=. ls",
     ] {
         if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
@@ -3779,9 +3777,9 @@ fn repair3_runner_sources_changed_earlier_on_the_line() {
             let out = f.command(&f.linked, hook, &command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
-        // A program's own output written to a file: TSK-1476 r21 refuses
-        // text the line spells written before any program but a few that
-        // never run file text, `git rebase` included.
+        // A program's own output written to a file: TSK-1476 r22 refuses
+        // text the line spells written on a line of several commands,
+        // `git rebase` after it included.
         let ordinary = f.command(&f.linked, hook, "date > notes.txt; git rebase --continue");
         assert_eq!(ordinary.status.code(), Some(0), "{hook}: {ordinary:?}");
     }
@@ -4483,8 +4481,8 @@ fn earlier_writes_make_the_next_runner_state_unknown() {
             for command in [
                 "git -C . status",
                 "git config --file config user.name x",
-                // TSK-1476 r21: a program's own output; spelled text
-                // written before `git status` refuses.
+                // TSK-1476 r22: a program's own output; spelled text
+                // written on a line of several commands refuses.
                 "date > notes.txt && git -C . status",
             ] {
                 let out = run(&stage, command);
@@ -4493,7 +4491,11 @@ fn earlier_writes_make_the_next_runner_state_unknown() {
                 allowed += usize::from(passed);
             }
             for command in [
-                "printf note > notes.txt && git add notes.txt",
+                // A program's output: TSK-1476 r22 refuses a line of
+                // several commands that writes text it spells, so
+                // `printf note > notes.txt && git add notes.txt` takes two
+                // lines.
+                "date > notes.txt && git add notes.txt",
                 "cp README.md copy.md && git add copy.md",
                 "cp ../../base.txt . && git add base.txt",
                 "mkdir -p build && cp README.md build/ && git status",

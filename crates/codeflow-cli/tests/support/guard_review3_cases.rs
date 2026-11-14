@@ -38,7 +38,9 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
     (42, "git-guard", "ln -s .git l; cd -P ./l/info/.. && printf x > config", true),
     (42, "git-guard", "mkdir -p .codeflow/x; ln -s .codeflow c; cd -P c/x/.. && printf x > policy.json", true),
     (42, "exec-guard", "ln -s ~/.codex c; cd -P c/x/.. && cat auth.json", true),
-    (42, "", "ln -s clean l; cd -P l/child/.. && printf x > notes.txt", false),
+    // A program's output: TSK-1476 r22 refuses spelled text written on a
+    // line of several commands.
+    (42, "", "ln -s clean l; cd -P l/child/.. && date > notes.txt", false),
     (43, "exec-guard", "printf '!ignored/\\n' > scan/.ignore; rg -n . scan", true),
     (43, "exec-guard", "printf '!ignored/\\n' > scan/.rgignore && rg -n token scan", true),
     (43, "exec-guard", ": > .gitignore; rg -n . scan", true),

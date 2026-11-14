@@ -1181,12 +1181,19 @@ mod tests {
             r#"x='co\deflow'; printf '%s update\n' "$x" > commands.fifo"#,
             r#"a="'cod'"; b="'eflow'"; printf '%s%s update\n' "$a" "$b" > commands.fifo"#,
             r#"x='$'; y="'\\143'"; printf '%s%s%s\n' "$x" "$y" 'odeflow update' > commands.fifo"#,
+            // r22: more than one command and a spelled write, which refuses
+            // whatever it writes.
+            r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
+            r#"x='notes'; echo "$x" > out.txt"#,
+            r#"x='a\tb'; printf '%s\n' "$x" > out.txt"#,
+            r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
+            r"printf '%s\n' a > out.txt; printf '%s\n' b > out.txt",
+            r#"for w in no tes; do printf '%s' "$w"; done > out.txt"#,
         ];
         let allow = [
             r"printf '%s\n' 'notes' > notes.txt",
             r"printf 'codeflow\n' > notes.txt",
             r"printf 'update\n' > notes.txt",
-            r#"a=notes; printf '%s\n' "$a" > notes.txt"#,
             "printf '%s' notes > out.txt",
             "echo notes > out.txt",
             "echo -n notes > out.txt",
@@ -1197,17 +1204,11 @@ mod tests {
             r"printf '%s %s\n' x > out.txt",
             r#"printf '%s\n' "$a" > out.txt"#,
             r#"echo "$HOME" > out.txt"#,
-            r#"x='notes'; echo "$x" > out.txt"#,
-            r#"x='a\tb'; print -r "$x" > out.txt"#,
-            r#"x='a\tb'; printf '%s\n' "$x" > out.txt"#,
             r#"find . -type f -exec sh -c 'echo "$1"' _ {} \;"#,
             r"print -r 'a\x75b' > out.txt",
             r"printf -v p '%s%s' no tes; cat $p > out.txt",
             r"printf '%s\n' 'notes' > /dev/null",
             "ls notes > out.txt",
-            r"{ printf '%s' note; printf '%s\n' 's here'; } > out.txt",
-            r"printf '%s\n' a > out.txt; printf '%s\n' b > out.txt",
-            r#"for w in no tes; do printf '%s' "$w"; done > out.txt"#,
         ];
         let wrong = misjudged(&refuse, &allow);
         assert!(wrong.is_empty(), "{wrong:#?}");
@@ -1228,6 +1229,9 @@ mod tests {
             r"print -P '%n' | zsh",
             r"echo $'notes' $'a\tb' | sh",
             r"printf '%x\n' 255 | python3",
+            // r22: more than one command and a spelled write.
+            r#"x='a\cb'; echo "$x" > out.txt"#,
+            r#"x='a\tb'; echo "$x" > out.txt"#,
         ];
         let allow = [
             r"printf '%5s\n' notes > out.txt",
@@ -1245,8 +1249,6 @@ mod tests {
             r"printf > out.txt",
             r"echo -e 'a\tb' > out.txt",
             r"echo 'a\nb' > out.txt",
-            r#"x='a\cb'; echo "$x" > out.txt"#,
-            r#"x='a\tb'; echo "$x" > out.txt"#,
             r"print 'notes\n' > out.txt",
             r"print -P '%n' > out.txt",
             r"echo $'notes' $'a\tb' > out.txt",
@@ -1350,27 +1352,29 @@ mod tests {
     /// named residual: on a line with no executor of its own, only a
     /// settled printer's output and the composer's values are judged, so
     /// these draw no install finding (AC-6). The sandbox, where it runs,
-    /// denies the writes the verbs make.
+    /// denies the writes the verbs make. A line of more than one command
+    /// that writes spelled text refuses (r22), so what remains is one
+    /// command, or a line that writes no file.
     #[test]
     fn text_written_to_an_earlier_process_is_the_named_residual() {
         let comments = "'#' ".repeat(16);
         let spelled = "c o d e f l o w ' ' u p d a t e";
         let reused = format!("printf '%c' {comments}$'\\n' {spelled} $'\\n' > commands.fifo");
-        let residual = [
-            r#": ${piece:=code}; printf '%s' "$piece"; printf '%s\n' 'flow update'"#,
+        let refuse = [
             r#"while read -r; do printf '%s' "$REPLY"; done < words.txt > commands.fifo"#,
-            r"{ { sleep 1; printf '%s\n' 'flow update'; } & printf '%s' code; wait; } > commands.fifo",
             r"{ printf '%s' code; printf '%s\n' 'flow update'; } > commands.fifo",
             r#"for w in code 'flow update'; do printf '%s' "$w"; done > commands.fifo"#,
             r"printf '%s' code > commands.fifo; printf '%s\n' 'flow update' > commands.fifo",
             r"printf '%s' code >> commands.fifo && printf '%s\n' 'flow update' >> commands.fifo",
             r"{ printf '%s' code || printf '%s\n' 'flow update'; } > commands.fifo",
             r"( printf '%s' code; printf '%s\n' 'flow update' ) > commands.fifo",
-            r"{ echo -n code; cat notes.txt; echo 'flow update'; } > commands.fifo",
-            r"{ printf '%s' code; head -n 1 notes.txt; printf '%s\n' 'flow update'; } > commands.fifo",
             r#"while read -r w; do printf '%s' "$w"; done < words.txt > commands.fifo"#,
             r#"for f in *.txt; do echo "$f"; done > commands.fifo"#,
             r#"x=code; { printf '%s' "$x"; printf '%s\n' 'flow update'; } > commands.fifo"#,
+            r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
+        ];
+        let residual = [
+            r#": ${piece:=code}; printf '%s' "$piece"; printf '%s\n' 'flow update'"#,
             r"printf '\u0063odeflow update' > commands.fifo",
             r"printf '\U00000063odeflow update' > commands.fifo",
             r"printf 'cod\0eflow update' > commands.fifo",
@@ -1389,9 +1393,8 @@ mod tests {
             r"printf '\143odeflow%1supdate\n' '' > commands.fifo",
             r"printf '#\c\n\143odeflow update\n' > commands.fifo",
             reused.as_str(),
-            r#"x='\143odeflow update'; echo "$x" > commands.fifo"#,
         ];
-        let wrong = misjudged(&[], &residual);
+        let wrong = misjudged(&refuse, &residual);
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
@@ -1578,14 +1581,10 @@ mod tests {
             "curl -s 'https://example.com/x?a=1' > out.json && jq . out.json",
             "cargo build > build.log 2>&1; mytool --rev abc",
             "cargo test 2>&1 | tee test.log; grep FAILED test.log",
-            "printf 'a\\n' > a.txt; diff a.txt b.txt",
             "v=$(printf '%05d' 3); echo \"$v\"",
             "export PATH=\"$(pwd)/bin:$PATH\"; mytool",
             "HOME=\"$(mktemp -d)\" cargo test",
             "if true; then D=/; D=build; rm -rf \"$D\"; fi",
-            "printf note > notes.txt && git add notes.txt",
-            "ln -s src/app.py app && printf x > app",
-            "echo x | tee \"$TMPDIR/run.log\" | grep -E \"SURVIVED|MISSING\"",
             "diff <(sort a.txt) <(sort b.txt)",
             "ssh host \"$(printf 'ls')\"",
             "git commit -m \"$(printf 'fix: a')\"",
@@ -1613,12 +1612,111 @@ mod tests {
     }
 
     /// A line of more than one command that writes text it spells to a
-    /// file runs no other program except ones that never run file text,
-    /// whatever file the program would run and however it finds it: a
-    /// default file, a loader option, a configuration file (TSK-1476 r21).
+    /// file refuses, whatever else is on it: a program can run a file the
+    /// line never names (a default file, a loader option, a configuration
+    /// file, TSK-1476 r21), the shell finds a program's name on the path,
+    /// where the line may write a file of that name, and the shell itself
+    /// runs text it evaluates as arithmetic, even beside builtins only
+    /// (r22). One simple command whose writes come last is the exception.
     #[test]
-    fn a_line_writing_spelled_text_to_a_file_runs_only_inert_programs() {
+    #[allow(clippy::too_many_lines)] // the r22 sets, one row each
+    fn a_line_of_several_commands_that_writes_spelled_text_to_a_file_refuses() {
         let refuse = [
+            // r22: a file the line writes, run from text the shell
+            // evaluates as arithmetic beside builtins only.
+            "printf '%s' code > f; printf '%s\\n' 'flow update' >> f; [[ 1 -eq 'a[$(sh f)]' ]]",
+            "printf '%s' code > f; printf '%s\\n' 'flow update' >> f; test -v 'a[$(sh f)]'",
+            "printf '%s' code > f; printf '%s\\n' 'flow update' >> f; printf -v 'a[$(sh f)]' x",
+            "printf '%s' code > f; printf '%s\\n' 'flow update' >> f; read 'a[$(sh f)]' < /dev/null",
+            "printf '%s' code > f; printf '%s\\n' 'flow update' >> f; x='a[$(sh f)]'; [[ $x -eq 1 ]]",
+            // r22: the rows a builtin-only rule allowed.
+            "printf x > f; echo done",
+            "printf x > f && cd d",
+            "cd d && printf x > f",
+            "for f in a b; do printf '%s\\n' \"$f\" > \"$f.txt\"; done",
+            "printf x > f; [ -f f ] && echo ok",
+            "printf x > f; [[ -f f ]] && echo ok",
+            "printf x > f; test -s f || echo empty",
+            "x=1; printf '%s' \"$x\" > f; echo \"$x\"",
+            "printf x > f & wait",
+            "pushd d && printf x > f; popd",
+            "printf x > f; pwd; true; false; :",
+            "printf -v v '%s' x; printf '%s' \"$v\" > f",
+            // r22: a program file written into a folder on the path, then
+            // the program run by its plain name, or by an option that runs
+            // it.
+            "printf '%s\\n' '#!/bin/sh' > /usr/local/bin/grep; printf '%s' 'code' >> /usr/local/bin/grep; printf '%s\\n' 'flow update' >> /usr/local/bin/grep; chmod +x /usr/local/bin/grep; grep x",
+            "printf '%s\\n' '#!/bin/sh' > /usr/local/bin/pr; printf '%s' 'code' >> /usr/local/bin/pr; printf '%s\\n' 'flow update' >> /usr/local/bin/pr; chmod +x /usr/local/bin/pr; printf 'a\\n' > a.txt; diff -l a.txt a.txt",
+            "printf '%s\\n' '#!/bin/sh' > /opt/homebrew/bin/grep; printf '%s' 'code' >> /opt/homebrew/bin/grep; printf '%s\\n' 'flow update' >> /opt/homebrew/bin/grep; chmod +x /opt/homebrew/bin/grep; grep x",
+            "printf '%s\\n' '#!/bin/sh' > /opt/homebrew/bin/git; printf '%s' 'code' >> /opt/homebrew/bin/git; printf '%s\\n' 'flow update' >> /opt/homebrew/bin/git; chmod +x /opt/homebrew/bin/git; printf x > a.txt && git add a.txt",
+            // r22: every program, the r21 controls that ran one included.
+            "printf x > a.txt && git add a.txt",
+            "mkdir -p d && printf x > d/f",
+            "echo x > f; cat f",
+            "echo x > f && cp f g && chmod +x g",
+            "printf '%s\\n' a b > list.txt && wc -l list.txt && cat list.txt",
+            "printf '{}' > a.json && jq . a.json",
+            "printf x | base64 > enc.txt && tail -n 1 enc.txt",
+            "cd out && printf x > f && head f",
+            "printf x > a; ln -s a b && rm a",
+            "echo x > f.txt; diff f.txt g.txt",
+            // r22: each builtin left off the list, and zsh's `print`.
+            "printf x > f; source f",
+            "printf x > f; . f",
+            "printf x > f; eval \"$(cat f)\"",
+            "printf x > f; eval echo",
+            "printf x > f; exec f",
+            "printf x > f; exec",
+            "printf x > f; exec 3< f",
+            "printf x > f; command grep x f",
+            "printf x > f; builtin echo x",
+            "printf x > f; trap 'sh f' EXIT",
+            "printf x > f; fc -s",
+            "printf x > f; enable -f ./f x",
+            "printf x > f; alias echo=sh; echo",
+            "printf x > f; hash -p ./f echo; echo",
+            "printf x > f; type echo",
+            "printf x > f; coproc echo x",
+            "printf x > f; autoload -U f",
+            "printf x > f; emulate sh -c 'sh f'",
+            "printf x > f; print done",
+            // r22: a listed builtin the line redefines.
+            "echo() { sh f; }; printf x > f; echo",
+            "printf() { sh f; }; printf x > f; printf y",
+            "cd() { sh f; }; printf x > f; cd d",
+            "pushd() { sh f; }; printf x > f; pushd d",
+            "popd() { sh f; }; printf x > f; popd",
+            "pwd() { sh f; }; printf x > f; pwd",
+            "true() { sh f; }; printf x > f; true",
+            "false() { sh f; }; printf x > f; false",
+            "test() { sh f; }; printf x > f; test -f f",
+            "read() { sh f; }; printf x > f; read a < f",
+            "wait() { sh f; }; printf x > f; wait",
+            "function echo { sh f; }; printf x > f; echo",
+            // r22: a program before the write, in the background, in a
+            // pipeline, in a loop header or in a substitution.
+            "grep x f & printf x > f",
+            "printf x > f & grep x f",
+            "grep x f; printf x > f",
+            "printf x > f; echo \"$(grep x f)\"",
+            "printf x > f; for w in $(grep x f); do echo \"$w\"; done",
+            "printf x > f; echo x | grep x",
+            "printf x > f; a=$(grep x f); echo \"$a\"",
+            "printf x > f; if grep -q x f; then echo y; fi",
+            "printf x > f; while read l; do grep \"$l\" g; done < f",
+            "printf x > f; echo x > >(grep x)",
+            // r22: rows earlier tests allowed, each a spelled write beside a
+            // program: a data program, `git add`, `tee` into a reader, zsh's
+            // `print` after an assignment, and a writer group holding a
+            // program (once the earlier-process residual).
+            "printf 'a\\n' > a.txt; diff a.txt b.txt",
+            "printf note > notes.txt && git add notes.txt",
+            "ln -s src/app.py app && printf x > app",
+            "echo x | tee \"$TMPDIR/run.log\" | grep -E \"SURVIVED|MISSING\"",
+            r#"x='a\tb'; print -r "$x" > out.txt"#,
+            r"{ { sleep 1; printf '%s\n' 'flow update'; } & printf '%s' code; wait; } > commands.fifo",
+            r"{ echo -n code; cat notes.txt; echo 'flow update'; } > commands.fifo",
+            r"{ printf '%s' code; head -n 1 notes.txt; printf '%s\n' 'flow update'; } > commands.fifo",
             // A default file, and a loader option, the line never names
             // where the program runs.
             "printf '%s\\n' 'all:' > Makefile; printf '%s' '\tcode' >> Makefile; printf '%s\\n' 'flow update' >> Makefile; make",
@@ -1664,25 +1762,173 @@ mod tests {
             r"printf '%s\n' '\143odeflow update' | xargs printf > commands.fifo",
         ];
         let allow = [
+            // A program's own output written to a file: the named residual.
             "cargo build > build.log 2>&1 && grep error build.log",
-            "printf x > a.txt && git add a.txt",
-            "echo x > f && cp f g && chmod +x g",
-            "mkdir -p d && printf x > d/f",
             "make > build.log",
             "cargo test > test.log 2>&1; echo done",
             "cargo test 2>&1 | tee test.log; grep FAILED test.log",
-            "printf '%s\\n' a b > list.txt && wc -l list.txt && cat list.txt",
-            "printf '{}' > a.json && jq . a.json",
-            "printf x | base64 > enc.txt && tail -n 1 enc.txt",
-            "cd out && printf x > f && head f",
             "mytool > out.txt; echo done",
-            "for f in a b; do printf '%s\\n' \"$f\" > \"$f.txt\"; done",
-            "printf x > a; ln -s a b && rm a",
-            "echo x > f.txt; diff f.txt g.txt",
             "curl -s https://example.com > out.json && jq . out.json",
             "cargo build --target-dir \"$(pwd)/t\" > b.log 2>&1; grep error b.log",
             "mytool > out.txt; mytool2 out.txt",
+            // A lone write, and one command whose substitutions write
+            // nothing and that runs after them.
+            "printf x > f",
+            "printf '%s\\n' 'echo $(date)' > run.sh",
+            "echo \"$(date)\" > out.txt",
+            "printf '%s\\n' \"$(git rev-parse HEAD)\" > head.txt",
+            "cat <<'EOF' > notes.txt\nline\nEOF",
         ];
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Text the shell evaluates as arithmetic is judged as command text:
+    /// each command substitution in it runs, and its output is evaluated,
+    /// so it is judged as a command whose output a shell runs, with what
+    /// the line binds; a variable such text reads that the line binds to
+    /// text from outside the line, to unresolved text or to text with a
+    /// substitution refuses, as does a word that joins written substitution
+    /// text with an expansion (TSK-1476 r22). So does a variable it reads
+    /// that the line assigns in a way no word shows or that the shell sets
+    /// from text on the line, and text the shell expands as a prompt has
+    /// each substitution judged as a command line. One row per context the
+    /// bash and zsh manuals list; the command is built by `printf` so that
+    /// only this rule finds it.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one row per context the manuals list
+    fn text_the_shell_evaluates_as_arithmetic_is_judged_as_command_text() {
+        let built = r#"printf "co%xflow update" 222 | sh"#;
+        let refuse: Vec<String> = [
+            "(( a['$(B)'] ))",
+            "for (( i = a['$(B)']; i < 1; i++ )); do :; done",
+            "echo $(( a['$(B)'] ))",
+            "echo $[ a['$(B)'] ]",
+            "let 'x = a[$(B)]'",
+            "[[ 1 -eq 'a[$(B)]' ]]",
+            "[[ 'a[$(B)]' -ne 1 ]]",
+            "[[ 1 -lt 'a[$(B)]' ]]",
+            "[[ 1 -le 'a[$(B)]' ]]",
+            "[[ 1 -gt 'a[$(B)]' ]]",
+            "if [[ 1 -ge 'a[$(B)]' ]]; then :; fi",
+            "[[ -v 'a[$(B)]' ]]",
+            "test -v 'a[$(B)]'",
+            "[ -v 'a[$(B)]' ]",
+            "printf -v 'a[$(B)]' x",
+            "read 'a[$(B)]' < /dev/null",
+            "read -a 'a[$(B)]' < /dev/null",
+            "mapfile 'a[$(B)]' < /dev/null",
+            "getopts ab 'a[$(B)]'",
+            "unset 'a[$(B)]'",
+            "wait -p 'a[$(B)]'",
+            "a['$(B)']=1",
+            "a=(['$(B)']=1)",
+            "declare 'a[$(B)]=1'",
+            "declare -i n='a[$(B)]'",
+            "typeset -i n='a[$(B)]'",
+            "local -i n='a[$(B)]'",
+            "integer n='a[$(B)]'",
+            "declare -n r='a[$(B)]'",
+            "declare -i n; n='a[$(B)]'",
+            "echo \"${s:'a[$(B)]'}\"",
+            "echo \"${s:0:'a[$(B)]'}\"",
+            "echo \"${a['$(B)']}\"",
+            "echo \"${#a['$(B)']}\"",
+            "echo $a['$(B)']",
+            "repeat 'a[$(B)]' do :; done",
+            "printf '%d' 'a[$(B)]'",
+            "print -f '%d' 'a[$(B)]'",
+            "print -v 'a[$(B)]' x",
+            "shift 'a[$(B)]'",
+            "return 'a[$(B)]'",
+            "exit 'a[$(B)]'",
+            "break 'a[$(B)]'",
+            "continue 'a[$(B)]'",
+            "builtin let 'x = a[$(B)]'",
+            "command printf -v 'a[$(B)]' x",
+            "setopt promptsubst; print -P '$(B)'",
+            // A variable such text reads, bound on the line.
+            "x='a[$(B)]'; [[ $x -eq 1 ]]",
+            "x='a[$(B)]'; (( x ))",
+            "x='a[$(B)]'; y=x; (( y ))",
+            "x='a[$(B)]'; echo \"${!x}\"",
+            "x='a[$(B)]'; echo \"${(P)x}\"",
+            "x='$(B)'; echo \"${(e)x}\"",
+            "x='$(B)'; echo \"${x@P}\"",
+            "x=$(git log -1 --format=%s); (( x ))",
+            "for x in *; do (( x )); done",
+            // Output a program writes, evaluated.
+            "(( $(B) ))",
+            "(( $(wc -l < count.txt) > 3 ))",
+            "[[ $(git rev-list --count HEAD) -gt 0 ]]",
+            "n=$(wc -l < f); (( n > 3 ))",
+            "x=$(printf 'co%xflow update' 222); [[ 1 -eq 'a[$($x)]' ]]",
+            "[[ 1 -eq 'a[$(eval \"$(printf \"co%xflow update\" 222)\")]' ]]",
+            // A word that joins written substitution text with an
+            // expansion, and positional parameters a function reads.
+            "d='$'; [[ 1 -eq \"a[${d}(sh f)]\" ]]",
+            "v=x; [[ 1 -eq 'a[$('\"$v\"')]' ]]",
+            "f() { (( $1 )); }; f 'a[$(B)]'",
+            "set -- 'a[$(B)]'; (( $1 ))",
+            // A variable the line assigns in a way no word shows, or that
+            // the shell sets from text on the line.
+            "x=1; eval 'x=a[\\$(B)]'; (( x ))",
+            "x=1; trap 'x=a[\\$(B)]' DEBUG; (( x ))",
+            "x=; : ${x:='a[$(B)]'}; (( x ))",
+            "i=0; read i <<< 'a[$(B)]'; (( i ))",
+            "read <<< 'a[$(B)]'; (( REPLY ))",
+            ": 'a[$(B)]'; (( _ ))",
+            "getopts a: o -a 'a[$(B)]'; (( OPTARG ))",
+            "for i j in 1 'a[$(B)]'; do (( j )); done",
+            "typeset -T FOO foo; FOO='a[$(B)]'; (( foo ))",
+            "mapfile -C 'x=a[\\$(B)]' -c 1 a < /dev/null; (( x ))",
+            // Text the shell expands as a prompt.
+            "PS4='$(B)'; set -x; true",
+            "env PS4='$(B)' bash -x -c true",
+            "PROMPT4='$(B)'; setopt promptsubst xtrace; true",
+            "PROMPT_COMMAND='B' bash -i < /dev/null",
+        ]
+        .iter()
+        .map(|row| row.replace('B', built))
+        .chain([format!("[[ 'a[$({built})]' =~ .* ]]; (( BASH_REMATCH ))")])
+        .collect();
+        let refuse: Vec<&str> = refuse.iter().map(String::as_str).collect();
+        let allow = [
+            // Arithmetic on plain literals, with no substitution.
+            "(( 1 + 2 ))",
+            "[[ 3 -eq 3 ]]",
+            "echo $(( 2 * 3 ))",
+            "n=0; for f in a b; do (( n++ )); done; echo \"$n\"",
+            "i=2; echo \"${s:i:1}\"",
+            "[[ $count -gt 0 ]] && echo some",
+            // `test` and `[` compare integers and evaluate nothing.
+            "[ \"$(wc -l < f)\" -gt 3 ] && echo long",
+            "test \"$(git rev-list --count HEAD)\" -gt 0",
+            // A file the line runs whose content is state the line does not
+            // show, and substitution text no shell evaluates.
+            "echo 'a[$(sh f)]'",
+            "grep -F '$(B)' notes.md",
+            "git commit -m 'docs: explain $(x | sh)'",
+            "cd \"$(git rev-parse --show-toplevel)\" && cargo test",
+            "read -r line < f; echo \"$line\"",
+            "x=$(git rev-parse HEAD); echo \"$x\"",
+            "printf '%s\\n' '$(B)'",
+            "export PATH=\"$(pwd)/bin:$PATH\"",
+            "local x=\"$(git rev-parse HEAD)\"",
+            // Variables assigned only by words whose values are literal
+            // text or arithmetic, where the composer cannot follow the
+            // loop or the function.
+            "f() { local x=id_rsa; }; f",
+            "i=0; while (( i < 3 )); do i=$((i + 1)); done",
+            "for i in 1 2 3; do (( i )); done",
+            "a=(1 2 3); (( a[1] > 1 ))",
+            "alias ll='ls -l'; ll src",
+            // A prompt whose substitutions are ordinary commands.
+            "PS4='+ ${LINENO}: '; set -x; true",
+            "PS4='+ $(date) '; set -x; true",
+        ];
+        let allow: Vec<String> = allow.iter().map(|row| row.replace('B', built)).collect();
+        let allow: Vec<&str> = allow.iter().map(String::as_str).collect();
         let wrong = misjudged(&refuse, &allow);
         assert!(wrong.is_empty(), "{wrong:#?}");
     }

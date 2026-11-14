@@ -49,7 +49,9 @@ pub const CASES: &[(u8, &str, bool)] = &[
     (6, "python3 -c 'import sys;print(open(sys.argv[1]).read())' id_rsa", true),
     (6, "zip -r out.zip ~/.aws", true),
     (11, "cat 'dir\nname/id_rsa'", true),
-    (13, "D=src; printf x > \"$D/settings.json\"", false),
+    // A program's output: TSK-1476 r22 refuses spelled text written on a
+    // line of several commands.
+    (13, "D=src; date > \"$D/settings.json\"", false),
     (13, "cat > notes.txt <<'EOF'\npython3 -c 'open(\".codeflow/policy.json\",\"w\")'\nEOF", false),
     (13, "cat > notes.txt <<'EOF'\npython3 edit.py .claude/settings.json\nEOF", false),
     (13, "rg 'id_rsa' README.md", false),

@@ -362,7 +362,7 @@
   [
     "cp -l src/app.py app2.py && printf x > app2.py",
     0,
-    0
+    2
   ],
   [
     "/bin/ln -s src L && rm -rf L/",

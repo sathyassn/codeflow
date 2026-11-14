@@ -552,7 +552,7 @@
   [
     "ln -s src link && printf x > link/new.txt",
     0,
-    0
+    2
   ],
   [
     "ln -s src/app.py app && cat app",
@@ -562,7 +562,7 @@
   [
     "ln -s src/app.py app && printf x > app",
     0,
-    0
+    2
   ],
   [
     "ln -sf ../src docs/src",
@@ -612,7 +612,7 @@
   [
     "ln -s notes.txt n && printf x > n",
     0,
-    0
+    2
   ],
   [
     "ln -s ../ up && cat up/README.md",
@@ -632,7 +632,7 @@
   [
     "ln -s docs L && printf x > L/notes.txt",
     0,
-    0
+    2
   ],
   [
     "env bash -c 'ls'",

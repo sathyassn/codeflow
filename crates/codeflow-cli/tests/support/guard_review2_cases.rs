@@ -54,7 +54,9 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
         "ln -s .codeflow/rules l; cd -P l/.. && printf x > policy.json",
         true,
     ),
-    (27, "", "cd -P clean && printf x > policy.json", false),
+    // A program's output: TSK-1476 r22 refuses spelled text written on a
+    // line of several commands.
+    (27, "", "cd -P clean && date > policy.json", false),
     (28, "exec-guard", "rg x .", true),
     (28, "exec-guard", "grep -r x .", true),
     (28, "exec-guard", "tar cf - src", true),
