@@ -81,7 +81,7 @@ pub fn detect_hook_manager(root: &Path) -> Result<Option<HookManager>, ScaffoldE
         }
     }
     if let Some(path) = configured {
-        if path != CODEFLOW_HOOKS_PATH {
+        if !super::hooks_path::classify(root, &path)?.is_codeflow() {
             return Ok(Some(HookManager::HooksPath(path)));
         }
     }
@@ -120,7 +120,7 @@ impl GitDirHooks {
             ", ",
         );
         crate::shown!(
-            "existing git hooks in {}: {}. git no longer runs them once CodeFlow's hooks are wired (core.hooksPath = {}); nothing was moved or deleted. For each, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file; (2) keep it: set core.hooksPath to a project-relative hooks folder the project owns, whose hooks call both the check and the CodeFlow shim. `codeflow doctor` warns while they stay in {}",
+            "existing git hooks in {}: {}. git no longer runs them once core.hooksPath names CodeFlow's {}; nothing was moved or deleted. For each, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file; (2) keep it: set core.hooksPath to the absolute path of a hooks folder the project owns, whose hooks call both the check and the CodeFlow shim. `codeflow doctor` warns while they stay in {}",
             dir,
             names,
             Shown::fixed(CODEFLOW_HOOKS_PATH),
@@ -172,9 +172,8 @@ const GIT_HOOK_NAMES: &[&str] = &[
 #[must_use]
 pub fn git_dir_hooks(root: &Path) -> Option<GitDirHooks> {
     // This function only supplies an advisory note; it never selects wiring.
-    if configured_hooks_path(root)
-        .ok()?
-        .is_some_and(|path| path != CODEFLOW_HOOKS_PATH)
+    if !super::hooks_path::form(root).ok()?.is_codeflow()
+        && configured_hooks_path(root).ok()?.is_some()
     {
         return None;
     }

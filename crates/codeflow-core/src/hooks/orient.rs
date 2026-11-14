@@ -566,10 +566,13 @@ pub(crate) fn git_hooks_dir(root: &Path) -> Result<Option<std::path::PathBuf>, S
             let path = crate::git::GitName::from_bytes(bytes)
                 .os_path()
                 .map_err(|error| error.to_string())?;
+            // Git reads a relative path from the top of the working tree
+            // its commands run in (the git directory when bare), which is
+            // not `root` when the project sits in a subfolder.
             Ok(Some(if path.is_absolute() {
                 path
             } else {
-                root.join(path)
+                repo.workdir().unwrap_or_else(|| repo.path()).join(path)
             }))
         }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
@@ -616,9 +619,36 @@ mod tests {
             .write_all(b"[core]\n\thooksPath = hooks-\xff\n")
             .unwrap();
         let active = git_hooks_dir(dir.path()).unwrap().unwrap();
+        let top = dir.path().canonicalize().unwrap();
         assert_eq!(
             active.as_os_str().as_bytes(),
-            [dir.path().as_os_str().as_bytes(), b"/hooks-\xff"].concat()
+            [top.as_os_str().as_bytes(), b"/hooks-\xff"].concat()
+        );
+    }
+
+    /// TSK-1395: a relative hooks path is read from the repository's working
+    /// tree top, which is not the project root when the project sits in a
+    /// subfolder of its repository.
+    #[test]
+    fn a_relative_hooks_path_is_read_from_the_working_tree_top() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("core.hooksPath", "rel-hooks")
+            .unwrap();
+        let project = dir.path().join("sub");
+        std::fs::create_dir_all(&project).unwrap();
+        let active = git_hooks_dir(&project).unwrap().unwrap();
+        assert_eq!(
+            active.canonicalize().ok(),
+            None,
+            "the folder does not exist yet"
+        );
+        std::fs::create_dir_all(dir.path().join("rel-hooks")).unwrap();
+        assert_eq!(
+            active.canonicalize().unwrap(),
+            dir.path().join("rel-hooks").canonicalize().unwrap()
         );
     }
 

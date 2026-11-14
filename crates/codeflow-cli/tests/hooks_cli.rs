@@ -1850,6 +1850,40 @@ fn git_guard_blocks_hook_plane_self_disarm_with_exit_2() {
     }
 }
 
+/// TSK-1395 AC-5 (ADR-0099): a session cannot write `core.hooksPath` in
+/// any form, the absolute managed form `codeflow init` writes included;
+/// both guards refuse under `git.hook_integrity`.
+#[test]
+fn guards_refuse_every_hooks_path_write_form() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let managed = format!("{}/.codeflow/git-hooks", dir.path().display());
+    for cmd in [
+        format!("git config core.hooksPath '{managed}'"),
+        format!(
+            "git -C '{}' config core.hooksPath '{managed}'",
+            dir.path().display()
+        ),
+        "git config core.hooksPath .codeflow/git-hooks".to_string(),
+        "git config --unset core.hooksPath".to_string(),
+        "git config --local core.hooksPath /tmp/elsewhere/.codeflow/git-hooks".to_string(),
+    ] {
+        for hook in ["git-guard", "exec-guard"] {
+            let payload = guard_payload(&cmd, dir.path());
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &payload,
+            );
+            assert_eq!(out.status.code(), Some(2), "{hook}: {cmd}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity"),
+                "{hook}: {cmd}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
 #[test]
 fn git_guard_blocks_remote_tracking_ref_poisoning_with_exit_2() {
     // Task 2a: the agent-writable sync oracle cannot be hand-set.
