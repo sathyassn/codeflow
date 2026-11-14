@@ -1,0 +1,11 @@
+id = "TSK-1493"
+uid = "9c984353-d578-4b5a-bbed-a65c9a4537d5"
+kind = "TSK"
+title = "Exec-guard gives the same verdict on every host, or names the host setting that changed it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:31:41Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
