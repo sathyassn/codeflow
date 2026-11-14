@@ -91,3 +91,9 @@ versions on one machine; it cannot designate a seat or claim evidence.
 Schema 1 remains the binding-reference form. Schema 2 adds an optional
 project design-authority block and standing extra-family reviews; binding
 references keep the rules above. See the ADR-0069 note of 2026-10-04.
+
+## Note (2026-11-10)
+
+ADR-0101 supersedes this record's limit that the project file gives
+binding references only. A project may override any catalog field inside
+the floors ADR-0101 lists. Schema 1 and 2 files keep resolving as before.
