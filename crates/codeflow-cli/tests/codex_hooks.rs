@@ -293,6 +293,43 @@ fn strict_run_time_refusal(out: &std::process::Output) -> bool {
         && stderr.contains("the strict text rule cannot verify the run-time argument")
 }
 
+/// TSK-1476 AC-6: the round-four rows that set a trap or a shell hook
+/// function and reset or remove it before an ordinary command. The install
+/// check does not settle the reset, so it judges the trap or hook text as
+/// text the shell runs later and refuses it under `git.hook_integrity`.
+/// That refusal shows only where a project has relaxed `security.text_guard`;
+/// at the default strict level these rows were already refused for their
+/// run-time words. The pull request lists it as an accepted over-refusal.
+#[cfg(unix)]
+const INSTALL_RUN_OVER_REFUSALS: [&str; 10] = [
+    "trap-reset-debug",
+    "trap-ignore-debug",
+    "trap-reset-exit",
+    "trap-reset-err-after-dashes",
+    "trap-reset-return",
+    "trap-reset-signal",
+    "trap-set-again-harmless",
+    "hook-unfunction-chpwd",
+    "hook-unfunction-trapdebug",
+    "hook-unset-f-precmd",
+];
+
+/// The listed over-refusal: exactly two findings, the strict text rule's
+/// run-time refusal and the install check's refusal of text the line hands
+/// to a shell that it cannot settle, and no other rule.
+#[cfg(unix)]
+fn strict_and_install_run_refusal(out: &std::process::Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(2)
+        && stderr.matches("policy rule ").count() == 2
+        && stderr.contains("policy rule security.text_guard (block)")
+        && stderr.contains("the strict text rule cannot verify the run-time argument")
+        && stderr.contains("policy rule git.hook_integrity (block)")
+        && stderr.contains(
+            "possible install run `text the line hands to a shell or interpreter that the guard cannot settle`",
+        )
+}
+
 /// Run the shipped Codex exec-guard wiring through the shell, as Codex
 /// does, with a Bash tool call for `command` on stdin.
 #[cfg(unix)]
@@ -758,12 +795,27 @@ fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
     for sub in ["build", "empty"] {
         std::fs::create_dir(root.join(sub)).unwrap();
     }
+    for listed in INSTALL_RUN_OVER_REFUSALS {
+        assert!(
+            guard_forms::REVIEW_ROUND_FOUR_PROBES
+                .iter()
+                .any(|(case, _, expect)| *case == listed && *expect == Expect::Allowed),
+            "{listed} is not an allowed round-four row"
+        );
+    }
     let mut wrong = Vec::new();
+    let mut over_refused = Vec::new();
     for (case, command, expect) in guard_forms::REVIEW_ROUND_FOUR_PROBES {
         let out = run_codex_exec_guard(root, command);
         let want = if *expect == Expect::Allowed { 0 } else { 2 };
         let strict = *expect == Expect::Allowed && strict_run_time_refusal(&out);
-        if out.status.code() != Some(want) && !strict {
+        let listed = INSTALL_RUN_OVER_REFUSALS.contains(case)
+            && *expect == Expect::Allowed
+            && strict_and_install_run_refusal(&out);
+        if listed {
+            over_refused.push(*case);
+        }
+        if out.status.code() != Some(want) && !strict && !listed {
             wrong.push(format!(
                 "{case} ({expect:?}): {command} -> {:?} {}",
                 out.status.code(),
@@ -772,6 +824,11 @@ fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+    // The list stays exact: a row the guard no longer over-refuses leaves it.
+    assert_eq!(
+        over_refused, INSTALL_RUN_OVER_REFUSALS,
+        "the listed install over-refusals changed"
+    );
 }
 
 #[test]
