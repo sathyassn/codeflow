@@ -1512,6 +1512,105 @@ mod tests {
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
+    /// Text the line spells takes the closed form on every channel a
+    /// program receives it by, not only standard input: an output process
+    /// substitution, which reads what its command writes; a command
+    /// substitution or a value the line binds, given as an argument; a
+    /// descriptor other than standard input, set on the command or by
+    /// `exec`; a descriptor path or a file the line writes, given as a file
+    /// operand; and an assignment, for a program the guard does not know or
+    /// a variable a program runs as a command. Program output on any of
+    /// them stays the named residual.
+    #[test]
+    fn every_channel_a_program_receives_spelled_text_by_takes_the_closed_form() {
+        let join = "printf '%s' code; printf '%s\\n' 'flow update'";
+        let refuse = [
+            format!("cat <({join}) > >(sh)"),
+            format!("{{ {join}; }} > >(ssh host sh)"),
+            format!("( {join} ) > >(sh)"),
+            format!("{{ {join}; }} 3>&1 > >(mytool)"),
+            format!("ssh host \"$({join})\""),
+            format!("ssh host \"`{join}`\""),
+            format!("mytool --cmd=\"$({join})\""),
+            format!("ssh host sh <&3 3< <({join})"),
+            format!("exec 3< <({join}); ssh host sh <&3"),
+            format!("exec > >(sh); {join}"),
+            "exec 3< <(printf 'co%xflow update' 222); mytool <&3".to_string(),
+            "mytool /dev/fd/3 3< <(printf 'co%xflow update' 222)".to_string(),
+            "cat /dev/fd/3 3< <(printf 'co%xflow update' 222) | sh".to_string(),
+            "mytool 3<<< \"$(printf 'co%xflow update' 222)\"".to_string(),
+            "printf 'co%xflow update' 222 | tee >(sh)".to_string(),
+            "printf 'co%xflow update' 222 > >(ssh host)".to_string(),
+            "printf 'co%xflow update' 222 2>&1 > >(mytool)".to_string(),
+            "x=\"$(printf 'co%xflow update' 222)\"; ssh host \"$x\"".to_string(),
+            "printf -v x 'co%xflow update' 222; ssh host \"$x\"".to_string(),
+            "ssh host \"co$(printf '%x' 222)flow update\"".to_string(),
+            "ssh host \"${x:-$(printf 'co%xflow update' 222)}\"".to_string(),
+            r"ssh host $'\143odeflow update'".to_string(),
+            "GIT_SSH_COMMAND=\"$(printf 'co%xflow update' 222)\" git fetch".to_string(),
+            "MYCMD=\"$(printf 'co%xflow update' 222)\" mytool".to_string(),
+            "env MYCMD=\"$(printf 'co%xflow update' 222)\" mytool".to_string(),
+            "{ ssh host \"$(printf 'co%xflow update' 222)\"; }".to_string(),
+            "for h in a; do ssh \"$h\" \"$(printf 'co%xflow update' 222)\"; done".to_string(),
+            "case a in a) ssh host \"$(printf 'co%xflow update' 222)\";; esac".to_string(),
+            "printf 'co%xflow update' 222 |& ssh host".to_string(),
+            // A file the line writes, handed by name as a file operand.
+            "printf 'co%xflow update' 222 > f.txt; mytool f.txt".to_string(),
+            "printf 'co%xflow update' 222 > f.txt; mytool ./f.txt".to_string(),
+            "printf 'co%xflow update' 222 > f.txt; mytool *.txt".to_string(),
+            "printf 'co%xflow update' 222 > f.txt; cp f.txt g.cfg; ssh -F g.cfg host".to_string(),
+            "printf 'co%xflow update' 222 > f.txt; ssh -Ff.txt host".to_string(),
+            "printf 'co%xflow update' 222 | tee f.txt; mytool --config=f.txt".to_string(),
+            "printf 'co%xflow update' 222 > cfg; GIT_CONFIG_GLOBAL=cfg git fetch".to_string(),
+            "printf 'co%xflow update' 222 > cfg; git -c include.path=cfg fetch".to_string(),
+            // A plain value joined with other text in a compound command.
+            "if true; then x=code; ssh host \"${x}flow update\"; fi".to_string(),
+            // An assignment alone that a later program reads.
+            "GIT_SSH_COMMAND=\"$(printf 'co%xflow update' 222)\"; git fetch".to_string(),
+            "MYCMD=\"$(printf 'co%xflow update' 222)\"; export MYCMD; mytool".to_string(),
+            "set -a; MYCMD=\"$(printf 'co%xflow update' 222)\"; mytool".to_string(),
+        ];
+        let allow = [
+            "if true; then D=./build; rm -rf $D; fi",
+            "if true; then x=ls; ssh host \"$x\"; fi",
+            "curl -s 'https://example.com/x?a=1' > out.json && jq . out.json",
+            "cargo build > build.log 2>&1; mytool --rev abc",
+            "cargo test 2>&1 | tee test.log; grep FAILED test.log",
+            "printf 'a\\n' > a.txt; diff a.txt b.txt",
+            "v=$(printf '%05d' 3); echo \"$v\"",
+            "export PATH=\"$(pwd)/bin:$PATH\"; mytool",
+            "HOME=\"$(mktemp -d)\" cargo test",
+            "if true; then D=/; D=build; rm -rf \"$D\"; fi",
+            "printf note > notes.txt && git add notes.txt",
+            "ln -s src/app.py app && printf x > app",
+            "printf x > run; chmod +x run; env PATH=. ls",
+            "echo x | tee \"$TMPDIR/run.log\" | grep -E \"SURVIVED|MISSING\"",
+            "diff <(sort a.txt) <(sort b.txt)",
+            "ssh host \"$(printf 'ls')\"",
+            "git commit -m \"$(printf 'fix: a')\"",
+            "echo \"$(date)\" > out.txt",
+            "tool --rev \"$(git rev-parse HEAD)\"",
+            "tool --rev=\"$(git rev-parse HEAD)\"",
+            "make 2>&1 > >(tee build.log)",
+            "cargo test 2>&1 | tee >(grep -c ok)",
+            "cargo build 2> >(grep -v warning)",
+            "exec 3< notes.txt",
+            "exec 2>&1",
+            "mytool 3< notes.txt",
+            "x=$(git rev-parse HEAD); git show \"$x\"",
+            "x=$(git rev-parse HEAD); mytool \"$x\"",
+            "GIT_PAGER=less git log",
+            "ls \"$(pwd)\"",
+            "mkdir -p \"$(dirname out/a.txt)\"",
+            "ssh host \"`git rev-parse HEAD`\"",
+            "mytool \"$(git ls-files)\"",
+            "for f in a b; do wc -l \"$f\"; done",
+        ];
+        let refuse: Vec<&str> = refuse.iter().map(String::as_str).collect();
+        let wrong = misjudged(&refuse, &allow);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     /// The brief's controls: the admitted lines that name the binary with
     /// a verb draw no finding, and lines that do not name it stay clean
     /// whatever form they take.

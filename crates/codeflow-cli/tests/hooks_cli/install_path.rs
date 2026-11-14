@@ -1177,6 +1177,45 @@ fn a_written_file_run_and_spelled_text_to_an_unknown_program_refuse() {
     tally.finish();
 }
 
+/// Text the line spells takes the closed form on every channel a program
+/// receives it by: an output process substitution, an argument, another
+/// descriptor, a file the line writes and an assignment a later program
+/// reads (TSK-1476 r20).
+#[test]
+fn spelled_text_on_any_channel_to_an_unknown_program_refuses() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = project(temp.path());
+    let join = r"printf '%s' code; printf '%s\n' 'flow update'";
+    let rows: Vec<String> = vec![
+        format!("cat <({join}) > >(sh)"),
+        format!("{{ {join}; }} > >(ssh host sh)"),
+        format!("ssh host \"$({join})\""),
+        format!("ssh host \"`{join}`\""),
+        format!("exec 3< <({join}); ssh host sh <&3"),
+        "mytool /dev/fd/3 3< <(printf 'co%xflow update' 222)".to_string(),
+        "printf 'co%xflow update' 222 | tee >(sh)".to_string(),
+        "printf 'co%xflow update' 222 > f.txt; ssh -F f.txt host".to_string(),
+        "GIT_SSH_COMMAND=\"$(printf 'co%xflow update' 222)\" git fetch".to_string(),
+    ];
+    let mut tally = Tally::default();
+    for row in &rows {
+        tally.refused(&[EXEC], row, &shell(row, &root), &root, operator_refusal);
+    }
+    let allowed: Vec<String> = [
+        "diff <(sort a.txt) <(sort b.txt)",
+        "ssh host \"$(printf 'ls')\"",
+        "echo \"$(date)\" > out.txt",
+        "make 2>&1 > >(tee build.log)",
+        "exec 3< notes.txt",
+        "cargo test 2>&1 | tee test.log; grep FAILED test.log",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    tally.install_allowed(&allowed, &root);
+    tally.finish();
+}
+
 /// A Git call that names the binary with a verb refuses whatever programs
 /// the repository's configuration has it run, an interpreter above all.
 #[test]
