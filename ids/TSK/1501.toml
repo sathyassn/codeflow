@@ -1,0 +1,11 @@
+id = "TSK-1501"
+uid = "73227733-1ead-45af-93e6-ed9d47c7e8b8"
+kind = "TSK"
+title = "A project can relax the spelled-write refusal without weakening the tamper checks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-14T19:47:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
