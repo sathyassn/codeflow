@@ -463,7 +463,7 @@ REUSE_JOB = """\
 # selection skips the work.
 WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
-    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
+    if: ${{{{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}}}
     name: windows
     needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey, windows-tier-journeys]
     runs-on: ubuntu-24.04
@@ -666,8 +666,13 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 # so the job must match this text exactly, apart from blank lines, comments
 # and trailing spaces. Every event but a draft pull request must receive a
 # verdict; a draft's verdicts are skipped, which is neutral (TSK-449).
+# Rulings of 2026-11-11: no pull request or push runs the gates (a line
+# pull request until the line gate ships, by the Director; a line push for
+# good and main's while main is relaxed, by the operator), so both verdicts
+# run only on the daily schedule and a manual dispatch, and admission names
+# the security jobs instead (codeflow-policy.yml).
 VERDICT_JOB = """\
-    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
+    if: ${{{{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}}}
     name: codeflow gates
     needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
@@ -740,11 +745,10 @@ GATE_STEP = """\
 # main or master, the schedule and manual runs, and never on a pull request
 # into integration/**.
 RELEASE_TARGETS = ("prose-exhaustive", "read-benchmark", "present-browser", "present-binary-delta")
-RELEASE_IF = ("${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && "
-              "!github.event.pull_request.draft && contains(fromJSON('[\"main\",\"master\"]'), "
-              "github.event.pull_request.base.ref) || github.event_name == 'push' && "
-              "contains(fromJSON('[\"refs/heads/main\",\"refs/heads/master\"]'), github.ref) || "
-              "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}")
+# Temporary relaxation (operator decision, 2026-11-11): the release parts,
+# like every gate job, run only on the daily schedule and a manual dispatch.
+RELEASE_IF = ("${{ !cancelled() && needs.reuse.outputs.run == '' && "
+              "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}")
 
 
 def release_job_problems(release: str, gate: str, workflow: str, released: list[str]) -> list[str]:

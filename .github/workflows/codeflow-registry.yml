@@ -25,7 +25,10 @@ name: codeflow-registry
 
 on:
   push:
-    branches: [main, master, "integration/**"]
+    # Permanent placement (operator ruling, 2026-11-11): no run on a push
+    # to an integration line; the daily run and each pull request's
+    # `commit standards` still check the registry.
+    branches: [main, master]
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
