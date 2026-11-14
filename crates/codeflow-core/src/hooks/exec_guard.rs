@@ -446,7 +446,9 @@ pub(crate) fn install_violation(
                  variable the shell sets from text on the line; so the guard cannot tell \
                  whether it runs the binary with an install verb; write the commands \
                  literally, write the file on one line and run the next command on the next \
-                 line, or compare a program's output with `test` or `[`)"
+                 line, or run a program on its own line and compare the number it prints as \
+                 literal text on the next; `test` or `[` on a program's output passes this \
+                 check, but the strict text rule refuses it at its default)"
             } else if !run.parsed {
                 " (the line is outside the forms the guard reads as data and its text names \
                  the binary with an install verb; give such text to `echo`, `printf '%s'`, \
