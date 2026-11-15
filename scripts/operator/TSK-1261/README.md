@@ -26,6 +26,8 @@ terminal. A mismatched preimage fails without changing either source file.
 The builder's `scripts/test_changed_coverage_patch.py` runs the real parity
 checker against patched copies and explicitly named support files in a
 temporary directory. It also checks that removing required inputs fails.
+This is builder evidence for the pinned preimage. The ongoing gate runs
+the report and exemption tests, which remain usable after patch application.
 
 After review, the operator runs `python3 -B scripts/operator/TSK-1261/apply.py
 --apply`, reviews both resulting changes, commits them and obtains hosted

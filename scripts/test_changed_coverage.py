@@ -184,7 +184,12 @@ class ShardTests(unittest.TestCase):
     def test_symlinked_report_fails(self):
         report = self.root / "coverage-data-1" / "coverage.info"
         report.unlink()
-        report.symlink_to(self.root / "coverage-data-2" / "coverage.info")
+        try:
+            report.symlink_to(self.root / "coverage-data-2" / "coverage.info")
+        except OSError:
+            if sys.platform != "win32":
+                raise
+            self.skipTest("host cannot create symbolic links; symlink refusal unverified")
         with self.assertRaisesRegex(cc.Problem, "regular report"):
             self.read()
 
