@@ -824,11 +824,14 @@ a program in the project's committed build configuration. A command a
 program reads from its own configuration files or environment is not read
 this way.
 
-When git-guard decides the repository a Git command is judged in, it
-reads the launchers in front of Git by each of their spellings, and an
-assignment written after a launcher as the launcher passes it on; a
-launcher whose options or environment it does not model leaves the
-repository unresolved, which refuses.
+git-guard reads a Git command through every launcher in the list above,
+by each of its spellings and its own options, the privilege and
+scheduling launchers included. When it decides the repository the
+command is judged in, it reads an assignment written after a launcher as
+the launcher passes it on. A launcher that runs the command as another
+user, with that user's environment and configuration, or whose options
+or environment the guard does not model, leaves the repository
+unresolved, which refuses.
 
 ### Program variables the guards judge
 
