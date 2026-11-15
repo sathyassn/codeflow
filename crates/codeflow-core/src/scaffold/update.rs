@@ -1168,6 +1168,10 @@ fn update_entry(
                 .is_some_and(|e| e.eq_ignore_ascii_case("json"));
             if is_json {
                 sync_user_owned_json(root, entry, &rendered, raw, installed, report, diffs)?;
+            } else if entry.refresh_unmodified {
+                refresh_unmodified_user_file(
+                    root, entry, &rendered, raw, installed, report, diffs,
+                )?;
             } else {
                 let mut notes = vec![Shown::fixed("user-owned: never mutated by update")];
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
@@ -1186,6 +1190,135 @@ fn update_entry(
         }
     }
     Ok(())
+}
+
+/// What update does with a user-owned file that follows the shipped version
+/// while it is unmodified (`refresh_unmodified`, TSK-1057).
+#[derive(Debug, PartialEq, Eq)]
+enum Follow {
+    /// The file already equals the new shipped version.
+    Current,
+    /// The file still equals the shipped version it was installed from (its
+    /// baseline), byte for byte: it is replaced with the new one.
+    Replace,
+    /// The file differs from both, or no baseline proves it unmodified: it
+    /// is the adopter's and is left alone.
+    Edited,
+}
+
+/// `baseline` is the stored copy of the shipped version the file was
+/// installed from; without one, `recorded` (the installed manifest's hash of
+/// that version) is the proof.
+fn follow(live: &str, baseline: Option<&str>, recorded: Option<&str>, rendered: &str) -> Follow {
+    let unmodified = match baseline {
+        Some(baseline) => baseline == live,
+        None => recorded == Some(hash::sha256_hex(live.as_bytes()).as_str()),
+    };
+    if live == rendered {
+        Follow::Current
+    } else if unmodified {
+        Follow::Replace
+    } else {
+        Follow::Edited
+    }
+}
+
+/// A user-owned file that follows the shipped version while unmodified: an
+/// unmodified copy (byte-equal to its baseline, the shipped version it was
+/// installed from) is replaced and reported; an edited copy is left alone
+/// and reported, with any warning [`kept_file_warning`] has for it.
+fn refresh_unmodified_user_file(
+    root: &Path,
+    entry: &ManifestEntry,
+    rendered: &str,
+    raw: Option<Shipped<'_>>,
+    installed: &mut InstalledManifest,
+    report: &mut Report,
+    diffs: &mut Shown,
+) -> Result<(), ScaffoldError> {
+    let dest_path = root.join(&entry.dest);
+    let live = std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
+    let baseline = Baseline::read(root, &entry.dest)?;
+    let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
+    match follow(&live, baseline.as_deref(), recorded.as_deref(), rendered) {
+        Follow::Current => {
+            record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+            Baseline::write(root, &entry.dest, rendered)?;
+            report.file(&entry.dest, Action::Unchanged);
+        }
+        Follow::Replace => {
+            write_dest(root, entry, rendered)?;
+            record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+            Baseline::write(root, &entry.dest, rendered)?;
+            push_diff(diffs, &entry.dest, &live, rendered, rendered, raw);
+            report.file_with_notes(
+                &entry.dest,
+                Action::Changed,
+                vec![Shown::fixed(
+                    "unmodified since it was installed: replaced with the shipped version",
+                )],
+            );
+        }
+        Follow::Edited => {
+            let mut notes = vec![Shown::fixed(
+                "user-owned and edited: left as it is; compare it with the shipped version",
+            )];
+            notes.extend(kept_file_warning(&entry.dest, &live));
+            if recorded.is_none() {
+                // An existing file adopted into the installed manifest, as
+                // for any user-owned file; nothing proves it was shipped.
+                Baseline::write(root, &entry.dest, rendered)?;
+                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                notes.push(Shown::fixed(
+                    "existing file adopted into the installed manifest",
+                ));
+            }
+            report.file_with_notes(&entry.dest, Action::KeptUserModified, notes);
+        }
+    }
+    Ok(())
+}
+
+/// A warning for an edited user-owned file that update keeps, when it still
+/// holds a rule a later release removed for a reason the guards depend on.
+///
+/// The Grok profile (TSK-1057): a `deny` entry naming
+/// `.codeflow/authority` also blocks reads there, so the guards in a Grok
+/// seat cannot read the policy baselines or the SSH configuration allow,
+/// and once a baseline exists every guard refuses. A profile that does not
+/// parse gets the same warning, since what it denies cannot be read.
+fn kept_file_warning(dest: &str, live: &str) -> Option<Shown> {
+    if dest != ".grok/sandbox.toml" {
+        return None;
+    }
+    let denies_authority = match live.parse::<toml::Value>() {
+        Ok(value) => value
+            .get("profiles")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|profiles| {
+                profiles.values().any(|profile| {
+                    profile
+                        .get("deny")
+                        .and_then(toml::Value::as_array)
+                        .is_some_and(|deny| {
+                            deny.iter().any(|item| {
+                                item.as_str()
+                                    .is_some_and(|path| path.contains(".codeflow/authority"))
+                            })
+                        })
+                })
+            }),
+        Err(_) => true,
+    };
+    denies_authority.then(|| {
+        Shown::fixed(
+            "warning: a Grok profile here denies ~/.codeflow/authority (or the file does not parse); \
+             Grok's deny also blocks reads, so the guards in a Grok seat cannot read the policy \
+             baselines or the SSH configuration allow there, and every guard refuses once a \
+             baseline exists; remove the .codeflow/authority entries from each profile's deny list \
+             (writes stay denied: the workspace profile does not write there)",
+        )
+    })
 }
 
 /// Additive key sync for schema-versioned, user-owned JSON (policy.json):
@@ -1922,5 +2055,154 @@ mod tests {
         );
         assert_eq!(user["git"]["push_signed"], "warn");
         assert_eq!(user["recall"]["share"], false);
+    }
+
+    /// The shipped Grok profile, and the earlier version that denied the
+    /// authority folder in every profile (TSK-1057).
+    fn grok_profiles() -> (String, String) {
+        let shipped = include_str!("../../../../assets/base/grok/sandbox.toml").to_string();
+        assert!(shipped.contains("deny = [\n"), "the profile lists deny");
+        let earlier = shipped.replace(
+            "deny = [\n",
+            "deny = [\n  \"/Users/*/.codeflow/authority\",\n  \"/root/.codeflow/authority\",\n",
+        );
+        (shipped, earlier)
+    }
+
+    fn grok_entry() -> ManifestEntry {
+        ManifestEntry {
+            src: "grok/sandbox.toml".to_string(),
+            dest: ".grok/sandbox.toml".to_string(),
+            ownership: Ownership::UserOwned,
+            tiers: vec![super::super::manifest::Tier::Minimal],
+            exec: false,
+            template: false,
+            preset: None,
+            region: None,
+            refresh_unmodified: true,
+        }
+    }
+
+    /// TSK-1057: a copy equal to the version it was installed from is
+    /// replaced; the proof is the baseline copy, or the recorded hash when
+    /// no baseline exists; anything else is the adopter's.
+    #[test]
+    fn a_file_follows_the_shipped_version_only_while_unmodified() {
+        let (old, new) = ("a = 1\n", "a = 2\n");
+        let old_hash = hash::sha256_hex(old.as_bytes());
+        assert_eq!(follow(new, Some(old), None, new), Follow::Current);
+        assert_eq!(follow(old, Some(old), None, new), Follow::Replace);
+        assert_eq!(follow(old, None, Some(&old_hash), new), Follow::Replace);
+        assert_eq!(
+            follow("a = 3\n", Some(old), Some(&old_hash), new),
+            Follow::Edited
+        );
+        assert_eq!(
+            follow("a = 3\n", None, Some(&old_hash), new),
+            Follow::Edited
+        );
+        assert_eq!(
+            follow(old, None, None, new),
+            Follow::Edited,
+            "nothing proves it shipped"
+        );
+        // The baseline outranks a recorded hash that happens to match.
+        assert_eq!(
+            follow(old, Some("a = 0\n"), Some(&old_hash), new),
+            Follow::Edited
+        );
+    }
+
+    /// TSK-1057: an edited Grok profile that still denies the authority
+    /// folder, or does not parse, is warned about; the shipped profile and
+    /// any other file are not.
+    #[test]
+    fn a_kept_grok_profile_that_denies_the_authority_folder_is_warned_about() {
+        let (shipped, earlier) = grok_profiles();
+        assert!(kept_file_warning(".grok/sandbox.toml", &shipped).is_none());
+        let warning = kept_file_warning(".grok/sandbox.toml", &earlier).expect("warned");
+        assert!(
+            warning.as_str().contains("~/.codeflow/authority"),
+            "{warning}"
+        );
+        assert!(kept_file_warning(".grok/sandbox.toml", "deny = [").is_some());
+        assert!(kept_file_warning("other/sandbox.toml", &earlier).is_none());
+    }
+
+    /// TSK-1057: update replaces an unmodified earlier Grok profile and
+    /// records the new version; an edited one stays byte for byte, is
+    /// reported as kept, and carries the warning.
+    #[test]
+    fn update_replaces_an_unmodified_grok_profile_and_keeps_an_edited_one() {
+        let (shipped, earlier) = grok_profiles();
+        let entry = grok_entry();
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".grok")).unwrap();
+        std::fs::write(root.join(".grok/sandbox.toml"), &earlier).unwrap();
+        Baseline::write(root, &entry.dest, &earlier).unwrap();
+        let mut installed = InstalledManifest::new("3.1.1");
+        record(&mut installed, &entry, hash::sha256_hex(earlier.as_bytes()));
+        let mut report = Report::new(Shown::default());
+        let mut diffs = Shown::default();
+        refresh_unmodified_user_file(
+            root,
+            &entry,
+            &shipped,
+            None,
+            &mut installed,
+            &mut report,
+            &mut diffs,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join(".grok/sandbox.toml")).unwrap(),
+            shipped
+        );
+        assert_eq!(report.count(Action::Changed), 1, "{report}");
+        assert_eq!(
+            installed.files[&entry.dest].sha256,
+            hash::sha256_hex(shipped.as_bytes())
+        );
+        assert_eq!(
+            Baseline::read(root, &entry.dest).unwrap().as_deref(),
+            Some(shipped.as_str())
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let edited = format!("{earlier}\n# the adopter's own line\n");
+        std::fs::create_dir_all(root.join(".grok")).unwrap();
+        std::fs::write(root.join(".grok/sandbox.toml"), &edited).unwrap();
+        Baseline::write(root, &entry.dest, &earlier).unwrap();
+        let mut installed = InstalledManifest::new("3.1.1");
+        record(&mut installed, &entry, hash::sha256_hex(earlier.as_bytes()));
+        let mut report = Report::new(Shown::default());
+        let mut diffs = Shown::default();
+        refresh_unmodified_user_file(
+            root,
+            &entry,
+            &shipped,
+            None,
+            &mut installed,
+            &mut report,
+            &mut diffs,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join(".grok/sandbox.toml")).unwrap(),
+            edited
+        );
+        assert_eq!(report.count(Action::KeptUserModified), 1, "{report}");
+        assert!(
+            report.to_string().contains("warning: a Grok profile"),
+            "{report}"
+        );
+        assert_eq!(
+            Baseline::read(root, &entry.dest).unwrap().as_deref(),
+            Some(earlier.as_str()),
+            "the baseline stays the version it was installed from"
+        );
     }
 }

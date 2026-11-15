@@ -753,7 +753,9 @@ fn update_brings_the_codex_profiles_and_keeps_the_adopters_keys() {
     assert!(workspace.get("**/.env").is_none(), "{workspace:?}");
 }
 
-/// AC-6: the Grok profile is installed when absent and never overwritten.
+/// AC-6: the Grok profile is installed when absent and an edited copy is
+/// never overwritten. TSK-1057: a copy that still equals the version it was
+/// installed from is replaced with the shipped one.
 #[test]
 fn the_grok_profile_is_installed_only_when_absent() {
     let (_dir, root) = init_minimal();
@@ -765,7 +767,27 @@ fn the_grok_profile_is_installed_only_when_absent() {
     let edited = format!("{shipped_profile}\n# adopter note\n");
     std::fs::write(&path, &edited).unwrap();
     scaffold::update(&assets(), &root, &update_opts()).unwrap();
-    assert_eq!(text(&path), edited, "update never overwrites it");
+    assert_eq!(
+        text(&path),
+        edited,
+        "update never overwrites an edited copy"
+    );
+
+    // An earlier release's profile, installed and never edited: its
+    // baseline is the same bytes, so update replaces it.
+    let earlier = shipped_profile.replace(
+        "deny = [\n",
+        "deny = [\n  \"/Users/*/.codeflow/authority\",\n",
+    );
+    assert_ne!(earlier, shipped_profile);
+    std::fs::write(&path, &earlier).unwrap();
+    scaffold::state::Baseline::write(&root, ".grok/sandbox.toml", &earlier).unwrap();
+    scaffold::update(&assets(), &root, &update_opts()).unwrap();
+    assert_eq!(
+        text(&path),
+        shipped_profile,
+        "update replaces an unmodified earlier copy"
+    );
 
     std::fs::remove_file(&path).unwrap();
     scaffold::update(&assets(), &root, &update_opts()).unwrap();

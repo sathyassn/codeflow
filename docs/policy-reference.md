@@ -1365,11 +1365,13 @@ only to the harness sandbox: Claude denies writes there (`denyWrite` and an
 `deny` and out of their write set. Edit-guard refuses edits there. That
 write deny is the boundary. The directory stays readable because the guards
 read the baselines and the SSH configuration allow from inside the sandbox.
-The Grok profile is installed only when absent, so a `.grok/sandbox.toml`
-written by an earlier release still denies the directory whole; once a
-baseline exists, every guard in such a Grok seat refuses until the
-operator removes the three `.codeflow/authority` entries from both
-profiles' `deny` lists.
+A `.grok/sandbox.toml` written by an earlier release denied the directory
+whole. `codeflow update` replaces such a copy while it still equals the
+version it installed. It leaves an edited copy alone and reports it as
+kept, with a warning when a profile there still denies
+`.codeflow/authority`. Once a baseline exists, every guard in such a Grok
+seat refuses until the operator removes those entries from each profile's
+`deny` list.
 
 What a record binds: the canonical common git directory, the authority
 remote and its configured URL, the branch `refs/remotes/<remote>/HEAD`
