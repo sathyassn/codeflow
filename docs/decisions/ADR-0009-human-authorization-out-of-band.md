@@ -179,3 +179,26 @@ the time. The repository is public and `main` now requires a pull request, the
 CI checks and an up-to-date branch, so ADR-0081 is the current rule. The
 human-merge discipline still applies. (Append-only note; the text above is
 unchanged.)
+
+## Residual clarification (2026-11-13, TSK-1448)
+
+The residuals above have a remote backstop only where the host's protection
+is configured and binds the actor. CI reports a verdict; by itself it cannot
+refuse a remote ref update or deletion.
+
+| Hook skipped | Local protected branch | Protected branch on the remote |
+|---|---|---|
+| Commit hooks | The installed `reference-transaction` hook still refuses a new commit's ref move when `git.local_ref_protection` is `block`. It also checks other local moves and deletions under the applicable policy. The exact remote-head sync allowance still applies. | A local refusal does not establish remote protection. The host enforces its own rules when a push reaches it. |
+| Push hook | The reference hook judges local ref transactions only. A push can change the remote without moving the local branch. | Only the remote's protection refuses a forced update or deletion. Without it, no remaining local layer stops this case. |
+
+In-session guards can refuse a hook skip they observe. A terminal outside
+the session does not pass through those guards. Disabling the reference hook
+as well removes the commit-side backstop. These local controls remain the
+honest-agent floor described by this ADR.
+
+`codeflow doctor --check remote-ref-protection` warns for each existing
+protected branch whose remote force-update and deletion protection it cannot
+verify. It names an unreadable host separately from missing rules and points
+to `codeflow remote protect` or the host's settings. A verified branch adds
+no warning. Host reads currently support GitHub; an unsupported host leaves
+the protection unverified.
