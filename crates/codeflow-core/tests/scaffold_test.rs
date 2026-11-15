@@ -387,10 +387,14 @@ fn fresh_init_empty_dir_bootstrap_grace() {
         .exists());
     assert!(read(&root, ".codeflow/manifest.json").contains("ADR-0001-stack-choice.md"));
 
-    // Hook wiring + exec bit.
+    // Hook wiring + exec bit. ADR-0099: one absolute path to the main
+    // working tree's managed hooks.
     assert_eq!(
         git(&root, &["config", "core.hooksPath"]),
-        ".codeflow/git-hooks"
+        format!(
+            "{}/.codeflow/git-hooks",
+            git(&root, &["rev-parse", "--show-toplevel"])
+        )
     );
     assert!(project_toml.contains("git_hooks = \"wired\""));
     #[cfg(unix)]
@@ -757,6 +761,15 @@ fn init_into_existing_repo_is_nondestructive() {
     assert_eq!(git_config(&root, "core.hooksPath"), "");
     assert!(read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""));
     assert!(report.notes.iter().any(|n| n.contains("husky")));
+    // TSK-1395: the suggested call names the shims by their absolute path,
+    // which does not depend on the directory a hook runs in.
+    let top = git(&root, &["rev-parse", "--show-toplevel"]);
+    let call = format!("\"{top}/.codeflow/git-hooks/pre-commit\" \"$@\"");
+    assert!(
+        report.notes.iter().any(|n| n.contains(&call)),
+        "{:?}",
+        report.notes
+    );
     assert_eq!(read(&root, ".husky/pre-commit"), "npx lint-staged\n");
 
     // Existing history: no scaffold commit on top of the user's branch.
