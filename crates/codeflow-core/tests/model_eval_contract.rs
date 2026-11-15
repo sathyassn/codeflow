@@ -1557,7 +1557,10 @@ fn tooling_and_framework_canaries_pin_both_directions() {
         .collect();
     for (case_id, requirement) in [
         ("untested-tooling-change-is-a-review-finding", "CF-QA-017"),
-        ("multi-view-web-surface-uses-project-framework", "CF-DES-019"),
+        (
+            "multi-view-web-surface-uses-project-framework",
+            "CF-DES-019",
+        ),
         ("one-page-tool-stays-plain", "CF-DES-019"),
     ] {
         assert!(
@@ -1595,11 +1598,21 @@ fn tooling_and_framework_canaries_pin_both_directions() {
     // floor only because the coverage source leaves `scripts/` out; the
     // script has no test. The trap is what the case grades.
     let tooling = fixture_overlay("tooling-change-untested");
-    let config = overlay_file(&tooling, "tooling-change-untested", ".codeflow/test-config.json");
+    let config = overlay_file(
+        &tooling,
+        "tooling-change-untested",
+        ".codeflow/test-config.json",
+    );
     assert!(config.contains("--cov=src"));
-    assert!(!tooling.keys().any(|path| path.starts_with("tests/") && path.contains("bump")));
-    assert!(overlay_file(&tooling, "tooling-change-untested", "scripts/bump_version.py")
-        .contains("def bump("));
+    assert!(!tooling
+        .keys()
+        .any(|path| path.starts_with("tests/") && path.contains("bump")));
+    assert!(overlay_file(
+        &tooling,
+        "tooling-change-untested",
+        "scripts/bump_version.py"
+    )
+    .contains("def bump("));
 }
 
 #[test]
