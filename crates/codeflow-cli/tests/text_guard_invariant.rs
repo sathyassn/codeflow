@@ -24,6 +24,14 @@
 //! written out here, apart from the guard's own predicate, so a widening of
 //! the guard's predicate fails this test instead of passing as an exception.
 //!
+//! The baseline refuses more than the line only where a hardening item says
+//! so: H-1 (a NUL byte), and the install check (TSK-1476), which refuses
+//! under `git.hook_integrity` whatever `security.text_guard` says. The rows
+//! that check refuses where the line allowed are listed one by one in
+//! [`INSTALL_RUN_OVER_REFUSALS`]; each must still be one the line allowed and
+//! the baseline must refuse it with the install finding as its only rule, so
+//! a widening of the check fails this test and so does a stale entry.
+//!
 //! The paths are macOS paths and the column was recorded on macOS, so the
 //! test runs there.
 #![cfg(target_os = "macos")]
@@ -134,9 +142,9 @@ fn build(t: &Path) {
     std::fs::create_dir_all(t.join("cfhome")).unwrap();
 }
 
-/// The exec guard's exit code for one row, in the baseline outcome or as a
-/// recognised retry (the tightened outcome).
-fn judge(t: &Path, row: &Value, tightened: bool) -> i32 {
+/// The exec guard's exit code and message for one row, in the baseline
+/// outcome or as a recognised retry (the tightened outcome).
+fn judge(t: &Path, row: &Value, tightened: bool) -> (i32, String) {
     let at = t.to_str().unwrap();
     let command = row["command"].as_str().unwrap().replace("@T@", at);
     let cwd = row["cwd"].as_str().unwrap().replace("@T@", at);
@@ -158,7 +166,7 @@ fn judge(t: &Path, row: &Value, tightened: bool) -> i32 {
         .envs(environment(t))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     {
@@ -170,7 +178,75 @@ fn judge(t: &Path, row: &Value, tightened: bool) -> i32 {
             .write_all(payload.to_string().as_bytes())
             .unwrap();
     }
-    child.wait().unwrap().code().unwrap_or(-1)
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Rows the line allowed that the install check refuses in the baseline, by
+/// set and source. Each falls in an accepted over-refusal class the pull
+/// request's table lists (AC-6).
+const INSTALL_RUN_OVER_REFUSALS: &[(&str, &str)] = &[
+    ("codex-rounds", "history.json:51"),
+    ("codex-rounds", "history.json:52"),
+    ("codex-rounds", "history.json:53"),
+    ("codex-rounds", "history.json:54"),
+    ("codex-rounds", "history.json:55"),
+    ("codex-rounds", "history.json:57"),
+    ("codex-rounds", "history.json:59"),
+    ("codex-rounds", "history.json:897"),
+    ("codex-rounds", "history.json:899"),
+    ("codex-rounds", "history.json:900"),
+    ("codex-rounds", "history.json:901"),
+    ("codex-rounds", "history.json:902"),
+    ("codex-rounds", "history.json:904"),
+    ("codex-rounds", "history.json:905"),
+    ("codex-rounds", "history.json:906"),
+    ("codex-rounds", "history.json:962"),
+    ("codex-rounds", "history.json:963"),
+    ("codex-rounds", "history.json:1212"),
+    ("codex-rounds", "history.json:1214"),
+    ("codex-rounds", "history.json:1216"),
+    ("codex-rounds", "history.json:1229"),
+    ("codex-rounds", "history.json:1240"),
+    ("codex-rounds", "controls.json:11"),
+    ("codex-rounds", "controls.json:12"),
+    ("codex-rounds", "closure.json:11"),
+    ("shell-ordinary-review", "27"),
+    ("shell-ordinary-review", "30"),
+    ("shell-ordinary-review", "43"),
+    ("shell-ordinary-review", "47"),
+    ("shell-ordinary-review", "95"),
+    ("shell-ordinary-review", "110"),
+    ("shell-ordinary-review", "112"),
+    ("shell-ordinary-review", "122"),
+    ("shell-ordinary-review", "126"),
+    ("shell-round-four-review", "17"),
+    ("shell-round-four-review", "29"),
+    ("shell-round-four-review", "53"),
+    ("shell-round-four-review", "57"),
+    ("shell-round-four-review", "58"),
+    ("shell-round-four-review", "59"),
+    ("shell-round-four-review", "60"),
+    ("shell-round-four-review", "61"),
+    ("shell-round-four-review", "62"),
+    ("shell-round-four-review", "63"),
+    ("shell-round-four-review", "65"),
+    ("shell-round-four-review", "66"),
+    ("shell-round-four-review", "67"),
+    ("shell-round-four-review", "68"),
+    ("shell-round-four-review", "71"),
+    ("shell-round-four-review", "72"),
+    ("shell-round-four-review", "335"),
+];
+
+/// A refusal whose only rule is the install check's finding.
+fn install_finding_only(stderr: &str) -> bool {
+    stderr.contains("policy rule git.hook_integrity (block)")
+        && stderr.contains("possible install run")
+        && stderr.matches("policy rule ").count() == 1
 }
 
 /// The H-3 class: every simple command is a bare `cd`, `pushd` or `popd`,
@@ -216,7 +292,7 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
     let rows = read_json("rows.json");
     let rows = rows.as_array().unwrap();
     // Four workers, as the gate's test-thread cap allows.
-    let judged: Vec<(i32, i32)> = std::thread::scope(|scope| {
+    let judged: Vec<((i32, String), (i32, String))> = std::thread::scope(|scope| {
         let chunk = rows.len().div_ceil(4);
         let workers: Vec<_> = rows
             .chunks(chunk)
@@ -236,8 +312,15 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
     });
     let mut wrong = Vec::new();
     let mut distinct = 0;
-    for (row, (baseline, tightened)) in rows.iter().zip(&judged) {
+    let mut listed_seen = 0;
+    for (row, ((baseline, baseline_stderr), (tightened, _))) in rows.iter().zip(&judged) {
         let line = row["line"].as_i64().unwrap();
+        let listed = INSTALL_RUN_OVER_REFUSALS.contains(&(
+            row["set"].as_str().unwrap(),
+            row["source"].as_str().unwrap(),
+        ));
+        let install_over_refusal =
+            listed && line == 0 && *baseline == 2 && install_finding_only(baseline_stderr);
         let shown = format!(
             "{} {}: {:?}",
             row["set"].as_str().unwrap(),
@@ -269,11 +352,21 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
             ));
         }
         // The baseline is the line's rule: it refuses more only where a
-        // hardening item says so (H-1, a NUL byte).
-        if line == 0 && *baseline == 2 && !command.contains('\0') {
+        // hardening item says so (H-1, a NUL byte; the install check, row by
+        // row).
+        if line == 0 && *baseline == 2 && !command.contains('\0') && !install_over_refusal {
             wrong.push(format!(
                 "the baseline refuses a row the line allows: {shown}"
             ));
+        }
+        if listed {
+            listed_seen += 1;
+            if !install_over_refusal {
+                wrong.push(format!(
+                    "a listed install over-refusal is not one the line allowed and the \
+                     baseline refuses with the install finding alone: {shown}"
+                ));
+            }
         }
         if *baseline == 0 && *tightened == 2 {
             distinct += 1;
@@ -284,6 +377,11 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
     assert!(
         distinct > 100,
         "only {distinct} rows differ between the outcomes"
+    );
+    assert_eq!(
+        listed_seen,
+        INSTALL_RUN_OVER_REFUSALS.len(),
+        "a listed install over-refusal names no row of the corpus"
     );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
