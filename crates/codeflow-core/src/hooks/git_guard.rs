@@ -7311,12 +7311,10 @@ fn contained_git_directory_violation(
 /// whose arity is unknown, every operand could be the destination and
 /// each is returned.
 fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) -> Vec<String> {
+    // The name is read on the host's separators, so on Windows
+    // `src\policy.json` lands at `policy.json` inside the directory.
     let inside = |dir: &str, source: &str| {
-        let base = source
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(source);
+        let base = crate::security::copy_reach::last_name(source);
         format!("{}/{base}", dir.trim_end_matches('/'))
     };
     let mut paths = read.written.clone();

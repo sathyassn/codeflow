@@ -146,11 +146,18 @@ fn pattern(word: &str) -> bool {
 /// The last name of `source`, the name a copy of it gets in a directory,
 /// or `None` for `.`, `..` and a root, whose contents are copied.
 fn base_name(source: &str) -> Option<&str> {
-    let name = source
+    let name = last_name(source);
+    (!name.is_empty() && name != "." && name != "..").then_some(name)
+}
+
+/// The last name of `source` on this host's separators, the name a copy of
+/// it gets inside a directory; `source` itself when it has none.
+pub(crate) fn last_name(source: &str) -> &str {
+    source
         .trim_end_matches(SEPARATORS)
         .rsplit(SEPARATORS)
-        .next()?;
-    (!name.is_empty() && name != "." && name != "..").then_some(name)
+        .next()
+        .unwrap_or(source)
 }
 
 /// The path separators of this host, as `portable_path::filesystem_spelling`

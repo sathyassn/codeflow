@@ -289,13 +289,16 @@ fn a_source_name_is_read_on_the_host_separators() {
     assert!(names_contents("src/."));
     assert!(names_contents("."));
     assert!(!names_contents("src"));
+    assert_eq!(last_name("src/policy.json"), "policy.json");
     if cfg!(windows) {
+        assert_eq!(last_name("src\\policy.json"), "policy.json");
         assert_eq!(base_name("src\\.claude"), Some(".claude"));
         assert_eq!(base_name(".\\.claude."), Some(".claude."));
         assert!(names_contents("src\\"));
         assert!(names_contents("src\\."));
     } else {
         // Elsewhere a backslash is part of the name.
+        assert_eq!(last_name("src\\policy.json"), "src\\policy.json");
         assert_eq!(base_name("src\\.claude"), Some("src\\.claude"));
         assert!(!names_contents("src\\"));
     }
