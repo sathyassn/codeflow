@@ -811,10 +811,24 @@ the guards do not read, an editor's own commands or a build tool setting
 that names a program the tool runs, is refused under the same rule; the
 build tool's settings are decoded and judged by their names, never by
 their values, and an environment setting is judged as the same variable
-assigned before the tool. Edit files with the harness's file tool
-instead, and set such a program in the project's committed build
-configuration. A command a program reads from its own configuration files
-or environment is not read this way.
+assigned before the tool, with its value read as literal data. A startup
+setting whose value sets the startup-command setting again is refused
+under the same rule; give each startup setting in its own option. A
+carried command the program runs in another directory, given by one of
+its options, is judged in that directory, with that directory's
+configuration, when the directory is a literal path; where the guard
+cannot establish it (a value filled in at run time, a directory per found
+path, a login's home or a workspace), the command is refused under the
+same rule. Edit files with the harness's file tool instead, and set such
+a program in the project's committed build configuration. A command a
+program reads from its own configuration files or environment is not read
+this way.
+
+When git-guard decides the repository a Git command is judged in, it
+reads the launchers in front of Git by each of their spellings, and an
+assignment written after a launcher as the launcher passes it on; a
+launcher whose options or environment it does not model leaves the
+repository unresolved, which refuses.
 
 ### Program variables the guards judge
 
