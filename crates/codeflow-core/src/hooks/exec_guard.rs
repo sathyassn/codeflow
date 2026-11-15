@@ -129,6 +129,20 @@ pub fn evaluate_in(
     )
 }
 
+/// Add git-guard's refusals of an agent push of a line or the default
+/// branch, read as git-guard reads them, whatever credential Git uses
+/// (TSK-1479 AC-15). A finding already present is not repeated.
+fn add_agent_push_refusals(command: &str, cwd: &std::path::Path, violations: &mut Vec<Violation>) {
+    for finding in super::git_guard::agent_push_refusals(command, cwd) {
+        if !violations
+            .iter()
+            .any(|existing| existing.rule == finding.rule && existing.message == finding.message)
+        {
+            violations.push(finding);
+        }
+    }
+}
+
 /// [`evaluate_in`] under the outcome [`super::sandbox_state`] selected for
 /// the call (TSK-397): the line's rule, or the line's rule with the strict
 /// branch added. Every check outside the interpreter-argument rule is the
@@ -231,6 +245,7 @@ pub fn evaluate_ruled(
         command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
+    add_agent_push_refusals(command, cwd, &mut violations);
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
@@ -337,11 +352,28 @@ fn runner_violations(
                     &bodies, cwd, integrity,
                 ));
             }
+            // TSK-1479: on an admitted fetch or push, the GitHub CLI
+            // credential helper's account finding is skipped; every other
+            // finding on it stands.
+            let admitted = super::agent_transport::admits(command, cwd, &bodies);
             let _body = RunnerBody::enter();
             bodies
                 .iter()
-                .flat_map(|(body, directory)| {
-                    evaluate_ruled(body, posix, levels, integrity, directory, root, outcome)
+                .flat_map(|body| {
+                    let mut findings = evaluate_ruled(
+                        &body.command,
+                        posix,
+                        levels,
+                        integrity,
+                        &body.directory,
+                        root,
+                        outcome,
+                    );
+                    if admitted && super::agent_transport::exempt_body(body) {
+                        findings
+                            .retain(|finding| !super::agent_transport::is_account_finding(finding));
+                    }
+                    findings
                 })
                 .collect()
         }
@@ -428,6 +460,10 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
         crate::remedy::PRIVILEGE_ESCALATION.with(&[("enforcement", enforcement)]),
     )
 }
+
+#[cfg(all(test, unix))]
+#[path = "agent_transport_tests.rs"]
+mod agent_transport_tests;
 
 #[cfg(test)]
 mod tests {

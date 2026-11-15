@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 pub(super) struct Body {
     pub command: String,
     pub directory: PathBuf,
+    /// Whether the command is a `credential.helper` or
+    /// `credential.<url>.helper` value, and whether Git runs it as written
+    /// (a leading `!` or an absolute path) or as `git credential-<name>`
+    /// (TSK-1479).
+    pub helper: super::HelperKind,
 }
 
 #[derive(Default)]
@@ -606,15 +611,19 @@ fn config_environment(
         .collect()
 }
 
+/// The commands the Git call's configuration and environment name, each
+/// with whether it is a credential helper and how Git runs it (see
+/// [`Body::helper`]).
 fn configured_commands(
     args: &[String],
     cwd: &Path,
     env: &crate::security::git_config::Environment,
     earlier: &[PathBuf],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<(String, super::HelperKind)>, String> {
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(Vec::new());
     };
+    let source_verb = catalog::source_verb(verb, rest);
     let settings = configuration_options(args)?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
@@ -655,10 +664,12 @@ fn configured_commands(
             matches!(source,
             catalog::Source::Config(pattern, verbs) | catalog::Source::ConfigList(pattern, verbs)
                 if catalog::config_matches(key, pattern)
-                && (catalog::active(verbs, verb) || (pager && paging)))
+                && (catalog::active(verbs, source_verb) || (pager && paging)))
         }) {
             continue;
         }
+        let helper_key = catalog::config_matches(key, "credential.helper")
+            || catalog::config_matches(key, "credential.*.helper");
         for value in config_values(&config, key)? {
             if value.is_empty()
                 || crate::security::git::config_kind(key, value)
@@ -666,8 +677,15 @@ fn configured_commands(
             {
                 continue;
             }
+            // Git runs a helper value as written when it starts with `!` or
+            // is an absolute path; any other value names `git credential-*`.
+            let helper = match (helper_key, value.starts_with('!') || value.starts_with('/')) {
+                (false, _) => super::HelperKind::NotHelper,
+                (true, true) => super::HelperKind::AsWritten,
+                (true, false) => super::HelperKind::Named,
+            };
             // Helpers and custom submodule updates use a leading shell marker.
-            commands.push(value.strip_prefix('!').unwrap_or(value).to_string());
+            commands.push((value.strip_prefix('!').unwrap_or(value).to_string(), helper));
         }
     }
     for source in catalog::SOURCES {
@@ -679,7 +697,7 @@ fn configured_commands(
             let active = if pager {
                 pagination != Some(false) && paging
             } else {
-                catalog::active(verbs, verb)
+                catalog::active(verbs, source_verb)
             };
             if !active {
                 continue;
@@ -695,7 +713,7 @@ fn configured_commands(
                 },
             };
             if let Some(value) = value.filter(|value| !value.is_empty()) {
-                commands.push(value);
+                commands.push((value, super::HelperKind::NotHelper));
             }
         }
     }
@@ -783,7 +801,7 @@ fn transport(
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(());
     };
-    if !catalog::active(catalog::REMOTE, verb) {
+    if !catalog::active(catalog::REMOTE, catalog::source_verb(verb, rest)) {
         return Ok(());
     }
     let ext = |value: &str| value.starts_with("ext::");
@@ -1001,6 +1019,7 @@ fn external_body(
     Ok(Some(Body {
         command: quote_words(&words),
         directory: at,
+        helper: super::HelperKind::NotHelper,
     }))
 }
 
@@ -1849,14 +1868,24 @@ fn note_segment(
 }
 
 /// Read the command bodies and callbacks a runner starts, each from the
-/// directories it runs in.
+/// directories it runs in. `configured` pairs each configured command with
+/// whether it is a credential helper and how Git runs it.
 fn descend(
     runner: &Runner<'_>,
     args: &[String],
-    [commands, configured]: [&Vec<String>; 2],
+    commands: &[String],
+    configured: &[(String, super::HelperKind)],
     bodies: &mut Vec<Body>,
 ) -> Result<(), String> {
     let child = Inputs::child(args, runner.env)?;
+    let commands: Vec<(&String, super::HelperKind)> = commands
+        .iter()
+        .map(|command| (command, super::HelperKind::NotHelper))
+        .collect();
+    let configured: Vec<(&String, super::HelperKind)> = configured
+        .iter()
+        .map(|(command, helper)| (command, *helper))
+        .collect();
     for (commands, callbacks) in [(commands, false), (configured, true)] {
         if commands.is_empty() {
             continue;
@@ -1867,11 +1896,12 @@ fn descend(
             directories(args, runner.at, runner.env)?
         };
         for dir in dirs {
-            for command in commands {
+            for (command, helper) in &commands {
                 collect(command, &dir, runner.depth + 1, &child, bodies)?;
                 bodies.push(Body {
-                    command: command.clone(),
+                    command: (*command).clone(),
                     directory: dir.clone(),
+                    helper: *helper,
                 });
             }
         }
@@ -2763,6 +2793,7 @@ fn collect_segments(
                 bodies.push(Body {
                     command: normalized_command(&args, &env),
                     directory: at.clone(),
+                    helper: super::HelperKind::NotHelper,
                 });
             }
             bodies.extend(external_body(&args, &at, &env)?);
@@ -2799,7 +2830,7 @@ fn collect_segments(
             if changed_checkouts && !commands.is_empty() && runs_in_checkouts(&args) {
                 return Err("an earlier command may change the checkouts a Git runner runs its command in; run the commands separately".into());
             }
-            descend(&runner, &args, [&commands, &configured], bodies)?;
+            descend(&runner, &args, &commands, &configured, bodies)?;
         }
         landings.extend(pending);
         changed_checkouts = true;
