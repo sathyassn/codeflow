@@ -2124,6 +2124,34 @@ pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
     "parallel --workdir=/scratch-main {} ::: x",
 ];
 
+/// Ordinary commands through the launchers the launcher grammar models,
+/// which keep passing both guards under the grammar's fail-closed default
+/// (TSK-1490): each modelled launcher with its documented options, a
+/// privilege launcher's name given only as another launcher's option
+/// value, a split string behind a modelled launcher, and a privilege
+/// launcher's verb that runs no command.
+pub const LAUNCHER_ORDINARY: &[&str] = &[
+    "nice -n 5 git status",
+    "timeout 5 git status",
+    "time git status",
+    "nohup git status",
+    "stdbuf -oL git log -1",
+    "xcrun git status",
+    "command -v git",
+    "env A=1 git status",
+    "env -S 'git status'",
+    "taskset -c 0 git status",
+    "taskset -c 0 env -S 'git status'",
+    "chrt -r 5 git status",
+    "nice -n 5 sh -c 'git status'",
+    "exec -a sudo sh <<< 'git status'",
+    "exec -a pkexec git status",
+    "taskset -c 0 cargo build",
+    "printf 'git status' | sh",
+    "script -q -c 'git status' /dev/null",
+    "parallel echo ::: a b",
+];
+
 /// A carried command the program runs in a directory the guard cannot
 /// establish: one set at run time, per found path, by a spelling the reader
 /// does not parse, or by a login or workspace switch. Both guards refuse

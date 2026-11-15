@@ -1447,13 +1447,29 @@ fn launched_or_carried_line_pushes_still_refuse() {
         "sudo -n LC_ALL=C -u root git push origin HEAD:refs/heads/integration/EPC-001-line",
         "sudo A=1 B=2 -n git push origin HEAD:refs/heads/integration/EPC-001-line",
         "sudo LC_ALL=C -n bash -c 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "sudo -n -- LC_ALL=C git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "taskset -c 0 env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "sudo -n env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "gsudo run git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "gsudo '!git'",
+        "sudo -s <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "printf 'git push origin HEAD:refs/heads/integration/EPC-001-line' | pkexec",
+        "doas -s",
+        "su <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "runuser -u root git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "script -q /dev/null <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "parallel <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
     ]);
     let off = SecuritySection {
         privilege_escalation: PolicyLevel::Off,
         ..SecuritySection::default()
     };
     let mut wrong = Vec::new();
-    for level in ["block", "warn", "off"] {
+    for (level, integrity) in [
+        ("block", PolicyLevel::Block),
+        ("warn", PolicyLevel::Warn),
+        ("off", PolicyLevel::Off),
+    ] {
         let landed = LANDED_POLICY.replacen(
             r#"{"git":{"#,
             &format!(r#"{{"git":{{"hook_integrity":"{level}","#),
@@ -1461,21 +1477,61 @@ fn launched_or_carried_line_pushes_still_refuse() {
         );
         let f = Fixture::landed(&landed, "", |_, _| {});
         let before = wrong.len();
-        expect_both_refuse(&f.root, &lines, &mut wrong);
         for row in &lines {
-            let found = evaluate_at(row, &off, PolicyLevel::Block, &f.root, &f.root);
-            let privileged = found
-                .iter()
-                .any(|finding| finding.rule == "security.privilege_escalation");
-            if privileged || !agent_push_refused(&found) {
+            // git-guard reads the level from the landed policy; exec-guard
+            // takes it, and the privilege level, as its inputs.
+            let git = git_guard_verdict(&f.root, row);
+            if !agent_push_refused(&git) {
                 wrong.push(format!(
-                    "exec-guard, privilege rule off, should refuse under {AGENT_PUSH}: {row}: {}",
-                    shown(&found)
+                    "git-guard should refuse under {AGENT_PUSH}: {row}: {}",
+                    shown(&git)
                 ));
+            }
+            for (privilege, levels) in [
+                ("default", SecuritySection::default()),
+                ("off", off.clone()),
+            ] {
+                let found = evaluate_at(row, &levels, integrity, &f.root, &f.root);
+                let privileged = privilege == "off"
+                    && found
+                        .iter()
+                        .any(|finding| finding.rule == "security.privilege_escalation");
+                if privileged || !agent_push_refused(&found) {
+                    wrong.push(format!(
+                        "exec-guard, privilege rule {privilege}, should refuse under {AGENT_PUSH}: {row}: {}",
+                        shown(&found)
+                    ));
+                }
             }
         }
         for entry in &mut wrong[before..] {
             write!(entry, " [hook integrity: {level}]").unwrap();
+        }
+    }
+    report(&wrong);
+}
+
+/// TSK-1490: the cost side of the launcher grammar's fail-closed default.
+/// Ordinary commands through the launchers it models, a privilege
+/// launcher's name given only as another launcher's option value, a split
+/// string behind a modelled launcher, and a privilege launcher's quiet
+/// verb, keep passing both guards with no finding
+/// (`security/guard_forms.rs` `LAUNCHER_ORDINARY`).
+#[test]
+fn ordinary_launcher_commands_stay_allowed() {
+    if !isolated("ordinary_launcher_commands_stay_allowed") {
+        return;
+    }
+    let f = Fixture::landed(LANDED_POLICY, "", |_, _| {});
+    let mut wrong = Vec::new();
+    for row in crate::security::guard_forms::LAUNCHER_ORDINARY {
+        for (guard, found) in [
+            ("exec-guard", verdict(&f.root, row)),
+            ("git-guard", git_guard_verdict(&f.root, row)),
+        ] {
+            if blocked(&found) {
+                wrong.push(format!("{guard} should pass: {row}: {}", shown(&found)));
+            }
         }
     }
     report(&wrong);
