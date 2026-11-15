@@ -1,5 +1,6 @@
 ---
 id: ADR-0103
+uid: 623dd599-cde2-4512-a2fd-57c921948f2e
 title: Changed-line coverage requires an explicit base
 date: 2026-11-14
 status: proposed
