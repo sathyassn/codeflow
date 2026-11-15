@@ -438,6 +438,13 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     // the base, which the declared target picks. The pre-push hook picks the
     // base and target under the judging policy's prefixes and passes them as
     // `--base` and `--into` (TSK-1257).
+    if let Err(error) = codeflow_core::hooks::gitleaks::require_offline_judgment(&root) {
+        eprintln!(
+            "codeflow ci: {}",
+            codeflow_core::git::display_message(&error)
+        );
+        return 2;
+    }
     let context = match context::resolve(
         &root,
         args,
@@ -464,6 +471,29 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         into,
         target: line_target,
     } = context;
+    // Check promised contents before any downstream range, policy or record
+    // reader. Missing blobs produce one path-policy refusal, not a fetch or
+    // a series of misleading failures from the checks that need them.
+    let sources: Vec<&str> = [
+        args.policy_from.as_deref(),
+        args.baseline_from.as_deref(),
+        args.commits_from.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let contents = require_range_contents(&root, base_sha.as_deref(), &head, &sources);
+    if let Err(error) = contents {
+        let finding = TaggedViolation {
+            sha: None,
+            violation: Violation::always_blocking("git.path_policy", format!("cannot verify introduced paths: {error}"), "repair the named Git object or promisor configuration, using any fetch commands above outside the check, then retry"),
+        };
+        eprintln!("{}", finding.violation.render("ci"));
+        if let Some(out) = &args.blocking_rules_out {
+            write_blocking_rules(out, &[finding]);
+        }
+        return 2;
+    }
     if let Some(code) = adopter::check_head_config(&root, &head) {
         return code;
     }
@@ -3109,6 +3139,18 @@ pub(super) fn exact_ref_exists(root: &Path, name: &str) -> Result<bool, String> 
         Some(1) => Ok(false),
         _ => Err(format!("cannot read ref {name}: Git exited {}", out.status)),
     }
+}
+
+/// Establish local contents before a downstream range reader can fetch.
+fn require_range_contents(
+    root: &Path,
+    base: Option<&str>,
+    head: &str,
+    sources: &[&str],
+) -> Result<(), String> {
+    let repo = codeflow_core::hooks::repo::open(root)?
+        .ok_or("cannot read range contents: repository is absent")?;
+    codeflow_core::git::missing_contents::check_range(&repo, base, head, sources)
 }
 
 /// Enumerate the commits in `base..head`, newest first, as (sha, stored

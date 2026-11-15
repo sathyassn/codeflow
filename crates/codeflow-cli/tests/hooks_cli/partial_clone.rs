@@ -12,6 +12,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(merge: bool) -> Self {
+        Self::with_file(merge, "ordinary.txt")
+    }
+
+    fn with_file(merge: bool, name: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "--bare", "upstream.git"]);
         git(dir.path(), &["init", "--bare", "destination.git"]);
@@ -48,9 +52,17 @@ impl Fixture {
         let base = commit(empty, &[]);
         let ordinary = upstream.blob(b"ordinary contents\n").unwrap();
         let side = upstream.blob(b"other side contents\n").unwrap();
-        let mut tree = upstream.treebuilder(None).unwrap();
-        tree.insert("ordinary.txt", ordinary, 0o100_644).unwrap();
-        let left = commit(tree.write().unwrap(), &[base]);
+        let mut entry = ordinary;
+        let mut mode = 0o100_644;
+        for component in name.rsplit('/') {
+            let mut tree = upstream.treebuilder(None).unwrap();
+            tree.insert(component, entry, mode).unwrap();
+            entry = tree.write().unwrap();
+            mode = 0o040_000;
+        }
+        let first_tree = upstream.find_tree(entry).unwrap();
+        let mut tree = upstream.treebuilder(Some(&first_tree)).unwrap();
+        let left = commit(first_tree.id(), &[base]);
         let head = if merge {
             let mut other = upstream.treebuilder(None).unwrap();
             other.insert("side.txt", side, 0o100_644).unwrap();
@@ -256,4 +268,52 @@ fn partial_clone_push_refuses_offline_and_passes_after_named_commands() {
         );
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn partial_clone_push_names_inputs_before_other_ci_content_readers() {
+    for path in [
+        "docs/notes.md",
+        "project-management/tasks/TSK-001.md",
+        ".codeflow/project.toml",
+        ".codeflow/policy.json",
+        ".gitignore",
+        ".gitattributes",
+        ".github/workflows/codeflow-ci.yml",
+    ] {
+        let fixture = Fixture::with_file(false, path);
+        let repo = Repository::open(&fixture.clone).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str(
+                "remote.origin.url",
+                &format!("file://{}/unreachable.git", fixture.dir.path().display()),
+            )
+            .unwrap();
+        let trace = fixture.dir.path().join("inputs.trace");
+        let output = fixture.push_check(&trace);
+        let message = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{path}: {message}");
+        assert!(
+            message.contains("partial clone")
+                && message.contains(path)
+                && message.contains("git cat-file -e"),
+            "{path}: {message}"
+        );
+        let text = std::fs::read_to_string(trace).unwrap();
+        let destination = fixture.destination_url.strip_prefix("file://").unwrap();
+        let forbidden: Vec<_> = text
+            .lines()
+            .filter(|line| {
+                line.contains("fetch ")
+                    || (line.contains("upload-pack") && !line.contains(destination))
+            })
+            .collect();
+        assert!(forbidden.is_empty(), "{path}: {forbidden:#?}");
+        eprintln!("missing {path}: refused with partial-clone guidance and no promisor transport");
+    }
 }

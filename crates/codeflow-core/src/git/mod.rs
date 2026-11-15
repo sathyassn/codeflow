@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 
 pub mod ci;
 pub mod conflict;
+pub mod missing_contents;
 pub mod name;
 pub mod remote_identity;
 pub mod remote_query;

@@ -595,10 +595,16 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
         .map_err(|error| format!("{revision}: {error}"))?;
     if let Some(entry) = committed_state_entry(&repo, &tree, revision)? {
         let blob = repo.find_blob(entry).map_err(|error| {
-            format!(
-                "{revision}: {} cannot be read: {}",
-                crate::scaffold::state::PROJECT_TOML,
-                error.message()
+            crate::git::missing_contents::explain_object(
+                &repo,
+                crate::scaffold::state::PROJECT_TOML.as_bytes(),
+                entry,
+                &error,
+                format!(
+                    "{revision}: {} cannot be read: {}",
+                    crate::scaffold::state::PROJECT_TOML,
+                    error.message()
+                ),
             )
         })?;
         let text = std::str::from_utf8(blob.content())
@@ -3841,7 +3847,12 @@ fn read_record(
         // so a hostile tip cannot make every reader load it.
         let size = odb
             .read_header(id)
-            .map_err(|error| format!("{path}: cannot read record size: {error}"))?
+            .map_err(|error| {
+                format!(
+                    "{path}: cannot read record size: {}",
+                    crate::git::missing_contents::object_error(repo, path.as_bytes(), id, &error)
+                )
+            })?
             .0;
         if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
             return Err(format!(
@@ -3849,9 +3860,15 @@ fn read_record(
             ));
         }
     }
-    let blob = repo
-        .find_blob(id)
-        .map_err(|_| format!("{path}: cannot read blob"))?;
+    let blob = repo.find_blob(id).map_err(|error| {
+        crate::git::missing_contents::explain_object(
+            repo,
+            path.as_bytes(),
+            id,
+            &error,
+            format!("{path}: cannot read blob"),
+        )
+    })?;
     let content =
         std::str::from_utf8(blob.content()).map_err(|_| format!("{path}: record is not UTF-8"))?;
     parse_record(content, kind).map_err(|error| format!("{path}: {error}"))

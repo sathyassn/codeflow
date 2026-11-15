@@ -869,16 +869,25 @@ fn git_refusal(version: &str, promisor: bool) -> Option<String> {
 /// command-line and numbered settings are removed, as the scan removes them
 /// for `git diff`.
 fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let mut command = crate::git::command();
+    capability_command(root, args, false)
+        .output()
+        .map_err(|error| format!("git did not run: {error}"))
+}
+
+fn capability_command(root: &Path, args: &[&str], explicit_root: bool) -> Command {
+    let mut command = if explicit_root {
+        crate::git::judging_command()
+    } else {
+        crate::git::command()
+    };
     command.env_remove("GIT_CONFIG");
     remove_caller_settings(&mut command);
     crate::git::local_objects_only(&mut command);
     command
         .args(args)
         .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| format!("git did not run: {error}"))
+        .stdin(std::process::Stdio::null());
+    command
 }
 
 /// The git version text, and whether the repository has a promisor remote
@@ -886,7 +895,16 @@ fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, 
 /// from `git config` means no match; any other failure is an error, so an
 /// undecidable repository is never taken as a plain one.
 fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
-    let version = capability_query(root, &["version"])?;
+    version_and_promisor_in(root, false)
+}
+
+fn version_and_promisor_in(root: &Path, explicit_root: bool) -> Result<(String, bool), String> {
+    let query = |args: &[&str]| {
+        capability_command(root, args, explicit_root)
+            .output()
+            .map_err(|error| format!("git did not run: {error}"))
+    };
+    let version = query(&["version"])?;
     if !version.status.success() {
         return Err(format!("`git version` exited with {}", version.status));
     }
@@ -894,14 +912,31 @@ fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
         .map_err(|_| "`git version` printed text that is not UTF-8".to_string())?;
     let version = version.strip_suffix('\n').unwrap_or(version);
     let version = version.strip_suffix('\r').unwrap_or(version).to_string();
-    let config = capability_query(
-        root,
-        &[
+    if explicit_root {
+        let extension = query(&["config", "--get", "extensions.partialclone"])?;
+        match extension.status.code() {
+            Some(0) => return Ok((version, true)),
+            Some(1) => {}
+            _ => return Err("cannot read partial-clone configuration".into()),
+        }
+        let remotes = query(&[
             "config",
+            "--null",
+            "--bool",
             "--get-regexp",
-            r"^(extensions\.partialclone|remote\..*\.promisor)$",
-        ],
-    )?;
+            r"^remote\..*\.promisor$",
+        ])?;
+        return match remotes.status.code() {
+            Some(0) => canonical_promisors(&remotes.stdout).map(|promisor| (version, promisor)),
+            Some(1) => Ok((version, false)),
+            _ => Err("cannot read promisor configuration".into()),
+        };
+    }
+    let config = query(&[
+        "config",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.promisor)$",
+    ])?;
     match config.status.code() {
         Some(0) => Ok((version, !config.stdout.is_empty())),
         Some(1) => Ok((version, false)),
@@ -911,6 +946,28 @@ fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
             config.status
         )),
     }
+}
+
+fn canonical_promisors(bytes: &[u8]) -> Result<bool, String> {
+    // Git config --null separates a key and its value with LF and records
+    // with NUL. --bool makes the value canonical; names remain opaque bytes.
+    // Keep the last value per key, as Git does for a boolean setting.
+    let malformed = || "cannot read canonical promisor configuration".to_string();
+    let bytes = bytes.strip_suffix(&[0]).ok_or_else(malformed)?;
+    let mut flags = std::collections::BTreeMap::new();
+    for record in bytes.split(|byte| *byte == 0) {
+        let split = record
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .ok_or_else(malformed)?;
+        let value = match &record[split + 1..] {
+            b"true" => true,
+            b"false" => false,
+            _ => return Err(malformed()),
+        };
+        flags.insert(&record[..split], value);
+    }
+    Ok(flags.values().any(|value| *value))
 }
 
 /// Refuse before any git object read when the repository fetches missing
@@ -924,6 +981,17 @@ fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
 /// The refusal reason, naming the git version needed.
 pub fn require_offline_objects(root: &Path) -> Result<(), String> {
     let (version, promisor) = version_and_promisor(root)?;
+    promisor_refusal(&version, promisor).map_or(Ok(()), Err)
+}
+
+/// The offline-object capability guard for a judgment bound to `root`.
+/// Unlike a staged scan, the query ignores inherited repository redirects,
+/// matching the Git processes bound to that directory for the judgment.
+///
+/// # Errors
+/// The Git version cannot prevent lazy fetching, or capability is unreadable.
+pub fn require_offline_judgment(root: &Path) -> Result<(), String> {
+    let (version, promisor) = version_and_promisor_in(root, true)?;
     promisor_refusal(&version, promisor).map_or(Ok(()), Err)
 }
 
@@ -1233,6 +1301,71 @@ mod tests {
         assert!(promisor_refusal("not git", false).is_none());
         assert!(git_refusal("git version 2.40.1", false).is_some());
         assert!(git_refusal("not git", false).is_some());
+    }
+
+    #[test]
+    fn judgment_capability_queries_ignore_repository_redirects() {
+        let root = Path::new("fixture-root");
+        let judgment = capability_command(root, &["version"], true);
+        let staged = capability_command(root, &["version"], false);
+        let removed = |command: &Command, name: &str| {
+            command
+                .get_envs()
+                .any(|(key, value)| key == name && value.is_none())
+        };
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+        ] {
+            assert!(
+                removed(&judgment, name),
+                "{name} must not redirect a judgment"
+            );
+        }
+        assert!(
+            !removed(&staged, "GIT_DIR"),
+            "staged capability keeps the scan's repository view"
+        );
+        assert!(!removed(&judgment, "GIT_CONFIG_GLOBAL"));
+        assert_eq!(judgment.get_current_dir(), Some(root));
+        assert!(judgment
+            .get_envs()
+            .any(|(key, value)| key == "GIT_NO_LAZY_FETCH"
+                && value == Some(std::ffi::OsStr::new("1"))));
+    }
+
+    #[test]
+    fn judgment_promisor_flags_use_git_boolean_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("remote.origin.promisor", false)
+            .unwrap();
+        assert!(!version_and_promisor_in(dir.path(), true).unwrap().1);
+        repo.config()
+            .unwrap()
+            .set_bool("remote.origin.promisor", true)
+            .unwrap();
+        assert!(version_and_promisor_in(dir.path(), true).unwrap().1);
+    }
+
+    #[test]
+    fn canonical_promisor_names_and_duplicate_keys_do_not_change_the_value() {
+        assert!(!canonical_promisors(b"remote.origin.promisor\nfalse\0").unwrap());
+        assert!(!canonical_promisors(
+            b"remote.origin.promisor\ntrue\0remote.origin.promisor\nfalse\0"
+        )
+        .unwrap());
+        assert!(!canonical_promisors(b"remote.opaque true\nname.promisor\nfalse\0").unwrap());
+        assert!(canonical_promisors(b"remote.origin.promisor\ntrue\0").unwrap());
+        assert!(canonical_promisors(b"remote.origin.promisor\ntrue").is_err());
+        assert!(canonical_promisors(b"remote.origin.promisor\ninvalid\0").is_err());
     }
 
     #[test]

@@ -157,9 +157,12 @@ pub(super) fn blob_at(
         Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
         Err(error) => return Err(format!("cannot read {path} at {commit}: {error}")),
     };
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|error| format!("cannot read {path} at {commit}: {error}"))?;
+    let blob = repo.find_blob(entry.id()).map_err(|error| {
+        format!(
+            "cannot read {path} at {commit}: {}",
+            crate::git::missing_contents::object_error(repo, path.as_bytes(), entry.id(), &error)
+        )
+    })?;
     let text = std::str::from_utf8(blob.content())
         .map_err(|error| format!("cannot decode {path} at {commit}: {error}"))?;
     Ok(Some(text.to_string()))

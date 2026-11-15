@@ -391,9 +391,12 @@ fn check_path(
         }
     }
     if !deleted && mode == LINK {
-        let blob = repo
-            .find_blob(id)
-            .map_err(|e| format!("cannot read symlink {shown}: {e}"))?;
+        let blob = repo.find_blob(id).map_err(|e| {
+            format!(
+                "cannot read symlink {shown}: {}",
+                crate::git::missing_contents::object_error(repo, entry.raw, id, &e)
+            )
+        })?;
         // "./docs" and "docs/" name the same path as "docs".
         let content = blob.content();
         let content = content.strip_prefix(b"./").unwrap_or(content);
@@ -525,6 +528,7 @@ pub fn range_with(
     }
     let _judgment = history::judgment();
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    crate::git::missing_contents::check_range(&repo, base, head, &[])?;
     let oid = |rev: &str| {
         repo.revparse_single(rev)
             .and_then(|o| o.peel_to_commit())
@@ -730,9 +734,12 @@ impl IgnoreRules {
         let shown = name.display().to_string();
         let path = normalize(name.bytes()).map_err(|e| format!("{shown}: {e}"))?;
         let dir = path.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-        let blob = repo
-            .find_blob(id)
-            .map_err(|e| format!("cannot read {shown}: {e}"))?;
+        let blob = repo.find_blob(id).map_err(|e| {
+            format!(
+                "cannot read {shown}: {}",
+                crate::git::missing_contents::object_error(repo, name.bytes(), id, &e)
+            )
+        })?;
         let text =
             std::str::from_utf8(blob.content()).map_err(|_| format!("{shown} is not UTF-8"))?;
         // Git skips a byte order mark at the start of the file.
@@ -957,7 +964,12 @@ impl ContentRules {
             let (size, _) = repo
                 .odb()
                 .and_then(|odb| odb.read_header(entry.id))
-                .map_err(|e| format!("cannot size {shown}: {e}"))?;
+                .map_err(|e| {
+                    format!(
+                        "cannot size {shown}: {}",
+                        crate::git::missing_contents::object_error(repo, entry.raw, entry.id, &e)
+                    )
+                })?;
             u64::try_from(size).unwrap_or(u64::MAX)
         };
         let (level, text, routes) = if size > self.limit {
@@ -1020,7 +1032,9 @@ fn project_at(repo: &Repository, commit: git2::Oid) -> Result<Option<toml::Value
         Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
-    let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+    let blob = repo.find_blob(entry.id()).map_err(|e| {
+        crate::git::missing_contents::object_error(repo, PROJECT_FILE.as_bytes(), entry.id(), &e)
+    })?;
     let text = std::str::from_utf8(blob.content())
         .map_err(|_| format!("project settings at {commit} are not UTF-8"))?;
     toml::from_str(text)
@@ -1200,7 +1214,7 @@ mod tests {
     /// All transport stays inside the test's temporary folder. The fetched
     /// branch is never checked out, so its promised blobs stay absent.
     struct PartialFixture {
-        _dir: tempfile::TempDir,
+        dir: tempfile::TempDir,
         repo: Repository,
         base: git2::Oid,
         head: git2::Oid,
@@ -1209,8 +1223,22 @@ mod tests {
 
     impl PartialFixture {
         fn new(merge: bool) -> Self {
+            Self::with_file(merge, "ordinary.txt", 0o100_644)
+        }
+
+        fn with_file(merge: bool, name: &str, mode: i32) -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let upstream = Repository::init_bare(dir.path().join("upstream.git")).unwrap();
+            let output = crate::git::judging_command()
+                .current_dir(dir.path())
+                .args(["init", "--bare", "upstream.git"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let upstream = Repository::open_bare(dir.path().join("upstream.git")).unwrap();
             let mut config = upstream.config().unwrap();
             config.set_bool("uploadpack.allowFilter", true).unwrap();
             config
@@ -1238,9 +1266,17 @@ mod tests {
             let base = commit(empty, &[]);
             let first = upstream.blob(b"ordinary content\n").unwrap();
             let second = upstream.blob(b"side content\n").unwrap();
-            let mut tree = upstream.treebuilder(None).unwrap();
-            tree.insert("ordinary.txt", first, 0o100_644).unwrap();
-            let left = commit(tree.write().unwrap(), &[base]);
+            let mut entry = first;
+            let mut entry_mode = mode;
+            for component in name.rsplit('/') {
+                let mut tree = upstream.treebuilder(None).unwrap();
+                tree.insert(component, entry, entry_mode).unwrap();
+                entry = tree.write().unwrap();
+                entry_mode = 0o040_000;
+            }
+            let first_tree = upstream.find_tree(entry).unwrap();
+            let mut tree = upstream.treebuilder(Some(&first_tree)).unwrap();
+            let left = commit(first_tree.id(), &[base]);
             let head = if merge {
                 let mut side = upstream.treebuilder(None).unwrap();
                 side.insert("side.txt", second, 0o100_644).unwrap();
@@ -1261,8 +1297,14 @@ mod tests {
             config.set_str("extensions.partialClone", "origin").unwrap();
             let output = crate::git::judging_command()
                 .current_dir(repo.workdir().unwrap())
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env(
+                    "GIT_CONFIG_GLOBAL",
+                    if cfg!(windows) { "NUL" } else { "/dev/null" },
+                )
+                .env(
+                    "GIT_CONFIG_SYSTEM",
+                    if cfg!(windows) { "NUL" } else { "/dev/null" },
+                )
                 .args(["fetch", "--filter=blob:none", "origin", "fixture"])
                 .output()
                 .unwrap();
@@ -1283,7 +1325,7 @@ mod tests {
                 );
             }
             Self {
-                _dir: dir,
+                dir,
                 repo,
                 base,
                 head,
@@ -1323,7 +1365,23 @@ mod tests {
                 }
             }
             if !error.contains("git cat-file") {
-                failures.push(error);
+                failures.push(error.clone());
+            } else {
+                for command in error.split("git cat-file -e ").skip(1) {
+                    let id: git2::Oid = command.get(..40).unwrap().parse().unwrap();
+                    let output = crate::git::judging_command()
+                        .current_dir(fixture.repo.workdir().unwrap())
+                        .env("GIT_NO_LAZY_FETCH", "0")
+                        .args(["cat-file", "-e", &id.to_string()])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                assert!(fixture.judge().unwrap().violations.is_empty());
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
@@ -1338,10 +1396,10 @@ mod tests {
             .unwrap()
             .set_str(
                 "remote.origin.url",
-                &format!("file://{}/unreachable.git", fixture._dir.path().display()),
+                &format!("file://{}/unreachable.git", fixture.dir.path().display()),
             )
             .unwrap();
-        let trace = fixture._dir.path().join("trace");
+        let trace = fixture.dir.path().join("trace");
         let output = history::command()
             .current_dir(fixture.repo.workdir().unwrap())
             .env("GIT_TRACE", &trace)
@@ -1362,5 +1420,143 @@ mod tests {
             !text.contains("fetch ") && !text.contains("upload-pack"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn full_clone_missing_blob_keeps_unreadable_refusal() {
+        let fixture = PartialFixture::new(false);
+        let source = Repository::open_bare(fixture.dir.path().join("upstream.git")).unwrap();
+        let full_path = fixture.dir.path().join("full");
+        let full = Repository::init(&full_path).unwrap();
+        let source_objects = source.odb().unwrap();
+        let full_objects = full.odb().unwrap();
+        source_objects
+            .foreach(|id| {
+                let object = source_objects.read(*id).unwrap();
+                full_objects.write(object.kind(), object.data()).unwrap();
+                true
+            })
+            .unwrap();
+        drop(full_objects);
+        let id = fixture.blobs[0];
+        let hex = id.to_string();
+        let loose = full.path().join("objects").join(&hex[..2]).join(&hex[2..]);
+        drop(full);
+        std::fs::remove_file(loose).unwrap();
+        let full = Repository::open(&full_path).unwrap();
+        let native = full.odb().and_then(|odb| odb.read_header(id)).unwrap_err();
+        let git = GitPolicy::default();
+        let rules = ContentRules::at(&full, &git, Some(fixture.base), None).unwrap();
+        let error = range_with(
+            &full_path,
+            Some(&fixture.base.to_string()),
+            &fixture.head.to_string(),
+            &PathPolicy::from_git(&git).unwrap(),
+            Some(&rules),
+        )
+        .unwrap_err();
+        assert_eq!(error, format!("cannot size ordinary.txt: {native}"));
+        assert!(!error.contains("partial clone"));
+    }
+
+    #[test]
+    fn partial_clone_unavailable_promisor_keeps_objects_unreadable() {
+        let fixture = PartialFixture::new(false);
+        fixture
+            .repo
+            .config()
+            .unwrap()
+            .set_str(
+                "remote.origin.url",
+                &format!("file://{}/unreachable.git", fixture.dir.path().display()),
+            )
+            .unwrap();
+        let error = fixture.judge().unwrap_err();
+        assert!(
+            error.contains("cannot read") && error.contains("partial clone"),
+            "{error}"
+        );
+        for id in &fixture.blobs {
+            assert!(error.contains(&id.to_string()), "{error}");
+            let output = crate::git::judging_command()
+                .current_dir(fixture.repo.workdir().unwrap())
+                .env("GIT_NO_LAZY_FETCH", "0")
+                .args(["cat-file", "-e", &id.to_string()])
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "offline retrieval must fail");
+            assert!(fixture.judge().unwrap_err().contains(&id.to_string()));
+        }
+    }
+
+    #[test]
+    fn partial_clone_object_readers_name_missing_paths() {
+        for (reader, path, mode) in [
+            ("size", "ordinary.txt", 0o100_644),
+            ("symlink", "link", 0o120_000),
+            ("ignore", ".gitignore", 0o100_644),
+            ("project", ".codeflow/project.toml", 0o100_644),
+            ("policy", ".codeflow/policy.json", 0o100_644),
+            ("tracking", ".codeflow/project.toml", 0o100_644),
+            ("record", "project-management/tasks/TSK-001.md", 0o100_644),
+            ("release", ".codeflow/policy.json", 0o100_644),
+        ] {
+            let f = PartialFixture::with_file(false, path, mode);
+            let root = f.repo.workdir().unwrap();
+            let head = f.head.to_string();
+            let id = f.blobs[0];
+            let git = GitPolicy::default();
+            let paths = PathPolicy::from_git(&git).unwrap();
+            let mut report = Report::default();
+            let entry = Entry {
+                raw: path.as_bytes(),
+                deleted: false,
+                mode: u32::try_from(mode).unwrap(),
+                id,
+            };
+            let error = match reader {
+                "size" => ContentRules::at(&f.repo, &git, Some(f.base), None)
+                    .unwrap()
+                    .check(&f.repo, &mut report, path, Ok(path), &entry)
+                    .unwrap_err(),
+                "symlink" => {
+                    check_path(&f.repo, &paths, &mut report, path, Ok(path), &entry).unwrap_err()
+                }
+                "ignore" => IgnoreRules::read(&f.repo, f.head).err().unwrap(),
+                "project" => project_at(&f.repo, f.head).unwrap_err(),
+                "policy" => super::super::landed_policy::policy_text_at(root, &head).unwrap_err(),
+                "tracking" => {
+                    crate::workgraph::durable_work_tracking_enabled_at(root, &head).unwrap_err()
+                }
+                "record" => crate::workgraph::declared_work_target_at_revision(
+                    root,
+                    &["task/".to_string()],
+                    "task/TSK-001-fixture",
+                    &head,
+                )
+                .unwrap_err()
+                .to_string(),
+                "release" => {
+                    let destination = crate::workgraph::release_line::Destination {
+                        default: Some(("main".into(), f.head)),
+                        ..Default::default()
+                    };
+                    crate::workgraph::release_line::scope(
+                        root,
+                        &destination,
+                        "feat/partial",
+                        Some("main"),
+                    )
+                    .unwrap_err()
+                }
+                _ => unreachable!(),
+            };
+            assert!(error.contains("partial clone"), "{reader}: {error}");
+            assert!(
+                error.contains(path) && error.contains(&id.to_string()),
+                "{reader}: {error}"
+            );
+            assert!(error.contains("git cat-file -e"), "{reader}: {error}");
+        }
     }
 }
