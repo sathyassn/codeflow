@@ -1,5 +1,25 @@
 # Test gate selection
 
+## Findings
+
+Before the named-resource change (TSK-1010, base `5405cdb1b`), heavy
+admission takes a shared legacy fence and a shared host lock in each lock
+directory, then the first free numbered slot. Each slot records one run;
+the host has a set of occupied slots, rather than one gate holder.
+`GateLock` releases its admission and clears its slot record on drop.
+See `gate_guard.rs`, `acquire_gate_lock` and `GateLock::drop`.
+
+A host-exclusive target releases this process's shared host locks and
+takes them exclusively, waiting within `heavy_wait_seconds`. Its drop
+clears the exclusive records, releases the exclusive locks and retakes
+the shared locks. A refusal to admit heavy work prints the recorded
+exclusive holder; an exclusive target that exhausts its wait prints the
+wait duration and lock path. Output leases lock sorted output names and
+wait within `timeout_seconds`; their refusal prints the output and lease
+path, without a holder. Neither path records structured wait metadata in
+`run.json`. See `hold_host_exclusive_in`, `take_host_shared` and
+`runner::evidence_leases`.
+
 ## Concept
 
 Every gate run executes every eligible target of its mode, unless `--only`
