@@ -556,17 +556,23 @@ fn old_tar_values(carrier: &Carrier, args: &[String], out: &mut Vec<Carried>) ->
 /// separated from the value by `=` or blanks, naming a command.
 fn ssh_command(value: &str) -> Option<String> {
     const KEYS: &[&str] = &["proxycommand", "localcommand", "knownhostscommand"];
-    let value = value.trim_start();
+    // ssh's own configuration separators: ASCII blanks and line ends only.
+    const BLANKS: &[char] = &[' ', '\t', '\r', '\n'];
+    let value = value.trim_start_matches(BLANKS);
     let end = value
-        .find(|c: char| c == '=' || c.is_whitespace())
+        .find(|c: char| c == '=' || BLANKS.contains(&c))
         .unwrap_or(value.len());
     let key = value[..end].to_ascii_lowercase();
     if !KEYS.contains(&key.as_str()) {
         return None;
     }
-    let rest = value[end..].trim_start();
-    let rest = rest.strip_prefix('=').unwrap_or(rest).trim_start();
-    (!rest.is_empty() && !rest.eq_ignore_ascii_case("none")).then(|| rest.to_string())
+    let rest = value[end..].trim_start_matches(BLANKS);
+    let rest = rest
+        .strip_prefix('=')
+        .unwrap_or(rest)
+        .trim_start_matches(BLANKS);
+    // ssh compares the disabling word exactly, so only `none` is inert.
+    (!rest.is_empty() && rest != "none").then(|| rest.to_string())
 }
 
 /// The editor values that only move the cursor: `+` alone, a line number,
@@ -682,6 +688,11 @@ mod tests {
             commands("gh repo clone o/r -- -u x"),
             vec![Carried::Command("git clone \"-u\" \"x\" \"o/r\"".into())]
         );
+        // ssh separates its keys only by ASCII blanks and `=`, and disables
+        // a command only with `none` exactly.
+        assert_eq!(ssh_command("ProxyCommand\tX"), Some("X".into()));
+        assert_eq!(ssh_command("ProxyCommand\u{a0}X"), None);
+        assert_eq!(ssh_command("ProxyCommand NONE"), Some("NONE".into()));
         for line in [
             "vim -c x",
             "less +!id",
