@@ -7728,9 +7728,21 @@ fn carried_from(toks: &[String]) -> Vec<String> {
     }
 }
 
-/// Carry launcher directory changes with code from every input route.
+/// Carry launcher directory changes with code from every input route. A
+/// launcher that runs the code as another user leaves the repository
+/// unresolved, as it does for a Git command it runs directly, so the code
+/// is judged as run in a directory the guard cannot read (TSK-1490, Codex
+/// review 06).
 pub(crate) fn launched_script(words: &[String], script: &str) -> String {
     let mut text = String::new();
+    let program = launch_walk(words).0.unwrap_or(0);
+    if words[..program]
+        .iter()
+        .map(String::as_str)
+        .any(super::git_target::runs_as_another_user)
+    {
+        text.push_str(&crate::security::option_commands::unknown_directory(""));
+    }
     for dir in launcher_effects(words).0 {
         text.push_str("cd ");
         text.push_str(&quote_words(&[dir.to_string()]));
@@ -15155,6 +15167,14 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
             idx += 1;
             break;
         }
+        // sudo stores an environment assignment met before `--` and then
+        // resumes reading its options, so options may follow it
+        // (sudo's `parse_args.c`). The other launchers here stop at the
+        // first word that is not an option.
+        if name == "sudo" && sudo_assignment(word) {
+            idx += 1;
+            continue;
+        }
         if !word.starts_with('-') || word.len() < 2 {
             break;
         }
@@ -15188,9 +15208,9 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
                 // sudo's `-h` written alone takes the next word as the host
                 // when it is not an option or an assignment; otherwise it
                 // asks for help (sudo's `parse_args.c`).
-                let host = tokens.get(idx).is_some_and(|next| {
-                    !next.starts_with('-') && (next.starts_with(['/', '=']) || !next.contains('='))
-                });
+                let host = tokens
+                    .get(idx)
+                    .is_some_and(|next| !next.starts_with('-') && !sudo_assignment(next));
                 if name == "sudo" && cluster.len() == 1 && host {
                     idx += 1;
                     break;
@@ -15214,6 +15234,12 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
         idx += 1;
     }
     Launch::Runs(idx)
+}
+
+/// Whether sudo reads `word` as an environment assignment: it holds `=`
+/// and starts with neither `/` nor `=` (sudo's `parse_args.c`).
+fn sudo_assignment(word: &str) -> bool {
+    word.contains('=') && !word.starts_with(['/', '='])
 }
 
 /// Whether `busybox APPLET` runs `applet` as the program for the readers:
@@ -22470,7 +22496,10 @@ mod tests {
     // on: after a launcher option it does not read (a valued unknown option
     // or an abbreviation), in a directory it cannot establish, through a
     // manual program's pager, and in a directory option after a carried
-    // command's `--`. A commit the guard can place still passes.
+    // command's `--`. Codex review 06 (N6): the same after environment
+    // assignments a launcher reads among its options, before or between
+    // them, and in a shell's command that a launcher runs as another user.
+    // A commit the guard can place still passes.
     #[test]
     fn an_unplaced_commit_keeps_the_protected_branch_rule() {
         let relaxed = GitPolicy {
@@ -22498,6 +22527,12 @@ mod tests {
             "fd -C \"$D\" -x git commit -m x",
             "man -P 'git commit -m x' ls",
             "fd x -x git commit -m x -- ';' --base-directory /scratch-main",
+            "sudo LC_ALL=C -n git commit -m x",
+            "sudo -n LC_ALL=C -u root git commit -m x",
+            "sudo A=1 B=2 -n -- git commit -m x",
+            "sudo LC_ALL=C -n sh -c 'git commit -m x'",
+            "sudo -n sh -c 'git commit -m x'",
+            "doas sh -c 'git commit -m x'",
         ] {
             // With hook integrity off the protected-branch rule refuses on
             // its own; with it on, the line refuses under either rule.
@@ -22522,6 +22557,8 @@ mod tests {
             "sudo -h",
             "fd -x printf '%s\\n' --base-directory '$D'",
             "man -P cat ls",
+            "sudo LC_ALL=C -n ls",
+            "nice -n 5 sh -c 'git commit -m x'",
         ] {
             let r = judged(&relaxed, cmd);
             if !r.violations.is_empty() {

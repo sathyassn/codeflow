@@ -433,7 +433,7 @@ pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, S
             }
             continue;
         }
-        if name != "env" && crate::security::launchers::LAUNCHERS.contains(&name) {
+        if runs_as_another_user(word) {
             // The privilege launchers run the command as another user, with
             // that user's environment and configuration.
             return Err(format!(
@@ -456,6 +456,22 @@ pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, S
         }
         return Ok(env);
     }
+}
+
+/// Whether `word` is a launcher of the closed list that runs its command as
+/// another user, with that user's environment and configuration: every
+/// launcher [`launcher_env`] does not read through. A Git command it runs,
+/// directly or in a shell's command, is judged with the repository
+/// unresolved.
+pub(crate) fn runs_as_another_user(word: &str) -> bool {
+    use super::git_guard::{is_prefix_launcher, launcher_name};
+    let name = launcher_name(word);
+    !is_prefix_launcher(word)
+        && !matches!(
+            name,
+            "env" | "chrt" | "taskset" | "setsid" | "unbuffer" | "busybox"
+        )
+        && crate::security::launchers::LAUNCHERS.contains(&name)
 }
 
 /// The directories the shell could be in: path expressions ("" is the
