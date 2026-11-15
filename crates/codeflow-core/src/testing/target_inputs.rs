@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::delivery::GateOptions;
 use super::error::TestingError;
+use crate::workgraph::work_start::{is_stable_work_target, logical_target, target_reference_names};
 
 pub(super) const ENV_KEYS: [&str; 4] = [
     "CODEFLOW_BASE",
@@ -12,6 +13,60 @@ pub(super) const ENV_KEYS: [&str; 4] = [
     "CODEFLOW_LANDING_LINE",
 ];
 const PATH_BYTES_LIMIT: usize = 16 * 1024 * 1024;
+
+fn safe_landing_line(line: &str) -> bool {
+    is_stable_work_target(line)
+        && !line.contains("..")
+        && line
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/-_.".contains(&byte))
+}
+
+fn declared_base(
+    repo: &git2::Repository,
+    head: git2::Oid,
+    line: &str,
+    branch: Option<&str>,
+) -> Result<git2::Oid, String> {
+    if !safe_landing_line(line) {
+        return Err("declared landing line is not a safe stable target".into());
+    }
+    if branch.is_some_and(|branch| logical_target(line) == logical_target(branch)) {
+        return Err("declared landing line is the current branch".into());
+    }
+    let names = target_reference_names(line)
+        .ok_or_else(|| "declared landing line has no stable reference names".to_string())?;
+    let mut target = None;
+    for name in names {
+        match repo.find_reference(&name) {
+            Ok(reference) => {
+                target = Some(
+                    reference
+                        .peel_to_commit()
+                        .map_err(|_| {
+                            "declared landing line does not resolve to a commit".to_string()
+                        })?
+                        .id(),
+                );
+                break;
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(_) => return Err("declared landing line reference could not be read".into()),
+        }
+    }
+    let target =
+        target.ok_or_else(|| "declared landing line has no resolvable local commit".to_string())?;
+    if target == head {
+        return Err("declared landing line resolves to HEAD".into());
+    }
+    let bases = repo
+        .merge_bases(head, target)
+        .map_err(|_| "no provable merge base with the landing line".to_string())?;
+    if bases.len() != 1 {
+        return Err("landing line has no unique merge base".into());
+    }
+    Ok(bases[0])
+}
 
 #[derive(Debug, serde::Serialize)]
 pub(super) struct TargetInputs {
@@ -31,7 +86,7 @@ impl TargetInputs {
             base: "unknown".into(),
             head: "unknown".into(),
             landing_line: landing
-                .filter(|v| !v.is_empty())
+                .filter(|line| safe_landing_line(line))
                 .unwrap_or("unknown")
                 .into(),
             proven: false,
@@ -70,22 +125,21 @@ impl TargetInputs {
             .map_err(|_| self.reason.clone())?
             .id();
         let attached = !repo.head_detached().unwrap_or(true);
-        let declared = attached
-            .then(|| {
-                let branch = repo.head().ok()?.shorthand().ok()?.to_owned();
-                let task =
-                    crate::workgraph::task_id_from_branch_at(root, &branch, &head.to_string())
-                        .ok()??;
-                crate::workgraph::work_start::task_target_at_revision(
-                    root,
-                    &task,
-                    &head.to_string(),
-                )
-                .ok()?
-            })
+        let branch = attached
+            .then(|| repo.head().ok()?.shorthand().ok().map(str::to_owned))
             .flatten();
+        let declared = branch.as_deref().and_then(|branch| {
+            let task = crate::workgraph::task_id_from_branch_at(root, branch, &head.to_string())
+                .ok()??;
+            crate::workgraph::work_start::task_target_at_revision(root, &task, &head.to_string())
+                .ok()?
+        });
         if let Some(line) = &declared {
-            self.landing_line.clone_from(line);
+            self.landing_line = if safe_landing_line(line) {
+                line.clone()
+            } else {
+                "unknown".into()
+            };
         }
         if repo.is_shallow() {
             return Err("shallow repository: comparison history is incomplete".into());
@@ -99,19 +153,7 @@ impl TargetInputs {
             let line = declared.ok_or_else(|| {
                 "no attached carried task with a declared landing line".to_string()
             })?;
-            let target = repo
-                .find_reference(&format!("refs/heads/{line}"))
-                .or_else(|_| repo.find_reference(&format!("refs/remotes/origin/{line}")))
-                .and_then(|r| r.peel_to_commit())
-                .map_err(|_| "declared landing line has no resolvable local commit".to_string())?
-                .id();
-            let bases = repo
-                .merge_bases(head, target)
-                .map_err(|_| "no provable merge base with the landing line".to_string())?;
-            if bases.len() != 1 {
-                return Err("landing line has no unique merge base".into());
-            }
-            bases[0]
+            declared_base(&repo, head, &line, branch.as_deref())?
         };
         let tree = repo
             .find_commit(base)
@@ -214,6 +256,51 @@ mod tests {
             &parent.iter().collect::<Vec<_>>(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn review_n1_path_list_over_sixteen_mib_is_unknown_without_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let blob = repo.blob(b"x").unwrap();
+        let mut builder = repo.treebuilder(None).unwrap();
+        // Git-only deleted entries avoid creating 66,000 filesystem files.
+        // Each name plus its NUL is 256 bytes: 16,896,000 bytes in total.
+        for index in 0..66_000 {
+            let name = format!("{index:08}{}", "a".repeat(247));
+            builder.insert(name.as_str(), blob, 0o100_644).unwrap();
+        }
+        let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let base = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "test: oversized path list",
+                &tree,
+                &[],
+            )
+            .unwrap();
+        let mut inputs = TargetInputs::discover(
+            dir.path(),
+            &GateOptions {
+                since: Some(base.to_string()),
+                ..GateOptions::default()
+            },
+            None,
+        );
+        assert!(!inputs.proven, "{inputs:?}");
+        assert!(inputs.reason.contains("16 MiB"), "{inputs:?}");
+        assert_eq!(inputs.base, "unknown");
+        assert_eq!(inputs.head, "unknown");
+        std::fs::create_dir(dir.path().join("run")).unwrap();
+        inputs.write_paths(dir.path(), "run").unwrap();
+        assert!(inputs.paths_file.is_none());
+        assert!(std::fs::read_dir(dir.path().join("run"))
+            .unwrap()
+            .next()
+            .is_none());
     }
 
     #[test]

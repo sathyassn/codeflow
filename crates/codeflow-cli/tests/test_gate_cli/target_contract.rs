@@ -41,6 +41,136 @@ fn inputs(root: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(root.join("target/inputs.json")).unwrap()).unwrap()
 }
 
+fn declared_line_fixture(line: &str) -> tempfile::TempDir {
+    let dir = fixture(0);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-inputs"]);
+    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    std::fs::write(
+        dir.path().join("project-management/tasks/TSK-001.md"),
+        format!(
+            "---\nid: TSK-001\nintegration_target: {}\n---\n",
+            serde_json::to_string(line).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("README.md"), "committed branch change\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: declared line"]);
+    dir
+}
+
+fn assert_unknown_comparison(record: &Value, data: &Value) {
+    assert_eq!(record["comparison"]["proven"], false);
+    assert!(record["comparison"]["paths_file"].is_null());
+    assert_eq!(data["CODEFLOW_BASE"], "unknown");
+    assert_eq!(data["CODEFLOW_HEAD"], "unknown");
+    assert_eq!(data["CODEFLOW_CHANGED_PATHS_FILE"], "unknown");
+}
+
+#[test]
+fn review_f1_self_target_with_committed_changes_is_unknown() {
+    let dir = declared_line_fixture("task/TSK-001-inputs");
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let (_, record) = artifact(&output);
+    assert_eq!(record["clean"], true);
+    assert_unknown_comparison(&record, &inputs(dir.path()));
+    assert_eq!(inputs(dir.path())["CODEFLOW_LANDING_LINE"], "unknown");
+}
+
+#[test]
+fn review_n2_non_unique_merge_base_is_not_proved() {
+    let dir = declared_line_fixture("integration/checks");
+    let repo = git2::Repository::open(dir.path()).unwrap();
+    let root = repo.head().unwrap().peel_to_commit().unwrap();
+    let tree = root.tree().unwrap();
+    let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+    let left = repo
+        .find_commit(
+            repo.commit(None, &sig, &sig, "test: left", &tree, &[&root])
+                .unwrap(),
+        )
+        .unwrap();
+    let right = repo
+        .find_commit(
+            repo.commit(None, &sig, &sig, "test: right", &tree, &[&root])
+                .unwrap(),
+        )
+        .unwrap();
+    let head = repo
+        .commit(None, &sig, &sig, "test: candidate", &tree, &[&left, &right])
+        .unwrap();
+    let target = repo
+        .commit(None, &sig, &sig, "test: line", &tree, &[&right, &left])
+        .unwrap();
+    repo.reference(
+        "refs/heads/task/TSK-001-inputs",
+        head,
+        true,
+        "test: candidate",
+    )
+    .unwrap();
+    repo.reference("refs/heads/integration/checks", target, false, "test: line")
+        .unwrap();
+    assert_eq!(repo.merge_bases(head, target).unwrap().len(), 2);
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let (_, record) = artifact(&output);
+    assert_unknown_comparison(&record, &inputs(dir.path()));
+    assert!(record["comparison"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no unique merge base"));
+}
+
+#[test]
+fn review_f2_candidate_landing_line_payloads_remain_unknown_data() {
+    // These are data in a committed record, never commands or evaluated text.
+    let mut exported = Vec::new();
+    for line in ["$(id)", "x;id"] {
+        let dir = declared_line_fixture(line);
+        let home = tempfile::tempdir().unwrap();
+        let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let (_, record) = artifact(&output);
+        assert_unknown_comparison(&record, &inputs(dir.path()));
+        exported.push(inputs(dir.path())["CODEFLOW_LANDING_LINE"].clone());
+    }
+    assert_eq!(exported, vec![json!("unknown"), json!("unknown")]);
+}
+
+#[test]
+fn review_f2_parent_landing_line_payloads_remain_unknown_data() {
+    let dir = fixture(0);
+    git(dir.path(), &["switch", "--detach", "HEAD"]);
+    let home = tempfile::tempdir().unwrap();
+    let mut exported = Vec::new();
+    for line in ["$(id)", "x;id", "task/TSK-001-inputs", "integration/a..b"] {
+        let output = command(dir.path(), home.path(), &["test", "--mode", "quick"])
+            .env("CODEFLOW_LANDING_LINE", line)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let (_, record) = artifact(&output);
+        assert_unknown_comparison(&record, &inputs(dir.path()));
+        exported.push(inputs(dir.path())["CODEFLOW_LANDING_LINE"].clone());
+    }
+    assert_eq!(exported, vec![json!("unknown"); 4]);
+}
+
+#[test]
+fn review_f1_stable_line_resolving_to_head_is_unknown() {
+    let dir = declared_line_fixture("integration/checks");
+    git(dir.path(), &["branch", "integration/checks"]);
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let (_, record) = artifact(&output);
+    assert_unknown_comparison(&record, &inputs(dir.path()));
+}
+
 #[test]
 fn commands_receive_comparison_in_quick_and_unknown_without_base() {
     comparison_fixture("quick");

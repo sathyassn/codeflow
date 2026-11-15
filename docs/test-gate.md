@@ -53,7 +53,7 @@ inputs. They never change CodeFlow's target selection or earn reuse credit.
 | `CODEFLOW_BASE` | Exact comparison commit, or `unknown` |
 | `CODEFLOW_HEAD` | Exact HEAD commit at comparison time, or `unknown` when no comparison is proven |
 | `CODEFLOW_CHANGED_PATHS_FILE` | Absolute path to this run's NUL-separated path file, or `unknown` when no comparison is proven |
-| `CODEFLOW_LANDING_LINE` | The carried task's committed `integration_target`, falling back to the caller's informational environment hint (including on a detached candidate), then `unknown` |
+| `CODEFLOW_LANDING_LINE` | A safe stable landing name from the carried task's committed `integration_target`, or the caller's informational environment hint when no task field is present (including on a detached candidate); otherwise `unknown` |
 
 `--since` resolves once to a commit. Otherwise the base is the merge base
 of HEAD and the carried task's declared landing line, resolved locally.
@@ -62,6 +62,14 @@ revision leaves the comparison unknown. An unknown comparison never offers
 a path file as complete. The schema-2 `run.json` adds a `comparison` object
 with `base`, `head`, `landing_line`, `proven`, `reason` and `paths_file`;
 `proven: false` records the unknown case and `paths_file` is null.
+
+A declared landing line must be a stable work target. It cannot name the
+current branch or resolve to HEAD; either case leaves the comparison unknown.
+Both task fields and parent environment hints export `unknown` unless they
+are stable names containing only ASCII letters, digits, `/`, `-`, `_` and
+`.`. Names containing `..` are rejected. This validation also applies when
+the named ref does not resolve. An explicit `--since HEAD` remains a valid
+comparison request.
 
 The file is a snapshot before targets start, inside the run's own directory.
 It lists repository-relative raw Git path bytes separated by NUL, including
