@@ -28,6 +28,7 @@
 //! path (charter §6.2).
 
 pub mod adoption;
+mod agent_transport;
 pub mod conflict_markers;
 pub mod delegate_turn;
 pub mod edit_guard;
