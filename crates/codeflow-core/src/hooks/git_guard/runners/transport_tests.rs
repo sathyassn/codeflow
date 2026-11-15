@@ -603,6 +603,81 @@ fn indirect_contact_paths_refuse_unless_proven() {
     legacy.unproven(fresh, "legacy remote file");
 }
 
+/// Git takes the word after a value-taking option as its value whatever it
+/// looks like, so in these rows a turn-off word or a terminator it consumes
+/// proves nothing, and the reading goes on past it.
+#[test]
+fn a_word_an_option_consumes_proves_nothing() {
+    let listed = Scratch::new(HTTPS);
+    std::fs::write(listed.root().join(".gitmodules"), "").unwrap();
+    for command in [
+        "fetch --recurse-submodules=on-demand --server-option --no-recurse-submodules origin",
+        "fetch -o --no-recurse-submodules origin",
+        "fetch --server-option --recurse-submodules=no origin",
+        "pull origin main --strategy --no-recurse-submodules",
+        "push --recurse-submodules --no-recurse-submodules origin HEAD",
+    ] {
+        listed.unproven(command, "submodule");
+    }
+    for command in [
+        "fetch -q --no-recurse-submodules origin",
+        "fetch --depth=1 --no-recurse-submodules origin",
+        "fetch --recurse-submodules --no-recurse-submodules origin",
+        "pull origin main --no-recurse-submodules",
+    ] {
+        assert_eq!(listed.helpers(command), Ok(vec![]), "{command}");
+    }
+
+    let plain = Scratch::new("");
+    for command in [
+        "clone --recurse-submodules --server-option --no-recurse-submodules https://example.test/r copy",
+        "clone --server-option -- --recurse-submodules https://example.test/r copy",
+        "clone --recursive -u --no-recurse-submodules https://example.test/r copy",
+    ] {
+        plain.unproven(command, "clone without recursion");
+    }
+    plain.unproven(
+        "clone --server-option -- -c submodule.recurse=true https://example.test/r copy",
+        "submodule setting",
+    );
+    assert_eq!(
+        plain.helpers("clone -q --no-recurse-submodules https://example.test/r copy"),
+        Ok(vec![])
+    );
+
+    let origin = Scratch::new(HTTPS);
+    for command in [
+        "push -o -- --dry-run",
+        "push --recurse-submodules no",
+        "ls-remote -u x",
+    ] {
+        origin.unproven(command, "names no remote");
+    }
+    assert_eq!(origin.helpers("push origin -- HEAD"), Ok(vec![]));
+
+    let helper = Scratch::new(&format!("{HTTPS}[remote \"fresh\"]\n\tvcs = fixture\n"));
+    for scratch in [&origin, &helper] {
+        scratch.unproven(
+            "remote add -t -- -f fresh https://example.test/r",
+            "fetches with settings",
+        );
+    }
+}
+
+/// Every verb the contacting-verb inventory lists either resolves its
+/// contact here or refuses by name.
+#[test]
+fn a_listed_contacting_verb_without_a_resolution_refuses() {
+    let plain = Scratch::new(HTTPS);
+    plain.unproven("request-pull HEAD fixture::x HEAD", "`request-pull`");
+    plain.unproven(
+        "request-pull HEAD https://example.test/r HEAD",
+        "`request-pull`",
+    );
+    assert_eq!(plain.helpers("credential fill"), Ok(vec![]));
+    assert_eq!(plain.helpers("ls-remote origin"), Ok(vec![]));
+}
+
 #[test]
 fn a_maintenance_run_passes_only_a_proven_local_task_list() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));

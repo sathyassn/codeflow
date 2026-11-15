@@ -765,6 +765,64 @@ fn both_guards_refuse_indirect_contacts_they_cannot_prove() {
     );
 }
 
+/// Git takes the word after a value-taking option as its value whatever it
+/// looks like, so a turn-off word or a terminator it consumes proves
+/// nothing in either guard.
+#[test]
+fn both_guards_read_a_consumed_word_as_a_value() {
+    let listed = Scratch::landed(None);
+    listed.write(".gitmodules", b"");
+    assert_unproven(
+        &listed,
+        &[
+            "git fetch --recurse-submodules=on-demand --server-option --no-recurse-submodules origin",
+            "git fetch --server-option --recurse-submodules=no origin",
+        ],
+        &["git fetch -q --no-recurse-submodules origin"],
+    );
+    let plain = Scratch::landed(None);
+    assert_unproven(
+        &plain,
+        &[
+            "git clone --recurse-submodules --server-option --no-recurse-submodules https://127.0.0.1:9/r copy",
+            "git clone --server-option -- --recurse-submodules https://127.0.0.1:9/r copy",
+        ],
+        &["git clone -q --no-recurse-submodules https://127.0.0.1:9/r copy"],
+    );
+}
+
+/// A `remote add` whose `--` an option consumes still fetches; the global
+/// configuration gives the new name a helper setting. git-guard refuses
+/// every `remote add` first by its remote identity rule.
+#[test]
+fn both_guards_read_a_remote_add_past_a_consumed_terminator() {
+    let scratch = Scratch::landed(None);
+    let global = scratch.base.join("global.gitconfig");
+    std::fs::write(&global, "[remote \"fresh\"]\n\tvcs = fixture\n").unwrap();
+    let global = shell_path(&global);
+    let add = "git remote add -t -- -f fresh https://127.0.0.1:9/r";
+    let out = scratch.judge_inheriting("exec-guard", add, ("GIT_CONFIG_GLOBAL", &global));
+    assert!(unproven_refusal(&out), "exec-guard: {}", stderr(&out));
+    let out = scratch.judge_inheriting("git-guard", add, ("GIT_CONFIG_GLOBAL", &global));
+    let err = stderr(&out);
+    assert!(
+        out.status.code() == Some(2) && err.contains(REMOTE_IDENTITY),
+        "git-guard: {err}"
+    );
+}
+
+/// A verb the contacting-verb inventory lists without a resolution of its
+/// own refuses by name in both guards; an ordinary listing still passes.
+#[test]
+fn both_guards_refuse_a_listed_contacting_verb_they_do_not_resolve() {
+    let scratch = Scratch::landed(None);
+    assert_unproven(
+        &scratch,
+        &["git request-pull HEAD fixture::x HEAD"],
+        &["git ls-remote origin"],
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn both_guards_check_a_legacy_remote_name_with_a_backslash() {
@@ -804,12 +862,13 @@ fn an_inherited_location_input_admits_nothing() {
 /// TSK-1479's rule refusing an agent push of a listed branch.
 const AGENT_PUSH: &str = "git.agent_push_refused_branches";
 
-/// `git.agent_remote_urls` and `git.admitted_helpers` each relax only their
-/// own rule: a listed agent remote URL admits no helper program and keeps
-/// the account finding off its closed forms, and an admitted helper relaxes
-/// no agent push refusal.
+/// `git.agent_remote_urls` and `git.admitted_helpers` each keep to their
+/// own rule in these cases: a listed agent remote URL admits no helper
+/// program for a fetch and keeps the account finding on a listing, and an
+/// admitted helper relaxes no agent push refusal of a protected or
+/// integration branch.
 #[test]
-fn the_remote_url_list_and_the_helper_list_never_relax_each_other() {
+fn the_remote_url_list_and_the_helper_list_keep_to_their_own_rules() {
     const HELPER_URL: &str = "fixture::https://127.0.0.1:9/r";
     let urls_only = Scratch::landed_with(|origin| {
         let policy = serde_json::json!({"git": {

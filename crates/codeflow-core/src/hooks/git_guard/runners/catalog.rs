@@ -52,11 +52,12 @@ fn remote_stays_local(rest: &[String]) -> bool {
     };
     let rest: Vec<&str> = words.collect();
     // Only plain operands, and the options each subcommand lists here that
-    // never fetch; `--` ends the options.
+    // never fetch. Every word is read: an option such as `-t` may consume a
+    // `--` as its value, so a `--` never ends the reading, and a word after
+    // it that looks like an option reads as one (TSK-1489).
     let only = |allowed: &[&str]| {
         rest.iter()
-            .take_while(|word| **word != "--")
-            .all(|word| !word.starts_with('-') || allowed.contains(word))
+            .all(|word| !word.starts_with('-') || *word == "--" || allowed.contains(word))
     };
     match subcommand {
         "get-url" => only(&["--push", "--all"]),

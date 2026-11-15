@@ -28,12 +28,18 @@
 //! legacy remote file may define, a `remote add` that fetches unless the
 //! new remote's configuration is proven empty, a maintenance run unless
 //! every task is a proven local one, the submodule builtins that update,
-//! add or clone, and submodule recursion in a repository that has or may
-//! have submodules unless the command line provably turns it off.
+//! add or clone, submodule recursion in a repository that has or may
+//! have submodules unless the command line provably turns it off, and any
+//! other verb the contacting-verb inventory lists that this resolution does
+//! not model.
 //!
 //! Options are read as Git's option parser reads them: a long option may be
 //! any unambiguous abbreviation, so every recursion or task option form is
-//! matched by prefix, and a form the reading cannot place refuses.
+//! matched by prefix, and a form the reading cannot place refuses. Git takes
+//! the word after a value-taking option as its value whatever it looks like,
+//! a `--` included, so a word that turns something off counts only where it
+//! is surely an option, and a `--` is read as ending the options only where
+//! no option can have taken it as its value.
 
 use super::super::shown_word;
 use crate::security::git_config::{EffectiveConfig, Location};
@@ -124,6 +130,35 @@ const FLAGS: &[&str] = &[
     "--verify",
     "--write-fetch-head",
 ];
+
+/// The words of [`FLAGS`] that one verb reads as an option taking the next
+/// word as its value: `ls-remote -u` and `clone -u` name the upload program,
+/// and `push --recurse-submodules` requires its mode.
+const VALUE_IN: &[(&str, &str)] = &[
+    ("ls-remote", "-u"),
+    ("clone", "-u"),
+    ("push", "--recurse-submodules"),
+];
+
+/// Whether the option `word` of `verb` surely never takes the next word as
+/// its value.
+fn takes_no_value(verb: &str, word: &str) -> bool {
+    FLAGS.contains(&word) && !VALUE_IN.contains(&(verb, word))
+}
+
+/// Whether the word after `previous` surely stands on its own, never as the
+/// value of an option: it comes first, or `previous` is an operand or a
+/// value, a long option with its value attached, or an option that takes
+/// no value. Git's option parser takes the next word as a value whatever it
+/// looks like, so a word after any other option may be consumed.
+fn stands_alone(verb: &str, previous: Option<&str>) -> bool {
+    previous.is_none_or(|word| {
+        !word.starts_with('-')
+            || word == "-"
+            || (word.starts_with("--") && word.contains('='))
+            || takes_no_value(verb, word)
+    })
+}
 
 /// The transports Git builds in or ships, as address schemes and helper
 /// names. Every other scheme or name starts `git-remote-<name>`.
@@ -216,7 +251,7 @@ pub(super) fn contacts(
         for word in candidates(rest) {
             resolver.word(word, direction, &mut found, probe)?;
         }
-        if DEFAULTING.contains(&verb) && !names_repository(rest) {
+        if DEFAULTING.contains(&verb) && !names_repository(verb, rest) {
             if resolver.names_no_remote() {
                 // Git falls back to `origin` without the user naming it, and
                 // an undefined fallback contacts nothing (`remote.c`
@@ -256,6 +291,14 @@ pub(super) fn contacts(
                 "a submodule update or add contacts the remotes of submodule repositories, which the guard does not read",
             ));
         }
+    } else if verb != "credential" && super::catalog::active(super::catalog::REMOTE, verb) {
+        // Every other verb the inventory lists as contacting a remote, such
+        // as `request-pull`, which runs `ls-remote` on its own operand,
+        // refuses until its contact is resolved here; `credential` talks
+        // only to credential helpers, which the runner reader judges.
+        return Err(unproven(format!(
+            "`{verb}` contacts a remote through a command of its own, whose transport the guard does not resolve; the operator runs it"
+        )));
     }
     for name in resolver.promisors()? {
         resolver.named(&name, Direction::Fetch, &mut found)?;
@@ -270,9 +313,13 @@ pub(super) fn contacts(
 }
 
 /// The words of `rest` that may name a remote or an address: every operand,
-/// every word after `--`, and the value of every `--<option>=<value>`.
+/// every word after the first `--` or `--end-of-options`, and the value of
+/// every `--<option>=<value>`. A terminator an option consumes as its value
+/// only makes more words candidates.
 fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
-    let end = rest.iter().position(|word| word == "--");
+    let end = rest
+        .iter()
+        .position(|word| matches!(word.as_str(), "--" | "--end-of-options"));
     rest.iter().enumerate().filter_map(move |(at, word)| {
         if end.is_some_and(|end| at > end) {
             Some(word.as_str())
@@ -289,21 +336,20 @@ fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
 }
 
 /// Whether a `remote add` in `rest` may fetch: any short option cluster
-/// holding `f`, or any long option that abbreviates or negates `--fetch`.
-/// A negation still counts, so the reading never relies on option order.
+/// holding `f`, or any long option that abbreviates or negates `--fetch`,
+/// anywhere after `add`. A negation still counts, and a `--` does not end
+/// the reading, since an option may consume it as its value, so the
+/// reading never relies on option order or placement.
 fn remote_add_fetches(rest: &[String]) -> bool {
-    rest.iter()
-        .skip_while(|word| *word != "add")
-        .take_while(|word| *word != "--")
-        .any(|word| {
-            if let Some(option) = word.strip_prefix("--") {
-                let name = option.split_once('=').map_or(option, |(name, _)| name);
-                let name = name.strip_prefix("no-").unwrap_or(name);
-                !name.is_empty() && "fetch".starts_with(name)
-            } else {
-                word.len() > 1 && word.starts_with('-') && word.contains('f')
-            }
-        })
+    rest.iter().skip_while(|word| *word != "add").any(|word| {
+        if let Some(option) = word.strip_prefix("--") {
+            let name = option.split_once('=').map_or(option, |(name, _)| name);
+            let name = name.strip_prefix("no-").unwrap_or(name);
+            !name.is_empty() && "fetch".starts_with(name)
+        } else {
+            word.len() > 1 && word.starts_with('-') && word.contains('f')
+        }
+    })
 }
 
 /// The values of `archive`'s `--remote` option, the only remote it contacts.
@@ -328,15 +374,17 @@ fn every_remote_option(word: &str) -> bool {
 }
 
 /// Whether `rest` surely names the remote: a word that cannot be an
-/// option's value is an operand, and the first operand is the remote.
-fn names_repository(rest: &[String]) -> bool {
+/// option's value is an operand, and the first operand is the remote. A
+/// `--` after an option that may take a value may be that value, so it
+/// ends the options only after a word it surely stands apart from.
+fn names_repository(verb: &str, rest: &[String]) -> bool {
     let mut value_may_follow = false;
     for (at, word) in rest.iter().enumerate() {
-        if word == "--" {
+        if word == "--" && !value_may_follow {
             return at + 1 < rest.len();
         }
-        if word.len() > 1 && word.starts_with('-') {
-            value_may_follow = !word.contains('=') && !FLAGS.contains(&word.as_str());
+        if word.len() > 1 && word.starts_with('-') && !(word == "--" && value_may_follow) {
+            value_may_follow = !word.contains('=') && !takes_no_value(verb, word);
             continue;
         }
         if !value_may_follow {
@@ -429,17 +477,41 @@ fn maintenance(rest: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The long options of `rest` before `--`, each as its name without the
-/// dashes and its `=` value.
-fn long_options(rest: &[String]) -> impl Iterator<Item = (&str, Option<&str>)> {
-    rest.iter()
-        .take_while(|word| *word != "--")
-        .filter_map(|word| word.strip_prefix("--"))
-        .filter(|option| !option.is_empty())
-        .map(|option| match option.split_once('=') {
-            Some((name, value)) => (name, Some(value)),
-            None => (option, None),
-        })
+/// Whether the line `rest` of `verb` turns submodule recursion on
+/// (`Some(true)`) or off (`Some(false)`); the last recursion word wins. A
+/// long option `off` reads as turning recursion off counts as off only when
+/// it is surely an option: no `--` or `--end-of-options` comes before it,
+/// since an option may consume a terminator as its value, and it stands
+/// apart from the word before it ([`stands_alone`]). Every other word that
+/// may be a recursion option counts as on wherever it stands, after a
+/// terminator too, so a word Git consumes as a value never proves recursion
+/// off and never hides a real recursion option.
+fn recursion_words(
+    verb: &str,
+    rest: &[String],
+    off: impl Fn(&str, Option<&str>) -> bool,
+) -> Option<bool> {
+    let mut state = None;
+    let mut ended = false;
+    let mut previous: Option<&str> = None;
+    for word in rest {
+        if matches!(word.as_str(), "--" | "--end-of-options") {
+            ended = true;
+        }
+        if let Some(option) = word.strip_prefix("--").filter(|option| !option.is_empty()) {
+            let (name, value) = match option.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (option, None),
+            };
+            if !ended && stands_alone(verb, previous) && off(name, value) {
+                state = Some(false);
+            } else if recursion_name(name) {
+                state = Some(true);
+            }
+        }
+        previous = Some(word);
+    }
+    state
 }
 
 /// Whether the option `name` may be a submodule recursion option: one of
@@ -459,50 +531,37 @@ fn recursion_name(name: &str) -> bool {
 /// Whether the command line of a fetch, pull or push turns submodule
 /// recursion on (`Some(true)`) or off (`Some(false)`); the last such option
 /// wins. Only the full negation, or the full option with a value Git reads
-/// as false, turns it off; an abbreviation or any other value reads as on.
-fn recursion_on_line(rest: &[String]) -> Option<bool> {
-    let mut state = None;
-    for (name, value) in long_options(rest) {
-        let off = match (name, value) {
-            ("no-recurse-submodules", None) => true,
-            ("recurse-submodules", Some(value)) => {
-                crate::security::git::config_boolean(value) == Some(false)
-            }
-            _ => false,
-        };
-        if off {
-            state = Some(false);
-        } else if recursion_name(name) {
-            state = Some(true);
+/// as false, turns it off, and only where [`recursion_words`] proves it an
+/// option; an abbreviation or any other value reads as on.
+fn recursion_on_line(verb: &str, rest: &[String]) -> Option<bool> {
+    recursion_words(verb, rest, |name, value| match (name, value) {
+        ("no-recurse-submodules", None) => true,
+        ("recurse-submodules", Some(value)) => {
+            crate::security::git::config_boolean(value) == Some(false)
         }
-    }
-    state
+        _ => false,
+    })
 }
 
 /// Whether a clone's command line turns recursion on (`Some(true)`) or off
 /// (`Some(false)`); the last such option wins. A clone reads the value of
 /// its recursion option as a pathspec, never as a boolean, so every
 /// recursion option, abbreviation or value turns it on, and only the full
-/// negation turns it off.
+/// negation turns it off, where [`recursion_words`] proves it an option.
 fn clone_recursion_on_line(rest: &[String]) -> Option<bool> {
-    let mut state = None;
-    for (name, value) in long_options(rest) {
-        if name == "no-recurse-submodules" && value.is_none() {
-            state = Some(false);
-        } else if recursion_name(name) {
-            state = Some(true);
-        }
-    }
-    state
+    recursion_words("clone", rest, |name, value| {
+        name == "no-recurse-submodules" && value.is_none()
+    })
 }
 
 /// The keys of the settings a clone's own `-c` or `--config` options give
 /// the new repository; an option without a value reads as an empty key. A
 /// short-option group that holds `c` counts, read from that letter on, so
-/// no spelling of the option is missed.
+/// no spelling of the option is missed. Every word is read, after a `--`
+/// too, since an option may consume a terminator as its value.
 fn clone_setting_keys(rest: &[String]) -> Vec<String> {
     let mut keys = Vec::new();
-    let mut words = rest.iter().take_while(|word| *word != "--");
+    let mut words = rest.iter();
     while let Some(word) = words.next() {
         let short = word
             .strip_prefix('-')
@@ -850,7 +909,7 @@ impl<'a> Resolver<'a> {
     fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
         // Git reads the push setting and the general one in configuration
         // order, so either one turning recursion on reads as on.
-        let on = match recursion_on_line(rest) {
+        let on = match recursion_on_line(verb, rest) {
             Some(on) => on,
             None if verb == "push" => {
                 self.setting_on("push.recursesubmodules")?

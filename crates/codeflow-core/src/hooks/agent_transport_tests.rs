@@ -256,7 +256,10 @@ fn transport_refusal(found: &[Violation]) -> bool {
 
 /// Each row keeps the account finding on the helper body, so the
 /// admission did not apply and the line is refused; or TSK-1489's
-/// transport rule refuses the line first, which admits nothing either.
+/// transport rule refuses the line first. A row the transport rule
+/// refuses proves only that the line stays refused: the account rule and
+/// its admission check are not reached for it, so it says nothing about
+/// whether they would keep the finding.
 fn expect_account(cwd: &Path, rows: &[String], wrong: &mut Vec<String>) {
     for row in rows {
         let found = verdict(cwd, row);

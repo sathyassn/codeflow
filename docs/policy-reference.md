@@ -639,10 +639,9 @@ the form refuses:
   tests) refuses, since the guard reads the checkouts before the line
   runs. A command the guard cannot read, such as an `ext::` remote or an
   unread `--config-env` value, refuses as cannot-verify.
-- For every remote a Git command contacts, both guards resolve the
-  transport Git selects, after the address rewrites Git applies for that
-  direction, and admit only the forms they can prove Git resolves the same
-  way:
+- When a Git command contacts a remote, both guards resolve the transport
+  Git selects, after the address rewrites Git applies for that direction,
+  and admit only these forms, which they read the way Git resolves them:
   - an address the command names;
   - a remote the command names that the configuration the call reads
     defines with one address, at most one push address, no helper setting
@@ -668,9 +667,15 @@ the form refuses:
   the configuration already holds settings for the new name; the
   submodule commands and internal builtins that update, add or clone; and
   submodule recursion in a repository that has or may have submodules,
-  unless the command line provably turns it off. Options are read as Git
-  reads them, abbreviations included, and a recursion option the guard
-  cannot read as off counts as on. A configuration the guard cannot
+  unless the command line provably turns it off; and any other command
+  the guards list as contacting a remote whose contact they do not
+  resolve, such as `request-pull`. Options are read as Git reads them,
+  abbreviations included, and a recursion option the guard cannot read as
+  off counts as on. Git takes the word after an option that needs a value
+  as that value, whatever it looks like, so a word that turns recursion
+  off counts only where the guard can tell it is an option, and a `--`
+  that may be another option's value does not end the options. A
+  configuration the guard cannot
   read, or a repository it cannot locate, refuses and names the file or
   the cause. Transports Git runs itself or ships (https, http, ftp, ssh in
   both forms, `git://`, a local path or `file://`) keep their verdict. The
