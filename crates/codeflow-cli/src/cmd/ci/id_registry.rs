@@ -10,7 +10,6 @@ use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::ids::{check, Git};
-use codeflow_core::workgraph::durable_work_tracking_enabled;
 
 const RULE: &str = "work.id_registry";
 
@@ -22,7 +21,12 @@ pub(super) fn dispatch(
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    match durable_work_tracking_enabled(root) {
+    let resolved = super::resolve_base(root, base_candidates);
+    // Tracking as the checkout, the head and the base carry it, so a
+    // checkout without tracking state never switches the rule off for a
+    // range whose commits carry it (TSK-1257).
+    let tracking_base = resolved.as_ref().ok().and_then(Option::as_deref);
+    match super::tracking_judged(root, tracking_base, head) {
         Ok(true) => {}
         Ok(false) => return,
         Err(error) => {
@@ -34,7 +38,7 @@ pub(super) fn dispatch(
             return;
         }
     }
-    let resolved_base = match super::resolve_base(root, base_candidates) {
+    let resolved_base = match resolved {
         Ok(value) => value,
         Err(error) => {
             tagged.push(super::TaggedViolation {

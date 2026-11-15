@@ -31,12 +31,13 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.remote_query_timeout_seconds` | uint | `30` | a whole number of seconds, at least 1; no ceiling beyond what the number can hold | How long one `git ls-remote` attempt may take when the pre-push hook, `codeflow ci`, `task status` or the id sync asks a destination what it holds. | Default 30: GitHub answered the default-branch lookup in 11.3 s and 11.6 s, over the earlier fixed 10 s (TSK-1301). A destination that does not answer in time still refuses the push or run (ci.destination_unavailable), naming the limits and the measured time. The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. A very large value means effectively no limit: a silent destination is then waited on until something stops the run. The session guards never use it: they wait at most 10 s for each such lookup, their 20 s deadline bounds the whole command, and they refuse naming `git fetch <remote>`, after which they read local refs and need no network. Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.remote_query_attempts` | uint | `3` | a whole number of attempts, at least 1; no ceiling beyond what the number can hold | How many attempts a timed-out `git ls-remote` gets, the first included; any other failure is final at once. | Default 3. The worst wait is this times git.remote_query_timeout_seconds. The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. A very large value means effectively no limit: a silent destination is then waited on until something stops the run. Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.remote_fetch_timeout_seconds` | uint | `120` | a whole number of seconds, at least 1; no ceiling beyond what the number can hold | How long a fetch of the objects a judge needs may take, such as the destination's default-branch tip this clone lacks, in the pre-push hook, `codeflow ci` and `task status`. | Default 120, the earlier fixed fetch wait. A fetch that does not finish in time refuses, naming this key. The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. A very large value means effectively no limit: a silent destination is then waited on until something stops the run. Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.push_budget_seconds` | uint | `60` | a whole number of seconds, at least 1; no ceiling beyond what the number can hold | How long the pre-push set may take before the hook reports the overrun, naming the slowest step and the slowest checks inside a `codeflow ci` step. | Default 60. It only reports: a push over the budget still lands when its checks pass, and no check is skipped or shortened to meet it. The pre-push hook reads it from the default branch's committed policy as last fetched, never from a pushed head; with no such branch it uses the default. Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.root_branch` | string | `""` | empty, or a valid branch name | The branch the root checkout holds; empty means the repository's default branch. | Set it only for an umbrella repository whose root is a working checkout; `codeflow init --workspace` writes the convention name. |
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
 | `git.claim_remotes` | string list | `[]` | an array of configured remote names, none starting with a dash | Additional remotes whose branches count as advisory work claims. | Origin and the target's fetch remote always count. Empty by default; other remote branches are reported as information. Named remotes must be configured when work claim lists their branches. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.candidate_prefix` | string | `candidate/` | a branch name prefix ending in /, such as candidate/, that shares no start with a git.branch_prefixes entry, integration/ or a protected branch | The name prefix of landing candidate branches that `codeflow work remove-candidate` may remove. | Default candidate/. A prefix that equals, contains or is contained by a git.branch_prefixes entry, integration/, or a protected branch name or the part of a protected pattern before its first glob character is refused, by the schema and again by the removal. A protected branch is never removed, whatever its name. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree. | Default 200. A tree older than the depth is not found, so the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.candidate_prefix` | string | `candidate/` | a branch name prefix ending in /, such as candidate/, that shares no start with a git.branch_prefixes entry, integration/ or a protected branch | The name prefix of landing candidate branches: an allowed branch name, judged at pre-push and by `codeflow ci` against the line it is cut from, and removable by `codeflow work remove-candidate`. | Default candidate/. A prefix that equals, contains or is contained by a git.branch_prefixes entry, integration/, or a protected branch name or the part of a protected pattern before its first glob character is refused, by the schema and again by the removal. A protected branch is never removed, whatever its name. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of first-parent history are searched: a pushed candidate's chain for its line's fetched tip, and the line's history by `codeflow work remove-candidate` for the candidate's tree. | Default 200. A line tip or tree older than the depth is not found, so the push or the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.branch_name_omit_words` | string list | `["secret","credentials"]` | an array of words of lower-case letters and digits | Words that work claim and epic new --integration leave out of a generated branch name. | A loose ref is a file named after its branch, and a sandbox can refuse to read a file by its name; git then reports that ref as broken. An entry matches anywhere inside a title word. The default holds the words the Claude Code sandbox was probed to refuse; set the list your harness needs, or an empty list to keep every word. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
@@ -49,8 +50,9 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.commit_footer_tokens` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers ALLOWED (optional) beyond the always-allowed BREAKING CHANGE:. | Unioned with commit_required_footers and commit_ticket_keys into the sanctioned-footer set; enforced under commit_body. |
 | `git.commit_required_footers` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Signed-off-by) | Footer trailers that MUST appear on every non-exempt commit (e.g. DCO). | A required token is implicitly allowed; a commit missing one blocks under commit_body. |
 | `git.commit_ticket_keys` | string list | `[]` | an array of exact, case-sensitive trailer tokens (e.g. Refs, Closes) | Ticket-reference trailer tokens the project recognizes. | EMPTY = the ticket feature is off and a `Refs:` line BLOCKS unless listed in commit_footer_tokens; non-empty allows these tokens and arms commit_ticket_required. |
-| `git.commit_ticket_required` | Level | `off` | off \| warn \| allow \| block | Whether a matching ticket-reference trailer is REQUIRED on every commit. | Only meaningful when commit_ticket_keys is non-empty; `allow` behaves like `off` here (inactive); use warn or block to require. Merge/revert/fixup/squash commits are exempt. |
+| `git.commit_ticket_required` | Level | `off` | off \| warn \| allow \| block | Whether a matching ticket-reference trailer is REQUIRED on every commit. | Only meaningful when commit_ticket_keys is non-empty; `allow` behaves like `off` here (inactive); use warn or block to require. Merge/revert/fixup/squash commits are exempt; commit_ticket_merges opts merges in. |
 | `git.commit_ticket_pattern` | string | `""` | a regular expression, e.g. ^PROJ-\d+$ (empty = no format check) | Regex a present ticket trailer's value must match. | Strictly validated: an unparseable pattern is a loud error at the commit-msg hook, `codeflow ci`, and `codeflow validate` (at enforcement time it would silently fail open). |
+| `git.commit_ticket_merges` | Level | `off` | off \| warn \| allow \| block | Whether a merge commit must carry a ticket-reference trailer too. | Default off keeps merges exempt. warn or block judges every real merge, git's default `Merge ...` subject included, for a commit_ticket_keys trailer matching commit_ticket_pattern, in the commit-msg hook and `codeflow ci`; only meaningful when commit_ticket_keys is non-empty. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.breaking_watch_paths` | string list | `[]` | an array of path globs (the `glob` crate's syntax) | Declared contract surfaces: an unmarked commit touching one draws a WARN. | Warn-only, never blocks, whatever the levels say; empty = no tripwire. The nudge asks for a `type!:` marker or a BREAKING CHANGE: footer. |
 | `git.ai_attribution` | Level | `block` | off \| warn \| allow \| block | AI attribution (Co-Authored-By AI trailers, "Generated with", robot emoji) in commits and PR bodies. |  |
 | `git.commit_emoji` | Level | `block` | off \| warn \| allow \| block | Emoji in commit subjects and PR bodies. |  |
@@ -96,6 +98,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.headless_peer_runs` | Level | `block` | off \| warn \| allow \| block | Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate). | Default block (ADR-0075 D4): a project that needs a headless run sets security.headless_peer_runs to warn or off. `codeflow update` moves a project still at the old warn default to block. |
 | `security.script_bypass` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 | `security.text_guard` | enum | `absent` | strict \| relaxed | Which text rule the exec-guard applies to shell calls (TSK-397): `strict` adds the strict rule to every call; `relaxed` applies the line's rule by the operator's choice and verifies no sandbox. | Default strict, also when the key is absent. `relaxed` is honoured only from the remote-tracking refs as last fetched (the remote's default branch, the one policy authority since TSK-1077): plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, and no ref file that is a symbolic link. It is never honoured from a working copy, a local branch or tag, or a repository without a remote; a Claude Code call also needs it in the session project's policy. Those refs are local state that a process able to write `.git` can set; the guard does not authenticate them. The strict rule's refusals block whatever `git.hook_integrity` says. Under `relaxed`, a recognized marked retry (`dangerouslyDisableSandbox`) and every call on native Windows still take the strict rule. `codeflow doctor --check sandbox` shows the rule and the ref it was read from. The shipped policy file does not list it, so an older binary never meets the key. |
+| `security.trusted_client_configs` | string list | `absent` | any of curl, wget, httpie, xh, gh_aliases | The HTTP clients whose config files the project trusts (TSK-1346). For a listed tool, exec-guard no longer refuses a call because a config file it reads may exist: `curl` without `-q`, `wget` without `--no-config`, `HTTPie` or xh beside a `config.json`, and, for `gh_aliases`, a gh config the guard cannot locate, read or parse, or an alias in it that is not text or names another alias. A gh alias the guard can read is still judged as its expansion, and a shell alias it can read is still refused. | Default empty: every config-file refusal stays on. Accepting a tool accepts this threat: a config file the requester can write can turn that tool's call into a GitHub write the guard does not see. The GitHub-destination checks stay for every tool: a write to a GitHub release route, an unknown option, an unparsed destination or a redirect is still refused. Read only from the committed policy authority (`landed_policy`, the remote-tracking refs as last fetched), never from the working tree or the environment. A tool is trusted only when every policy source the guard reads lists it: the call's repository and, for a Claude Code call made outside it, the session project; a source that cannot be read trusts none. An unknown name is a validation error and trusts nothing. |
 | `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
 | `security.interpreter_scan` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 | `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
@@ -1200,12 +1203,43 @@ Findings). A bypass actor merges into the default branch with `gh pr merge
   `codeflow protect <pattern>`, with the checks in `git.required_checks`.
   The registry's data profile is `codeflow protect codeflow/registry`.
   Classic branch protection is never written.
-- **Never weaker.** A ruleset with any other name is never written. Every
+- **Absent branches and `--branch`.** A pattern in `git.protected_branches`
+  that names one branch the host does not have (a 404 from
+  `repos/<repo>/branches/<name>`) is reported and gets no ruleset; a glob,
+  the default branch and the registry are planned without that read.
+  `--branch <name>` limits a run to the owned rulesets that target that
+  branch.
+- **Adopting a ruleset.** `--adopt <id or name>` hands one existing ruleset
+  to `remote protect`: it is matched to the owned ruleset whose include
+  patterns are exactly its own, with no exclude, renamed to the owned name
+  and updated as an owned ruleset is, so it keeps its bypass list unless it
+  becomes B or C. Where two owned rulesets target the same branches, as A and
+  B do, `--adopt <ruleset>=<owned name>` says which. Any other target is
+  refused and the ruleset is left as it is. The dry run and the report name
+  the adopted ruleset, its id and its new name.
+- **One repository.** `remote protect` and `doctor` act on the repository
+  `origin` fetches from. A push URL that names another repository is
+  refused, `gh repo view` is asked about that repository and an answer for
+  another one is refused, and an inherited `GH_HOST` or `GH_REPO` never
+  reaches `gh`, so neither can point a read or a write elsewhere. `remote
+  protect` sets `GH_HOST` to the host `origin`'s URL names, a GitHub
+  Enterprise host included, and refuses a host `gh` has no working login
+  for. `doctor` reads the rules of a github.com `origin` only; for any other
+  host it notes that they were not read.
+- **The dry run is exact.** `--dry-run` reads the host with GET calls only
+  and prints each request a run would send (method, path and body); a run
+  sends exactly those. Without a readable host it prints the intended rules
+  and says they are not the exact requests.
+- **Never weaker.** A ruleset with any other name, unless `--adopt` names
+  it, is never written. Every
   write sends `name`, `target`, `enforcement`, `conditions`,
   `bypass_actors` and `rules`, because GitHub does not document what an
-  update does with omitted fields, and the bypass list the host answers is
-  checked against the one sent. An update makes the ruleset active, joins
-  its include patterns and drops its excludes, adds a missing rule, raises
+  update does with omitted fields, and the answer must carry every field
+  as sent: the bypass list exactly, conditions and rules with only the
+  host's own defaults added. An update makes the ruleset active, joins its
+  include patterns and keeps its excludes, naming them in the report; an
+  exclude that leaves out a branch the ruleset must cover is refused, and
+  the ruleset is left unwritten. It adds a missing rule, raises
   an approval count and turns review flags on, makes checks strict and adds
   missing names. It never lowers an approval count, removes a rule, changes
   which app produces a check (that ruleset is left unwritten and reported)
@@ -1452,8 +1486,8 @@ written: quoted, or free of unquoted glob, brace and `$` or backtick
 expansion. An unquoted `~/.*rc` in the pattern position expands into the
 pattern and more searched paths, so it is judged as before. GNU
 `parallel` without `-q` runs its command through a shell, so no word of
-it is a pattern word, and git-guard's `parallel` rule reads the commands
-it builds whole. `ag` has no `-e`, and a direct `git grep` is a read both
+it is a pattern word; both hooks refuse `parallel` in agent sessions
+(TSK-326). `ag` has no `-e`, and a direct `git grep` is a read both
 guards pass. Every other word is judged as before: a path operand after
 the pattern, a `-f` pattern file, a redirect and every word of a call
 with an option the reader does not know, so `rg x > ~/.zshrc` refuses.
@@ -1712,6 +1746,78 @@ checked, so a symlink does not remove the target owner's protection.
   otherwise remains unread. Exec-guard refuses such a line when a command
   that uses the reassigned home writes an enforcement path, as git-guard
   judges the write; a read-only use such as a Git pathspec passes.
+- Refs, remotes, programs and environment supplied as data are refused as
+  unresolved by both shell hooks (TSK-326). A word the shell fills in from
+  data the guard cannot read has no text to judge: a variable assigned
+  from a command substitution or `read`, an inherited variable, or the
+  input that `xargs` and `fd -x` or `-X` append or put in place of a
+  replacement string, and that `find -exec` puts in place of `{}`. The git command a launcher runs (`watch`, `flock`, `script -c`) is
+  read the same way. When one of those suppliers runs a shell `-c` script
+  or `eval`, the script is read as a command line in which the replacement
+  strings and the positional parameters (`$1`, `"$@"`, `$0`) are the
+  supplied input; input spliced into the script text, and a script the
+  guard cannot read (a file, standard input, a variable), refuse as well,
+  so pass the input as `sh -c '... "$1"' _ {}` with a literal script.
+  GNU `parallel` and its front ends `sem` and `env_parallel` are refused
+  in every agent session. They build the commands they run from their
+  input, options, configuration files and environment, which neither hook
+  reads, so those commands can carry a git command or a deletion the
+  catastrophic floor cannot read. Both hooks refuse the three programs in
+  every literal spelling (a path, quotes, letter case, a `.exe` suffix, a
+  parameter the line assigns a literal) and behind the launchers,
+  privilege runners and suppliers the hooks unwrap, and exec-guard's
+  recursive-deletion check reports them unproven. No policy key relaxes
+  this: a person runs them outside the session. In the session, run each
+  command directly, or pass the input to a literal command with `xargs`,
+  which the hooks read. The hooks read these program words as a Unix shell
+  passes them. Three residuals remain: a native Windows shell was not
+  tested; an interpreter one-liner that starts a program is read only for
+  the families the interpreter check judges; and a program word that is a
+  parameter the line does not assign a literal is not judged as one of
+  these programs, except where the recursive-deletion check models the
+  parameter's value (TSK-1404). An
+  unquoted brace list or sequence (`{feat/x,main}`, `{1..3}`) in a judged
+  git word refuses too, since the shell makes it several words; a quoted
+  or escaped brace is text. A word filled in from data the guard cannot
+  read, or one holding an unquoted brace list or sequence, in the program
+  position (`$V push origin HEAD:main`, `env "$V" git push`), in a `GIT_*`
+  or other git
+  configuration, location or program variable assigned for git, in a git
+  subcommand or `-c` value, or in an operand of a subcommand a decision
+  reads refuses before the push, alias, transport and release decisions
+  read it. Git-guard reads the operands of every subcommand it judges for
+  protected refs and of any alias; exec-guard reads `push`, `tag`,
+  `config`, `update-ref`, `remote`, `credential` and any alias. Git-guard
+  names the protected-ref rule the subcommand could break, and exec-guard
+  names `security.outward_actions`; the sanctioned path is to write the
+  value in the command, or to compute it first and pass it as a literal. A
+  variable the line assigned a literal before the word is filled in and
+  judged as that literal, so a tag name held in a variable is judged as a
+  tag push and `main` held in one as a push to `main`. Messages stay data
+  where `-m` takes one (`commit`, `tag`, `merge`, `notes add` and `append`,
+  and a `stash` that saves); on `git branch` the names after `-m` are
+  judged. A `$` in single quotes or escaped is text, in this check
+  and in the check before a forced branch delete. A program position
+  refuses under this rule only when the words after it show git (a git
+  subcommand or global option first, or a word naming `git`). In an agent
+  session, a program word that is a parameter the line does not assign a
+  literal, whose words show no git, is not judged as git or as one of the
+  programs above by either hook, except where exec-guard's
+  recursive-deletion check models the parameter's value; the pre-push hook
+  stays the floor for a push git runs with its hooks, and the fix is
+  tracked in TSK-1404. Git-guard refuses a command substitution, in `$(...)`
+  or backtick form, in a command's program word whose basename is neither
+  `git` nor `gh`, read after the prefix launchers and `env` it unwraps,
+  since its output decides which program runs. A command
+  substitution written on the git command itself stays with git-guard's
+  substitution reader and its alias and message rules. Git-guard reads
+  bracket arithmetic that holds only decimal integer arithmetic
+  (`HEAD:v$[2]`) as its value, on a line whose quoting it reads exactly;
+  any other `$[...]` and every `$((...))` stays unresolved and refuses.
+  Configuration or refs supplied as data through variables or `xargs` are
+  not judged except by this refusal, and the content of a data file is
+  never read; the pre-push hook and remote branch protection remain the
+  floors for a push that reaches a protected ref.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.

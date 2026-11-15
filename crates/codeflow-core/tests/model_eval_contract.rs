@@ -1726,8 +1726,8 @@ fn integration_branch_canaries_pin_batch_and_review_boundaries() {
                     "per_task_producer_verification_and_cross_lineage_review_before_landing",
                     "reviewed_heads_land_in_dependency_ordered_batch_candidates",
                     "one_full_gate_on_exact_candidate_with_integration_seams_inspected",
-                    "one_final_human_reviewed_pr_to_protected_target",
-                    "different_landing_shape_requires_recorded_rationale_in_approved_plan",
+                    "checkpoint_pr_to_protected_target_at_every_green_line_tip",
+                    "direct_protected_target_only_when_a_human_merges_each_task_pr_as_ready",
                 ][..],
                 &[
                     "treat_request_batch_as_automatic_epic_boundary",

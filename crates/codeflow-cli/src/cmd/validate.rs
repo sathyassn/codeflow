@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
+use codeflow_core::scaffold::too_old::BinaryAge;
 use codeflow_core::validate::docs::lint_docs;
 use codeflow_core::validate::portal::{validate_portal_with, LookupInputs};
 use codeflow_core::validate::{
@@ -39,28 +40,42 @@ pub fn run(args: &ValidateArgs) -> i32 {
         }
     };
     let mut failed = false;
+    let age = super::binary_age(&root);
 
-    failed |= !validate_policy(&root);
+    let policy_read = validate_policy(&root, &age);
+    failed |= !policy_read;
+    let mut unread = !policy_read;
     if let Some(portal) = &args.portal {
         failed |= !run_portal_validation(&root, portal);
         if args.docs {
             failed |= !run_docs_lint(&root);
         }
     } else if args.docs && args.path.is_none() {
-        failed |= !run_workgraph_validation(&root);
+        let records_read = run_workgraph_validation(&root, &age);
+        failed |= !records_read;
+        unread |= !records_read;
         if let Some(since) = &args.since {
             failed |= !run_transition_validation(&root, since);
         }
     } else if let Some(since) = &args.since {
-        failed |= !validate_records(&root, None);
+        let records_read = validate_records(&root, None, &age);
+        failed |= !records_read;
+        unread |= !records_read;
         failed |= !run_transition_validation(&root, since);
     } else {
-        failed |= !validate_records(&root, args.path.as_deref());
+        let records_read = validate_records(&root, args.path.as_deref(), &age);
+        failed |= !records_read;
+        unread |= !records_read;
         if args.docs {
             failed |= !run_docs_lint(&root);
         }
     }
 
+    if unread {
+        // The per-item errors were held back when the repository is newer,
+        // so this one message stands for them; else it adds the one line.
+        super::unread_refusal("validate", &age, "its policy or records", || {});
+    }
     i32::from(failed)
 }
 
@@ -86,7 +101,7 @@ fn run_portal_validation(root: &Path, portal: &Path) -> bool {
     }
 }
 
-fn run_workgraph_validation(root: &Path) -> bool {
+fn run_workgraph_validation(root: &Path, age: &BinaryAge) -> bool {
     let report = validate_workgraph(root);
     for note in &report.notes {
         println!("{}", note.line("validate --docs", "note"));
@@ -94,20 +109,21 @@ fn run_workgraph_validation(root: &Path) -> bool {
     for warning in &report.warnings {
         eprintln!("{}", warning.line("validate --docs", "warning"));
     }
-    for issue in &report.issues {
-        eprintln!("validate --docs: error: {issue}");
-    }
     if report.is_clean() {
         println!("validate: {} record(s) clean", report.checked_records);
         println!("validate --docs: doc graph clean");
-        true
-    } else {
+        return true;
+    }
+    if !age.repository_is_newer() {
+        for issue in &report.issues {
+            eprintln!("validate --docs: error: {issue}");
+        }
         eprintln!(
             "validate --docs: {} workgraph integrity error(s)",
             report.issues.len()
         );
-        false
     }
+    false
 }
 
 /// Judge each record changed since `since` by the transition rules.
@@ -143,7 +159,7 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
 
 /// Strictly validate `.codeflow/policy.json` — an invalid value would
 /// otherwise silently default away a gate. Returns `true` when clean or absent.
-fn validate_policy(root: &Path) -> bool {
+fn validate_policy(root: &Path, age: &BinaryAge) -> bool {
     match policy_schema::validate_policy(root) {
         Ok(()) => {
             for warning in policy_schema::deprecation_warnings(root)
@@ -159,6 +175,7 @@ fn validate_policy(root: &Path) -> bool {
             }
             true
         }
+        Err(_) if age.repository_is_newer() => false,
         Err(errors) => {
             for e in &errors {
                 eprintln!("validate: error: policy: {e}", e = crate::cmd::shown(&e));
@@ -177,7 +194,7 @@ fn validate_policy(root: &Path) -> bool {
 }
 
 /// Frontmatter validation over a file or tree. Returns `true` when clean.
-fn validate_records(root: &Path, path: Option<&Path>) -> bool {
+fn validate_records(root: &Path, path: Option<&Path>, age: &BinaryAge) -> bool {
     let base = path.map_or_else(|| root.join("project-management"), Path::to_path_buf);
     let shown = codeflow_core::git::display_path(&base);
 
@@ -229,6 +246,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     }
 
     let opts = ValidateOptions::default();
+    let show_errors = !age.repository_is_newer();
     let mut clean = true;
     let mut checked = 0usize;
 
@@ -247,7 +265,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
 
         match result {
             Ok((errors, warnings)) => {
-                for e in &errors {
+                for e in errors.iter().filter(|_| show_errors) {
                     eprintln!(
                         "{}: error: {e}",
                         codeflow_core::git::display_path(&file),
@@ -266,11 +284,13 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "{}: error: {e}",
-                    codeflow_core::git::display_path(&file),
-                    e = crate::cmd::shown(&e)
-                );
+                if show_errors {
+                    eprintln!(
+                        "{}: error: {e}",
+                        codeflow_core::git::display_path(&file),
+                        e = crate::cmd::shown(&e)
+                    );
+                }
                 clean = false;
             }
         }
@@ -339,9 +359,10 @@ mod tests {
     #[test]
     fn r23_a_dangling_record_home_refuses() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(super::validate_records(dir.path(), None));
+        let age = super::super::binary_age(dir.path());
+        assert!(super::validate_records(dir.path(), None, &age));
         std::os::unix::fs::symlink("gone", dir.path().join("project-management")).unwrap();
-        assert!(!super::validate_records(dir.path(), None));
+        assert!(!super::validate_records(dir.path(), None, &age));
     }
 
     #[test]

@@ -262,7 +262,7 @@
     },
     "tests/fixtures/figures/01-flow.json": {
       "ownership": "managed",
-      "pristine_sha256": "a54e2b287f6483cdde0f6b32455b712de8aeec6180fa0993753c5693c30e7c00"
+      "pristine_sha256": "a15f3b1a3ecd83be8d8c97fc3cdc7636a82e3fbd095f19020a1a730c84391b5c"
     },
     "tests/fixtures/figures/02-structure.json": {
       "ownership": "managed",
@@ -326,7 +326,7 @@
     },
     "tests/fixtures/figures/rendered/01-flow.html": {
       "ownership": "managed",
-      "pristine_sha256": "d7e1a1a7d3cf1c839b6df6d68b0399d691961b3facc975b1133efc4293a0a7a4"
+      "pristine_sha256": "75e26b7371de82ecdde55e138259c461ca8f9f0b56655117b2f65231879fc8f3"
     },
     "tests/fixtures/figures/rendered/02-structure.html": {
       "ownership": "managed",

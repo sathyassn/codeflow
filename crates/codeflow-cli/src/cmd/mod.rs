@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 
 use codeflow_core::hooks::{any_blocking, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use codeflow_core::registry;
+use codeflow_core::scaffold::too_old::BinaryAge;
 use codeflow_core::scaffold::Shown;
 use codeflow_core::shown;
 
@@ -97,6 +98,32 @@ pub fn render_outcome_to(
 
 /// Render a git hook stage: the findings another plane printed for it, its
 /// progress lines, then its own notes and violations and the closing line.
+/// This binary's age against the working tree's project state (TSK-1285).
+pub(crate) fn binary_age(root: &Path) -> BinaryAge {
+    BinaryAge::at_root(root, env!("CARGO_PKG_VERSION"))
+}
+
+/// Word the refusal of a reader that failed on `unread`, and return whether
+/// it was the too-old one. A repository that declares a newer `CodeFlow` gets
+/// that one message in place of the reader's own findings, which `today`
+/// prints otherwise. The caller exits non-zero either way.
+pub(crate) fn unread_refusal(
+    plane: &str,
+    age: &BinaryAge,
+    unread: &str,
+    today: impl FnOnce(),
+) -> bool {
+    if let Some(refusal) = age.too_old(unread) {
+        eprintln!("{plane}: {refusal}");
+        return true;
+    }
+    today();
+    if let Some(line) = age.may_be_older() {
+        eprintln!("{plane}: {line}");
+    }
+    false
+}
+
 pub fn render_stage(
     plane: &str,
     root: &Path,

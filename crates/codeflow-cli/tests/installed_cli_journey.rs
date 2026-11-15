@@ -28,6 +28,11 @@ fn with_env(command: &mut Command) -> &mut Command {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
+    // The journey plays a human: a marker inherited from an agent session
+    // would apply the agent-only rules to its commits.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
     command
         .env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)

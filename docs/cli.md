@@ -195,14 +195,17 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
 | | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). Deciding that asks the destination for its default branch and that branch's policy, so on a private repository the job running codeflow ci needs read access to it (for actions/checkout, `persist-credentials: true`). |
 | | `--line-tip <LINE>` | Judge the head as the next tip of this integration line, as a landing candidate is: every commit on the head's first-parent chain from the line's fetched tip (`origin/<LINE>`) must be a merge or a direct commit a landed `line_adoptions` entry names, the rule the pre-push hook applies to a push to the line (`work.epic_line`). Without it, a run with no pull request and no push context whose base is the fetched tip of exactly one epic line cannot tell how the head reaches the line and refuses when the head would add a direct commit; pass `--into <LINE>` or the body for a pull request head that lands by merge. |
+| | `--timings` | Print how long each check took, on stderr after the verdict, one line per check and then the total. The times only report; they change no verdict. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | | Write the rulesets codeflow owns: "codeflow authority updates" and "codeflow authority checks" on the default branch, "codeflow line checks" on the integration lines, and `codeflow protect <pattern>` for each other protected branch in policy.json |
 | | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
-| | `--dry-run` | Print the intended rules without applying anything. |
+| | `--dry-run` | Read the host and print the exact requests a run would send, writing nothing. |
 | | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
 | | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B). |
 | | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
+| | `--branch <NAME>` | Limit the run to the owned rulesets that target this branch. A literal policy branch the host does not have is reported and never planned, with or without this flag. |
+| | `--adopt <RULESET>...` | Bring an existing ruleset, by id or exact name, under the owned name of the ruleset that targets exactly the same branches; add `=<owned name>` where two owned rulesets target them. It is renamed and only gains rules. Repeat for more than one. |
 
 ### Verify
 
@@ -504,6 +507,7 @@ How `codeflow ci` treats a head that could become an epic line's next tip:
 | No role, and the base is the fetched tip of both the default target and an epic line, as a new line's is | Yes: nothing the requester cannot forge says where the head lands | A direct commit refuses, and the remedy also names `--into main` for a change into the default target |
 | No role, and the head is the base | No: it adds no commit | Not judged |
 | A pull request head: a body, a pull request event, or `--into` | No: it lands by merge | Not judged |
+| A push hand-off of a branch named with `git.candidate_prefix` (`--pushed-ref refs/heads/candidate/...`) | Yes, when `codeflow ci` binds it again itself: its first-parent chain reaches the fetched tip of exactly one epic line within `git.candidate_search_depth` commits, the destination advertises that tip (`codeflow ci` reads the destination itself, and the policy at the default branch tip of that read, which must be in the clone, decides whether the ref is a candidate; the destination must be `origin`'s push URL, and the hook's advertisement must match the read at HEAD's target and every branch tip: the line or the default branch moved, or the hand-off is not the destination's, refuses; fetch and push again), the records at the default branch's tip and at the line tip bind the line, every commit after the tip is a clean two-parent merge whose second parent is the current head of an open pull request into the line with every `trusted:` check of the default branch's policy workflow green at that exact commit, each written by that workflow's own `pull_request_target` run for that pull request (read from the forge with `gh`; a same-named check from another workflow or event does not count; admission at the head, not a person's review), `--policy-from` is the default branch tip and `--into` the line the destination advertises, and `--base` is that tip | Judged as a push of the line: the line's records into the line's own target, and the line's direct-commit rule; a binding that does not hold or cannot be read refuses with `work.landing_candidate` and its cause |
 | A push hand-off from the pre-push hook | No | The hook judges the push |
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
@@ -527,11 +531,11 @@ checkout; how it judges a task's own criteria on its integration line is
 in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
-by name, never another ruleset or classic branch protection, and never weakens
-a rule; the rulesets, profiles and recovery window are in the
+or `--adopt` names, and never weakens a rule; the rulesets, profiles, dry run
+and recovery window are in the
 [policy reference](policy-reference.md#remote-protection). A live read that
-fails or does not parse writes nothing. `codeflow doctor --check
-remote-perimeter` reads the default branch's live rules back.
+fails or does not parse writes nothing. `codeflow doctor` reads the live rules
+back.
 
 ### Verify notes
 
@@ -569,6 +573,15 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 - A branch with a declared target starts at the merge base with that target's
   advertised tip, read from the task record.
 - The hook names what it left to CI, such as an unresolved range.
+
+| Push set | What happens |
+|---|---|
+| Order | The hook's own ref rules run before any `codeflow ci`. Each `codeflow ci` runs every check, so the hook reports the same findings CI reports for the range. |
+| After a refusal | The later branches' checks and the release preflight do not run. The id sync still runs, so a pending reservation is published. The printed rerun repeats the refused step. |
+| A passing push | Every check runs, as before. |
+| A landing candidate | A branch named with `git.candidate_prefix` starts at its line's fetched tip and is judged into that line once the binding in the `codeflow ci` table above holds; otherwise the push is refused with `work.landing_candidate` and its cause, and no `codeflow ci` runs for it. |
+| A line push to a candidate's tip | A push of an epic line whose new tip is a landing candidate's tip (the pushed ref's source, a local branch at that commit, or an advertised candidate branch) is admitted only when that candidate binds to the line and the push fast-forwards the line to it. |
+| Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget only reports; it never refuses a push. `codeflow ci --timings` prints the time of every check. |
 
 `codeflow integrate` is the local landing path for protected branches. It
 rebases the branch onto the target by default, runs every full-gate target, then

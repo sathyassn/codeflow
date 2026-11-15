@@ -14,12 +14,16 @@ mod capacity;
 #[cfg(unix)]
 #[path = "test_gate_cli/containment.rs"]
 mod containment;
+#[path = "test_gate_cli/coverage_defaults.rs"]
+mod coverage_defaults;
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
 mod evidence;
 #[path = "test_gate_cli/named_config.rs"]
 mod named_config;
+#[path = "test_gate_cli/no_comparison_base.rs"]
+mod no_comparison_base;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 #[cfg(unix)]
@@ -92,7 +96,7 @@ fn every_selection_control_names_why_every_target_runs() {
     for (args, reason) in [
         (
             vec!["test", "--mode", "quick"],
-            "every target: no local run record earns selection credit (ADR-0089)",
+            "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)",
         ),
         (
             vec!["test", "--mode", "quick", "--since", "HEAD"],
@@ -151,7 +155,10 @@ fn the_spawn_helper_drains_both_streams_past_a_pipe_buffer() {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        if started.elapsed() > Duration::from_secs(10) {
+        // A child blocked on an undrained pipe never exits, so a generous
+        // bound still catches it, and a loaded runner writing 2 MiB does
+        // not fail the test for time alone (TSK-1253).
+        if started.elapsed() > Duration::from_secs(60) {
             child.kill().unwrap();
             child.wait().unwrap();
             panic!("the child blocked on a pipe: a stream is not drained while the test waits");
@@ -1130,6 +1137,10 @@ fn a_cargo_target_dir_outside_the_worktree_warns_and_runs() {
             "the gate still ran: {err}"
         );
     }
+    // The gate keeps its evidence in the build-output folder the variable
+    // names, never the project's own `target` (TSK-1044, TSK-1369).
+    assert!(elsewhere.path().join("codeflow-gate").is_dir());
+    assert!(!dir.path().join("target/codeflow-gate").exists());
 
     let inside = command(dir.path(), home.path(), &["test"])
         .env("CARGO_TARGET_DIR", dir.path().join("target"))
@@ -1366,9 +1377,21 @@ fn selection_runs_everything_for_shared_unmatched_rename_deletion_and_unproven_b
             &["test", "--mode", "quick", "--since", &comparison],
         );
         assert!(output.status.success(), "{case}: {}", stderr(&output));
+        // TSK-1039 AC-4: each case prints the reason and says every target
+        // was selected for it, never that the change narrowed anything.
+        let text = stderr(&output);
+        let reason = format!(
+            "every target: --since {comparison} narrows nothing; local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)"
+        );
+        assert!(text.contains(&reason), "{case}: {text}");
+        assert!(!text.contains("skipped "), "{case}: {text}");
         let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
         for target in ["producer", "docs", "present", "release"] {
             assert!(runs.lines().any(|line| line == target), "{case}: {runs}");
+            assert!(
+                text.contains(&format!("selected {target}: {reason}")),
+                "{case} {target}: {text}"
+            );
         }
     }
 }

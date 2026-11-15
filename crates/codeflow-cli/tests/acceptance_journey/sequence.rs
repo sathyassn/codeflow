@@ -146,6 +146,15 @@ pub(super) fn host_merge(root: &Path, main: &str, branch: &str) {
 pub(super) fn planned_project(root: &Path, second: bool) -> String {
     ok(&codeflow(root, &["init", "--yes", "--full"]), "init --full");
     let main = git(root, &["branch", "--show-current"]);
+    // `src/**` is product code from the default branch on, before the line
+    // is cut: a policy change landed on the line by the plan would be
+    // product work outside any task's reviewed head (TSK-1309).
+    git(root, &["switch", "-q", "-c", "chore/product-paths"]);
+    set_policy(root, |git| {
+        git["product_paths"] = serde_json::json!(["src/**"]);
+    });
+    commit(root, "chore: mark src as product code");
+    host_merge(root, &main, "chore/product-paths");
     git(root, &["switch", "-q", "-c", LINE]);
     git(root, &["switch", "-q", "-c", "plan/sequence"]);
     ok(&codeflow(root, &["epic", "new", "sequence"]), "epic new");
@@ -169,9 +178,6 @@ pub(super) fn planned_project(root: &Path, second: bool) -> String {
     if second {
         edit(root, SECOND, "- AC-1\n", criteria);
     }
-    set_policy(root, |git| {
-        git["product_paths"] = serde_json::json!(["src/**"]);
-    });
     commit(root, "chore: plan the sequence journey");
     merge(root, LINE, "plan/sequence", "chore: land the plan");
     main

@@ -103,19 +103,14 @@ pub fn run(args: &GitHookArgs) -> i32 {
     // and blocking here never strands a fetch or push mid-flight.
     if matches!(args.stage, StageName::CommitMsg) {
         if let Err(errors) = policy_schema::validate_policy(&root) {
-            for e in &errors {
-                eprintln!("codeflow commit-msg: policy error: {}", super::shown(e));
-            }
-            eprintln!(
-                "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
-            );
+            report_invalid_policy(&root, &errors);
             return 1;
         }
     }
 
     let (policy, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
-        Err(error) => return policy_unreadable(&error),
+        Err(error) => return policy_unreadable(&root, &error),
     };
     let token = super::integrate_token_present();
 
@@ -273,7 +268,7 @@ fn run_reference_transaction_with_reader(
             // so Git must cancel it instead of silently moving a protected ref.
             let (policy, _armed) = match Policy::load_effective(root) {
                 Ok(value) => value,
-                Err(error) => return policy_unreadable(&error),
+                Err(error) => return policy_unreadable(root, &error),
             };
             if !policy.git.local_ref_protection.is_active()
                 && !policy.git.delete_protected.is_active()
@@ -304,7 +299,7 @@ fn run_reference_transaction_with_reader(
 
     let (policy, _armed) = match Policy::load_effective(root) {
         Ok(value) => value,
-        Err(error) => return policy_unreadable(&error),
+        Err(error) => return policy_unreadable(root, &error),
     };
     let token = super::integrate_token_present();
     let human = super::human_override_present();
@@ -496,10 +491,30 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
         .collect())
 }
 
+/// Name each invalid key at the commit-msg stage, or say the binary is too
+/// old for the repository (TSK-1285).
+fn report_invalid_policy(root: &Path, errors: &[policy_schema::PolicyError]) {
+    super::unread_refusal(
+        "codeflow commit-msg",
+        &super::binary_age(root),
+        "its policy",
+        || {
+            for e in errors {
+                eprintln!("codeflow commit-msg: policy error: {}", super::shown(e));
+            }
+            eprintln!(
+                "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
+            );
+        },
+    );
+}
+
 /// A local policy that cannot be read stops the hook. The error can quote a
 /// policy value from the checkout, so it is shown escaped (TSK-388).
-fn policy_unreadable(error: &str) -> i32 {
-    eprintln!("codeflow: cannot read policy: {}", super::shown(&error));
+fn policy_unreadable(root: &Path, error: &str) -> i32 {
+    super::unread_refusal("codeflow", &super::binary_age(root), "its policy", || {
+        eprintln!("codeflow: cannot read policy: {}", super::shown(&error));
+    });
     2
 }
 

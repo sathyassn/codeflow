@@ -99,7 +99,10 @@ fn isolated_codeflow(mut cmd: Command) -> Command {
     isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        // A gate the command runs keeps its evidence under the fixture's own
+        // `target`, never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
     cmd
 }
 
@@ -1847,6 +1850,40 @@ fn git_guard_blocks_hook_plane_self_disarm_with_exit_2() {
     }
 }
 
+/// TSK-1395 AC-5 (ADR-0099): a session cannot write `core.hooksPath` in
+/// any form, the absolute managed form `codeflow init` writes included;
+/// both guards refuse under `git.hook_integrity`.
+#[test]
+fn guards_refuse_every_hooks_path_write_form() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let managed = format!("{}/.codeflow/git-hooks", dir.path().display());
+    for cmd in [
+        format!("git config core.hooksPath '{managed}'"),
+        format!(
+            "git -C '{}' config core.hooksPath '{managed}'",
+            dir.path().display()
+        ),
+        "git config core.hooksPath .codeflow/git-hooks".to_string(),
+        "git config --unset core.hooksPath".to_string(),
+        "git config --local core.hooksPath /tmp/elsewhere/.codeflow/git-hooks".to_string(),
+    ] {
+        for hook in ["git-guard", "exec-guard"] {
+            let payload = guard_payload(&cmd, dir.path());
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &payload,
+            );
+            assert_eq!(out.status.code(), Some(2), "{hook}: {cmd}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity"),
+                "{hook}: {cmd}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
 #[test]
 fn git_guard_blocks_remote_tracking_ref_poisoning_with_exit_2() {
     // Task 2a: the agent-writable sync oracle cannot be hand-set.
@@ -2224,6 +2261,192 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
     );
 }
 
+/// This account's home from the password database, whatever `HOME` says.
+#[cfg(unix)]
+fn password_database_home() -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut buffer = vec![0_u8; 1 << 16];
+    // SAFETY: an all-zero `passwd` is a valid plain C struct; `getpwuid_r`
+    // fills it, and `buffer` outlives every use of its strings.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &raw mut entry,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &raw mut result,
+        )
+    };
+    assert!(code == 0 && !result.is_null() && !entry.pw_dir.is_null());
+    // SAFETY: `pw_dir` is a NUL-terminated string inside `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()))
+}
+
+/// TSK-1184 delta 4: the SSH configuration allow lives in
+/// `~/.codeflow/authority/config.toml`: the edit guard refuses a Write or
+/// Edit of it, and every shipped preset denies the directory to the harness
+/// sandbox (Claude `denyWrite` and an `Edit` deny, Grok `deny`; the Codex
+/// profile is checked in `codex_config.rs`). A Bash write that spells the
+/// path in full rests on that sandbox (TSK-1386 covers it in the shell
+/// guards). The user config the allow used to live in,
+/// `~/.codeflow/config.toml`, is a file the edit guard lets an agent write,
+/// so it could not hold the allow.
+///
+/// Delta 5: while the directory does not exist, a Write under another case
+/// of it (`Authority`) is refused, since a volume that folds case opens it
+/// for the allow; and with `HOME` elsewhere, a Write of the allow under the
+/// account's home from the password database, where the reader opens it, is
+/// refused. The guard only judges these paths; nothing is written.
+#[test]
+fn agents_cannot_write_the_ssh_configuration_allow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".codeflow")).unwrap();
+    // TSK-1400: the same home named by another spelling, one every host
+    // reads as `home`.
+    let spelled = tmp.path().join("absent").join("..").join("home");
+    let mut wrong = Vec::new();
+    let cases = vec![
+        (&home, home.join(".codeflow/authority/config.toml"), 2),
+        (&home, home.join(".codeflow/Authority/config.toml"), 2),
+        (&home, home.join(".codeflow/config.toml"), 0),
+        (&spelled, home.join(".codeflow/Authority/config.toml"), 2),
+        (&spelled, home.join(".codeflow/config.toml"), 0),
+        #[cfg(unix)]
+        (
+            &home,
+            password_database_home().join(".codeflow/authority/config.toml"),
+            2,
+        ),
+    ];
+    for (home, file, code) in cases {
+        for tool in ["Write", "Edit"] {
+            let payload = serde_json::json!({"tool_name": tool, "tool_input":{
+                "file_path": file, "content": "[policy_authority]\n",
+                "old_string": "a", "new_string": "b"}, "cwd": root})
+            .to_string();
+            let out = run_with_stdin(
+                codeflow()
+                    .env("HOME", home)
+                    .env("USERPROFILE", home)
+                    .args(["hook", "edit-guard"])
+                    .current_dir(&root),
+                &payload,
+            );
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(code) || (code == 2 && !err.contains("enforcement path")) {
+                wrong.push(format!(
+                    "edit-guard {tool} {} with HOME {}: exit {:?}, wanted {code}: {err}",
+                    file.display(),
+                    home.display(),
+                    out.status.code(),
+                ));
+            }
+        }
+    }
+    for (name, preset) in [
+        (
+            "default",
+            include_str!("../../../assets/base/settings/default.json"),
+        ),
+        (
+            "acceptEdits",
+            include_str!("../../../assets/base/settings/acceptEdits.json"),
+        ),
+        (
+            "bypass-sandboxed",
+            include_str!("../../../assets/base/settings/bypass-sandboxed.json"),
+        ),
+    ] {
+        let preset: serde_json::Value = serde_json::from_str(preset).unwrap();
+        let listed = |list: &serde_json::Value, entry: &str| {
+            list.as_array()
+                .is_some_and(|list| list.iter().any(|item| item == entry))
+        };
+        if !listed(
+            &preset["sandbox"]["filesystem"]["denyWrite"],
+            "~/.codeflow/authority",
+        ) || !listed(
+            &preset["permissions"]["deny"],
+            "Edit(~/.codeflow/authority/**)",
+        ) {
+            wrong.push(format!(
+                "the {name} Claude preset lets agents write the authority directory"
+            ));
+        }
+    }
+    let grok = include_str!("../../../assets/base/grok/sandbox.toml");
+    let grok: toml::Value = toml::from_str(grok).unwrap();
+    for profile in ["cf-guard", "cf-guard-worktree"] {
+        let denied = grok["profiles"][profile]["deny"]
+            .as_array()
+            .is_some_and(|deny| {
+                [
+                    "/Users/*/.codeflow/authority",
+                    "/home/*/.codeflow/authority",
+                ]
+                .iter()
+                .all(|entry| deny.iter().any(|item| item.as_str() == Some(entry)))
+            });
+        if !denied {
+            wrong.push(format!(
+                "the Grok {profile} profile lets agents write the authority directory"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// TSK-1400: with `HOME` given through a linked ancestor and the authority
+/// directory's parent not listable, an edit that reaches the directory
+/// through another link is still refused by the built binary.
+#[cfg(unix)]
+#[test]
+fn the_authority_directory_stays_covered_when_its_parent_cannot_be_listed() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(real.join("home/.codeflow/authority")).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.path().join("link")).unwrap();
+    let home = tmp.path().join("link/home");
+    let canonical = std::fs::canonicalize(real.join("home/.codeflow/authority")).unwrap();
+    let door = tmp.path().join("door");
+    std::os::unix::fs::symlink(&canonical, &door).unwrap();
+    let parent = real.join("home/.codeflow");
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o100)).unwrap();
+    let mut wrong = Vec::new();
+    for tool in ["Write", "Edit"] {
+        let payload = serde_json::json!({"tool_name": tool, "tool_input":{
+            "file_path": door.join("config.toml"), "content": "[policy_authority]\n",
+            "old_string": "a", "new_string": "b"}, "cwd": root})
+        .to_string();
+        let out = run_with_stdin(
+            codeflow()
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .args(["hook", "edit-guard"])
+                .current_dir(&root),
+            &payload,
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("enforcement path") {
+            wrong.push(format!(
+                "edit-guard {tool}: exit {:?}, wanted 2: {err}",
+                out.status.code()
+            ));
+        }
+    }
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.
@@ -2359,6 +2582,208 @@ fn exec_guard_alone_refuses_environment_release_aliases() {
         let out = exec_guard_tool(dir.path(), "Bash", &command);
         assert_eq!(out.status.code(), Some(2), "{command}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"), "{command}");
+    }
+}
+
+/// TSK-326: each shell guard, run on its own, refuses git operands,
+/// programs and environment the line supplies as data, naming the rule and
+/// the sanctioned path, and lets a literal push through.
+#[test]
+fn each_guard_alone_refuses_git_operands_supplied_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    std::fs::write(dir.path().join("cmdfile"), "git\n").unwrap();
+    std::fs::write(dir.path().join("envpush3"), "GIT_DIR=/tmp/x\n").unwrap();
+    std::fs::write(dir.path().join("envpush2"), "GIT_DIR=/tmp/x\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "V=$(cat refs); git push origin \"$V\"",
+            "V=$(cat cmdfile); $V push origin HEAD:main",
+            "xargs git push origin < refs",
+            "V=$(cat envpush3); env \"$V\" git push origin",
+            "xargs -I{} env {} git push origin < envpush2",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            // Under active hook integrity git-guard's own `xargs` refusal
+            // names that form first; every other form is named as
+            // unresolved with the sanctioned path.
+            let xargs_integrity = hook == "git-guard"
+                && command.starts_with("xargs git")
+                && stderr.contains("xargs supplies operands to a guarded Git command");
+            assert!(
+                xargs_integrity
+                    || (stderr.contains("command unresolved:")
+                        && stderr.contains("filled in at run time")
+                        && stderr.contains("pass it as a literal")),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        let out = run_with_stdin(
+            codeflow().args(["hook", hook]).current_dir(dir.path()),
+            &guard_payload("git push origin HEAD", dir.path()),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{hook}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// TSK-326 siblings: `fd -x` and a launcher's git child are refused by each
+/// guard alone when their input or a variable supplies a git operand; their
+/// literal forms pass.
+#[test]
+fn each_guard_alone_refuses_fd_and_launcher_data() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "fd -x git push origin {}",
+            "V=$(cat refs); watch git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
+            "V=$(cat refs); script -q -c \"git push origin $V\" /dev/null",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("command unresolved:") && stderr.contains("filled in at run time"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        for command in [
+            "watch git push origin feat/x",
+            "flock /tmp/l git push origin feat/x",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
+/// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the commands
+/// they run at run time, so each guard alone refuses them in every literal
+/// spelling and behind a launcher, and names the human route.
+#[test]
+fn each_guard_alone_refuses_command_builders() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "parallel --plain echo ::: feat/x",
+            "parallel --plain git push origin :::: refs",
+            "parallel --plain sh -c 'git push --no-verify origin {}' :::: refs",
+            "parallel --plain rm -rf {} :::: refs",
+            "/usr/bin/PARALLEL.exe echo ::: a",
+            "nice -n 5 'parallel' echo ::: a",
+            "sem echo hi",
+            "timeout 5 env_parallel echo ::: a",
+            "printf '%s\\n' a | xargs sem echo",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("refused in agent sessions") && stderr.contains("a human runs"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+    }
+}
+
+/// TSK-326 review F1 and F3: a shell script a supplier runs with its input,
+/// and a brace list in a push refspec, are refused by each guard alone; a
+/// literal script and a quoted brace pass.
+#[test]
+fn each_guard_alone_refuses_supplied_scripts_and_brace_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/data");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    std::fs::write(dir.path().join("refs"), "main\n").unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            "fd -x sh -c 'git push --no-verify origin {}'",
+            "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
+            "git push --no-verify origin {feat/x,main}",
+            "V=main; git push origin {feat/x,$V}",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("command unresolved:") && stderr.contains("filled in at run time"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
+        for command in [
+            "git push origin 'feat/{x,y}'",
+            "git push origin \"feat/{x,y}\"",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {command}: {stderr}");
+        }
+    }
+}
+
+/// TSK-326 AC-5: the over-refusals PR 195 (TSK-283) accepted on a line with
+/// a configuration-dependent push stay refused by each guard: non-Git data
+/// naming a configuration variable, a parameter read with an operator, an
+/// unresolved assignment destination and a command-local prefix on a
+/// non-Git command.
+#[test]
+fn tsk283_accepted_over_refusals_still_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "echo \"set GIT_CONFIG_GLOBAL in CI\" > notes.txt; git push origin feat/x",
+            "echo \"${HOME:-/tmp}\"; git push origin feat/x",
+            "export \"$NAME=/tmp/x\"; git push origin feat/x",
+            "HOME=/tmp/x cargo test; git push origin feat/x",
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {command}: {stderr}");
+            assert!(
+                stderr.contains("cannot verify Git configuration after"),
+                "{hook}: {command}: {stderr}"
+            );
+        }
     }
 }
 
@@ -5546,9 +5971,9 @@ fn push_without_gate_repo() -> tempfile::TempDir {
             "schema_version": "1.0",
             "targets": [
                 {"name": "slow-check", "runner": "custom", "heavy": true,
-                    "modes": {"quick": {"command": "sleep 30"}}},
+                    "modes": {"quick": {"command": "touch ran.marker; sleep 30"}}},
                 {"name": "failing-check", "runner": "custom",
-                    "modes": {"quick": {"command": "false"}}}]
+                    "modes": {"quick": {"command": "touch ran.marker; false"}}}]
         })
         .to_string(),
     )
@@ -5654,6 +6079,247 @@ fn installed_push_hook_runs_codeflow_ci_and_no_test_target() {
     let staged = with_installed_hooks("git", dir.path(), &["commit", "-m", "feat: add leak"]);
     assert_ne!(staged.status.code(), Some(0), "{}", both_streams(&staged));
     assert_eq!(rev(dir.path(), "HEAD"), before);
+}
+
+/// The fixture above with the destination's default branch seeded, so a push
+/// is judged by ordinary admission (`codeflow ci` over the pushed range) and
+/// not as the initialization of an empty destination (`push_set.rs`). Every
+/// target writes `ran.marker` when it starts.
+#[cfg(unix)]
+fn push_admission_repo() -> tempfile::TempDir {
+    let dir = push_without_gate_repo();
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "upstream",
+            "HEAD:refs/heads/main",
+        ],
+    );
+    ok(
+        "git",
+        dir.path(),
+        &["remote", "set-head", "upstream", "main"],
+    );
+    // A task record is judged against its target `main`, which must resolve.
+    ok(
+        "git",
+        dir.path(),
+        &["-c", "core.hooksPath=/dev/null", "branch", "main", "HEAD"],
+    );
+    dir
+}
+
+/// Bind the ids of the records committed so far in the shared registry and
+/// publish it to the destination, as a repository with an authority remote
+/// has it, so `codeflow ci` can judge a range that adds a record.
+#[cfg(unix)]
+fn publish_id_registry(dir: &Path) {
+    let seeded = with_installed_hooks("codeflow", dir, &["ids", "seed"]);
+    assert!(seeded.status.success(), "{}", both_streams(&seeded));
+    ok(
+        "git",
+        dir,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "upstream",
+            "codeflow/registry",
+        ],
+    );
+    ok("git", dir, &["fetch", "-q", "upstream"]);
+}
+
+/// Commit `file` with `message` through the installed hooks.
+#[cfg(unix)]
+fn commit_through_hooks(dir: &Path, file: &str, body: &str, message: &str) {
+    let path = dir.join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, body).unwrap();
+    ok("git", dir, &["add", file]);
+    let committed = with_installed_hooks("git", dir, &["commit", "-q", "-m", message]);
+    assert!(committed.status.success(), "{}", both_streams(&committed));
+}
+
+/// Push `HEAD` to `branch` on `upstream` through the installed hooks and
+/// assert that ordinary admission judged it (the push set finished, the
+/// destination already holds a default branch), that the push finished
+/// inside the budget and reached the destination, and that no test-config
+/// target started (`ran.marker` is the execution marker).
+#[cfg(unix)]
+fn assert_admitted_push_runs_no_target(dir: &Path, branch: &str) {
+    let started = std::time::Instant::now();
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let pushed = with_installed_hooks("git", dir, &["push", "upstream", &refspec]);
+    let elapsed = started.elapsed();
+    let output = both_streams(&pushed);
+    assert!(pushed.status.success(), "{branch}: {output}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "{branch} {elapsed:?}: {output}"
+    );
+    assert!(output.contains("push set finished"), "{branch}: {output}");
+    assert!(
+        output.contains(&format!(
+            "`codeflow ci` judges '{branch}' with the policy at"
+        )),
+        "ordinary admission did not judge {branch}: {output}"
+    );
+    assert!(!dir.join("ran.marker").exists(), "{branch}: {output}");
+    assert!(ok("git", dir, &["ls-remote", "upstream"]).contains(&rev(dir, "HEAD")));
+}
+
+/// A commit `codeflow ci` refuses stops a push of the same fixture, which
+/// shows ordinary admission is active there and not the initialization skip.
+#[cfg(unix)]
+fn assert_admission_is_active(dir: &Path, branch: &str) {
+    ok(
+        "git",
+        dir,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Not conventional",
+        ],
+    );
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let refused = with_installed_hooks("git", dir, &["push", "upstream", &refspec]);
+    let output = both_streams(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{output}");
+    assert!(!dir.join("ran.marker").exists(), "{output}");
+}
+
+// TSK-1039 AC-2, issue 494: with a quick target that always fails at the
+// tip, a records-only branch creation and a records-only update, each
+// touching only `project-management/` and one plan row, finish under
+// ordinary admission and never start the target (TSK-449).
+#[cfg(unix)]
+#[test]
+fn records_only_push_runs_no_failing_target() {
+    let dir = push_admission_repo();
+    commit_through_hooks(
+        dir.path(),
+        "project-management/plan/rows.md",
+        "| row | status |\n|---|---|\n| one | todo |\n",
+        "docs: add one plan row",
+    );
+    assert_admitted_push_runs_no_target(dir.path(), "feat/probe");
+    commit_through_hooks(
+        dir.path(),
+        "project-management/plan/rows.md",
+        "| row | status |\n|---|---|\n| one | done |\n",
+        "docs: update the plan row",
+    );
+    assert_admitted_push_runs_no_target(dir.path(), "feat/probe");
+    assert_admission_is_active(dir.path(), "feat/probe");
+}
+
+// TSK-1039 AC-2, issue 494: the creation of a task branch carrying its
+// standalone record finishes under ordinary admission with the same failing
+// target at the tip. The `codeflow work claim` journey is
+// `claim_push_runs_no_failing_target_at_the_tip` in `work_cli.rs`.
+#[cfg(unix)]
+#[test]
+fn task_branch_creation_runs_no_failing_target() {
+    let dir = push_admission_repo();
+    ok(
+        "git",
+        dir.path(),
+        &["switch", "-c", "task/TSK-001-fix-the-flaky-test"],
+    );
+    commit_through_hooks(
+        dir.path(),
+        "project-management/tasks/TSK-001.md",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"fix a flaky test\"\nintegration_target: main\ntitle: fix the flaky test\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-11-02\n---\n\n## Description\nFix it.\n\n## Acceptance Criteria\n- AC-1 the test passes\n",
+        "docs: add the standalone task record",
+    );
+    publish_id_registry(dir.path());
+    assert_admitted_push_runs_no_target(dir.path(), "task/TSK-001-fix-the-flaky-test");
+    assert_admission_is_active(dir.path(), "task/TSK-001-fix-the-flaky-test");
+}
+
+/// Push `HEAD` to `branch` on `upstream` through the installed hooks and
+/// assert that it is refused with `reason` in its output, that no test-config
+/// target started and that the destination did not move.
+#[cfg(unix)]
+fn assert_refused_push_runs_no_target(dir: &Path, branch: &str, reason: &str) {
+    let before = ok("git", dir, &["ls-remote", "upstream"]);
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let refused = with_installed_hooks("git", dir, &["push", "upstream", &refspec]);
+    let output = both_streams(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{branch}: {output}");
+    assert!(output.contains(reason), "{branch} {reason}: {output}");
+    assert!(!dir.join("ran.marker").exists(), "{branch}: {output}");
+    assert_eq!(
+        ok("git", dir, &["ls-remote", "upstream"]),
+        before,
+        "{output}"
+    );
+}
+
+// TSK-1039 AC-2, issue 515: with a quick target that always fails at the tip,
+// a push refused for a commit reason and a push refused for a record reason
+// are each refused by the commit and record checks with no target run, and
+// the destination does not move (TSK-449).
+#[cfg(unix)]
+#[test]
+fn push_refused_for_a_commit_or_record_reason_runs_no_target() {
+    let dir = push_admission_repo();
+    // A commit reason: a subject that is not a conventional commit.
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Not conventional",
+        ],
+    );
+    assert_refused_push_runs_no_target(dir.path(), "feat/probe", "git.commit_format");
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "reset",
+            "-q",
+            "--hard",
+            "HEAD~1",
+        ],
+    );
+    // A record reason: a task record whose id is not bound in the shared
+    // registry the destination holds.
+    ok(
+        "git",
+        dir.path(),
+        &["switch", "-c", "task/TSK-001-fix-the-flaky-test"],
+    );
+    commit_through_hooks(
+        dir.path(),
+        "project-management/tasks/TSK-001.md",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"fix a flaky test\"\nintegration_target: main\ntitle: fix the flaky test\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-11-02\n---\n\n## Description\nFix it.\n\n## Acceptance Criteria\n- AC-1 the test passes\n",
+        "docs: add the standalone task record",
+    );
+    assert_refused_push_runs_no_target(
+        dir.path(),
+        "task/TSK-001-fix-the-flaky-test",
+        "work.id_registry",
+    );
 }
 
 // TSK-449 AC-2: with the heavy-work admission lock held, a push neither
@@ -6451,7 +7117,10 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
         .unwrap()
         .lines()
         .any(|line| line == "get"));
-    assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
+    // The destination answered, so no attempt waited out its timeout: the
+    // refusal is the authentication answer, never a "no answer" (TSK-1253:
+    // this was a 10 s wall-clock bound, which a loaded runner can pass).
+    assert!(!err.contains("no answer within"), "{took:?}: {err}");
     assert!(
         err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
@@ -9509,10 +10178,6 @@ fn guards_read_a_search_pattern_as_text() {
         "rg --files | xargs rg --pre tee ~/.{a,zsh}rc",
         "find . -maxdepth 0 -exec rg --pre tee ~/.*rc {} +",
         "find . -maxdepth 0 -exec rg --pre tee ~/.?shrc {} +",
-        "parallel rg --pre tee ~/.*rc ::: x",
-        // GNU parallel runs its command through a shell unless `-q`.
-        "parallel rg --pre tee '~/.*rc' ::: x",
-        "parallel rg '~/.*rc' ::: x",
         // A ripgrep configuration the line sets may supply the pattern.
         "read -r RIPGREP_CONFIG_PATH <<< cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
         "printf -v RIPGREP_CONFIG_PATH cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
@@ -9528,6 +10193,23 @@ fn guards_read_a_search_pattern_as_text() {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
         if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
+    // `parallel` is refused in agent sessions (TSK-326), and the deletion
+    // floor reports it unproven, so the startup check after the floor does
+    // not run on these lines.
+    for command in [
+        "parallel --plain rg --pre tee ~/.*rc ::: x",
+        "parallel --plain rg --pre tee '~/.*rc' ::: x",
+        "parallel --plain rg '~/.*rc' ::: x",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2)
+            || !err.contains("security.dangerous_commands")
+            || !err.contains("refused in agent sessions")
+        {
             wrong.push(format!("exec-guard should refuse: {command}: {err}"));
         }
     }
@@ -11612,6 +12294,118 @@ fn an_automatic_merge_is_scanned_in_commit_msg() {
     // Control: the same merge whose result holds no key lands.
     std::fs::write(dir.path().join("merge-result.txt"), "merged\n").unwrap();
     let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// TSK-1350 AC-2 and AC-4: with `git.commit_ticket_merges` on, the wired
+// commit-msg hook refuses a `--no-ff` landing merge without its ticket
+// footer, for git's default subject and for an author's own, and the
+// refusal names the merge, the rule and the keys.
+#[cfg(unix)]
+#[test]
+fn a_landing_merge_without_its_ticket_footer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    init_repo(d, "integration/line");
+    write_policy(
+        d,
+        r#"{"schema_version":1,"git":{"commit_ticket_keys":["Refs"],"commit_ticket_required":"warn","commit_ticket_merges":"block"}}"#,
+    );
+    git(d, &["checkout", "-q", "-b", "task/x"]);
+    std::fs::write(d.join("thing.txt"), "thing\n").unwrap();
+    git(d, &["add", "thing.txt"]);
+    git(
+        d,
+        &["commit", "-q", "-m", "feat: add thing", "-m", "Refs: TSK-1"],
+    );
+    git(d, &["checkout", "-q", "integration/line"]);
+    wire_scan_hooks(d);
+
+    // Review F1: the one-parent exempt prefixes do not exempt a merge.
+    for subject in [
+        None,
+        Some("feat: land the thing"),
+        Some("fixup! land the thing"),
+        Some("squash! land the thing"),
+        Some("Revert \"feat: add thing\""),
+        Some("Reapply \"feat: add thing\""),
+    ] {
+        let mut args = vec!["merge", "--no-ff", "--no-edit", "task/x"];
+        if let Some(s) = subject {
+            args.extend(["-m", s]);
+        }
+        let out = run_wired_git(d, &args, None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{subject:?}: {stderr}");
+        assert!(
+            stderr.contains("policy rule git.commit_ticket_merges (block)"),
+            "{subject:?}: {stderr}"
+        );
+        let named = subject.unwrap_or("Merge branch 'task/x' into integration/line");
+        assert!(
+            stderr.contains(&format!("merge commit '{named}'")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("keys: Refs"), "{stderr}");
+        let _ = run_wired_git(d, &["merge", "--abort"], None);
+    }
+
+    // With the footer, both subject forms land.
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "Merge branch 'task/x' into integration/line",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "feat: land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(d, &["reset", "-q", "--hard", "HEAD~1"]);
+    let out = run_wired_git(
+        d,
+        &[
+            "merge",
+            "--no-ff",
+            "task/x",
+            "-m",
+            "fixup! land the thing",
+            "-m",
+            "Refs: TSK-1",
+        ],
+        None,
+    );
     assert!(
         out.status.success(),
         "{}",
