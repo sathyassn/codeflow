@@ -30,6 +30,347 @@ fn write(root: &Path, path: &str, content: &str) {
 fn record(id: &str, deps: &str) -> String {
     format!("---\nid: {id}\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: work {id}\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: {deps}\ncreated: 2026-09-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the command shall succeed. (journey)\n")
 }
+
+#[test]
+#[cfg(unix)]
+fn tsk341_claim_finds_a_predecessor_only_on_the_target_line() {
+    let dir = fixture();
+    let root = dir.path();
+    let origin = with_origin(root);
+    let line = "integration/test-line";
+    git(root, &["switch", "-qc", line]);
+    commit_record(root, "TSK-003", &record_on("TSK-003", line, "[]"));
+    commit_record(root, "TSK-004", &record_on("TSK-004", line, "[TSK-003]"));
+    git(root, &["push", "-q", "origin", line]);
+    let branch = "task/TSK-003-work";
+    git(root, &["switch", "-qc", branch]);
+    write(root, "src/predecessor.rs", "pub fn ready() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: predecessor"]);
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(
+        root,
+        &["config", &format!("branch.{branch}.remote"), "review"],
+    );
+    let bin = tempfile::tempdir().unwrap();
+    review_tool(bin.path(), branch, &pin, true);
+    for checkout in ["main", "integration/test-line", "linked-line"] {
+        let linked = tempfile::tempdir().unwrap();
+        let linked_path = linked.path().join("line");
+        let checkout_root = if checkout == "linked-line" {
+            git(root, &["switch", "-q", "main"]);
+            let repo = git2::Repository::open(root).unwrap();
+            let reference = repo
+                .find_reference("refs/heads/integration/test-line")
+                .unwrap();
+            let mut options = git2::WorktreeAddOptions::new();
+            options.reference(Some(&reference));
+            repo.worktree("line-checkout", &linked_path, Some(&options))
+                .unwrap();
+            linked_path.as_path()
+        } else {
+            git(root, &["switch", "-q", checkout]);
+            root
+        };
+        write(
+            checkout_root,
+            "project-management/tasks/TSK-999.md",
+            &record("TSK-999", "[]"),
+        );
+        let mut command = cli_command(
+            checkout_root,
+            &[
+                "work",
+                "claim",
+                "TSK-004",
+                "--on",
+                &format!("TSK-003@{pin}"),
+            ],
+            Some(bin.path()),
+        );
+        // Git's command-scoped URL mapping keeps transport local without
+        // changing the hosted identity libgit2 reads from repository config.
+        let out = command
+            .env("GIT_CONFIG_COUNT", "3")
+            .env(
+                "GIT_CONFIG_KEY_2",
+                format!("url.{}.insteadOf", origin.path().display()),
+            )
+            .env("GIT_CONFIG_VALUE_2", "https://github.com/owner/project.git")
+            .output()
+            .unwrap();
+        succeeds(&out);
+        println!("checkout={checkout}: work claim TSK-004 --on TSK-003@{pin}; directory={}; exit={:?}; {}", checkout_root.display(), out.status.code(), text(&out));
+        assert_eq!(git(root, &["rev-parse", "task/TSK-004-work-tsk-004"]), pin);
+        if checkout != "linked-line" {
+            // Reset this disposable claim through its local remote so the
+            // next checkout runs the exact same command against the same pin.
+            let child = "task/TSK-004-work-tsk-004";
+            git(root, &["branch", "-D", child]);
+            git(root, &["push", "-q", "origin", "--delete", child]);
+            git(root, &["fetch", "-q", "--prune", "origin"]);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk341_start_accepts_its_committed_head_edge() {
+    for edge in [false, true] {
+        let dir = fixture();
+        let root = dir.path();
+        commit_record(root, "TSK-002", &record("TSK-002", "[]"));
+        let branch = "task/TSK-001-work";
+        let (_, pin) = reviewed_predecessor(root, branch);
+        let bin = tempfile::tempdir().unwrap();
+        review_tool(bin.path(), branch, &pin, true);
+        git(root, &["switch", "-qc", "task/TSK-002-child", &pin]);
+        if edge {
+            commit_record(root, "TSK-002", &record("TSK-002", "[TSK-001]"));
+        }
+        let out = cli(
+            root,
+            &[
+                "work",
+                "start",
+                "TSK-002",
+                "--on",
+                &format!("TSK-001@{pin}"),
+            ],
+            Some(bin.path()),
+        );
+        if edge {
+            succeeds(&out);
+            git(root, &["switch", "-q", "main"]);
+            commit_record(
+                root,
+                "TSK-002",
+                &record("TSK-002", "[]").replace("status: todo", "status: blocked"),
+            );
+            git(root, &["switch", "-q", "task/TSK-002-child"]);
+            let blocked = cli(
+                root,
+                &[
+                    "work",
+                    "start",
+                    "TSK-002",
+                    "--on",
+                    &format!("TSK-001@{pin}"),
+                ],
+                Some(bin.path()),
+            );
+            assert!(
+                !blocked.status.success() && text(&blocked).contains("blocked"),
+                "a head edge must not clear the target's block: {}",
+                text(&blocked)
+            );
+        } else {
+            assert!(!out.status.success(), "{}", text(&out));
+            assert!(
+                text(&out).contains("does not name a code dependency"),
+                "{}",
+                text(&out)
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk341_claim_refuses_an_unlanded_predecessor_chain_before_creating_work() {
+    let dir = fixture();
+    let root = dir.path();
+    commit_record(root, "TSK-003", &record("TSK-003", "[TSK-002]"));
+    let _origin = with_origin(root);
+    let first = "task/TSK-001-work";
+    let (_, first_pin) = reviewed_predecessor(root, first);
+    let second = "task/TSK-002-work";
+    git(root, &["switch", "-qc", second, &first_pin]);
+    git(
+        root,
+        &["config", &format!("branch.{second}.remote"), "review"],
+    );
+    write(root, "src/b.rs", "pub fn b() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: second predecessor"]);
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    let bin = tempfile::tempdir().unwrap();
+    review_tool(bin.path(), second, &pin, true);
+    git(root, &["switch", "-q", "main"]);
+    let before = git(root, &["for-each-ref", "refs/heads/"]);
+    let out = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-003",
+            "--on",
+            &format!("TSK-002@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+    for needle in ["TSK-002", "TSK-001", "land", "main"] {
+        assert!(text(&out).contains(needle), "{needle}: {}", text(&out));
+    }
+    assert_eq!(git(root, &["for-each-ref", "refs/heads/"]), before);
+    println!(
+        "two-deep chain: work claim TSK-003 --on TSK-002@{pin}; checkout={}; exit={:?}; {}",
+        root.display(),
+        out.status.code(),
+        text(&out)
+    );
+    git(root, &["branch", "-D", first]);
+    let broken = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-003",
+            "--on",
+            &format!("TSK-002@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(!broken.status.success(), "{}", text(&broken));
+    assert!(
+        text(&broken).contains("unlanded predecessor TSK-001"),
+        "{}",
+        text(&broken)
+    );
+    assert!(git(root, &["branch", "--list", "task/TSK-003-*"]).is_empty());
+    println!(
+        "broken-link control: work claim TSK-003 --on TSK-002@{pin}; exit={:?}; {}",
+        broken.status.code(),
+        text(&broken)
+    );
+    // A manually cut branch receives no admission for this unsupported
+    // stack. These call CI directly; no hook binary is substituted.
+    let child = "task/TSK-003-manual";
+    git(root, &["switch", "-qc", child, &pin]);
+    let start = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-003",
+            "--on",
+            &format!("TSK-002@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(
+        !start.status.success() && text(&start).contains("unlanded predecessor TSK-001"),
+        "{}",
+        text(&start)
+    );
+    let push = push_check(root, child, "HEAD", bin.path());
+    assert!(
+        !push.status.success() && text(&push).contains("unlanded predecessor TSK-001"),
+        "{}",
+        text(&push)
+    );
+    let ci = cli(
+        root,
+        &[
+            "ci", "--base", "main", "--head", "HEAD", "--branch", child, "--into", "main",
+        ],
+        Some(bin.path()),
+    );
+    assert!(!ci.status.success(), "{}", text(&ci));
+    println!("manual unsupported chain: start exit={:?}; pre-push CI form exit={:?}; landing CI exit={:?}", start.status.code(), push.status.code(), ci.status.code());
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk341_claim_accepts_only_a_clean_merge_of_the_predecessors_target() {
+    for case in ["clean", "other-branch", "resolved-hunk", "record-change"] {
+        let dir = fixture();
+        let root = dir.path();
+        let branch = "task/TSK-001-work";
+        let (reviewed, _) = reviewed_predecessor(root, branch);
+        if case == "other-branch" {
+            git(root, &["switch", "-qc", "experiment/other"]);
+        }
+        write(root, "target.txt", "target work\n");
+        if case == "resolved-hunk" {
+            write(root, "src/a.rs", "pub fn different() {}\n");
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "feat: advance target"]);
+        let merge_from = if case == "other-branch" {
+            "experiment/other"
+        } else {
+            "main"
+        };
+        git(root, &["switch", "-q", branch]);
+        if case == "resolved-hunk" {
+            let conflict = Command::new("git")
+                .args(["merge", "--no-ff", "--no-commit", merge_from])
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                !conflict.status.success() && text(&conflict).contains("CONFLICT"),
+                "{}",
+                text(&conflict)
+            );
+            write(root, "src/a.rs", "pub fn resolved() {}\n");
+        } else {
+            git(root, &["merge", "--no-ff", "--no-commit", merge_from]);
+        }
+        if case == "resolved-hunk" {
+            write(root, "target.txt", "hand resolved work\n");
+        }
+        if case == "record-change" {
+            let path = "project-management/tasks/TSK-001.md";
+            let old = std::fs::read_to_string(root.join(path)).unwrap();
+            write(
+                root,
+                path,
+                &old.replace("shall still succeed", "shall do more"),
+            );
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "chore: synchronize predecessor"]);
+        let pin = git(root, &["rev-parse", "HEAD"]);
+        let bin = tempfile::tempdir().unwrap();
+        review_tool_naming(bin.path(), branch, &pin, &reviewed);
+        git(root, &["switch", "-q", "main"]);
+        let out = cli(
+            root,
+            &[
+                "work",
+                "claim",
+                "TSK-002",
+                "--on",
+                &format!("TSK-001@{pin}"),
+            ],
+            Some(bin.path()),
+        );
+        if case == "clean" {
+            succeeds(&out);
+        } else {
+            assert!(!out.status.success(), "{case}: {}", text(&out));
+            let cause = match case {
+                "other-branch" => "own integration target",
+                "resolved-hunk" => "clean automatic re-merge",
+                _ => "changes the predecessor's record",
+            };
+            assert!(text(&out).contains(cause), "{case}: {}", text(&out));
+        }
+    }
+}
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -50,7 +391,7 @@ fn fixture() -> tempfile::TempDir {
     git(root, &["commit", "-qm", "docs: plan tasks"]);
     dir
 }
-fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
+fn cli_command(root: &Path, args: &[&str], bin: Option<&Path>) -> Command {
     // Run the same regression fixtures against a released baseline when
     // collecting fail-before evidence. Production code never reads this.
     let binary = std::env::var_os("CODEFLOW_TEST_BINARY")
@@ -58,6 +399,7 @@ fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
     let mut cmd = Command::new(binary);
     cmd.current_dir(root)
         .args(args)
+        .env("GIT_ALLOW_PROTOCOL", "file")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null");
     if let Some(bin) = bin {
@@ -67,7 +409,10 @@ fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
         .unwrap();
         cmd.env("PATH", path);
     }
-    cmd.output().unwrap()
+    cmd
+}
+fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
+    cli_command(root, args, bin).output().unwrap()
 }
 fn succeeds(out: &Output) {
     assert!(
@@ -850,6 +1195,13 @@ fn multiple_pins_require_a_single_prospective_base_before_claim_mutates() {
         let dir = fixture();
         let root = dir.path();
         let bin = tempfile::tempdir().unwrap();
+        // These are independent predecessors; unlanded dependency chains
+        // have their own early-refusal fixture (TSK-341).
+        write(
+            root,
+            "project-management/tasks/TSK-002.md",
+            &record("TSK-002", "[]"),
+        );
         write(
             root,
             "project-management/tasks/TSK-003.md",
