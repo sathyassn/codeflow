@@ -6,8 +6,8 @@ use super::{
     active_block, bind_completion_with_amendment, bind_epic_completion, commit_of,
     default_target_name, first_parent, history, introduced_at, is_ancestor_or_same,
     is_clean_remerge, own_file_name, owned_paths, presence_at, record_at, record_uid,
-    source_landing_base, CompletionProof, Graph, Landing, Oid, Presence, RecordKind, RecordView,
-    Repository, RunBases, Transport,
+    source_landing_base, CompletionProof, Finding, Graph, Landing, Oid, Presence, RecordKind,
+    RecordView, Repository, RunBases, Transport,
 };
 
 /// A record whose exact contents arrived from a verified home landing.
@@ -137,6 +137,7 @@ fn refuse_unpublished_homes(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // Resolve homes, then prove and list every record in one judged range.
 fn compute_imports(
     repo: &Repository,
     base: Oid,
@@ -212,6 +213,7 @@ fn compute_imports(
             }
         }
     }
+    let mut refused: Vec<String> = Vec::new();
     for (home, tip) in homes {
         // A source already contained by the shared anchor supplies no new imports.
         if is_ancestor_or_same(repo, tip, anchor)? || on_home_chain(repo, head, tip)? {
@@ -247,12 +249,35 @@ fn compute_imports(
             if !is_new_import(repo, record, landed, anchor, head)? {
                 continue;
             }
-            let result = prove_record(repo, record, &home, tip, default_tip, landed, base, head, trusted)
-                .map_err(|reason| format!("{}: blocks come from target history on `{home}` at {landed}: {reason}; fetch the home and repair or reopen the work there through its task pull request, then merge the reviewed result", record.id))?;
-            imported.insert(record.id.clone(), result);
+            // Every record whose proof refuses is listed, so one run names
+            // them all; any refusal still refuses the whole range.
+            match prove_record(repo, record, &home, tip, default_tip, landed, base, head, trusted) {
+                Ok(result) => {
+                    imported.insert(record.id.clone(), result);
+                }
+                Err(reason) => refused.push(format!("{}: blocks come from target history on `{home}` at {landed}: {reason}; fetch the home and repair or reopen the work there through its task pull request, then merge the reviewed result", record.id)),
+            }
         }
     }
+    if !refused.is_empty() {
+        return Err(refused.join("\n"));
+    }
     Ok(imported)
+}
+
+/// The findings for an [`imported_records`] error: one per line, because
+/// the judge lists each record it cannot prove on its own line. An error
+/// with no line still gives one finding, so it always refuses.
+pub(super) fn refusals(reason: &str) -> Vec<Finding> {
+    let mut found: Vec<Finding> = reason
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| super::finding(super::IMPORT_RULE, line.to_string()))
+        .collect();
+    if found.is_empty() {
+        found.push(super::finding(super::IMPORT_RULE, reason.to_string()));
+    }
+    found
 }
 
 fn merged_records<'a>(

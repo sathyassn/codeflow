@@ -4209,7 +4209,7 @@ fn completions_received(
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let imported = match imported_records(repo, base_oid, head_oid, &after, mains) {
         Ok(imported) => imported,
-        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+        Err(reason) => return Ok(imports::refusals(&reason)),
     };
     let mut local = after.clone();
     for id in imported.keys() {
@@ -4812,7 +4812,7 @@ pub fn pull_request_findings_into(
     let imported = match imported_records(&repo, target_tip, head_tip, &at_head, mains.as_ref()) {
         Ok(imported) => imported,
         Err(reason) => {
-            mains_notes.push(finding(IMPORT_RULE, reason));
+            mains_notes.extend(imports::refusals(&reason));
             return Ok(mains_notes);
         }
     };
