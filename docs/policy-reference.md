@@ -834,12 +834,15 @@ this way.
 
 git-guard reads a Git command through every launcher in the list above,
 by each of its spellings and its own options, the privilege and
-scheduling launchers included. When it decides the repository the
+scheduling launchers included. A launcher that reads environment
+assignments among its own options is read by that grammar, so the
+command is found after the last of its options. When it decides the repository the
 command is judged in, it reads an assignment written after a launcher as
 the launcher passes it on. A launcher that runs the command as another
 user, with that user's environment and configuration, or whose options
 or environment the guard does not model, leaves the repository
-unresolved, which refuses. After a launcher option the guard does not
+unresolved, which refuses; a shell's command run through a launcher that
+runs it as another user is judged the same way. After a launcher option the guard does not
 read, it cannot tell which later word starts the command, so it judges a
 Git or GitHub CLI call, and a command a shell runs, from every word where
 the command may start, with the repository unresolved; each rule then
