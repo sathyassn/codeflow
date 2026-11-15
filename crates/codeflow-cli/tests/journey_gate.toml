@@ -285,6 +285,7 @@ fault = [
   "codeflow-cli --test ci_pin a_pr_lowering_the_pin_is_still_judged_by_the_target_binary",
   "codeflow-cli --test ci_pin a_pr_relaxing_its_policy_cannot_override_the_authority",
   "codeflow-cli --test ci_pin the_installed_journey_rejects_a_substituted_version_only_executable",
+  "codeflow-cli --test ci_pin the_installed_journey_rejects_a_fixed_output_executable",
 ]
 
 [[journey]]

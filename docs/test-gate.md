@@ -96,15 +96,33 @@ and SHA-256 digest. Its identity test compares that digest with the candidate.
 The archive uses the installer's Linux asset layout and the test host's
 native executable format.
 
-The journey dispatches the installed file with the managed verdict step's
-authority arguments. Valid pull request data passes. A head that lowers its
-pin, replaces its workflow or relaxes its policy still gets the authority's
-`git.commit_format` refusal for an invalid commit. Those edits are separate
-cases; the invalid commit is what each case must reject. The substitution
-case first passes the journey with the genuine installed binary, then
-replaces that file with an executable that prints the expected version and
-approves everything. The old version-only check accepts it, but the same
-behavioral journey rejects its approval of the invalid commit (TSK-365).
+The journey runs the authority checkout's own install and verdict steps.
+The install runs after every head exists, and the verdict step finds
+`codeflow` only in the directory the install registered. Each head commit
+subject carries a value fresh for the run, so its subject and sha differ
+in every run. Each case is proved by its own evidence:
+
+- A valid head passes, and the verdict names its head and the authority
+  commit.
+- A head that lowers its pin to a published 1.0.0 release, a different
+  executable, would install that executable if its pin were read. The
+  installed file's digest is the candidate's and not the 1.0.0
+  executable's.
+- A head that replaces the workflow with an always-green one leaves the
+  executed install and verdict scripts byte for byte the shipped
+  workflow's. The verdict reports the head's workflow edit, which the
+  forged step cannot print.
+- A head that turns `commit_format` off would pass its invalid subject
+  with itself as the authority. The authority's refusal names that
+  subject and the authority commit, with the base or the head checked
+  out.
+
+Two substitution cases replace the installed file after a passing run. An
+executable that prints the expected version and approves everything passes
+the old version-only check and fails every case. An executable that copies
+the head and authority from its arguments and prints a fixed commit-format
+refusal fails, because its refusal cannot name the run's fresh subject
+(TSK-365).
 
 ## Technical
 
