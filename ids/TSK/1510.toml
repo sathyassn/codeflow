@@ -1,0 +1,11 @@
+id = "TSK-1510"
+uid = "3c6aaf67-36ee-40e1-9868-d6540f95e588"
+kind = "TSK"
+title = "The dependency audit fails when osv-scanner reports a file it could not extract"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T22:28:34Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
