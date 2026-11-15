@@ -7,7 +7,7 @@ use super::{
     redirect_writes, run_dirs, same_path, shown_word, split_alias, strip_launchers,
     strip_reserved_words, unresolved_word, Arity, Literals, OptionSpec, ParsedOptions, Seen,
     Violation, GIT_BUILTINS, GIT_LOCATION_VARS, GIT_PUSH_OPTIONS, GIT_REBASE_OPTIONS,
-    MAX_ALIAS_DEPTH, NESTING_LIMIT, NESTING_UNREAD, RUN_DIR_LIMIT,
+    MAX_ALIAS_DEPTH, NESTING_LIMIT, RUN_DIR_LIMIT,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -2175,7 +2175,7 @@ fn collect(
             || expanded
                 .segments
                 .iter()
-                .any(|segment| segment == NESTING_UNREAD))
+                .any(|segment| super::unread_marker(segment)))
     {
         return Err("a Git runner body contains an unread command word".into());
     }

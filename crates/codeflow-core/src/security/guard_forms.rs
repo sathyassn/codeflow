@@ -1874,3 +1874,165 @@ pub const XARGS_OPTION_FORMS: &[(&str, bool)] = &[
         true,
     ),
 ];
+
+/// Commands both guards refuse written bare, which the option forms below
+/// carry (TSK-1490 AC-1): git-guard's rules first, then exec-guard's.
+pub const OPTION_BARE_GIT: &[&str] = &[
+    "git push --force origin main",
+    "git config core.hooksPath /tmp/h",
+    "git push origin --delete main",
+    "git config --global alias.x !id",
+];
+
+/// The exec-guard commands for [`OPTION_CARRIERS`] (TSK-1490 AC-1).
+pub const OPTION_BARE_EXEC: &[&str] = &[
+    "cat ~/.ssh/id_rsa",
+    "echo x >> ~/.zshrc",
+    "rm -rf /",
+    "claude -p hi",
+    "sudo id",
+];
+
+/// A program that runs the command at `{}` from one of its option values
+/// (TSK-1490 AC-1). Each guard gives the form the rules of the command
+/// written bare and of the form with an ordinary value (`true`), no more.
+pub const OPTION_CARRIERS: &[&str] = &[
+    "ack --pager='{}' needle",
+    "ack --pager '{}' needle",
+    "ag --pager '{}' needle",
+    "ag --pager='{}' needle",
+    "man -P '{}' ls",
+    "man --pager='{}' ls",
+    "man --pag '{}' ls",
+    "man -H'{}' ls",
+    "man --html='{}' ls",
+    "rg --pre '{}' needle",
+    "rg --pre='{}' needle",
+    "rg --hostname-bin '{}' needle",
+    "ssh -o 'ProxyCommand={}' host",
+    "ssh -o 'ProxyCommand {}' host",
+    "ssh -oProxyCommand='{}' host",
+    "ssh -o 'proxycommand = {}' host",
+    "ssh -vo 'LocalCommand={}' host",
+    "ssh -o 'KnownHostsCommand={}' host",
+    "scp -o 'ProxyCommand={}' a host:b",
+    "scp -S '{}' a host:b",
+    "sftp -o 'ProxyCommand={}' host",
+    "sftp -S '{}' host",
+    "sftp -D '{}'",
+    "rsync -e '{}' a host:b",
+    "rsync -avze '{}' a host:b",
+    "rsync --rsh='{}' a host:b",
+    "tar -I '{}' -cf x.tar d",
+    "tar -cf x.tar -I'{}' d",
+    "tar --use-compress-program='{}' -cf x.tar d",
+    "tar --use-comp '{}' -cf x.tar d",
+    "tar --to-command='{}' -xf x.tar",
+    "tar --checkpoint-action=exec='{}' -cf x.tar d",
+    "tar --checkpoint-action 'exec={}' -cf x.tar d",
+    "tar -F '{}' -cf x.tar d",
+    "tar --info-script='{}' -cf x.tar d",
+    "tar --new-volume-script='{}' -cf x.tar d",
+    "tar --rsh-command='{}' -cf h:x.tar d",
+    "tar cIf '{}' x.tar d",
+    "gtar -I '{}' -cf x.tar d",
+    "sort --compress-program='{}' f",
+    "split --filter='{}' f",
+    "install --strip-program='{}' -s a b",
+    "zip -TT '{}' -T a.zip f",
+    "zip --unzip-command '{}' -T a.zip f",
+    "flock /tmp/l -c '{}'",
+    "script -c '{}' /dev/null",
+    "npx -c '{}'",
+    "npx --call='{}'",
+    "npm exec -c '{}'",
+    "npm x --call '{}'",
+    "su -c '{}'",
+    "su --command='{}' root",
+    "runuser -c '{}' x",
+    "fd -x {}",
+    "fd needle -x {}",
+    "fd --exec {}",
+    "fd -X {}",
+    "fd --exec-batch {}",
+    "fdfind -x {}",
+    "fd -x {} \\;",
+];
+
+/// `gh` subcommands that pass the words after `--` to `git clone`: `{}` is
+/// those words, judged as `git clone {} o/r` (TSK-1490 AC-1).
+pub const OPTION_CLONE_CARRIERS: &[&str] = &[
+    "gh repo clone o/r -- {}",
+    "gh repo clone o/r d -- {}",
+    "gh repo fork o/r --clone -- {}",
+    "gh gist clone 123 -- {}",
+];
+
+/// `git clone` arguments the clone forms carry: git-guard's, then
+/// exec-guard's.
+pub const OPTION_CLONE_GIT: &[&str] = &[
+    "--upload-pack='git config --global alias.x !id'",
+    "-u 'git config core.hooksPath /tmp/h'",
+];
+
+/// The exec-guard arguments for [`OPTION_CLONE_CARRIERS`].
+pub const OPTION_CLONE_EXEC: &[&str] = &["--upload-pack='rm -rf /'", "-u 'cat ~/.ssh/id_rsa'"];
+
+/// Option values in a command language the guard does not read, an editor's
+/// commands or a Cargo key naming a program it runs: both guards refuse them
+/// under `git.hook_integrity` (TSK-1490 rulings D2 and D3).
+pub const OPTION_LANGUAGES: &[&str] = &[
+    "vim -c 'set nu' f",
+    "vim --cmd 'set nu' f",
+    "vim '+set nu' f",
+    "vi '+/x/|!id' f",
+    "nvim -c 'lua x()' f",
+    "view -c x f",
+    "less '+!id' f",
+    "less '++|id' f",
+    "emacs --eval '(x)' f",
+    "emacs -eval '(x)' f",
+    "emacs --batch -f x",
+    "emacsclient -e '(x)'",
+    "emacsclient --eval '(x)'",
+    "cargo --config 'target.x.runner=\"y\"' run",
+    "cargo run --config 'build.rustc-wrapper=\"y\"'",
+    "cargo build --config=target.x.linker=y",
+    "cargo --config 'target.\"cfg(unix)\".runner = \"y\"' run",
+    "cargo --config 'build={rustc-wrapper=\"y\"}' build",
+];
+
+/// Values that run an ordinary command or none, options outside the
+/// inventory, and forms the reader does not reach, each beside the same
+/// command without that option: both guards give the two the same rules,
+/// so the value adds no finding (TSK-1490 AC-2).
+pub const OPTION_CONTROLS: &[(&str, &str)] = &[
+    (
+        "ssh -o ProxyCommand='ssh -W %h:%p bastion' host",
+        "ssh host",
+    ),
+    ("ssh -o ProxyCommand=none host", "ssh host"),
+    ("ssh -o BatchMode=yes host", "ssh host"),
+    ("ssh -F ./ssh_config host", "ssh host"),
+    ("rsync -e 'ssh -p 2222' a host:b", "rsync a host:b"),
+    ("tar -I zstd -xf x.tar.zst", "tar -xf x.tar.zst"),
+    ("tar --checkpoint=10 -xf x.tar", "tar -xf x.tar"),
+    ("man -P cat ls", "man ls"),
+    ("ack --pager='less -R' needle", "ack needle"),
+    ("rg --pre pdftotext needle notes", "rg needle notes"),
+    ("fd -x wc -l", "fd"),
+    ("sort -S 1G f", "sort f"),
+    ("install --strip a b", "install a b"),
+    ("zip -T a.zip", "zip a.zip"),
+    ("npx -y prettier .", "npx prettier ."),
+    ("vim +12 f", "vim f"),
+    ("vim + f", "vim f"),
+    ("less +G f", "less f"),
+    ("less +F f", "less f"),
+    ("cargo --config build.jobs=2 build", "cargo build"),
+    (
+        "cargo build --config profile.dev.opt-level=1",
+        "cargo build",
+    ),
+    ("cargo --config ci.toml build", "cargo build"),
+];

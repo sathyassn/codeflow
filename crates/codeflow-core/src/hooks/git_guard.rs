@@ -1020,6 +1020,17 @@ fn evaluate_report_with_runners(
             continue;
         }
 
+        // An option value in a command language the guard does not read
+        // may hold any command (TSK-1490 rulings D2 and D3).
+        if let Some(form) = segment.strip_prefix(OPTION_UNREAD) {
+            if ctx.policy.hook_integrity.is_active() {
+                violations.push(crate::security::option_commands::unread_violation(
+                    form,
+                    ctx.policy.hook_integrity,
+                ));
+            }
+            continue;
+        }
         // Text nested deeper than the reader follows may hide any command.
         if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
             if ctx.policy.hook_integrity.is_active() {
@@ -7380,6 +7391,10 @@ fn expand_segments(
         };
         let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
         bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
+        // An option value in a command language the guard does not read
+        // stands as a marker the integrity check refuses (TSK-1490).
+        let unread_option = crate::security::option_commands::first_unread(&toks)
+            .map(|form| format!("{OPTION_UNREAD}{form}"));
         let mut words = toks;
         strip_reserved_words(&mut words);
         if let Some((program, _)) = strip_launchers(&words) {
@@ -7397,6 +7412,11 @@ fn expand_segments(
             literals.note(&words);
         }
         out.segments.push(seg);
+        if let Some(marker) = unread_option {
+            if !out.segments.contains(&marker) {
+                out.segments.push(marker);
+            }
+        }
         if bodies.is_empty() {
             continue;
         }
@@ -7611,7 +7631,19 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     } else if name == "sed" {
         sed_run_commands(args)
     } else {
-        launcher_commands(name, args)
+        // A command a program runs from an option value, by the inventory
+        // both guards share (TSK-1490), in the directory its launchers
+        // move to, as a shell `-c` body is.
+        let mut out = launcher_commands(name, args);
+        for carried in crate::security::option_commands::option_values(prog, args) {
+            if let crate::security::option_commands::Carried::Command(body) = carried {
+                let body = launched_script(toks, &body);
+                if !out.contains(&body) {
+                    out.push(body);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -8916,6 +8948,18 @@ const NESTING_LIMIT: usize = 8;
 /// The segment that stands for text nested deeper than [`NESTING_LIMIT`].
 /// It is not a command any shell runs, and the integrity check refuses it.
 pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
+
+/// The start of the segment that stands for an option value in a command
+/// language the guard does not read; the program and option follow it as
+/// plain words (TSK-1490). Like [`NESTING_UNREAD`], no shell runs it and
+/// the integrity check refuses it.
+pub(crate) const OPTION_UNREAD: &str = "\u{1}codeflow: unread option value: ";
+
+/// Whether `segment` stands for text the command reader could not read:
+/// [`NESTING_UNREAD`] or an [`OPTION_UNREAD`] marker.
+pub(crate) fn unread_marker(segment: &str) -> bool {
+    segment == NESTING_UNREAD || segment.starts_with(OPTION_UNREAD)
+}
 
 /// Words that leave the shell in command position, so a `(` after them
 /// opens a subshell or a `case` pattern.
@@ -17168,6 +17212,83 @@ mod tests {
         // another program's arguments come from input the guard cannot see.
         assert_eq!(expand_commands("printf x | xargs rm").len(), 2);
         assert_eq!(expand_commands("find . -exec rm {} +").len(), 1);
+    }
+
+    /// TSK-1490 AC-1: a command a program runs from one of its option
+    /// values gets every rule the command gets written bare. Each row names
+    /// the rule. A row may add a rule of its own: the carried words stay on
+    /// the line, and a closed rule refuses a line it cannot resolve beside
+    /// them.
+    #[test]
+    fn a_command_in_an_option_value_gets_the_bare_verdict() {
+        use crate::security::guard_forms::{
+            OPTION_BARE_GIT, OPTION_CARRIERS, OPTION_CLONE_CARRIERS, OPTION_CLONE_GIT,
+        };
+        let p = default_policy();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate(cmd, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for (forms, values, bare_of) in [
+            (OPTION_CARRIERS, OPTION_BARE_GIT, "{}"),
+            (OPTION_CLONE_CARRIERS, OPTION_CLONE_GIT, "git clone {} o/r"),
+        ] {
+            for value in values {
+                let bare = rules(&bare_of.replace("{}", value));
+                assert!(!bare.is_empty(), "{value}");
+                for form in forms {
+                    let carried = form.replace("{}", value);
+                    let got = rules(&carried);
+                    if !bare.is_subset(&got) {
+                        failed.push(format!("{carried}: {got:?}, want {bare:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 rulings D2 and D3: an option value in a command language
+    /// the guard does not read refuses under hook integrity; an ordinary
+    /// value, another option or a form the reader does not reach adds no
+    /// rule to the command without it (AC-2).
+    #[test]
+    fn an_option_value_the_guard_cannot_read_refuses_and_ordinary_values_keep_their_verdict() {
+        use crate::security::guard_forms::{OPTION_CONTROLS, OPTION_LANGUAGES};
+        let p = default_policy();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate(cmd, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for cmd in OPTION_LANGUAGES {
+            let got = rules(cmd);
+            if !got.contains("git.hook_integrity") {
+                failed.push(format!("refuse {cmd}: {got:?}"));
+            }
+        }
+        for (cmd, without) in OPTION_CONTROLS {
+            let (got, want) = (rules(cmd), rules(without));
+            if got != want {
+                failed.push(format!("keep {cmd}: {got:?}, want {want:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
     }
 
     #[test]

@@ -2227,6 +2227,59 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
     );
 }
 
+/// TSK-1490 AC-6: through each hook entry, a command a program runs from
+/// an option value is refused by the rule the command meets written bare,
+/// and the same program with an ordinary value passes.
+#[test]
+fn a_command_in_an_option_value_is_refused_through_both_hook_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let run = |hook: &str, command: &str| {
+        run_with_stdin(
+            codeflow().args(["hook", hook]).current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    // Each carried line, then the command it carries written bare, refuses
+    // by the same rule.
+    for (hook, lines, rule) in [
+        (
+            "git-guard",
+            [
+                "man -P 'git config --global alias.x !id' ls",
+                "git config --global alias.x '!id'",
+            ],
+            "git.hook_integrity",
+        ),
+        (
+            "exec-guard",
+            ["man -P 'cat ~/.ssh/id_rsa' ls", "cat ~/.ssh/id_rsa"],
+            "security.secret_reads",
+        ),
+        // A value in a command language the guards do not read.
+        ("git-guard", ["vim -c 'set nu' f"; 2], "git.hook_integrity"),
+        ("exec-guard", ["vim -c 'set nu' f"; 2], "git.hook_integrity"),
+    ] {
+        for line in lines {
+            let out = run(hook, line);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {line}: {stderr}");
+            assert!(
+                stderr.contains(&format!("policy rule {rule}")),
+                "{hook}: {line}: {stderr}"
+            );
+        }
+    }
+    for hook in ["git-guard", "exec-guard"] {
+        let out = run(hook, "man -P cat ls");
+        assert!(
+            line_allows(&out),
+            "{hook}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.

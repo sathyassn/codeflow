@@ -157,6 +157,190 @@ mod tests {
         }
     }
 
+    /// TSK-1490 AC-3: the inventory documented in the option reader's module
+    /// is the one both guards read, line for line; the rows read by
+    /// git-guard's own launcher reader are its command carriers; and every
+    /// program and spelling of every row reaches both guards.
+    #[test]
+    fn every_option_carrier_is_read_by_both_guards() {
+        use crate::hooks::git_guard::COMMAND_CARRIERS;
+        use crate::security::option_commands::{Runs, OPTION_COMMANDS};
+
+        let source = include_str!("option_commands.rs");
+        let documented: Vec<&str> = source
+            .lines()
+            .skip_while(|line| !line.starts_with("//! The inventory, one line per row"))
+            .skip_while(|line| !line.starts_with("//! - "))
+            .take_while(|line| line.starts_with("//! - "))
+            .map(|line| &line[4..])
+            .collect();
+        let rendered: Vec<String> = OPTION_COMMANDS.iter().map(render_row).collect();
+        assert_eq!(documented, rendered);
+
+        for row in OPTION_COMMANDS {
+            for program in row.programs {
+                assert_eq!(
+                    COMMAND_CARRIERS.contains(program),
+                    row.runs == Runs::OwnReader,
+                    "{program}"
+                );
+            }
+        }
+
+        // Both guards judge in an owned, unborn repository, never this
+        // source checkout.
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let root = dir.path().to_path_buf();
+        let policy = crate::hooks::policy::GitPolicy::default();
+        let ctx = crate::hooks::git_guard::GuardContext {
+            policy: &policy,
+            current_branch: "feat/x",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            branch_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
+            root_checkout: None,
+        };
+        let section = crate::hooks::policy::SecuritySection::default();
+        let git_rules = |line: &str| -> Vec<String> {
+            crate::hooks::git_guard::evaluate_report_at(line, &ctx, &root)
+                .violations
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let exec_rules = |line: &str| -> Vec<String> {
+            crate::hooks::exec_guard::evaluate_at(
+                line,
+                &section,
+                crate::hooks::policy::PolicyLevel::Block,
+                &root,
+                &root,
+            )
+            .into_iter()
+            .map(|v| v.rule)
+            .collect()
+        };
+        let git_command = "git config core.hooksPath /tmp/h";
+        let exec_command = "cat ~/.ssh/id_rsa";
+        let mut failed = Vec::new();
+        for row in OPTION_COMMANDS {
+            let (git_rule, exec_rule) = match row.runs {
+                Runs::Language | Runs::CargoConfig => ("git.hook_integrity", "git.hook_integrity"),
+                _ => ("git.hook_integrity", "security.secret_reads"),
+            };
+            for (command, rule, guard) in [
+                (
+                    git_command,
+                    git_rule,
+                    &git_rules as &dyn Fn(&str) -> Vec<String>,
+                ),
+                (exec_command, exec_rule, &exec_rules),
+            ] {
+                for line in probes(row, command) {
+                    if !guard(&line).iter().any(|r| r == rule) {
+                        failed.push(format!("{rule}: {line}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// One inventory row as its line in the option reader's module docs.
+    fn render_row(row: &crate::security::option_commands::Carrier) -> String {
+        use crate::security::option_commands::Runs;
+        let names: Vec<String> = if row.subcommands.is_empty() {
+            row.programs.iter().map(|p| format!("`{p}`")).collect()
+        } else {
+            row.programs
+                .iter()
+                .flat_map(|p| {
+                    row.subcommands
+                        .iter()
+                        .map(move |words| format!("`{p} {}`", words.join(" ")))
+                })
+                .collect()
+        };
+        let mut options: Vec<String> = row.short.iter().map(|c| format!("`-{c}`")).collect();
+        options.extend(row.long.iter().map(|l| format!("`{l}`")));
+        if row.plus {
+            options.push("`+`".to_string());
+        }
+        if row.runs == Runs::CloneArguments {
+            options.push("`--`".to_string());
+        }
+        format!("- {}: {}", names.join(", "), options.join(", "))
+    }
+
+    /// One probe line per program and spelling of `row`, carrying `command`
+    /// as the row runs a value.
+    fn probes(row: &crate::security::option_commands::Carrier, command: &str) -> Vec<String> {
+        use crate::security::option_commands::Runs;
+        let value = match row.runs {
+            Runs::SshOption => format!("ProxyCommand={command}"),
+            Runs::Checkpoint => format!("exec={command}"),
+            Runs::Language => "x".to_string(),
+            Runs::CargoConfig => "target.x.runner=y".to_string(),
+            _ => command.to_string(),
+        };
+        // A value as one word, or as the command words a `Words` row takes.
+        let word = if row.runs == Runs::Words {
+            value.clone()
+        } else {
+            format!("'{value}'")
+        };
+        let mut spellings: Vec<String> = Vec::new();
+        for letter in row.short {
+            spellings.push(if row.attached {
+                format!("-{letter}{word}")
+            } else {
+                format!("-{letter} {word}")
+            });
+        }
+        for long in row.long {
+            spellings.push(format!("{long}={word}"));
+            if !row.attached {
+                spellings.push(format!("{long} {word}"));
+            }
+        }
+        if row.plus {
+            spellings.push(format!("'+{value}'"));
+        }
+        if row.runs == Runs::CloneArguments {
+            spellings.push(format!("o/r -- -u {word}"));
+        }
+        let mut lines = Vec::new();
+        for program in row.programs {
+            let heads: Vec<String> = if row.subcommands.is_empty() {
+                vec![(*program).to_string()]
+            } else {
+                row.subcommands
+                    .iter()
+                    .map(|words| format!("{program} {}", words.join(" ")))
+                    .collect()
+            };
+            for head in &heads {
+                for spelling in &spellings {
+                    lines.push(match *program {
+                        "flock" => format!("{head} /tmp/l {spelling}"),
+                        "script" => format!("{head} {spelling} /dev/null"),
+                        _ => format!("{head} {spelling}"),
+                    });
+                }
+            }
+        }
+        lines
+    }
+
     /// The policy reference lists exactly these names, in the section that
     /// states the promise.
     #[test]

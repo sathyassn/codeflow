@@ -23,6 +23,25 @@ thread_local! {
     /// Set while a Git runner body is judged: the runner reader already
     /// read every nested body, so a body's own runners are not read again.
     static RUNNER_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a command an option value carries is judged: the line's
+    /// command reader already read every nested option value, so a body's
+    /// own option values are not read again (TSK-1490).
+    static OPTION_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the judging of an option value's command until dropped.
+struct OptionBody(bool);
+
+impl OptionBody {
+    fn enter() -> Self {
+        Self(OPTION_BODY.replace(true))
+    }
+}
+
+impl Drop for OptionBody {
+    fn drop(&mut self) {
+        OPTION_BODY.set(self.0);
+    }
 }
 
 /// Marks the judging of a Git runner body until dropped.
@@ -252,6 +271,11 @@ pub fn evaluate_ruled(
             violations.push(violation);
         }
     }
+    // Commands carried in option values join after the line's own checks,
+    // so a rule both meet is reported once, at its strongest.
+    for finding in option_violations(command, posix, levels, integrity, cwd, root, outcome) {
+        merge_strongest(&mut violations, finding);
+    }
     // Interpreter code expands `~` with the home its process inherits: the
     // line's assigned home, judged besides the guard's own.
     let homes = std::iter::once(crate::portable_path::user_home())
@@ -304,6 +328,66 @@ fn program_violations(
             crate::remedy::SECRET_SELECTION.remedy(),
         )],
     }
+}
+
+/// Every command a program on the line runs from an option value, read by
+/// the inventory both guards share (TSK-1490) through every nesting level
+/// git-guard's command reader follows, judged as a command of its own in
+/// each directory the line's commands may run in, so every check here,
+/// the raw-text ones included, sees it as written bare. A value in a
+/// command language the guard does not read refuses under hook integrity,
+/// as git-guard refuses it. Each body takes the call's outcome.
+fn option_violations(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
+    use crate::security::option_commands::{option_commands, unread_violation, Carried};
+    if OPTION_BODY.get() {
+        return Vec::new();
+    }
+    let segments = super::git_guard::expand_commands(command);
+    let mut bodies: Vec<String> = Vec::new();
+    let mut found = Vec::new();
+    for segment in &segments {
+        let mut words = super::git_guard::command_argv(segment);
+        super::git_guard::strip_reserved_words(&mut words);
+        let Some((program, args)) = super::git_guard::strip_launchers(&words) else {
+            continue;
+        };
+        for carried in option_commands(program, args) {
+            match carried {
+                Carried::Command(body) => {
+                    let body = super::git_guard::launched_script(&words, &body);
+                    if !bodies.contains(&body) {
+                        bodies.push(body);
+                    }
+                }
+                Carried::Unread(form) => {
+                    if integrity.is_active() {
+                        found.push(unread_violation(&form, integrity));
+                    }
+                }
+            }
+        }
+    }
+    if bodies.is_empty() {
+        return found;
+    }
+    let dirs = super::git_guard::run_dirs(&segments, cwd).dirs;
+    let _body = OptionBody::enter();
+    for body in &bodies {
+        for directory in &dirs {
+            found.extend(evaluate_ruled(
+                body, posix, levels, integrity, directory, root, outcome,
+            ));
+        }
+    }
+    found
 }
 
 /// Every command a Git call on the line runs itself, read with its
@@ -596,6 +680,89 @@ mod tests {
                 assert!(evaluate(&nested, &section).is_empty(), "{nested}");
             }
         }
+    }
+
+    /// TSK-1490 AC-1: a command a program runs from one of its option
+    /// values gets every rule the command gets written bare. Each row names
+    /// the rule. A row may add a rule of its own: the carried words stay on
+    /// the line, and a closed rule refuses a line it cannot resolve beside
+    /// them.
+    #[test]
+    fn a_command_in_an_option_value_gets_the_bare_verdict() {
+        use crate::security::guard_forms::{
+            OPTION_BARE_EXEC, OPTION_CARRIERS, OPTION_CLONE_CARRIERS, OPTION_CLONE_EXEC,
+        };
+        // An owned, empty directory: a recursive reader walks nothing of
+        // this checkout.
+        let section = SecuritySection::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for (forms, values, bare_of) in [
+            (OPTION_CARRIERS, OPTION_BARE_EXEC, "{}"),
+            (OPTION_CLONE_CARRIERS, OPTION_CLONE_EXEC, "git clone {} o/r"),
+        ] {
+            for value in values {
+                let bare = rules(&bare_of.replace("{}", value));
+                assert!(!bare.is_empty(), "{value}");
+                for form in forms {
+                    let carried = form.replace("{}", value);
+                    let got = rules(&carried);
+                    if !bare.is_subset(&got) {
+                        failed.push(format!("{carried}: {got:?}, want {bare:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 rulings D2 and D3: an option value in a command language
+    /// the guard does not read refuses under hook integrity; an ordinary
+    /// value, another option or a form the reader does not reach adds no
+    /// rule to the command without it (AC-2).
+    #[test]
+    fn an_option_value_the_guard_cannot_read_refuses_and_ordinary_values_keep_their_verdict() {
+        use crate::security::guard_forms::{OPTION_CONTROLS, OPTION_LANGUAGES};
+        let section = SecuritySection::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for cmd in OPTION_LANGUAGES {
+            let got = rules(cmd);
+            if !got.contains("git.hook_integrity") {
+                failed.push(format!("refuse {cmd}: {got:?}"));
+            }
+        }
+        for (cmd, without) in OPTION_CONTROLS {
+            let (got, want) = (rules(cmd), rules(without));
+            if got != want {
+                failed.push(format!("keep {cmd}: {got:?}, want {want:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
     }
 
     /// TSK-397 design D: where the strict rule applies, a run-time word

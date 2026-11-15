@@ -23,7 +23,7 @@ use super::startup::{mentions, mentions_path_end, reader_program, PATH_END_NEEDL
 use crate::hooks::git_guard::{
     basename, command_argv, expands, gnu_prefixed, is_shell, launcher_commands, launcher_name,
     shell_c_argument, strip_launchers, strip_reserved_words, xargs_command, Expanded,
-    NESTING_UNREAD,
+    NESTING_UNREAD, OPTION_UNREAD,
 };
 
 /// Shell builtins that run no command of their own and that the data
@@ -787,6 +787,11 @@ pub(crate) fn unresolved_form(
     expanded.segments.iter().find_map(|segment| {
         if segment == NESTING_UNREAD {
             return Some("it nests commands deeper than the guard reads".to_string());
+        }
+        if let Some(form) = segment.strip_prefix(OPTION_UNREAD) {
+            return Some(format!(
+                "`{form}` takes a value that runs commands the guard does not read"
+            ));
         }
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);

@@ -484,6 +484,10 @@ catalog! {
     /// enforcement path (TSK-302).
     INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
         "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// An option value in a command language the guard does not read: an
+    /// editor's commands or a program Cargo runs (TSK-1490).
+    OPTION_LANGUAGE = Step::Edit(".cargo/config.toml"),
+        "the guard cannot judge commands written in that language, so it refuses the value: edit files with the harness's file tool instead of an editor's command options, and set a program Cargo runs in the project's committed `.cargo/config.toml` instead of on the command line";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";
