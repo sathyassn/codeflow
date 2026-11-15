@@ -49,6 +49,10 @@ crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	"clone fetch pull pu
 crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	CommandOption("clone",'u',"--upload-pack")	1	Catalog entry for judging a clone option's command body; never starts Git.
 crates/codeflow-core/src/hooks/git_guard/runners.rs	"clone"	2	Selects the option table in the shared reader and reads a clone destination for the runner-state check; never starts Git.
 crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	ConfigOption("clone",'c',"--config")	1	Catalog entry for clone-local configuration inspection; never starts Git.
+crates/codeflow-core/src/hooks/git_guard/runners/transport.rs	"clone"	2	Verb vocabulary selecting which remotes a command contacts and whether it recurses into submodules; never starts Git.
+crates/codeflow-core/src/hooks/git_guard/runners/transport_tests.rs	helpers("clone --recurse-submodules https://example.test/r copy")	2	Inert argument list the transport reader resolves from scratch configuration; never executed as Git.
+crates/codeflow-core/src/hooks/git_guard/runners/transport_tests.rs	helpers("clone fixture::https://example.test/r copy")	1	Inert argument list the transport reader resolves from scratch configuration; never executed as Git.
+crates/codeflow-core/src/hooks/git_guard/runners/transport_tests.rs	helpers("clone fx:r copy")	1	Inert argument list the transport reader resolves from scratch configuration; never executed as Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -c 'filter.fixture.smudge=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local filter configuration; never executes Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --config='core.sshCommand=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local transport configuration; never executes Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --reject-shallow /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.

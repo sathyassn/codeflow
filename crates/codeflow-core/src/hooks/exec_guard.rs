@@ -340,8 +340,23 @@ fn runner_violations(
             let _body = RunnerBody::enter();
             bodies
                 .iter()
-                .flat_map(|(body, directory)| {
-                    evaluate_ruled(body, posix, levels, integrity, directory, root, outcome)
+                .flat_map(|body| {
+                    let mut findings = evaluate_ruled(
+                        &body.command,
+                        posix,
+                        levels,
+                        integrity,
+                        &body.directory,
+                        root,
+                        outcome,
+                    );
+                    // TSK-1489 AC-7: a credential helper the landed policy
+                    // admits, started by a command that contacts a remote,
+                    // drops its account finding; every other finding stands.
+                    if body.admitted_helper {
+                        findings.retain(|finding| !is_account_finding(finding));
+                    }
+                    findings
                 })
                 .collect()
         }
@@ -361,6 +376,12 @@ fn runner_violations(
             crate::remedy::SECRET_SELECTION.remedy(),
         )],
     }
+}
+
+/// Whether `finding` is the account rule's finding, the one finding an
+/// admitted credential helper skips.
+fn is_account_finding(finding: &Violation) -> bool {
+    finding.rule == "security.outward_actions" && finding.message.starts_with("account action:")
 }
 
 fn merge_strongest(violations: &mut Vec<Violation>, finding: Violation) {

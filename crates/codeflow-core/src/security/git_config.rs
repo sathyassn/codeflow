@@ -37,6 +37,10 @@ pub(crate) struct EffectiveConfig {
     entries: Vec<Entry>,
     /// Files contributing values, resolved from Git's reported origin directory.
     pub(crate) sources: Vec<PathBuf>,
+    /// The files of the repository's own (`local`) scope, resolved as
+    /// `sources` are: the common Git directory's `config` and any file it
+    /// includes.
+    pub(crate) local: Vec<PathBuf>,
     /// Includes named by the files Git read, including inactive conditions.
     pub(crate) includes: Vec<Include>,
 }
@@ -193,6 +197,7 @@ fn parse(
     let mut entries = Vec::new();
     let mut includes = Vec::new();
     let mut sources = Vec::new();
+    let mut local = Vec::new();
     while let Some(scope) = fields.next() {
         if scope.is_empty() && bytes.is_empty() {
             break;
@@ -206,6 +211,9 @@ fn parse(
             .map_err(|_| "cannot verify Git configuration: origin is not UTF-8")?;
         if let Some(file) = origin.strip_prefix("file:") {
             sources.push(directory.join(file));
+            if scope == "local" && !local.contains(&directory.join(file)) {
+                local.push(directory.join(file));
+            }
         }
         let entry = fields
             .next()
@@ -278,6 +286,7 @@ fn parse(
     Ok(EffectiveConfig {
         entries,
         sources,
+        local,
         includes,
     })
 }

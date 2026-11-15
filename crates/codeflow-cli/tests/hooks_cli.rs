@@ -19,6 +19,9 @@ use host_isolation::{git_command, isolate_clone, isolate_git};
 #[path = "hooks_cli/path_writers.rs"]
 mod path_writers;
 
+#[path = "hooks_cli/remote_transport.rs"]
+mod remote_transport;
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
