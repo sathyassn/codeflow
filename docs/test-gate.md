@@ -86,6 +86,26 @@ membership are not skips and do not fail strict mode. In particular,
 `--strict --all --only X` passes when its requested checks run successfully;
 that split run remains incomplete as evidence for a full landing gate.
 
+## Installed CI binary journey
+
+The CI pin journey in `crates/codeflow-cli/tests/ci_pin.rs` archives the
+candidate executable in a local release fixture with `sha256.sum`. It runs
+the managed workflow's install script against that fixture through `file://`,
+checks the registered installation directory, and logs the installed path
+and SHA-256 digest. Its identity test compares that digest with the candidate.
+The archive uses the installer's Linux asset layout and the test host's
+native executable format.
+
+The journey dispatches the installed file with the managed verdict step's
+authority arguments. Valid pull request data passes. A head that lowers its
+pin, replaces its workflow or relaxes its policy still gets the authority's
+`git.commit_format` refusal for an invalid commit. Those edits are separate
+cases; the invalid commit is what each case must reject. The substitution
+case first passes the journey with the genuine installed binary, then
+replaces that file with an executable that prints the expected version and
+approves everything. The old version-only check accepts it, but the same
+behavioral journey rejects its approval of the invalid commit (TSK-365).
+
 ## Technical
 
 The config is `.codeflow/test-config.json`; its editor schema is

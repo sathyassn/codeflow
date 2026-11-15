@@ -275,10 +275,16 @@ fault = [
 [[journey]]
 text = "a PR that lowers the enforcing binary while touching a protected surface"
 platform = "unix"
-control = ["codeflow-cli --test ci_pin the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data"]
+control = [
+  "codeflow-cli --test ci_pin the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data",
+  "codeflow-cli --test ci_pin the_installed_candidate_matches_the_release_binary",
+  "codeflow-cli --test ci_pin the_installed_candidate_accepts_a_valid_pull_request",
+]
 fault = [
   "codeflow-cli --test ci_pin a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict",
   "codeflow-cli --test ci_pin a_pr_lowering_the_pin_is_still_judged_by_the_target_binary",
+  "codeflow-cli --test ci_pin a_pr_relaxing_its_policy_cannot_override_the_authority",
+  "codeflow-cli --test ci_pin the_installed_journey_rejects_a_substituted_version_only_executable",
 ]
 
 [[journey]]
