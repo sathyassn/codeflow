@@ -2940,10 +2940,9 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
                 .flatten()
         })
         .and_then(|target| {
-            ["refs/heads/", "refs/remotes/"]
-                .iter()
-                .find_map(|prefix| repo.find_reference(&format!("{prefix}{target}")).ok())
-                .and_then(|reference| reference.peel_to_commit().ok())
+            super::work_start::target_reference(repo, &target)
+                .ok()
+                .flatten()
                 .map(|commit| commit.id())
         });
     let Ok(references) = repo.references() else {

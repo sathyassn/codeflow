@@ -631,6 +631,26 @@ mod tests {
         );
     }
 
+    /// TSK-416 AC-10: a stale local branch beside a newer remote-tracking
+    /// ref of the same name never decides the conflict check's target.
+    #[test]
+    fn test_find_target_ref_prefers_the_fetched_ref_to_a_stale_local_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_file(dir.path(), "file.txt", "content\n");
+        let stale = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("line", &stale, false).unwrap();
+        let tree = stale.tree().unwrap();
+        let signature = git2::Signature::now("t", "t@example.test").unwrap();
+        let fetched = repo
+            .commit(None, &signature, &signature, "fetched", &tree, &[&stale])
+            .unwrap();
+        repo.reference("refs/remotes/origin/line", fetched, false, "fetched")
+            .unwrap();
+        let reference = find_target_ref(&repo, "line").unwrap();
+        assert_eq!(reference.name().unwrap(), "refs/remotes/origin/line");
+        assert_eq!(reference.target(), Some(fetched));
+    }
+
     #[test]
     fn test_find_target_ref_not_found() {
         let dir = tempfile::tempdir().unwrap();

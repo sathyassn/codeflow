@@ -936,8 +936,10 @@ pub fn ref_line_touches_local_branch(line: &str) -> bool {
 }
 
 /// Refuses a ref update whose spelling can alias a protected ref, unless
-/// the transaction is sanctioned; the ref name is shown escaped (TSK-388).
+/// the transaction is sanctioned; the ref name is shown escaped (TSK-388),
+/// with a remote's name in it withheld unless plain (TSK-416 review round 7).
 fn refuse_alias(
+    root: &Path,
     report: &mut StageReport,
     policy: &GitPolicy,
     sanctioned: bool,
@@ -950,7 +952,7 @@ fn refuse_alias(
             policy.local_ref_protection,
             format!(
                 "ref update of '{}': {why}",
-                crate::git::display_text(refname)
+                crate::security::git::shown_ref(root, refname)
             ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
@@ -1018,6 +1020,7 @@ pub fn reference_transaction(
         let unchanged = || keeps_value(&repo, refname, old_oid, new_oid);
         if collisions.contains(refname) && !unchanged() {
             refuse_alias(
+                root,
                 &mut report,
                 policy,
                 sanctioned,
@@ -1034,6 +1037,7 @@ pub fn reference_transaction(
             && !unchanged()
         {
             refuse_alias(
+                root,
                 &mut report,
                 policy,
                 sanctioned,
@@ -1047,6 +1051,7 @@ pub fn reference_transaction(
         // is refused outright, failing closed (TSK-381 SF-3).
         if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
             refuse_alias(
+                root,
                 &mut report,
                 policy,
                 sanctioned,

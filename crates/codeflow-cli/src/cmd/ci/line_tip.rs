@@ -226,7 +226,7 @@ fn judge(
     let (message, mut remedy) =
         line_adoption::direct_commit_refusal(line, &report.unadopted, &remote);
     if let Source::Base { target } = source {
-        let _ = write!(remedy, "; {}", routes(line, target.as_deref()));
+        let _ = write!(remedy, "; {}", routes(Some(line), target.as_deref()));
     }
     tagged.push(super::TaggedViolation {
         sha: None,
@@ -237,19 +237,34 @@ fn judge(
 
 /// The remedy for a run that found the line from its base: it names the
 /// role flag for each way the head can land.
-fn routes(line: &str, target: Option<&str>) -> String {
-    let shown = codeflow_core::git::display_text(line);
+fn routes(line: Option<&str>, target: Option<&str>) -> String {
+    let (line_tip, into) = (flag("--line-tip", line), flag("--into", line));
     let mut text = format!(
-        "this run found the line from its base and cannot tell how the head reaches it: pass --line-tip {shown} on a landing candidate, or, for a pull request head that lands on the line by merge, --into {shown} or the pull request's body (--pr-body-file or CODEFLOW_PR_BODY)"
+        "this run found the line from its base and cannot tell how the head reaches it: pass {line_tip} on a landing candidate, or, for a pull request head that lands on the line by merge, {into} or the pull request's body (--pr-body-file or CODEFLOW_PR_BODY)"
     );
     if let Some(target) = target {
-        let target = codeflow_core::git::display_text(target);
+        let into = flag("--into", Some(target));
         let _ = write!(
             text,
-            "; the base is also the fetched tip of the default target, so for a change into it pass --into {target}"
+            "; the base is also the fetched tip of the default target, so for a change into it pass {into}"
         );
     }
     text
+}
+
+/// A flag with its value as a reader passes it, rendered from the raw
+/// value so it pastes back as that value (TSK-416 review round 2): `<LINE>`
+/// when there is no value, and the flag with the value typed by hand when
+/// the value holds a character a terminal does not show as itself.
+fn flag(name: &'static str, value: Option<&str>) -> String {
+    match value {
+        None => format!("{name} <LINE>"),
+        Some(value) => codeflow_core::git::pasted::option(name, value).unwrap_or_else(|| {
+            format!(
+                "{name} with the line's name typed by hand, since it holds a character a terminal does not show as itself"
+            )
+        }),
+    }
 }
 
 /// A run that cannot judge the line it was given or found refuses: CI is
@@ -261,14 +276,15 @@ fn refuse(
     line: Option<&str>,
     source: &Source,
 ) {
-    let shown = line.map_or_else(|| "<LINE>".to_string(), codeflow_core::git::display_text);
     let remedy = match source {
         Source::Flag => format!(
-            "fetch the line (`git fetch origin`) and pass --line-tip {shown} for a landing candidate cut from its fetched tip, or --into {shown} for a pull request head that lands by merge"
+            "fetch the line (`git fetch origin`) and pass {} for a landing candidate cut from its fetched tip, or {} for a pull request head that lands by merge",
+            flag("--line-tip", line),
+            flag("--into", line)
         ),
         Source::Base { target } => format!(
             "fetch the lines (`git fetch origin`); {}",
-            routes(line.unwrap_or("<LINE>"), target.as_deref())
+            routes(line, target.as_deref())
         ),
     };
     tagged.push(super::TaggedViolation {
@@ -279,4 +295,29 @@ fn refuse(
             &remedy,
         ),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flag;
+
+    /// TSK-416 review round 2: a line name reaches the printed role flag
+    /// as one shell word from its raw value; a name starting with `-`
+    /// stays the flag's value; a name a terminal cannot show as itself is
+    /// not printed to paste.
+    #[test]
+    fn a_role_flag_renders_the_raw_line_name() {
+        assert_eq!(
+            flag("--line-tip", Some("integration/EPC-001-x")),
+            "--line-tip integration/EPC-001-x"
+        );
+        assert_eq!(flag("--into", Some("o$(id)")), "--into 'o$(id)'");
+        assert_eq!(flag("--into", Some("-x")), "--into=-x");
+        assert_eq!(flag("--into", None), "--into <LINE>");
+        let hidden = flag("--into", Some("a\u{200b}b"));
+        assert!(
+            !hidden.contains('\u{200b}') && !hidden.contains("200b"),
+            "{hidden}"
+        );
+    }
 }

@@ -773,4 +773,33 @@ mod tests {
             .collect();
         assert_eq!(ids, ["TSK-100", "TSK-999", "TSK-1000", "TSK-10000"]);
     }
+
+    /// TSK-416 AC-3: the landing places are read on the fetched line beside
+    /// a local copy behind it, and on a diverged pair the fetched one decides.
+    #[test]
+    fn the_line_is_read_on_the_fetched_tip_beside_a_local_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let root = repo
+            .commit(None, &signature, &signature, "root", &tree, &[])
+            .unwrap();
+        let parent = repo.find_commit(root).unwrap();
+        let fetched = repo
+            .commit(None, &signature, &signature, "fetched", &tree, &[&parent])
+            .unwrap();
+        let aside = repo
+            .commit(None, &signature, &signature, "aside", &tree, &[&parent])
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", fetched, true, "test")
+            .unwrap();
+        for local in [root, aside] {
+            repo.reference("refs/heads/main", local, true, "test")
+                .unwrap();
+            assert_eq!(line(&repo, "main").unwrap().unwrap().tip, fetched);
+        }
+    }
 }
