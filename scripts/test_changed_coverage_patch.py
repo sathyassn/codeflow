@@ -29,7 +29,7 @@ def load_parity(path):
 
 def copy_inputs(scratch, parity):
     config = json.loads((ROOT / ".codeflow/test-config.json").read_text(encoding="utf-8"))
-    inputs = {".codeflow/test-config.json", "dist-workspace.toml", "scripts/ci-reuse.py",
+    inputs = {".codeflow/test-config.json", "dist-workspace.toml", "scripts/ci-reuse.py", "scripts/gate-binary.py",
               "scripts/windows-test-times.json", "scripts/coverage-test-times.json"}
     for directory in (".github/workflows", "assets/base/ci"):
         inputs.update(str(p.relative_to(ROOT)) for p in (ROOT / directory).glob("*.y*ml"))
@@ -74,6 +74,10 @@ class PatchTests(unittest.TestCase):
                                     cwd=scratch, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             print(f"Patched scratch parity: {result.stdout.strip()}")
+            controls = subprocess.run([sys.executable, "-B", str(scratch / "scripts/test_gate_parity.py")],
+                                      cwd=ROOT, capture_output=True, text=True, check=False)
+            self.assertEqual(controls.returncode, 0, controls.stdout + controls.stderr)
+            print(f"Patched parity controls: {controls.stderr.strip()}")
             workflow = (scratch / ".github/workflows/codeflow-ci.yml").read_text(encoding="utf-8")
             config = json.loads((scratch / ".codeflow/test-config.json").read_text(encoding="utf-8"))
             self.assertEqual(parity.gate_part_problems(config, workflow), [])
