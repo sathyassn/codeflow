@@ -130,6 +130,7 @@ fn tsk341_start_accepts_its_committed_head_edge() {
         commit_record(root, "TSK-002", &record("TSK-002", "[]"));
         let branch = "task/TSK-001-work";
         let (_, pin) = reviewed_predecessor(root, branch);
+        ensure_origin(root);
         let bin = tempfile::tempdir().unwrap();
         review_tool(bin.path(), branch, &pin, true);
         git(root, &["switch", "-qc", "task/TSK-002-child", &pin]);
@@ -307,18 +308,30 @@ fn tsk341_claim_refuses_an_unlanded_predecessor_chain_before_creating_work() {
         ],
         Some(bin.path()),
     );
-    assert!(!ci.status.success(), "{}", text(&ci));
+    assert!(
+        !ci.status.success() && text(&ci).contains("unlanded predecessor TSK-001"),
+        "{}",
+        text(&ci)
+    );
     println!("manual unsupported chain: start exit={:?}; pre-push CI form exit={:?}; landing CI exit={:?}", start.status.code(), push.status.code(), ci.status.code());
 }
 
 #[test]
 #[cfg(unix)]
 fn tsk341_claim_accepts_only_a_clean_merge_of_the_predecessors_target() {
-    for case in ["clean", "other-branch", "resolved-hunk", "record-change"] {
+    for case in [
+        "clean",
+        "other-branch",
+        "resolved-hunk",
+        "record-change",
+        "stale-target",
+    ] {
         let dir = fixture();
         let root = dir.path();
         let branch = "task/TSK-001-work";
         let (reviewed, _) = reviewed_predecessor(root, branch);
+        let initial = git(root, &["rev-parse", "main"]);
+        let _origin = with_origin(root);
         if case == "other-branch" {
             git(root, &["switch", "-qc", "experiment/other"]);
         }
@@ -328,6 +341,25 @@ fn tsk341_claim_accepts_only_a_clean_merge_of_the_predecessors_target() {
         }
         git(root, &["add", "."]);
         git(root, &["commit", "-qm", "feat: advance target"]);
+        if case == "stale-target" {
+            git(root, &["switch", "-qc", "upstream", &initial]);
+            write(root, "upstream.txt", "upstream work\n");
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "feat: upstream history"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    "merge: old target as side",
+                    "main",
+                ],
+            );
+            git(root, &["push", "-q", "origin", "HEAD:main"]);
+        } else if case != "other-branch" {
+            git(root, &["push", "-q", "origin", "main"]);
+        }
         let merge_from = if case == "other-branch" {
             "experiment/other"
         } else {
@@ -385,13 +417,139 @@ fn tsk341_claim_accepts_only_a_clean_merge_of_the_predecessors_target() {
         } else {
             assert!(!out.status.success(), "{case}: {}", text(&out));
             let cause = match case {
-                "other-branch" => "own integration target",
+                "other-branch" | "stale-target" => "own integration target",
                 "resolved-hunk" => "clean automatic re-merge",
                 _ => "changes the predecessor's record",
             };
             assert!(text(&out).contains(cause), "{case}: {}", text(&out));
         }
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk341_stale_local_target_cannot_admit_an_unlanded_chain() {
+    let dir = fixture();
+    let root = dir.path();
+    commit_record(root, "TSK-003", &record("TSK-003", "[TSK-002]"));
+    commit_record(
+        root,
+        "TSK-001",
+        &record("TSK-001", "[]").replace("status: todo", "status: complete"),
+    );
+    let _origin = with_origin(root);
+    git(root, &["switch", "-qc", "upstream"]);
+    commit_record(root, "TSK-001", &record("TSK-001", "[]"));
+    git(root, &["push", "-q", "origin", "HEAD:main"]);
+    let branch = "task/TSK-002-work";
+    git(root, &["switch", "-qc", branch, "main"]);
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(
+        root,
+        &["config", &format!("branch.{branch}.remote"), "review"],
+    );
+    write(root, "src/b.rs", "pub fn b() {}\n");
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "feat: reviewed second predecessor"],
+    );
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    let bin = tempfile::tempdir().unwrap();
+    review_tool(bin.path(), branch, &pin, true);
+    git(root, &["switch", "-q", "main"]);
+    assert_eq!(
+        git(root, &["merge-base", "main", "origin/main"]),
+        git(root, &["rev-parse", "main"])
+    );
+    assert_ne!(
+        git(root, &["rev-parse", "main"]),
+        git(root, &["rev-parse", "origin/main"])
+    );
+    let before = git(root, &["for-each-ref", "refs/heads/"]);
+    let claim = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-003",
+            "--on",
+            &format!("TSK-002@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    println!(
+        "stale target claim exit={:?}: {}",
+        claim.status.code(),
+        text(&claim)
+    );
+    assert!(
+        !claim.status.success() && text(&claim).contains("unlanded predecessor TSK-001"),
+        "{}",
+        text(&claim)
+    );
+    assert_eq!(git(root, &["for-each-ref", "refs/heads/"]), before);
+    let child = "task/TSK-003-manual";
+    git(root, &["switch", "-qc", child, &pin]);
+    let before = git(root, &["for-each-ref", "refs/heads/"]);
+    let start = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-003",
+            "--on",
+            &format!("TSK-002@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    let push = push_check(root, child, "HEAD", bin.path());
+    for (name, out) in [("start", start), ("pre-push CI", push)] {
+        println!(
+            "stale target {name} exit={:?}: {}",
+            out.status.code(),
+            text(&out)
+        );
+        assert!(
+            !out.status.success() && text(&out).contains("unlanded predecessor TSK-001"),
+            "{name}: {}",
+            text(&out)
+        );
+    }
+    assert_eq!(git(root, &["for-each-ref", "refs/heads/"]), before);
+    git(root, &["switch", "-q", "upstream"]);
+    git(root, &["rm", "project-management/tasks/TSK-002.md"]);
+    git(
+        root,
+        &["commit", "-qm", "docs: remove predecessor planning record"],
+    );
+    git(root, &["push", "-q", "origin", "HEAD:main"]);
+    git(root, &["switch", "-q", "main"]);
+    let before = git(root, &["for-each-ref", "refs/heads/"]);
+    let missing = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-003",
+            "--on",
+            &format!("TSK-002@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(
+        !missing.status.success() && text(&missing).contains("does not hold its planning record"),
+        "{}",
+        text(&missing)
+    );
+    assert_eq!(git(root, &["for-each-ref", "refs/heads/"]), before);
 }
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -2031,6 +2189,7 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
 fn stacked_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = fixture();
     let root = dir.path();
+    ensure_origin(root);
     let branch = "task/TSK-001-work";
     git(
         root,
@@ -2344,6 +2503,7 @@ fn tsk250_next_judges_each_pins_own_record_on_a_shared_tip() {
     );
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "docs: plan dependents"]);
+    ensure_origin(root);
     git(
         root,
         &[
@@ -3322,6 +3482,7 @@ fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_is_re
         let bin = tempfile::tempdir().unwrap();
         let branch = "task/TSK-001-work";
         let (reviewed, mut pin) = reviewed_predecessor(root, branch);
+        ensure_origin(root);
         if merged {
             git(root, &["branch", "experiment/completion", &pin]);
             git(root, &["switch", "-q", "-C", branch, &reviewed]);

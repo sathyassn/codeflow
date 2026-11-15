@@ -620,7 +620,7 @@ that ancestor may change only the predecessor's own task record, and in it
 only its status and Closeout.
 Every intervening commit is checked, so a change followed by a revert still
 requires review. A later merge is accepted only when its second parent is on
-the first-parent history of the predecessor's own integration target, its
+the first-parent history of the predecessor's own fetched integration target, its
 tree equals the automatic conflict-free merge of its parents, and the
 predecessor's record is unchanged from the first parent. Any other merge after
 that reviewed ancestor refuses, naming the cause. The repository owner,
@@ -629,6 +629,9 @@ name and branch must match; cross-repository pull requests are refused.
 Predecessor identities come from committed records at the target tip. Only
 records absent from that target may come from the candidate pin's tree.
 The current checkout and untracked records do not supply pin identities.
+In a clone with remotes, predecessor completeness and merge ancestry use
+the target's remote-tracking tip. A stale local target cannot supply landed
+evidence, and a target missing the predecessor's planning record refuses.
 Push admission also reads the task's committed code-dependency edge. Landing
 still requires the predecessor to be complete at the merge-base.
 

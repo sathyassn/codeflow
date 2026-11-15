@@ -796,11 +796,9 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     timings.lap("line-tip");
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
-    let stacked = if pr_body.is_none() && !pr_context {
-        stacked_pins(&root, git, &branch, &head)
-    } else {
-        Vec::new()
-    };
+    // Report a rejected stack at landing too, while granting pins only
+    // to pushes. Landing still requires completed dependencies.
+    let stacked = stacked_pins(&root, git, &branch, &head, pr_body.is_none() && !pr_context);
     // One checked tree diff decides what the body may leave out (TSK-135).
     // Asked only with a body. A range or project paths that cannot be read
     // stop the run, never a guessed class.
@@ -1985,7 +1983,13 @@ fn visible_graph_check(
 /// as the claim honoured it, through the same review lookup, so a branch
 /// tip or another movable ref never stands in for review. A candidate that
 /// is not honoured is noted and the ordinary checks judge the range.
-fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<ReviewedPin> {
+fn stacked_pins(
+    root: &Path,
+    git: &GitPolicy,
+    branch: &str,
+    head: &str,
+    honour: bool,
+) -> Vec<ReviewedPin> {
     // A read that fails honours no pin, the strict side; the work-start
     // check reads the same task and target and reports the failure. The
     // task and its target come from the judged head under the run's
@@ -2011,6 +2015,9 @@ fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<R
         &|branch, sha, covers| super::work::review_lookup(root, branch, sha, covers),
     ) {
         Ok(pins) => {
+            if !honour {
+                return Vec::new();
+            }
             for pin in &pins {
                 println!(
                     "codeflow ci: {task_id} stacks on {}'s reviewed head {}; the commits up to it are judged as that pull request",

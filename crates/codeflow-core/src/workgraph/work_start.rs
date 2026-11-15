@@ -2160,7 +2160,10 @@ fn pin_target(repo: &Repository, pin: &ReviewedPin) -> Result<Oid, String> {
         .integration_target
         .as_deref()
         .ok_or_else(|| format!("{} pin has no integration_target", pin.task_id))?;
-    let tip = target_reference(repo, target)
+    let root = repo
+        .workdir()
+        .ok_or("predecessor repository has no working directory")?;
+    let resolved = resolve_work_target_checked(root, Some(target))
         .map_err(|error| error.to_string())?
         .ok_or_else(|| {
             format!(
@@ -2168,16 +2171,30 @@ fn pin_target(repo: &Repository, pin: &ReviewedPin) -> Result<Oid, String> {
                 pin.task_id
             )
         })?;
+    let (_, tip_id) = tracking_reference(repo, &resolved.target)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "{} predecessor target '{target}' has no fetched landing ref",
+                pin.task_id
+            )
+        })?;
+    let tip = repo
+        .find_commit(tip_id)
+        .map_err(|error| error.to_string())?;
     let anchored = records_from_tree(repo, &tip.tree().map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
-    if let Some(planned) = anchored.get(&pin.task_id) {
-        if planned.integration_target.as_deref().map(logical_target) != Some(logical_target(target))
-        {
-            return Err(format!(
-                "{} pin changes its integration_target; use its target's reviewed planning record",
-                pin.task_id
-            ));
-        }
+    let planned = anchored.get(&pin.task_id).ok_or_else(|| {
+        format!(
+            "{} predecessor target '{target}' does not hold its planning record",
+            pin.task_id
+        )
+    })?;
+    if planned.integration_target.as_deref().map(logical_target) != Some(logical_target(target)) {
+        return Err(format!(
+            "{} pin changes its integration_target; use its target's reviewed planning record",
+            pin.task_id
+        ));
     }
     Ok(tip.id())
 }
