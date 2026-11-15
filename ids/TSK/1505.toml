@@ -1,0 +1,11 @@
+id = "TSK-1505"
+uid = "ab3d91ee-d7c1-48a5-bd96-9f0c3656832c"
+kind = "TSK"
+title = "Reopen and archive checks agree on a completion edited in place"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T21:50:36Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
