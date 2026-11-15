@@ -961,7 +961,7 @@ fn commit_msg_secret_scan_engine(
 /// (no merge commit is created), so a ff-merge onto a protected branch cannot
 /// be caught here — the Claude-layer `git-guard` catches it in-session, and the
 /// push gate + remote protection remain the perimeter for other harnesses
-/// (charter D19). See `tests::ff_merge_fires_no_client_hook` and ADR-0007.
+/// (charter D19). See `tests::reference_transaction_closes_the_ff_merge_gap` and ADR-0007.
 ///
 /// # Errors
 ///

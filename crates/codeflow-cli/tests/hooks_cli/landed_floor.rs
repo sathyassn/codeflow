@@ -17,6 +17,7 @@ fn journey_git(fixture: &Fixture, args: &[&str]) -> std::process::Output {
     super::git_command()
         .current_dir(fixture.dir.path())
         .env("PATH", journey_path())
+        .env_remove("CODEFLOW_HOOK_BINARY")
         .args(args)
         .output()
         .unwrap()
@@ -44,6 +45,7 @@ fn journey_adopter() -> Fixture {
     let out = super::codeflow()
         .current_dir(fixture.dir.path())
         .env("PATH", journey_path())
+        .env_remove("CODEFLOW_HOOK_BINARY")
         .args(["init", "--minimal", "--yes"])
         .output()
         .unwrap();
