@@ -1424,6 +1424,42 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
     report(&wrong);
 }
 
+/// AC-15 with TSK-1490: a line push after a launcher option the guards do
+/// not read, or carried by another program's option, is refused by both
+/// guards under the rule, with hook integrity at block, at warn and off: an
+/// earlier finding on the same command never hides the rule.
+#[test]
+fn launched_or_carried_line_pushes_still_refuse() {
+    if !isolated("launched_or_carried_line_pushes_still_refuse") {
+        return;
+    }
+    let mut wrong = Vec::new();
+    for level in ["block", "warn", "off"] {
+        let landed = LANDED_POLICY.replacen(
+            r#"{"git":{"#,
+            &format!(r#"{{"git":{{"hook_integrity":"{level}","#),
+            1,
+        );
+        let f = Fixture::landed(&landed, "", |_, _| {});
+        let before = wrong.len();
+        expect_both_refuse(
+            &f.root,
+            &rows(&[
+                "taskset --cpu-l 0 git push origin HEAD:refs/heads/integration/EPC-001-line",
+                "env --bogus v git push origin HEAD:refs/heads/integration/EPC-001-line",
+                "nice -n 5 git push origin HEAD:refs/heads/integration/EPC-001-line",
+                "fd -x git push origin HEAD:refs/heads/integration/EPC-001-line",
+                "man -P 'git push origin HEAD:refs/heads/integration/EPC-001-line' ls",
+            ]),
+            &mut wrong,
+        );
+        for entry in &mut wrong[before..] {
+            write!(entry, " [hook integrity: {level}]").unwrap();
+        }
+    }
+    report(&wrong);
+}
+
 /// AC-15: a push into another repository whose authority the guard cannot
 /// read is refused by exec-guard under the rule, explicit refspecs
 /// included, instead of being judged by the session's policy. Here the

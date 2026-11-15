@@ -1003,6 +1003,10 @@ fn evaluate_report_with_runners(
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
     let mut earlier_mutation = command.contains("GIT_INDEX_FILE");
+    // A segment that may run git but ends at an earlier finding below is
+    // still judged by the agent push rule after the walk, so a finding at
+    // warn never hides that rule's refusal.
+    let mut push_unjudged = false;
     for (idx, segment) in segments.iter().enumerate() {
         branches.discard_state_changed = earlier_mutation;
         earlier_mutation |= may_change_discard_state(segment);
@@ -1080,6 +1084,7 @@ fn evaluate_report_with_runners(
                 let beside = path_writers::is_finding(&v);
                 violations.push(v);
                 if !beside {
+                    push_unjudged |= agent_push_segment(segment);
                     continue;
                 }
             }
@@ -1089,6 +1094,7 @@ fn evaluate_report_with_runners(
         // override — block it before evaluating whatever it prefixed.
         if let Some(var) = laundered_override(&tokens) {
             violations.push(laundering_violation(var));
+            push_unjudged |= agent_push_segment(segment);
             continue;
         }
 
@@ -1100,6 +1106,7 @@ fn evaluate_report_with_runners(
                     ctx.policy.hook_integrity,
                     format!("command sets the hook-skip env var `{var}`"),
                 ));
+                push_unjudged |= agent_push_segment(segment);
                 continue;
             }
         }
@@ -1123,6 +1130,7 @@ fn evaluate_report_with_runners(
                 ctx.policy.hook_integrity,
                 "command injects core.hooksPath via GIT_CONFIG_* env".to_string(),
             ));
+            push_unjudged |= agent_push_segment(segment);
             continue;
         }
 
@@ -1195,6 +1203,18 @@ fn evaluate_report_with_runners(
                 }
                 ProgramKind::Gh => check_gh(args, ctx, violations),
                 ProgramKind::Other => {}
+            }
+        }
+    }
+    if push_unjudged {
+        let mut found = Vec::new();
+        agent_push_walk(command, &expanded, ctx, cwd, &mut found);
+        for v in found {
+            if !violations
+                .iter()
+                .any(|f| f.rule == v.rule && f.message == v.message)
+            {
+                violations.push(v);
             }
         }
     }
@@ -12397,6 +12417,9 @@ fn agent_push_segment(segment: &str) -> bool {
     strip_reserved_words(&mut words);
     configuration_launch(&words)
         .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
+        || unread_starts(&words)
+            .into_iter()
+            .any(|at| matches!(program_kind(&words[at]), ProgramKind::Git))
 }
 
 /// [`check_git`] limited to what [`judge_agent_push`] needs: aliases
@@ -12524,6 +12547,16 @@ fn agent_push_walk(
         if matches!(program_kind(program), ProgramKind::Git) {
             let moved = line.moves_for(&shell, top_level, &tokens);
             agent_push_git(args, &mut branches, &moved, ctx, out, 0, cwd);
+        }
+        // After a launcher option the guard does not read, each later word
+        // that may start a git call is judged too, as git-guard's walker
+        // does, so the push rule holds whichever word starts the command.
+        let chosen = words.len() - args.len() - 1;
+        for at in unread_starts(&words) {
+            if at != chosen && matches!(program_kind(&words[at]), ProgramKind::Git) {
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                agent_push_git(&words[at + 1..], &mut branches, &moved, ctx, out, 0, cwd);
+            }
         }
     }
 }
