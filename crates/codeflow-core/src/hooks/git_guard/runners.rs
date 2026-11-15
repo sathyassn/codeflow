@@ -815,6 +815,17 @@ fn config_environment(
         .collect()
 }
 
+/// How Git runs `value` of a configuration key (TSK-1479): not a credential
+/// helper unless `helper_key`; as written when it starts with `!` or is an
+/// absolute path; any other helper value names `git credential-*`.
+fn helper_kind(helper_key: bool, value: &str) -> super::HelperKind {
+    match (helper_key, value.starts_with('!') || value.starts_with('/')) {
+        (false, _) => super::HelperKind::NotHelper,
+        (true, true) => super::HelperKind::AsWritten,
+        (true, false) => super::HelperKind::Named,
+    }
+}
+
 /// The commands the Git call's configuration and environment name, each
 /// with whether it is a credential helper and how Git runs it (see
 /// [`Body::helper`]) and whether it is an admitted credential helper (see
@@ -887,17 +898,10 @@ fn configured_commands(
             }
             let admitted_helper =
                 helper_key && contacts_remote(verb) && admitted.admits(&credential_program(value));
-            // Git runs a helper value as written when it starts with `!` or
-            // is an absolute path; any other value names `git credential-*`.
-            let helper = match (helper_key, value.starts_with('!') || value.starts_with('/')) {
-                (false, _) => super::HelperKind::NotHelper,
-                (true, true) => super::HelperKind::AsWritten,
-                (true, false) => super::HelperKind::Named,
-            };
             // Helpers and custom submodule updates use a leading shell marker.
             commands.push((
                 value.strip_prefix('!').unwrap_or(value).to_string(),
-                helper,
+                helper_kind(helper_key, value),
                 admitted_helper,
             ));
         }
