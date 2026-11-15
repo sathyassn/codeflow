@@ -790,7 +790,7 @@ mod tests {
         );
     }
 
-    /// TSK-1490 AC-1, Codex review 01: a carried command gets the bare
+    /// TSK-1490 AC-1: a carried command gets the bare
     /// command's rule at the level the policy sets it to, block, warn or
     /// off, and nothing of that rule when the bare command gets nothing.
     #[test]
@@ -851,7 +851,7 @@ mod tests {
         );
     }
 
-    /// TSK-1490 AC-1, Codex review 01: a carried relative read after a
+    /// TSK-1490 AC-1: a carried relative read after a
     /// directory change the guard cannot establish refuses as a possible
     /// secret read, as the read written bare does, with the text rule
     /// relaxed so that rule alone answers.
@@ -933,7 +933,7 @@ mod tests {
         );
     }
 
-    /// TSK-1490, Codex review 02: a startup setting whose value sets the
+    /// TSK-1490: a startup setting whose value sets the
     /// startup-command setting again refuses under hook integrity with its
     /// own reason at every privilege level, with outward actions off.
     #[test]

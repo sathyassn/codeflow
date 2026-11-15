@@ -2196,7 +2196,7 @@ pub const OPTION_UNKNOWN_RUN_DIRECTORIES: &[&str] = &[
 /// A startup setting whose value sets the startup-command setting again,
 /// in each spelling and at more than one level: both guards refuse it
 /// under hook integrity, whatever program the innermost setting names
-/// (TSK-1490, Codex review 02).
+/// (TSK-1490).
 pub const OPTION_NESTED_SETTINGS: &[&str] = &[
     "wget2 --execute=execute=use-askpass=sudo https://example.invalid",
     "wget --execute execute=use_askpass=sudo https://example.invalid",

@@ -587,7 +587,7 @@ struct RunDirs {
 /// next-word value of one of its inventory options, and the words a
 /// [`Runs::Words`] option takes through its `;`. They are never the
 /// program's own options, and a `--` among them never ends the program's
-/// options (TSK-1490, Codex review 04).
+/// options (TSK-1490).
 fn carried_words(name: &str, args: &[String]) -> Vec<bool> {
     let mut owned = vec![false; args.len()];
     for carrier in OPTION_COMMANDS
@@ -757,7 +757,7 @@ fn relocated(dirs: &RunDirs, body: &str) -> Vec<String> {
 /// `cd -`, whose directory neither guard reads. Each rule judges the
 /// command as run there, so a rule that depends on the directory, such
 /// as the protected-branch check or a relative secret read, refuses
-/// whatever other rules are enabled (TSK-1490, Codex reviews 04 and 05).
+/// whatever other rules are enabled (TSK-1490).
 pub(crate) fn unknown_directory(body: &str) -> String {
     format!("cd - && {body}")
 }

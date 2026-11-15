@@ -1188,7 +1188,7 @@ fn evaluate_report_with_runners(
         // may start the command: each Git or GitHub CLI call that may start
         // there is judged, with the repository left unresolved by that
         // launcher, so each rule keeps its verdict with hook integrity off
-        // (TSK-1490, Codex review 05).
+        // (TSK-1490).
         let chosen = words.len() - args.len() - 1;
         for at in unread_starts(&words) {
             if at == chosen {
@@ -7743,9 +7743,9 @@ pub(crate) fn reads_shell_stdin(words: &[String]) -> bool {
 /// launcher strings, runner bodies, and commands supplied to xargs or find.
 /// After a launcher option the guard does not read, the commands carried
 /// from each later word that may start the command too, each as run in an
-/// unknown directory, since that launcher's effects are unknown (TSK-1490,
-/// Codex review 05). Those starts cover every later unread launcher as
-/// well, so they are read without looking for further starts.
+/// unknown directory, since that launcher's effects are unknown (TSK-1490).
+/// Those starts cover every later unread launcher as well, so they are
+/// read without looking for further starts.
 fn carried_commands(toks: &[String]) -> Vec<String> {
     let mut out = carried_from(toks);
     let mut words = toks.to_vec();
@@ -14755,7 +14755,7 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
 /// read: every word after that launcher that is not option-shaped. The
 /// guard cannot tell which of them starts the command, so its readers
 /// judge each one, with the repository left unresolved by that launcher
-/// (TSK-1490, Codex review 05). Empty when every launcher is read.
+/// (TSK-1490). Empty when every launcher is read.
 pub(crate) fn unread_starts(tokens: &[String]) -> Vec<usize> {
     let Some(unread) = launch_walk(tokens).1 else {
         return Vec::new();
@@ -18873,7 +18873,7 @@ mod tests {
         );
     }
 
-    /// TSK-1490 AC-1, Codex review 01: a carried command gets the bare
+    /// TSK-1490 AC-1: a carried command gets the bare
     /// command's rule at the level the policy sets it to, block, warn or
     /// off, and nothing of that rule when the bare command gets nothing.
     #[test]
@@ -18958,7 +18958,7 @@ mod tests {
         );
     }
 
-    /// TSK-1490, Codex review 02: a startup setting whose value sets the
+    /// TSK-1490: a startup setting whose value sets the
     /// startup-command setting again refuses under hook integrity with its
     /// own reason, whatever the innermost setting names.
     #[test]
@@ -23156,19 +23156,18 @@ mod tests {
         );
     }
 
-    // TSK-1490, Codex reviews 04 and 05: a commit the guard cannot place
-    // keeps the protected-branch rule with hook integrity off as well as
-    // on: after a launcher option it does not read (a valued unknown option
-    // or an abbreviation), in a directory it cannot establish, through a
-    // manual program's pager, and in a directory option after a carried
-    // command's `--`. Codex review 06 (N6): the same after environment
-    // assignments a launcher reads among its options, before or between
-    // them, and in a shell's command that a launcher runs as another user.
-    // Codex review 07: the same behind a split string after any modelled
-    // launcher, behind a launcher's execution verb, and in the input of a
-    // shell a privilege launcher runs with no command. Codex review 08: the
-    // same behind any prefix launcher's option outside its grammar (an
-    // abbreviated long option or an unknown letter), a carrier hidden
+    // TSK-1490: a commit the guard cannot place keeps the protected-branch
+    // rule with hook integrity off as well as on: after a launcher option
+    // it does not read (a valued unknown option or an abbreviation), in a
+    // directory it cannot establish, through a manual program's pager, and
+    // in a directory option after a carried command's `--`. The same after
+    // environment assignments a launcher reads among its options, before
+    // or between them, and in a shell's command that a launcher runs as
+    // another user; behind a split string after any modelled launcher,
+    // behind a launcher's execution verb, and in the input of a shell a
+    // privilege launcher runs with no command; and behind any prefix
+    // launcher's option outside its grammar (an abbreviated long option or
+    // an unknown letter), a carrier hidden
     // behind one, and a carried command whose directory option follows a
     // `--` that another option takes as its value. A commit the guard can
     // place still passes, including one whose launcher only names a
