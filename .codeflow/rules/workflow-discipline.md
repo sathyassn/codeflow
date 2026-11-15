@@ -185,7 +185,11 @@ infrastructure, and runtime boundaries; a mocked changed boundary is
 disclosed, never called whole-flow proof. Concurrent UI runs isolate
 browser state, endpoints, test data, and artifacts and verify teardown
 without taking over the operator's browser or active desktop. Tests ship in
-the same change. Scenario coverage comes first: happy paths, boundaries,
+the same change. Project tooling is code: a script, build helper, code
+generator, or release, CI or hook helper ships with tests that run in a test
+target, and counts toward the coverage floor where its language can be
+measured; where it cannot, its tests still run and the gap is recorded.
+Scenario coverage comes first: happy paths, boundaries,
 malformed and hostile input, timeouts, partial failure, authorization,
 concurrency and idempotency, recovery, platform differences where the code
 meets the operating system, and regression; a class the change can reach and

@@ -50,6 +50,18 @@ chrome.js   -- behaviour reference --> product runtime
   same primitives, states, motion and keyboard contract in its own stack and
   checks itself against these pages.
 
+## Why the kit, the present runtime and the docs portal are built this way
+
+| Part | How it is built | Why |
+|---|---|---|
+| This kit | Plain HTML, CSS and ES2020, no build step, no framework | It ships inside the `codeflow` binary and the scaffold, opens from a folder with no install or network, and is the reference that products in different stacks check themselves against |
+| The `cf-present` web runtime | Preact and TypeScript, bundled into the binary | A multi-view interactive surface with state; Preact keeps the embedded bundle small |
+| The docs portal | Astro Starlight | The standard generator for a static, multi-page documentation site |
+
+The kit is not a template for a project's own application code. A
+project's non-trivial surface uses its standard framework, as `cf-stack`
+sets out.
+
 ## Naming and persistence contract
 
 | Surface | Names |
