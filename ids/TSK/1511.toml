@@ -1,0 +1,11 @@
+id = "TSK-1511"
+uid = "1ef1dc4d-bc0c-4ecb-a7a0-1decae0a3cf9"
+kind = "TSK"
+title = "CodeFlow's docs portal gate target runs as a heavy target with a measured bound"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T23:44:27Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
