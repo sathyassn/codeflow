@@ -4,6 +4,196 @@ use std::io::Write;
 use git2::{Repository, Signature};
 use serde_json::{json, Value};
 
+fn journey_path() -> std::ffi::OsString {
+    let binary = std::path::Path::new(env!("CARGO_BIN_EXE_codeflow"));
+    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(paths).unwrap()
+}
+
+fn journey_git(fixture: &Fixture, args: &[&str]) -> std::process::Output {
+    super::git_command()
+        .current_dir(fixture.dir.path())
+        .env("PATH", journey_path())
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn journey_ok(fixture: &Fixture, args: &[&str]) {
+    let out = journey_git(fixture, args);
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn journey_adopter() -> Fixture {
+    let policy =
+        json!({"root_branch":"task/check", "secret_scan":"block", "conflict_markers":"block"});
+    let fixture = Fixture::new(policy.clone(), policy, false);
+    for args in [
+        ["config", "user.name", "Test"],
+        ["config", "user.email", "test@example.invalid"],
+    ] {
+        journey_ok(&fixture, &args);
+    }
+    let out = super::codeflow()
+        .current_dir(fixture.dir.path())
+        .env("PATH", journey_path())
+        .args(["init", "--minimal", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(fixture
+        .dir
+        .path()
+        .join(".codeflow/git-hooks/pre-merge-commit")
+        .is_file());
+    journey_ok(&fixture, &["add", "."]);
+    journey_ok(
+        &fixture,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "chore: seed scratch adopter",
+        ],
+    );
+    fixture
+}
+
+fn journey_head(fixture: &Fixture) -> String {
+    let out = journey_git(fixture, &["rev-parse", "HEAD"]);
+    assert!(out.status.success());
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+fn lower_journey_policy(fixture: &Fixture, level: &str) {
+    super::write_policy(
+        fixture.dir.path(),
+        &json!({"schema_version":1,
+        "git":{"root_branch":"task/check", "secret_scan":level, "conflict_markers":level}})
+        .to_string(),
+    );
+}
+
+#[test]
+fn landed_floor_real_commit_journey_refuses_content_and_keeps_head() {
+    for level in ["off", "allow"] {
+        let fixture = journey_adopter();
+        lower_journey_policy(&fixture, level);
+        std::fs::write(
+            fixture.dir.path().join("payload.txt"),
+            format!("key = {}{}\n", "AKIA", "Q3ZWJ2X5LMN8RT4V"),
+        )
+        .unwrap();
+        journey_ok(&fixture, &["add", "payload.txt"]);
+        let before = journey_head(&fixture);
+        let out = journey_git(
+            &fixture,
+            &[
+                "commit",
+                "-m",
+                "fix: refuse staged content",
+                "--",
+                "payload.txt",
+            ],
+        );
+        let after = journey_head(&fixture);
+        println!(
+            "commit journey: root={} level={level} before={before} after={after} exit={}\n{}",
+            fixture.dir.path().display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        refused(&out, "git.secret_scan");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("codeflow pre-commit"));
+        assert_eq!(before, after);
+    }
+}
+
+#[test]
+fn landed_floor_real_merge_journey_refuses_content_and_keeps_head() {
+    let mut failures = Vec::new();
+    for level in ["off", "allow"] {
+        for (kind, content, rule) in [
+            (
+                "content",
+                format!("key = {}{}\n", "AKIA", "Q3ZWJ2X5LMN8RT4V"),
+                "git.secret_scan",
+            ),
+            (
+                "markers",
+                "<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n".to_owned(),
+                "git.conflict_markers",
+            ),
+        ] {
+            let fixture = journey_adopter();
+            // Seed held topic history as fixture data. The operation under
+            // test is the real Git merge through the hooks installed by init.
+            let base = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+            let mut index = fixture.repo.index().unwrap();
+            index.read(true).unwrap();
+            index.read_tree(&base.tree().unwrap()).unwrap();
+            let payload = fixture.dir.path().join("payload.txt");
+            std::fs::write(&payload, content).unwrap();
+            index.add_path(std::path::Path::new("payload.txt")).unwrap();
+            let tree = fixture.repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = Signature::now("Test", "test@example.invalid").unwrap();
+            fixture
+                .repo
+                .commit(
+                    Some("refs/heads/task/topic"),
+                    &sig,
+                    &sig,
+                    "feat: held topic payload",
+                    &tree,
+                    &[&base],
+                )
+                .unwrap();
+            std::fs::remove_file(payload).unwrap();
+            lower_journey_policy(&fixture, level);
+            let before = journey_head(&fixture);
+            let out = journey_git(
+                &fixture,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    "Merge topic fixture",
+                    "task/topic",
+                ],
+            );
+            let after = journey_head(&fixture);
+            let case = format!(
+                "merge journey: root={} level={level} kind={kind} before={before} after={after}",
+                fixture.dir.path().display()
+            );
+            println!(
+                "{case} exit={}\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            collect_refusal(&out, rule, &case, &mut failures);
+            if !String::from_utf8_lossy(&out.stderr).contains("codeflow pre-merge-commit") {
+                failures.push(format!("{case}: did not refuse at pre-merge-commit"));
+            }
+            if before != after {
+                failures.push(format!("{case}: HEAD moved"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 struct Fixture {
     dir: tempfile::TempDir,
     _remote: tempfile::TempDir,
@@ -131,13 +321,37 @@ fn landed_floor_content_scans_survive_lowered_checkout() {
                 "key = {}{}\n<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n",
                 "AKIA", "Q3ZWJ2X5LMN8RT4V"
             ));
-            let out = fixture.hook("pre-commit", "fix: check", "");
-            let case = format!("stale={stale}, level={level}");
-            collect_refusal(&out, "git.secret_scan", &case, &mut failures);
-            collect_refusal(&out, "git.conflict_markers", &case, &mut failures);
+            for stage in ["pre-commit", "pre-merge-commit"] {
+                let out = fixture.hook(stage, "fix: check", "");
+                let case = format!("stage={stage}, stale={stale}, level={level}");
+                collect_refusal(&out, "git.secret_scan", &case, &mut failures);
+                collect_refusal(&out, "git.conflict_markers", &case, &mut failures);
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn landed_floor_inactive_authority_and_checkout_do_not_scan_on_either_hook() {
+    for stale in [false, true] {
+        for level in ["off", "allow"] {
+            let policy = json!({"secret_scan":level, "conflict_markers":level});
+            let fixture = Fixture::new(policy.clone(), policy, stale);
+            fixture.stage(&format!(
+                "key = {}{}\n<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n",
+                "AKIA", "Q3ZWJ2X5LMN8RT4V"
+            ));
+            for stage in ["pre-commit", "pre-merge-commit"] {
+                let out = fixture.hook(stage, "fix: check", "");
+                assert!(
+                    out.status.success(),
+                    "stage={stage}, stale={stale}, level={level}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+    }
 }
 
 #[test]

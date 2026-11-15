@@ -221,15 +221,20 @@ fn hook_floor_required_ticket_footer_cannot_become_unchecked() {
 }
 
 #[test]
-fn hook_floor_pre_commit_scans_at_block_over_off_and_allow() {
-    for level in ["off", "allow"] {
+fn hook_floor_both_commit_hooks_scan_at_the_composed_level() {
+    for (landed_level, level, active) in [
+        ("block", "off", true),
+        ("block", "allow", true),
+        ("off", "off", false),
+        ("allow", "allow", false),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
         repo.set_head("refs/heads/task/check").unwrap();
         std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
         let path = dir.path().join(".codeflow/policy.json");
         let landed = git(
-            json!({"root_checkout_commits":"off", "secret_scan":"block", "conflict_markers":"block"}),
+            json!({"root_checkout_commits":"off", "secret_scan":landed_level, "conflict_markers":landed_level}),
         );
         std::fs::write(&path, json!({"git":landed}).to_string()).unwrap();
         let mut index = repo.index().unwrap();
@@ -256,15 +261,21 @@ fn hook_floor_pre_commit_scans_at_block_over_off_and_allow() {
         index.add_path(std::path::Path::new("payload.txt")).unwrap();
         index.write().unwrap();
         let policy = compose_git(&landed, &working).unwrap();
-        let report = crate::hooks::git_hook::pre_commit(dir.path(), &policy, false, false).unwrap();
-        for rule in ["git.secret_scan", "git.conflict_markers"] {
-            assert!(
-                report
-                    .violations
-                    .iter()
-                    .any(|v| v.rule == rule && v.level == PolicyLevel::Block),
-                "missing {rule}: {report:?}"
-            );
+        for stage in [
+            crate::hooks::git_hook::pre_commit,
+            crate::hooks::git_hook::pre_merge_commit,
+        ] {
+            let report = stage(dir.path(), &policy, false, false).unwrap();
+            for rule in ["git.secret_scan", "git.conflict_markers"] {
+                assert_eq!(
+                    report
+                        .violations
+                        .iter()
+                        .any(|v| v.rule == rule && v.level == PolicyLevel::Block),
+                    active,
+                    "{rule}, landed={landed_level}, checkout={level}: {report:?}"
+                );
+            }
         }
     }
 }

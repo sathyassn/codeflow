@@ -173,18 +173,29 @@ fn pre_commit_engine(
             .push(unverified_staged_paths(root, &error)),
     }
 
+    scan_staged_content(&repo, root, policy, engine, &mut report);
+
+    Ok(report)
+}
+
+/// Staged content checks for pre-commit and pre-merge-commit.
+fn scan_staged_content(
+    repo: &Repository,
+    root: &Path,
+    policy: &GitPolicy,
+    engine: &Engine,
+    report: &mut StageReport,
+) {
     if policy.secret_scan.is_active() {
-        secret_scan(&repo, root, policy, engine, &mut report);
+        secret_scan(repo, root, policy, engine, report);
     }
 
     if policy.conflict_markers.is_active() {
         report.violations.extend(super::conflict_markers::staged(
-            &repo,
+            repo,
             policy.conflict_markers,
         ));
     }
-
-    Ok(report)
 }
 
 /// The refusal when the staged paths cannot be judged. A landed policy this
@@ -943,6 +954,9 @@ fn commit_msg_secret_scan_engine(
 /// [`HUMAN_OVERRIDE_ENV`](super::HUMAN_OVERRIDE_ENV) is
 /// present (both sanctioned paths, ADR-0007).
 ///
+/// Also scan staged secrets and conflict markers at the supplied policy's
+/// levels. The CLI supplies the composed landed policy floor.
+///
 /// HONEST BOUNDARY: git fires **no** client hook for a fast-forward merge
 /// (no merge commit is created), so a ff-merge onto a protected branch cannot
 /// be caught here — the Claude-layer `git-guard` catches it in-session, and the
@@ -985,6 +999,8 @@ pub fn pre_merge_commit(
             policy,
             &crate::root_checkout::process_env,
         ));
+
+    scan_staged_content(&repo, root, policy, &Engine::from_env(), &mut report);
 
     Ok(report)
 }
