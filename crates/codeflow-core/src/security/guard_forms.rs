@@ -1903,7 +1903,6 @@ pub const OPTION_CARRIERS: &[&str] = &[
     "ag --pager='{}' needle",
     "man -P '{}' ls",
     "man --pager='{}' ls",
-    "man --pag '{}' ls",
     "man -H'{}' ls",
     "man --html='{}' ls",
     "rg --pre '{}' needle",
@@ -1926,7 +1925,6 @@ pub const OPTION_CARRIERS: &[&str] = &[
     "tar -I '{}' -cf x.tar d",
     "tar -cf x.tar -I'{}' d",
     "tar --use-compress-program='{}' -cf x.tar d",
-    "tar --use-comp '{}' -cf x.tar d",
     "tar --to-command='{}' -xf x.tar",
     "tar --checkpoint-action=exec='{}' -cf x.tar d",
     "tar --checkpoint-action 'exec={}' -cf x.tar d",
@@ -1940,6 +1938,8 @@ pub const OPTION_CARRIERS: &[&str] = &[
     "split --filter='{}' f",
     "install --strip-program='{}' -s a b",
     "zip -TT '{}' -T a.zip f",
+    "zip -TT'{}' -T a.zip f",
+    "zip -TT='{}' -T a.zip f",
     "zip --unzip-command '{}' -T a.zip f",
     "flock /tmp/l -c '{}'",
     "script -c '{}' /dev/null",
@@ -1947,6 +1947,15 @@ pub const OPTION_CARRIERS: &[&str] = &[
     "npx --call='{}'",
     "npm exec -c '{}'",
     "npm x --call '{}'",
+    "npm --prefix /tmp exec -c '{}'",
+    "npm --prefix /tmp x --call='{}'",
+    "npm -c '{}' exec",
+    "wget --use-askpass='{}' https://example.invalid",
+    "wget --use-askpass '{}' https://example.invalid",
+    "wget2 --use-askpass='{}' https://example.invalid",
+    "wget -e 'use_askpass = {}' https://example.invalid",
+    "wget --execute='useAskPass={}' https://example.invalid",
+    "wget -qe 'use-askpass={}' https://example.invalid",
     "su -c '{}'",
     "su --command='{}' root",
     "runuser -c '{}' x",
@@ -1978,10 +1987,31 @@ pub const OPTION_CLONE_GIT: &[&str] = &[
 /// The exec-guard arguments for [`OPTION_CLONE_CARRIERS`].
 pub const OPTION_CLONE_EXEC: &[&str] = &["--upload-pack='rm -rf /'", "-u 'cat ~/.ssh/id_rsa'"];
 
-/// Option values in a command language the guard does not read, an editor's
-/// commands or a Cargo key naming a program it runs: both guards refuse them
-/// under `git.hook_integrity` (TSK-1490 rulings D2 and D3).
+/// Option values the guard does not read as a command: an editor's
+/// commands, a Cargo setting naming a program it runs or a Cargo value that
+/// does not parse, and a spelling of an inventory option the reader does
+/// not parse exactly (an abbreviation, a case variant, a value glued inside
+/// a cluster). Both guards refuse them under `git.hook_integrity` (TSK-1490
+/// rulings D2 and D3).
 pub const OPTION_LANGUAGES: &[&str] = &[
+    "script --comm 'true' /dev/null",
+    "flock /tmp/l --comm 'true'",
+    "man --pag 'true' ls",
+    "tar --use-comp 'true' -cf x.tar d",
+    "sort --compress-prog=true f",
+    "ack --PAGER=true needle",
+    "vim --cMd 'set nu' f",
+    "vim --CMD 'set nu' f",
+    "zip -qTT'true' a.zip f",
+    "wget --use-ask=true https://example.invalid",
+    "cargo --conf 'build.jobs=2' build",
+    "cargo --config 'doc.\"brow\\u0073er\"=\"id\"' doc --open",
+    "cargo --config 'credential-alias.local=[\"id\"]' publish",
+    "cargo --config 'build.rustflags=[\"-Clinker=id\"]' build",
+    "cargo --config 'registries.x.credential-provider=\"id\"' publish",
+    "cargo --config 'Build.Rustc_Wrapper=\"id\"' build",
+    "cargo --config 'alias.b=\"run\"' b",
+    "cargo --config 'a=' build",
     "vim -c 'set nu' f",
     "vim --cmd 'set nu' f",
     "vim '+set nu' f",
@@ -2035,4 +2065,49 @@ pub const OPTION_CONTROLS: &[(&str, &str)] = &[
         "cargo build",
     ),
     ("cargo --config ci.toml build", "cargo build"),
+    (
+        "cargo --config 'env.APP_MODE=\"runner\"' build",
+        "cargo build",
+    ),
+    (
+        "cargo --config 'build.target-dir=\"/tmp/runner/linker\"' build",
+        "cargo build",
+    ),
+    (
+        "cargo --config 'env.APP_MODE={value=\"rustc-wrapper\",force=true}' build",
+        "cargo build",
+    ),
+    (
+        "wget -e robots=off https://example.invalid",
+        "wget https://example.invalid",
+    ),
+    (
+        "wget -Orelease.tar.gz https://example.invalid",
+        "wget https://example.invalid",
+    ),
+    ("tar --to-stdout -xf x.tar", "tar -xf x.tar"),
+    ("npm --prefix /tmp install", "npm install"),
+];
+
+/// A Cargo `env` setting beside the same assignment written bare before
+/// Cargo, for exec-guard: the setting gets the assignment's verdict
+/// (TSK-1490 ruling D3). The spaced spelling keeps the raw text from
+/// matching the assignment itself.
+pub const OPTION_ASSIGNMENTS: &[(&str, &str)] = &[(
+    "cargo --config 'env.LD_PRELOAD = \"/tmp/x.so\"' build",
+    "LD_PRELOAD=/tmp/x.so cargo build",
+)];
+
+/// A carried relative read after a directory change the guard cannot
+/// establish, beside the read written bare, for exec-guard with the text
+/// rule relaxed: both refuse as a possible secret read (TSK-1490).
+pub const OPTION_UNKNOWN_DIRECTORY: &[(&str, &str)] = &[
+    (
+        "cd \"$D\"; man -P 'cat auth.json' ls",
+        "cd \"$D\"; cat auth.json",
+    ),
+    (
+        "cd \"$D\" && rg --pre 'cat .codex/auth.json' needle",
+        "cd \"$D\" && cat .codex/auth.json",
+    ),
 ];

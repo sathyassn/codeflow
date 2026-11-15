@@ -378,17 +378,33 @@ fn option_violations(
     if bodies.is_empty() {
         return found;
     }
-    let dirs = super::git_guard::run_dirs(&segments, cwd).dirs;
+    let run = super::git_guard::run_dirs(&segments, cwd);
     let _body = OptionBody::enter();
     for body in &bodies {
-        for directory in &dirs {
+        for directory in &run.dirs {
             found.extend(evaluate_ruled(
                 body, posix, levels, integrity, directory, root, outcome,
             ));
         }
+        // Where the line may move to a directory the guard cannot establish,
+        // the body is judged after such a move too, so a relative name keeps
+        // the unknown directory the bare command would have. Findings about
+        // the stand-in directory word itself are the guard's own and dropped.
+        if run.unknown.is_some() {
+            let moved = format!("cd \"${UNKNOWN_DIRECTORY}\"; {body}");
+            found.extend(
+                evaluate_ruled(&moved, posix, levels, integrity, cwd, root, outcome)
+                    .into_iter()
+                    .filter(|finding| !finding.message.contains(UNKNOWN_DIRECTORY)),
+            );
+        }
     }
     found
 }
+
+/// The stand-in variable for a directory the guard cannot establish, which
+/// [`option_violations`] moves a carried command into.
+const UNKNOWN_DIRECTORY: &str = "CODEFLOW_UNKNOWN_DIRECTORY";
 
 /// Every command a Git call on the line runs itself, read with its
 /// directory by git-guard's runner reader through every nesting level and
@@ -720,12 +736,104 @@ mod tests {
                 }
             }
         }
+        for (carried, bare_line) in crate::security::guard_forms::OPTION_ASSIGNMENTS {
+            let bare = rules(bare_line);
+            assert!(!bare.is_empty(), "{bare_line}");
+            let got = rules(carried);
+            if !bare.is_subset(&got) {
+                failed.push(format!("{carried}: {got:?}, want {bare:?}"));
+            }
+        }
         assert!(
             failed.is_empty(),
             "{} rows:\n{}",
             failed.len(),
             failed.join("\n")
         );
+    }
+
+    /// TSK-1490 AC-1, Codex review 01: a carried command gets the bare
+    /// command's rule at the level the policy sets it to, block, warn or
+    /// off, and nothing of that rule when the bare command gets nothing.
+    #[test]
+    fn a_command_in_an_option_value_takes_the_bare_rule_at_each_level() {
+        use crate::security::guard_forms::{OPTION_ASSIGNMENTS, OPTION_CARRIERS};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Each bare command with the one rule it meets; the carried form
+        // may meet other rules of its own (see the test above).
+        let mut triples: Vec<(String, String, &str)> = Vec::new();
+        for (value, rule) in [
+            ("cat ~/.ssh/id_rsa", "security.secret_reads"),
+            ("claude -p hi", "security.headless_peer_runs"),
+            ("sudo id", "security.privilege_escalation"),
+        ] {
+            for form in OPTION_CARRIERS {
+                triples.push((form.replace("{}", value), value.to_string(), rule));
+            }
+        }
+        for (carried, bare) in OPTION_ASSIGNMENTS {
+            triples.push((
+                (*carried).to_string(),
+                (*bare).to_string(),
+                "security.privilege_escalation",
+            ));
+        }
+        let mut failed = Vec::new();
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            let section = SecuritySection {
+                secret_reads: level,
+                headless_peer_runs: level,
+                privilege_escalation: level,
+                ..SecuritySection::default()
+            };
+            let level_of = |cmd: &str, rule: &str| -> Option<(PolicyLevel, bool)> {
+                evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                    .into_iter()
+                    .find(|v| v.rule == rule)
+                    .map(|v| (v.level, v.level_fixed))
+            };
+            for (carried, bare, rule) in &triples {
+                let (want, got) = (level_of(bare, rule), level_of(carried, rule));
+                if want != got {
+                    failed.push(format!(
+                        "{level:?} {rule} {carried}: {got:?}, want {want:?}"
+                    ));
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 AC-1, Codex review 01: a carried relative read after a
+    /// directory change the guard cannot establish refuses as a possible
+    /// secret read, as the read written bare does, with the text rule
+    /// relaxed so that rule alone answers.
+    #[test]
+    fn a_carried_read_keeps_an_unknown_directory() {
+        use crate::hooks::policy::TextGuard;
+        use crate::security::guard_forms::OPTION_UNKNOWN_DIRECTORY;
+        let section = SecuritySection {
+            text_guard: TextGuard::Relaxed,
+            secret_reads: PolicyLevel::Block,
+            ..SecuritySection::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let secret = |cmd: &str| {
+            evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                .iter()
+                .any(|v| v.rule == "security.secret_reads")
+        };
+        for (carried, bare) in OPTION_UNKNOWN_DIRECTORY {
+            assert!(secret(bare), "{bare}");
+            assert!(secret(carried), "{carried}");
+        }
     }
 
     /// TSK-1490 rulings D2 and D3: an option value in a command language

@@ -17256,6 +17256,56 @@ mod tests {
         );
     }
 
+    /// TSK-1490 AC-1, Codex review 01: a carried command gets the bare
+    /// command's rule at the level the policy sets it to, block, warn or
+    /// off, and nothing of that rule when the bare command gets nothing.
+    #[test]
+    fn a_command_in_an_option_value_takes_the_bare_rule_at_each_level() {
+        use crate::security::guard_forms::OPTION_CARRIERS;
+        let values = [
+            "git push --force origin main",
+            "git push origin --delete main",
+        ];
+        let wanted: std::collections::BTreeSet<String> = values
+            .iter()
+            .flat_map(|value| evaluate(value, &ctx(&default_policy(), "feat/x")))
+            .map(|v| v.rule)
+            .collect();
+        assert!(!wanted.is_empty());
+        let mut failed = Vec::new();
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            let p = GitPolicy {
+                force_push_protected: level,
+                force_push_unprotected: level,
+                delete_protected: level,
+                ..default_policy()
+            };
+            let levels = |cmd: &str| -> std::collections::BTreeMap<String, PolicyLevel> {
+                evaluate(cmd, &ctx(&p, "feat/x"))
+                    .into_iter()
+                    .filter(|v| wanted.contains(&v.rule))
+                    .map(|v| (v.rule, v.level))
+                    .collect()
+            };
+            for value in values {
+                let want = levels(value);
+                for form in OPTION_CARRIERS {
+                    let carried = form.replace("{}", value);
+                    let got = levels(&carried);
+                    if got != want {
+                        failed.push(format!("{level:?} {carried}: {got:?}, want {want:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
     /// TSK-1490 rulings D2 and D3: an option value in a command language
     /// the guard does not read refuses under hook integrity; an ordinary
     /// value, another option or a form the reader does not reach adds no

@@ -11,12 +11,17 @@
 //! (`hooks/git_guard/runners.rs`), and the shells, `env -S`, `eval`, `sed`,
 //! `find -exec`, `xargs`, `parallel` and `watch` keep their own readers.
 //!
-//! The reader fails closed where a program's grammar is not modelled: it
-//! scans every word up to `--` (option permutation), reads any prefix of a
-//! long name for programs that accept abbreviations, and reads a value that
-//! names a program path as shell text, so a value may be read as more than
-//! the program runs, never less. A value in a file the program reads (a
-//! configuration file, an environment variable) is outside this reader.
+//! The reader admits only the spellings it parses exactly: a whole option
+//! name with its value after `=`, glued on where the program's grammar
+//! allows it, or in the next word, and short options alone or in clusters.
+//! Any other spelling of an inventory option refuses by name: an
+//! abbreviation or a case variant of a `--` name, or a glued name inside a
+//! cluster. It scans every word up to `--` (option permutation) and reads a
+//! value that names a program path as shell text, so a value may be read as
+//! more than the program runs, never less. A Cargo `--config` value is
+//! parsed as TOML and judged by its decoded key paths. A value in a file the
+//! program reads (a configuration file, an environment variable) is outside
+//! this reader.
 //!
 //! The inventory, one line per row of [`OPTION_COMMANDS`], held equal to it
 //! by a test (`security/launchers.rs`):
@@ -37,7 +42,7 @@
 //! - `zip`: `-TT`, `--unzip-command`
 //! - `flock`, `script`: `-c`, `--command`
 //! - `npx`: `-c`, `--call`
-//! - `npm exec`, `npm x`: `-c`, `--call`
+//! - `npm`: `-c`, `--call`
 //! - `su`, `runuser`: `-c`, `--command`, `--session-command`
 //! - `fd`, `fdfind`: `-x`, `-X`, `--exec`, `--exec-batch`
 //! - `gh repo clone`, `gh repo fork`, `gh gist clone`: `--`
@@ -46,6 +51,8 @@
 //! - `emacs`: `--eval`, `--execute`, `--funcall`, `-eval`, `-execute`, `-funcall`, `-f`
 //! - `emacsclient`: `-e`, `--eval`
 //! - `cargo`: `--config`
+//! - `wget`, `wget2`: `--use-askpass`
+//! - `wget`, `wget2`: `-e`, `--execute`
 
 use crate::hooks::git_guard::{launcher_commands, program_name};
 
@@ -64,8 +71,12 @@ pub(crate) enum Runs {
     CloneArguments,
     /// A command language the guard does not read: refused.
     Language,
-    /// A Cargo configuration value: a key naming a program refuses.
+    /// A Cargo configuration value, judged by its decoded key paths: a key
+    /// naming a program refuses, an `env` key is judged as the assignment.
     CargoConfig,
+    /// A wget startup command (`NAME = VALUE`): the askpass command's value
+    /// is the program wget runs.
+    Wgetrc,
     /// Read by the program's own reader in git-guard
     /// ([`launcher_commands`]), which also reads its operand commands.
     OwnReader,
@@ -81,18 +92,18 @@ pub(crate) struct Carrier {
     pub(crate) subcommands: &'static [&'static [&'static str]],
     /// Short option letters, read in clusters (`-vo VALUE`, `-oVALUE`).
     pub(crate) short: &'static [char],
-    /// Long names with their dashes (`--pager`, `-TT`, `-eval`). A name
-    /// with one dash is matched whole, with its value attached by `=` or
-    /// in the next word.
+    /// Long names with their dashes (`--pager`, `-TT`, `-eval`), matched
+    /// whole, with the value after `=` or in the next word. Another
+    /// spelling of a `--` name, an abbreviation or a case variant, refuses.
     pub(crate) long: &'static [&'static str],
-    /// Whether any prefix of a `--` name names it (`getopt_long`, Perl's
-    /// `Getopt::Long`); over-reading a prefix fails closed.
-    pub(crate) prefixes: bool,
     /// Real options of the program that are prefixes of a name above, which
     /// an exact match makes the program's own (`install --strip`).
     pub(crate) shadows: &'static [&'static str],
     /// Whether the value must be attached (`-Hbrowser`, `--html=browser`).
     pub(crate) attached: bool,
+    /// Whether a one-dash long name takes its value glued on (`-TTcmd`);
+    /// the name glued inside a cluster refuses.
+    pub(crate) glued: bool,
     /// Whether a `+VALUE` word is the value (`vim +CMD`, `less +CMD`).
     pub(crate) plus: bool,
     /// How the program runs the value.
@@ -107,9 +118,9 @@ const fn row(programs: &'static [&'static str], runs: Runs) -> Carrier {
         subcommands: &[],
         short: &[],
         long: NONE,
-        prefixes: false,
         shadows: NONE,
         attached: false,
+        glued: false,
         plus: false,
         runs,
     }
@@ -117,6 +128,7 @@ const fn row(programs: &'static [&'static str], runs: Runs) -> Carrier {
 
 const TAR: &[&str] = &["tar", "gtar", "bsdtar"];
 const SSH: &[&str] = &["ssh", "scp", "sftp"];
+const WGET: &[&str] = &["wget", "wget2"];
 const VIM: &[&str] = &[
     "vim", "vi", "nvim", "view", "ex", "vimdiff", "gvim", "mvim", "rvim", "rview", "gview", "evim",
     "vimx", "nview", "nvi",
@@ -128,19 +140,16 @@ const VIM: &[&str] = &[
 pub(crate) const OPTION_COMMANDS: &[Carrier] = &[
     Carrier {
         long: &["--pager"],
-        prefixes: true,
         ..row(&["ack", "ag"], Runs::Line)
     },
     Carrier {
         short: &['P'],
         long: &["--pager"],
-        prefixes: true,
         ..row(&["man"], Runs::Line)
     },
     Carrier {
         short: &['H'],
         long: &["--html"],
-        prefixes: true,
         attached: true,
         ..row(&["man"], Runs::Line)
     },
@@ -163,7 +172,6 @@ pub(crate) const OPTION_COMMANDS: &[Carrier] = &[
     Carrier {
         short: &['e'],
         long: &["--rsh"],
-        prefixes: true,
         ..row(&["rsync"], Runs::Line)
     },
     Carrier {
@@ -175,34 +183,29 @@ pub(crate) const OPTION_COMMANDS: &[Carrier] = &[
             "--new-volume-script",
             "--rsh-command",
         ],
-        prefixes: true,
         ..row(TAR, Runs::Line)
     },
     Carrier {
         long: &["--checkpoint-action"],
-        prefixes: true,
         shadows: &["--checkpoint"],
         ..row(TAR, Runs::Checkpoint)
     },
     Carrier {
         long: &["--compress-program"],
-        prefixes: true,
         ..row(&["sort"], Runs::Line)
     },
     Carrier {
         long: &["--filter"],
-        prefixes: true,
         ..row(&["split"], Runs::Line)
     },
     Carrier {
         long: &["--strip-program"],
-        prefixes: true,
         shadows: &["--strip"],
         ..row(&["install"], Runs::Line)
     },
     Carrier {
         long: &["-TT", "--unzip-command"],
-        prefixes: true,
+        glued: true,
         ..row(&["zip"], Runs::Line)
     },
     Carrier {
@@ -213,20 +216,18 @@ pub(crate) const OPTION_COMMANDS: &[Carrier] = &[
     Carrier {
         short: &['c'],
         long: &["--call"],
-        prefixes: true,
         ..row(&["npx"], Runs::Line)
     },
+    // npm takes `-c` as `--call` before or after any subcommand, so the
+    // value is read wherever it stands.
     Carrier {
-        subcommands: &[&["exec"], &["x"]],
         short: &['c'],
         long: &["--call"],
-        prefixes: true,
         ..row(&["npm"], Runs::Line)
     },
     Carrier {
         short: &['c'],
         long: &["--command", "--session-command"],
-        prefixes: true,
         ..row(&["su", "runuser"], Runs::Line)
     },
     Carrier {
@@ -258,18 +259,25 @@ pub(crate) const OPTION_COMMANDS: &[Carrier] = &[
             "-funcall",
             "-f",
         ],
-        prefixes: true,
         ..row(&["emacs"], Runs::Language)
     },
     Carrier {
         short: &['e'],
         long: &["--eval"],
-        prefixes: true,
         ..row(&["emacsclient"], Runs::Language)
     },
     Carrier {
         long: &["--config"],
         ..row(&["cargo"], Runs::CargoConfig)
+    },
+    Carrier {
+        long: &["--use-askpass"],
+        ..row(WGET, Runs::Line)
+    },
+    Carrier {
+        short: &['e'],
+        long: &["--execute"],
+        ..row(WGET, Runs::Wgetrc)
     },
 ];
 
@@ -286,7 +294,7 @@ pub(crate) enum Carried {
 /// The refusal message for an [`Carried::Unread`] form.
 pub(crate) fn unread_message(form: &str) -> String {
     format!(
-        "`{form}` takes a value that runs commands in a language the guard does not read, so it is not judged as a command"
+        "`{form}` takes a value the guard does not read as a command: a command language, a setting that names a program, or a spelling of the option the guard does not parse, so it cannot be judged"
     )
 }
 
@@ -329,11 +337,12 @@ pub(crate) fn option_values(program: &str, args: &[String]) -> Vec<Carried> {
 
 fn read(program: &str, args: &[String], own: bool) -> Vec<Carried> {
     let name = program_name(program);
-    let mut out = Vec::new();
-    for carrier in OPTION_COMMANDS
+    let rows: Vec<&Carrier> = OPTION_COMMANDS
         .iter()
         .filter(|carrier| carrier.programs.contains(&name))
-    {
+        .collect();
+    let mut out = unparsed_spellings(&rows, name, args);
+    for carrier in rows {
         if carrier.runs == Runs::OwnReader {
             if own {
                 out.extend(
@@ -348,6 +357,62 @@ fn read(program: &str, args: &[String], own: bool) -> Vec<Carried> {
             continue;
         }
         for carried in carrier_values(carrier, name, args) {
+            if !out.contains(&carried) {
+                out.push(carried);
+            }
+        }
+    }
+    out
+}
+
+/// Every word of `args`, up to `--`, that spells an option of `rows` in a
+/// form the reader does not parse exactly: an abbreviation or a case
+/// variant of a `--` name, or a glued one-dash name inside a cluster. Each
+/// refuses by name, so a spelling the program may accept is never left
+/// unjudged; a full real option that is a prefix of a name stays the
+/// program's own (`install --strip`).
+fn unparsed_spellings(rows: &[&Carrier], name: &str, args: &[String]) -> Vec<Carried> {
+    let longs: Vec<&str> = rows
+        .iter()
+        .flat_map(|row| row.long.iter().copied())
+        .collect();
+    let shadows: Vec<&str> = rows
+        .iter()
+        .flat_map(|row| row.shadows.iter().copied())
+        .collect();
+    let glued: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.glued)
+        .flat_map(|row| row.long.iter().copied())
+        .filter(|long| !long.starts_with("--"))
+        .collect();
+    let mut out = Vec::new();
+    for word in args
+        .iter()
+        .map(String::as_str)
+        .take_while(|word| *word != "--")
+    {
+        let spelled = word.split_once('=').map_or(word, |(spelled, _)| spelled);
+        let form = if spelled.starts_with("--") && spelled.len() > 2 {
+            let lower = spelled.to_ascii_lowercase();
+            let unparsed = !longs.contains(&spelled)
+                && !shadows.contains(&spelled)
+                && longs
+                    .iter()
+                    .any(|long| long.starts_with("--") && long.starts_with(lower.as_str()));
+            unparsed.then(|| spelled.to_string())
+        } else {
+            word.strip_prefix('-')
+                .filter(|cluster| !cluster.starts_with('-'))
+                .and_then(|cluster| {
+                    glued
+                        .iter()
+                        .find(|long| cluster.find(&long[1..]).is_some_and(|at| at > 0))
+                })
+                .map(|long| (*long).to_string())
+        };
+        if let Some(form) = form {
+            let carried = Carried::Unread(format!("{name} {form}"));
             if !out.contains(&carried) {
                 out.push(carried);
             }
@@ -434,12 +499,20 @@ fn option_value(carrier: &Carrier, word: &str) -> Option<Value> {
         return Some(Value::Attached(word.trim_start_matches('+').to_string()));
     }
     let next = || (!carrier.attached).then_some(Value::Next);
+    let spelled = word.split_once('=').map_or(word, |(spelled, _)| spelled);
     for long in carrier.long {
-        if long_match(carrier, word, long) {
+        if spelled == *long {
             return match word.split_once('=') {
                 Some((_, value)) => Some(Value::Attached(value.to_string())),
                 None => next(),
             };
+        }
+        if carrier.glued && !long.starts_with("--") {
+            if let Some(rest) = word.strip_prefix(long).filter(|rest| !rest.is_empty()) {
+                return Some(Value::Attached(
+                    rest.strip_prefix('=').unwrap_or(rest).to_string(),
+                ));
+            }
         }
     }
     let cluster = word
@@ -454,20 +527,6 @@ fn option_value(carrier: &Carrier, word: &str) -> Option<Value> {
     } else {
         Some(Value::Attached(attached.to_string()))
     }
-}
-
-/// Whether `word` names the long option `long`: the whole name, a one-dash
-/// name with `=VALUE`, or for `--` names a prefix where the row reads one
-/// and no real option of the program shadows it.
-fn long_match(carrier: &Carrier, word: &str, long: &str) -> bool {
-    let name = word.split_once('=').map_or(word, |(name, _)| name);
-    if name == long {
-        return true;
-    }
-    if long.starts_with("--") && carrier.prefixes && name.starts_with("--") && name.len() > 2 {
-        return long.starts_with(name) && !carrier.shadows.contains(&name);
-    }
-    false
 }
 
 /// Push what `value` carries by the row's kind; returns where reading goes
@@ -515,8 +574,13 @@ fn carried_value(
             }
         }
         Runs::CargoConfig => {
-            if names_cargo_program(&value) {
-                push(Carried::Unread(format!("{name} --config")));
+            for carried in cargo_config(&value) {
+                push(carried);
+            }
+        }
+        Runs::Wgetrc => {
+            if let Some(command) = wgetrc_command(&value) {
+                push(Carried::Command(command));
             }
         }
         Runs::CloneArguments | Runs::OwnReader => {}
@@ -586,27 +650,121 @@ fn inert_position(name: &str, word: &str, value: &str) -> bool {
         || (name == "less" && matches!(value, "G" | "g" | "F"))
 }
 
-/// Whether a Cargo `--config` value sets a key naming a program Cargo runs
-/// (TSK-1490 ruling D3): a runner, a compiler wrapper, a linker, the
-/// compiler, rustdoc, a browser or a credential provider. Any word of the
-/// value counts, so a key in an inline table or a quoted segment is found;
-/// a value naming no such key, a configuration file included, passes.
-fn names_cargo_program(value: &str) -> bool {
+/// What a Cargo `--config` value carries (TSK-1490 ruling D3). A value
+/// without `=` names a configuration file, outside this reader. Any other
+/// value is parsed as TOML, its keys decoded, and judged by key path, never
+/// by its values: a setting naming a program Cargo runs refuses, an `env`
+/// setting is judged as the same assignment written bare before Cargo, and
+/// every other setting passes. A value that does not parse refuses.
+fn cargo_config(value: &str) -> Vec<Carried> {
+    let refuse = || vec![Carried::Unread("cargo --config".to_string())];
+    if !value.contains('=') {
+        return Vec::new();
+    }
+    let Ok(table) = value.parse::<toml::Table>() else {
+        return refuse();
+    };
+    let mut out = Vec::new();
+    for (key, setting) in &table {
+        let path = [cargo_segment(key)];
+        if path[0] != "env" {
+            if names_cargo_program(&path, setting) {
+                return refuse();
+            }
+            continue;
+        }
+        let toml::Value::Table(variables) = setting else {
+            return refuse();
+        };
+        for (variable, setting) in variables {
+            let text = match setting {
+                toml::Value::String(text) => Some(text),
+                toml::Value::Table(fields) => match fields.get("value") {
+                    Some(toml::Value::String(text)) => Some(text),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(text) = text.filter(|_| shell_name(variable)) else {
+                return refuse();
+            };
+            out.push(Carried::Command(format!(
+                "{variable}={} cargo",
+                quoted(text)
+            )));
+        }
+    }
+    out
+}
+
+/// A Cargo key segment as compared here: lower case, `_` read as `-`, so a
+/// spelling Cargo may fold together is judged as one.
+fn cargo_segment(key: &str) -> String {
+    key.to_ascii_lowercase().replace('_', "-")
+}
+
+/// Whether the setting at `path`, or one below it, names a program Cargo
+/// runs: anything under `target` or `host` (runners, linkers, flags,
+/// build script overrides), a Cargo command alias or a credential provider
+/// alias, and the program and flag keys wherever they stand.
+fn names_cargo_program(path: &[String], setting: &toml::Value) -> bool {
+    const ROOTS: &[&str] = &["target", "host", "alias", "credential-alias"];
     const KEYS: &[&str] = &[
         "runner",
         "linker",
-        "rustc-wrapper",
-        "rustc-workspace-wrapper",
+        "ar",
         "rustc",
         "rustdoc",
+        "rustc-wrapper",
+        "rustc-workspace-wrapper",
         "browser",
         "credential-provider",
         "global-credential-providers",
+        "rustflags",
+        "rustdocflags",
+        "codegen-backend",
     ];
-    value.contains('=')
-        && value
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-            .any(|word| KEYS.contains(&word))
+    if ROOTS.contains(&path[0].as_str())
+        || path.iter().any(|segment| KEYS.contains(&segment.as_str()))
+    {
+        return true;
+    }
+    match setting {
+        toml::Value::Table(table) => table.iter().any(|(key, below)| {
+            let mut deeper = path.to_vec();
+            deeper.push(cargo_segment(key));
+            names_cargo_program(&deeper, below)
+        }),
+        toml::Value::Array(items) => items.iter().any(|below| names_cargo_program(path, below)),
+        _ => false,
+    }
+}
+
+/// Whether `name` is a shell variable name, so `name=value` is an
+/// assignment.
+fn shell_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The program a wget startup command (`-e NAME=VALUE`) runs: wget compares
+/// the name without case and with `-` and `_` dropped, so any spelling of
+/// the askpass command counts. Another command, or one without `=`, runs
+/// nothing here.
+fn wgetrc_command(value: &str) -> Option<String> {
+    // wget's own blanks: ASCII spaces, tabs and line ends.
+    const BLANKS: &[char] = &[' ', '\t', '\r', '\n', '\u{b}', '\u{c}'];
+    let (key, rest) = value.split_once('=')?;
+    let key: String = key
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_') && !BLANKS.contains(c))
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let rest = rest.trim_matches(BLANKS);
+    (key == "useaskpass" && !rest.is_empty()).then(|| rest.to_string())
 }
 
 /// The option as the refusal shows it: its name without a value.
@@ -646,22 +804,26 @@ mod tests {
         let x = || vec![Carried::Command("X".into())];
         for line in [
             "ack --pager=X",
-            "ack --pag X",
             "man -PX",
             "man -aP X",
             "rsync -avzeX",
             "tar -cf a -I X",
-            "tar --use=X",
             "zip -TT X",
+            "zip -TTX",
+            "zip -TT=X",
             "zip --unzip-command=X",
-            "sort --compress-prog=X",
             "su -lc X",
             "ssh -o ProxyCommand=X",
             "ssh -oLocalCommand=X",
             "tar --checkpoint-action=exec=X",
             "tar cIf X a.tar",
             "npm exec -c X",
+            "npm --prefix /tmp exec -c X",
+            "npm install -c X",
             "/usr/bin/gsort --compress-program X",
+            "wget --use-askpass=X",
+            "wget -e use_askpass=X",
+            "wget -qe Use-AskPass=X",
         ] {
             assert_eq!(commands(line), x(), "{line}");
         }
@@ -671,12 +833,17 @@ mod tests {
             "tar --checkpoint X",
             "man -H",
             "man -H X",
-            "npm install -c X",
+            "npm install --cache X",
             "ssh -o BatchMode=yes",
             "ssh -o ProxyCommand=none",
             "cargo --config build.jobs=2",
+            "cargo --config ci.toml",
+            "cargo --config build.target-dir=\"/tmp/runner\"",
             "vim +12",
             "less +G",
+            "wget -e robots=off",
+            "wget -Orelease.tar.gz",
+            "tar --checkpoint=10",
         ] {
             assert!(commands(line).is_empty(), "{line}: {:?}", commands(line));
         }
@@ -693,15 +860,34 @@ mod tests {
         assert_eq!(ssh_command("ProxyCommand\tX"), Some("X".into()));
         assert_eq!(ssh_command("ProxyCommand\u{a0}X"), None);
         assert_eq!(ssh_command("ProxyCommand NONE"), Some("NONE".into()));
+        // A Cargo `env` setting is the same assignment written bare.
+        assert_eq!(
+            commands("cargo --config env.APP_MODE=\"runner\""),
+            vec![Carried::Command("APP_MODE=\"runner\" cargo".into())]
+        );
         for line in [
             "vim -c x",
             "less +!id",
             "emacs --ev x",
             "cargo --config target.x.runner=y",
+            "cargo --config doc.\"brow\\u0073er\"=\"id\"",
+            "cargo --config credential-alias.local=[\"id\"]",
+            "cargo --config build.RUSTC_WRAPPER=\"id\"",
+            "cargo --config a=",
+            "cargo --config env.\"A-B\"=\"x\"",
+            "cargo --conf build.jobs=2",
+            "ack --pag X",
+            "tar --use=X",
+            "sort --compress-prog=X",
+            "script --comm X",
+            "vim --cMd x",
+            "zip -qTTX",
+            "wget --use-ask=X",
         ] {
             assert!(
                 matches!(commands(line).as_slice(), [Carried::Unread(_)]),
-                "{line}"
+                "{line}: {:?}",
+                commands(line)
             );
         }
     }

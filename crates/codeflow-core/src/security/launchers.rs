@@ -290,6 +290,7 @@ mod tests {
             Runs::Checkpoint => format!("exec={command}"),
             Runs::Language => "x".to_string(),
             Runs::CargoConfig => "target.x.runner=y".to_string(),
+            Runs::Wgetrc => format!("use_askpass={command}"),
             _ => command.to_string(),
         };
         // A value as one word, or as the command words a `Words` row takes.
@@ -310,6 +311,9 @@ mod tests {
             spellings.push(format!("{long}={word}"));
             if !row.attached {
                 spellings.push(format!("{long} {word}"));
+            }
+            if row.glued && !long.starts_with("--") {
+                spellings.push(format!("{long}{word}"));
             }
         }
         if row.plus {
