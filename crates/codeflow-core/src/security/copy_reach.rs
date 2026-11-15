@@ -77,6 +77,21 @@ fn short_alias(name: &str) -> bool {
     cfg!(windows) && crate::portable_path::has_short_component(name)
 }
 
+/// Whether a source's own name is an enforcement name, compared as the
+/// filesystem opens it; a name Windows may read as a short name is one the
+/// guard cannot verify.
+fn enforcement_name(name: Option<&str>) -> Result<bool, String> {
+    let Some(name) = name else {
+        return Ok(false);
+    };
+    if short_alias(name) {
+        return Err(format!(
+            "it is named `{name}`, which Windows may read as the short name of another entry"
+        ));
+    }
+    Ok(ENFORCEMENT_NAMES.contains(&compared(name).as_str()))
+}
+
 /// Whether a long option `flag` is `full` or an abbreviation of it.
 fn long_is(flag: &str, full: &str) -> bool {
     flag.len() > 3 && flag.starts_with("--") && full.starts_with(flag)
@@ -431,18 +446,17 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
                 let (state, path) = read.get_or_insert_with(|| read_source(cmd, source, place));
                 let held = match (state, path) {
                     (Source::Unread(why), _) => Err(why.clone()),
-                    (Source::Entry, Some(path)) => Ok(path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_lowercase())
-                        .filter(|n| ENFORCEMENT_NAMES.contains(&n.as_str()))
-                        .map(|_| path.clone())),
-                    (Source::Tree(..), Some(path)) => holds_enforcement_name(path).map(|found| {
-                        found.or_else(|| {
-                            base_name(source)
-                                .filter(|n| ENFORCEMENT_NAMES.contains(&n.to_lowercase().as_str()))
-                                .map(|_| path.clone())
+                    (Source::Entry, Some(path)) => {
+                        let own = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                        enforcement_name(own.as_deref()).map(|hit| hit.then(|| path.clone()))
+                    }
+                    (Source::Tree(..), Some(path)) => {
+                        holds_enforcement_name(path).and_then(|found| match found {
+                            Some(found) => Ok(Some(found)),
+                            None => enforcement_name(base_name(source))
+                                .map(|hit| hit.then(|| path.clone())),
                         })
-                    }),
+                    }
                     (_, None) => Err("it cannot be resolved".into()),
                 };
                 return match held {

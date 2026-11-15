@@ -237,3 +237,44 @@ fn names_are_compared_as_the_filesystem_opens_them() {
     }
     assert!(!short_alias("docs"));
 }
+
+/// Review N1: a filter rule or another documented value that starts with
+/// a dash is the option's value, so an ordinary sync passes and a planted
+/// one is still judged.
+#[test]
+fn a_value_that_starts_with_a_dash_stays_the_option_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    repository(&root);
+    let plain = tmp.path().join("plain");
+    std::fs::create_dir_all(plain.join("docs")).unwrap();
+    let source = tmp.path().join("src");
+    std::fs::create_dir_all(source.join(".claude")).unwrap();
+    let p = plain.display();
+    let s = source.display();
+    // A bare `-@` is not read as an option at all (it fails closed as a
+    // source the guard cannot read), so the window is given in a cluster.
+    for options in ["-a -f -C", "-a -f -p", "-a@ -1", "-af -C"] {
+        let ordinary = format!("rsync {options} {p}/ ./");
+        assert_eq!(judged(&ordinary, &root), None, "{ordinary}");
+        let planted = format!("rsync {options} {s}/ ./");
+        assert!(judged(&planted, &root).is_some(), "{planted}");
+    }
+}
+
+/// Review N2: a source's own name is compared as the filesystem opens it
+/// under a run-time destination too.
+#[test]
+fn a_source_own_name_is_compared_as_the_filesystem_opens_it() {
+    assert_eq!(enforcement_name(Some(".CLAUDE")), Ok(true));
+    assert_eq!(enforcement_name(Some("docs")), Ok(false));
+    assert_eq!(enforcement_name(None), Ok(false));
+    if cfg!(windows) {
+        assert_eq!(enforcement_name(Some(".claude.")), Ok(true));
+        assert_eq!(enforcement_name(Some(".git ")), Ok(true));
+        assert!(enforcement_name(Some("CLAUDE~1")).is_err());
+    } else {
+        assert_eq!(enforcement_name(Some(".claude.")), Ok(false));
+        assert_eq!(enforcement_name(Some("CLAUDE~1")), Ok(false));
+    }
+}

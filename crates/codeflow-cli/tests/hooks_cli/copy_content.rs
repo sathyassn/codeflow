@@ -190,6 +190,33 @@ fn a_dry_run_letter_that_may_be_an_option_value_is_judged_by_both_guards() {
     assert_both(&f.root, &refused, &allowed);
 }
 
+/// Review N1: documented filter rules given to `-f` as the next word stay
+/// its value in both hooks, so an ordinary sync into a checkout passes;
+/// the same rule with a planted source is still refused.
+#[test]
+fn a_filter_rule_given_as_the_next_word_keeps_an_ordinary_sync_passing() {
+    let f = fixture();
+    let a = &f.claude;
+    let allowed: Vec<String> = vec![
+        "rsync -a -f '-p .rsync-partial/' docs/ ./".into(),
+        "rsync -a -f -C docs/ ./".into(),
+        "rsync -a -f '- *.o' docs/ ./".into(),
+        "rsync -a --filter='-p *.o' docs/ ./".into(),
+        "rsync -a -f '+ */' -f '-! */' docs/ ./".into(),
+    ];
+    let refused = vec![
+        row(
+            format!("rsync -a -f -C {a}/ ./"),
+            &[".claude/settings.json"],
+        ),
+        row(
+            format!("rsync -a -f '- *.o' {a}/ ./"),
+            &[".claude/settings.json"],
+        ),
+    ];
+    assert_both(&f.root, &refused, &allowed);
+}
+
 /// AC-3: a source the guard cannot read, copied into a place that holds
 /// enforcement files, is refused as cannot-verify naming the source; a
 /// run-time destination refuses a source that holds an enforcement name.
