@@ -273,9 +273,14 @@ mod tests {
         }
         let mut failed = Vec::new();
         for launcher in &spellings {
-            // `timeout` reads its duration before the command.
+            // `timeout` reads its duration, `taskset` its CPU mask and
+            // `chrt` its priority before the command.
             let duration = if launcher.ends_with("timeout") {
                 " 5"
+            } else if launcher.ends_with("taskset") {
+                " 0x1"
+            } else if launcher.ends_with("chrt") {
+                " 10"
             } else {
                 ""
             };

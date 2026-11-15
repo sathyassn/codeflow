@@ -13967,11 +13967,33 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 None => return Some((t, &tokens[idx + 1..])),
             }
         }
-        if basename(t) == "busybox"
-            && tokens
-                .get(idx + 1)
-                .is_some_and(|a| is_shell(a) || matches!(a.as_str(), "ln" | "link" | "cp" | "dd"))
-        {
+        // A launcher with options of its own: its command, by its grammar
+        // (TSK-1490 AC-8). An option the grammar does not hold: skip
+        // option-shaped words so the command is still judged;
+        // [`launcher_effects`] refuses the launcher.
+        if OPTION_LAUNCHERS.contains(&launcher_name(t)) {
+            match launch_after(launcher_name(t), tokens, idx + 1) {
+                // With no command after it (`sudo -s` reading a script from
+                // its input), the launcher stays the program, so the readers
+                // of a shell's input still judge it.
+                Launch::Runs(next) if next < tokens.len() => {
+                    idx = next;
+                    continue;
+                }
+                Launch::Runs(_) | Launch::Nothing => return Some((t, &tokens[idx + 1..])),
+                Launch::Unread(_) => {
+                    idx += 1;
+                    while tokens.get(idx).is_some_and(|a| a.starts_with('-')) {
+                        idx += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+        // `busybox` running a shell, a file copier or a launcher of the
+        // inventory runs that applet as the program; other applets stay
+        // `busybox`, which the startup guard refuses by design.
+        if basename(t) == "busybox" && tokens.get(idx + 1).is_some_and(|a| busybox_launches(a)) {
             idx += 1;
             continue;
         }
@@ -14052,6 +14074,28 @@ pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>)
                 );
             }
             idx = next;
+            continue;
+        }
+        if OPTION_LAUNCHERS.contains(&name) {
+            match launch_after(name, tokens, idx + 1) {
+                Launch::Runs(next) => {
+                    if let Some(why) = launcher_moves(name, &tokens[idx + 1..next]) {
+                        return (dirs, Some(why));
+                    }
+                    idx = next;
+                    continue;
+                }
+                Launch::Nothing => return (dirs, None),
+                Launch::Unread(form) => {
+                    return (
+                        dirs,
+                        Some(format!("{form}, an option the guard does not read")),
+                    );
+                }
+            }
+        }
+        if basename(t) == "busybox" && tokens.get(idx + 1).is_some_and(|a| busybox_launches(a)) {
+            idx += 1;
             continue;
         }
         if name == "env" {
@@ -14360,6 +14404,258 @@ pub(crate) fn skip_launcher_options(
         idx += 1;
     }
     Some(idx)
+}
+
+/// The privilege and scheduling launchers of the inventory
+/// (`security/launchers.rs`) that take options of their own before the
+/// command they run; git-guard reads through each by its own grammar
+/// ([`launch_after`]) (TSK-1490 AC-8).
+pub(crate) const OPTION_LAUNCHERS: &[&str] =
+    &["sudo", "doas", "gsudo", "pkexec", "chrt", "taskset"];
+
+/// What an [`OPTION_LAUNCHERS`] launcher does with the words after it.
+pub(crate) enum Launch {
+    /// The command it runs starts at this index.
+    Runs(usize),
+    /// A mode that runs no command (`sudo -l`, `chrt -p`).
+    Nothing,
+    /// An option the reader does not parse exactly, shown as written.
+    Unread(String),
+}
+
+/// One launcher's option grammar: the short letters that take a value
+/// (attached or the next word), take only an attached value and otherwise
+/// run nothing, run nothing, or take no value; the long names likewise;
+/// and whether one operand (a priority or a CPU mask) comes before the
+/// command. Any other option is [`Launch::Unread`].
+struct LaunchGrammar {
+    valued: &'static str,
+    attached_only: &'static str,
+    stops: &'static str,
+    flags: &'static str,
+    valued_long: &'static [&'static str],
+    stops_long: &'static [&'static str],
+    flags_long: &'static [&'static str],
+    operand: bool,
+}
+
+/// `sudo`'s grammar, from its manual (`h` takes only an attached host;
+/// alone it prints help).
+const SUDO_GRAMMAR: LaunchGrammar = LaunchGrammar {
+    valued: "aCcDgpRrTtUu",
+    attached_only: "h",
+    stops: "eKlVv",
+    flags: "ABbEHikNnPSs",
+    valued_long: &[
+        "auth-type",
+        "close-from",
+        "chdir",
+        "login-class",
+        "group",
+        "host",
+        "prompt",
+        "chroot",
+        "role",
+        "type",
+        "command-timeout",
+        "other-user",
+        "user",
+    ],
+    stops_long: &[
+        "edit",
+        "help",
+        "list",
+        "remove-timestamp",
+        "version",
+        "validate",
+    ],
+    flags_long: &[
+        "askpass",
+        "background",
+        "bell",
+        "preserve-env",
+        "set-home",
+        "login",
+        "reset-timestamp",
+        "non-interactive",
+        "preserve-groups",
+        "stdin",
+        "shell",
+    ],
+    operand: false,
+};
+
+/// The grammar of each [`OPTION_LAUNCHERS`] launcher, from its manual.
+fn launch_grammar(name: &str) -> LaunchGrammar {
+    match name {
+        "sudo" => SUDO_GRAMMAR,
+        "doas" => LaunchGrammar {
+            valued: "au",
+            attached_only: "",
+            stops: "CL",
+            flags: "ns",
+            valued_long: &[],
+            stops_long: &[],
+            flags_long: &[],
+            operand: false,
+        },
+        "gsudo" => LaunchGrammar {
+            valued: "iu",
+            attached_only: "",
+            stops: "hv",
+            flags: "dknsw",
+            valued_long: &["integrity", "user"],
+            stops_long: &["help", "version"],
+            flags_long: &[
+                "new",
+                "wait",
+                "system",
+                "direct",
+                "reset-timestamp",
+                "ti",
+                "loadProfile",
+                "copyns",
+                "debug",
+            ],
+            operand: false,
+        },
+        "pkexec" => LaunchGrammar {
+            valued: "u",
+            attached_only: "",
+            stops: "",
+            flags: "",
+            valued_long: &["user"],
+            stops_long: &["help", "version"],
+            flags_long: &["disable-internal-agent", "keep-cwd"],
+            operand: false,
+        },
+        "chrt" => LaunchGrammar {
+            valued: "DPT",
+            attached_only: "",
+            stops: "hmpV",
+            flags: "abdefioRrv",
+            valued_long: &["sched-runtime", "sched-period", "sched-deadline"],
+            stops_long: &["pid", "max", "help", "version"],
+            flags_long: &[
+                "all-tasks",
+                "batch",
+                "deadline",
+                "fifo",
+                "idle",
+                "other",
+                "rr",
+                "reset-on-fork",
+                "verbose",
+            ],
+            operand: true,
+        },
+        // taskset
+        _ => LaunchGrammar {
+            valued: "",
+            attached_only: "",
+            stops: "hpV",
+            flags: "ac",
+            valued_long: &[],
+            stops_long: &["pid", "help", "version"],
+            flags_long: &["all-tasks", "cpu-list"],
+            operand: true,
+        },
+    }
+}
+
+/// Where the command after the [`OPTION_LAUNCHERS`] launcher `name` starts,
+/// reading its options from `idx`. A name that is not a whole option of the
+/// launcher (an abbreviation, an unknown letter) is [`Launch::Unread`], so
+/// the caller refuses rather than guess. `chrt`'s priority is skipped only
+/// when it is a number, since some policies let it be left out.
+pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Launch {
+    let grammar = launch_grammar(name);
+    while let Some(word) = tokens.get(idx).map(String::as_str) {
+        if word == "--" {
+            idx += 1;
+            break;
+        }
+        if !word.starts_with('-') || word.len() < 2 {
+            break;
+        }
+        idx += 1;
+        if let Some(long) = word.strip_prefix("--") {
+            let (option, attached) = long
+                .split_once('=')
+                .map_or((long, false), |(o, _)| (o, true));
+            if grammar.stops_long.contains(&option) {
+                return Launch::Nothing;
+            }
+            if grammar.valued_long.contains(&option) {
+                idx += usize::from(!attached);
+                continue;
+            }
+            if grammar.flags_long.contains(&option) {
+                continue;
+            }
+            return Launch::Unread(format!("`{name} --{option}`"));
+        }
+        let cluster = &word[1..];
+        for (offset, letter) in cluster.char_indices() {
+            let rest = &cluster[offset + letter.len_utf8()..];
+            if grammar.stops.contains(letter) {
+                return Launch::Nothing;
+            }
+            if grammar.attached_only.contains(letter) {
+                if rest.is_empty() {
+                    return Launch::Nothing;
+                }
+                break;
+            }
+            if grammar.valued.contains(letter) {
+                idx += usize::from(rest.is_empty());
+                break;
+            }
+            if !grammar.flags.contains(letter) {
+                return Launch::Unread(format!("`{name} -{letter}`"));
+            }
+        }
+    }
+    if grammar.operand
+        && tokens
+            .get(idx)
+            .is_some_and(|w| name != "chrt" || w.bytes().all(|b| b.is_ascii_digit()))
+    {
+        idx += 1;
+    }
+    Launch::Runs(idx)
+}
+
+/// Whether `busybox APPLET` runs `applet` as the program for the readers:
+/// a shell, `ln`, `link`, `cp` or `dd`, or a launcher of the inventory
+/// (`security/launchers.rs`), whose command the readers then read
+/// (TSK-1490 AC-8).
+fn busybox_launches(applet: &str) -> bool {
+    is_shell(applet)
+        || matches!(applet, "ln" | "link" | "cp" | "dd")
+        || (applet != "busybox"
+            && crate::security::launchers::LAUNCHERS.contains(&launcher_name(applet)))
+}
+
+/// Why the [`OPTION_LAUNCHERS`] launcher `name`, with the option words
+/// `options`, runs its command in a directory the guard does not follow:
+/// `sudo`'s login, directory and root options, and `pkexec`, which moves
+/// to the target user's home unless told to keep the directory. `None`
+/// for the others, which keep the directory.
+fn launcher_moves(name: &str, options: &[String]) -> Option<String> {
+    let moved = match name {
+        "sudo" => options.iter().any(|w| {
+            matches!(
+                w.split('=').next(),
+                Some("--login" | "--chdir" | "--chroot")
+            ) || (!w.starts_with("--")
+                && w.starts_with('-')
+                && w.trim_start_matches('-').contains(['i', 'D', 'R']))
+        }),
+        "pkexec" => !options.iter().any(|w| w == "--keep-cwd"),
+        _ => false,
+    };
+    moved.then(|| format!("`{name}`, which can run the command in another directory"))
 }
 
 /// `true` when the option `a` takes the next word as its value: `exec -a
@@ -21578,33 +21874,60 @@ mod tests {
     // TSK-1490 AC-8: the location reader reads every launcher of the shared
     // inventory in front of Git, each spelling, and the assignments after
     // it; a launcher whose effect it does not model leaves the target
-    // unresolved, which refuses. The launchers the guard does not read
-    // through to Git at all are held by the reader's own test
-    // (`security/launchers.rs`), which requires a refusal for each.
+    // unresolved, which refuses. Every launcher of the inventory has rows,
+    // by its name, its path and its GNU name; the zsh precommand modifiers
+    // are shell syntax, never a program path.
     #[test]
     fn every_inventory_launcher_keeps_the_repository_judged() {
+        use crate::security::launchers::LAUNCHERS;
+        let forms: &[(&str, &[&str])] = &[
+            ("-", &[""]),
+            ("builtin", &[""]),
+            ("busybox", &["nohup", "env", "timeout 5"]),
+            ("caffeinate", &["-i"]),
+            ("chrt", &["-f 10", "10", "--fifo 10"]),
+            ("command", &["-p"]),
+            ("doas", &["", "-u root", "-n"]),
+            ("env", &[""]),
+            ("exec", &["-a x"]),
+            ("gsudo", &["", "-n", "--integrity Medium"]),
+            ("ionice", &["-c 3"]),
+            ("nice", &["-n 5"]),
+            ("nocorrect", &[""]),
+            ("noglob", &[""]),
+            ("nohup", &[""]),
+            ("pkexec", &["", "--user root", "--keep-cwd"]),
+            ("setsid", &["-f"]),
+            ("stdbuf", &["-o L"]),
+            (
+                "sudo",
+                &["", "-u root", "-E", "--user=root", "-iu root", "-D /x"],
+            ),
+            ("taskset", &["0x1", "-c 0", "--cpu-list 0"]),
+            ("time", &["-p"]),
+            ("timeout", &["5"]),
+            ("unbuffer", &["-p"]),
+            ("xcrun", &[""]),
+        ];
+        let named: Vec<&str> = forms.iter().map(|(name, _)| *name).collect();
+        assert_eq!(named, LAUNCHERS, "every inventory launcher has rows");
+        let mut launchers = Vec::new();
+        for (name, args) in forms {
+            let mut spellings = vec![(*name).to_string()];
+            if !is_shell_modifier(name) {
+                spellings.push(format!("/usr/bin/{name}"));
+            }
+            if GNU_LAUNCHERS.contains(name) {
+                spellings.push(format!("g{name}"));
+            }
+            for spelling in &spellings {
+                for arg in *args {
+                    launchers.push(format!("{spelling} {arg}").trim_end().to_string());
+                }
+            }
+        }
         let mut failed = Vec::new();
-        for launcher in [
-            "nohup",
-            "/usr/bin/nohup",
-            "timeout 5",
-            "gtimeout 5",
-            "nice -n 5",
-            "stdbuf -o L",
-            "ionice -c 3",
-            "time -p",
-            "command -p",
-            "exec -a x",
-            "caffeinate -i",
-            "xcrun",
-            "noglob",
-            "nocorrect",
-            "-",
-            "setsid -f",
-            "unbuffer -p",
-            "genv",
-            "/usr/bin/env",
-        ] {
+        for launcher in &launchers {
             for tail in [
                 "env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
                 "GIT_DIR=/session/.git git -C \"$R\" commit -m x",
@@ -21622,10 +21945,17 @@ mod tests {
             failed.len(),
             failed.join("\n")
         );
-        // An ordinary launcher with an ordinary assignment keeps its verdict.
+        // An ordinary launcher with an ordinary assignment keeps its verdict;
+        // so does a scheduling launcher, which moves nothing, and a mode of
+        // a launcher that runs no command.
         for cmd in [
             "nohup env FOO=1 git -C /scratch commit -m x",
             "timeout 5 git -C /scratch commit -m x",
+            "chrt -f 10 git -C /scratch commit -m x",
+            "taskset -c 0 git -C /scratch commit -m x",
+            "busybox nohup git -C /scratch commit -m x",
+            "sudo -l git commit -m x",
+            "chrt -p 1234",
         ] {
             let r = report(cmd, "main");
             assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);

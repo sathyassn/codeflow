@@ -927,6 +927,46 @@ mod tests {
         );
     }
 
+    /// TSK-1490 AC-8 control: git-guard now reads Git through the
+    /// privilege launchers, and exec-guard's privilege rule still refuses
+    /// each of them at its default level; turning the rule off removes
+    /// only its own finding.
+    #[test]
+    fn a_privilege_launcher_before_git_keeps_the_privilege_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for cmd in [
+            "sudo git -C /scratch commit -m x",
+            "doas git -C /scratch commit -m x",
+            "pkexec git -C /scratch commit -m x",
+        ] {
+            let default = evaluate_at(
+                cmd,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                root,
+                root,
+            );
+            assert!(
+                default
+                    .iter()
+                    .any(|v| v.rule == "security.privilege_escalation"
+                        && v.level == PolicyLevel::Block),
+                "{cmd}: {default:?}"
+            );
+            let off = SecuritySection {
+                privilege_escalation: PolicyLevel::Off,
+                ..SecuritySection::default()
+            };
+            let got = evaluate_at(cmd, &off, PolicyLevel::Block, root, root);
+            assert!(
+                !got.iter()
+                    .any(|v| v.rule == "security.privilege_escalation"),
+                "{cmd}: {got:?}"
+            );
+        }
+    }
+
     /// TSK-1490: the move a carried command is judged after, where the
     /// line's directory is unknown, leaves the directory unknown and finds
     /// nothing itself at any level, the strict text rule included, so the

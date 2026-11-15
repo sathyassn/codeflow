@@ -387,7 +387,9 @@ pub(super) const GIT_LOCATION_VARS: &[&str] = &["GIT_DIR", "GIT_COMMON_DIR", "GI
 /// effect (`-C`, `-u`, `-S`, `-i`) the guard does not model, and for a
 /// launcher whose options or environment it does not model.
 pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, String> {
-    use super::git_guard::{is_prefix_launcher, launcher_name, skip_launcher_options};
+    use super::git_guard::{
+        is_prefix_launcher, launch_after, launcher_name, skip_launcher_options, Launch,
+    };
     let mut env = Vec::new();
     let mut i = 0;
     loop {
@@ -410,6 +412,19 @@ pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, S
             }
         }
         let name = launcher_name(word);
+        // The scheduling launchers pass the environment on unchanged.
+        if matches!(name, "chrt" | "taskset") {
+            match launch_after(name, tokens, i + 1) {
+                Launch::Runs(next) => {
+                    i = next;
+                    continue;
+                }
+                Launch::Nothing => return Ok(env),
+                Launch::Unread(form) => {
+                    return Err(format!("{form}, an option the guard does not read"))
+                }
+            }
+        }
         if matches!(name, "setsid" | "unbuffer" | "busybox") {
             // Options that take no value, or the applet name that follows.
             i += 1;
@@ -419,8 +434,10 @@ pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, S
             continue;
         }
         if name != "env" && crate::security::launchers::LAUNCHERS.contains(&name) {
+            // The privilege launchers run the command as another user, with
+            // that user's environment and configuration.
             return Err(format!(
-                "the launcher `{word}`, whose options and environment the guard does not read for the repository"
+                "the launcher `{word}`, which runs the command with an environment and configuration the guard does not read for the repository"
             ));
         }
         if name == "env" {
