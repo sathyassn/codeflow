@@ -218,6 +218,24 @@ fn an_operand_free_fetch_reads_the_current_branch_remote() {
 }
 
 #[test]
+fn an_operand_free_contact_with_no_remote_configured_contacts_nothing() {
+    let none = Scratch::new("");
+    for command in ["fetch", "pull -r", "push", "ls-remote -h"] {
+        assert_eq!(none.helpers(command), Ok(vec![]), "{command}");
+    }
+    std::fs::create_dir(none.root().join(".git/remotes")).unwrap();
+    std::fs::write(none.root().join(".git/remotes/origin"), "URL: fixture::x\n").unwrap();
+    none.unproven("fetch", "legacy remote file");
+    none.unproven("push", "legacy remote file");
+
+    let named = Scratch::new("[branch \"main\"]\n\tremote = elsewhere\n");
+    named.unproven("fetch", "remote `elsewhere` is not configured");
+    named.unproven("push", "names no remote");
+    let pushed = Scratch::new("[remote]\n\tpushDefault = elsewhere\n");
+    pushed.unproven("push", "names no remote");
+}
+
+#[test]
 fn an_operand_free_contact_refuses_each_state_it_cannot_prove() {
     let ordinary = Scratch::new(HTTPS);
     ordinary.unproven("push", "names no remote");

@@ -210,13 +210,19 @@ pub(super) fn contacts(
             resolver.word(word, direction, &mut found, probe)?;
         }
         if DEFAULTING.contains(&verb) && !names_repository(rest) {
-            if !matches!(verb, "fetch" | "pull") {
+            if resolver.names_no_remote() {
+                // Git falls back to `origin` without the user naming it, and
+                // an undefined fallback contacts nothing (`remote.c`
+                // `remotes_remote_get_1`) unless a legacy file defines it.
+                legacy("origin", probe)?;
+            } else if !matches!(verb, "fetch" | "pull") {
                 return Err(unproven(format!(
                     "`{verb}` names no remote, and the guard does not resolve the remote it defaults to; name the remote"
                 )));
+            } else {
+                let name = resolver.default_remote(probe)?;
+                resolver.named(&name, direction, &mut found)?;
             }
-            let name = resolver.default_remote(probe)?;
-            resolver.named(&name, direction, &mut found)?;
         }
         if matches!(verb, "fetch" | "pull" | "push") {
             resolver.recursion(verb, rest, probe)?;
@@ -473,6 +479,18 @@ impl<'a> Resolver<'a> {
         self.keys.iter().any(|key| {
             key.strip_prefix(&prefix)
                 .is_some_and(|variable| !variable.is_empty() && !variable.contains('.'))
+        })
+    }
+
+    /// Whether the configuration names no remote at all: no `remote.*` key
+    /// and no branch setting that names a remote.
+    fn names_no_remote(&self) -> bool {
+        self.keys.iter().all(|key| {
+            let branch = key
+                .strip_prefix("branch.")
+                .and_then(|rest| rest.rsplit_once('.'))
+                .is_some_and(|(_, variable)| matches!(variable, "remote" | "pushremote"));
+            !key.starts_with("remote.") && !branch
         })
     }
 
