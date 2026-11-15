@@ -12,7 +12,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("coverage_patch", ROOT / "scripts/operator/TSK-1261/apply.py")
@@ -58,6 +60,47 @@ def copy_inputs(scratch, parity):
 
 
 class PatchTests(unittest.TestCase):
+    def assert_tampered_package_refused_without_writes(self, artifact):
+        manifest = (operator.HERE / "patch-manifest.json").read_bytes()
+        patch = (operator.HERE / "coverage-workflow.patch").read_bytes()
+        if artifact == "manifest":
+            offset = manifest.index(json.loads(manifest)["patch_sha256"].encode())
+            replacement = b"0" if manifest[offset:offset + 1] != b"0" else b"1"
+            changed = manifest[:offset] + replacement + manifest[offset + 1:]
+            self.assertEqual(sum(a != b for a, b in zip(manifest, changed)), 1)
+            manifest = changed
+        else:
+            offset = patch.index(b"Bind this shard")
+            changed = patch[:offset] + b"b" + patch[offset + 1:]
+            self.assertEqual(sum(a != b for a, b in zip(patch, changed)), 1)
+            patch = changed
+        with tempfile.TemporaryDirectory(prefix="tsk1261-tampered-") as directory:
+            package = Path(directory)
+            manifest_path = package / "patch-manifest.json"
+            patch_path = package / "coverage-workflow.patch"
+            manifest_path.write_bytes(manifest)
+            patch_path.write_bytes(patch)
+            make_directory = tempfile.TemporaryDirectory
+            write_bytes = Path.write_bytes
+            with mock.patch.object(operator, "HERE", package), \
+                    mock.patch.object(operator.tempfile, "TemporaryDirectory", wraps=make_directory) as scratch, \
+                    mock.patch.object(Path, "write_bytes", autospec=True, side_effect=write_bytes) as writes:
+                with self.assertRaisesRegex(ValueError, "^patch or manifest differs from the reviewed bytes$"):
+                    with operator.preview(root=ROOT):
+                        self.fail("tampered package was accepted")
+                scratch.assert_not_called()
+                writes.assert_not_called()
+            self.assertEqual(manifest_path.read_bytes(), manifest)
+            self.assertEqual(patch_path.read_bytes(), patch)
+            self.assertEqual(sorted(p.name for p in package.iterdir()),
+                             ["coverage-workflow.patch", "patch-manifest.json"])
+
+    def test_changed_manifest_digest_is_refused_without_writes(self):
+        self.assert_tampered_package_refused_without_writes("manifest")
+
+    def test_changed_patch_digest_is_refused_without_writes(self):
+        self.assert_tampered_package_refused_without_writes("patch")
+
     def test_patch_refuses_other_files_bad_context_and_truncated_hunks(self):
         originals = {name: (ROOT / name).read_bytes() for name in operator.FILES}
         text = (operator.HERE / "coverage-workflow.patch").read_text(encoding="utf-8")

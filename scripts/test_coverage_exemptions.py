@@ -10,11 +10,14 @@ from coverage_exemptions import Problem, exemptions, path_name
 
 
 class ExemptionTests(unittest.TestCase):
-    def validate(self, entry):
+    def validate_list(self, data):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "exemptions.json"
-            path.write_text(json.dumps({"version": 1, "exemptions": [entry]}))
+            path.write_text(json.dumps(data))
             return exemptions(path)
+
+    def validate(self, entry):
+        return self.validate_list({"version": 1, "exemptions": [entry]})
 
     def entry(self):
         return {"path": "src/lib.rs", "owner": "maintainer", "reason": "platform binding",
@@ -22,6 +25,31 @@ class ExemptionTests(unittest.TestCase):
 
     def test_valid_list(self):
         self.assertEqual(list(self.validate(self.entry())), ["src/lib.rs"])
+
+    def test_wrong_version_is_refused(self):
+        for version in (2, True):
+            with self.subTest(version=version), self.assertRaisesRegex(
+                    Problem, "^exemption list requires version 1 and exemptions$"):
+                self.validate_list({"version": version, "exemptions": [self.entry()]})
+
+    def test_unknown_field_is_refused(self):
+        data = {"version": 1, "exemptions": [self.entry()], "unexpected": "value"}
+        with self.subTest(location="list"), self.assertRaisesRegex(
+                Problem, "^exemption list requires version 1 and exemptions$"):
+            self.validate_list(data)
+        entry = {**self.entry(), "unexpected": "value"}
+        with self.subTest(location="entry"), self.assertRaisesRegex(
+                Problem, "^each exemption requires path, owner, reason and remove_when$"):
+            self.validate(entry)
+
+    def test_duplicate_path_is_refused(self):
+        with self.assertRaisesRegex(Problem, "^exemption path must be normalized and unique: 'src/lib.rs'$"):
+            self.validate_list({"version": 1, "exemptions": [self.entry(), self.entry()]})
+
+    def test_non_normalized_path_is_refused(self):
+        entry = {**self.entry(), "path": "./src/lib.rs"}
+        with self.assertRaisesRegex(Problem, "^exemption path must be normalized and unique: 'src/lib.rs'$"):
+            self.validate(entry)
 
     def test_missing_owner(self):
         entry = self.entry()
