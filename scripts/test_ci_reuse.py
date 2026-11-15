@@ -14,11 +14,13 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
 import zipfile
 from contextlib import redirect_stdout
+from itertools import product
 from pathlib import Path
 from unittest import mock
 
@@ -826,6 +828,270 @@ class WindowsTierTests(unittest.TestCase):
         ran = [item for item in GREEN_JOBS if item["name"] != "windows tier journeys"] + [
             job("windows tier journeys")]
         self.assertIn("reduced Windows tier", self.reason(ran))
+
+
+def workflow_skip_problems(workflow):
+    """Jobs unavailable to pull requests must permit a skipped reuse result."""
+    spec = importlib.util.spec_from_file_location("skip_parity", ROOT / "scripts" / "gate-parity.py")
+    parity = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(parity)
+    jobs, problems = parity.parse_jobs(workflow)
+    if not jobs:
+        problems.append("no jobs to classify")
+    # Read the actual CLI arguments, rather than the fixture's PUSH_ONLY set.
+    arguments = jobs.get("reuse", "")
+    push_only = re.findall(r'--push-only\s+(?:"([^"\n]+)"|\'([^\'\n]+)\'|([\w-]+))', arguments)
+    if len(push_only) != arguments.count("--push-only"):
+        problems.append("cannot read the reuse job's --push-only arguments")
+    accepted = {next(value for value in match if value) for match in push_only}
+    if any(not re.fullmatch(r"[A-Za-z0-9 ()_-]+", name) for name in accepted):
+        problems.append("reuse --push-only names must be literal shell arguments")
+    for job_id, body in jobs.items():
+        problems.extend(parity.job_structure_problems(job_id, body, ""))
+        keys = {}
+        for line in body.splitlines():
+            if match := parity.JOB_KEY.fullmatch(line):
+                key = next(value for value in match.groups()[:3] if value is not None)
+                keys[key] = (match.group(4) or "").strip()
+        name = keys.get("name", job_id).strip("\"'")
+        try:
+            condition = PullRequestCondition(keys.get("if", "true"))
+            for base in ("main", LINE):
+                allowed = accepted | {reuse.TIER_JOURNEYS_JOB}
+                if base == LINE:
+                    allowed |= reuse.LINE_SKIPS
+                if not condition.can_run(base) and name not in allowed:
+                    problems.append(f"{job_id}: {name!r} cannot run on a pull request into {base} "
+                                    "but reuse refuses its skipped result")
+        except ValueError as error:
+            problems.append(f"{job_id}: unreadable condition: {error}")
+    return problems
+
+
+class PullRequestCondition:
+    """Read the workflow's boolean expression subset without executing it.
+
+    Event and destination are fixed to a pull request. Other string fields
+    range over every literal and prefix boundary in the expression plus an
+    unrelated value; this covers equality, list membership and startsWith.
+    Unsupported syntax or functions fail even in an unreachable branch.
+    """
+
+    TOKEN = re.compile(r"\s*('(?:[^']|'')*'|[A-Za-z_][\w.-]*|==|!=|&&|\|\||[!(),])")
+    FIELD = re.compile(r"github\.(?:event_name|ref|event\.pull_request\.(?:draft|base\.ref))"
+                       r"|needs\.[\w-]+\.(?:result|outputs\.[\w-]+)")
+
+    def __init__(self, text):
+        text = text.strip()
+        if text.startswith("${{") and text.endswith("}}"):
+            text = text[3:-2].strip()
+        self.tokens = []
+        while text:
+            match = self.TOKEN.match(text)
+            if not match:
+                raise ValueError(f"unsupported syntax {text!r}")
+            self.tokens.append(match.group(1))
+            text = text[match.end():].lstrip()
+        self.position = 0
+        self.fields = set()
+        self.values = {"", "__other__"}
+        self.tree = self.expression()
+        if self.position != len(self.tokens):
+            raise ValueError("trailing expression text")
+
+    def take(self, token):
+        if self.position < len(self.tokens) and self.tokens[self.position] == token:
+            self.position += 1
+            return True
+        return False
+
+    def expression(self, level=0):
+        operators = ("||", "&&", "==")
+        if level == len(operators):
+            return self.atom()
+        left = self.expression(level + 1)
+        while self.position < len(self.tokens):
+            op = self.tokens[self.position]
+            if op != operators[level] and not (level == 2 and op == "!="):
+                break
+            self.position += 1
+            left = (op, left, self.expression(level + 1))
+        return left
+
+    def atom(self):
+        if self.take("!"):
+            return ("!", self.atom())
+        if self.take("("):
+            node = self.expression()
+            if not self.take(")"):
+                raise ValueError("missing closing parenthesis")
+            return node
+        if self.position == len(self.tokens):
+            raise ValueError("missing operand")
+        token = self.tokens[self.position]
+        self.position += 1
+        if token.startswith("'"):
+            value = token[1:-1].replace("''", "'").casefold()
+            self.values.add(value)
+            return ("literal", value)
+        if token in ("true", "false"):
+            return ("literal", token == "true")
+        if self.FIELD.fullmatch(token):
+            self.fields.add(token)
+            return ("field", token)
+        if token not in ("always", "cancelled", "contains", "startsWith", "fromJSON") or not self.take("("):
+            raise ValueError(f"unsupported operand {token!r}")
+        if token in ("always", "cancelled"):
+            if not self.take(")"):
+                raise ValueError(f"{token} takes no arguments")
+            if token == "always":
+                return ("literal", True)
+            self.fields.add("cancelled()")
+            return ("field", "cancelled()")
+        first = self.expression()
+        if token == "fromJSON":
+            if first[0] != "literal" or not isinstance(first[1], str) or not self.take(")"):
+                raise ValueError("fromJSON needs one literal string array")
+            value = json.loads(first[1])
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError("fromJSON supports only string arrays")
+            self.values.update(value)
+            return ("literal", value)
+        if not self.take(","):
+            raise ValueError(f"{token} needs two arguments")
+        second = self.expression()
+        if not self.take(")"):
+            raise ValueError("missing function closing parenthesis")
+        if token == "contains":
+            if first[0] != "literal" or not isinstance(first[1], list) or second[0] != "field":
+                raise ValueError("contains needs a literal array and a field")
+        else:
+            if first[0] != "field" or second[0] != "literal" or not isinstance(second[1], str):
+                raise ValueError("startsWith needs a field and a literal prefix")
+            self.values.add(second[1] + "__suffix__")
+        return (token, first, second)
+
+    def evaluate(self, node, fields):
+        op = node[0]
+        if op == "literal":
+            return node[1]
+        if op == "field":
+            return fields[node[1]]
+        left = self.evaluate(node[1], fields)
+        if op == "!":
+            return not left
+        right = self.evaluate(node[2], fields)
+        if op == "||":
+            return bool(left or right)
+        if op == "&&":
+            return bool(left and right)
+        if op == "==":
+            return left == right
+        if op == "!=":
+            return left != right
+        if op == "contains":
+            return right in left
+        return left.startswith(right)
+
+    def can_run(self, base):
+        fixed = {"github.event_name": "pull_request", "github.event.pull_request.base.ref": base.casefold()}
+        fields = sorted(self.fields - fixed.keys())
+        domains = [(False, True) if field in ("cancelled()", "github.event.pull_request.draft")
+                   else sorted(self.values) for field in fields]
+        outcomes = set()
+        for values in product(*domains):
+            result = self.evaluate(self.tree, fixed | dict(zip(fields, values)))
+            if not isinstance(result, bool):
+                raise ValueError("condition must produce a boolean")
+            outcomes.add(result)
+        return True in outcomes
+
+
+class WorkflowSkipTests(unittest.TestCase):
+    """TSK-359 AC-6: new push-only jobs cannot silently disable reuse."""
+
+    def workflow(self, name, condition, push_only=False):
+        argument = f' --push-only "{name}"' if push_only else ''
+        return ("jobs:\n  reuse:\n    name: reuse a pull request verdict\n"
+                "    if: github.event_name == 'push'\n"
+                "    steps:\n      - run: python3 scripts/ci-reuse.py"
+                f' --push-only "reuse a pull request verdict"{argument}\n'
+                f"  added:\n    name: {name}\n    if: {condition}\n")
+
+    def test_a_push_only_job_explicitly_accepted_as_skipped_passes(self):
+        workflow = self.workflow("read the image", "github.event_name == 'push'", push_only=True)
+        self.assertEqual(workflow_skip_problems(workflow), [])
+
+    def test_an_unaccepted_push_only_job_fails(self):
+        workflow = self.workflow("new measurement", "github.event_name == 'push'")
+        self.assertTrue(workflow_skip_problems(workflow))
+
+    def test_an_unreadable_condition_fails_even_for_an_accepted_skip(self):
+        for condition in ("|", "${{ mystery(github.event_name) }}", "${{ github.event_name == }}",
+                          "'some text'", "${{ true || mystery() }}", "github.unknown == 'push'"):
+            with self.subTest(condition=condition):
+                self.assertTrue(workflow_skip_problems(self.workflow("read the image", condition, True)))
+
+    def test_negation_disjunction_and_parentheses_preserve_event_meaning(self):
+        for condition in ("${{ !(github.event_name == 'pull_request') }}",
+                          "github.event_name == 'push' || github.event_name == 'schedule'",
+                          "${{ github.event_name != 'pull_request' && !cancelled() }}"):
+            with self.subTest(condition=condition):
+                problems = workflow_skip_problems(self.workflow("new measurement", condition))
+                self.assertTrue(any("new measurement" in problem for problem in problems), problems)
+        condition = "${{ github.event_name == 'push' || github.event_name == 'pull_request' }}"
+        self.assertEqual(workflow_skip_problems(self.workflow("ordinary job", condition)), [])
+
+    def test_release_skips_apply_only_to_a_line_and_tier_skips_are_accepted(self):
+        release = "github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'"
+        self.assertEqual(workflow_skip_problems(self.workflow(RELEASE_JOB, release)), [])
+        self.assertTrue(workflow_skip_problems(self.workflow(RELEASE_JOB, "false")))
+        self.assertEqual(workflow_skip_problems(self.workflow(reuse.TIER_JOURNEYS_JOB, "false")), [])
+
+    def test_a_new_job_skipped_in_the_run_is_refused_by_the_decider(self):
+        with self.assertRaisesRegex(reuse.Skip, "'new measurement'.*concluded skipped"):
+            decide(api=FakeApi(base=LINE, jobs={77: [*GREEN_JOBS, job("new measurement", "skipped")]}),
+                   ref=LINE_REF)
+
+    def test_unreadable_job_structure_and_push_only_arguments_fail(self):
+        workflow = self.workflow("read the image", "github.event_name == 'push'", True)
+        for mutated in (workflow.replace("  added:", "  added: &anchor"),
+                        workflow.replace("    if: github.event_name == 'push'", "    if: |", 1),
+                        workflow.replace('--push-only "read the image"', '--push-only "$IMAGE_JOB"'),
+                        workflow.replace("    name: read the image", "    if: true\n    name: read the image")):
+            with self.subTest(workflow=mutated):
+                # Expanding CLI arguments cannot establish the literal skipped job name.
+                self.assertTrue(workflow_skip_problems(mutated))
+
+    def test_the_real_workflow_accepts_every_job_unavailable_to_pull_requests(self):
+        self.assertEqual(workflow_skip_problems((ROOT / WORKFLOW).read_text(encoding="utf-8")), [])
+
+    def test_security_jobs_have_no_reuse_dependency_or_condition(self):
+        spec = importlib.util.spec_from_file_location("scan_parity", ROOT / "scripts" / "gate-parity.py")
+        parity = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(parity)
+        jobs, problems = parity.parse_jobs((ROOT / WORKFLOW).read_text(encoding="utf-8"))
+        self.assertEqual(problems, [])
+        for job_id in ("secret-scan", "gitleaks-canary", "security-review"):
+            with self.subTest(job=job_id):
+                self.assertNotRegex(jobs[job_id], r"(?m)^    (?:if|needs):")
+                self.assertNotIn("needs.reuse", jobs[job_id])
+
+
+class DecisionErrorTests(unittest.TestCase):
+    """AC-3: reader errors reach main's fallback without writing a reuse id."""
+
+    def test_any_git_reader_error_runs_everything(self):
+        for method in ("tree", "parents", "is_ancestor", "changed", "blob"):
+            for error in (reuse.Skip("git failed"), OSError("git unavailable")):
+                with self.subTest(method=method, error=type(error).__name__), \
+                        mock.patch.object(FakeGit, method, side_effect=error):
+                    self.assertEqual(MainTests().main(lambda *args, **kwargs: decide()), (0, ""))
+
+    def test_any_api_reader_error_runs_everything(self):
+        for method in ("pulls", "runs", "jobs", "caches", "artifacts", "artifact_zip", "job_log_head"):
+            with self.subTest(method=method), mock.patch.object(FakeApi, method, side_effect=OSError("HTTP 500")):
+                self.assertEqual(MainTests().main(lambda *args, **kwargs: decide()), (0, ""))
 
 
 class GitTests(unittest.TestCase):
