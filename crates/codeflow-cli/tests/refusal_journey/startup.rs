@@ -23,6 +23,51 @@ fn startup_project() -> (Project, PathBuf) {
     (project, home)
 }
 
+/// Ordinary lines the install check refuses (TSK-1476 AC-6): each hands a
+/// shell or interpreter text it produces, which the guard cannot settle as
+/// free of the install verbs. The pull request lists them as accepted
+/// over-refusals. The flag marks a row the strict text rule, the default,
+/// already refused for its run-time words, so its added refusal shows only
+/// where a project relaxed that rule; the row without it, an interpreter's
+/// inline code that reads a variable the line sets, is refused at the
+/// default level by the install check alone.
+const INSTALL_RUN_OVER_REFUSALS: &[(&str, bool)] = &[
+    ("N=out.txt; echo x > build/$N", true),
+    ("cat ~/.zshrc | sort | uniq -c | head", true),
+    (
+        "p=notes.txt; python3 -c \"open('$p','a').write('x')\"",
+        false,
+    ),
+    ("CMD='git status'; sh -c \"$CMD\"", true),
+];
+
+/// The listed over-refusal of `command`: the install check's refusal of
+/// text it cannot settle, with the strict text rule's run-time refusal
+/// exactly where `strict` says, and no other rule.
+fn install_run_over_refusal(outputs: &[Output], strict: bool) -> bool {
+    let refusals: Vec<String> = outputs
+        .iter()
+        .filter(|out| !out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stderr).into_owned())
+        .collect();
+    let text_rule = |stderr: &String| {
+        stderr.contains("policy rule security.text_guard (block)")
+            && stderr.contains("the strict text rule cannot verify the run-time argument")
+    };
+    outputs
+        .iter()
+        .all(|out| out.status.success() || out.status.code() == Some(2))
+        && !refusals.is_empty()
+        && refusals.iter().all(|stderr| {
+            stderr.contains("policy rule git.hook_integrity (block)")
+                && stderr.contains(
+                    "possible install run `text the line hands to a shell or interpreter that the guard cannot settle`",
+                )
+                && stderr.matches("policy rule ").count() == 1 + usize::from(strict)
+                && text_rule(stderr) == strict
+        })
+}
+
 fn refused_with(outputs: &[Output], rule: &str) -> bool {
     outputs.iter().any(|out| {
         out.status.code() == Some(2) && String::from_utf8_lossy(&out.stderr).contains(rule)
@@ -135,13 +180,11 @@ const ALLOWED: &[&str] = &[
     "diff ~/.zshrc ~/.bashrc",
     "cp ~/.bashrc backup.txt",
     "echo x > notes.txt",
-    "N=out.txt; echo x > build/$N",
     "sh -c 'echo hi'",
     "cargo build",
     "rg --no-config alias ~/.zshrc",
     "sed -n 1,20p ~/.zshrc",
     "python3 -c 'print(1)'",
-    "p=notes.txt; python3 -c \"open('$p','a').write('x')\"",
     "cat <(echo hello)",
     "diff <(echo a) <(echo b)",
     "bash <(echo 'echo hi')",
@@ -150,7 +193,6 @@ const ALLOWED: &[&str] = &[
     "make test",
     "grep -c alias ~/.zshrc > b.txt; sed -E 's/a/b/' README.md",
     "find . -name '*.rs' -print",
-    "cat ~/.zshrc | sort | uniq -c | head",
     "git -c color.ui=never status",
     "git -c color.ui=never diff -- .envrc",
     "EDITOR=vim git log -p -- .envrc | head",
@@ -181,6 +223,14 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
+            }
+        }
+        for &(command, strict) in INSTALL_RUN_OVER_REFUSALS {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !install_run_over_refusal(&outputs, strict) {
+                wrong.push(format!(
+                    "{harness}: not the listed over-refusal {command}: {outputs:?}"
+                ));
             }
         }
         // `--exec-path=DIR` moves where Git finds the helpers it runs, so it
@@ -506,7 +556,8 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "env -S 'git status'",
     "FOO=1 env -S 'git config --global user.name Probe'",
     "bash -c 'git status'",
-    "CMD='git status'; sh -c \"$CMD\"",
+    // `CMD='git status'; sh -c "$CMD"` is a listed install-check
+    // over-refusal since TSK-1476 (INSTALL_RUN_OVER_REFUSALS).
     "printf '%s\\n' README | xargs ls",
     "xargs -I{} echo {}",
     // `status` operands are judged since TSK-1002 review 11, so the

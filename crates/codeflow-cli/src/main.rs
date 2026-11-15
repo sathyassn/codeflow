@@ -538,6 +538,44 @@ fn run() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// The install guard's list of subcommands that are not an install verb
+    /// and run no operand is this parser's subcommands less `init`, `update`
+    /// and `reserve`, which runs the command after it. A new subcommand
+    /// fails here until it is judged and placed on the list or left off;
+    /// the parser takes no option before a subcommand and no abbreviation.
+    #[test]
+    fn the_install_guard_lists_each_subcommand_that_runs_no_operand() {
+        use clap::CommandFactory;
+        // No abbreviation of a subcommand parses as it.
+        for word in ["upd", "ini", "dele"] {
+            assert!(Cli::try_parse_from(["codeflow", word]).is_err(), "{word}");
+        }
+        let parser = Cli::command();
+        // No option before the subcommand but help and version.
+        assert!(parser
+            .get_arguments()
+            .all(|arg| matches!(arg.get_id().as_str(), "help" | "version")));
+        let mut parsed: Vec<String> = parser
+            .get_subcommands()
+            .filter(|sub| {
+                assert!(
+                    sub.get_all_aliases().next().is_none(),
+                    "{} has an alias",
+                    sub.get_name()
+                );
+                !matches!(sub.get_name(), "init" | "update" | "reserve" | "help")
+            })
+            .map(|sub| sub.get_name().to_string())
+            .collect();
+        parsed.sort();
+        let mut listed: Vec<String> = codeflow_core::security::NON_INSTALL_SUBCOMMANDS
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        listed.sort();
+        assert_eq!(parsed, listed);
+    }
+
     /// DEFECT 5: the `doctor` about-line is derived, not hand-maintained —
     /// a different registry produces different help, with every name present.
     #[test]

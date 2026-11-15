@@ -53,6 +53,7 @@ pub(crate) mod shell_lex;
 pub mod startup;
 pub(crate) mod unresolved;
 
+pub use install_run::NON_INSTALL_SUBCOMMANDS;
 pub use policy::SecurityPolicy;
 
 /// Result of a security module check.

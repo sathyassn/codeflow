@@ -288,7 +288,12 @@ pub const SCHEMA: [KeySpec; 82] = [
                 as written, in its words as the shell passes them, in what `printf`, `echo` \
                 and `print` write from them where that is plain literal text, or in a value \
                 the line builds from its own assignments. So give such text to a listed \
-                program or leave the binary's name out of a search. Where the line itself \
+                program or leave the binary's name out of a search. The verb is the \
+                binary's own subcommand: one command the shell passes exactly as written, \
+                plain words with no quote, operator or expansion, that runs the binary with \
+                another subcommand that runs no operand (each one but `update`, `init` and \
+                `reserve`), such as `codeflow delegate init`, passes this check. Where the \
+                line itself \
                 hands text it produces to a shell or interpreter on the line (through a pipe, \
                 a here-string, a here-document it expands, a process substitution, `eval`, a \
                 `-c` or `-e` value it expands, a command word it fills in, or a supplier that \

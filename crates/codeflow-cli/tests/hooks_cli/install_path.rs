@@ -344,6 +344,14 @@ fn the_install_verbs_refuse_with_the_installed_binary() {
         "env codeflow update",
         "nice codeflow init --yes",
         "sh -c 'codeflow update'",
+        // A verb after another subcommand is read only where the shell
+        // passes the line as written and the subcommand runs no operand.
+        "codeflow -- update",
+        "codeflow reserve -- codeflow update",
+        "codeflow delegate init; codeflow update",
+        "codeflow delegate init --state-dir \"$(codeflow update)\"",
+        "codeflow task new codeflow update",
+        "X=1 codeflow delegate init codeflow update",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1481,6 +1489,12 @@ fn forms_that_write_nothing_and_ordinary_commands_stay_allowed() {
         "codeflow validate --docs",
         "codeflow task status",
         "codeflow hook exec-guard",
+        // Only the binary's own subcommand is its verb: a verb word after
+        // another subcommand is that subcommand's operand.
+        "codeflow delegate init --run-id review-1 --state-dir /tmp/run",
+        "/usr/local/bin/codeflow delegate init --run-id r1 --state-dir /tmp/x --model opus",
+        "codeflow delegate arm --run-id r1 --state-dir /tmp/x --turn-id update",
+        "codeflow task new --title update",
         "command -v codeflow",
         "which codeflow",
         "cargo run -- doctor",

@@ -19,7 +19,12 @@
 //! 2. Any other line is read for a run whose text need not hold the
 //!    binary's name with a verb: a word the shell expands where a program
 //!    runs, with a verb after it, or a run inside a quoted argument or an
-//!    assigned value, read again as a command line.
+//!    assigned value, read again as a command line. A POSIX line whose
+//!    text the shell passes exactly as written ([`own_subcommand_line`]),
+//!    one simple command of plain words that runs the binary with one of
+//!    its own subcommands that is not a verb and runs no operand
+//!    ([`NON_INSTALL_SUBCOMMANDS`]), is judged by this step alone: its verb
+//!    position is read, so `codeflow delegate init` runs `delegate`.
 //! 3. Every other line is judged on its raw text ([`raw_run`]): the
 //!    binary's name followed, anywhere later, by a verb, or `cargo`
 //!    followed by `run` or `r` and then a verb. So any line outside the
@@ -88,6 +93,42 @@ const PRINTS_ONLY: &[&[&str]] = &[
     &["-h"],
     &["--version"],
     &["-V"],
+];
+
+/// The binary's own top-level subcommands, as its argument parser names
+/// them, that are not a verb and never run a command-line operand as a
+/// program. `reserve`, which runs the command after it, is left out, and so
+/// is any subcommand added later until it is placed here: a test in the
+/// binary compares this list with its parser. The parser takes no option
+/// before the subcommand and no abbreviation of one, so the word after the
+/// program is the subcommand that runs.
+pub const NON_INSTALL_SUBCOMMANDS: &[&str] = &[
+    "adr",
+    "ci",
+    "delegate",
+    "doctor",
+    "epic",
+    "estimate",
+    "feedback",
+    "follow",
+    "git-hook",
+    "hook",
+    "ids",
+    "integrate",
+    "models",
+    "orient",
+    "policy",
+    "portal",
+    "present",
+    "recall",
+    "remote",
+    "report",
+    "spec",
+    "status",
+    "task",
+    "test",
+    "validate",
+    "work",
 ];
 
 /// Programs the reader of step 2 reads only for the program an option of
@@ -357,12 +398,41 @@ pub fn install_run(command: &str, posix: bool) -> Option<InstallRun> {
     if posix && admission::admitted(command) {
         return None;
     }
+    if posix && own_subcommand_line(command) {
+        return find(command, 0);
+    }
     let slashed = (!posix && command.contains('\\')).then(|| command.replace('\\', "/"));
     find(command, 0)
         .or_else(|| slashed.as_deref().and_then(|text| find(text, 0)))
         .or_else(|| raw_run(command))
         .or_else(|| slashed.as_deref().and_then(raw_run))
         .or_else(|| produced::produced_run(command))
+}
+
+/// Whether `command` is one simple command the shell passes exactly as
+/// written that runs the binary with one of [`NON_INSTALL_SUBCOMMANDS`]:
+/// words of ASCII letters, digits and `-_./:=,+@` separated by spaces, so
+/// no operator, redirection, quote, escape, expansion, pattern or comment;
+/// the binary's name, by itself or at the end of a path, as the first word,
+/// so no assignment or launcher before it; and the subcommand as the second
+/// word, so no option before it. The words after the subcommand are its
+/// operands, which it never runs; step 2 still reads them for a word that
+/// names the binary.
+fn own_subcommand_line(command: &str) -> bool {
+    let plain = command.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, ' ' | '-' | '_' | '.' | '/' | ':' | '=' | ',' | '+' | '@')
+    });
+    if !plain {
+        return false;
+    }
+    let mut words = command.split(' ').filter(|word| !word.is_empty());
+    let program = words.next().unwrap_or_default();
+    !program.contains('=')
+        && basename(program) == BINARY
+        && words
+            .next()
+            .is_some_and(|subcommand| NON_INSTALL_SUBCOMMANDS.contains(&subcommand))
 }
 
 /// One simple command: the argument vector from the program on, after
@@ -2209,6 +2279,49 @@ mod tests {
         ] {
             assert!(!runs(command), "{command}");
         }
+    }
+
+    /// Only the binary's own top-level subcommand is its verb: a verb word
+    /// after another subcommand is that subcommand's operand. The reading
+    /// holds only where the shell passes the line as written; any other
+    /// line naming the binary with a verb still refuses.
+    #[test]
+    fn a_verb_after_another_subcommand_is_its_operand() {
+        let misjudged = misjudged(
+            &[
+                "codeflow update",
+                "codeflow init --yes",
+                "codeflow -- update",
+                "codeflow reserve -- codeflow update",
+                "codeflow reserve -- init",
+                "codeflow delegate init; codeflow update",
+                "codeflow delegate init && codeflow init",
+                "codeflow delegate init --state-dir \"$(codeflow update)\"",
+                "codeflow delegate init --run-id r1 --state-dir `codeflow update`",
+                "codeflow delegate init --run-id $X update",
+                "codeflow task new codeflow update",
+                "codeflow delegate init 'x; codeflow update'",
+                "codeflow delegate init codeflow init",
+                "X=1 codeflow delegate init codeflow update",
+                "env codeflow delegate init update",
+                "codeflow --verbose delegate init",
+                "codeflow dele\\gate init",
+                "codeflow delegate init # codeflow update",
+                "codeflow delegate init\ncodeflow update",
+                "./delegate/codeflow update",
+            ],
+            &[
+                "codeflow delegate init --run-id review-1 --state-dir /tmp/run",
+                "codeflow delegate init --run-id r1 --state-dir /tmp/x --model opus --effort high",
+                "/usr/local/bin/codeflow delegate init --run-id r1 --state-dir /tmp/x",
+                "./target/debug/codeflow delegate init --run-id r1 --state-dir /tmp/x",
+                "codeflow delegate arm --run-id r1 --state-dir /tmp/x --turn-id update",
+                "codeflow task new --title update",
+                "codeflow integrate update --into main",
+                "codeflow follow add init",
+            ],
+        );
+        assert!(misjudged.is_empty(), "{}", misjudged.join("\n"));
     }
 
     #[test]
