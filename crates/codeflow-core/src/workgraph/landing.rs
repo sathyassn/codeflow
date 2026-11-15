@@ -2109,6 +2109,59 @@ mod tests {
         newest_is_fast(dir.path(), LINE, "plan");
     }
 
+    /// TSK-1014 on the EPC-022 checkpoint, the PR 607 shape: [`LINE`]
+    /// writes v1 at L1 against main's v0, then merges main, which only
+    /// edited other files. Main merges the line at M (PR 607), keeping v1
+    /// against its own v0. The line amends v1 to v2 at C, which forks from
+    /// the line before M, and lands C. M rejected nothing that came after
+    /// v1, so v2 is newer than main's v1.
+    fn line_amends_after_main_took_its_version() -> tempfile::TempDir {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Note],
+            vec![Step::File(RECORD, with_criterion(KEPT))],
+        );
+        let root = dir.path();
+        git(root, &["merge", "-q", "--no-ff", "-m", "sync main", "main"]);
+        git(root, &["switch", "-q", "main"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "take the line", LINE],
+        );
+        git(root, &["switch", "-q", "-c", "plan", LINE]);
+        save(root, RECORD, &with_criterion(LINE_V));
+        git(root, &["switch", "-q", LINE]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "land the plan", "plan"],
+        );
+        let repo = Repository::open(root).unwrap();
+        let main = repo.revparse_single("main").unwrap().id();
+        let line = repo.revparse_single(LINE).unwrap().id();
+        let amend = repo.revparse_single("plan").unwrap().id();
+        assert!(!repo.graph_descendant_of(main, line).unwrap());
+        assert!(!repo.graph_descendant_of(line, main).unwrap());
+        assert!(!repo.graph_descendant_of(amend, main).unwrap());
+        dir
+    }
+
+    #[test]
+    fn a_line_amendment_after_main_took_the_lines_version_is_newer() {
+        let dir = line_amends_after_main_took_its_version();
+        newest_is_fast(dir.path(), "main", LINE);
+    }
+
+    /// The control for the PR 607 shape: main also edits v1 after taking
+    /// it, so both sides changed the shared version and neither is newer.
+    #[test]
+    fn both_sides_editing_after_main_took_the_lines_version_still_refuses() {
+        let dir = line_amends_after_main_took_its_version();
+        let root = dir.path();
+        git(root, &["switch", "-q", "main"]);
+        save(root, RECORD, &with_criterion(SIDE));
+        refuses_both_orders(root, "different versions");
+    }
+
     /// TSK-1185 AC-3: swapping the branch names changes nothing.
     #[test]
     fn the_order_does_not_read_which_branch_is_named_like_a_line() {

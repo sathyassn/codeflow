@@ -1973,32 +1973,43 @@ fn early_fork_import(
     divergent: bool,
     new_version_date: Option<&str>,
 ) -> tempfile::TempDir {
+    early_fork_import_of(
+        &["TSK-001"],
+        receiver_second_resolution,
+        divergent,
+        new_version_date,
+    )
+}
+
+/// [`early_fork_import`] with each record step applied to every task in
+/// `ids`.
+fn early_fork_import_of(
+    ids: &[&str],
+    receiver_second_resolution: bool,
+    divergent: bool,
+    new_version_date: Option<&str>,
+) -> tempfile::TempDir {
     let dir = repo(&[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)], "");
     let root = dir.path();
-    let path = record_path("TSK-001");
+    let write_all = |criteria: &str| {
+        for id in ids {
+            write(
+                root,
+                &record_path(id),
+                &task(
+                    id,
+                    "todo",
+                    &OWN_JOURNEY.replace("shall work", criteria),
+                    "Pending.\n",
+                ),
+            );
+        }
+    };
     let older = head(root);
-    write(
-        root,
-        &path,
-        &task(
-            "TSK-001",
-            "todo",
-            &OWN_JOURNEY.replace("shall work", "shall work well"),
-            "Pending.\n",
-        ),
-    );
+    write_all("shall work well");
     let base = commit(root, "docs: write the criteria the syncs keep");
     git(root, &["switch", "-c", "plan/new-version"]);
-    write(
-        root,
-        &path,
-        &task(
-            "TSK-001",
-            "todo",
-            &OWN_JOURNEY.replace("shall work", "shall work safely"),
-            "Pending.\n",
-        ),
-    );
+    write_all("shall work safely");
     let introduction = match new_version_date {
         Some(date) => commit_dated(root, "docs: introduce the superseding criteria", date),
         None => commit(root, "docs: introduce the superseding criteria"),
@@ -2068,16 +2079,7 @@ fn early_fork_import(
     // reject it even though the candidate is a clean merge of source bytes.
     if divergent {
         git(root, &["switch", "test/receiving-base"]);
-        write(
-            root,
-            &path,
-            &task(
-                "TSK-001",
-                "todo",
-                &OWN_JOURNEY.replace("shall work", "shall work independently"),
-                "Pending.\n",
-            ),
-        );
+        write_all("shall work independently");
         commit(root, "docs: independently amend the receiving criteria");
         git(root, &["switch", RECEIVER]);
     }
@@ -2115,6 +2117,34 @@ fn tsk1185_two_sided_criteria_divergence_still_refuses() {
         &["work.import_authority", "none of them is newer"],
     );
     eprintln!("two-sided divergence control:\n{}", result.1);
+}
+
+/// One run lists every record the import judge cannot order: two tasks
+/// diverge on both sides, and both are named, each in its own block. The
+/// run still refuses.
+#[test]
+fn tsk1185_every_unordered_record_is_listed_in_one_run() {
+    let dir = early_fork_import_of(&["TSK-001", "TSK-002"], false, true, None);
+    let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
+    assert_blocks(
+        &result,
+        "two records with real two-sided divergences",
+        &["work.import_authority", "none of them is newer"],
+    );
+    for id in ["TSK-001", "TSK-002"] {
+        assert!(
+            result
+                .1
+                .contains(&format!("{id}: blocks come from target history")),
+            "{id} is not listed: {}",
+            result.1
+        );
+    }
+    let blocks = result
+        .1
+        .matches("BLOCKED — lifecycle invariant work.import_authority")
+        .count();
+    assert_eq!(blocks, 2, "one block per record: {}", result.1);
 }
 
 /// AC-6: the same three answers through `--into`, the form a sync uses.
