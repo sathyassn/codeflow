@@ -252,7 +252,9 @@ fn an_operand_free_contact_refuses_each_state_it_cannot_prove() {
     let folded = Scratch::new(&format!("{HTTPS}[remotes]\n\tOrigin = origin\n"));
     folded.unproven("fetch origin", "remote group");
 
-    let twice = Scratch::new(&format!("{HTTPS}[remote \"origin\"]\n\turl = https://example.test/r\n"));
+    let twice = Scratch::new(&format!(
+        "{HTTPS}[remote \"origin\"]\n\turl = https://example.test/r\n"
+    ));
     twice.unproven("fetch", "more than one address");
 
     let unreadable = Scratch::bytes(
@@ -402,12 +404,24 @@ fn submodule_recursion_refuses_unless_the_line_turns_it_off() {
     for scratch in [&configured, &active, &listed, &cloned] {
         scratch.unproven("fetch origin", "submodule");
         scratch.unproven("pull origin main", "submodule");
-        scratch.unproven("fetch origin --recurse-submodules=no --recurse-submodules", "submodule");
+        scratch.unproven(
+            "fetch origin --recurse-submodules=no --recurse-submodules",
+            "submodule",
+        );
         scratch.unproven("remote update origin", "submodule");
         scratch.unproven("submodule update", "submodule");
-        scratch.unproven("submodule --quiet add https://example.test/lib lib", "submodule");
-        assert_eq!(scratch.helpers("fetch --no-recurse-submodules origin"), Ok(vec![]));
-        assert_eq!(scratch.helpers("pull --recurse-submodules=no origin main"), Ok(vec![]));
+        scratch.unproven(
+            "submodule --quiet add https://example.test/lib lib",
+            "submodule",
+        );
+        assert_eq!(
+            scratch.helpers("fetch --no-recurse-submodules origin"),
+            Ok(vec![])
+        );
+        assert_eq!(
+            scratch.helpers("pull --recurse-submodules=no origin main"),
+            Ok(vec![])
+        );
         assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
         assert_eq!(scratch.helpers("log"), Ok(vec![]));
     }
@@ -425,10 +439,16 @@ fn submodule_recursion_refuses_unless_the_line_turns_it_off() {
         );
     }
     let plain = Scratch::new("");
-    plain.unproven("clone --recurse-submodules https://example.test/r copy", "clone");
+    plain.unproven(
+        "clone --recurse-submodules https://example.test/r copy",
+        "clone",
+    );
     plain.unproven("clone --recursive https://example.test/r copy", "clone");
     plain.unproven("clone --recurse https://example.test/r copy", "clone");
-    assert_eq!(plain.helpers("clone https://example.test/r copy"), Ok(vec![]));
+    assert_eq!(
+        plain.helpers("clone https://example.test/r copy"),
+        Ok(vec![])
+    );
     let recursing = Scratch::new("[submodule]\n\trecurse = true\n");
     recursing.unproven("clone https://example.test/r copy", "clone");
 }

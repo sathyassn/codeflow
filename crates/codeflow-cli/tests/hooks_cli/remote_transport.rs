@@ -132,7 +132,9 @@ fn assert_judged_with(
             if let Some((_, reason)) = first {
                 let err = stderr(&out);
                 if out.status.code() != Some(2) || !err.contains(reason) {
-                    wrong.push(format!("{hook} should refuse `{command}` first by `{reason}`: {err}"));
+                    wrong.push(format!(
+                        "{hook} should refuse `{command}` first by `{reason}`: {err}"
+                    ));
                 }
                 continue;
             }
@@ -196,7 +198,11 @@ fn both_guards_refuse_a_transport_that_starts_a_helper_program() {
             "git ls-remote fixture::https://127.0.0.1:9/r",
             "git ls-remote fixture://127.0.0.1:9/r",
         ],
-        &["git fetch origin", "git ls-remote origin", "git fetch pushed"],
+        &[
+            "git fetch origin",
+            "git ls-remote origin",
+            "git fetch pushed",
+        ],
     );
 }
 
@@ -338,7 +344,11 @@ fn both_guards_refuse_an_operand_free_contact_they_cannot_prove() {
     let ordinary = Scratch::landed(None);
     assert_unproven(
         &ordinary,
-        &["git push", "git ls-remote", "git push --force-with-lease=main"],
+        &[
+            "git push",
+            "git ls-remote",
+            "git push --force-with-lease=main",
+        ],
         &["git fetch", "git push origin HEAD:refs/heads/task/x"],
     );
 }
@@ -532,7 +542,10 @@ fn a_recovery_fetch_is_withheld_for_a_helper_transport() {
             let out = scratch.judge(hook, command);
             let err = stderr(&out);
             assert_eq!(out.status.code(), Some(2), "{hook} `{command}`: {err}");
-            assert!(err.contains("policy source is ambiguous"), "{hook} `{command}`: {err}");
+            assert!(
+                err.contains("policy source is ambiguous"),
+                "{hook} `{command}`: {err}"
+            );
         }
         let out = scratch.judge(hook, "git fetch first");
         assert_eq!(out.status.code(), Some(0), "{hook}: {}", stderr(&out));

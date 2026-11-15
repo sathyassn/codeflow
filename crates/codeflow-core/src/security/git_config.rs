@@ -494,9 +494,9 @@ fn location_command(
     while at < globals.len() {
         let arg = globals[at].as_str();
         if matches!(arg, "-C" | "--git-dir" | "--work-tree") {
-            let value = globals
-                .get(at + 1)
-                .ok_or("cannot read the repository the command works in: missing global-option value")?;
+            let value = globals.get(at + 1).ok_or(
+                "cannot read the repository the command works in: missing global-option value",
+            )?;
             command.args([arg, value]);
             at += 2;
         } else if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {

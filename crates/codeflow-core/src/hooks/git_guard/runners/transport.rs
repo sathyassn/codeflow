@@ -403,6 +403,21 @@ fn remote_nick(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\'])
 }
 
+/// Refuse a name that a legacy remote file in the common Git directory may
+/// define, unless both files are proven absent.
+fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
+    let location = probe.location()?;
+    for folder in ["remotes", "branches"] {
+        if !absent(&location.common.join(folder).join(word)) {
+            return Err(unproven(format!(
+                "remote `{}` may be defined in a legacy remote file in the repository's `{folder}` directory",
+                shown_word(word)
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Whether `path` is proven absent; anything short of that may exist.
 fn absent(path: &Path) -> bool {
     crate::absence::proven_absent(path).unwrap_or(false)
@@ -475,7 +490,8 @@ impl<'a> Resolver<'a> {
         }
         let shown = shown_word(name);
         let key = |variable: &str| format!("remote.{name}.{variable}");
-        let unread = |why: String| format!("cannot resolve the transport of remote `{shown}`: {why}");
+        let unread =
+            |why: String| format!("cannot resolve the transport of remote `{shown}`: {why}");
         if !self.config.get_all(&key("vcs")).is_empty() {
             return Err(unproven(format!(
                 "remote `{shown}` selects a helper through its configuration"
@@ -526,7 +542,7 @@ impl<'a> Resolver<'a> {
             return Ok(());
         }
         if remote_nick(word) {
-            self.legacy(word, probe)?;
+            legacy(word, probe)?;
         }
         self.address(word, direction, found);
         Ok(())
@@ -534,7 +550,12 @@ impl<'a> Resolver<'a> {
 
     /// Resolve `name`, which the configuration names, as a configured remote;
     /// a name it does not define refuses.
-    fn named(&self, name: &str, direction: Direction, found: &mut Vec<Contact>) -> Result<(), String> {
+    fn named(
+        &self,
+        name: &str,
+        direction: Direction,
+        found: &mut Vec<Contact>,
+    ) -> Result<(), String> {
         if self.group(name) {
             return Err(unproven(format!(
                 "`{}` names a remote group",
@@ -558,21 +579,6 @@ impl<'a> Resolver<'a> {
             pushurl: None,
         };
         self.destinations(word, &anonymous, direction, found);
-    }
-
-    /// Refuse a name that a legacy remote file in the common Git directory
-    /// may define, unless both files are proven absent.
-    fn legacy(&self, word: &str, probe: &mut dyn Probe) -> Result<(), String> {
-        let location = probe.location()?;
-        for folder in ["remotes", "branches"] {
-            if !absent(&location.common.join(folder).join(word)) {
-                return Err(unproven(format!(
-                    "remote `{}` may be defined in a legacy remote file in the repository's `{folder}` directory",
-                    shown_word(word)
-                )));
-            }
-        }
-        Ok(())
     }
 
     /// The destinations Git uses for `remote` in `direction`, after its
@@ -627,9 +633,11 @@ impl<'a> Resolver<'a> {
                 }
             },
         }
-        let branch = probe
-            .branch()
-            .map_err(|why| unproven(format!("an operand-free fetch needs the current branch: {why}")))?;
+        let branch = probe.branch().map_err(|why| {
+            unproven(format!(
+                "an operand-free fetch needs the current branch: {why}"
+            ))
+        })?;
         let key = format!("branch.{branch}.remote");
         let named = values(self.config, &key)?;
         match named.as_slice() {
@@ -647,7 +655,8 @@ impl<'a> Resolver<'a> {
     fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
         let on = match recursion_on_line(rest) {
             Some(on) => on,
-            None if verb == "push" => self.setting_on("push.recursesubmodules")?
+            None if verb == "push" => self
+                .setting_on("push.recursesubmodules")?
                 .or(self.setting_on("submodule.recurse")?)
                 .unwrap_or(false),
             None => true,
@@ -703,11 +712,11 @@ impl<'a> Resolver<'a> {
     /// configuration would give the new remote, and recursion into the
     /// submodules the cloned project names.
     fn clone_settings(&self, rest: &[String]) -> Result<(), String> {
-        if self
-            .keys
-            .iter()
-            .any(|key| key.starts_with("remote.") && key.ends_with(".vcs"))
-        {
+        if self.keys.iter().any(|key| {
+            key.strip_prefix("remote.")
+                .and_then(|rest| rest.rsplit_once('.'))
+                .is_some_and(|(_, variable)| variable == "vcs")
+        }) {
             return Err(unproven(
                 "the configuration gives a remote a helper setting, which a clone would use",
             ));

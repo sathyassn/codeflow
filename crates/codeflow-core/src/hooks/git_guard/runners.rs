@@ -207,9 +207,7 @@ impl transport::Probe for CallProbe<'_> {
         let (cwd, env) = (self.cwd, self.env);
         let globals = self.globals.clone();
         self.location
-            .get_or_insert_with(|| {
-                crate::security::git_config::locate(cwd, globals?, env)
-            })
+            .get_or_insert_with(|| crate::security::git_config::locate(cwd, globals?, env))
             .clone()
     }
 
@@ -217,9 +215,7 @@ impl transport::Probe for CallProbe<'_> {
         let (cwd, env) = (self.cwd, self.env);
         let globals = self.globals.clone();
         self.branch
-            .get_or_insert_with(|| {
-                crate::security::git_config::current_branch(cwd, globals?, env)
-            })
+            .get_or_insert_with(|| crate::security::git_config::current_branch(cwd, globals?, env))
             .clone()
     }
 }
