@@ -122,6 +122,16 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1346: a workflow file name that is not UTF-8 makes the whole
+    // workflow directory unreadable, so every dispatch is refused; the
+    // decode never lets a dispatch pass.
+    (
+        "codeflow-core/src/security/release_routes.rs",
+        "flows_in",
+        "name",
+        1,
+        "unproven",
+    ),
     // Both startup_glob_paths callers construct pattern from Pattern.rest, a UTF-8
     // shell-word String. Only those pattern components are decoded to recognize
     // recursive stars; base and filesystem entry names are never decoded here.
@@ -1551,6 +1561,52 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-1346: a session GH_REPO that is not UTF-8 is held as the
+    // unresolved expansion `$GH_REPO`, which the release reader refuses as
+    // a repository it cannot resolve; the decode never lets a call pass.
+    (
+        "crates/codeflow-core/src/security/outward.rs",
+        "release_route",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
+    // TSK-1346: a session config variable (`CURL_HOME`, `HOME` and the
+    // like) that is not UTF-8 is held as the expansion `$NAME`, which the
+    // config lookup cannot resolve, so it counts as a config file present
+    // and the call is refused; the decode never lets a call pass.
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "session_environment",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
+    // TSK-1346: a workflow file that cannot be read or is not UTF-8 counts
+    // as a release workflow that listens to every repository dispatch, and a
+    // workflow name that is not a string matches no selector, which is
+    // refused; neither absence lets a dispatch pass.
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "classify",
+        "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "flows_in",
+        "obtain-absent:find_blob",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/security/release_routes.rs",
+        "flows_in",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
     // or not a JSON object is reported, never read as an absent layer. A
     // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
@@ -7297,6 +7353,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/scaffold/detect.rs", "git_dir_hooks", "is_file", 1, "The result only builds an advisory report note on init and update, or a doctor Warn instead of Pass; a Warn never fails doctor and nothing is written."),
     ("crates/codeflow-core/src/scaffold/detect.rs", "is_executable", "is_file", 1, "Windows variant; callers are the advisory git_dir_hooks note and doctor shims_not_called after the hook was read, choosing a Broken Warn or an Unverified Note, never Fail or a write."),
     ("crates/codeflow-core/src/scaffold/gitutil.rs", "add_and_commit", "exists", 1, "Its only caller passes paths this run just wrote through guard_beneath_root (no links), or the baseline directory when truly absent; exists can only misread them under a concurrent change."),
+    ("crates/codeflow-core/src/scaffold/hooks_path.rs", "holds_hooks", "is_file", 1, "Type check on symlink_metadata of the managed pre-commit hook; a misread only makes doctor Warn and update rewrite core.hooksPath to a working tree's managed folder, never unset it or name another folder."),
     ("crates/codeflow-core/src/scaffold/init.rs", "init_writes", "exists", 4, "A false state check reaches state.store, whose read_beneath_root refuses a link or IO error before any write; the policy check feeds diagnose, whose read_policy refuses a link; the third is a Codex note only."),
     ("crates/codeflow-core/src/scaffold/mod.rs", "path_exists", "try_exists", 1, "A false try_exists is accepted only when proven_absent confirms it; a dangling leaf or ancestor link returns an error."),
     ("crates/codeflow-core/src/scaffold/mod.rs", "should_skip_initial_stack_adr", "ErrorKind::NotFound", 1, "A listing not found is accepted only when proven_absent confirms docs/decisions is missing; a dangling link refuses."),
@@ -7363,6 +7420,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_all_checks", "exists", 1, "False returns a Fail config-exists check, so an unreadable path is never passed; a present config is then loaded by load_test_config, which refuses a dangling leaf."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "exists", 1, "Only picks Pass or Warn text for a coverage exception path; exceptions are matched by path name in threshold evaluation and never read from disk."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "is_dir", 1, "False yields a Fail cwd-exists check, so an unreadable or dangling target directory is reported failing, never passed."),
+    ("crates/codeflow-core/src/testing/doctor/mod.rs", "producer_check", "is_file", 1, "Only picks Pass or Warn doctor text for a coverage package; false names the package and its install command, and no gate or verdict reads this probe (TSK-1014)."),
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_folder", "is_dir", 1, "Type check on metadata the anchored walk read without following, errors propagated; a link or special file fails before it, and a file then reopens through open_regular (TSK-1044)."),

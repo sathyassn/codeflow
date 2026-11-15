@@ -19,12 +19,12 @@
           "command": "cargo nextest run"
         },
         "full": {
-          "command": "cargo llvm-cov nextest --workspace --lcov --output-path target/llvm-cov/lcov.info"
+          "command": "cargo llvm-cov nextest --workspace --lcov --output-path target/lcov.info"
         }
       },
       "coverage": {
         "format": "lcov",
-        "path": "target/llvm-cov/lcov.info",
+        "path": "target/lcov.info",
         "rules": [
           {
             "scope": "per_file",

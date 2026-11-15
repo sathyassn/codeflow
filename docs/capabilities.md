@@ -348,7 +348,8 @@ or a detected stack.
 - With no stack detected it is a loud no-op that exits 0. `--strict` turns that
   into a non-zero exit for unattended callers.
 - With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
-  the verdict (ADR-0021).
+  the verdict (ADR-0021); rules in `defaults.coverage` judge every target
+  whose coverage block sets none.
 - Every run executes every eligible target: no local run record earns
   selection credit (ADR-0089). The [test-gate reference](test-gate.md)
   defines the fields a record holds.
