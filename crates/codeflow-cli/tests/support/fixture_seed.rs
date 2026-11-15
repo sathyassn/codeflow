@@ -78,6 +78,7 @@ pub fn copy_in(
     key: &str,
     construct: impl FnOnce() -> tempfile::TempDir,
 ) -> tempfile::TempDir {
+    codeflow_fixture::require_cargo_environment();
     assert!(
         !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
         "fixture seed key {key:?}"

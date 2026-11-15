@@ -62,6 +62,7 @@ fn repo(config: &str) -> tempfile::TempDir {
 }
 
 fn command(dir: &Path, home: &Path, args: &[&str]) -> Command {
+    codeflow_fixture::require_cargo_environment();
     let mut cmd = Command::new(
         std::env::var_os("CODEFLOW_TEST_GATE_BIN")
             .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into()),

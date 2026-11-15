@@ -84,7 +84,7 @@ mod drain_pipe;
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn codeflow() -> Command {
     isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))

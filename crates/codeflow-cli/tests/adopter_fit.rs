@@ -12,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn codeflow_cmd(dir: &Path) -> Command {
     let path = test_path();

@@ -96,6 +96,7 @@ impl Adopter {
             .unwrap();
     }
     fn command(&self, program: &str) -> Command {
+        codeflow_fixture::require_cargo_environment();
         let mut c = Command::new(program);
         c.current_dir(self.dir.path())
             .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))

@@ -63,6 +63,7 @@ fn install_script(workflow: &str) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
+    codeflow_fixture::require_cargo_environment();
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)

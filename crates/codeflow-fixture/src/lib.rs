@@ -1,8 +1,91 @@
-//! Transport-only Git clones for workspace fixtures.
+//! Git transport and environment checks for workspace fixtures.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+/// Values forced by the repository's Cargo configuration, independent of
+/// agent identity and CI event. A runtime manifest path does not establish
+/// that Cargo loaded the configuration from its starting directory.
+const CARGO_ENVIRONMENT_PROBE: [(&str, &str); 6] = [
+    ("GIT_CONFIG_COUNT", "2"),
+    ("GIT_CONFIG_KEY_0", "maintenance.auto"),
+    ("GIT_CONFIG_VALUE_0", "false"),
+    ("GIT_CONFIG_KEY_1", "gc.auto"),
+    ("GIT_CONFIG_VALUE_1", "0"),
+    ("GIT_CONFIG_PARAMETERS", ""),
+];
+
+/// Whether the lookup contains the values Cargo forces for fixture Git.
+#[must_use]
+pub fn cargo_environment_applied(lookup: impl Fn(&str) -> Option<OsString>) -> bool {
+    CARGO_ENVIRONMENT_PROBE
+        .iter()
+        .all(|(key, expected)| lookup(key).is_some_and(|value| value == *expected))
+}
+
+/// Refuse a fixture that depends on Cargo's forced environment when Cargo
+/// was started elsewhere, before a host's Git settings or CI event affect it.
+///
+/// # Panics
+/// Panics with the cause and the command to use when the table was skipped.
+pub fn require_cargo_environment() {
+    require_environment(cargo_environment_applied(|key| std::env::var_os(key)));
+}
+
+fn require_environment(applied: bool) {
+    assert!(
+        applied,
+        ".cargo/config.toml [env] was not applied to this test process; \
+         run `cargo test` from the repository root or a worktree root. \
+         Starting elsewhere with --manifest-path does not load that table."
+    );
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::{cargo_environment_applied, require_environment, CARGO_ENVIRONMENT_PROBE};
+
+    #[test]
+    fn forced_values_establish_that_the_cargo_table_was_applied() {
+        let config = include_str!("../../../.cargo/config.toml");
+        for (key, value) in CARGO_ENVIRONMENT_PROBE {
+            assert!(config.contains(&format!("{key} = {{ value = \"{value}\", force = true }}")));
+        }
+        assert!(cargo_environment_applied(|key| {
+            CARGO_ENVIRONMENT_PROBE
+                .iter()
+                .find_map(|(name, value)| (*name == key).then(|| (*value).into()))
+        }));
+        for missing in CARGO_ENVIRONMENT_PROBE.map(|(key, _)| key) {
+            assert!(!cargo_environment_applied(|key| {
+                CARGO_ENVIRONMENT_PROBE.iter().find_map(|(name, value)| {
+                    (*name == key && key != missing).then(|| (*value).into())
+                })
+            }));
+            assert!(!cargo_environment_applied(|key| {
+                CARGO_ENVIRONMENT_PROBE.iter().find_map(|(name, value)| {
+                    (*name == key).then(|| {
+                        if key == missing {
+                            "host-value".into()
+                        } else {
+                            (*value).into()
+                        }
+                    })
+                })
+            }));
+        }
+        assert!(!cargo_environment_applied(|key| {
+            (key == "CARGO_MANIFEST_DIR").then(|| "/a/manifest/path".into())
+        }));
+    }
+
+    #[test]
+    #[should_panic(expected = "run `cargo test` from the repository root or a worktree root")]
+    fn a_missing_table_refuses_with_the_cause_and_fix() {
+        require_environment(false);
+    }
+}
 
 /// A clone with only the options used by workspace fixtures.
 #[must_use]

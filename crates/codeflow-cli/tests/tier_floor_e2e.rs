@@ -57,7 +57,7 @@ const METHOD_ARTIFACTS: [&str; 5] = [
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 /// Runs the binary under test with the git-hook shims pointed back at it (they
 /// `exec codeflow` from PATH) and host git config neutralized.

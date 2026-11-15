@@ -11,7 +11,7 @@ use std::process::Command;
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));

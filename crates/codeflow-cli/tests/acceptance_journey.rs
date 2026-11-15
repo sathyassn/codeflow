@@ -17,7 +17,7 @@ mod process_folders;
 mod sequence;
 #[path = "acceptance_journey/unblock.rs"]
 mod unblock;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));

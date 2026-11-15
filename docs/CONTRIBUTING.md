@@ -19,6 +19,14 @@ CodeFlow is a Rust CLI. Changes land through pull requests.
 
 ## Getting started
 
+Run tests from the repository root or a worktree root. Cargo loads
+`.cargo/config.toml` from its starting directory; `--manifest-path` does not
+load that file when cargo starts elsewhere. Fixtures that depend on its
+`[env]` table refuse to run when the table was skipped, with a message naming
+the cause and asking you to run `cargo test` from a checkout root. The release
+journey fixtures clear agent session markers themselves, so they also work
+when their test binary is started directly.
+
 ```sh
 cargo build --release --locked
 PATH="$PWD/target/release:$PATH" codeflow test --mode full --strict

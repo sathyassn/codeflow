@@ -7,8 +7,16 @@ use std::process::{Command, Output};
 #[cfg(unix)]
 use codeflow_core::workgraph::work_start::REVIEW_LOOKUP_TIMEOUT;
 
+fn human_git() -> Command {
+    let mut command = Command::new("git");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = human_git()
         .args(args)
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -51,6 +59,7 @@ fn fixture() -> tempfile::TempDir {
     dir
 }
 fn cli(root: &Path, args: &[&str], bin: Option<&Path>) -> Output {
+    codeflow_fixture::require_cargo_environment();
     // Run the same regression fixtures against a released baseline when
     // collecting fail-before evidence. Production code never reads this.
     let binary = std::env::var_os("CODEFLOW_TEST_BINARY")
@@ -1275,7 +1284,7 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
     let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
     let remote = tempfile::tempdir().unwrap();
     let origin = remote.path().join("origin.git");
-    let reftable = Command::new("git")
+    let reftable = human_git()
         .args([
             "init",
             "-q",
@@ -1331,7 +1340,7 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
     }
     let legit = git(root, &["rev-parse", "refs/remotes/origin/main"]);
 
-    let fetch = Command::new("git")
+    let fetch = human_git()
         .args(["fetch", "origin"])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1349,7 +1358,7 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
     git(&origin, &["update-ref", "-d", "refs/heads/MAIN"]);
     git(root, &["push", "-q", "origin", "main:refs/heads/feat/new"]);
     git(&origin, &["update-ref", "refs/heads/feat/other", &legit]);
-    let fetch = Command::new("git")
+    let fetch = human_git()
         .args(["fetch", "origin"])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1374,7 +1383,7 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
 fn case_sensitive_origin(remote: &Path, insensitive: bool) -> std::path::PathBuf {
     // Its default branch is `main`, as a hosted remote's is (TSK-340).
     let origin = remote.join("origin.git");
-    let reftable = Command::new("git")
+    let reftable = human_git()
         .args([
             "init",
             "-q",
@@ -1419,7 +1428,7 @@ fn wire_transaction_hook(root: &Path) {
 }
 
 fn fetch_origin(root: &Path) -> Output {
-    Command::new("git")
+    human_git()
         .args(["fetch", "origin"])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1495,7 +1504,7 @@ fn tsk381_a_unicode_remote_branch_fetches_and_a_folded_directory_does_not() {
         String::from_utf8_lossy(&out.stderr)
     );
     if insensitive {
-        let landed = Command::new("git")
+        let landed = human_git()
             .args([
                 "rev-parse",
                 "--verify",
@@ -2257,7 +2266,7 @@ fn claim_push_runs_no_failing_target_at_the_tip() {
         root,
         &["commit", "-q", "--allow-empty", "-m", "Not conventional"],
     );
-    let refused = Command::new("git")
+    let refused = human_git()
         .args(["push", "origin", &format!("HEAD:refs/heads/{child}")])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2362,7 +2371,7 @@ fn a_claim_on_a_reviewed_head_passes_its_own_push_check() {
     write(root, "src/b.rs", "pub fn b() {}\n");
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "feat: build on the predecessor"]);
-    let pushed = Command::new("git")
+    let pushed = human_git()
         .args(["push", "-q", "origin", child])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2805,7 +2814,7 @@ fn the_journey_rule_matches_the_name_git_records() {
 fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
     use std::io::Write as _;
     use std::os::unix::ffi::OsStringExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     let dir = fixture();
     let root = dir.path();
     let bin = tempfile::tempdir().unwrap();
@@ -2841,7 +2850,7 @@ fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
     ));
     let child = "task/TSK-002-work-tsk-002";
     git(root, &["switch", child]);
-    let mut hash = Command::new("git")
+    let mut hash = human_git()
         .args(["hash-object", "-w", "--stdin"])
         .current_dir(root)
         .stdin(Stdio::piped())
@@ -2855,7 +2864,7 @@ fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
         .unwrap();
     let blob = String::from_utf8(hash.wait_with_output().unwrap().stdout).unwrap();
     let raw = std::ffi::OsString::from_vec(b"src/\xff.rs".to_vec());
-    let out = Command::new("git")
+    let out = human_git()
         .args([
             "update-index",
             "--add",
@@ -3009,7 +3018,7 @@ fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_is_re
 /// One approving Reviews row for the whole unit at each commit an acceptance
 /// block at `rev` binds (issue 121), or `fallback` when none is bound.
 fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
-    let out = std::process::Command::new("git")
+    let out = human_git()
         .args([
             "grep",
             "-h",

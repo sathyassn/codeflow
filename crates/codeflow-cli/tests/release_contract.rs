@@ -642,6 +642,7 @@ fn the_release_build_writes_only_ignored_paths_so_its_binary_is_clean() {
 /// breaking level.
 #[test]
 fn an_adopter_without_release_tooling_is_judged_by_codeflow_ci_alone() {
+    codeflow_fixture::require_cargo_environment();
     use std::process::Command;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

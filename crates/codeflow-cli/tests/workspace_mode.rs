@@ -10,7 +10,7 @@ use codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH;
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -18,7 +18,11 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new(&exe)
+    let mut command = Command::new(&exe);
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
@@ -46,7 +50,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    let out = Command::new("git")
+    let mut command = Command::new("git");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    let out = command
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -838,6 +846,7 @@ fn journey_ci_accepts_the_root_branch_at_the_minimal_tier() {
 }
 
 fn with_runtime_override<'a>(command: &'a mut Command, key: &str, value: &str) -> &'a mut Command {
+    codeflow_fixture::require_cargo_environment();
     // Preserve Cargo's two maintenance settings and append the fixture override.
     command
         .env("GIT_CONFIG_COUNT", "3")
