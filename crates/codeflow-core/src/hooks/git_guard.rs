@@ -1540,6 +1540,13 @@ fn configuration_variable(name: &str) -> bool {
     name.starts_with("GIT_CONFIG") || matches!(name, "HOME" | "XDG_CONFIG_HOME")
 }
 
+/// Whether a variable a judged command assigns is one of Git's own
+/// (`GIT_*`): the alias precheck (TSK-1456) and the agent-push destination
+/// check (TSK-1479) both step aside when the line sets one.
+fn git_variable(name: &str) -> bool {
+    name.starts_with("GIT_")
+}
+
 fn configuration_environment_change(command: &str) -> Option<String> {
     expand_commands(command).iter().find_map(|segment| {
         let mut tokens = command_argv(segment);
@@ -10315,7 +10322,7 @@ fn alias_starts(moved: &Moves<'_>, config_changed: bool, cwd: &Path) -> Option<V
         || moved.git_config_var
         || moved.vars.is_some_and(|vars| {
             vars.keys()
-                .any(|name| name.starts_with("GIT_") || configuration_variable(name))
+                .any(|name| git_variable(name) || configuration_variable(name))
         })
     {
         return None;
@@ -13207,7 +13214,7 @@ fn agent_push_destination(
     if moved.tokens.iter().any(|token| {
         token
             .split_once('=')
-            .is_some_and(|(name, _)| name.starts_with("GIT_"))
+            .is_some_and(|(name, _)| git_variable(name))
     }) {
         return refuse("a Git variable assigned on the line");
     }
