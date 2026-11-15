@@ -1973,25 +1973,27 @@ fn early_fork_import(
     divergent: bool,
     new_version_date: Option<&str>,
 ) -> tempfile::TempDir {
+    let diverging: &[&str] = if divergent { &["TSK-001"] } else { &[] };
     early_fork_import_of(
         &["TSK-001"],
         receiver_second_resolution,
-        divergent,
+        diverging,
         new_version_date,
     )
 }
 
 /// [`early_fork_import`] with each record step applied to every task in
-/// `ids`.
+/// `ids`; the receiving line independently amends only the tasks in
+/// `diverging`.
 fn early_fork_import_of(
     ids: &[&str],
     receiver_second_resolution: bool,
-    divergent: bool,
+    diverging: &[&str],
     new_version_date: Option<&str>,
 ) -> tempfile::TempDir {
     let dir = repo(&[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)], "");
     let root = dir.path();
-    let write_all = |criteria: &str| {
+    let write_each = |ids: &[&str], criteria: &str| {
         for id in ids {
             write(
                 root,
@@ -2006,10 +2008,10 @@ fn early_fork_import_of(
         }
     };
     let older = head(root);
-    write_all("shall work well");
+    write_each(ids, "shall work well");
     let base = commit(root, "docs: write the criteria the syncs keep");
     git(root, &["switch", "-c", "plan/new-version"]);
-    write_all("shall work safely");
+    write_each(ids, "shall work safely");
     let introduction = match new_version_date {
         Some(date) => commit_dated(root, "docs: introduce the superseding criteria", date),
         None => commit(root, "docs: introduce the superseding criteria"),
@@ -2077,9 +2079,9 @@ fn early_fork_import_of(
     // The target independently edits its criteria after the sync branch
     // forks. Its new tip is outside the candidate, so import ordering must
     // reject it even though the candidate is a clean merge of source bytes.
-    if divergent {
+    if !diverging.is_empty() {
         git(root, &["switch", "test/receiving-base"]);
-        write_all("shall work independently");
+        write_each(diverging, "shall work independently");
         commit(root, "docs: independently amend the receiving criteria");
         git(root, &["switch", RECEIVER]);
     }
@@ -2124,14 +2126,15 @@ fn tsk1185_two_sided_criteria_divergence_still_refuses() {
 /// run still refuses.
 #[test]
 fn tsk1185_every_unordered_record_is_listed_in_one_run() {
-    let dir = early_fork_import_of(&["TSK-001", "TSK-002"], false, true, None);
+    let both = ["TSK-001", "TSK-002"];
+    let dir = early_fork_import_of(&both, false, &both, None);
     let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
     assert_blocks(
         &result,
         "two records with real two-sided divergences",
         &["work.import_authority", "none of them is newer"],
     );
-    for id in ["TSK-001", "TSK-002"] {
+    for id in both {
         assert!(
             result
                 .1
@@ -2145,6 +2148,34 @@ fn tsk1185_every_unordered_record_is_listed_in_one_run() {
         .matches("BLOCKED — lifecycle invariant work.import_authority")
         .count();
     assert_eq!(blocks, 2, "one block per record: {}", result.1);
+}
+
+/// Of two imported records, only the one that diverged on both sides is
+/// listed; the run still refuses.
+#[test]
+fn tsk1185_only_the_unordered_record_is_listed_and_the_run_refuses() {
+    let dir = early_fork_import_of(&["TSK-001", "TSK-002"], false, &["TSK-001"], None);
+    let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
+    assert_blocks(
+        &result,
+        "one record with a real two-sided divergence",
+        &[
+            "work.import_authority",
+            "TSK-001: blocks come from target history",
+        ],
+    );
+    assert!(
+        !result
+            .1
+            .contains("TSK-002: blocks come from target history"),
+        "the provable record is listed: {}",
+        result.1
+    );
+    let blocks = result
+        .1
+        .matches("BLOCKED — lifecycle invariant work.import_authority")
+        .count();
+    assert_eq!(blocks, 1, "one block for the one record: {}", result.1);
 }
 
 /// AC-6: the same three answers through `--into`, the form a sync uses.
