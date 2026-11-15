@@ -63,3 +63,12 @@ merges into `main`.
 ## Architecture impact
 
 None.
+
+## Note, 2026-11-11: ADR-0102 narrows this record for marked epics
+
+ADR-0102 (a marked epic reaches `main` once and complete, and line pushes
+start no hosted run), proposed on 2026-11-11, replaces two parts of this
+record for marked epics only: the checkpoint pull request at every green
+line tip, and the one pull request per task. For unmarked epics, EPC-022
+among them, this record's checkpoint rule stays in force until they close.
+The rest of this record stands.
