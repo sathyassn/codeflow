@@ -345,9 +345,9 @@ pub fn blob_id_at(
         .revparse_single(revision)
         .and_then(|object| object.peel_to_tree())
         .map_err(|error| format!("cannot read {revision}: {}", error.message()))?;
-    match tree.get_path(std::path::Path::new(path)) {
-        Ok(entry) => Ok(Some(entry.id().to_string())),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+    match missing_contents::tree_entry(&repo, &tree, std::path::Path::new(path)) {
+        Ok(Some(entry)) => Ok(Some(entry.id().to_string())),
+        Ok(None) => Ok(None),
         Err(error) => Err(format!(
             "cannot read {path} at {revision}: {}",
             error.message()

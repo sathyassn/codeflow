@@ -152,11 +152,12 @@ pub(super) fn blob_at(
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| format!("cannot read {path} at {commit}: {error}"))?;
-    let entry = match tree.get_path(std::path::Path::new(path)) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => return Err(format!("cannot read {path} at {commit}: {error}")),
-    };
+    let entry =
+        match crate::git::missing_contents::tree_entry(repo, &tree, std::path::Path::new(path)) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return Ok(None),
+            Err(error) => return Err(format!("cannot read {path} at {commit}: {error}")),
+        };
     let blob = repo.find_blob(entry.id()).map_err(|error| {
         format!(
             "cannot read {path} at {commit}: {}",
@@ -5423,6 +5424,34 @@ fn stacked_heads(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_record_directory_is_unreadable_not_absent() {
+        let path = "project-management/tasks/TSK-001.md";
+        for partial in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, head) =
+                crate::git::repo_with_tree(dir.path(), &[(path.as_bytes(), b"record")]);
+            let missing = repo
+                .find_commit(head)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .get_name("project-management")
+                .unwrap()
+                .id();
+            r22_remove_object(&repo, missing);
+            repo.config()
+                .unwrap()
+                .set_bool("remote.origin.promisor", partial)
+                .unwrap();
+            drop(repo);
+            let repo = Repository::open(dir.path()).unwrap();
+            let error = blob_at(&repo, head, path).unwrap_err();
+            assert!(error.contains(&missing.to_string()), "{error}");
+            assert_eq!(error.contains("partial clone"), partial, "{error}");
+        }
+    }
+
     fn r22_remove_object(repo: &Repository, oid: Oid) {
         let hex = oid.to_string();
         std::fs::remove_file(repo.path().join("objects").join(&hex[..2]).join(&hex[2..])).unwrap();

@@ -510,9 +510,9 @@ fn file_in(
     path: &str,
     shown: &str,
 ) -> Result<Option<String>, String> {
-    let entry = match tree.get_path(Path::new(path)) {
-        Ok(entry) => entry,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+    let entry = match crate::git::missing_contents::tree_entry(repo, tree, Path::new(path)) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(None),
         Err(e) => return Err(format!("cannot read policy source {shown}: {path}: {e}")),
     };
     if entry.kind() != Some(git2::ObjectType::Blob) || entry.filemode() == 0o120_000 {

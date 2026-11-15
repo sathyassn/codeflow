@@ -514,9 +514,10 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Pattern, Str
         .find_commit(tip)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.message().to_string())?;
-    let entry = match tree.get_path(Path::new(POLICY_PATH)) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+    let entry = match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(POLICY_PATH))
+    {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
             return match policy_in_history(repo, tip) {
                 Ok(None) => Ok(Pattern::InitialAdoption),
                 Ok(Some(carried)) => Err(format!(
@@ -1869,9 +1870,9 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<Entry>,
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    match tree.get_path(Path::new(path)) {
-        Ok(entry) => Ok(Some((entry.id(), entry.filemode().cast_unsigned()))),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+    match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(path)) {
+        Ok(Some(entry)) => Ok(Some((entry.id(), entry.filemode().cast_unsigned()))),
+        Ok(None) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }

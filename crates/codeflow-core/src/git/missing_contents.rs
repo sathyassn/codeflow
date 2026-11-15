@@ -10,6 +10,71 @@ use git2::{ErrorCode, ObjectType, Oid, Repository};
 use super::GitName;
 use crate::workgraph::history;
 
+/// Look up a relative path, distinguishing absent names from unreadable trees.
+/// `None` proves a component absent from a tree that was actually loaded.
+///
+/// # Errors
+/// A directory object cannot be read, an intermediate entry is not a tree,
+/// or the path is not a relative repository path.
+pub fn tree_entry(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    path: &std::path::Path,
+) -> Result<Option<git2::TreeEntry<'static>>, git2::Error> {
+    let components = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(name) if !name.as_encoded_bytes().contains(&0) => {
+                Ok(name.as_encoded_bytes())
+            }
+            _ => Err(git2::Error::from_str("expected a relative repository path")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if components.is_empty() {
+        return Err(git2::Error::from_str("expected a nonempty repository path"));
+    }
+    let unreadable = |id: Oid, name: &[u8], error: git2::Error| {
+        git2::Error::new(
+            error.code(),
+            error.class(),
+            format!(
+                "cannot read tree {} (object {id}): {}",
+                GitName::from_bytes(name).display(),
+                object_error(repo, name, id, &error)
+            ),
+        )
+    };
+    let mut current = repo
+        .find_tree(tree.id())
+        .map_err(|error| unreadable(tree.id(), b".", error))?;
+    let mut name = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        if !name.is_empty() {
+            name.push(b'/');
+        }
+        name.extend_from_slice(component);
+        let Some(entry) = current.get_name_bytes(component) else {
+            return Ok(None);
+        };
+        if index + 1 == components.len() {
+            return Ok(Some(entry.to_owned()));
+        }
+        if entry.kind() != Some(ObjectType::Tree) {
+            return Err(git2::Error::from_str(&format!(
+                "cannot read directory {} (object {}): not a tree",
+                GitName::from_bytes(&name).display(),
+                entry.id()
+            )));
+        }
+        let id = entry.id();
+        drop(entry);
+        current = repo
+            .find_tree(id)
+            .map_err(|error| unreadable(id, &name, error))?;
+    }
+    unreachable!("a nonempty path returns its final entry")
+}
+
 fn partial(repo: &Repository) -> Result<bool, String> {
     // Config errors can quote a remote name. Keep classification errors
     // static so neither that name nor URL userinfo reaches a diagnostic.
@@ -101,16 +166,36 @@ struct Inventory {
 }
 
 impl Inventory {
-    fn tree(&mut self, repo: &Repository, id: Oid) -> Result<Vec<(Vec<u8>, Oid)>, String> {
+    fn tree(
+        &mut self,
+        repo: &Repository,
+        id: Oid,
+        path: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Oid)>, String> {
         if let Some(known) = self.trees.get(&id) {
             return Ok(known.clone());
         }
-        let tree = repo.find_tree(id).map_err(|error| error.to_string())?;
+        let tree = repo.find_tree(id).map_err(|error| {
+            format!(
+                "cannot read tree {} (object {id}): {}",
+                GitName::from_bytes(path).display(),
+                object_error(repo, path, id, &error)
+            )
+        })?;
         let mut missing = Vec::new();
         for entry in &tree {
             match entry.kind() {
                 Some(ObjectType::Tree) => {
-                    for (relative, blob) in self.tree(repo, entry.id())? {
+                    let mut directory = if path == b"." {
+                        Vec::new()
+                    } else {
+                        path.to_vec()
+                    };
+                    if !directory.is_empty() {
+                        directory.push(b'/');
+                    }
+                    directory.extend_from_slice(entry.name_bytes());
+                    for (relative, blob) in self.tree(repo, entry.id(), &directory)? {
                         let mut path = entry.name_bytes().to_vec();
                         path.push(b'/');
                         path.extend(relative);
@@ -145,7 +230,7 @@ impl Inventory {
 
     fn commit(&mut self, repo: &Repository, id: Oid) -> Result<(), String> {
         let commit = repo.find_commit(id).map_err(|error| error.to_string())?;
-        let missing = self.tree(repo, commit.tree_id())?;
+        let missing = self.tree(repo, commit.tree_id(), b".")?;
         self.missing.extend(missing);
         Ok(())
     }
@@ -207,6 +292,87 @@ pub fn check_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_lookup_distinguishes_absence_from_unreadable_directory_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Repository::init(dir.path().join("source")).unwrap();
+        let blob = source.blob(b"contents").unwrap();
+        let mut nested = source.treebuilder(None).unwrap();
+        nested.insert("file", blob, 0o100_644).unwrap();
+        let missing = nested.write().unwrap();
+        let mut root = source.treebuilder(None).unwrap();
+        root.insert("nested", missing, 0o040_000).unwrap();
+        root.insert("regular", blob, 0o100_644).unwrap();
+        let root = root.write().unwrap();
+        let signature = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+        let commit = source
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "fixture",
+                &source.find_tree(root).unwrap(),
+                &[],
+            )
+            .unwrap();
+        let target = Repository::init(dir.path().join("target")).unwrap();
+        let objects = source.odb().unwrap();
+        objects
+            .foreach(|id| {
+                if *id != missing {
+                    let object = objects.read(*id).unwrap();
+                    target
+                        .odb()
+                        .unwrap()
+                        .write(object.kind(), object.data())
+                        .unwrap();
+                }
+                true
+            })
+            .unwrap();
+        let tree = target.find_tree(root).unwrap();
+        assert!(
+            tree_entry(&target, &tree, std::path::Path::new("absent/file"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(tree_entry(&target, &tree, std::path::Path::new("regular/file")).is_err());
+        assert_eq!(
+            tree_entry(&target, &tree, std::path::Path::new("regular"))
+                .unwrap()
+                .unwrap()
+                .id(),
+            blob
+        );
+        for partial in [false, true] {
+            target
+                .config()
+                .unwrap()
+                .set_bool("remote.withheld-marker.promisor", partial)
+                .unwrap();
+            let error = tree_entry(&target, &tree, std::path::Path::new("nested/file"))
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains(&missing.to_string()) && error.contains("nested"),
+                "{error}"
+            );
+            assert_eq!(error.contains("partial clone"), partial, "{error}");
+            assert_eq!(error.contains("git cat-file -e"), partial, "{error}");
+            assert!(!error.contains("withheld-marker"), "{error}");
+            if partial {
+                let error = check_range(&target, None, &commit.to_string(), &[]).unwrap_err();
+                assert!(
+                    error.contains(&missing.to_string())
+                        && error.contains("partial clone")
+                        && error.contains("nested"),
+                    "{error}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn missing_contents_commands_enable_retrieval_on_both_platforms() {

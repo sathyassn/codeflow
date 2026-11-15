@@ -1027,9 +1027,10 @@ fn project_at(repo: &Repository, commit: git2::Oid) -> Result<Option<toml::Value
         .find_commit(commit)
         .and_then(|c| c.tree())
         .map_err(|e| format!("cannot read the authority tree {commit}: {e}"))?;
-    let entry = match tree.get_path(Path::new(PROJECT_FILE)) {
-        Ok(entry) => entry,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+    let entry = match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(PROJECT_FILE))
+    {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
     let blob = repo.find_blob(entry.id()).map_err(|e| {
@@ -1487,6 +1488,81 @@ mod tests {
             assert!(!output.status.success(), "offline retrieval must fail");
             assert!(fixture.judge().unwrap_err().contains(&id.to_string()));
         }
+    }
+
+    fn missing_policy_tree_refuses(cleared_partial: bool) {
+        let fixture = PartialFixture::with_file(false, ".codeflow/policy.json", 0o100_644);
+        let source = if cleared_partial {
+            Repository::open(fixture.repo.workdir().unwrap()).unwrap()
+        } else {
+            Repository::open_bare(fixture.dir.path().join("upstream.git")).unwrap()
+        };
+        let tree = source.find_commit(fixture.head).unwrap().tree().unwrap();
+        let missing = tree.get_name(".codeflow").unwrap().id();
+        let copy = Repository::init(fixture.dir.path().join("copy")).unwrap();
+        let objects = source.odb().unwrap();
+        objects
+            .foreach(|id| {
+                if *id != missing {
+                    let object = objects.read(*id).unwrap();
+                    copy.odb()
+                        .unwrap()
+                        .write(object.kind(), object.data())
+                        .unwrap();
+                }
+                true
+            })
+            .unwrap();
+        let root = if cleared_partial {
+            // Keep the real blob:none clone and its refs, but rewrite its
+            // locally held objects as loose objects without the target tree.
+            let root = fixture.repo.workdir().unwrap().to_path_buf();
+            let object_dir = fixture.repo.path().join("objects");
+            drop(objects);
+            drop(tree);
+            drop(source);
+            drop(fixture.repo);
+            std::fs::remove_dir_all(&object_dir).unwrap();
+            std::fs::rename(copy.path().join("objects"), &object_dir).unwrap();
+            let repo = Repository::open(&root).unwrap();
+            let mut config = repo.config().unwrap();
+            config.remove("extensions.partialclone").unwrap();
+            config.remove("remote.origin.promisor").unwrap();
+            root
+        } else {
+            copy.workdir().unwrap().to_path_buf()
+        };
+        drop(copy);
+        let repo = Repository::open(&root).unwrap();
+        assert!(repo.find_tree(missing).is_err());
+        assert!(repo
+            .config()
+            .unwrap()
+            .get_string("extensions.partialclone")
+            .is_err());
+        assert!(!repo
+            .config()
+            .unwrap()
+            .get_bool("remote.origin.promisor")
+            .unwrap_or(false));
+        let result = super::super::landed_policy::checked_policy_at(&repo, fixture.head);
+        match result {
+            Err(error) => {
+                eprintln!("cleared_partial={cleared_partial}, missing tree {missing}: {error}");
+                assert!(error.contains(&missing.to_string()), "{error}");
+            }
+            Ok(_) => panic!("missing tree {missing} was treated as an absent policy (cleared_partial={cleared_partial})"),
+        }
+    }
+
+    #[test]
+    fn full_clone_missing_policy_tree_refuses() {
+        missing_policy_tree_refuses(false);
+    }
+
+    #[test]
+    fn cleared_partial_clone_missing_policy_tree_refuses() {
+        missing_policy_tree_refuses(true);
     }
 
     #[test]
