@@ -555,6 +555,13 @@ budget; only a `host_exclusive` target runs alone
 
 Heavy-target deadlines: [test gate reference](test-gate.md#technical).
 
+Target commands receive `CODEFLOW_BASE`, `CODEFLOW_HEAD`,
+`CODEFLOW_CHANGED_PATHS_FILE` and `CODEFLOW_LANDING_LINE` in every mode.
+The comparison inputs say `unknown` when no base is proven; they never
+narrow CodeFlow's selection. Exit 77 reports `skipped, not selected` and
+fails the gate with incomplete evidence. The [target-command contract](test-gate.md#inputs-and-exit-codes-for-target-commands)
+defines the base source, path-file format and other exit codes.
+
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
 - A killed gate's slot stays busy while its target runs. On Windows the

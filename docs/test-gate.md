@@ -22,7 +22,7 @@ in CodeFlow reads one to decide what runs.
 
 ### A run with no comparison base
 
-A quick or essential run on a branch with no task (`plan/`, `chore/`), on a
+A run without `--since` on a branch with no task (`plan/`, `chore/`), on a
 detached head, or on a task with no declared target has no comparison base.
 It runs every target and prints `every target: local narrowing is
 unavailable, since no local run record earns selection credit (ADR-0089)`.
@@ -42,6 +42,42 @@ same-user key, an ownership or mode check, or a home-directory lookup is
 not such a recorder. Before 3.2.0 a passed, clean, complete full record of
 the base tree could skip a content target; such a record, and any written
 since, is read by nothing.
+
+### Inputs and exit codes for target commands
+
+Every quick, essential and full target command receives these informational
+inputs. They never change CodeFlow's target selection or earn reuse credit.
+
+| Variable | Value |
+|---|---|
+| `CODEFLOW_BASE` | Exact comparison commit, or `unknown` |
+| `CODEFLOW_HEAD` | Exact HEAD commit at comparison time, or `unknown` when no comparison is proven |
+| `CODEFLOW_CHANGED_PATHS_FILE` | Absolute path to this run's NUL-separated path file, or `unknown` when no comparison is proven |
+| `CODEFLOW_LANDING_LINE` | The carried task's committed `integration_target`, falling back to the caller's informational environment hint (including on a detached candidate), then `unknown` |
+
+`--since` resolves once to a commit. Otherwise the base is the merge base
+of HEAD and the carried task's declared landing line, resolved locally.
+A shallow repository, missing task or line, unreadable diff or unresolved
+revision leaves the comparison unknown. An unknown comparison never offers
+a path file as complete. The schema-2 `run.json` adds a `comparison` object
+with `base`, `head`, `landing_line`, `proven`, `reason` and `paths_file`;
+`proven: false` records the unknown case and `paths_file` is null.
+
+The file is a snapshot before targets start, inside the run's own directory.
+It lists repository-relative raw Git path bytes separated by NUL, including
+tracked edits and nonignored untracked paths. Names have no quoting or
+escaping; newlines and non-UTF-8 bytes remain literal. A reader splits on
+NUL and treats each name as data, never shell code. The file is limited to
+16 MiB; a larger list leaves the comparison unknown. Environment values
+require exact UTF-8: an unrepresentable file-path value stays unset.
+
+A target exits 0 to pass. Exit 77 means `skipped, not selected`; every other
+exit code fails. A skip fails the gate in every mode, including `--strict`
+and a protected landing gate, and leaves the run incomplete. It blocks
+dependent targets and earns no pass count, report, coverage or target
+evidence. The run record lists it in `not_selected` and gives its result
+the status `not_selected`, distinct from a selection skip. Hosted shard
+aggregation also refuses execution credit for a skipped JUnit case.
 
 ### Where evidence is written
 

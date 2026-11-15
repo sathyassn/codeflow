@@ -55,7 +55,10 @@ impl GateTargetResult {
     /// Whether this target passed.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.exit_code == 0 && self.error.is_none() && !self.termination_unconfirmed
+        self.status == super::runner::deadline::TargetStatus::Passed
+            && self.exit_code == 0
+            && self.error.is_none()
+            && !self.termination_unconfirmed
     }
 }
 
@@ -363,12 +366,17 @@ fn run_configured(
         .map_err(|error| delivery::evidence_refused(&anchor, &run_relative, &error))?;
     let target_dir = anchor.join(&target_relative);
     let run_dir = anchor.join(&run_relative);
+    let landing_line = std::env::var("CODEFLOW_LANDING_LINE").ok();
+    let mut inputs =
+        super::target_inputs::TargetInputs::discover(project_dir, options, landing_line.as_deref());
+    inputs.write_paths(&anchor, &run_relative)?;
     configure_run_targets(
         &mut targets,
         project_dir,
         &target_dir,
         &run_dir,
         options.all,
+        Some(&inputs),
     )?;
     // Resolve fallback weight before scheduling; the original declarations remain evidence inputs.
     for target in &mut targets {
@@ -408,7 +416,9 @@ fn run_configured(
     let coverage = if effective_mode == "full" {
         let ok_runs: Vec<TargetRunResult> = raw
             .iter()
-            .filter_map(|r| r.as_ref().ok().cloned())
+            .filter_map(|r| r.as_ref().ok())
+            .filter(|r| r.status() != super::runner::deadline::TargetStatus::NotSelected)
+            .cloned()
             .collect();
         collect_coverage_reports(&targets, &ok_runs, defaults)
     } else {
@@ -429,6 +439,7 @@ fn run_configured(
                 // yields None and the caller falls back to raw output.
                 let report = targets
                     .iter()
+                    .filter(|_| run.status() != super::runner::deadline::TargetStatus::NotSelected)
                     .find(|t| t.name == run.target_name)
                     .and_then(|t| validation::parse_target_report(t, &run).ok().flatten())
                     .map(|rep| summarize_report(&rep));
@@ -488,6 +499,11 @@ fn run_configured(
         Err(error) => vec![format!("repository unavailable: {error}")],
     };
     let clean = dirty_paths.is_empty();
+    let not_selected: Vec<String> = results
+        .iter()
+        .filter(|r| r.status == super::runner::deadline::TargetStatus::NotSelected)
+        .map(|r| r.name.clone())
+        .collect();
     // A run limited by `--only` is one part of a split gate, never the
     // whole gate's evidence, even when its names happen to cover every
     // target: only an unlimited run is recorded complete.
@@ -495,6 +511,7 @@ fn run_configured(
         && options.only.is_empty()
         && selection.skipped.is_empty()
         && ci_skipped.is_empty()
+        && not_selected.is_empty()
         && results.len() == targets.len()
         && effective_mode == "full";
     if !ci_skipped.is_empty() && effective_mode == "full" {
@@ -509,6 +526,8 @@ fn run_configured(
         "tree": tree, "config_digest": config_digest, "mode": effective_mode,
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
         "ci_skipped": ci_skipped,
+        "comparison": inputs,
+        "not_selected": not_selected,
         "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
         "failure_reasons": failure_reasons,
         "results": results, "coverage": coverage,
@@ -543,8 +562,13 @@ fn run_configured(
         );
     }
     Ok(GateOutcome::Completed {
-        evidence_skipped: selection.skipped.len(),
-        skipped: selection.skipped.into_iter().chain(ci_skipped).collect(),
+        evidence_skipped: selection.skipped.len() + not_selected.len(),
+        skipped: selection
+            .skipped
+            .into_iter()
+            .chain(ci_skipped)
+            .chain(not_selected)
+            .collect(),
         complete,
         results,
         passed,
@@ -569,6 +593,7 @@ fn configure_run_targets(
     target_dir: &Path,
     run_dir: &Path,
     with_repeat: bool,
+    inputs: Option<&super::target_inputs::TargetInputs>,
 ) -> Result<(), TestingError> {
     let binary = targets
         .iter()
@@ -580,6 +605,9 @@ fn configure_run_targets(
     // that needs it fails on its own, never on a lossy lookalike path.
     let text = |path: &Path| path.to_str().map(str::to_string);
     for target in targets {
+        if let Some(inputs) = inputs {
+            inputs.configure(target);
+        }
         if let Some(binary) = binary.as_deref().and_then(text) {
             if target.name != "codeflow-bin" {
                 target.env.insert("CODEFLOW_BIN".into(), binary.clone());
@@ -1073,6 +1101,26 @@ mod tests {
         format!(
             r#"{{"name": "{name}", "runner": "custom", "modes": {{"full": {{"command": "{command}"}}, "quick": {{"command": "{command}"}}}}}}"#
         )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_commands_receive_unknown_comparison_without_a_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            &format!(
+                "[{}]",
+                echo_target(
+                    "inputs",
+                    "echo $CODEFLOW_BASE,$CODEFLOW_HEAD,$CODEFLOW_CHANGED_PATHS_FILE"
+                )
+            ),
+        );
+        let GateOutcome::Completed { results, .. } = run_gate(dir.path(), "quick").unwrap() else {
+            panic!("expected target to run");
+        };
+        assert_eq!(results[0].stdout.trim(), "unknown,unknown,unknown");
     }
 
     #[test]
@@ -1595,7 +1643,7 @@ mod tests {
         let root = Path::new("/project");
         let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9"));
         let run_dir = Path::new("/project/target/run-1");
-        configure_run_targets(&mut targets, root, odd, run_dir, false).unwrap();
+        configure_run_targets(&mut targets, root, odd, run_dir, false, None).unwrap();
         assert!(!targets[0].env.contains_key("CARGO_LLVM_COV_TARGET_DIR"));
         assert_eq!(
             targets[0]
@@ -1617,8 +1665,10 @@ mod r22_regressions {
         let target: TargetConfig = serde_json::from_str(r#"{"name":"t","runner":"custom","outputs":["target/out"],"modes":{"quick":{"command":"true"}}}"#).unwrap();
         let root = Path::new("/repo");
         let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/odd\xff"));
-        assert!(configure_run_targets(&mut [target.clone()], root, odd, root, false).is_err());
-        assert!(configure_run_targets(&mut [target], root, root, root, false).is_ok());
+        assert!(
+            configure_run_targets(&mut [target.clone()], root, odd, root, false, None).is_err()
+        );
+        assert!(configure_run_targets(&mut [target], root, root, root, false, None).is_ok());
     }
 }
 
