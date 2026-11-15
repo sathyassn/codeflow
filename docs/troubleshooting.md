@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-seven checks fall into six groups by the surface each one reads.
+The twenty-seven checks fall into seven groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -55,7 +55,8 @@ The twenty-seven checks fall into six groups by the surface each one reads.
   and installed skills, and the optional `.codeflow/test-config.json`.
 - **Pipeline workflow.** `pipeline` reads the user-owned
   `.claude/workflows/pipeline.workflow.js` and reports a verify stage that
-  still runs a whole essential gate on every change.
+  still runs a whole essential gate on every change, or a copy it cannot
+  read.
 
 ## Technical
 
@@ -69,10 +70,10 @@ failed check never hides the others. Each line starts with a status badge.
 - `FAIL` means the check found a broken state.
 
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
-check failed. Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
+check failed. Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
 `config`, `permissions`, `policy-source`, `secret-engine`, `model-bindings`,
-`delegate-roundtrip`, `repo-integrity`, `id-registry` and `adopter-fit`. The
-other fourteen warn at most.
+`delegate-roundtrip`, `repo-integrity`, `id-registry`, `adopter-fit` and
+`pipeline`. The other fourteen warn at most.
 
 - `codeflow doctor --list` prints the twenty-seven names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an

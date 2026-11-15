@@ -3,8 +3,9 @@
 //!
 //! The pipeline is user-owned, so `codeflow update` never moves a copy to
 //! the new default of targeted checks plus the quick gate. This check names
-//! the one-line edit. It warns and never fails: a project may keep an
-//! essential run on every change on purpose.
+//! the one-line edit. The old stage only warns, since a project may keep an
+//! essential run on every change on purpose. A copy that exists but cannot
+//! be read fails the check.
 
 use std::path::PathBuf;
 use std::time::Instant;
