@@ -535,7 +535,13 @@ pub(crate) fn locate(
     ]);
     let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
     let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
-    let lines: Vec<&str> = text.lines().collect();
+    // Git ends each value with one newline; a carriage return stays part of
+    // the path, so a directory whose name ends in one is not misread.
+    let lines: Vec<&str> = text
+        .strip_suffix('\n')
+        .ok_or_else(|| unread(String::new()))?
+        .split('\n')
+        .collect();
     let [common, bare, inside] = lines.as_slice() else {
         return Err(unread(String::new()));
     };
