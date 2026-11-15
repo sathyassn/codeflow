@@ -29,15 +29,21 @@ impl Scratch {
     /// `landed` as the policy on its default branch, fetched with
     /// `origin/HEAD` set, so the guards read it as the landed policy.
     fn landed(landed: Option<&str>) -> Self {
+        Self::landed_with(|_| landed.map(str::to_owned))
+    }
+
+    /// [`Scratch::landed`] with the policy `make` builds from `origin`'s
+    /// URL, for a policy that names it.
+    fn landed_with(make: impl FnOnce(&str) -> Option<String>) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let base = codeflow_core::portable_path::canonicalize(temp.path()).unwrap();
         let root = base.join("repo");
         std::fs::create_dir(&root).unwrap();
         enforced_repo(&root);
-        if let Some(policy) = landed {
-            write_agent_policy(&root, policy);
-        }
         let origin = base.join("origin.git");
+        if let Some(policy) = make(&shell_path(&origin)) {
+            write_agent_policy(&root, &policy);
+        }
         super::isolate_clone(codeflow_fixture::clone(&base, &root, &origin))
             .bare()
             .run();
@@ -789,6 +795,55 @@ fn an_inherited_location_input_admits_nothing() {
             assert!(
                 helper_refusal(&out),
                 "{hook} {inherited:?}: {}",
+                stderr(&out)
+            );
+        }
+    }
+}
+
+/// TSK-1479's rule refusing an agent push of a listed branch.
+const AGENT_PUSH: &str = "git.agent_push_refused_branches";
+
+/// `git.agent_remote_urls` and `git.admitted_helpers` each relax only their
+/// own rule: a listed agent remote URL admits no helper program and keeps
+/// the account finding off its closed forms, and an admitted helper relaxes
+/// no agent push refusal.
+#[test]
+fn the_remote_url_list_and_the_helper_list_never_relax_each_other() {
+    const HELPER_URL: &str = "fixture::https://127.0.0.1:9/r";
+    let urls_only = Scratch::landed_with(|origin| {
+        let policy = serde_json::json!({"git": {
+            "protected_branches": ["main", "master"],
+            "root_checkout_commits": "off",
+            "agent_remote_urls": [origin, HELPER_URL],
+        }});
+        Some(policy.to_string())
+    });
+    urls_only
+        .config("remote.selected.url", HELPER_URL)
+        .config("credential.helper", "!gh auth git-credential");
+    for hook in HOOKS {
+        let out = urls_only.judge(hook, "git fetch selected");
+        assert!(helper_refusal(&out), "{hook}: {}", stderr(&out));
+    }
+    let out = urls_only.judge("exec-guard", "git ls-remote origin");
+    assert!(
+        out.status.code() == Some(2) && account_finding(&out),
+        "{}",
+        stderr(&out)
+    );
+
+    let helpers_only = Scratch::landed(Some(ADMITTING));
+    helpers_only.config("credential.helper", "!gh auth git-credential");
+    for line in [
+        "git push origin HEAD:refs/heads/main",
+        "git push origin HEAD:refs/heads/integration/EPC-001-line",
+    ] {
+        for hook in HOOKS {
+            let out = helpers_only.judge(hook, line);
+            assert!(
+                out.status.code() == Some(2) && stderr(&out).contains(AGENT_PUSH),
+                "{hook} {line}: {}",
                 stderr(&out)
             );
         }

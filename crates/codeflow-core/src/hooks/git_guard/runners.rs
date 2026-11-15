@@ -13,6 +13,11 @@ use super::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// A configured command: its text, whether and how Git runs it as a
+/// credential helper (TSK-1479), and whether it is a credential helper the
+/// landed `git.admitted_helpers` names on a remote contact (TSK-1489).
+type Configured = (String, super::HelperKind, bool);
+
 pub(super) struct Body {
     pub command: String,
     pub directory: PathBuf,
@@ -20,6 +25,11 @@ pub(super) struct Body {
     /// `git.admitted_helpers` names, started by a command that contacts a
     /// remote (TSK-1489 AC-7). Exec-guard skips its account finding only.
     pub admitted_helper: bool,
+    /// Whether the command is a `credential.helper` or
+    /// `credential.<url>.helper` value, and whether Git runs it as written
+    /// (a leading `!` or an absolute path) or as `git credential-<name>`
+    /// (TSK-1479).
+    pub helper: super::HelperKind,
 }
 
 #[derive(Default)]
@@ -243,8 +253,8 @@ fn helper_programs(
     config: &crate::security::git_config::EffectiveConfig,
     admitted: &mut Admitted<'_>,
     probe: &mut dyn transport::Probe,
-) -> Result<Vec<(String, bool)>, String> {
-    let mut programs: Vec<(String, bool)> = Vec::new();
+) -> Result<Vec<Configured>, String> {
+    let mut programs: Vec<Configured> = Vec::new();
     for contact in transport::contacts(verb, rest, config, probe)? {
         match contact.selected {
             transport::Selected::Stock => {}
@@ -263,8 +273,8 @@ fn helper_programs(
                         shown_word(&contact.remote)
                     ));
                 }
-                if !programs.iter().any(|(known, _)| *known == program) {
-                    programs.push((program, false));
+                if !programs.iter().any(|(known, _, _)| *known == program) {
+                    programs.push((program, super::HelperKind::NotHelper, false));
                 }
             }
         }
@@ -806,7 +816,8 @@ fn config_environment(
 }
 
 /// The commands the Git call's configuration and environment name, each
-/// with whether it is an admitted credential helper (see
+/// with whether it is a credential helper and how Git runs it (see
+/// [`Body::helper`]) and whether it is an admitted credential helper (see
 /// [`Body::admitted_helper`]), and the remote helper programs its
 /// transports start that the landed policy admits.
 fn configured_commands(
@@ -814,10 +825,11 @@ fn configured_commands(
     cwd: &Path,
     env: &crate::security::git_config::Environment,
     earlier: &[PathBuf],
-) -> Result<Vec<(String, bool)>, String> {
+) -> Result<Vec<Configured>, String> {
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(Vec::new());
     };
+    let source_verb = catalog::source_verb(verb, rest);
     let settings = configuration_options(args)?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
@@ -860,11 +872,11 @@ fn configured_commands(
             matches!(source,
             catalog::Source::Config(pattern, verbs) | catalog::Source::ConfigList(pattern, verbs)
                 if catalog::config_matches(key, pattern)
-                && (catalog::active(verbs, verb) || (pager && paging)))
+                && (catalog::active(verbs, source_verb) || (pager && paging)))
         }) {
             continue;
         }
-        let credential = catalog::config_matches(key, "credential.helper")
+        let helper_key = catalog::config_matches(key, "credential.helper")
             || catalog::config_matches(key, "credential.*.helper");
         for value in config_values(&config, key)? {
             if value.is_empty()
@@ -874,10 +886,18 @@ fn configured_commands(
                 continue;
             }
             let admitted_helper =
-                credential && contacts_remote(verb) && admitted.admits(&credential_program(value));
+                helper_key && contacts_remote(verb) && admitted.admits(&credential_program(value));
+            // Git runs a helper value as written when it starts with `!` or
+            // is an absolute path; any other value names `git credential-*`.
+            let helper = match (helper_key, value.starts_with('!') || value.starts_with('/')) {
+                (false, _) => super::HelperKind::NotHelper,
+                (true, true) => super::HelperKind::AsWritten,
+                (true, false) => super::HelperKind::Named,
+            };
             // Helpers and custom submodule updates use a leading shell marker.
             commands.push((
                 value.strip_prefix('!').unwrap_or(value).to_string(),
+                helper,
                 admitted_helper,
             ));
         }
@@ -891,7 +911,7 @@ fn configured_commands(
             let active = if pager {
                 pagination != Some(false) && paging
             } else {
-                catalog::active(verbs, verb)
+                catalog::active(verbs, source_verb)
             };
             if !active {
                 continue;
@@ -907,7 +927,7 @@ fn configured_commands(
                 },
             };
             if let Some(value) = value.filter(|value| !value.is_empty()) {
-                commands.push((value, false));
+                commands.push((value, super::HelperKind::NotHelper, false));
             }
         }
     }
@@ -995,7 +1015,7 @@ fn transport(
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(());
     };
-    if !catalog::active(catalog::REMOTE, verb) {
+    if !catalog::active(catalog::REMOTE, catalog::source_verb(verb, rest)) {
         return Ok(());
     }
     let ext = |value: &str| value.starts_with("ext::");
@@ -1214,6 +1234,7 @@ fn external_body(
         command: quote_words(&words),
         directory: at,
         admitted_helper: false,
+        helper: super::HelperKind::NotHelper,
     }))
 }
 
@@ -2008,19 +2029,23 @@ fn note_segment(
 }
 
 /// Read the command bodies and callbacks a runner starts, each from the
-/// directories it runs in.
+/// directories it runs in. `configured` pairs each configured command with
+/// whether it is a credential helper and how Git runs it.
 fn descend(
     runner: &Runner<'_>,
     args: &[String],
     commands: &[String],
-    configured: &[(String, bool)],
+    configured: &[Configured],
     bodies: &mut Vec<Body>,
 ) -> Result<(), String> {
     let child = Inputs::child(args, runner.env)?;
-    let commands: Vec<(&String, bool)> = commands.iter().map(|command| (command, false)).collect();
-    let configured: Vec<(&String, bool)> = configured
+    let commands: Vec<(&String, super::HelperKind, bool)> = commands
         .iter()
-        .map(|(command, admitted)| (command, *admitted))
+        .map(|command| (command, super::HelperKind::NotHelper, false))
+        .collect();
+    let configured: Vec<(&String, super::HelperKind, bool)> = configured
+        .iter()
+        .map(|(command, helper, admitted)| (command, *helper, *admitted))
         .collect();
     for (commands, callbacks) in [(commands, false), (configured, true)] {
         if commands.is_empty() {
@@ -2032,12 +2057,13 @@ fn descend(
             directories(args, runner.at, runner.env)?
         };
         for dir in dirs {
-            for (command, admitted_helper) in &commands {
+            for (command, helper, admitted_helper) in &commands {
                 collect(command, &dir, runner.depth + 1, &child, bodies)?;
                 bodies.push(Body {
                     command: (*command).clone(),
                     directory: dir.clone(),
                     admitted_helper: *admitted_helper,
+                    helper: *helper,
                 });
             }
         }
@@ -2475,6 +2501,7 @@ fn collect(
                     command: normalized_command(&args, &env),
                     directory: at.clone(),
                     admitted_helper: false,
+                    helper: super::HelperKind::NotHelper,
                 });
             }
             bodies.extend(external_body(&args, &at, &env)?);

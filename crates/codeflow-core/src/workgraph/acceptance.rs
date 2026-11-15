@@ -466,7 +466,18 @@ mod landed_review;
 mod planning_move;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
-pub use imports::{imported_record_paths, imported_records, ImportedRecord};
+pub use imports::{
+    imported_record_paths, imported_records, HomeAnchor, ImportedRecord, PLANNING_LANDING_PATHS,
+};
+
+/// One import-authority finding per refused record (TSK-1378 AC-8).
+fn import_findings(reason: &str) -> Vec<Finding> {
+    // The import check joins its refusals with '\n' alone.
+    reason
+        .split('\n')
+        .map(|line| finding(IMPORT_RULE, line.to_string()))
+        .collect()
+}
 use receiving_merges::LineSyncTip;
 
 /// The source and completion endpoints established by the binding.
@@ -3429,7 +3440,9 @@ fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
 /// one of these. Records whose home is elsewhere, a task of `epic` that
 /// targets the default branch included, come along at the default branch's
 /// version, judged by the criteria freeze and the completion binding; a
-/// record the range adds is new, not a change.
+/// record the range adds is new, not a change. A record the range adds or
+/// re-homes onto the line proves its history on the default branch in the
+/// import check instead (TSK-1378 AC-12, `imports::home::judge_arrival`).
 fn line_records_changed(
     (head, target): (&Graph, &Graph),
     changed_paths: &[String],
@@ -4258,7 +4271,7 @@ fn completions_received(
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let imported = match imported_records(repo, base_oid, head_oid, &after) {
         Ok(imported) => imported,
-        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+        Err(reason) => return Ok(import_findings(&reason)),
     };
     let mut local = after.clone();
     for id in imported.keys() {
@@ -4863,7 +4876,7 @@ pub fn pull_request_findings_into(
     let mut at_head = Graph::from_revision(&repo, head)?;
     let imported = match imported_records(&repo, target_tip, head_tip, &at_head) {
         Ok(imported) => imported,
-        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+        Err(reason) => return Ok(import_findings(&reason)),
     };
     let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
     let before = Graph::from_revision(&repo, &anchor.to_string())?;
