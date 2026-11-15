@@ -1196,4 +1196,171 @@ mod tests {
             assert!(PathPolicy::from_git(&git).is_err());
         }
     }
+
+    /// All transport stays inside the test's temporary folder. The fetched
+    /// branch is never checked out, so its promised blobs stay absent.
+    struct PartialFixture {
+        _dir: tempfile::TempDir,
+        repo: Repository,
+        base: git2::Oid,
+        head: git2::Oid,
+        blobs: Vec<git2::Oid>,
+    }
+
+    impl PartialFixture {
+        fn new(merge: bool) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let upstream = Repository::init_bare(dir.path().join("upstream.git")).unwrap();
+            let mut config = upstream.config().unwrap();
+            config.set_bool("uploadpack.allowFilter", true).unwrap();
+            config
+                .set_bool("uploadpack.allowAnySHA1InWant", true)
+                .unwrap();
+            let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+            let empty = upstream.treebuilder(None).unwrap().write().unwrap();
+            let commit = |tree, parents: &[git2::Oid]| {
+                let tree = upstream.find_tree(tree).unwrap();
+                let parents: Vec<_> = parents
+                    .iter()
+                    .map(|id| upstream.find_commit(*id).unwrap())
+                    .collect();
+                upstream
+                    .commit(
+                        None,
+                        &sig,
+                        &sig,
+                        "fix: partial clone fixture",
+                        &tree,
+                        &parents.iter().collect::<Vec<_>>(),
+                    )
+                    .unwrap()
+            };
+            let base = commit(empty, &[]);
+            let first = upstream.blob(b"ordinary content\n").unwrap();
+            let second = upstream.blob(b"side content\n").unwrap();
+            let mut tree = upstream.treebuilder(None).unwrap();
+            tree.insert("ordinary.txt", first, 0o100_644).unwrap();
+            let left = commit(tree.write().unwrap(), &[base]);
+            let head = if merge {
+                let mut side = upstream.treebuilder(None).unwrap();
+                side.insert("side.txt", second, 0o100_644).unwrap();
+                let right = commit(side.write().unwrap(), &[base]);
+                tree.insert("side.txt", second, 0o100_644).unwrap();
+                commit(tree.write().unwrap(), &[left, right])
+            } else {
+                left
+            };
+            upstream
+                .reference("refs/heads/fixture", head, true, "fixture")
+                .unwrap();
+            let repo = Repository::init(dir.path().join("clone")).unwrap();
+            let url = format!("file://{}", upstream.path().display());
+            repo.remote("origin", &url).unwrap();
+            let mut config = repo.config().unwrap();
+            config.set_bool("remote.origin.promisor", true).unwrap();
+            config.set_str("extensions.partialClone", "origin").unwrap();
+            let output = crate::git::judging_command()
+                .current_dir(repo.workdir().unwrap())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .args(["fetch", "--filter=blob:none", "origin", "fixture"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let blobs = if merge {
+                vec![first, second]
+            } else {
+                vec![first]
+            };
+            for blob in &blobs {
+                assert!(
+                    repo.find_blob(*blob).is_err(),
+                    "fixture unexpectedly fetched {blob}"
+                );
+            }
+            Self {
+                _dir: dir,
+                repo,
+                base,
+                head,
+                blobs,
+            }
+        }
+
+        fn judge(&self) -> Result<Report, String> {
+            let git = GitPolicy::default();
+            let content = ContentRules::at(&self.repo, &git, Some(self.base), None).unwrap();
+            range_with(
+                self.repo.workdir().unwrap(),
+                Some(&self.base.to_string()),
+                &self.head.to_string(),
+                &PathPolicy::from_git(&git).unwrap(),
+                Some(&content),
+            )
+        }
+    }
+
+    #[test]
+    fn partial_clone_range_names_missing_contents_and_fetch_command() {
+        let mut failures = Vec::new();
+        for merge in [false, true] {
+            let fixture = PartialFixture::new(merge);
+            let error = fixture.judge().unwrap_err();
+            eprintln!("partial clone (merge={merge}): {error}");
+            if !error.contains("partial clone")
+                || !error.contains("ordinary.txt")
+                || (merge && !error.contains("side.txt"))
+            {
+                failures.push(error.clone());
+            }
+            for blob in &fixture.blobs {
+                if !error.contains(&blob.to_string()) {
+                    failures.push(error.clone());
+                }
+            }
+            if !error.contains("git cat-file") {
+                failures.push(error);
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn partial_clone_history_reader_never_fetches() {
+        let fixture = PartialFixture::new(false);
+        fixture
+            .repo
+            .config()
+            .unwrap()
+            .set_str(
+                "remote.origin.url",
+                &format!("file://{}/unreachable.git", fixture._dir.path().display()),
+            )
+            .unwrap();
+        let trace = fixture._dir.path().join("trace");
+        let output = history::command()
+            .current_dir(fixture.repo.workdir().unwrap())
+            .env("GIT_TRACE", &trace)
+            .args([
+                "diff-tree",
+                "-p",
+                "--no-ext-diff",
+                "--no-textconv",
+                &fixture.base.to_string(),
+                &fixture.head.to_string(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let text = std::fs::read_to_string(trace).unwrap();
+        eprintln!("offline history trace:\n{text}");
+        assert!(
+            !text.contains("fetch ") && !text.contains("upload-pack"),
+            "{text}"
+        );
+    }
 }
