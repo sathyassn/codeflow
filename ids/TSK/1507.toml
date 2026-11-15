@@ -1,0 +1,11 @@
+id = "TSK-1507"
+uid = "53fc0590-1d78-48bf-9198-a42a2349442f"
+kind = "TSK"
+title = "Update keeps a state file's key order and final newline"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T21:38:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
