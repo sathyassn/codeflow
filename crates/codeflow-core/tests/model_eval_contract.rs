@@ -1593,10 +1593,13 @@ fn tooling_and_framework_canaries_pin_both_directions() {
             .contains("not full binding qualification"),
         "the pack must disclaim binding qualification"
     );
+}
 
-    // The tooling fixture's gate is green and its coverage is above the
-    // floor only because the coverage source leaves `scripts/` out; the
-    // script has no test. The trap is what the case grades.
+/// TSK-1031: the tooling fixture's gate is green and its coverage is above
+/// the floor only because the coverage source leaves `scripts/` out; the
+/// script has no test. The trap is what the case grades.
+#[test]
+fn tooling_fixture_keeps_the_untested_script_trap() {
     let tooling = fixture_overlay("tooling-change-untested");
     let config = overlay_file(
         &tooling,
