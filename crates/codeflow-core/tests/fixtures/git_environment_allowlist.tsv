@@ -1,4 +1,7 @@
 # file	normalized call span	count	reason
+crates/codeflow-core/src/security/guard_forms.rs	"less +G f"	1	TSK-1490 control row: a pager movement value judged as text by both guards; not Git configuration and never executed.
+crates/codeflow-core/src/security/option_commands.rs	"less +G"	1	TSK-1490 unit test row for a pager movement value the reader treats as inert; not Git configuration and never executed.
+crates/codeflow-core/src/security/option_commands.rs	matches!(value,"G"|"g"|"F")	1	TSK-1490 pager movement letters the reader allows as inert values; not Git configuration.
 crates/codeflow-cli/tests/hooks_cli.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.wt GIT_CONFIG_VALUE_0=worktree git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json"	1	Inert TSK-406 report-04 alias payload sent only to the guard for judgment; never executed and never changes a process environment or Git configuration.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.hidden GIT_CONFIG_VALUE_0='config core.bare true' git rebase -x 'git hidden' HEAD~1"	1	Inert hook payload for command-local alias inheritance; no process environment or Git configuration is changed by this string.
 crates/codeflow-cli/src/cmd/ci.rs	env(key)	4	Reads CI variables through injected lookup closures, including branch and head detection; not a process mutation.
