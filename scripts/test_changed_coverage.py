@@ -66,6 +66,17 @@ class CoverageTests(unittest.TestCase):
         self.assertIn("unavailable: no comparison base; nothing enforced", text)
         self.assertNotIn("50.00", text)
 
+    def test_standalone_local_command_without_base_needs_no_shard_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            excluded = Path(directory) / "exemptions.json"
+            excluded.write_text('{"version":1,"exemptions":[]}')
+            argv = ["changed-coverage.py", "report", "--event", "local", "--exemptions", str(excluded)]
+            out = StringIO()
+            with patch.object(sys, "argv", argv), redirect_stdout(out):
+                status = cc.main()
+            self.assertEqual(status, 0)
+            self.assertIn("unavailable: no comparison base; nothing enforced", out.getvalue())
+
     def test_push_without_base_fails(self):
         with self.assertRaises(cc.Problem):
             self.report(event="push", base=None)

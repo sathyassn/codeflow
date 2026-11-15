@@ -265,6 +265,15 @@ TSK-1190 environment hints are informational; `unknown` is not a base and a
 changed-path list does not replace the line diff. ADR-0089's selection rule
 still holds.
 
+A standalone no-base report needs no shard identity or coverage input:
+
+```sh
+python3 -B scripts/changed-coverage.py report --event local
+```
+
+It still validates the project's exemption list. A report with a comparison
+base also requires the tested `--head`, `--run` and `--attempt` identifiers.
+
 The `bind` subcommand records the tested revision, run, attempt, target,
 shard number/count, format, source root and SHA-256 of the coverage file.
 The consumer compares that binding with its expected inputs and the

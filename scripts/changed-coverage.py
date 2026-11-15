@@ -306,14 +306,19 @@ def main():
     check.add_argument("--code-suffix", action="append", default=None)
     check.add_argument("--output", type=Path)
     for command in (bind, check):
-        command.add_argument("--head", required=True)
-        command.add_argument("--run", required=True)
-        command.add_argument("--attempt", required=True)
+        command.add_argument("--head", required=command is bind)
+        command.add_argument("--run", required=command is bind)
+        command.add_argument("--attempt", required=command is bind)
     args = parser.parse_args()
     try:
-        revision(args.head, "head")
-        if not args.run.isdecimal() or not args.attempt.isdecimal() or int(args.attempt) < 1:
-            raise Problem("run and attempt must be decimal identifiers, attempt at least 1")
+        local_without_base = args.action == "report" and args.event == "local" and not args.base
+        if args.action == "report" and not local_without_base:
+            revision(args.base, "base")
+        if not local_without_base:
+            revision(args.head, "head")
+            if (not isinstance(args.run, str) or not isinstance(args.attempt, str)
+                    or not args.run.isdecimal() or not args.attempt.isdecimal() or int(args.attempt) < 1):
+                raise Problem("run and attempt must be decimal identifiers, attempt at least 1")
         if args.action == "bind":
             if not 1 <= args.shard <= args.shards <= 128:
                 raise Problem("shard must be within the configured 1 to shards range")
@@ -326,10 +331,9 @@ def main():
                 output.write(json.dumps(record, indent=2) + "\n")
             return 0
         excluded = exemptions(args.exemptions)
-        if not args.base and args.event == "local":
+        if local_without_base:
             status, text = report(args.event, None, args.head, "", [], {}, excluded, [".rs"])
         else:
-            revision(args.base, "base")
             if not args.diff or not args.paths or not args.directory:
                 raise Problem("resolved comparison needs --diff, --paths and --directory")
             coverage = shard_coverage(args.directory, configured_roster(args.config, args.plan),
