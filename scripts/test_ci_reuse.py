@@ -211,10 +211,11 @@ class FakeApi:
 
 
 def decide(event="push", git=None, api=None, ref=MAIN_REF, images=None, text=WORKFLOW_TEXT, line_skips=None,
-           run_id=PUSH_RUN):
+           run_id=PUSH_RUN, decider=reuse.decide):
+    # Keep the real reader path when MainTests temporarily patches reuse.decide.
     skips = frozenset({RELEASE_JOB}) if line_skips is None else line_skips
-    return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi(),
-                        APT_KEY, ref, images or IMAGES, text, skips, run_id)
+    return decider(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi(),
+                   APT_KEY, ref, images or IMAGES, text, skips, run_id)
 
 
 class DecisionTests(unittest.TestCase):
@@ -994,7 +995,8 @@ class PullRequestCondition:
         return left.startswith(right)
 
     def can_run(self, base):
-        fixed = {"github.event_name": "pull_request", "github.event.pull_request.base.ref": base.casefold()}
+        fixed = {"github.event_name": "pull_request", "github.event.pull_request.base.ref": base.casefold(),
+                 "github.ref": "refs/pull/95/merge"}
         fields = sorted(self.fields - fixed.keys())
         domains = [(False, True) if field in ("cancelled()", "github.event.pull_request.draft")
                    else sorted(self.values) for field in fields]
@@ -1025,6 +1027,12 @@ class WorkflowSkipTests(unittest.TestCase):
     def test_an_unaccepted_push_only_job_fails(self):
         workflow = self.workflow("new measurement", "github.event_name == 'push'")
         self.assertTrue(workflow_skip_problems(workflow))
+
+    def test_a_branch_ref_only_job_cannot_run_on_a_pull_request(self):
+        condition = "github.ref == 'refs/heads/main'"
+        self.assertFalse(PullRequestCondition(condition).can_run("main"))
+        problems = workflow_skip_problems(self.workflow("branch-only job", condition))
+        self.assertTrue(any("branch-only job" in problem for problem in problems), problems)
 
     def test_an_unreadable_condition_fails_even_for_an_accepted_skip(self):
         for condition in ("|", "${{ mystery(github.event_name) }}", "${{ github.event_name == }}",
@@ -1085,13 +1093,28 @@ class DecisionErrorTests(unittest.TestCase):
         for method in ("tree", "parents", "is_ancestor", "changed", "blob"):
             for error in (reuse.Skip("git failed"), OSError("git unavailable")):
                 with self.subTest(method=method, error=type(error).__name__), \
-                        mock.patch.object(FakeGit, method, side_effect=error):
+                        mock.patch.object(FakeGit, method, side_effect=error) as reader:
+                    with self.assertRaises((reuse.Skip, OSError)) as caught:
+                        decide()
+                    self.assertIs(caught.exception, error)
+                    reader.assert_called_once()
+                    reader.reset_mock()
                     self.assertEqual(MainTests().main(lambda *args, **kwargs: decide()), (0, ""))
+                    reader.assert_called_once()
 
     def test_any_api_reader_error_runs_everything(self):
         for method in ("pulls", "runs", "jobs", "caches", "artifacts", "artifact_zip", "job_log_head"):
-            with self.subTest(method=method), mock.patch.object(FakeApi, method, side_effect=OSError("HTTP 500")):
+            error = OSError("HTTP 500")
+            with self.subTest(method=method), \
+                    mock.patch.object(FakeApi, method, side_effect=error) as reader, \
+                    mock.patch.object(reuse, "LOG_RETRY_SECONDS", 0):
+                with self.assertRaises((reuse.Skip, OSError)) as caught:
+                    decide()
+                self.assertTrue(caught.exception is error or caught.exception.__cause__ is error)
+                reader.assert_called()
+                reader.reset_mock()
                 self.assertEqual(MainTests().main(lambda *args, **kwargs: decide()), (0, ""))
+                reader.assert_called()
 
 
 class GitTests(unittest.TestCase):
