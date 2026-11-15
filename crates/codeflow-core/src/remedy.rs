@@ -786,7 +786,7 @@ catalog! {
         "run `codeflow remote protect`, or have the repository owner turn on \"Require branches to be up to date before merging\" with every check in git.required_checks in the host rules for {branch}; then `codeflow doctor --check remote-perimeter` confirms it";
     /// Remote force-update or deletion protection doctor cannot verify.
     DOCTOR_REMOTE_REF_PROTECTION = Step::Codeflow("codeflow remote protect"),
-        "run `codeflow remote protect`, or have the repository owner block force updates and deletions in the host's settings for each named branch with no bypass actors; then `codeflow doctor --check remote-ref-protection` confirms it";
+        "run `codeflow remote protect`, or have the repository owner block force updates and deletions in the host rules for each named branch with no bypass actors; then `codeflow doctor --check remote-ref-protection` confirms it";
     /// Host merge rules doctor could not read.
     DOCTOR_REMOTE_UNREAD = Step::Manual("read the host rules for the default branch"),
         "read the host rules for the default branch in the host's settings and confirm they require every check in git.required_checks on an up-to-date branch; `codeflow doctor` cannot verify them here";
