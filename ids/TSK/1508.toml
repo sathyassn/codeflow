@@ -1,0 +1,11 @@
+id = "TSK-1508"
+uid = "f569f5b6-ede7-4da4-b6e9-66be809486ba"
+kind = "TSK"
+title = "A selective run never counts as split gate evidence, and update keeps a hand-patched workflow"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T21:49:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
