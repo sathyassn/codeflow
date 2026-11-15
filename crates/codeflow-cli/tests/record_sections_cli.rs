@@ -152,7 +152,9 @@ fn plan(root: &Path) -> String {
     ok(
         &codeflow(
             root,
-            &["task", "new", "--epic", "EPC-001", "--into", TARGET, "first"],
+            &[
+                "task", "new", "--epic", "EPC-001", "--into", TARGET, "first",
+            ],
         ),
         "task new",
     );
@@ -238,11 +240,21 @@ fn journey_declare_allocate_remove_and_restore_a_task_section() {
     step("epic new outcome", &out);
     let out = codeflow(
         &root,
-        &["task", "new", "--epic", "EPC-001", "--into", TARGET, "first"],
+        &[
+            "task", "new", "--epic", "EPC-001", "--into", TARGET, "first",
+        ],
     );
-    step("task new --epic EPC-001 --into integration/EPC-001-work first", &out);
+    step(
+        "task new --epic EPC-001 --into integration/EPC-001-work first",
+        &out,
+    );
     outcome::state_outcomes(&root);
-    edit(&root, EPIC, "- AC-1\n", "- AC-1 When used, the system shall work.\n");
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n",
+    );
     edit(
         &root,
         TASK,
@@ -392,7 +404,10 @@ fn the_pre_push_hook_refuses_through_codeflow_ci() {
             &format!("{base}:refs/heads/{TARGET}"),
         ],
     );
-    git(&root, &["remote", "add", "upstream", bare.to_str().unwrap()]);
+    git(
+        &root,
+        &["remote", "add", "upstream", bare.to_str().unwrap()],
+    );
     git(&root, &["fetch", "-q", "upstream"]);
     let head = git(&root, &["rev-parse", "HEAD"]);
     let mut child = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))

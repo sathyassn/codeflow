@@ -245,7 +245,9 @@ pub fn with_sections(template: &str, kind: RecordKind, required: &Required) -> S
     let key = key(kind);
     let added: String = missing
         .iter()
-        .map(|name| format!("## {name}\n\n<!-- Required by the project's policy (`{key}`). -->\n\n"))
+        .map(|name| {
+            format!("## {name}\n\n<!-- Required by the project's policy (`{key}`). -->\n\n")
+        })
         .collect();
     let mut offset = 0;
     for line in template.split_inclusive('\n') {
@@ -277,7 +279,11 @@ fn head_policy(root: &Path) -> Option<(String, Policy)> {
 }
 
 fn without_cr(bytes: &[u8]) -> Vec<u8> {
-    bytes.iter().copied().filter(|byte| *byte != b'\r').collect()
+    bytes
+        .iter()
+        .copied()
+        .filter(|byte| *byte != b'\r')
+        .collect()
 }
 
 /// The text of each `## ` heading line in `body`, trimmed, outside fenced
