@@ -977,6 +977,16 @@ fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
                 scan.values.push((option, a.to_string()));
                 continue;
             }
+        } else if !pending.is_empty() {
+            // getopt gives a short option that takes a value the next word
+            // whatever it is (`rsync -T -n` puts its temporary files in
+            // `-n` and is no dry run), while this scan never takes an option
+            // as a value (review round 18). Either reading may be the one
+            // the program makes, so the call is a form the guard does not
+            // read (TSK-408). The option is spent either way, so a later
+            // operand is never taken as its value.
+            scan.unlisted(a);
+            pending.pop_front();
         }
         if a == "--" {
             scan.operands.extend(words.map(|(_, w)| w.clone()));

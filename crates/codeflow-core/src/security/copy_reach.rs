@@ -55,9 +55,26 @@ pub(crate) fn rsync_deletes(flag: &str) -> bool {
     flag.len() >= 5 && (flag.starts_with("--delete") || "--delete".starts_with(flag))
 }
 
-/// Whether an rsync call only reports what it would do.
-fn dry_run(flags: &[String]) -> bool {
-    flags.iter().any(|f| f == "-n" || f == "--dry-run")
+/// Whether an rsync call only reports what it would do. An option the
+/// reader does not know may take a value (`-e` and `-M` take the rest of
+/// their cluster or the next word), so after one a later `-n` may be that
+/// value, and the call is never read as a dry run.
+pub(crate) fn dry_run(copy: &CopyRead) -> bool {
+    copy.unknown.is_none() && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run")
+}
+
+/// A directory entry's name as the guard compares it: case is ignored, and
+/// on Windows a trailing dot or space is dropped, as Win32 drops it when it
+/// opens the name.
+fn compared(name: &str) -> String {
+    crate::portable_path::filesystem_spelling(name).to_lowercase()
+}
+
+/// Whether a source entry's name is one Windows may read as the 8.3 short
+/// name of another entry at the landing place, which the guard cannot map
+/// before the entry exists.
+fn short_alias(name: &str) -> bool {
+    cfg!(windows) && crate::portable_path::has_short_component(name)
 }
 
 /// Whether a long option `flag` is `full` or an abbreviation of it.
@@ -213,15 +230,19 @@ fn read_source(cmd: &str, source: &str, place: &Place<'_>) -> (Source, Option<Pa
                     match entry {
                         Ok(entry) => {
                             let name = entry.file_name();
-                            lower.insert(name.to_string_lossy().to_lowercase());
+                            let text = name.to_string_lossy();
+                            if short_alias(&text) {
+                                failed = Some(format!(
+                                    "it holds `{text}`, which Windows may read as the short name of another entry"
+                                ));
+                            }
+                            lower.insert(compared(&text));
                             names.push(name);
                         }
-                        Err(error) => failed = Some(error.to_string()),
+                        Err(error) => failed = Some(format!("cannot list it: {error}")),
                     }
                 }
-                failed.map_or(Source::Tree(lower, names), |why| {
-                    Source::Unread(format!("cannot list it: {why}"))
-                })
+                failed.map_or(Source::Tree(lower, names), Source::Unread)
             }
             Err(error) => Source::Unread(format!("cannot list it: {error}")),
         },
@@ -262,9 +283,14 @@ fn holds_enforcement_name(dir: &Path) -> Result<Option<PathBuf>, String> {
         let entries = std::fs::read_dir(&next).map_err(|e| format!("cannot list it: {e}"))?;
         for entry in entries {
             let entry = entry.map_err(|e| format!("cannot list it: {e}"))?;
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            if ENFORCEMENT_NAMES.contains(&name.as_str()) {
+            let text = entry.file_name().to_string_lossy().into_owned();
+            if ENFORCEMENT_NAMES.contains(&compared(&text).as_str()) {
                 return Ok(Some(entry.path()));
+            }
+            if short_alias(&text) {
+                return Err(format!(
+                    "it holds `{text}`, which Windows may read as the short name of another entry"
+                ));
             }
             if entry
                 .file_type()
@@ -342,7 +368,7 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
     if !recursive(cmd, &copy.flags) || copy.directories {
         return None;
     }
-    if cmd == "rsync" && dry_run(&copy.flags) {
+    if cmd == "rsync" && dry_run(copy) {
         return None;
     }
     let current = |word: &String| {
@@ -489,7 +515,7 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
                         let first = relative
                             .components()
                             .next()
-                            .map(|c| c.as_os_str().to_string_lossy().to_lowercase());
+                            .map(|c| compared(&c.as_os_str().to_string_lossy()));
                         if first.is_some_and(|first| lower.contains(&first)) {
                             return Some(format!(
                                 "`{cmd}` would write the enforcement path `{}` from the source `{source}`",

@@ -1673,8 +1673,8 @@ checked, so a symlink does not remove the target owner's protection.
   works out where its contents land, by the command's own rules: `cp`
   into an existing directory at the source's name, into an absent one as
   that directory, and both when the kind cannot be read; `rsync` at the
-  destination for a source ending in `/` and at the source's name
-  otherwise; `ditto` at both. It then lists the enforcement files, and
+  destination for a source ending in `/` or `/.`, or written as `.`, and
+  at the source's name otherwise; `ditto` at both. It then lists the enforcement files, and
   the `.git` of every registered checkout, at or below that place.
   - When there are none, the call keeps its earlier verdict and the
     source is not read: `cp -R src/ build/`, `rsync -a docs/ site/`, a
@@ -1682,7 +1682,9 @@ checked, so a symlink does not remove the target owner's protection.
   - A source holding an entry on the way to one of them refuses, naming
     the file and the source: `cp -R /src/.claude .`, `rsync -a /src/ ./`
     and `ditto /src .` when `/src` holds `.claude` or `.git`. Names are
-    compared ignoring case.
+    compared ignoring case and, on Windows, without a trailing dot or
+    space, as Windows opens them; there a source entry shaped like a
+    short name is a source the guard cannot verify.
   - A deleting sync refuses whenever its landing place holds one: `--del`,
     every option whose name starts with `--delete`, and an abbreviation
     of `--delete`. A source-removing sync (`--remove-source-files`,
@@ -1696,7 +1698,8 @@ checked, so a symlink does not remove the target owner's protection.
     at any depth, read within 4096 directories, or cannot be read. The
     search for hidden checkouts under a configured worktree location keeps
     its 4096-directory bound, and past it the copy refuses.
-  - A dry run (`rsync -n`, `--dry-run`) passes. The guard does not read
+  - A dry run (`rsync -n`, `--dry-run`) passes when the guard reads every
+    option on the line, each with its value. The guard does not read
     filters, so `--exclude .claude` does not clear a refusal; sync a
     subdirectory, or copy the files you need by name.
   - A symbolic link at the landing place that a source entry of the same

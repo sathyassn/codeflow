@@ -198,3 +198,42 @@ fn a_link_at_the_landing_place_into_enforcement_files_refuses() {
         None
     );
 }
+
+/// Review F1: an option the reader does not know may take a value, and a
+/// known option that takes one takes the next word, so a later `-n` is no
+/// dry run there.
+#[test]
+fn a_dry_run_letter_that_may_be_an_option_value_is_no_dry_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    repository(&root);
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let source = tmp.path().join("src");
+    std::fs::create_dir_all(source.join(".claude")).unwrap();
+    let e = empty.display();
+    let s = source.display();
+    for options in ["-aen", "-ae -n", "-aMn", "-aM -n", "-aT -n", "-aTn"] {
+        let deleting = format!("rsync {options} --delete {e}/ ./");
+        assert!(judged(&deleting, &root).is_some(), "{deleting}");
+        let planted = format!("rsync {options} {s}/ ./");
+        assert!(judged(&planted, &root).is_some(), "{planted}");
+    }
+    assert_eq!(judged(&format!("rsync -an --delete {e}/ ./"), &root), None);
+    assert_eq!(judged(&format!("rsync -aT tmp -n {s}/ ./"), &root), None);
+}
+
+/// Review F2: names are compared as Windows opens them.
+#[test]
+fn names_are_compared_as_the_filesystem_opens_them() {
+    assert_eq!(compared(".CLAUDE"), ".claude");
+    if cfg!(windows) {
+        assert_eq!(compared(".claude."), ".claude");
+        assert_eq!(compared(".Git "), ".git");
+        assert!(short_alias("CLAUDE~1"));
+    } else {
+        assert_eq!(compared(".claude."), ".claude.");
+        assert!(!short_alias("CLAUDE~1"));
+    }
+    assert!(!short_alias("docs"));
+}

@@ -167,6 +167,29 @@ fn a_sync_deleting_or_removing_enforcement_files_is_refused_by_both_guards() {
     assert_both(&f.root, &refused, &[]);
 }
 
+/// Review F1: a `-n` that may be the value of an option before it is no
+/// dry run, so the deleting or planting sync is still refused by both
+/// hooks, in the bundled and the separate form.
+#[test]
+fn a_dry_run_letter_that_may_be_an_option_value_is_judged_by_both_guards() {
+    let f = fixture();
+    let (a, b, e) = (&f.claude, &f.hooks, &f.empty);
+    let mut refused = Vec::new();
+    for options in ["-aen", "-ae -n", "-aMn", "-aM -n", "-aT -n", "-aTn"] {
+        refused.push(row(
+            format!("rsync {options} --delete {e}/ .worktrees/w/"),
+            &[],
+        ));
+        refused.push(row(format!("rsync {options} {a}/ ./"), &[]));
+        refused.push(row(format!("rsync {options} {b}/ ./"), &[]));
+    }
+    let allowed = vec![
+        format!("rsync -an --delete {e}/ .worktrees/w/"),
+        format!("rsync -a -T tmp -n {a}/ ./"),
+    ];
+    assert_both(&f.root, &refused, &allowed);
+}
+
 /// AC-3: a source the guard cannot read, copied into a place that holds
 /// enforcement files, is refused as cannot-verify naming the source; a
 /// run-time destination refuses a source that holds an enforcement name.

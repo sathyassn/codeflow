@@ -7065,8 +7065,9 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             flags: copy.flags.clone(),
             unknown: copy.unknown.clone(),
         };
-        // A dry run writes nothing at its destination.
-        if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
+        // A dry run writes nothing at its destination. After an option the
+        // reader does not know, `-n` may be that option's value.
+        if cmd == "rsync" && crate::security::copy_reach::dry_run(copy) {
             return None;
         }
         if cmd == "mv"
