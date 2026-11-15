@@ -797,6 +797,18 @@ A program outside this list that moves the command it runs to another
 directory, or hands it paths it finds, is outside the text guard's
 promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
+A command a known program runs from one of its option values, such as a
+pager, a remote shell, a compression program or a filter, is judged by
+both guards as that command written bare, by the same rule and at the
+project's configured level (TSK-1490). Both guards read these values from
+one inventory in the code (`security/option_commands.rs`), and a test
+keeps its documented list equal to it. A value in a command language the
+guards do not read, an editor's own commands or a build tool setting that
+names a program the tool runs, is refused under `git.hook_integrity`;
+edit files with the harness's file tool instead, and set such a program
+in the project's committed build configuration. A command a program reads
+from its own configuration files or environment is not read this way.
+
 ### Program variables the guards judge
 
 A variable whose value is a program is judged as a command before every
