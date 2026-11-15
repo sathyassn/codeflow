@@ -304,6 +304,31 @@ fn a_source_name_is_read_on_the_host_separators() {
     }
 }
 
+/// Review F1 and N2 (round c): the Windows reading of a source's last
+/// name, checked on every host. A directory written with `\` is named by
+/// its final component, for its landing place and for its own name.
+#[test]
+fn the_windows_reading_of_a_source_name_splits_on_both_separators() {
+    let windows = WINDOWS_SEPARATORS;
+    assert_eq!(last_name_on("src\\.claude", windows), ".claude");
+    assert_eq!(last_name_on("src\\.claude\\", windows), ".claude");
+    assert_eq!(last_name_on(".\\.claude.", windows), ".claude.");
+    assert_eq!(
+        last_name_on("C:\\work\\src/.codeflow", windows),
+        ".codeflow"
+    );
+    assert_eq!(last_name_on("src\\policy.json", windows), "policy.json");
+    assert!(names_contents_on("src\\", windows));
+    assert!(names_contents_on("src\\.", windows));
+    assert!(!names_contents_on("src\\.claude", windows));
+    // The name Win32 opens: the trailing dot is dropped, so `.claude.` is
+    // `.claude` once its parent written with `\` is split off.
+    assert_eq!(
+        last_name_on(".\\.claude.", windows).trim_end_matches(['.', ' ']),
+        ".claude"
+    );
+}
+
 /// Review F1 (round c): on Windows a source written with backslashes
 /// lands at its last name, so a copy into the checkout root is refused,
 /// naming `.claude`.
@@ -319,8 +344,24 @@ fn a_backslash_source_into_the_checkout_is_refused_on_windows() {
         "cp -R src\\.claude .",
         "rsync -a src\\.claude ./",
         "cp -R .\\.claude. .",
+        "rsync -a .\\.claude. ./",
     ] {
         let found = judged(line, &root).expect(line);
-        assert!(found.contains(".claude"), "{line}: {found}");
+        // The enforcement path named, after the source operand.
+        let named = found
+            .rsplit_once("enforcement path")
+            .map_or("", |(_, rest)| rest);
+        assert!(named.contains(".claude"), "{line}: {found}");
+    }
+    // Under a destination filled in at run time, the directory's own name
+    // is read on both separators (N2).
+    let plain = root.join("plain/.claude.");
+    std::fs::create_dir_all(&plain).unwrap();
+    for line in [
+        "cp -R plain\\.claude. $OUT",
+        "rsync -a plain\\.claude. $OUT",
+    ] {
+        let found = judged(line, &root).expect(line);
+        assert!(found.contains("enforcement entry"), "{line}: {found}");
     }
 }

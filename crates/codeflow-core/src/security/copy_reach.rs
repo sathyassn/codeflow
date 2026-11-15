@@ -153,26 +153,50 @@ fn base_name(source: &str) -> Option<&str> {
 /// The last name of `source` on this host's separators, the name a copy of
 /// it gets inside a directory; `source` itself when it has none.
 pub(crate) fn last_name(source: &str) -> &str {
+    last_name_on(source, SEPARATORS)
+}
+
+/// [`last_name`] on `separators`, so each host's reading is tested on
+/// every host.
+fn last_name_on<'a>(source: &'a str, separators: &[char]) -> &'a str {
     source
-        .trim_end_matches(SEPARATORS)
-        .rsplit(SEPARATORS)
+        .trim_end_matches(separators)
+        .rsplit(separators)
         .next()
         .unwrap_or(source)
 }
 
-/// The path separators of this host, as `portable_path::filesystem_spelling`
-/// reads them: a backslash separates names only on Windows, and elsewhere
-/// it is part of a name.
-const SEPARATORS: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+/// The path separators Windows reads, as `portable_path::filesystem_spelling`
+/// does: a backslash separates names there.
+const WINDOWS_SEPARATORS: &[char] = &['/', '\\'];
+
+/// The path separators of this host: a backslash separates names only on
+/// Windows, and elsewhere it is part of a name.
+const SEPARATORS: &[char] = if cfg!(windows) {
+    WINDOWS_SEPARATORS
+} else {
+    &['/']
+};
 
 /// Whether `source` names its contents rather than itself: it ends in a
 /// separator or a separator and `.`, or is `.`.
 fn names_contents(source: &str) -> bool {
+    names_contents_on(source, SEPARATORS)
+}
+
+/// [`names_contents`] on `separators`.
+fn names_contents_on(source: &str, separators: &[char]) -> bool {
     source == "."
-        || source.ends_with(SEPARATORS)
+        || source.ends_with(separators)
         || source
             .strip_suffix('.')
-            .is_some_and(|rest| rest.ends_with(SEPARATORS))
+            .is_some_and(|rest| rest.ends_with(separators))
+}
+
+/// `name` inside the directory `dest`, whose trailing separators are read
+/// on this host's separators.
+fn joined(dest: &str, name: &str) -> String {
+    format!("{}/{name}", dest.trim_end_matches(SEPARATORS))
 }
 
 /// The places the contents of `source` land, each as spelled (for the
@@ -184,7 +208,7 @@ fn landings(
     dest: &str,
     place: &Place<'_>,
 ) -> Vec<String> {
-    let join = |name: &str| format!("{}/{name}", dest.trim_end_matches('/'));
+    let join = |name: &str| joined(dest, name);
     let contents = names_contents(source);
     let named = base_name(source);
     let mut out = Vec::new();
@@ -368,7 +392,7 @@ fn through_link(
         }
         let shown = format!(
             "{}/{}",
-            landing.trim_end_matches('/'),
+            landing.trim_end_matches(SEPARATORS),
             name.to_string_lossy()
         );
         let target = match std::fs::canonicalize(&at) {
@@ -532,7 +556,7 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
             let shown = |relative: &Path| {
                 format!(
                     "{}/{}",
-                    landing.trim_end_matches('/'),
+                    landing.trim_end_matches(SEPARATORS),
                     crate::portable_path::slashed(relative)
                 )
             };
@@ -604,7 +628,7 @@ fn tree_reaches(
         if first.is_some_and(|first| lower.contains(&first)) {
             return Some(format!(
                 "`{cmd}` would write the enforcement path `{}/{}` from the source `{source}`",
-                landing.trim_end_matches('/'),
+                landing.trim_end_matches(SEPARATORS),
                 crate::portable_path::slashed(relative)
             ));
         }

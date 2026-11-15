@@ -392,3 +392,21 @@ fn a_copy_refusal_names_its_operand_and_role() {
     let out = hook("git-guard", &format!("cat {ci}"), &f.root);
     assert_eq!(out.status.code(), Some(0));
 }
+
+/// Review F1 and N2 (round c): on Windows a source written with `\` lands
+/// at its final component, so a copy of `src\.claude` or `.\.claude.` into
+/// the checkout root is refused by both hooks, naming `.claude`.
+#[cfg(windows)]
+#[test]
+fn a_backslash_source_into_the_checkout_is_refused_by_both_guards_on_windows() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join("src/.claude")).unwrap();
+    std::fs::write(f.root.join("src/.claude/settings.json"), "{}\n").unwrap();
+    let refused = vec![
+        row(r"cp -R 'src\.claude' .".to_string(), &[".claude"]),
+        row(r"rsync -a 'src\.claude' ./".to_string(), &[".claude"]),
+        row(r"cp -R '.\.claude.' .".to_string(), &[".claude"]),
+        row(r"rsync -a '.\.claude.' ./".to_string(), &[".claude"]),
+    ];
+    assert_both(&f.root, &refused, &[]);
+}
