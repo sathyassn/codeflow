@@ -629,6 +629,8 @@ name and branch must match; cross-repository pull requests are refused.
 Predecessor identities come from committed records at the target tip. Only
 records absent from that target may come from the candidate pin's tree.
 The current checkout and untracked records do not supply pin identities.
+Push admission also reads the task's committed code-dependency edge. Landing
+still requires the predecessor to be complete at the merge-base.
 
 ### Remember notes
 

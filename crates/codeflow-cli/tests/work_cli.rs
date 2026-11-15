@@ -149,6 +149,28 @@ fn tsk341_start_accepts_its_committed_head_edge() {
         );
         if edge {
             succeeds(&out);
+            let push = push_check(root, "task/TSK-002-child", "HEAD", bin.path());
+            succeeds(&push);
+            let landing = cli(
+                root,
+                &[
+                    "ci",
+                    "--base",
+                    "main",
+                    "--head",
+                    "HEAD",
+                    "--branch",
+                    "task/TSK-002-child",
+                    "--into",
+                    "main",
+                ],
+                Some(bin.path()),
+            );
+            assert!(
+                !landing.status.success() && text(&landing).contains("not complete"),
+                "landing still waits for the predecessor: {}",
+                text(&landing)
+            );
             git(root, &["switch", "-q", "main"]);
             commit_record(
                 root,

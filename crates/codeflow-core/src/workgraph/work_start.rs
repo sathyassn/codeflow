@@ -2670,18 +2670,18 @@ pub fn stacked_pins(
     let (merge_base, mut records) =
         anchored_records(&repo, target, head_id).map_err(|error| error.to_string())?;
     let merge_base = Oid::from_str(&merge_base).map_err(|error| error.to_string())?;
-    if !records.contains_key(task_id) {
-        // A standalone record new on this branch carries its edges at head.
-        let tree = repo
-            .find_commit(head_id)
-            .and_then(|commit| commit.tree())
-            .map_err(|error| error.to_string())?;
-        if let Some(task) = records_from_tree(&repo, &tree)
-            .map_err(|error| error.to_string())?
-            .remove(task_id)
-        {
-            records.insert(task_id.to_string(), task);
-        }
+    let tree = repo
+        .find_commit(head_id)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    if let Some(own) = records_from_tree(&repo, &tree)
+        .map_err(|error| error.to_string())?
+        .remove(task_id)
+    {
+        let task = records
+            .entry(task_id.to_string())
+            .or_insert_with(|| own.clone());
+        merge_head_code_edges(task, &own, None);
     }
     let Some(task) = records.get(task_id) else {
         return Ok(Vec::new());
@@ -2795,25 +2795,42 @@ fn project_start_pin_edges(
     if let Some(own) = own {
         records.entry(task_id.to_string()).or_insert(own);
     }
+    project_head_code_edges(repo, records, task_id, head_id, Some(pins))?;
+    Ok(tip.id().to_string())
+}
+
+/// Preserve planned constraints while reading the claiming task's own
+/// committed code edges. A pin filter limits start's explicit exception.
+fn merge_head_code_edges(task: &mut Record, own: &Record, pins: Option<&[ReviewedPin]>) {
+    for dependency in &own.depends_on {
+        if dependency.kind == DependencyKind::Code
+            && pins.is_none_or(|pins| pins.iter().any(|pin| pin.task_id == dependency.id))
+            && !task
+                .depends_on
+                .iter()
+                .any(|dep| dep.id == dependency.id && dep.kind == DependencyKind::Code)
+        {
+            task.depends_on.push(dependency.clone());
+        }
+    }
+}
+
+fn project_head_code_edges(
+    repo: &Repository,
+    records: &mut BTreeMap<String, Record>,
+    task_id: &str,
+    head_id: Oid,
+    pins: Option<&[ReviewedPin]>,
+) -> Result<(), WorkStartError> {
     let tree = repo
         .find_commit(head_id)
         .and_then(|commit| commit.tree())
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let head_records = records_from_tree(repo, &tree)?;
     if let (Some(task), Some(own)) = (records.get_mut(task_id), head_records.get(task_id)) {
-        for dependency in &own.depends_on {
-            if dependency.kind == DependencyKind::Code
-                && pins.iter().any(|pin| pin.task_id == dependency.id)
-                && !task
-                    .depends_on
-                    .iter()
-                    .any(|dep| dep.id == dependency.id && dep.kind == DependencyKind::Code)
-            {
-                task.depends_on.push(dependency.clone());
-            }
-        }
+        merge_head_code_edges(task, own, pins);
     }
-    Ok(tip.id().to_string())
+    Ok(())
 }
 
 fn check_task_anchor(
@@ -2849,6 +2866,9 @@ fn check_task_anchor(
     let status_base = if admission == Admission::Start && !pins.is_empty() {
         project_start_pin_edges(&repo, &mut records, task_id, target, head_id, pins)?
     } else {
+        if admission == Admission::Work {
+            project_head_code_edges(&repo, &mut records, task_id, head_id, None)?;
+        }
         merge_base.clone()
     };
     // A named fix may reopen a complete task in this range (TSK-140). Only
@@ -3483,7 +3503,7 @@ fn validate_task_structure(
             .any(|dep| dep.id == pin.task_id && dep.kind == DependencyKind::Code)
     }) {
         return Err(WorkStartError::InvalidGraph(
-            "--on pin does not name a code dependency of this task; add its code depends_on edge to this task's committed branch-head record or its target's planning record, then recheck".into(),
+            "--on pin does not name a code dependency of this task; add its code depends_on edge to the target's planning record, or commit it in this task's head record for work start, then recheck".into(),
         ));
     }
     if dependencies_required {
