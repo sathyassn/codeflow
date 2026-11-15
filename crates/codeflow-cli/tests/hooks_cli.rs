@@ -2323,6 +2323,19 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
             password_database_home().join(".codeflow/authority/config.toml"),
             2,
         ),
+        // TSK-1057: the policy baselines and their ledger live in the same
+        // directory, under the account's home from the password database.
+        (
+            &home,
+            home.join(".codeflow/authority/baselines/initialized"),
+            2,
+        ),
+        #[cfg(unix)]
+        (
+            &home,
+            password_database_home().join(".codeflow/authority/baselines/0a.json"),
+            2,
+        ),
     ];
     for (home, file, code) in cases {
         for tool in ["Write", "Edit"] {
