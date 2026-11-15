@@ -2232,7 +2232,9 @@ fn fresh_token() -> String {
     let low = nanos as u32;
     let mixed = low
         ^ std::process::id().rotate_left(16)
-        ^ COUNT.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9);
+        ^ COUNT
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9e37_79b9);
     format!("{mixed:08x}")
 }
 
@@ -2282,7 +2284,9 @@ fn judged(
 /// `subject`, a value the commit under test holds and no earlier run did.
 fn refuses_subject(label: &str, text: &str, subject: &str) -> Result<(), String> {
     if !text.contains("git.commit_format") {
-        return Err(format!("{label}: expected a git.commit_format refusal\n{text}"));
+        return Err(format!(
+            "{label}: expected a git.commit_format refusal\n{text}"
+        ));
     }
     if !text.contains(&format!("got {subject:?}")) {
         return Err(format!(
@@ -2365,7 +2369,10 @@ impl InstalledCi {
             std::fs::read_to_string(work.join(".github/workflows/codeflow-policy.yml")).unwrap();
         assert_eq!(workflow, POLICY, "the run uses the authority's workflow");
         let job_text = job(&workflow, "commit-lint");
-        assert!(job_text.contains("PIN_REF: HEAD"), "the pin is the checkout's");
+        assert!(
+            job_text.contains("PIN_REF: HEAD"),
+            "the pin is the checkout's"
+        );
         let install_step = install_script(job_text);
         let verdict_step = run_blocks(job_text, "codeflow ci (")
             .into_iter()
@@ -2594,7 +2601,10 @@ impl InstalledCi {
         let change = HeadChange::Policy;
         let relaxed = git(
             &self.work,
-            &["show", &format!("{}:.codeflow/policy.json", change.branch())],
+            &[
+                "show",
+                &format!("{}:.codeflow/policy.json", change.branch()),
+            ],
         );
         if !relaxed.contains("\"commit_format\": \"off\"") {
             return Err("Policy: the head does not turn commit_format off".into());
