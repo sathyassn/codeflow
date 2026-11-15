@@ -1,0 +1,11 @@
+id = "TSK-1503"
+uid = "229abf95-ff69-4afd-bd53-1389ad14f722"
+kind = "TSK"
+title = "The install check settles a reset trap or a removed shell hook function as handing no text"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T00:41:32Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
