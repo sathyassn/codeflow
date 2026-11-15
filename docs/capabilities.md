@@ -233,6 +233,13 @@ section of `.codeflow/policy.json`.
   the gate-context token for protected-branch advances, and the guard's refusal
   of override variables set in-session.
 - Secret scanning fails closed.
+- Pre-commit, commit-msg, pre-merge-commit and pre-push compose their git
+  policy with the default branch's landed policy. Checked-out levels can
+  only rise, requirement lists retain landed entries, admitting lists can
+  only shrink without disabling a check, and commit limits can only decrease.
+  An unreadable authority refuses the operation. CI range selection uses the
+  same protected-branch floor and work-prefix ceiling. Bootstrap grace
+  retains its existing suspensions.
 - Agent sessions are judged by the landed policy on the remote, so a local
   edit, commit or branch cannot relax the session checks. The authority is
   the default branch at one commit, never a line or a guess (ADR-0091).

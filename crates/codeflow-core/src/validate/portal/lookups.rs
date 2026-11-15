@@ -150,6 +150,42 @@ fn skill_description(text: &str) -> Option<String> {
     value.get("description")?.as_str().map(str::to_string)
 }
 
+fn classic_hook_note(path: &str) -> &'static str {
+    match path {
+        "git.commit_to_protected" | "git.push_to_protected" | "git.force_push_protected"
+        | "git.force_push_unprotected" | "git.delete_protected" | "git.merge_to_protected"
+        | "git.root_checkout_commits" | "git.commit_format" | "git.commit_body"
+        | "git.commit_ticket_required" | "git.commit_ticket_merges" | "git.ai_attribution"
+        | "git.commit_emoji" | "git.policy_characters" | "git.branch_naming"
+        | "git.secret_scan" | "git.conflict_markers" | "git.test_gate_on_push" =>
+            "Classic hooks enforce the landed level as a floor; the checked-out policy may only tighten it. Bootstrap grace retains its existing suspensions.",
+        "git.protected_branches" =>
+            "In classic hooks and CI range selection, the landed list is the floor: the checked-out policy may add protected entries, never remove them.",
+        "git.branch_prefixes" =>
+            "In classic hooks and CI range selection, the landed list is the ceiling: the checked-out policy may remove prefixes, never add them.",
+        "git.commit_required_footers" =>
+            "Classic hooks retain every landed requirement; the checked-out policy may only add requirements. A new required footer cannot grant an allowance absent from an active landed body rule.",
+        "git.breaking_watch_paths" =>
+            "Classic hooks retain every landed watched path; the checked-out policy may only add paths to watch.",
+        "git.commit_types" | "git.commit_footer_tokens" =>
+            "Classic hooks intersect the landed and checked-out allowances; the checked-out policy may only remove permissions. Required and ticket footers retain their implicit allowances under the composed rules.",
+        "git.commit_ticket_keys" =>
+            "Classic hooks intersect landed and checked-out keys. A nonempty landed list cannot become empty. Narrowing cannot drop validation of a landed pattern or a required ticket footer, and a removed key cannot survive as a generic footer allowance.",
+        "git.commit_desc_max_len" | "git.commit_subject_max_len"
+        | "git.commit_body_max_bullets" | "git.commit_body_bullet_max_len" =>
+            "Classic hooks use the smaller of the landed and checked-out limits; the checked-out policy may only tighten the limit.",
+        "git.root_branch" | "git.commit_ticket_pattern" | "git.push_budget_seconds" =>
+            "Classic hooks keep the landed value because this field has no defined strict ordering; the checked-out policy cannot replace it.",
+        "git.secret_scan_engine" =>
+            "Classic hooks retain gitleaks when either policy requests it; the checked-out policy cannot remove the landed engine's additional scan.",
+        "git.path_policy" | "git.blocked_names" | "git.protected_paths" =>
+            "Pre-commit retains the landed floor: the checked-out policy may only tighten the level or denials and cannot add exceptions.",
+        "git.ignored_files" | "git.max_file_bytes" =>
+            "Pre-commit uses the landed declaration; the checked-out policy cannot weaken or replace it.",
+        _ => "",
+    }
+}
+
 /// The generated region of the policy reference: every key the policy file
 /// accepts, grouped as `codeflow policy explain` groups them, with defaults
 /// taken live from the built-in policy.
@@ -175,14 +211,14 @@ pub fn policy_reference() -> Generated {
             cell(&default),
             cell(spec.valid),
             cell(spec.purpose),
-            cell(spec.notes)
+            cell(format!("{} {}", spec.notes, classic_hook_note(spec.path)).trim_end())
         );
         if let Some((_, rows)) = sections.last_mut() {
             rows.push(row);
         }
     }
     let mut text = format!(
-        "{}\n\nEvery key `.codeflow/policy.json` accepts, with its type, built-in default and valid values. A missing file or key means the default applies; `codeflow policy show` prints the values in effect for a repository. ADR means architecture decision record.\n\nLevel keys accept `off`, `warn`, `allow` or `block`: {}\n",
+        "{}\n\nEvery key `.codeflow/policy.json` accepts, with its type, built-in default and valid values. A missing file or key means the default applies; `codeflow policy show` prints the values in effect for a repository. ADR means architecture decision record.\n\nLevel keys accept `off`, `warn`, `allow` or `block`: {}\n\nThe classic hooks below are pre-commit, commit-msg, pre-merge-commit and pre-push. Their checked-out policy may only tighten the landed policy. An unreadable landed authority refuses the operation.\n",
         begin_marker(POLICY_REFERENCE),
         cell(LEVEL_LEGEND)
     );

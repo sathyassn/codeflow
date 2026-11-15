@@ -368,6 +368,18 @@ fn ci_environment(
     Ok(values)
 }
 
+fn range_policy(root: &Path) -> Result<(Policy, bool), String> {
+    let (mut working, armed) = Policy::load_effective(root)?;
+    let landed = codeflow_core::hooks::landed_policy::load_local(root)?;
+    (working.git.protected_branches, working.git.branch_prefixes) =
+        codeflow_core::hooks::landed_policy::compose_branches(&landed.policy.git, &working.git);
+    Ok((working, armed))
+}
+
+#[cfg(test)]
+#[path = "ci/range_floor_tests.rs"]
+mod range_floor_tests;
+
 pub fn run(args: &CiArgs) -> i32 {
     let mut timings = timing::Timings::start();
     let code = run_timed(args, &mut timings);
@@ -410,12 +422,11 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     if !policy_verifiable(&root, args.blocking_rules_out.as_deref()) {
         return 2;
     }
-    // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is
-    // moot here: the pre-first-commit window cannot occur in CI, which always
-    // has history — CI is the authoritative, always-armed perimeter. The
-    // working copy's policy only finds the range; the range is judged with
-    // the policy at its base (see `judging_policy`).
-    let (working, _armed) = match Policy::load_effective(&root) {
+    // Range selection keeps the landed protected list as a floor and its
+    // prefixes as a ceiling. The range itself is judged with the policy at
+    // its base (see `judging_policy`). Bootstrap grace cannot occur here:
+    // CI always has history.
+    let (working, _armed) = match range_policy(&root) {
         Ok(value) => value,
         Err(error) => {
             let age = crate::cmd::binary_age(&root);
@@ -433,8 +444,8 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     };
 
     // Resolve names and pin revisions once before any range rule runs.
-    // The working copy's policy finds the range, its work prefixes as its
-    // protected branches (see `judging_policy`): the judging policy is read at
+    // The landed protected list is the floor and its work prefixes the ceiling
+    // when the checkout finds the range. The judging policy is read at
     // the base, which the declared target picks. The pre-push hook picks the
     // base and target under the judging policy's prefixes and passes them as
     // `--base` and `--into` (TSK-1257).

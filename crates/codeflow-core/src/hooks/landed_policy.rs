@@ -699,6 +699,160 @@ pub fn compose_paths(
     base
 }
 
+/// Compose the branch lists used by classic hooks and CI range selection.
+/// Protected entries add requirements; work prefixes admit branch names.
+#[must_use]
+pub fn compose_branches(
+    landed: &super::policy::GitPolicy,
+    working: &super::policy::GitPolicy,
+) -> (Vec<String>, Vec<String>) {
+    (
+        union(&landed.protected_branches, &working.protected_branches),
+        intersection(&landed.branch_prefixes, &working.branch_prefixes),
+    )
+}
+
+fn union(base: &[String], other: &[String]) -> Vec<String> {
+    let mut result = base.to_vec();
+    for entry in other {
+        if !result.contains(entry) {
+            result.push(entry.clone());
+        }
+    }
+    result
+}
+
+fn intersection(base: &[String], other: &[String]) -> Vec<String> {
+    base.iter()
+        .filter(|entry| other.contains(entry))
+        .cloned()
+        .collect()
+}
+
+/// Judge classic hooks at the landed floor, retaining local tightening.
+/// Path and content declarations keep their existing composition in
+/// [`staged_rules`]. Unordered fields keep their landed value.
+///
+/// # Errors
+/// Intersecting ticket keys would switch a landed ticket check off, or a
+/// new required footer would grant an allowance absent from the authority.
+#[allow(clippy::too_many_lines)] // Keep each hook field's strict direction visible in one place.
+pub fn compose_git(
+    landed: &super::policy::GitPolicy,
+    working: &super::policy::GitPolicy,
+) -> Result<super::policy::GitPolicy, String> {
+    use super::policy::SecretScanEngine;
+    let mut judged = working.clone();
+    macro_rules! levels {
+        ($($field:ident),+ $(,)?) => {$(
+            judged.$field = if landed.$field.lower(working.$field) == landed.$field {
+                working.$field
+            } else {
+                landed.$field
+            };
+        )+};
+    }
+    levels!(
+        commit_to_protected,
+        push_to_protected,
+        force_push_protected,
+        force_push_unprotected,
+        delete_protected,
+        merge_to_protected,
+        root_checkout_commits,
+        commit_format,
+        commit_body,
+        commit_ticket_required,
+        commit_ticket_merges,
+        ai_attribution,
+        commit_emoji,
+        policy_characters,
+        branch_naming,
+        secret_scan,
+        conflict_markers,
+        test_gate_on_push
+    );
+    (judged.protected_branches, judged.branch_prefixes) = compose_branches(landed, working);
+    judged.commit_required_footers = union(
+        &landed.commit_required_footers,
+        &working.commit_required_footers,
+    );
+    judged.breaking_watch_paths =
+        union(&landed.breaking_watch_paths, &working.breaking_watch_paths);
+    judged.commit_types = intersection(&landed.commit_types, &working.commit_types);
+    judged.commit_ticket_keys =
+        intersection(&landed.commit_ticket_keys, &working.commit_ticket_keys);
+    if !landed.commit_ticket_keys.is_empty() && judged.commit_ticket_keys.is_empty() {
+        return Err("git.commit_ticket_keys would disable the landed ticket check; retain at least one landed ticket key".into());
+    }
+    if !landed.commit_ticket_pattern.is_empty()
+        && judged.commit_ticket_keys != landed.commit_ticket_keys
+    {
+        return Err("git.commit_ticket_keys would stop validating a landed ticket pattern; retain its landed keys".into());
+    }
+    let mut allowed = intersection(
+        &landed.allowed_footer_tokens(),
+        &working.allowed_footer_tokens(),
+    );
+    // A removed ticket key must not survive as an unchecked generic footer.
+    allowed.retain(|token| {
+        !landed.commit_ticket_keys.contains(token) || judged.commit_ticket_keys.contains(token)
+    });
+    if judged.commit_required_footers.iter().any(|token| {
+        landed.commit_ticket_keys.contains(token) && !judged.commit_ticket_keys.contains(token)
+    }) {
+        return Err("git.commit_ticket_keys removes a required ticket footer; retain that landed ticket key".into());
+    }
+    if landed.commit_body.is_active()
+        && judged
+            .commit_required_footers
+            .iter()
+            .any(|token| !landed.allowed_footer_tokens().contains(token))
+    {
+        return Err("git.commit_required_footers would admit a footer outside the landed allowance; use a footer allowed by both policies".into());
+    }
+    judged.commit_footer_tokens = allowed;
+    judged.commit_desc_max_len = landed.commit_desc_max_len.min(working.commit_desc_max_len);
+    judged.commit_subject_max_len = landed
+        .commit_subject_max_len
+        .min(working.commit_subject_max_len);
+    judged.commit_body_max_bullets = landed
+        .commit_body_max_bullets
+        .min(working.commit_body_max_bullets);
+    judged.commit_body_bullet_max_len = landed
+        .commit_body_bullet_max_len
+        .min(working.commit_body_bullet_max_len);
+    judged
+        .commit_ticket_pattern
+        .clone_from(&landed.commit_ticket_pattern);
+    judged.root_branch.clone_from(&landed.root_branch);
+    judged.push_budget_seconds = landed.push_budget_seconds;
+    judged.secret_scan_engine = if landed.secret_scan_engine == SecretScanEngine::Gitleaks
+        || working.secret_scan_engine == SecretScanEngine::Gitleaks
+    {
+        SecretScanEngine::Gitleaks
+    } else {
+        SecretScanEngine::Builtin
+    };
+    Ok(judged)
+}
+
+/// The four classic hooks' effective policy at the landed floor.
+/// Bootstrap grace still suspends the same checks in both inputs; the scan
+/// is never suspended. An unreadable authority always refuses.
+///
+/// # Errors
+/// Either policy source is unreadable or their composition disables a rule.
+pub fn load_for_hooks(root: &Path) -> Result<(Policy, bool), String> {
+    let mut landed = load(root)?.policy.git;
+    let (mut policy, armed) = Policy::load_effective(root)?;
+    if !armed {
+        landed.suspend_for_bootstrap();
+    }
+    policy.git = compose_git(&landed, &policy.git)?;
+    Ok((policy, armed))
+}
+
 /// Read path authority for pre-commit, then retain any stricter local rules.
 ///
 /// # Errors
@@ -759,6 +913,10 @@ pub fn staged_rules(
     };
     Ok((paths, content))
 }
+
+#[cfg(test)]
+#[path = "landed_policy/composition_tests.rs"]
+mod composition_tests;
 
 #[cfg(test)]
 mod tests {
