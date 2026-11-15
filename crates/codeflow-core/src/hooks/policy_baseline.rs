@@ -373,7 +373,7 @@ const NOT_LEVELS: &[&str] = &[
 /// The stricter of two policies: `baseline` and the authority ref's `other`.
 ///
 /// Every level takes the higher of block, warn, allow and off; the lists in
-/// [`UNION_LISTS`] take the union and those in [`INTERSECT_LISTS`] the
+/// `UNION_LISTS` take the union and those in `INTERSECT_LISTS` the
 /// intersection; `security.text_guard` is strict when either is. Every
 /// other value is the baseline's: the ref can add strictness through these
 /// keys, never change anything else, until the operator refreshes the
@@ -725,7 +725,8 @@ pub fn apply(
 // ---------------------------------------------------------------------------
 
 /// The authority as the remote itself reports it, with its policy read from
-/// the fetched commit.
+/// the fetched commit. `crate::git::baseline_fresh::fresh` reads it; that
+/// read uses configured waits, so it stays out of the guard code.
 #[derive(Clone, Debug)]
 pub struct Fresh {
     pub common_dir: String,
@@ -735,80 +736,6 @@ pub struct Fresh {
     pub commit: String,
     pub policy_text: Option<String>,
     pub policy_digest: String,
-}
-
-/// Ask the authority remote for its default branch and commit, fetch that
-/// commit's objects (no ref is written), and read the policy from it. The
-/// local tracking refs are never read for the policy: they only have to
-/// agree on which branch is the default.
-///
-/// # Errors
-/// The remote cannot be selected, verified, asked or fetched; its answer
-/// cannot be read; the local remote `HEAD` names another branch; or the
-/// policy at the commit is invalid.
-pub fn fresh(root: &Path, limits: crate::git::remote_query::QueryLimits) -> Result<Fresh, String> {
-    let Some(repo) = super::repo::open(root)? else {
-        return Err("this is not a repository with a commit".into());
-    };
-    let remote = super::landed_policy::authority_remote(&repo)?
-        .ok_or("the repository has no remote, so there is no policy authority to record")?;
-    let url = configured_url(&repo, &remote)?;
-    crate::git::remote_identity::verify(root, &remote, &url, limits)?;
-    let answer = crate::git::remote_query::ls_remote(root, &["--symref", &url, "HEAD"], limits)?;
-    let (branch, commit) = parse_head(&answer)?;
-    let authority = format!("refs/remotes/{remote}/{branch}");
-    let local = super::landed_policy::remote_head_target(&repo, &remote)?;
-    if local != authority {
-        return Err(format!(
-            "{remote} names {} as its default branch, and refs/remotes/{remote}/HEAD names {}; the operator runs git remote set-head {remote} -a and retries",
-            crate::git::display_text(&format!("refs/heads/{branch}")),
-            crate::git::display_text(&local)
-        ));
-    }
-    crate::git::remote_query::fetch_objects(
-        root,
-        &url,
-        &[&format!("refs/heads/{branch}")],
-        limits,
-    )?;
-    let oid = git2::Oid::from_str(&commit).map_err(|e| e.to_string())?;
-    if repo.find_commit(oid).is_err() {
-        return Err(format!(
-            "{remote} moved while it was read: commit {commit} did not arrive; retry"
-        ));
-    }
-    super::landed_policy::checked_policy_at(&repo, oid)?;
-    let policy_text = super::landed_policy::policy_text_at(root, &commit)?;
-    Ok(Fresh {
-        common_dir: common_dir(&repo)?,
-        policy_digest: digest(policy_text.as_deref().unwrap_or("")),
-        remote,
-        remote_url: url,
-        authority,
-        commit,
-        policy_text,
-    })
-}
-
-/// The default branch and its commit from `git ls-remote --symref <url> HEAD`.
-fn parse_head(answer: &str) -> Result<(String, String), String> {
-    let mut branch = None;
-    let mut commit = None;
-    for line in answer.lines() {
-        if let Some(rest) = line.strip_prefix("ref: ") {
-            if let Some((target, "HEAD")) = rest.split_once('\t') {
-                branch = target.strip_prefix("refs/heads/").map(str::to_owned);
-            }
-        } else if let Some((sha, "HEAD")) = line.split_once('\t') {
-            commit = Some(sha.to_owned());
-        }
-    }
-    let unread = "the remote did not report its default branch as a branch and commit";
-    let branch = branch.filter(|b| !b.is_empty()).ok_or(unread)?;
-    let commit = commit
-        .filter(|c| c.len() >= 40 && c.bytes().all(|b| b.is_ascii_hexdigit()))
-        .ok_or(unread)?;
-    Ok((branch, commit))
 }
 
 /// The record that initializes a repository from a fresh read.

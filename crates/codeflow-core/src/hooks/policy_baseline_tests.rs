@@ -497,42 +497,6 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?}");
 }
 
-/// A bare remote whose `main` holds the strict policy, and a clone whose
-/// tracking ref was weakened before the first run.
-fn poisoned_clone() -> (tempfile::TempDir, PathBuf, Oid) {
-    let dir = tempfile::tempdir().unwrap();
-    let parent = dir.path().canonicalize().unwrap();
-    let remote = parent.join("remote.git");
-    let bare = Repository::init_bare(&remote).unwrap();
-    let strong = commit(&bare, STRICT, &[]);
-    bare.reference("refs/heads/main", strong, true, "test")
-        .unwrap();
-    bare.set_head("refs/heads/main").unwrap();
-    let work = parent.join("work");
-    let url = format!("file://{}", remote.display());
-    git(&parent, &["clone", "--quiet", &url, "work"]);
-    let repo = Repository::open(&work).unwrap();
-    let weak = commit(&repo, WEAK, &[]);
-    repo.reference("refs/remotes/origin/main", weak, true, "test: poison")
-        .unwrap();
-    (dir, work, strong)
-}
-
-/// Poisoned initialization: the fresh read asks the remote, so it yields
-/// the authority's strict policy, never the weakened local ref's.
-#[test]
-fn initialization_reads_the_remote_never_the_weakened_tracking_ref() {
-    let (_dir, work, strong) = poisoned_clone();
-    let fresh = fresh(&work, crate::git::remote_query::QueryLimits::guard()).unwrap();
-    assert_eq!(fresh.commit, strong.to_string());
-    assert_eq!(fresh.policy_text.as_deref(), Some(STRICT));
-    assert_eq!(fresh.authority, "refs/remotes/origin/main");
-    // Nothing was written to the tracking ref.
-    let repo = Repository::open(&work).unwrap();
-    let tracked = repo.refname_to_id("refs/remotes/origin/main").unwrap();
-    assert_ne!(tracked, strong);
-}
-
 fn fresh_at(fixture: &Fixture, oid: Oid, text: &str) -> Fresh {
     Fresh {
         common_dir: common_dir(&fixture.repo()).unwrap(),
@@ -793,15 +757,6 @@ fn the_ledger_survives_a_second_write_and_lists_each_repository_once() {
     fixture.initialize();
     let ledger = std::fs::read_to_string(fixture.store.dir().join(LEDGER)).unwrap();
     assert_eq!(ledger.lines().count(), 1);
-}
-
-#[test]
-fn the_head_answer_is_read_strictly() {
-    let sha = "a".repeat(40);
-    let answer = format!("ref: refs/heads/main\tHEAD\n{sha}\tHEAD\n");
-    assert_eq!(parse_head(&answer).unwrap(), ("main".into(), sha.clone()));
-    assert!(parse_head(&format!("{sha}\tHEAD\n")).is_err());
-    assert!(parse_head("ref: refs/tags/v1\tHEAD\nzz\tHEAD\n").is_err());
 }
 
 #[test]

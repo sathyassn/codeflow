@@ -149,7 +149,7 @@ fn show(root: &Path, store: &Store) -> i32 {
 /// session checks have passed.
 fn write_checked(root: &Path, store: &Store, confirm: Option<&str>, mode: &Mode) -> i32 {
     let limits = codeflow_core::git::remote_query::QueryLimits::from_authority_or_default(root);
-    let fresh = match baseline::fresh(root, limits) {
+    let fresh = match codeflow_core::git::baseline_fresh::fresh(root, limits) {
         Ok(fresh) => fresh,
         Err(error) => return fail(&error),
     };
