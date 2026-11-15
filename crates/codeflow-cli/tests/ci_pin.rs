@@ -1137,12 +1137,19 @@ fn audit_repo(
 /// `empty` or `broken` (both exit 128) and `OSV_FAKE_SOURCE` is the path the
 /// advisory names. With `--format json` it prints a report on stdout, one
 /// vulnerability per id in `OSV_FAKE_IDS` (default `GHSA-test`), and its
-/// messages on stderr.
+/// messages on stderr. `OSV_FAKE` `empty-large` and `broken-large` exit 128
+/// with about 1 MiB of log on stderr, `broken-large` with the extraction
+/// error on its first line; `OSV_FAKE_DROP_LOG` removes the file the step
+/// keeps stderr in, so the step cannot read it.
 const FAKE_OSV_SCANNER: &str = r#"#!/bin/sh
 case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac
+if [ -n "${OSV_FAKE_DROP_LOG:-}" ]; then rm -f "$RUNNER_TEMP"/osv-tool.*/scan.err; fi
+filler() { awk 'BEGIN { for (i = 0; i < 20000; i++) print "Scanned file " i " and found no package in it" }'; }
 case ${OSV_FAKE:-} in
   empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
   broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
+  empty-large) { filler; echo 'No package sources found, --help for usage information.'; } >&2; exit 128 ;;
+  broken-large) { echo 'Error during extraction: Cargo.lock: could not extract'; filler; echo 'No package sources found, --help for usage information.'; } >&2; exit 128 ;;
 esac
 if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
 case " $* " in
@@ -1169,8 +1176,20 @@ echo "GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}"; exit 1
 /// beside the lockfile and, as osv-scanner does, skips a lockfile the
 /// `.gitignore` names unless it runs with `--no-ignore`. `fake` sets
 /// `OSV_FAKE` (`empty` or `broken`, both exit 128) and `OSV_FAKE_SOURCE`
-/// (the path the advisory names) for the fake scanner.
+/// (the path the advisory names) for the fake scanner. The step runs as a
+/// `shell: bash` step does, with `-eo pipefail`.
 fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
+    run_audit_step_with(repo, trusted, fake, &["-eo", "pipefail"])
+}
+
+/// [`run_audit_step`] with the shell options `flags`: `-e` is how GitHub
+/// runs a step that names no shell, `-eo pipefail` a `shell: bash` step.
+fn run_audit_step_with(
+    repo: &Path,
+    trusted: &str,
+    fake: &[(&str, &str)],
+    flags: &[&str],
+) -> Output {
     let script = run_blocks(CI, "dependency audit").remove(0);
     let bin = repo.parent().unwrap().join("audit-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -1195,7 +1214,9 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
             .unwrap();
     }
     let out = Command::new("bash")
-        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
+        .args(["--noprofile", "--norc"])
+        .args(flags)
+        .args(["-c", &script])
         .current_dir(repo)
         .env(
             "PATH",
@@ -1397,11 +1418,21 @@ fn run_exception_step(
     head: &[(&str, &str)],
     fake: &[(&str, &str)],
 ) -> (bool, String) {
+    run_exception_step_with(base, head, fake, &["-eo", "pipefail"])
+}
+
+/// [`run_exception_step`] with the shell options `flags`.
+fn run_exception_step_with(
+    base: &[(&str, &str)],
+    head: &[(&str, &str)],
+    fake: &[(&str, &str)],
+    flags: &[&str],
+) -> (bool, String) {
     let dir = tempfile::tempdir().unwrap();
     let work = dir.path().join("repo");
     std::fs::create_dir_all(&work).unwrap();
     let trusted = exception_repo(&work, &levels("warn", "block"), base, head);
-    let out = run_audit_step(&work, &trusted, fake);
+    let out = run_audit_step_with(&work, &trusted, fake, flags);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -1498,6 +1529,82 @@ fn the_project_exception_hook_fails_the_step_for_findings_it_does_not_accept() {
         assert!(!ok, "{hook}: {text}");
         assert!(text.contains("not accepted: GHSA-a\t"), "{hook}: {text}");
         assert!(text.contains(expect), "{hook}: {text}");
+    }
+}
+
+/// The last part of a step's output, which holds its verdict; a large scan
+/// log stays out of an assertion message.
+fn verdict_tail(text: &str) -> &str {
+    let start = text.len().saturating_sub(1500);
+    let start = (start..text.len())
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(text.len());
+    &text[start..]
+}
+
+/// TSK-1510 AC-1: at the block level a scan that reports a file it could
+/// not extract fails the job whatever the size of the scanner's output,
+/// with or without the project exception hook, and whether the step runs
+/// as GitHub runs a step that names no shell (`bash -e`) or as a
+/// `shell: bash` step (`-eo pipefail`). Error text the step cannot read is
+/// a scan error too, and a large scan that finds no package sources still
+/// has nothing to audit.
+#[test]
+fn a_scan_error_fails_the_audit_whatever_the_output_size() {
+    let hook: [(&str, &str); 2] = [ACCEPTING, REGISTER];
+    for flags in [&["-e"][..], &["-eo", "pipefail"][..]] {
+        for base in [&[][..], &hook[..]] {
+            let with_hook = !base.is_empty();
+            let (ok, text) =
+                run_exception_step_with(base, &[], &[("OSV_FAKE", "broken-large")], flags);
+            assert!(text.len() > 64 * 1024, "{flags:?} hook={with_hook}: the scan log is small");
+            let tail = verdict_tail(&text);
+            assert!(!ok, "{flags:?} hook={with_hook}: {tail}");
+            assert!(text.contains("exit 128"), "{flags:?} hook={with_hook}: {tail}");
+            assert!(
+                !text.contains("nothing to audit"),
+                "{flags:?} hook={with_hook}: {tail}"
+            );
+
+            let (ok, text) =
+                run_exception_step_with(base, &[], &[("OSV_FAKE", "empty-large")], flags);
+            let tail = verdict_tail(&text);
+            assert!(ok, "{flags:?} hook={with_hook}: {tail}");
+            assert!(
+                text.contains("nothing to audit"),
+                "{flags:?} hook={with_hook}: {tail}"
+            );
+        }
+
+        // The hook's scan keeps its errors in a file; when that file cannot
+        // be read, neither "nothing to audit" nor an accepting hook passes.
+        let (ok, text) = run_exception_step_with(
+            &hook,
+            &[],
+            &[("OSV_FAKE", "empty"), ("OSV_FAKE_DROP_LOG", "1")],
+            flags,
+        );
+        assert!(!ok, "{flags:?}: {text}");
+        assert!(
+            text.contains("cannot read the errors osv-scanner logged"),
+            "{flags:?}: {text}"
+        );
+        assert!(!text.contains("nothing to audit"), "{flags:?}: {text}");
+        let (ok, text) = run_exception_step_with(
+            &hook,
+            &[],
+            &[("OSV_FAKE_IDS", "GHSA-a"), ("OSV_FAKE_DROP_LOG", "1")],
+            flags,
+        );
+        assert!(!ok, "{flags:?}: {text}");
+        assert!(
+            text.contains("cannot read the errors osv-scanner logged"),
+            "{flags:?}: {text}"
+        );
+        assert!(
+            !text.contains("Every dependency advisory is accepted"),
+            "{flags:?}: {text}"
+        );
     }
 }
 

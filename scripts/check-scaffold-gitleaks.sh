@@ -10,7 +10,8 @@
 #      managed paths and still fails on a credential on that same line, the
 #      same prose anywhere else, and every finding an adopter's own
 #      configuration makes, wherever gitleaks reads that configuration from;
-#      a scan that does not complete fails the step;
+#      a scan that does not complete fails the step, whatever the size of
+#      its log and with or without pipefail;
 #   3. that step reads every exemption from the trusted commit: an ignore
 #      entry, an allowlist, a .gitleaks.json beside .gitleaks.toml, an
 #      inline gitleaks:allow comment or an edited extended file that a pull
@@ -256,7 +257,7 @@ expect() {
   set +e
   (cd "$REPO" && env PATH="$FAKE_PATH" RUNNER_TEMP="$runner" \
     TRUSTED_SHA="${TRUSTED-$(tip)}" SCAN_FROM="${SCAN_FROM-${TRUSTED-}}" \
-    ${STEP_ENV:-} bash -e "${STEP_SCRIPT:-$TMP/step.sh}") \
+    ${STEP_ENV:-} bash ${STEP_SHELL_FLAGS:--e} "${STEP_SCRIPT:-$TMP/step.sh}") \
     >"$TMP/$name.out" 2>&1
   rc=$?
   set -e
@@ -381,6 +382,39 @@ REPO="$TMP/prose-only"
 STEP_ENV="PATH=$TMP/fake-bin:$TMP/failing-git:$PATH"
 MESSAGE="gitleaks did not complete a scan"
 expect git-exit 1
+STEP_ENV=
+MESSAGE=
+
+# A gitleaks that logs an error line first and then far more debug text
+# than a pipe holds still fails the step, whether the step runs as GitHub
+# runs a step that names no shell (bash -e) or as a `shell: bash` step
+# (-eo pipefail). It runs on the clean prose-only history.
+mkdir "$TMP/early-error" "$TMP/early-error-bin"
+cat >"$TMP/early-error/gitleaks" <<SH
+#!/bin/sh
+{
+  echo '1:00AM ERR the scan stopped early'
+  awk 'BEGIN { for (i = 0; i < 20000; i++) print "1:00AM DBG debug line " i " after the error" }'
+} >&2
+exec "$GITLEAKS" "\$@"
+SH
+chmod +x "$TMP/early-error/gitleaks"
+tar -czf "$TMP/gitleaks-early-error.tar.gz" -C "$TMP/early-error" gitleaks
+cat >"$TMP/early-error-bin/curl" <<SH
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+  case \$1 in -o) out=\$2; shift ;; esac
+  shift
+done
+cp "$TMP/gitleaks-early-error.tar.gz" "\$out"
+SH
+chmod +x "$TMP/early-error-bin/curl"
+STEP_ENV="PATH=$TMP/early-error-bin:$TMP/fake-bin:$PATH"
+MESSAGE="gitleaks did not complete a scan"
+expect early-error 1
+STEP_SHELL_FLAGS="-eo pipefail"
+expect early-error-pipefail 1
+STEP_SHELL_FLAGS=
 STEP_ENV=
 MESSAGE=
 
