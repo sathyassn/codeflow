@@ -836,7 +836,15 @@ git-guard reads a Git command through every launcher in the list above,
 by each of its spellings and its own options, the privilege and
 scheduling launchers included. A launcher that reads environment
 assignments among its own options is read by that grammar, so the
-command is found after the last of its options. When it decides the repository the
+command is found after the last of its options. The launchers the guards
+model are a closed list, each read by its own grammar, and the grammar
+fails closed: a command it cannot resolve to its final program and words,
+such as a launcher mode that runs a shell on its input or runs a command
+the line does not name, is refused under the agent push rule
+(`git.agent_push_refused_branches`) in both guards at every
+`git.hook_integrity` level, and under `git.hook_integrity`. A launcher's
+name given only as another launcher's option value is not a launcher.
+When it decides the repository the
 command is judged in, it reads an assignment written after a launcher as
 the launcher passes it on. A launcher that runs the command as another
 user, with that user's environment and configuration, or whose options
