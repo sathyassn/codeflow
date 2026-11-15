@@ -101,23 +101,20 @@ produced them (ADR-0007).
 | `reference-transaction` | fast-forward merges, `reset --hard`, `branch -D` on protected | the harness-agnostic backstop; needs git ≥ 2.28 |
 | `pre-push` | push, force-push and delete to protected | reports `codeflow pre-push: BLOCKED` against policy rule `git.push_to_protected` |
 
-- `reference-transaction` on older git is absent, and protection falls back to
-  the other planes.
+- On older git, without `reference-transaction`, the other planes protect.
 - With active protection, an unreadable or unevaluable prepared transaction
   blocks rather than silently skipping the check.
-- The current input contract is UTF-8. Non-UTF-8 input also blocks, including
-  remote-only transactions. Valid UTF-8 remote-only input retains its fast
-  path.
-- After a block, inspect the reported cause and the repository, tool and
-  backend compatibility before retrying. Preserve the work and repair the
-  supported path. Do not disable the hook or automatically convert repository
+- Input must be UTF-8: non-UTF-8 input blocks, remote-only transactions
+  included; valid UTF-8 remote-only input keeps its fast path.
+- After a block, check the reported cause and the repository, tool and
+  backend compatibility before retrying; keep the work, repair the supported
+  path, and never disable the hook or automatically convert repository
   storage to evade it.
 
-This plane needs no per-harness configuration. A Codex
-`git push --force origin main` against protected `main` is refused by the
-`pre-push` shim exactly as any agent's would be. Installed files still do not
-make these checks unbypassable: local hook files and Git configuration remain
-editable.
+This plane needs no per-harness configuration: the `pre-push` shim refuses a
+Codex force-push to protected `main` exactly as any agent's. Installed files
+do not make these checks unbypassable: local hook files and Git configuration
+stay editable.
 
 ### in-session guards
 
@@ -159,8 +156,8 @@ default branch at one commit, and nothing else (ADR-0091).
   with its configured URL.
 - Missing authority refuses the call and names `git fetch`, or the
   operator's `git remote set-head <remote> -a`.
-- `doctor` and orient report the source and any local policy drift. They do not
-  detect earlier movement of a tracking ref.
+- `doctor` and orient report the source and any local policy drift, but not
+  earlier movement of a tracking ref.
 
 **Shipped defaults.** The guards refuse the wrapped, flag-led and interpreter
 forms of privilege escalation, package or gist publishing, release and tag
@@ -188,9 +185,9 @@ route.
 - The `security.dangerous_commands` floor cannot be lowered.
 - `security.shell_startup` has no key and no relief: the operator edits
   their own shell startup files.
-- An agent's run of `codeflow update` or `codeflow init` refuses under
-  `git.hook_integrity`; only the operator runs them. A renamed or copied
-  binary, and words written to a file and run later, are a named residual.
+- Only the operator runs `codeflow init` and `codeflow update`; an agent's
+  run refuses under `git.hook_integrity`. A renamed or copied binary, and a
+  file written then run later, stay residual.
 
 **Hook wrappers.**
 
@@ -207,8 +204,8 @@ route.
 - Grok shows only the first stderr line of a denying hook, so a guard refusing
   a Grok call also writes Grok's deny decision with the whole refusal on
   stdout.
-- The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash). Native
-  PowerShell as the hook runner is unsupported.
+- The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash), not
+  native PowerShell, as the hook runner.
 
 | Case | What prints |
 |---|---|
@@ -233,9 +230,9 @@ hook command Grok would skip.
   plant, answers for it.
 - A customised handler is reported unverified. Where PATH resolves `codeflow`
   is reported without being run.
-- The canary does not exercise a shell, the command-line parsing, the
-  `codeflow` on PATH or Grok's own hook call. A live session's hook lines prove
-  those.
+- The canary does not exercise a shell, command-line parsing, the
+  `codeflow` on PATH or Grok's own hook call; a live session's hook lines
+  prove those.
 
 **Shell plane.**
 
@@ -249,8 +246,8 @@ hook command Grok would skip.
 
 ### CI
 
-The scaffolded CI runs the same git standards through the `codeflow ci` binary,
-one source of truth with no inline drift, portable across CI hosts via thin
+The scaffolded CI runs the same git standards through `codeflow ci`, one
+source of truth with no inline drift, portable across CI hosts through thin
 per-platform wrappers (ADR-0017).
 
 | CI check | What it enforces |
@@ -264,9 +261,8 @@ per-platform wrappers (ADR-0017).
 
 CI also carries the **security-review** job (ADR-0016).
 
-- Its deterministic floor is `osv-scanner`, stack-agnostic software
-  composition analysis (SCA) across every lockfile ecosystem. It is the
-  universal floor today.
+- Its deterministic floor, for every stack today, is `osv-scanner`:
+  software composition analysis (SCA) across every lockfile ecosystem.
 - The `cf-security-reviewer` dual-vendor red-team is layered on top.
 - Per-stack scanners such as `cargo audit`, `pip-audit`, `govulncheck` or
   `semgrep` are an optional future extension.
@@ -283,8 +279,8 @@ The job blocks when either `security_review` or `dep_audit` is `block`; otherwis
 
 The GitHub remote-protect adapter (`remote.rs`, surfaced as `codeflow remote`)
 arms the host's own branch rules where the host offers them. CI re-runs the
-checks, and configured remote rules can require their results, so CI becomes a
-merge gate when the remote requires its result.
+checks and becomes a merge gate when configured remote rules require its
+result.
 
 The end state the planes exist for is a protected branch whose PRs are merged
 by a human on evidenced-green checks.
@@ -332,7 +328,7 @@ startup files source from outside the class; the
 
 CodeFlow has two kinds of control: **enforcement** (gates that block) and
 **guidance** (instructions and skills that inform). They reach different
-distances, so the table says what a given harness actually gets.
+distances; the table says what each harness gets.
 
 | Layer | Reaches | Depends on |
 |---|---|---|
