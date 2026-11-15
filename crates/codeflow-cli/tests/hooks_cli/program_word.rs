@@ -585,6 +585,14 @@ fn launchers_that_remove_variables_judge_the_alias_git_runs() {
         };
         for command in ["git ship", "$G ship"] {
             rows.push(("git-guard", command, git_guard));
+            // exec-guard's agent-push rule reads the alias a literal `git`
+            // runs, so the repository's alias, a push of `main`, is
+            // refused there as an agent push.
+            let exec_guard = if session.is_none() && command == "git ship" {
+                Some("git.agent_push_refused_branches")
+            } else {
+                exec_guard
+            };
             rows.push(("exec-guard", command, exec_guard));
         }
         wrong.extend(check_env(dir.path(), &rows, &env));
