@@ -68,6 +68,49 @@ fn the_program_behind_unplaced_words_is_judged() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// An expansion limit keeps the command behind the word and refuses the
+/// unreadable program, regardless of incidental integrity violations.
+#[test]
+fn unreadable_leading_words_keep_the_command_and_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let values = [
+        format!("{{{}}}", "x".repeat(4097)),
+        format!("{{{}}}", vec!["x"; 65].join(",")),
+        "{1..1}".repeat(257),
+    ];
+    let mut wrong = Vec::new();
+    for name in ["X+=", "a[0]="] {
+        for value in &values {
+            for program in ["git", "gh"] {
+                for command in [
+                    "git push --force origin main",
+                    "git commit -m x",
+                    "git -c core.hooksPath=/tmp/x commit -m x",
+                ] {
+                    let line = format!("{name}{value}/{program} {command}");
+                    wrong.extend(check(
+                        dir.path(),
+                        &[(
+                            "git-guard",
+                            &line,
+                            Some("a word in the program position that the guard cannot read"),
+                        )],
+                    ));
+                }
+            }
+        }
+    }
+    wrong.extend(check(
+        dir.path(),
+        &[
+            ("git-guard", "NAME=value git status", None),
+            ("git-guard", "X+=1 git status", None),
+        ],
+    ));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// `env` reads every operand before its command that holds `=` as an
 /// assignment, whatever stands before the `=`, so the program after such
 /// operands is judged. The secret-read rule is off, so each row is refused

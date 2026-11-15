@@ -123,11 +123,12 @@ fn classify_written(argv: &[String], marks: Option<&[String]>, depth: usize) -> 
         // reading is judged here, and the word as the program below.
         if placed == LeadingWord::Unplaced {
             let marks = tail.map_or_else(|| assumed_marks(argv), <[String]>::to_vec);
-            let Some(readings) = other_readings(&marks, 0) else {
-                return Found::Unresolved;
-            };
+            let (readings, incomplete) = other_readings(&marks, 0);
             if let Some(run) = readings.iter().find_map(|reading| find(reading, depth + 1)) {
                 return Found::Run(run);
+            }
+            if incomplete {
+                return Found::Unresolved;
             }
         }
         let name = basename(program);

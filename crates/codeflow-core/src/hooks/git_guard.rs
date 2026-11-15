@@ -7587,15 +7587,15 @@ fn expand_segments(
                 }
             }
             if placed == LeadingWord::Unplaced {
-                match other_readings(&marks, at) {
-                    Some(readings) => {
-                        for reading in readings {
-                            if !alternatives.contains(&reading) {
-                                alternatives.push(reading);
-                            }
-                        }
+                let (readings, incomplete) = other_readings(&marks, at);
+                for reading in readings {
+                    if !alternatives.contains(&reading) {
+                        alternatives.push(reading);
                     }
-                    None => out.unread_commands.push(program.to_string()),
+                }
+                if incomplete {
+                    unreadable = true;
+                    out.unread_commands.push(program.to_string());
                 }
                 // A word whose text reads as an assignment, but which the
                 // shell runs because a quote stands in its name or `=`, is
@@ -7798,19 +7798,21 @@ fn expand_bodies(
 /// ([`brace_expand`]). The reading with the word as the program is the
 /// segment itself, so every reading is judged. `marks` are the command's
 /// words as written ([`ShellWord::marked`]), so only braces the shell reads
-/// unquoted expand. `None` when the braces are past what the guard reads,
-/// so the word stays unread.
-pub(crate) fn other_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
+/// unquoted expand. The flag is true when brace expansion is past what the
+/// guard reads: the caller refuses, while keeping the completed readings.
+pub(crate) fn other_readings(marks: &[String], at: usize) -> (Vec<String>, bool) {
     let mut without = marks.to_vec();
     let word = without.remove(at);
     let mut readings = vec![requote_words(&without)];
     if word.contains('{') {
-        let list = brace_expand(&word)?;
+        let Some(list) = brace_expand(&word) else {
+            return (readings, true);
+        };
         if list.len() > 1 {
             readings.push(replaced_word(marks, at, list));
         }
     }
-    Some(readings)
+    (readings, false)
 }
 
 /// Words as written ([`ShellWord::marked`]) with the word at `at` replaced
@@ -17905,6 +17907,37 @@ mod tests {
             "make CC=gcc",
         ] {
             assert_eq!(read(line), vec![words(line)], "{line}");
+        }
+    }
+
+    /// Expansion limits never erase the command behind an unplaced word.
+    #[test]
+    fn leading_words_past_expansion_limits_keep_the_command_and_refuse() {
+        let values = [
+            format!("{{{}}}", "x".repeat(BRACE_WORD_BYTES + 1)),
+            format!("{{{}}}", vec!["x"; BRACE_WORD_LIMIT + 1].join(",")),
+            "{1..1}".repeat(BRACE_DEPTH_LIMIT + 1),
+        ];
+        for name in ["X+=", "a[0]="] {
+            for value in &values {
+                for program in ["git", "gh"] {
+                    for command in [
+                        "git push --force origin main",
+                        "git commit -m x",
+                        "git -c core.hooksPath=/tmp/x commit -m x",
+                    ] {
+                        let line = format!("{name}{value}/{program} {command}");
+                        let segments = expand_commands(&line);
+                        assert!(
+                            segments
+                                .iter()
+                                .any(|s| command_argv(s) == command_argv(command)),
+                            "the command behind the leading word was lost"
+                        );
+                        assert!(segments.iter().any(|s| s == PROGRAM_UNREAD));
+                    }
+                }
+            }
         }
     }
 
