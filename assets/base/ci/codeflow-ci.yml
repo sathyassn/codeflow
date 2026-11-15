@@ -906,7 +906,14 @@ jobs:
           plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
           printf '%s\n' "$plain" | grep -E '^[^ ]+ (INF|WRN|ERR|FTL) ' >&2 || true
           scanned=$(printf '%s\n' "$plain" | sed -n 's/^[^ ]* INF \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
-          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' \
+          # grep reads the log from a file, so its answer does not depend on
+          # the log's size: 1 means no error line; anything else fails.
+          if ! printf '%s\n' "$plain" >"$tool/gitleaks.plain"; then
+            echo "::error::cannot keep the gitleaks log to check it; refusing to pass the scan"; exit 1
+          fi
+          logged=0
+          grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' "$tool/gitleaks.plain" || logged=$?
+          if [ "$rc" -ne 0 ] || [ "$logged" -ne 1 ] \
             || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
             echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
             exit 1
@@ -1116,11 +1123,16 @@ jobs:
           # lockfile it could not read, and it sends every log level to stderr
           # when the format is JSON. --verbosity error keeps only the errors,
           # so any text on stderr means the scan may be incomplete and the hook
-          # is not run.
+          # is not run. Error text that cannot be read is a scan error too.
           set +e
+          read_failed=
           if [ -n "$hook_mode" ]; then
             out=$("$tool/osv-scanner" scan -r --no-ignore --verbosity error --format json . 2>"$tool/scan.err"); rc=$?
-            diag=$(cat "$tool/scan.err")
+            if ! diag=$(cat "$tool/scan.err"); then
+              diag=
+              read_failed=1
+              echo "::error::cannot read the errors osv-scanner logged, so its scan may be incomplete"
+            fi
           else
             out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
             diag=$out
@@ -1144,7 +1156,7 @@ jobs:
             if printf '%s' "$out" | jq -r --arg here "$PWD/" '.results[]? | .source.path as $s | .packages[]? | .package as $p | .vulnerabilities[]? | [.id, $p.name, $p.version, $p.ecosystem, ($s | ltrimstr($here)), ((.aliases // []) | join(","))] | @tsv' >"$tool/findings.raw"; then
               LC_ALL=C sort -u "$tool/findings.raw" >"$findings"
             fi
-            if [ -s "$tool/scan.err" ]; then
+            if [ -n "$read_failed" ] || [ -s "$tool/scan.err" ]; then
               echo "::error::osv-scanner logged errors, so its scan may be incomplete; no project exception applies"
             elif [ ! -s "$findings" ]; then
               echo "::error::osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies"
@@ -1170,12 +1182,22 @@ jobs:
           # The verdict comes from osv-scanner's exit status (0 no advisories,
           # 1 advisories, 127 error, 128 no package sources), never from its
           # output, which repeats file paths the change chooses. A 128 that
-          # also reports a file it could not extract is a scan error.
-          if [ "$rc" -eq 0 ]; then
+          # also reports a file it could not extract is a scan error. That
+          # text is matched in the captured output with no pipe, so the
+          # decision cannot depend on the output's size or timing.
+          scan_error=$read_failed
+          if [ "$rc" -eq 128 ]; then
+            for text in "$diag" "$out"; do
+              case $text in
+                (*[Ee][Rr][Rr][Oo][Rr]' '[Dd][Uu][Rr][Ii][Nn][Gg]' '[Ee][Xx][Tt][Rr][Aa][Cc][Tt][Ii][Oo][Nn]*) scan_error=1 ;;
+              esac
+            done
+          fi
+          if [ -z "$scan_error" ] && [ "$rc" -eq 0 ]; then
             echo "No known advisories."
-          elif [ "$rc" -eq 128 ] && ! printf '%s\n%s' "$diag" "$out" | grep -qi 'error during extraction'; then
+          elif [ -z "$scan_error" ] && [ "$rc" -eq 128 ]; then
             echo "No scannable manifests found — nothing to audit."
-          elif [ -n "$accepted_all" ]; then
+          elif [ -z "$scan_error" ] && [ -n "$accepted_all" ]; then
             echo "Every dependency advisory is accepted by the project exception hook ${hook}."
           elif [ "$level" = "block" ]; then
             if [ -n "$hook_mode" ]; then
