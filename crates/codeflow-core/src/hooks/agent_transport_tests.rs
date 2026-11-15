@@ -238,12 +238,29 @@ fn expect_pass(cwd: &Path, rows: &[String], wrong: &mut Vec<String>) {
     }
 }
 
+/// Whether TSK-1489's transport rule refused the line: it stops the guard
+/// before the helper bodies are judged, so the account finding is not
+/// reached, and the line stays refused.
+fn transport_refusal(found: &[Violation]) -> bool {
+    found.iter().any(|finding| {
+        finding.rule == "git.hook_integrity"
+            && finding.level == PolicyLevel::Block
+            && (finding
+                .message
+                .contains("a remote's transport starts a helper program")
+                || finding
+                    .message
+                    .contains("the guard cannot prove which transport Git selects"))
+    })
+}
+
 /// Each row keeps the account finding on the helper body, so the
-/// admission did not apply and the line is refused.
+/// admission did not apply and the line is refused; or TSK-1489's
+/// transport rule refuses the line first, which admits nothing either.
 fn expect_account(cwd: &Path, rows: &[String], wrong: &mut Vec<String>) {
     for row in rows {
         let found = verdict(cwd, row);
-        if !(account(&found) && blocked(&found)) {
+        if !((account(&found) && blocked(&found)) || transport_refusal(&found)) {
             wrong.push(format!(
                 "should keep the account finding: {row}: {}",
                 shown(&found)
