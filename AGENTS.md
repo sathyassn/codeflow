@@ -144,12 +144,13 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     into a line run only the short checks, and their "codeflow gates" and
     "windows" verdicts pass as not selected. The candidate lands when its
     full gate is green and the line's current tip, which it was built on,
-    has green verdicts. Until TSK-1351 lands, the members merge into the
-    line one at a time, and the hosted run on the line's resulting tip is
-    the batch's hosted proof. Once TSK-1351 lands, the batch lands on the
-    line as one push and that push's run is the hosted proof; TSK-1351
-    updates this sentence when it lands. When the proof goes red, the line
-    is fixed forward under the recovery exception.
+    has green verdicts. The batch lands on the line as one push, a
+    fast-forward of the line to the bound candidate (TSK-1351), and that
+    push's run is the batch's hosted proof. A hook binary older than
+    TSK-1351 refuses the candidate push; there the members merge into the
+    line one at a time, and the run on the line's resulting tip is the
+    proof. When the proof goes red, the line is fixed forward under the
+    recovery exception.
   - Recovery exception: while the tip is red or lacks evidence, a candidate
     may carry only the repair of the failure and the work needed to produce
     the evidence, such as a workflow fix without which the jobs cannot run;

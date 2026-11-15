@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use crate::testing::config::{
-    self, load_named_test_config, load_test_config, ExecutionConfig, TargetConfig,
+    self, load_named_test_config, load_test_config, CoverageRule, ExecutionConfig, TargetConfig,
 };
 use crate::testing::coverage::FileCoverage;
 use crate::testing::delivery;
@@ -107,6 +107,9 @@ pub struct CoverageReport {
     /// coverage measurement that silently vanishes must not pass (codex round-2:
     /// coverage fail-open on absent artifacts).
     pub data_missing: bool,
+    /// The target's coverage block sets no rules, so the project's
+    /// `defaults.coverage` rules judged it (TSK-1014).
+    pub rules_from_defaults: bool,
 }
 
 /// Outcome of running the test gate.
@@ -216,6 +219,7 @@ fn run_gate_resolved(
             options,
             (config.targets, config.execution, effective),
             &delivery::digest(&bytes),
+            &config.defaults.coverage,
         )
         .map_err(|error| match error {
             TestingError::ConfigInvalid { path, message } if path == default => {
@@ -230,7 +234,7 @@ fn run_gate_resolved(
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
     let has_config = !crate::absence::proven_absent(&config_path)?;
-    let (targets, execution, effective_mode) = if has_config {
+    let (targets, execution, effective_mode, defaults) = if has_config {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -238,7 +242,12 @@ fn run_gate_resolved(
             });
         }
         let effective = resolve(&config.targets);
-        (config.targets, config.execution, effective)
+        (
+            config.targets,
+            config.execution,
+            effective,
+            config.defaults.coverage,
+        )
     } else {
         let detected = detect_stacks(project_dir)?;
         if detected.is_empty() {
@@ -248,7 +257,7 @@ fn run_gate_resolved(
         }
         let targets: Vec<TargetConfig> = detected.into_iter().map(|d| d.config).collect();
         let effective = resolve(&targets);
-        (targets, ExecutionConfig::default(), effective)
+        (targets, ExecutionConfig::default(), effective, Vec::new())
     };
 
     let config_digest = if has_config {
@@ -263,11 +272,12 @@ fn run_gate_resolved(
         options,
         (targets, execution, effective_mode),
         &config_digest,
+        &defaults,
     )
 }
 
 /// Select and run `targets` from a loaded config whose evidence binds to
-/// `config_digest`.
+/// `config_digest`; `defaults` are its `defaults.coverage` rules.
 #[allow(clippy::too_many_lines)]
 fn run_configured(
     project_dir: &Path,
@@ -275,6 +285,7 @@ fn run_configured(
     options: &GateOptions,
     (mut targets, mut execution, effective_mode): (Vec<TargetConfig>, ExecutionConfig, String),
     config_digest: &str,
+    defaults: &[CoverageRule],
 ) -> Result<GateOutcome, TestingError> {
     if let Some(seconds) = options.heavy_wait_seconds {
         execution.heavy_wait_seconds = seconds;
@@ -399,7 +410,7 @@ fn run_configured(
             .iter()
             .filter_map(|r| r.as_ref().ok().cloned())
             .collect();
-        collect_coverage_reports(&targets, &ok_runs)
+        collect_coverage_reports(&targets, &ok_runs, defaults)
     } else {
         Vec::new()
     };
@@ -792,55 +803,67 @@ pub fn gate_verdict(results: &[GateTargetResult], coverage: &[CoverageReport]) -
 /// coverage. Reuses the post-test parsing/threshold machinery in
 /// [`crate::testing::validation`]. Missing or unparseable artifacts are
 /// informational for collection-only coverage and gate failures when threshold
-/// rules make coverage enforcing.
+/// rules make coverage enforcing. A block with no rules of its own is judged
+/// by `defaults`, the project's `defaults.coverage`; while those are set, a
+/// test target with no block gets one warning, never a failure (TSK-1014).
 fn collect_coverage_reports(
     targets: &[TargetConfig],
     runs: &[TargetRunResult],
+    defaults: &[CoverageRule],
 ) -> Vec<CoverageReport> {
     let mut reports = Vec::new();
     for run in runs {
         let Some(target) = targets.iter().find(|t| t.name == run.target_name) else {
             continue;
         };
-        if target.coverage.is_none() {
+        let empty = |note: String, data_missing: bool, rules_from_defaults: bool| CoverageReport {
+            target: run.target_name.clone(),
+            overall_percent: None,
+            thresholds_passed: 0,
+            thresholds_failed: 0,
+            exceptions_applied: 0,
+            failing_files: Vec::new(),
+            note: Some(note),
+            data_missing,
+            rules_from_defaults,
+        };
+        let Some(coverage) = &target.coverage else {
+            if !defaults.is_empty() && target.is_test_target() {
+                reports.push(empty(
+                    "warning: no coverage producer, so the defaults.coverage rules cannot \
+                     measure it; add a coverage block naming the artifact its full command writes"
+                        .to_string(),
+                    false,
+                    false,
+                ));
+            }
             continue;
-        }
-        // Coverage with threshold rules is enforcing: if its artifact goes
-        // missing, that must fail the gate, not pass silently. A coverage block
-        // that only collects (no rules) has nothing to enforce, so a missing
-        // artifact there is merely informational.
-        let enforcing = target
-            .coverage
-            .as_ref()
-            .is_some_and(|c| !c.rules.is_empty());
+        };
+        // Coverage with threshold rules, its own or inherited, is enforcing:
+        // if its artifact goes missing, that must fail the gate, not pass
+        // silently. A coverage block that only collects (no rules anywhere)
+        // has nothing to enforce, so a missing artifact there is merely
+        // informational.
+        let (rules, rules_from_defaults) = coverage.effective_rules(defaults);
+        let enforcing = !rules.is_empty();
 
         let coverages = match validation::parse_target_coverage(target, run) {
             Ok(c) => c,
             Err(e) => {
-                reports.push(CoverageReport {
-                    target: run.target_name.clone(),
-                    overall_percent: None,
-                    thresholds_passed: 0,
-                    thresholds_failed: 0,
-                    exceptions_applied: 0,
-                    failing_files: Vec::new(),
-                    note: Some(format!("coverage artifact could not be parsed: {e}")),
-                    data_missing: enforcing,
-                });
+                reports.push(empty(
+                    format!("coverage artifact could not be parsed: {e}"),
+                    enforcing,
+                    rules_from_defaults,
+                ));
                 continue;
             }
         };
         if coverages.is_empty() {
-            reports.push(CoverageReport {
-                target: run.target_name.clone(),
-                overall_percent: None,
-                thresholds_passed: 0,
-                thresholds_failed: 0,
-                exceptions_applied: 0,
-                failing_files: Vec::new(),
-                note: Some("no coverage data collected".to_string()),
-                data_missing: enforcing,
-            });
+            reports.push(empty(
+                "no coverage data collected".to_string(),
+                enforcing,
+                rules_from_defaults,
+            ));
             continue;
         }
 
@@ -849,7 +872,7 @@ fn collect_coverage_reports(
         let overall_percent =
             (total_found > 0).then(|| FileCoverage::compute_percent(total_found, total_hit));
 
-        let thresholds = validation::evaluate_target_thresholds(target, &coverages, &[]);
+        let thresholds = validation::evaluate_target_thresholds(target, defaults, &coverages, &[]);
         let thresholds_passed = thresholds.iter().filter(|r| r.pass).count();
         // `pass` is already computed against the exception-lowered threshold, so
         // a failing result counts regardless of `exception_applied` — otherwise
@@ -871,6 +894,7 @@ fn collect_coverage_reports(
             failing_files,
             note: None,
             data_missing: false,
+            rules_from_defaults,
         });
     }
     reports
@@ -976,6 +1000,7 @@ mod tests {
             failing_files: vec![],
             note: None,
             data_missing: false,
+            rules_from_defaults: false,
         }
     }
     fn cov_missing() -> CoverageReport {
@@ -988,6 +1013,7 @@ mod tests {
             failing_files: vec![],
             note: Some("no coverage data collected".into()),
             data_missing: true,
+            rules_from_defaults: false,
         }
     }
     fn ok_result() -> GateTargetResult {
@@ -1373,6 +1399,114 @@ mod tests {
             assert!(!passed, "{scope} shortfall must fail the gate");
             assert_eq!(coverage[0].thresholds_failed, 1, "scope {scope}");
         }
+    }
+
+    /// A config with `defaults.coverage` set to `defaults` (TSK-1014).
+    fn write_config_with_defaults(dir: &Path, defaults: &str, targets_json: &str) {
+        let codeflow = dir.join(".codeflow");
+        std::fs::create_dir_all(&codeflow).unwrap();
+        std::fs::write(
+            codeflow.join("test-config.json"),
+            format!(
+                r#"{{"schema_version": "1.0", "defaults": {{"coverage": {defaults}}}, "targets": {targets_json}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn full_run(dir: &Path) -> (bool, Vec<CoverageReport>) {
+        match run_gate(dir, "full").unwrap() {
+            GateOutcome::Completed {
+                passed, coverage, ..
+            } => (passed, coverage),
+            GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
+        }
+    }
+
+    const FLOOR_90: &str = r#"[{"scope": "global", "minimum": 90}]"#;
+    const HALF_COVERED: &str = "SF:src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n";
+
+    #[test]
+    fn a_targets_own_rules_replace_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cov.lcov"), HALF_COVERED).unwrap();
+        write_config_with_defaults(
+            dir.path(),
+            FLOOR_90,
+            r#"[{"name": "cov", "runner": "custom", "modes": {"full": {"command": "exit 0"}},
+                "coverage": {"format": "lcov", "path": "cov.lcov",
+                             "rules": [{"scope": "per_file", "minimum": 40}]}}]"#,
+        );
+        let (passed, coverage) = full_run(dir.path());
+        assert!(passed, "own rules at 40 pass 50 percent: {coverage:?}");
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0].thresholds_passed, 1, "{coverage:?}");
+        assert_eq!(coverage[0].thresholds_failed, 0, "{coverage:?}");
+    }
+
+    #[test]
+    fn an_inherited_rule_fails_on_a_missing_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_defaults(
+            dir.path(),
+            FLOOR_90,
+            r#"[{"name": "cov", "runner": "custom", "modes": {"full": {"command": "exit 0"}},
+                "coverage": {"format": "lcov", "path": "never-written.lcov"}}]"#,
+        );
+        let (passed, coverage) = full_run(dir.path());
+        assert!(!passed, "an inherited rule enforces: {coverage:?}");
+        assert_eq!(coverage.len(), 1);
+        assert!(coverage[0].data_missing, "{coverage:?}");
+    }
+
+    #[test]
+    fn a_collect_only_block_with_empty_defaults_passes_without_its_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_defaults(
+            dir.path(),
+            "[]",
+            r#"[{"name": "cov", "runner": "custom", "modes": {"full": {"command": "exit 0"}},
+                "coverage": {"format": "lcov", "path": "never-written.lcov"}}]"#,
+        );
+        let (passed, coverage) = full_run(dir.path());
+        assert!(passed, "{coverage:?}");
+        assert!(!coverage[0].data_missing, "{coverage:?}");
+    }
+
+    /// A test runner, a custom target with a test report, and a custom
+    /// target with neither; none has a coverage block.
+    const UNCOVERED_TARGETS: &str = r#"[
+        {"name": "unit", "runner": "pytest", "modes": {"full": {"command": "exit 0"}}},
+        {"name": "suite", "runner": "custom", "modes": {"full": {"command": "exit 0"}},
+         "report": {"format": "junit", "path": "never-written.xml"}},
+        {"name": "lint", "runner": "custom", "modes": {"full": {"command": "exit 0"}}}]"#;
+
+    #[test]
+    fn a_test_target_without_coverage_is_named_once_while_defaults_are_set() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_defaults(dir.path(), FLOOR_90, UNCOVERED_TARGETS);
+        let (passed, coverage) = full_run(dir.path());
+        assert!(
+            passed,
+            "a missing producer warns and never fails: {coverage:?}"
+        );
+        let named: Vec<&str> = coverage.iter().map(|c| c.target.as_str()).collect();
+        assert_eq!(named, ["unit", "suite"], "{coverage:?}");
+        for report in &coverage {
+            let note = report.note.as_deref().unwrap_or_default();
+            assert!(note.contains("no coverage producer"), "{note}");
+            assert!(note.contains("defaults.coverage"), "{note}");
+            assert!(!report.data_missing && report.thresholds_failed == 0);
+        }
+    }
+
+    #[test]
+    fn without_defaults_a_target_without_coverage_gets_no_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_defaults(dir.path(), "[]", UNCOVERED_TARGETS);
+        let (passed, coverage) = full_run(dir.path());
+        assert!(passed);
+        assert!(coverage.is_empty(), "{coverage:?}");
     }
 
     #[test]

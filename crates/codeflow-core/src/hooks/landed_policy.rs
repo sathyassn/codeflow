@@ -78,7 +78,33 @@ pub fn load_local(root: &Path) -> Result<LandedPolicy, String> {
     load_raw(root, false).map_err(|error| crate::git::display_message(&error))
 }
 
+/// Keep in `trusted` only the tools another policy source the guard reads,
+/// the session project's committed policy, also lists in
+/// `security.trusted_client_configs` (TSK-1346). A source that cannot be
+/// read trusts no tool.
+pub fn keep_trusted_by(trusted: &mut Vec<String>, other: Result<&LandedPolicy, &String>) {
+    match other {
+        Ok(other) => {
+            let listed = &other.policy.security.trusted_client_configs;
+            trusted.retain(|tool| listed.contains(tool));
+        }
+        Err(_) => trusted.clear(),
+    }
+}
+
 fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
+    let mut landed = read_raw(root, ask)?;
+    // `security.trusted_client_configs` lifts guard refusals, so like
+    // `text_guard: relaxed` it is honoured only from the remote's default
+    // branch as last fetched (TSK-1346): a working copy, `HEAD` or a doubted
+    // ref trusts no tool.
+    if !landed.remote_tracked || landed.tracking_doubt.is_some() {
+        landed.policy.security.trusted_client_configs.clear();
+    }
+    Ok(landed)
+}
+
+fn read_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
     let Some(repo) = super::repo::open(root)? else {
         return working(root, "working copy (unborn HEAD; local only: no remote)");
     };
