@@ -287,6 +287,8 @@ fn run_configured(
     config_digest: &str,
     defaults: &[CoverageRule],
 ) -> Result<GateOutcome, TestingError> {
+    let waits = super::wait::WaitLog::current();
+    let _wait_scope = waits.enter();
     if let Some(seconds) = options.heavy_wait_seconds {
         execution.heavy_wait_seconds = seconds;
     }
@@ -503,7 +505,7 @@ fn run_configured(
             ci_skipped.join(", ")
         );
     }
-    let artifact = serde_json::json!({
+    let mut artifact = serde_json::json!({
         "schema_version": 2, "run_id": run_id, "revision": revision,
         "git_tree": super::evidence::git_tree(project_dir), "target_evidence": target_evidence,
         "tree": tree, "config_digest": config_digest, "mode": effective_mode,
@@ -516,6 +518,7 @@ fn run_configured(
         "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
         "tools": tools
     });
+    waits.apply(&mut artifact);
     // The targets have run and could have planted a link or file at this
     // name, so the record is created exclusively through the anchored walk
     // that made the run folder (TSK-1044).
@@ -551,6 +554,39 @@ fn run_configured(
         failure_reasons,
         coverage,
     })
+}
+
+/// Save failed, incomplete evidence when admission refuses before targets run.
+/// # Errors
+/// Refuses an unsafe or unwritable evidence path, as an executed gate does.
+pub fn record_lock_refusal(root: &Path, mode: &str, message: &str) -> Result<(), TestingError> {
+    let (anchor, output) = delivery::target_anchor(root)?;
+    std::fs::create_dir_all(&anchor)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let relative = format!("{output}/codeflow-gate/{id}");
+    let anchor = create_run_directory(&anchor, &relative)
+        .map_err(|error| delivery::evidence_refused(&anchor, &relative, &error))?;
+    let mut artifact = serde_json::json!({
+        "schema_version":2,"run_id":id,"mode":mode,"passed":false,
+        "complete":false,"clean":false,"results":[],"error":message,
+        "revision":delivery::revision(root).unwrap_or_default(),
+        "git_tree":super::evidence::git_tree(root),"target_evidence":[],
+        "tree":"","config_digest":"","generation_unchanged":true,
+        "selection":{"selected":[],"skipped":[],"excluded":[],"reason":"lock refused","reasons":{}},
+        "ci_skipped":[],"dirty_paths":[],"failure_reasons":[message],
+        "coverage":[],"targets":[],"tools":{},
+        "environment":{"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":anchor.join(&output)},
+    });
+    super::wait::WaitLog::current().apply(&mut artifact);
+    let record = format!("{relative}/run.json");
+    crate::contained::Tree::open(&anchor)?
+        .create_new(&record, &serde_json::to_vec_pretty(&artifact)?)
+        .map_err(|error| delivery::evidence_refused(&anchor, &record, &error))?;
+    progress!(
+        "[codeflow test] artifact: {}",
+        anchor.join(&record).display()
+    );
+    Ok(())
 }
 
 // Each run owns its folder exclusively before any producer writes there.

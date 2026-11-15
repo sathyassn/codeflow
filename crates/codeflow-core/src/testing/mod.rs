@@ -26,3 +26,4 @@ pub mod setup;
 pub mod structural;
 pub mod threshold;
 pub mod validation;
+pub mod wait;

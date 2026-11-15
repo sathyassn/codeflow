@@ -506,6 +506,7 @@ mod tests {
             evidence: None,
             exclusive: false,
             host_exclusive: false,
+            shared_resources: Vec::new(),
             heavy: None,
             workers: None,
             runner: RunnerType::Custom,

@@ -237,6 +237,12 @@
           "default": false,
           "description": "Run alone on the host: no other target of this run and no other heavy run on the machine beside it. Only for a target that cannot share the host, such as a timing-sensitive one."
         },
+        "shared_resources": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+          "default": [],
+          "description": "Named fixed host resources. Targets with any equal name serialize across gates; other targets overlap. Names are case-sensitive; duplicates are ignored."
+        },
         "input_class": {
           "type": "string",
           "enum": [
