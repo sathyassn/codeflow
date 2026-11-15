@@ -1916,6 +1916,16 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-config-int",
     ),
+    // The explicit set is ssh's configuration whitespace (space, tab, CR,
+    // LF), which separates an option keyword from its value beside `=`
+    // (TSK-1490). Other characters stay in the key or the command.
+    (
+        "crates/codeflow-core/src/security/option_commands.rs",
+        "ssh_command",
+        "trim_start_matches",
+        3,
+        "grammar:ssh-config",
+    ),
     // Only explicit native path separators after a home prefix are removed:
     // slash everywhere and backslash on Windows. Whitespace stays in the name.
     (
