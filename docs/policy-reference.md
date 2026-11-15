@@ -844,7 +844,10 @@ read, it cannot tell which later word starts the command, so it judges a
 Git or GitHub CLI call, and a command a shell runs, from every word where
 the command may start, with the repository unresolved; each rule then
 keeps its own verdict, the protected-branch rule included when
-`git.hook_integrity` is relaxed.
+`git.hook_integrity` is relaxed. The agent push rule
+(`git.agent_push_refused_branches`) reads the same starts in both guards,
+and a finding under another rule on the same command never hides it, at
+any `git.hook_integrity` level.
 
 ### Program variables the guards judge
 
