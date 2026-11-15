@@ -139,6 +139,12 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
     let shown = crate::git::display_text(&authority.reference);
     let (policy, project) = at_commit(&repo, oid, &shown)?;
     let mut landed = finish(root, policy, project, shown)?;
+    // The agent push floor includes the default branch (TSK-1479 AC-15).
+    landed.policy.git.landed_default_branch = authority
+        .reference
+        .strip_prefix(&format!("refs/remotes/{remote}/"))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
     landed.tracking_doubt = ref_file_doubt(&repo, remote, &authority);
     landed.remote_tracked = landed.tracking_doubt.is_none();
     landed.authority = Some(authority);
