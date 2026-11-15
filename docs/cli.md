@@ -545,7 +545,7 @@ and CI runs it again.
 |---|---|
 | No stack detected | Loud no-op, exit 0; `--strict` makes it non-zero for scripted callers |
 | Skipped targets | Summaries name executed and skipped counts and say "not complete"; `--strict` fails if no target executed or a requested target was skipped; caller exclusions through `--only` or mode membership are not skips |
-| Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
+| Coverage | File and aggregate thresholds count toward the verdict; standalone `changed_files` rules remain refused. The separate [changed-line report](test-gate.md#changed-line-coverage) takes an explicit comparison base, states the 80% floor and 90% target, and rejects missing hosted inputs (ADR-0103) |
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
 

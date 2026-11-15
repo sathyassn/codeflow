@@ -26,7 +26,8 @@ def path_name(value, source_root=""):
 
 def exemptions(path):
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or set(data) != {"version", "exemptions"} or data["version"] != 1:
+    if (not isinstance(data, dict) or set(data) != {"version", "exemptions"}
+            or type(data["version"]) is not int or data["version"] != 1):
         raise Problem("exemption list requires version 1 and exemptions")
     if not isinstance(data["exemptions"], list):
         raise Problem("exemptions must be a list")

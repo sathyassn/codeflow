@@ -38,7 +38,8 @@ def revision(value, label):
 def git_path(value, prefixed=True):
     if value.startswith('"'):
         # Git quotes non-ASCII bytes with octal escapes when quotePath is on.
-        value = ast.literal_eval("b" + value).decode("utf-8")
+        quoted = "".join(chr(byte) if byte < 128 else f"\\{byte:03o}" for byte in value.encode("utf-8"))
+        value = ast.literal_eval("b" + quoted).decode("utf-8")
     if value == "/dev/null":
         return None
     if not prefixed:
@@ -142,6 +143,7 @@ def line_map(content, kind, root):
             result.setdefault(path_name(name, root), {})
         # Function counters preserve each executable line, including branches
         # and generic instantiations; the aggregate merger remains independent.
+        work = 0
         for function in section["functions"]:
             for region in function["regions"]:
                 if (not isinstance(region, list) or len(region) < 8
@@ -149,6 +151,9 @@ def line_map(content, kind, root):
                         or region[0] < 1 or region[2] < region[0]
                         or region[2] - region[0] > 1000000):
                     raise Problem("invalid or oversized llvm-cov region")
+                work += region[2] - region[0] + 1
+                if work > 10000000:
+                    raise Problem("llvm-cov region expansion exceeds the line budget")
             main = merger.main_file(function)
             if main is None:
                 continue
@@ -317,7 +322,8 @@ def main():
                       "target": args.target, "shard": args.shard, "shards": args.shards, "status": "success",
                       "format": args.format, "source_root": args.source_root,
                       "sha256": hashlib.sha256(payload).hexdigest()}
-            (args.directory / "record.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            with (args.directory / "record.json").open("x", encoding="utf-8") as output:
+                output.write(json.dumps(record, indent=2) + "\n")
             return 0
         excluded = exemptions(args.exemptions)
         if not args.base and args.event == "local":
@@ -334,11 +340,16 @@ def main():
             paths = raw.decode("utf-8").split("\x00")[:-1] if raw else []
             status, text = report(args.event, args.base, args.head, read(args.diff).decode("utf-8"),
                                   paths, coverage, excluded, args.code_suffix or [".rs"])
-    except (Problem, OSError, ValueError, KeyError, IndexError, TypeError, ET.ParseError) as error:
+    except (Problem, OSError, ValueError, KeyError, IndexError, TypeError, SyntaxError, ET.ParseError) as error:
         status, text = 1, f"Changed-line coverage; floor {FLOOR}%; target {TARGET}%\nFAILED {error}\n"
     print(text, end="")
     if getattr(args, "output", None):
-        args.output.write_text(text, encoding="utf-8")
+        try:
+            with args.output.open("x", encoding="utf-8") as output:
+                output.write(text)
+        except OSError as error:
+            print(f"FAILED cannot create report output: {error}")
+            return 1
     return status
 
 

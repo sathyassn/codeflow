@@ -31,7 +31,7 @@ for the changed-line report.
 
 | Caller | Base | Head | Missing or unresolvable input |
 |---|---|---|---|
-| Pull request | event `pull_request.base.sha` | event `pull_request.head.sha` | Fail with the cause |
+| Pull request | event `pull_request.base.sha` | tested checkout revision, `github.sha` | Fail with the cause |
 | Push | event `before` | event `after` | Fail, including an all-zero initial-push base |
 | Local | explicitly supplied `--since`, resolved by the caller | explicitly resolved head | With no base, print `unavailable: no comparison base` and enforce nothing; an explicitly supplied but unresolvable base fails |
 | Schedule or manual hosted run | explicitly supplied comparison revision | explicitly resolved head | Fail when no base was supplied |
@@ -43,6 +43,13 @@ base-to-head diff with zero context and a separate changed-path inventory.
 The inventory prevents an empty diff from passing a range that adds or
 changes code. Deleted files have no head lines; a rename uses its head path.
 A deletion-only or pure-rename range reports no added executable lines.
+
+For a pull request, GitHub's default checkout tests its proposed merge
+revision. The report compares the event base with that tested revision and
+binds shards to it, preserving the aggregate gate's existing checkout.
+It does not label coverage of a merge revision as coverage of a different
+head revision. A local caller resolves its explicit `--since` input and
+passes the resolved commit as the report command's `--base` argument.
 
 TSK-1190's `CODEFLOW_BASE` and `CODEFLOW_HEAD` are compatible informational
 inputs, but `unknown` is never a resolved revision. Its changed-path file
@@ -58,6 +65,8 @@ LCOV `DA` records, Cobertura line records and llvm-cov regions supply line
 hits; duplicate observations merge by whether any observation ran the line.
 The aggregate merger retains its existing llvm-cov counting rules.
 
+The current hosted producer measures Rust source (`.rs`); another producer
+must explicitly supply its language suffixes and per-line coverage inputs.
 Paths are repository-relative, use `/`, and preserve case, Unicode and
 spaces. A report's absolute paths must start with its recorded source root.
 Leading `./` and Windows separators are normalized; parent traversal, empty
@@ -87,6 +96,9 @@ head-produced reports. Hosted workflow results remain the run's authority.
   The additional readers and shard format require malformed-input fixtures.
 - Local runs without a base remain informational. Hosted runs without one
   cannot claim a passing changed-line check.
+- Schedule and manual jobs retain their aggregate check. They do not invoke
+  changed-line reporting unless a caller supplies an explicit comparison;
+  invoking the report for either event without a base fails.
 
 ## Architecture impact
 

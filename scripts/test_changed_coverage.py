@@ -6,7 +6,6 @@ coverage report and binding record. Its explicit revisions model an event;
 the fixture does not claim to be a hosted GitHub run.
 """
 
-import copy
 import hashlib
 import importlib.util
 import json
@@ -105,6 +104,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_quoted_unicode_and_space_path(self):
         self.assertEqual(cc.git_path('"b/src/\\303\\251 space.rs"'), "src/é space.rs")
+        self.assertEqual(cc.git_path('"b/src/é\\tspace.rs"'), "src/é\tspace.rs")
 
     def test_lcov_and_cobertura(self):
         for kind, payload in (("lcov", LCOV), ("cobertura", XML)):
@@ -187,6 +187,27 @@ class ShardTests(unittest.TestCase):
         report.symlink_to(self.root / "coverage-data-2" / "coverage.info")
         with self.assertRaisesRegex(cc.Problem, "regular report"):
             self.read()
+
+    def test_bind_command_creates_a_digest_bound_record_and_refuses_overwrite(self):
+        directory = self.root / "producer"
+        directory.mkdir()
+        (directory / "coverage.info").write_bytes(LCOV)
+        argv = ["changed-coverage.py", "bind", "--format", "lcov", "--directory", str(directory),
+                "--source-root", "/checkout", "--head", HEAD, "--run", "42", "--attempt", "1",
+                "--shard", "1", "--shards", "2"]
+        with patch.object(sys, "argv", argv), redirect_stdout(StringIO()):
+            self.assertEqual(cc.main(), 0)
+            self.assertEqual(cc.main(), 1)
+        self.assertEqual(json.loads((directory / "record.json").read_text()), binding())
+
+    def test_configured_target_and_shard_roster(self):
+        config, plan = self.root / "config.json", self.root / "plan.json"
+        config.write_text(json.dumps({"targets": [{"name": "rust-coverage", "modes": {"full": {"command": "coverage"}}}]}))
+        plan.write_text('{"partitions":2}')
+        self.assertEqual(cc.configured_roster(config, plan), self.roster)
+        config.write_text('{"targets":[]}')
+        with self.assertRaisesRegex(cc.Problem, "configured coverage targets"):
+            cc.configured_roster(config, plan)
 
     def test_pr_fixture_journey(self):
         config, plan = self.root / "config.json", self.root / "plan.json"

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "patch_sha256": "d9ddffcac7efed21ebca16a3ca4034f65ade05f04fad702442c35e2af8969936",
+  "files": {
+    ".github/workflows/codeflow-ci.yml": {
+      "before": "e7e728f4980cb805da9943fc960183dbfbbe78a4de0b00c7f3276cce19101b56",
+      "after": "400fc6d67b12367fac04ac10e0996a6059911eb9c0e5c835afac855af75510f5"
+    },
+    "scripts/gate-parity.py": {
+      "before": "f2977103e7d2ffa7061b2bf9a76c365e4054594a7a39dc9250a7d557201ad155",
+      "after": "7e7867c4e05cb8facc3a8aac808b1fedeebbef28e667cce0699986ed370f073b"
+    }
+  }
+}

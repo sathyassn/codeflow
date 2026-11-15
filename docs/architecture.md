@@ -98,7 +98,8 @@ The test gate evaluates file and aggregate coverage rules through one verdict.
 
 | Test-gate rule | Behavior |
 |---|---|
-| `changed_files` rules | rejected at config load, because standalone test runs have no explicit comparison base (ADR-0021); silently evaluating an empty set is not a supported degradation |
+| `changed_files` rules | rejected at config load: this whole-file evaluator has no explicit comparison input. ADR-0103 supersedes ADR-0021's blanket rejection of changed coverage through a separate per-line report |
+| changed-line report | `scripts/changed-coverage.py` measures added executable lines from an explicit base-to-tested-head diff, states an 80% floor and 90% target, and enforces the floor. Hosted shard inputs must match the expected revision, run, attempt, target roster and report digest. A standalone local run without a base reports unavailable and enforces nothing; other callers without a usable base fail. The aggregate 90% gate remains independent. Workflow activation is supplied as the TSK-1261 operator patch |
 | child output | stdout and stderr are drained into bounded tail buffers, with truncation recorded on each target result |
 | setup | an adapter over the same typed config boundary: root-only detection, release-embedded templates, and explicit target append all use the deterministic writer and colocated schema |
 | automatic setup | may fill an absent or empty config but never replaces populated or malformed project intent |
