@@ -368,7 +368,9 @@ pub const SCHEMA: [KeySpec; 83] = [
         notes: "Read only from the landed policy at the remote's default \
                 branch, so an uncommitted or branch-local edit, or a value a \
                 command line sets, admits nothing until a reviewed policy \
-                naming it lands there. Default empty: the guards refuse a \
+                naming it lands there. A command that selects its repository \
+                with a Git-directory, work-tree or bare option or a location \
+                variable admits nothing. Default empty: the guards refuse a \
                 command whose remote selects a helper program, and \
                 exec-guard keeps the account finding on a credential helper \
                 the account rules match. A named remote helper is judged as a \

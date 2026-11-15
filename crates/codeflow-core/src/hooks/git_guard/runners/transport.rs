@@ -1,52 +1,122 @@
 //! The transport Git selects for each remote a command contacts (TSK-1489).
 //!
 //! To reach a remote, Git may start a helper program, `git-remote-<name>`.
-//! It picks one from the remote's configuration (`remote.<name>.vcs`), from
-//! a `<name>::<address>` address, or from an address scheme it does not
-//! handle itself, after the rewrites `url.<base>.insteadOf` and
-//! `url.<base>.pushInsteadOf` apply (Git's `transport_get` and
-//! `remote.c`). Both guards read this one resolution through the runner
-//! reader, so a helper program is either admitted by the landed policy and
-//! judged as a program word, or refused; anything the resolution cannot
-//! read refuses, naming the remote.
+//! Both guards read this one resolution through the runner reader, so a
+//! helper program is either admitted by the landed policy and judged as a
+//! program word, or refused.
 //!
-//! The remotes a command contacts are read generously, so a doubt adds a
-//! remote, never drops one:
+//! The resolution admits only the forms it can prove Git resolves the same
+//! way, and refuses every other form by name, so a gap between this reading
+//! and Git's refuses instead of passing:
 //!
-//! - every operand word of a contacting verb, and every `--<option>=<value>`
-//!   value, read as a remote name, a remote group or an address;
-//! - for a verb that has a default remote, every remote it may default to:
-//!   `origin`, each `branch.<name>.remote` and, for a push,
-//!   `branch.<name>.pushRemote` and `remote.pushDefault`;
-//! - every configured remote for `fetch --all`, `remote update` with no
-//!   remote named, and `maintenance`;
-//! - the promisor remotes of a partial clone, for every Git command, since
-//!   a missing object can be fetched from them by any command;
-//! - each `submodule.<name>.url` for a command that can recurse into
-//!   submodules. A submodule command runs its transports with
-//!   `GIT_PROTOCOL_FROM_USER=0`, so Git itself refuses a helper there
-//!   unless `protocol.allow` or `protocol.<name>.allow` is `always`; such a
-//!   setting is refused as unresolved, because the guard does not read the
-//!   addresses a clone's submodules will name.
+//! - an address the command names: the transport its `<name>::` prefix or
+//!   its `<scheme>://` selects after the address rewrites, as Git's
+//!   `transport_get` reads it;
+//! - a remote the command names that the configuration the call reads
+//!   defines with exactly one address, at most one push address, no helper
+//!   setting, and no remote group of the same name;
+//! - for an operand-free `fetch` or `pull`, the remote the current branch
+//!   names, or `origin` when it names none, under the same conditions and
+//!   with fetching every remote turned off;
+//! - the promisor remotes of a partial clone, under the same conditions,
+//!   for every Git command, since a missing object can be fetched from them
+//!   by any command.
+//!
+//! Refused by name: an operand-free push or `ls-remote`, every form that
+//! contacts every configured remote, a remote group, a remote with a helper
+//! setting, more than one address value or an empty one, a remote name a
+//! legacy remote file may define, and submodule recursion in a repository
+//! that has or may have submodules unless the command line turns it off.
 
 use super::super::shown_word;
-use crate::security::git_config::EffectiveConfig;
+use crate::security::git_config::{EffectiveConfig, Location};
 use std::path::Path;
 
 /// The verbs that contact a remote, and how.
-const FETCHING: &[&str] = &[
-    "fetch",
-    "pull",
-    "ls-remote",
-    "clone",
-    "fetch-pack",
-    "archive",
-];
+const FETCHING: &[&str] = &["fetch", "pull", "ls-remote", "fetch-pack"];
 const PUSHING: &[&str] = &["push", "send-pack"];
 /// Verbs whose remote defaults to a configured one when none is named.
 const DEFAULTING: &[&str] = &["fetch", "pull", "ls-remote", "push"];
-/// Verbs that can recurse into submodules and contact their remotes.
-const RECURSING: &[&str] = &["clone", "fetch", "pull", "push", "submodule"];
+
+/// Options of the defaulting verbs that never take the next word as their
+/// value. A word after any other option may be that option's value, so it
+/// does not prove that the command names its remote.
+const FLAGS: &[&str] = &[
+    "-4",
+    "-6",
+    "-a",
+    "-d",
+    "-f",
+    "-k",
+    "-n",
+    "-p",
+    "-P",
+    "-q",
+    "-r",
+    "-t",
+    "-u",
+    "-v",
+    "--append",
+    "--atomic",
+    "--autostash",
+    "--branches",
+    "--commit",
+    "--delete",
+    "--dry-run",
+    "--edit",
+    "--exit-code",
+    "--ff",
+    "--ff-only",
+    "--follow-tags",
+    "--force",
+    "--force-if-includes",
+    "--force-with-lease",
+    "--get-url",
+    "--heads",
+    "--ipv4",
+    "--ipv6",
+    "--keep",
+    "--mirror",
+    "--multiple",
+    "--no-autostash",
+    "--no-commit",
+    "--no-edit",
+    "--no-ff",
+    "--no-force-with-lease",
+    "--no-progress",
+    "--no-rebase",
+    "--no-recurse-submodules",
+    "--no-show-forced-updates",
+    "--no-signoff",
+    "--no-squash",
+    "--no-stat",
+    "--no-tags",
+    "--no-thin",
+    "--no-verify",
+    "--no-write-fetch-head",
+    "--porcelain",
+    "--progress",
+    "--prune",
+    "--prune-tags",
+    "--quiet",
+    "--rebase",
+    "--recurse-submodules",
+    "--refs",
+    "--set-upstream",
+    "--show-forced-updates",
+    "--signoff",
+    "--squash",
+    "--stat",
+    "--symref",
+    "--tags",
+    "--thin",
+    "--unshallow",
+    "--update-head-ok",
+    "--update-shallow",
+    "--verbose",
+    "--verify",
+    "--write-fetch-head",
+];
 
 /// The transports Git builds in or ships, as address schemes and helper
 /// names. Every other scheme or name starts `git-remote-<name>`.
@@ -56,6 +126,10 @@ const SHIPPED_HELPERS: &[&str] = &["http", "https", "ftp", "ftps"];
 /// The reason prefix of a refusal for a helper program the landed policy
 /// does not admit; the runner reader's message for it names the way through.
 pub(super) const HELPER_REFUSAL: &str = "a remote's transport starts a helper program";
+
+/// The reason prefix of a refusal for a form whose transport the guard
+/// cannot prove; the runner reader's message for it names the way through.
+pub(super) const UNPROVEN: &str = "the guard cannot prove which transport Git selects";
 
 /// What Git starts to reach one destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,26 +151,38 @@ pub(super) struct Contact {
     pub selected: Selected,
 }
 
+/// What the resolution learns about the call's repository from Git itself,
+/// read with the call's location inputs only.
+pub(super) trait Probe {
+    /// The repository the call works in.
+    fn location(&mut self) -> Result<Location, String>;
+    /// The branch the repository has checked out; an error for a detached
+    /// HEAD or any failure.
+    fn branch(&mut self) -> Result<String, String>;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Direction {
     Fetch,
     Push,
 }
 
+fn unproven(why: impl std::fmt::Display) -> String {
+    format!("{UNPROVEN}: {why}")
+}
+
 /// Every destination `args` contacts, with the transport Git selects for
-/// it, read from `config`. The repository's common Git directory, the
-/// folder of its local `config` file, is where Git also reads remotes
-/// defined outside its configuration.
+/// it, read from `config`, the configuration the call itself reads.
 ///
 /// # Errors
 ///
-/// A value the resolution needs is not UTF-8, a remote group names an
-/// unknown remote, a remote may be defined outside the configuration, or
-/// the configuration allows every protocol for a submodule command.
+/// A form the resolution cannot prove, a value it cannot read, or a probe
+/// of the repository that fails, each named.
 pub(super) fn contacts(
     verb: &str,
     rest: &[String],
     config: &EffectiveConfig,
+    probe: &mut dyn Probe,
 ) -> Result<Vec<Contact>, String> {
     let resolver = Resolver::new(config)?;
     let mut found = Vec::new();
@@ -105,40 +191,50 @@ pub(super) fn contacts(
     } else {
         Direction::Fetch
     };
-    let words = || candidates(rest);
-    if FETCHING.contains(&verb) || PUSHING.contains(&verb) {
-        for word in words() {
-            resolver.word(word, direction, &mut found)?;
+    if verb == "clone" {
+        for word in candidates(rest) {
+            resolver.address(word, direction, &mut found);
         }
-        if DEFAULTING.contains(&verb) {
-            for name in resolver.defaults(direction)? {
-                resolver.word(&name, direction, &mut found)?;
+        resolver.clone_settings(rest)?;
+    } else if verb == "archive" {
+        for word in remote_values(rest) {
+            resolver.word(word, direction, &mut found, probe)?;
+        }
+    } else if FETCHING.contains(&verb) || PUSHING.contains(&verb) {
+        if matches!(verb, "fetch" | "pull") && rest.iter().any(|word| every_remote_option(word)) {
+            return Err(unproven(format!(
+                "`{verb}` with every remote contacts each configured remote; name the remote"
+            )));
+        }
+        for word in candidates(rest) {
+            resolver.word(word, direction, &mut found, probe)?;
+        }
+        if DEFAULTING.contains(&verb) && !names_repository(rest) {
+            if !matches!(verb, "fetch" | "pull") {
+                return Err(unproven(format!(
+                    "`{verb}` names no remote, and the guard does not resolve the remote it defaults to; name the remote"
+                )));
             }
+            let name = resolver.default_remote(probe)?;
+            resolver.named(&name, direction, &mut found)?;
         }
-        if matches!(verb, "fetch" | "pull") && rest.iter().any(|word| word == "--all") {
-            resolver.all(direction, &mut found)?;
+        if matches!(verb, "fetch" | "pull" | "push") {
+            resolver.recursion(verb, rest, probe)?;
         }
     } else if verb == "remote" {
-        let operands: Vec<&str> = words().collect();
-        match operands.split_first() {
-            Some((&"update", [])) => resolver.all(Direction::Fetch, &mut found)?,
-            Some((sub, rest))
-                if matches!(*sub, "update" | "show" | "prune" | "set-head" | "add") =>
-            {
-                for word in rest {
-                    resolver.word(word, Direction::Fetch, &mut found)?;
-                }
-            }
-            _ => {}
-        }
+        resolver.remote_subcommand(rest, &mut found, probe)?;
     } else if verb == "maintenance" {
-        resolver.all(Direction::Fetch, &mut found)?;
-    }
-    if RECURSING.contains(&verb) {
-        resolver.submodules(&mut found)?;
+        maintenance(rest)?;
+    } else if verb == "submodule" {
+        let operands: Vec<&str> = candidates(rest).collect();
+        if matches!(operands.first(), Some(&("update" | "add"))) {
+            return Err(unproven(
+                "a submodule update or add contacts the remotes of submodule repositories, which the guard does not read",
+            ));
+        }
     }
     for name in resolver.promisors()? {
-        resolver.word(&name, Direction::Fetch, &mut found)?;
+        resolver.named(&name, Direction::Fetch, &mut found)?;
     }
     let mut unique: Vec<Contact> = Vec::with_capacity(found.len());
     for contact in found {
@@ -150,10 +246,15 @@ pub(super) fn contacts(
 }
 
 /// The words of `rest` that may name a remote or an address: every operand,
-/// and the value of every `--<option>=<value>`.
+/// every word after `--`, and the value of every `--<option>=<value>`.
 fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
-    rest.iter().filter_map(|word| {
-        if let Some(option) = word.strip_prefix("--") {
+    let end = rest.iter().position(|word| word == "--");
+    rest.iter().enumerate().filter_map(move |(at, word)| {
+        if end.is_some_and(|end| at > end) {
+            Some(word.as_str())
+        } else if end == Some(at) {
+            None
+        } else if let Some(option) = word.strip_prefix("--") {
             option.split_once('=').map(|(_, value)| value)
         } else if word.starts_with('-') {
             None
@@ -163,13 +264,94 @@ fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
     })
 }
 
-/// The transport Git selects for `address`, or for a remote whose
-/// `remote.<name>.vcs` is `vcs`, in Git's order: the remote's helper, a
-/// `<name>::` prefix, then the address scheme.
-pub(super) fn select(address: &str, vcs: Option<&str>) -> Selected {
-    if let Some(name) = vcs {
-        return helper(name);
+/// The values of `archive`'s `--remote` option, the only remote it contacts.
+fn remote_values(rest: &[String]) -> Vec<&str> {
+    let mut values = Vec::new();
+    for (at, word) in rest.iter().enumerate() {
+        if let Some(value) = word.strip_prefix("--remote=") {
+            values.push(value);
+        } else if word == "--remote" {
+            if let Some(value) = rest.get(at + 1) {
+                values.push(value.as_str());
+            }
+        }
     }
+    values
+}
+
+/// `--all` and its unambiguous abbreviation, which make `fetch` contact
+/// every configured remote.
+fn every_remote_option(word: &str) -> bool {
+    matches!(word, "--all" | "--al")
+}
+
+/// Whether `rest` surely names the remote: a word that cannot be an
+/// option's value is an operand, and the first operand is the remote.
+fn names_repository(rest: &[String]) -> bool {
+    let mut value_may_follow = false;
+    for (at, word) in rest.iter().enumerate() {
+        if word == "--" {
+            return at + 1 < rest.len();
+        }
+        if word.len() > 1 && word.starts_with('-') {
+            value_may_follow = !word.contains('=') && !FLAGS.contains(&word.as_str());
+            continue;
+        }
+        if !value_may_follow {
+            return true;
+        }
+        value_may_follow = false;
+    }
+    false
+}
+
+/// `maintenance run` contacts every configured remote when its tasks may
+/// include the prefetch task.
+fn maintenance(rest: &[String]) -> Result<(), String> {
+    if candidates(rest).next() != Some("run") {
+        return Ok(());
+    }
+    let mut tasks = Vec::new();
+    for (at, word) in rest.iter().enumerate() {
+        if let Some(task) = word.strip_prefix("--task=") {
+            tasks.push(task);
+        } else if word == "--task" {
+            tasks.push(rest.get(at + 1).map_or("", String::as_str));
+        }
+    }
+    if tasks.is_empty() || tasks.contains(&"prefetch") {
+        return Err(unproven(
+            "a maintenance run may prefetch from every configured remote; name its tasks without the prefetch task",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the command line turns submodule recursion on (`Some(true)`) or
+/// off (`Some(false)`); the last such option wins. A spelling the guard does
+/// not know reads as on.
+fn recursion_on_line(rest: &[String]) -> Option<bool> {
+    let mut state = None;
+    for word in rest {
+        if word == "--" {
+            break;
+        }
+        if word == "--no-recurse-submodules" {
+            state = Some(false);
+        } else if word == "--recurse-submodules" || word == "--recursive" {
+            state = Some(true);
+        } else if let Some(value) = word.strip_prefix("--recurse-submodules=") {
+            state = Some(crate::security::git::config_boolean(value) != Some(false));
+        } else if word.starts_with("--recurs") || word.starts_with("--no-recurs") {
+            state = Some(true);
+        }
+    }
+    state
+}
+
+/// The transport Git selects for `address`, in Git's order: a `<name>::`
+/// prefix, then the address scheme.
+pub(super) fn select(address: &str) -> Selected {
     if let Some(name) = helper_prefix(address) {
         return helper(name);
     }
@@ -215,25 +397,26 @@ fn scheme(address: &str) -> Option<&str> {
         .then_some(scheme)
 }
 
-/// Git's `valid_remote_nick`.
+/// Git's `valid_remote_nick`: a name Git also looks up in the legacy
+/// remote files.
 fn remote_nick(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\'])
 }
 
+/// Whether `path` is proven absent; anything short of that may exist.
+fn absent(path: &Path) -> bool {
+    crate::absence::proven_absent(path).unwrap_or(false)
+}
+
+/// A remote whose transport the resolution can prove: one address and at
+/// most one push address.
 struct Remote {
-    urls: Vec<String>,
-    /// The first URL before the last empty value cleared the list, which an
-    /// older Git still reads as the first.
-    first_before_reset: Option<String>,
-    pushurls: Vec<String>,
-    vcs: Option<String>,
+    url: String,
+    pushurl: Option<String>,
 }
 
 struct Resolver<'a> {
     config: &'a EffectiveConfig,
-    /// The common Git directories: the folders of the local scope's
-    /// `config` files.
-    local: Vec<&'a Path>,
     /// `(prefix, base)` pairs of `url.<base>.insteadOf`.
     rewrites: Vec<(String, String)>,
     /// `(prefix, base)` pairs of `url.<base>.pushInsteadOf`.
@@ -244,12 +427,6 @@ struct Resolver<'a> {
 impl<'a> Resolver<'a> {
     fn new(config: &'a EffectiveConfig) -> Result<Self, String> {
         let keys = config.keys()?;
-        let local = config
-            .local
-            .iter()
-            .filter(|file| file.file_name().is_some_and(|name| name == "config"))
-            .filter_map(|file| file.parent())
-            .collect();
         let mut rewrites = Vec::new();
         let mut push_rewrites = Vec::new();
         for key in &keys {
@@ -269,105 +446,132 @@ impl<'a> Resolver<'a> {
         }
         Ok(Self {
             config,
-            local,
             rewrites,
             push_rewrites,
             keys,
         })
     }
 
-    /// The configured remote `name`, when the configuration gives it a
-    /// URL, a push URL or a helper.
-    fn remote(&self, name: &str) -> Result<Option<Remote>, String> {
-        let key = |variable: &str| format!("remote.{name}.{variable}");
-        let unresolved = |why: String| {
-            format!(
-                "cannot resolve the transport of remote `{}`: {why}",
-                shown_word(name)
-            )
-        };
-        let mut urls = Vec::new();
-        let mut first_before_reset = None;
-        for value in values_raw(self.config, &key("url")).map_err(unresolved)? {
-            if value.is_empty() {
-                first_before_reset = first_before_reset.or_else(|| urls.first().cloned());
-                urls.clear();
-            } else {
-                urls.push(value);
-            }
-        }
-        let mut pushurls = Vec::new();
-        for value in values_raw(self.config, &key("pushurl")).map_err(unresolved)? {
-            if value.is_empty() {
-                pushurls.clear();
-            } else {
-                pushurls.push(value);
-            }
-        }
-        let vcs = values_raw(self.config, &key("vcs"))
-            .map_err(unresolved)?
-            .pop()
-            .filter(|value| !value.is_empty());
-        if urls.is_empty() && pushurls.is_empty() && vcs.is_none() && first_before_reset.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(Remote {
-            urls,
-            first_before_reset,
-            pushurls,
-            vcs,
-        }))
+    /// Whether the configuration has any `remote.<name>.<variable>` key.
+    fn configured(&self, name: &str) -> bool {
+        let prefix = format!("remote.{name}.");
+        self.keys.iter().any(|key| {
+            key.strip_prefix(&prefix)
+                .is_some_and(|variable| !variable.is_empty() && !variable.contains('.'))
+        })
     }
 
-    /// Resolve `word` as a configured remote, a remote group or an address.
+    /// Whether `name` names a remote group.
+    fn group(&self, name: &str) -> bool {
+        let group = format!("remotes.{name}");
+        self.keys.iter().any(|key| key.eq_ignore_ascii_case(&group))
+    }
+
+    /// The configured remote `name`, when its form is one the resolution
+    /// can prove; `None` when the configuration does not define it.
+    fn remote(&self, name: &str) -> Result<Option<Remote>, String> {
+        if !self.configured(name) {
+            return Ok(None);
+        }
+        let shown = shown_word(name);
+        let key = |variable: &str| format!("remote.{name}.{variable}");
+        let unread = |why: String| format!("cannot resolve the transport of remote `{shown}`: {why}");
+        if !self.config.get_all(&key("vcs")).is_empty() {
+            return Err(unproven(format!(
+                "remote `{shown}` selects a helper through its configuration"
+            )));
+        }
+        let urls = values_raw(self.config, &key("url")).map_err(unread)?;
+        let url = match urls.as_slice() {
+            [url] if !url.is_empty() => url.clone(),
+            [] => {
+                return Err(unproven(format!("remote `{shown}` has no address")));
+            }
+            _ => {
+                return Err(unproven(format!(
+                    "remote `{shown}` has more than one address value or an empty one"
+                )));
+            }
+        };
+        let pushurls = values_raw(self.config, &key("pushurl")).map_err(unread)?;
+        let pushurl = match pushurls.as_slice() {
+            [] => None,
+            [pushurl] if !pushurl.is_empty() => Some(pushurl.clone()),
+            _ => {
+                return Err(unproven(format!(
+                    "remote `{shown}` has more than one push address value or an empty one"
+                )));
+            }
+        };
+        Ok(Some(Remote { url, pushurl }))
+    }
+
+    /// Resolve `word`, which the command names, as a configured remote or
+    /// an address.
     fn word(
         &self,
         word: &str,
         direction: Direction,
         found: &mut Vec<Contact>,
+        probe: &mut dyn Probe,
     ) -> Result<(), String> {
+        if self.group(word) {
+            return Err(unproven(format!(
+                "`{}` names a remote group",
+                shown_word(word)
+            )));
+        }
         if let Some(remote) = self.remote(word)? {
             self.destinations(word, &remote, direction, found);
             return Ok(());
         }
-        let group = format!("remotes.{word}");
-        if self.keys.iter().any(|key| key.eq_ignore_ascii_case(&group)) {
-            for members in values(self.config, &group)? {
-                for member in members.split_ascii_whitespace() {
-                    let Some(remote) = self.remote(member)? else {
-                        return Err(format!(
-                            "cannot resolve the transport of remote `{}`: the remote group `{}` names it, and no remote by that name is configured",
-                            shown_word(member),
-                            shown_word(word)
-                        ));
-                    };
-                    self.destinations(member, &remote, direction, found);
-                }
-            }
-            return Ok(());
-        }
         if remote_nick(word) {
-            for local in &self.local {
-                for folder in ["remotes", "branches"] {
-                    let path = local.join(folder).join(word);
-                    // Anything short of proven absence may define the remote.
-                    let present = !crate::absence::proven_absent(&path).unwrap_or(false);
-                    if present {
-                        return Err(format!(
-                            "cannot resolve the transport of remote `{}`: it may be defined in the repository's `{folder}` directory, which the guard does not read",
-                            shown_word(word)
-                        ));
-                    }
-                }
-            }
+            self.legacy(word, probe)?;
         }
+        self.address(word, direction, found);
+        Ok(())
+    }
+
+    /// Resolve `name`, which the configuration names, as a configured remote;
+    /// a name it does not define refuses.
+    fn named(&self, name: &str, direction: Direction, found: &mut Vec<Contact>) -> Result<(), String> {
+        if self.group(name) {
+            return Err(unproven(format!(
+                "`{}` names a remote group",
+                shown_word(name)
+            )));
+        }
+        let Some(remote) = self.remote(name)? else {
+            return Err(unproven(format!(
+                "remote `{}` is not configured",
+                shown_word(name)
+            )));
+        };
+        self.destinations(name, &remote, direction, found);
+        Ok(())
+    }
+
+    /// Resolve `word` as an address.
+    fn address(&self, word: &str, direction: Direction, found: &mut Vec<Contact>) {
         let anonymous = Remote {
-            urls: vec![word.to_string()],
-            first_before_reset: None,
-            pushurls: Vec::new(),
-            vcs: None,
+            url: word.to_string(),
+            pushurl: None,
         };
         self.destinations(word, &anonymous, direction, found);
+    }
+
+    /// Refuse a name that a legacy remote file in the common Git directory
+    /// may define, unless both files are proven absent.
+    fn legacy(&self, word: &str, probe: &mut dyn Probe) -> Result<(), String> {
+        let location = probe.location()?;
+        for folder in ["remotes", "branches"] {
+            if !absent(&location.common.join(folder).join(word)) {
+                return Err(unproven(format!(
+                    "remote `{}` may be defined in a legacy remote file in the repository's `{folder}` directory",
+                    shown_word(word)
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -381,153 +585,203 @@ impl<'a> Resolver<'a> {
         found: &mut Vec<Contact>,
     ) {
         let mut addresses: Vec<String> = Vec::new();
-        match direction {
-            Direction::Fetch => {
-                for url in remote
-                    .urls
-                    .first()
-                    .into_iter()
-                    .chain(&remote.first_before_reset)
-                {
-                    addresses.extend(rewritten(url, &self.rewrites));
-                }
+        match (direction, &remote.pushurl) {
+            (Direction::Fetch, _) => addresses.extend(rewritten(&remote.url, &self.rewrites)),
+            (Direction::Push, None) => match matched(&remote.url, &self.push_rewrites) {
+                Some(pushed) => addresses.extend(pushed),
+                None => addresses.extend(rewritten(&remote.url, &self.rewrites)),
+            },
+            (Direction::Push, Some(pushurl)) => {
+                // Git applies the fetch rewrite to a push address; a push
+                // rewrite that also matches is kept too, so no reading of
+                // the two drops a destination.
+                addresses.extend(rewritten(pushurl, &self.rewrites));
+                addresses.extend(matched(pushurl, &self.push_rewrites).unwrap_or_default());
             }
-            Direction::Push => {
-                if remote.pushurls.is_empty() {
-                    // A URL a push rewrite matches is pushed as rewritten.
-                    // Whether Git still pushes to the URLs no push rewrite
-                    // matches, when some do, is read both ways: each is
-                    // kept with its fetch rewrite.
-                    for url in &remote.urls {
-                        match matched(url, &self.push_rewrites) {
-                            Some(pushed) => addresses.extend(pushed),
-                            None => addresses.extend(rewritten(url, &self.rewrites)),
-                        }
-                    }
-                } else {
-                    // Git applies the fetch rewrite to a push URL; a push
-                    // rewrite that also matches is kept too, so no reading
-                    // of the two drops a destination.
-                    for url in &remote.pushurls {
-                        addresses.extend(rewritten(url, &self.rewrites));
-                        addresses.extend(matched(url, &self.push_rewrites).unwrap_or_default());
-                    }
-                }
-            }
-        }
-        if addresses.is_empty() {
-            // A remote with a helper and no address still starts it.
-            addresses.push(String::new());
         }
         for address in addresses {
             found.push(Contact {
                 remote: name.to_string(),
-                selected: select(&address, remote.vcs.as_deref()),
+                selected: select(&address),
             });
         }
     }
 
-    /// Every remote `direction` may default to.
-    fn defaults(&self, direction: Direction) -> Result<Vec<String>, String> {
-        let mut names = vec!["origin".to_string()];
-        for key in &self.keys {
-            let Some(rest) = key.strip_prefix("branch.") else {
-                continue;
-            };
-            let default_key = rest.ends_with(".remote")
-                || (direction == Direction::Push && rest.ends_with(".pushremote"));
-            if default_key {
-                names.extend(values(self.config, key)?);
-            }
+    /// The remote an operand-free `fetch` or `pull` contacts: the current
+    /// branch's remote, or `origin` when the branch names none, with
+    /// fetching every remote turned off.
+    fn default_remote(&self, probe: &mut dyn Probe) -> Result<String, String> {
+        match self.config.get("fetch.all")? {
+            None => {}
+            Some(value) => match crate::security::git::config_boolean(value) {
+                Some(false) => {}
+                Some(true) => {
+                    return Err(unproven(
+                        "an operand-free fetch contacts every configured remote by configuration; name the remote",
+                    ))
+                }
+                None => {
+                    return Err(unproven(
+                        "the setting that makes a fetch contact every remote cannot be read",
+                    ))
+                }
+            },
         }
-        if direction == Direction::Push {
-            names.extend(values(self.config, "remote.pushdefault")?);
+        let branch = probe
+            .branch()
+            .map_err(|why| unproven(format!("an operand-free fetch needs the current branch: {why}")))?;
+        let key = format!("branch.{branch}.remote");
+        let named = values(self.config, &key)?;
+        match named.as_slice() {
+            [] => Ok("origin".to_string()),
+            [name] if !name.is_empty() => Ok(name.clone()),
+            _ => Err(unproven(format!(
+                "the remote of branch `{}` has more than one value or an empty one",
+                shown_word(&branch)
+            ))),
         }
-        names.retain(|name| !name.is_empty());
-        names.sort();
-        names.dedup();
-        Ok(names)
     }
 
-    /// Every configured remote, resolved in `direction`.
-    fn all(&self, direction: Direction, found: &mut Vec<Contact>) -> Result<(), String> {
-        for name in self.names() {
-            self.word(&name, direction, found)?;
+    /// Refuse submodule recursion in a repository that has or may have
+    /// submodules, unless the command line turns it off.
+    fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
+        let on = match recursion_on_line(rest) {
+            Some(on) => on,
+            None if verb == "push" => self.setting_on("push.recursesubmodules")?
+                .or(self.setting_on("submodule.recurse")?)
+                .unwrap_or(false),
+            None => true,
+        };
+        if on && self.may_have_submodules(probe)? {
+            let way = if verb == "remote" {
+                "name the remote in a fetch with --no-recurse-submodules"
+            } else {
+                "turn recursion off with --no-recurse-submodules"
+            };
+            return Err(unproven(format!(
+                "`{verb}` may recurse into submodule repositories, whose remotes the guard does not read; {way}"
+            )));
         }
         Ok(())
     }
 
-    /// The names of every remote the configuration defines.
-    fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
+    /// Whether the setting `key` turns recursion on: `None` when unset, off
+    /// only for a value Git reads as false.
+    fn setting_on(&self, key: &str) -> Result<Option<bool>, String> {
+        Ok(self
+            .config
+            .get(key)?
+            .map(|value| crate::security::git::config_boolean(value) != Some(false)))
+    }
+
+    /// Whether the repository has or may have submodules: a submodule
+    /// setting, the common Git directory's `modules` folder or the work
+    /// tree's `.gitmodules` file, each unless proven absent.
+    fn may_have_submodules(&self, probe: &mut dyn Probe) -> Result<bool, String> {
+        if self.keys.iter().any(|key| {
+            *key == "submodule.active"
+                || key
+                    .strip_prefix("submodule.")
+                    .is_some_and(|rest| rest.contains('.'))
+        }) {
+            return Ok(true);
+        }
+        let location = probe.location()?;
+        if !absent(&location.common.join("modules")) {
+            return Ok(true);
+        }
+        if location.bare {
+            return Ok(false);
+        }
+        Ok(location
+            .top
+            .as_ref()
+            .is_none_or(|top| !absent(&top.join(".gitmodules"))))
+    }
+
+    /// A clone fetches from its address; refuse a helper setting the
+    /// configuration would give the new remote, and recursion into the
+    /// submodules the cloned project names.
+    fn clone_settings(&self, rest: &[String]) -> Result<(), String> {
+        if self
             .keys
             .iter()
-            .filter_map(|key| {
-                let rest = key.strip_prefix("remote.")?;
-                let (name, _) = rest.rsplit_once('.')?;
-                Some(name.to_string())
-            })
-            .collect();
-        names.sort();
-        names.dedup();
-        names
+            .any(|key| key.starts_with("remote.") && key.ends_with(".vcs"))
+        {
+            return Err(unproven(
+                "the configuration gives a remote a helper setting, which a clone would use",
+            ));
+        }
+        let on = match recursion_on_line(rest) {
+            Some(on) => on,
+            None => self.setting_on("submodule.recurse")?.unwrap_or(false),
+        };
+        if on {
+            return Err(unproven(
+                "a clone that recurses into submodules contacts the addresses the cloned project names; clone without recursion",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The remotes the `remote` subcommands in `rest` contact.
+    fn remote_subcommand(
+        &self,
+        rest: &[String],
+        found: &mut Vec<Contact>,
+        probe: &mut dyn Probe,
+    ) -> Result<(), String> {
+        let operands: Vec<&str> = candidates(rest).collect();
+        match operands.split_first() {
+            Some((&"update", [])) => Err(unproven(
+                "`remote update` without a remote contacts every configured remote; name the remote",
+            )),
+            Some((sub, names)) if matches!(*sub, "update" | "show" | "prune" | "set-head") => {
+                for name in names {
+                    self.word(name, Direction::Fetch, found, probe)?;
+                }
+                if *sub == "update" {
+                    // `remote update` fetches with no way to turn recursion
+                    // off on its own line.
+                    self.recursion("remote", &[], probe)?;
+                }
+                Ok(())
+            }
+            Some((&"add", words)) => {
+                for word in words {
+                    self.address(word, Direction::Fetch, found);
+                }
+                if rest
+                    .iter()
+                    .any(|word| matches!(word.as_str(), "-f" | "--fetch"))
+                {
+                    self.recursion("remote", &[], probe)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// The remotes a partial clone fetches missing objects from.
     fn promisors(&self) -> Result<Vec<String>, String> {
         let mut names = values(self.config, "extensions.partialclone")?;
-        for name in self.names() {
-            let key = format!("remote.{name}.promisor");
-            if let Some(value) = self.config.get(&key)? {
-                if crate::security::git::config_boolean(value) != Some(false) {
-                    names.push(name);
-                }
-            }
-        }
-        names.retain(|name| !name.is_empty());
-        names.sort();
-        names.dedup();
-        Ok(names)
-    }
-
-    /// The submodule addresses the configuration names, and a refusal when
-    /// it lets submodule commands use every protocol.
-    fn submodules(&self, found: &mut Vec<Contact>) -> Result<(), String> {
-        for key in &self.keys {
-            if key == &"protocol.allow"
-                || key.strip_prefix("protocol.").is_some_and(|rest| {
-                    rest.strip_suffix(".allow").is_some_and(|name| {
-                        !NATIVE_SCHEMES.contains(&name) && !SHIPPED_HELPERS.contains(&name)
-                    })
-                })
-            {
-                for value in values(self.config, key)? {
-                    if value.eq_ignore_ascii_case("always") {
-                        return Err(format!(
-                            "cannot resolve the transports of submodules: `{key}` lets them start a helper program the guard cannot read"
-                        ));
-                    }
-                }
-            }
-        }
         for key in &self.keys {
             let Some(name) = key
-                .strip_prefix("submodule.")
-                .and_then(|rest| rest.strip_suffix(".url"))
+                .strip_prefix("remote.")
+                .and_then(|rest| rest.strip_suffix(".promisor"))
             else {
                 continue;
             };
-            for url in values(self.config, key)? {
-                let anonymous = Remote {
-                    urls: vec![url],
-                    first_before_reset: None,
-                    pushurls: Vec::new(),
-                    vcs: None,
-                };
-                self.destinations(name, &anonymous, Direction::Fetch, found);
+            if let Some(value) = self.config.get(key)? {
+                if crate::security::git::config_boolean(value) != Some(false) {
+                    names.push(name.to_string());
+                }
             }
         }
-        Ok(())
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 }
 

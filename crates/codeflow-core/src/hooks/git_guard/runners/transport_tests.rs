@@ -4,14 +4,28 @@
 //! the same configuration reader the guards use, with the host's Git
 //! configuration cut off. Nothing here contacts a remote or starts a helper.
 
-use super::{contacts, select, Contact, Selected};
-use crate::security::git_config::{read, Environment};
+use super::{contacts, select, Contact, Probe, Selected, UNPROVEN};
+use crate::security::git_config::{current_branch, locate, read, Environment, Location};
 use std::path::Path;
 
-/// A scratch repository whose local configuration ends with `config`.
+/// A scratch repository on branch `main` whose local configuration ends
+/// with `config`.
 struct Scratch {
     _dir: tempfile::TempDir,
     root: std::path::PathBuf,
+}
+
+/// The probe the runner reader uses, from the scratch repository's root.
+struct RootProbe<'a>(&'a Path);
+
+impl Probe for RootProbe<'_> {
+    fn location(&mut self) -> Result<Location, String> {
+        locate(self.0, &[], &Environment::new())
+    }
+
+    fn branch(&mut self) -> Result<String, String> {
+        current_branch(self.0, &[], &Environment::new())
+    }
 }
 
 impl Scratch {
@@ -25,6 +39,7 @@ impl Scratch {
             .unwrap()
             .join("repo");
         git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         let file = root.join(".git/config");
         let mut bytes = std::fs::read(&file).unwrap();
         bytes.extend_from_slice(b"\n");
@@ -42,7 +57,7 @@ impl Scratch {
         let config = read(&self.root, &[], &env)?;
         let words: Vec<String> = command.split_whitespace().map(str::to_string).collect();
         let (verb, rest) = words.split_first().unwrap();
-        contacts(verb, rest, &config)
+        contacts(verb, rest, &config, &mut RootProbe(&self.root))
     }
 
     /// The helper programs `command` starts, or the refusal.
@@ -56,6 +71,16 @@ impl Scratch {
                 Selected::Stock => None,
             })
             .collect())
+    }
+
+    /// Assert that `command` refuses as a form the guard cannot prove, with
+    /// `part` in the reason.
+    fn unproven(&self, command: &str, part: &str) {
+        let error = self
+            .helpers(command)
+            .expect_err(&format!("`{command}` must refuse"));
+        assert!(error.starts_with(UNPROVEN), "{command}: {error}");
+        assert!(error.contains(part), "{command}: {error}");
     }
 
     fn root(&self) -> &Path {
@@ -98,16 +123,8 @@ fn addresses_select_the_transport_git_selects() {
         ("HTTPS://example.test/r", Selected::Helper("HTTPS".into())),
         ("ext::sh -c true", Selected::Ext),
     ] {
-        assert_eq!(select(address, None), expected, "{address}");
+        assert_eq!(select(address), expected, "{address}");
     }
-    assert_eq!(
-        select("https://example.test/r.git", Some("fixture")),
-        Selected::Helper("fixture".into())
-    );
-    assert_eq!(
-        select("", Some("fixture")),
-        Selected::Helper("fixture".into())
-    );
 }
 
 #[test]
@@ -122,12 +139,16 @@ fn ordinary_transports_select_no_helper() {
         let scratch = Scratch::new(&format!("[remote \"origin\"]\n\turl = {address}\n"));
         for command in [
             "fetch",
+            "pull",
+            "fetch --prune",
             "fetch origin",
-            "pull origin main",
+            "fetch -q origin main",
+            "pull --rebase origin main",
             "push origin HEAD:refs/heads/task/x",
+            "push -u origin HEAD",
             "ls-remote origin",
-            "fetch --all",
-            "remote update",
+            "remote update origin",
+            "maintenance run --task=gc",
             "status",
         ] {
             assert_eq!(scratch.helpers(command), Ok(vec![]), "{address} {command}");
@@ -161,73 +182,141 @@ fn a_remote_address_selects_a_helper() {
         plain.helpers("archive --remote=fixture::x HEAD"),
         Ok(vec!["fixture".into()])
     );
+    assert_eq!(
+        plain.helpers("fetch -- fixture::x"),
+        Ok(vec!["fixture".into()])
+    );
 }
 
 #[test]
-fn a_remote_configuration_selects_a_helper() {
-    let with_url =
-        Scratch::new("[remote \"fixture\"]\n\turl = https://example.test/r\n\tvcs = fixture\n");
-    assert_eq!(
-        with_url.helpers("fetch fixture"),
-        Ok(vec!["fixture".into()])
-    );
-    assert_eq!(
-        with_url.helpers("push fixture HEAD"),
-        Ok(vec!["fixture".into()])
-    );
+fn a_remote_with_a_helper_setting_refuses() {
+    for setting in ["vcs = fixture", "vcs = https", "vcs ="] {
+        let with_url = Scratch::new(&format!(
+            "[remote \"fixture\"]\n\turl = https://example.test/r\n\t{setting}\n"
+        ));
+        with_url.unproven("fetch fixture", "helper through its configuration");
+        with_url.unproven("push fixture HEAD", "helper through its configuration");
+    }
     let without_url = Scratch::new("[remote \"fixture\"]\n\tvcs = fixture\n");
-    assert_eq!(
-        without_url.helpers("fetch fixture"),
-        Ok(vec!["fixture".into()])
-    );
+    without_url.unproven("fetch fixture", "remote `fixture`");
+    let clone = Scratch::new("[remote \"other\"]\n\tvcs = fixture\n");
+    clone.unproven("clone https://example.test/r copy", "a clone would use");
 }
 
 #[test]
-fn an_implicit_contact_resolves_the_remotes_it_may_reach() {
-    let default = Scratch::new("[remote \"origin\"]\n\tvcs = fixture\n");
+fn an_operand_free_fetch_reads_the_current_branch_remote() {
+    let default = Scratch::new("[remote \"origin\"]\n\turl = fixture::x\n");
     assert_eq!(default.helpers("fetch"), Ok(vec!["fixture".into()]));
     assert_eq!(default.helpers("pull"), Ok(vec!["fixture".into()]));
-    assert_eq!(default.helpers("push"), Ok(vec!["fixture".into()]));
     let tracked = Scratch::new(&format!(
-        "{HTTPS}[remote \"other\"]\n\tvcs = fixture\n[branch \"main\"]\n\tremote = other\n"
+        "{HTTPS}[remote \"other\"]\n\turl = fixture::x\n[branch \"main\"]\n\tremote = other\n"
     ));
     assert_eq!(tracked.helpers("fetch"), Ok(vec!["fixture".into()]));
-    let push_default = Scratch::new(&format!(
-        "{HTTPS}[remote \"other\"]\n\tvcs = fixture\n[remote]\n\tpushDefault = other\n"
-    ));
-    assert_eq!(push_default.helpers("push"), Ok(vec!["fixture".into()]));
-    assert_eq!(push_default.helpers("fetch"), Ok(vec![]));
-    let promisor = Scratch::new(&format!(
-        "{HTTPS}[remote \"lazy\"]\n\turl = fixture::x\n\tpromisor = true\n"
-    ));
-    assert_eq!(promisor.helpers("status"), Ok(vec!["fixture".into()]));
-    assert_eq!(promisor.helpers("log"), Ok(vec!["fixture".into()]));
-    let partial = Scratch::new(&format!(
-        "{HTTPS}[remote \"lazy\"]\n\turl = fixture::x\n[extensions]\n\tpartialClone = lazy\n"
-    ));
-    assert_eq!(partial.helpers("show HEAD"), Ok(vec!["fixture".into()]));
+    assert_eq!(tracked.helpers("fetch origin"), Ok(vec![]));
+    let off = Scratch::new(&format!("{HTTPS}[fetch]\n\tall = false\n"));
+    assert_eq!(off.helpers("fetch"), Ok(vec![]));
 }
 
 #[test]
-fn a_named_ordinary_remote_ignores_another_helper_remote() {
+fn an_operand_free_contact_refuses_each_state_it_cannot_prove() {
+    let ordinary = Scratch::new(HTTPS);
+    ordinary.unproven("push", "names no remote");
+    ordinary.unproven("ls-remote", "names no remote");
+    ordinary.unproven("push --force-with-lease=main", "names no remote");
+
+    let detached = Scratch::new(HTTPS);
+    std::fs::write(
+        detached.root().join(".git/HEAD"),
+        "0123456789012345678901234567890123456789\n",
+    )
+    .unwrap();
+    detached.unproven("fetch", "current branch");
+
+    let missing = Scratch::new(&format!("{HTTPS}[branch \"main\"]\n\tremote = gone\n"));
+    missing.unproven("fetch", "remote `gone` is not configured");
+
+    let no_origin = Scratch::new("[remote \"other\"]\n\turl = https://example.test/r\n");
+    no_origin.unproven("fetch", "remote `origin` is not configured");
+    no_origin.unproven("pull", "remote `origin` is not configured");
+
+    for value in ["true", "yes", "1"] {
+        let all = Scratch::new(&format!("{HTTPS}[fetch]\n\tall = {value}\n"));
+        all.unproven("fetch", "every configured remote");
+    }
+    let bare_key = Scratch::new(&format!("{HTTPS}[fetch]\n\tall\n"));
+    bare_key.unproven("fetch", "every configured remote");
+
+    let group = Scratch::new(&format!("{HTTPS}[remotes]\n\torigin = origin\n"));
+    group.unproven("fetch", "remote group");
+    group.unproven("fetch origin", "remote group");
+    let folded = Scratch::new(&format!("{HTTPS}[remotes]\n\tOrigin = origin\n"));
+    folded.unproven("fetch origin", "remote group");
+
+    let twice = Scratch::new(&format!("{HTTPS}[remote \"origin\"]\n\turl = https://example.test/r\n"));
+    twice.unproven("fetch", "more than one address");
+
+    let unreadable = Scratch::bytes(
+        b"[remote \"origin\"]\n\turl = https://example.test/r\n[branch \"main\"]\n\tremote = or\xffigin\n",
+    );
+    let error = unreadable.helpers("fetch").unwrap_err();
+    assert!(error.contains("not UTF-8"), "{error}");
+    let unclear = Scratch::new(&format!("{HTTPS}[fetch]\n\tall = maybe\n"));
+    unclear.unproven("fetch", "cannot be read");
+}
+
+#[test]
+fn every_remote_forms_and_groups_refuse() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
     assert_eq!(scratch.helpers("fetch origin"), Ok(vec![]));
     assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
     assert_eq!(scratch.helpers("fetch backup"), Ok(vec!["fixture".into()]));
-    assert_eq!(scratch.helpers("fetch --all"), Ok(vec!["fixture".into()]));
     assert_eq!(
         scratch.helpers("fetch --multiple origin backup"),
         Ok(vec!["fixture".into()])
     );
-    assert_eq!(scratch.helpers("remote update"), Ok(vec!["fixture".into()]));
-    assert_eq!(
-        scratch.helpers("maintenance run --task=prefetch"),
-        Ok(vec!["fixture".into()])
-    );
+    scratch.unproven("fetch --all", "every remote");
+    scratch.unproven("fetch --al", "every remote");
+    scratch.unproven("pull --all", "every remote");
+    scratch.unproven("remote update", "every configured remote");
+    scratch.unproven("remote update --prune", "every configured remote");
+    scratch.unproven("maintenance run", "prefetch");
+    scratch.unproven("maintenance run --task=prefetch", "prefetch");
+    scratch.unproven("maintenance run --task gc --task prefetch", "prefetch");
     let group = Scratch::new(&format!(
-        "{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n[remotes]\n\tmirrors = origin backup\n"
+        "{HTTPS}[remote \"backup\"]\n\turl = https://example.test/b\n[remotes]\n\tmirrors = origin backup\n"
     ));
-    assert_eq!(group.helpers("fetch mirrors"), Ok(vec!["fixture".into()]));
+    group.unproven("fetch mirrors", "remote group");
+    group.unproven("remote update mirrors", "remote group");
+}
+
+#[test]
+fn a_remote_with_more_than_one_address_value_refuses() {
+    for remote in [
+        "\turl = https://example.test/r\n\turl = fixture::x\n",
+        "\turl = fixture::x\n\turl =\n\turl = https://example.test/r\n",
+        "\turl =\n",
+        "\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+    ] {
+        let scratch = Scratch::new(&format!("[remote \"origin\"]\n{remote}"));
+        assert!(
+            scratch
+                .helpers("fetch origin")
+                .unwrap_err()
+                .starts_with(UNPROVEN),
+            "{remote}"
+        );
+    }
+    for pushurls in [
+        "\tpushurl = https://example.test/r\n\tpushurl = fixture::x\n",
+        "\tpushurl = fixture::x\n\tpushurl =\n",
+        "\tpushurl =\n",
+    ] {
+        let scratch = Scratch::new(&format!(
+            "[remote \"origin\"]\n\turl = https://example.test/r\n{pushurls}"
+        ));
+        scratch.unproven("push origin HEAD", "push address");
+        scratch.unproven("fetch origin", "push address");
+    }
 }
 
 #[test]
@@ -272,7 +361,7 @@ fn a_push_rewrite_takes_precedence_for_push() {
     ));
     assert_eq!(reversed.helpers("push origin HEAD"), Ok(vec![]));
     assert_eq!(reversed.helpers("fetch origin"), Ok(vec!["fixture".into()]));
-    // A push URL takes the fetch rewrite, never the push one.
+    // A push URL takes the fetch rewrite.
     let pushurl = Scratch::new(
         "[remote \"origin\"]\n\turl = https://example.test/r\n\tpushurl = https://push.test/r\n[url \"fixture::https://push.test/\"]\n\tinsteadOf = https://push.test/\n",
     );
@@ -284,72 +373,81 @@ fn a_push_rewrite_takes_precedence_for_push() {
 }
 
 #[test]
-fn a_later_push_destination_selects_a_helper() {
-    let pushurls = Scratch::new(
-        "[remote \"origin\"]\n\turl = https://example.test/r\n\tpushurl = https://example.test/r\n\tpushurl = fixture::x\n",
-    );
-    assert_eq!(
-        pushurls.helpers("push origin HEAD"),
-        Ok(vec!["fixture".into()])
-    );
-    assert_eq!(pushurls.helpers("fetch origin"), Ok(vec![]));
-    let urls =
-        Scratch::new("[remote \"origin\"]\n\turl = https://example.test/r\n\turl = fixture::x\n");
-    assert_eq!(urls.helpers("push origin HEAD"), Ok(vec!["fixture".into()]));
-    assert_eq!(urls.helpers("fetch origin"), Ok(vec![]));
-}
-
-#[test]
 fn an_unresolved_selection_refuses_naming_the_remote() {
-    let unknown = Scratch::new(&format!("{HTTPS}[remotes]\n\tmirrors = origin missing\n"));
-    let error = unknown.helpers("fetch mirrors").unwrap_err();
-    assert!(error.contains("remote `missing`"), "{error}");
     let bytes = Scratch::bytes(b"[remote \"fixture\"]\n\turl = https://example.test/\xff\n");
     let error = bytes.helpers("fetch fixture").unwrap_err();
     assert!(error.contains("remote `fixture`"), "{error}");
-    let legacy = Scratch::new(HTTPS);
-    std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
-    std::fs::write(legacy.root().join(".git/remotes/old"), "URL: fixture::x\n").unwrap();
-    let error = legacy.helpers("fetch old").unwrap_err();
-    assert!(error.contains("remote `old`"), "{error}");
-    assert_eq!(legacy.helpers("fetch origin"), Ok(vec![]));
-}
-
-#[test]
-fn submodule_transports_are_resolved() {
-    let configured = Scratch::new(&format!("{HTTPS}[submodule \"lib\"]\n\turl = fixture::x\n"));
-    assert_eq!(
-        configured.helpers("submodule update"),
-        Ok(vec!["fixture".into()])
-    );
-    assert_eq!(
-        configured.helpers("fetch origin"),
-        Ok(vec!["fixture".into()])
-    );
-    assert_eq!(configured.helpers("log"), Ok(vec![]));
-    for setting in [
-        "[protocol]\n\tallow = always\n",
-        "[protocol \"fixture\"]\n\tallow = always\n",
-    ] {
-        let allowed = Scratch::new(&format!("{HTTPS}{setting}"));
-        assert!(allowed
-            .helpers("clone --recurse-submodules https://example.test/r copy")
-            .is_err());
-        assert_eq!(allowed.helpers("log"), Ok(vec![]));
+    for folder in ["remotes", "branches"] {
+        let legacy = Scratch::new(HTTPS);
+        std::fs::create_dir_all(legacy.root().join(".git").join(folder)).unwrap();
+        std::fs::write(
+            legacy.root().join(".git").join(folder).join("old"),
+            "fixture::x\n",
+        )
+        .unwrap();
+        legacy.unproven("fetch old", "legacy remote file");
+        legacy.unproven("ls-remote old", "legacy remote file");
+        assert_eq!(legacy.helpers("fetch origin"), Ok(vec![]));
     }
-    let safe = Scratch::new(&format!("{HTTPS}[protocol \"https\"]\n\tallow = always\n"));
-    assert_eq!(
-        safe.helpers("clone --recurse-submodules https://example.test/r copy"),
-        Ok(vec![])
-    );
 }
 
 #[test]
-fn a_cleared_address_list_keeps_both_readings() {
-    // Git releases differ on whether an empty `url` clears the list; the
-    // fetch reads the first address under both readings.
-    let scratch = Scratch::new(
-        "[remote \"origin\"]\n\turl = fixture::x\n\turl =\n\turl = https://example.test/r\n",
-    );
-    assert_eq!(scratch.helpers("fetch origin"), Ok(vec!["fixture".into()]));
+fn submodule_recursion_refuses_unless_the_line_turns_it_off() {
+    let configured = Scratch::new(&format!("{HTTPS}[submodule \"lib\"]\n\turl = fixture::x\n"));
+    let active = Scratch::new(&format!("{HTTPS}[submodule]\n\tactive = .\n"));
+    let listed = Scratch::new(HTTPS);
+    std::fs::write(listed.root().join(".gitmodules"), "").unwrap();
+    let cloned = Scratch::new(HTTPS);
+    std::fs::create_dir_all(cloned.root().join(".git/modules/lib")).unwrap();
+    for scratch in [&configured, &active, &listed, &cloned] {
+        scratch.unproven("fetch origin", "submodule");
+        scratch.unproven("pull origin main", "submodule");
+        scratch.unproven("fetch origin --recurse-submodules=no --recurse-submodules", "submodule");
+        scratch.unproven("remote update origin", "submodule");
+        scratch.unproven("submodule update", "submodule");
+        scratch.unproven("submodule --quiet add https://example.test/lib lib", "submodule");
+        assert_eq!(scratch.helpers("fetch --no-recurse-submodules origin"), Ok(vec![]));
+        assert_eq!(scratch.helpers("pull --recurse-submodules=no origin main"), Ok(vec![]));
+        assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
+        assert_eq!(scratch.helpers("log"), Ok(vec![]));
+    }
+    for setting in [
+        "[push]\n\trecurseSubmodules = on-demand\n",
+        "[push]\n\trecurseSubmodules = check\n",
+        "[submodule]\n\trecurse = true\n",
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}{setting}"));
+        std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
+        scratch.unproven("push origin HEAD", "submodule");
+        assert_eq!(
+            scratch.helpers("push --no-recurse-submodules origin HEAD"),
+            Ok(vec![])
+        );
+    }
+    let plain = Scratch::new("");
+    plain.unproven("clone --recurse-submodules https://example.test/r copy", "clone");
+    plain.unproven("clone --recursive https://example.test/r copy", "clone");
+    plain.unproven("clone --recurse https://example.test/r copy", "clone");
+    assert_eq!(plain.helpers("clone https://example.test/r copy"), Ok(vec![]));
+    let recursing = Scratch::new("[submodule]\n\trecurse = true\n");
+    recursing.unproven("clone https://example.test/r copy", "clone");
+}
+
+#[test]
+fn promisor_remotes_pass_the_same_rule() {
+    let promisor = Scratch::new(&format!(
+        "{HTTPS}[remote \"lazy\"]\n\turl = fixture::x\n\tpromisor = true\n"
+    ));
+    assert_eq!(promisor.helpers("status"), Ok(vec!["fixture".into()]));
+    assert_eq!(promisor.helpers("log"), Ok(vec!["fixture".into()]));
+    let partial = Scratch::new(&format!(
+        "{HTTPS}[remote \"lazy\"]\n\turl = fixture::x\n[extensions]\n\tpartialClone = lazy\n"
+    ));
+    assert_eq!(partial.helpers("show HEAD"), Ok(vec!["fixture".into()]));
+    let set = Scratch::new(&format!(
+        "{HTTPS}[remote \"lazy\"]\n\turl = https://example.test/r\n\tvcs = fixture\n\tpromisor = true\n"
+    ));
+    set.unproven("status", "helper through its configuration");
+    let missing = Scratch::new(&format!("{HTTPS}[extensions]\n\tpartialClone = gone\n"));
+    missing.unproven("status", "remote `gone` is not configured");
 }

@@ -67,6 +67,8 @@ pub(super) fn program_environment_names() -> impl Iterator<Item = &'static str> 
 pub(super) fn unread(reason: &str) -> Violation {
     let sanctioned = if reason.starts_with(transport::HELPER_REFUSAL) {
         "reach the remote over a transport Git runs itself (https, ssh or a local path), have the operator run the command, or name the helper in `git.admitted_helpers` in a reviewed policy on the default branch"
+    } else if reason.starts_with(transport::UNPROVEN) {
+        "name one configured remote that has a single address and no helper setting, turn submodule recursion off with --no-recurse-submodules, or have the operator run the command"
     } else {
         "use explicit, readable Git runner options and a resolvable checkout"
     };
@@ -110,30 +112,139 @@ fn landed_helpers(args: &[String], cwd: &Path) -> Vec<String> {
     }
 }
 
+/// The location inputs that can make a Git call work in a repository other
+/// than the one its starting folder finds.
+const ADMISSION_LOCATION_ENVIRONMENT: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+];
+
+/// Whether the call may work in a repository other than the one its
+/// starting folder finds: a Git-directory, work-tree or bare option, or a
+/// location variable set on the line or inherited. An unreadable global
+/// option counts too.
+fn relocated(args: &[String], env: &crate::security::git_config::Environment) -> bool {
+    let Ok(words) = globals(args) else {
+        return true;
+    };
+    let option = words.iter().any(|word| {
+        matches!(word.as_str(), "--git-dir" | "--work-tree" | "--bare")
+            || word.starts_with("--git-dir=")
+            || word.starts_with("--work-tree=")
+    });
+    option
+        || ADMISSION_LOCATION_ENVIRONMENT
+            .iter()
+            .any(|name| env.contains_key(*name) || std::env::var_os(name).is_some())
+}
+
 /// The landed `git.admitted_helpers` list, read once and only when a
-/// helper needs it.
+/// helper needs it. A call with a location input admits nothing, since the
+/// list is read from the repository the starting folder finds.
 struct Admitted<'a> {
     args: &'a [String],
     cwd: &'a Path,
+    relocated: bool,
     list: Option<Vec<String>>,
 }
 
 impl<'a> Admitted<'a> {
-    fn new(args: &'a [String], cwd: &'a Path) -> Self {
+    fn new(
+        args: &'a [String],
+        cwd: &'a Path,
+        env: &crate::security::git_config::Environment,
+    ) -> Self {
         Self {
             args,
             cwd,
+            relocated: relocated(args, env),
             list: None,
         }
     }
 
     fn admits(&mut self, program: &str) -> bool {
+        if self.relocated {
+            return false;
+        }
         let (args, cwd) = (self.args, self.cwd);
         self.list
             .get_or_insert_with(|| landed_helpers(args, cwd))
             .iter()
             .any(|entry| entry == program)
     }
+}
+
+/// The resolution's probe of the call's repository, read once each, with
+/// only the call's location inputs.
+struct CallProbe<'a> {
+    cwd: &'a Path,
+    globals: Result<&'a [String], String>,
+    env: &'a crate::security::git_config::Environment,
+    location: Option<Result<crate::security::git_config::Location, String>>,
+    branch: Option<Result<String, String>>,
+}
+
+impl<'a> CallProbe<'a> {
+    fn new(
+        args: &'a [String],
+        cwd: &'a Path,
+        env: &'a crate::security::git_config::Environment,
+    ) -> Self {
+        Self {
+            cwd,
+            globals: globals(args),
+            env,
+            location: None,
+            branch: None,
+        }
+    }
+}
+
+impl transport::Probe for CallProbe<'_> {
+    fn location(&mut self) -> Result<crate::security::git_config::Location, String> {
+        let (cwd, env) = (self.cwd, self.env);
+        let globals = self.globals.clone();
+        self.location
+            .get_or_insert_with(|| {
+                crate::security::git_config::locate(cwd, globals?, env)
+            })
+            .clone()
+    }
+
+    fn branch(&mut self) -> Result<String, String> {
+        let (cwd, env) = (self.cwd, self.env);
+        let globals = self.globals.clone();
+        self.branch
+            .get_or_insert_with(|| {
+                crate::security::git_config::current_branch(cwd, globals?, env)
+            })
+            .clone()
+    }
+}
+
+/// Whether every remote the Git call `args` (its words after `git`)
+/// contacts is reached over a transport Git runs itself, read with no
+/// admission and no environment of its own. Anything the resolution cannot
+/// prove, and any read that fails, is `false`.
+pub(super) fn stock_transports(args: &[String], cwd: &Path) -> bool {
+    let Some((verb, rest)) = git_subcommand(args) else {
+        return false;
+    };
+    let Ok(settings) = configuration_options(args) else {
+        return false;
+    };
+    let env = crate::security::git_config::Environment::new();
+    let Ok(config) = crate::security::git_config::read(cwd, &settings, &env) else {
+        return false;
+    };
+    let mut probe = CallProbe::new(args, cwd, &env);
+    transport::contacts(verb, rest, &config, &mut probe).is_ok_and(|contacts| {
+        contacts
+            .iter()
+            .all(|contact| contact.selected == transport::Selected::Stock)
+    })
 }
 
 /// The remote helper programs the transports of the remotes the command
@@ -144,9 +255,10 @@ fn helper_programs(
     rest: &[String],
     config: &crate::security::git_config::EffectiveConfig,
     admitted: &mut Admitted<'_>,
+    probe: &mut dyn transport::Probe,
 ) -> Result<Vec<(String, bool)>, String> {
     let mut programs: Vec<(String, bool)> = Vec::new();
-    for contact in transport::contacts(verb, rest, config)? {
+    for contact in transport::contacts(verb, rest, config, probe)? {
         match contact.selected {
             transport::Selected::Stock => {}
             transport::Selected::Ext => {
@@ -729,8 +841,9 @@ fn configured_commands(
     {
         unchanged(path, earlier)?;
     }
-    let mut admitted = Admitted::new(args, cwd);
-    let mut commands = helper_programs(verb, rest, &config, &mut admitted)?;
+    let mut admitted = Admitted::new(args, cwd, env);
+    let mut probe = CallProbe::new(args, cwd, env);
+    let mut commands = helper_programs(verb, rest, &config, &mut admitted, &mut probe)?;
     let pagination = globals(args)?
         .iter()
         .fold(None, |choice, word| match word.as_str() {

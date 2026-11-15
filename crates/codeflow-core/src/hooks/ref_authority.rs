@@ -491,7 +491,7 @@ pub(super) fn recovery_args(root: &Path, args: &[String]) -> bool {
         Some(name) => repo.find_remote(name).is_ok(),
         None => repo.remotes().is_ok_and(|names| !names.is_empty()),
     };
-    configured && check(root, args).is_none()
+    configured && check(root, args).is_none() && super::git_guard::git_transports_stock(args, root)
 }
 
 /// Whether a command line is one plain fetch of a configured remote: `git
@@ -991,6 +991,24 @@ mod tests {
         ] {
             assert!(!recovery_fetch(line, plain.path()), "{line}");
         }
+    }
+
+    /// TSK-1489: the recovery fetch runs before the integrity checks, so it
+    /// is withheld unless every remote it contacts is reached over a
+    /// transport Git runs itself.
+    #[test]
+    fn a_recovery_fetch_is_withheld_for_a_transport_the_guard_cannot_prove() {
+        let helper = repository_with_url("fixture::/nonexistent/codeflow-origin.git", b"");
+        assert!(!recovery_fetch("git fetch origin", helper.path()));
+        assert!(!recovery_fetch("git fetch", helper.path()));
+        let setting = repository_with_url(
+            "file:///nonexistent/codeflow-origin.git",
+            b"[remote \"origin\"]\n\tvcs = fixture\n",
+        );
+        assert!(!recovery_fetch("git fetch origin", setting.path()));
+        let listed = repository_with_url("file:///nonexistent/codeflow-origin.git", b"");
+        std::fs::write(listed.path().join(".gitmodules"), "").unwrap();
+        assert!(!recovery_fetch("git fetch origin", listed.path()));
     }
 
     /// Round twelve on issue 79: an `insteadOf` rewrite that ends in a carriage

@@ -7661,6 +7661,13 @@ pub(crate) struct GitRunnerBody {
     pub admitted_helper: bool,
 }
 
+/// Whether every remote the Git call `args` (its words after `git`)
+/// contacts is reached over a transport Git runs itself, with no helper
+/// program admitted (TSK-1489): the recovery fetch's transport check.
+pub(crate) fn git_transports_stock(args: &[String], cwd: &Path) -> bool {
+    runners::stock_transports(args, cwd)
+}
+
 /// The environment variables whose value is a program Git runs, as the
 /// runner catalog lists them.
 pub(crate) fn git_program_environment() -> impl Iterator<Item = &'static str> {

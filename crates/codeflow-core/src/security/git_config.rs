@@ -37,10 +37,6 @@ pub(crate) struct EffectiveConfig {
     entries: Vec<Entry>,
     /// Files contributing values, resolved from Git's reported origin directory.
     pub(crate) sources: Vec<PathBuf>,
-    /// The files of the repository's own (`local`) scope, resolved as
-    /// `sources` are: the common Git directory's `config` and any file it
-    /// includes.
-    pub(crate) local: Vec<PathBuf>,
     /// Includes named by the files Git read, including inactive conditions.
     pub(crate) includes: Vec<Include>,
 }
@@ -197,7 +193,6 @@ fn parse(
     let mut entries = Vec::new();
     let mut includes = Vec::new();
     let mut sources = Vec::new();
-    let mut local = Vec::new();
     while let Some(scope) = fields.next() {
         if scope.is_empty() && bytes.is_empty() {
             break;
@@ -211,9 +206,6 @@ fn parse(
             .map_err(|_| "cannot verify Git configuration: origin is not UTF-8")?;
         if let Some(file) = origin.strip_prefix("file:") {
             sources.push(directory.join(file));
-            if scope == "local" && !local.contains(&directory.join(file)) {
-                local.push(directory.join(file));
-            }
         }
         let entry = fields
             .next()
@@ -286,7 +278,6 @@ fn parse(
     Ok(EffectiveConfig {
         entries,
         sources,
-        local,
         includes,
     })
 }
@@ -454,6 +445,156 @@ pub(crate) fn repository_of(
         }
         _ => Err("cannot read the Git repository paths".into()),
     }
+}
+
+/// The repository a Git call works in, as Git finds it from the call's
+/// location inputs alone (TSK-1489).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Location {
+    /// The common Git directory, as an absolute path.
+    pub(crate) common: PathBuf,
+    /// The work tree's top-level folder; `None` in a bare repository or
+    /// from inside the Git directory.
+    pub(crate) top: Option<PathBuf>,
+    pub(crate) bare: bool,
+}
+
+/// The environment variables that select the repository a Git call works
+/// in.
+pub(crate) const LOCATION_ENVIRONMENT: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
+/// A probe of the repository the call works in, built on
+/// [`crate::git::judging_command`]: only the call's location inputs reach
+/// it (`-C`, `--git-dir`, `--work-tree`, `--bare` and
+/// [`LOCATION_ENVIRONMENT`], the call's own value or else the inherited one
+/// the call also sees). Its configuration settings (`-c`,
+/// `--config-env`, `GIT_CONFIG_*`) never do, so they cannot move what the
+/// probe reports.
+fn location_command(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<std::process::Command, String> {
+    let mut command = crate::git::judging_command();
+    command.current_dir(cwd).stdin(Stdio::null());
+    for name in LOCATION_ENVIRONMENT {
+        if let Some(value) = environment.get(*name) {
+            command.env(name, value);
+        } else if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let mut at = 0;
+    while at < globals.len() {
+        let arg = globals[at].as_str();
+        if matches!(arg, "-C" | "--git-dir" | "--work-tree") {
+            let value = globals
+                .get(at + 1)
+                .ok_or("cannot read the repository the command works in: missing global-option value")?;
+            command.args([arg, value]);
+            at += 2;
+        } else if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {
+            at += 2;
+        } else {
+            if arg == "--bare"
+                || arg.starts_with("--git-dir=")
+                || arg.starts_with("--work-tree=")
+                || (arg.starts_with("-C") && arg.len() > 2)
+            {
+                command.arg(arg);
+            }
+            at += 1;
+        }
+    }
+    Ok(command)
+}
+
+/// The repository the call works in. Any probe failure or timeout is an
+/// error, so the caller refuses.
+pub(crate) fn locate(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<Location, String> {
+    let unread = |_| "cannot read the repository the command works in".to_string();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = location_command(cwd, globals, environment)?;
+    probe.args([
+        "--no-pager",
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "--is-bare-repository",
+        "--is-inside-work-tree",
+    ]);
+    let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+    let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
+    let lines: Vec<&str> = text.lines().collect();
+    let [common, bare, inside] = lines.as_slice() else {
+        return Err(unread(String::new()));
+    };
+    let flag = |value: &str| match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(unread(String::new())),
+    };
+    let (bare, inside) = (flag(bare)?, flag(inside)?);
+    if common.is_empty() || !Path::new(common).is_absolute() {
+        return Err(unread(String::new()));
+    }
+    let top = if inside {
+        let mut probe = location_command(cwd, globals, environment)?;
+        probe.args([
+            "--no-pager",
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        ]);
+        let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+        let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
+        let top = text.strip_suffix('\n').unwrap_or(&text);
+        if top.is_empty() || top.contains('\n') || !Path::new(top).is_absolute() {
+            return Err(unread(String::new()));
+        }
+        Some(PathBuf::from(top))
+    } else {
+        None
+    };
+    Ok(Location {
+        common: PathBuf::from(common),
+        top,
+        bare,
+    })
+}
+
+/// The name of the branch the call's repository has checked out. A
+/// detached HEAD, like any probe failure or timeout, is an error.
+pub(crate) fn current_branch(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<String, String> {
+    let unread = "cannot read the current branch: HEAD is detached or cannot be read";
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = location_command(cwd, globals, environment)?;
+    probe.args(["--no-pager", "symbolic-ref", "-q", "HEAD"]);
+    let bytes = bounded_output(&mut probe, deadline).map_err(|_| unread.to_string())?;
+    let text = String::from_utf8(bytes).map_err(|_| unread.to_string())?;
+    let name = text
+        .strip_suffix('\n')
+        .unwrap_or(&text)
+        .strip_prefix("refs/heads/")
+        .ok_or(unread)?;
+    if name.is_empty() || name.contains('\n') {
+        return Err(unread.into());
+    }
+    Ok(name.to_string())
 }
 
 pub(crate) fn bounded_output(
