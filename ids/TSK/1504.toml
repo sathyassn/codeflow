@@ -1,0 +1,11 @@
+id = "TSK-1504"
+uid = "fb3c97d7-1002-432d-8274-d0135a6b913e"
+kind = "TSK"
+title = "Update writes the docs portal state with the final newline the token sync expects"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T00:42:13Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
