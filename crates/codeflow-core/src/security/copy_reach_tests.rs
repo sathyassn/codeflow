@@ -278,3 +278,46 @@ fn a_source_own_name_is_compared_as_the_filesystem_opens_it() {
         assert_eq!(enforcement_name(Some("CLAUDE~1")), Ok(false));
     }
 }
+
+/// Review F1 (round c): the last name of a source is read on this host's
+/// separators, for its landing place and for its own name.
+#[test]
+fn a_source_name_is_read_on_the_host_separators() {
+    assert_eq!(base_name("src/.claude"), Some(".claude"));
+    assert_eq!(base_name("src/.claude/"), Some(".claude"));
+    assert!(names_contents("src/"));
+    assert!(names_contents("src/."));
+    assert!(names_contents("."));
+    assert!(!names_contents("src"));
+    if cfg!(windows) {
+        assert_eq!(base_name("src\\.claude"), Some(".claude"));
+        assert_eq!(base_name(".\\.claude."), Some(".claude."));
+        assert!(names_contents("src\\"));
+        assert!(names_contents("src\\."));
+    } else {
+        // Elsewhere a backslash is part of the name.
+        assert_eq!(base_name("src\\.claude"), Some("src\\.claude"));
+        assert!(!names_contents("src\\"));
+    }
+}
+
+/// Review F1 (round c): on Windows a source written with backslashes
+/// lands at its last name, so a copy into the checkout root is refused,
+/// naming `.claude`.
+#[cfg(windows)]
+#[test]
+fn a_backslash_source_into_the_checkout_is_refused_on_windows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    repository(&root);
+    std::fs::create_dir_all(root.join("src/.claude")).unwrap();
+    std::fs::write(root.join("src/.claude/settings.json"), "{}").unwrap();
+    for line in [
+        "cp -R src\\.claude .",
+        "rsync -a src\\.claude ./",
+        "cp -R .\\.claude. .",
+    ] {
+        let found = judged(line, &root).expect(line);
+        assert!(found.contains(".claude"), "{line}: {found}");
+    }
+}

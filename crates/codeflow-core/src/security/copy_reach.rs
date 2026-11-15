@@ -146,8 +146,26 @@ fn pattern(word: &str) -> bool {
 /// The last name of `source`, the name a copy of it gets in a directory,
 /// or `None` for `.`, `..` and a root, whose contents are copied.
 fn base_name(source: &str) -> Option<&str> {
-    let name = source.trim_end_matches('/').rsplit('/').next()?;
+    let name = source
+        .trim_end_matches(SEPARATORS)
+        .rsplit(SEPARATORS)
+        .next()?;
     (!name.is_empty() && name != "." && name != "..").then_some(name)
+}
+
+/// The path separators of this host, as `portable_path::filesystem_spelling`
+/// reads them: a backslash separates names only on Windows, and elsewhere
+/// it is part of a name.
+const SEPARATORS: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+
+/// Whether `source` names its contents rather than itself: it ends in a
+/// separator or a separator and `.`, or is `.`.
+fn names_contents(source: &str) -> bool {
+    source == "."
+        || source.ends_with(SEPARATORS)
+        || source
+            .strip_suffix('.')
+            .is_some_and(|rest| rest.ends_with(SEPARATORS))
 }
 
 /// The places the contents of `source` land, each as spelled (for the
@@ -160,7 +178,7 @@ fn landings(
     place: &Place<'_>,
 ) -> Vec<String> {
     let join = |name: &str| format!("{}/{name}", dest.trim_end_matches('/'));
-    let contents = source.ends_with('/') || source.ends_with("/.") || source == ".";
+    let contents = names_contents(source);
     let named = base_name(source);
     let mut out = Vec::new();
     match cmd {
@@ -175,12 +193,13 @@ fn landings(
                 .iter()
                 .any(|f| f == "-R" || long_is(f, "--relative"))
             {
-                let kept = source
+                let marked = source
                     .split_once("/./")
-                    .map_or(source, |(_, rest)| rest)
-                    .trim_start_matches('/');
+                    .or_else(|| cfg!(windows).then(|| source.split_once("\\.\\")).flatten())
+                    .map_or(source, |(_, rest)| rest);
+                let kept = marked.trim_start_matches(SEPARATORS);
                 if !kept.is_empty() {
-                    out.push(join(kept.trim_end_matches('/')));
+                    out.push(join(kept.trim_end_matches(SEPARATORS)));
                 }
             }
         }
@@ -371,8 +390,85 @@ fn through_link(
 }
 
 /// The first rsync option in `flags` that `test` matches.
-fn flag_of<'a>(flags: &'a [String], test: fn(&str) -> bool) -> Option<&'a str> {
+fn flag_of(flags: &[String], test: fn(&str) -> bool) -> Option<&str> {
     flags.iter().map(String::as_str).find(|f| test(f))
+}
+
+/// Why a source-removing sync given `flag` removes enforcement files, or
+/// cannot be shown not to, for any of its local `sources`.
+fn removed_source(cmd: &str, flag: &str, sources: &[String], place: &Place<'_>) -> Option<String> {
+    for source in sources {
+        if remote(source) {
+            continue;
+        }
+        let Some(path) = (place.resolve)(source) else {
+            return Some(format!(
+                "`{cmd} {flag}` removes its source `{source}`, which the guard cannot resolve"
+            ));
+        };
+        for root in place.roots {
+            match holds_enforcement_files(&path, root).and_then(|holds| {
+                Ok(holds
+                    || crate::hooks::edit_guard::repository_enforcement_target(&path, root, false)?)
+            }) {
+                Ok(false) => {}
+                Ok(true) => {
+                    return Some(format!(
+                        "`{cmd} {flag}` removes its source `{source}`, which is or holds enforcement files"
+                    ))
+                }
+                Err(error) => {
+                    return Some(format!(
+                        "`{cmd} {flag}` removes its source `{source}`, which the guard cannot read: {error}"
+                    ))
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A landing place under a destination filled in at run time: refuse a
+/// deleting sync, a source that holds an enforcement name, or one the guard
+/// cannot read. `None` when the source holds none.
+fn run_time_landing(
+    cmd: &str,
+    dest: &str,
+    source: &str,
+    deletes: Option<&str>,
+    read: &mut Option<(Source, Option<PathBuf>)>,
+    place: &Place<'_>,
+) -> Option<String> {
+    if let Some(flag) = deletes {
+        return Some(format!(
+            "`{cmd} {flag}` deletes under its destination `{dest}`, which the guard cannot resolve"
+        ));
+    }
+    let (state, path) = read.get_or_insert_with(|| read_source(cmd, source, place));
+    let held = match (state, path) {
+        (Source::Unread(why), _) => Err(why.clone()),
+        (Source::Entry, Some(path)) => {
+            let own = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            enforcement_name(own.as_deref()).map(|hit| hit.then(|| path.clone()))
+        }
+        (Source::Tree(..), Some(path)) => {
+            holds_enforcement_name(path).and_then(|found| match found {
+                Some(found) => Ok(Some(found)),
+                None => enforcement_name(base_name(source)).map(|hit| hit.then(|| path.clone())),
+            })
+        }
+        (_, None) => Err("it cannot be resolved".into()),
+    };
+    match held {
+        Ok(None) => None,
+        Ok(Some(found)) => Some(format!(
+            "`{cmd}` writes to `{dest}`, which the guard cannot resolve, from the source `{source}`, which holds the enforcement entry `{}`",
+            found.display()
+        )),
+        Err(why) => Some(format!(
+            "`{cmd}` writes to `{dest}`, which the guard cannot resolve, from the source `{source}`, which the guard cannot verify: {why}"
+        )),
+    }
 }
 
 /// Why a recursive copy or sync of `copy` by `cmd` reaches an enforcement
@@ -400,35 +496,8 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
     let removes = flag_of(&copy.flags, rsync_removes_source).filter(|_| rsync);
 
     if let Some(flag) = removes {
-        for source in &sources {
-            if remote(source) {
-                continue;
-            }
-            let Some(path) = (place.resolve)(source) else {
-                return Some(format!(
-                    "`{cmd} {flag}` removes its source `{source}`, which the guard cannot resolve"
-                ));
-            };
-            for root in place.roots {
-                match holds_enforcement_files(&path, root).and_then(|holds| {
-                    Ok(holds
-                        || crate::hooks::edit_guard::repository_enforcement_target(
-                            &path, root, false,
-                        )?)
-                }) {
-                    Ok(false) => {}
-                    Ok(true) => {
-                        return Some(format!(
-                            "`{cmd} {flag}` removes its source `{source}`, which is or holds enforcement files"
-                        ))
-                    }
-                    Err(error) => {
-                        return Some(format!(
-                            "`{cmd} {flag}` removes its source `{source}`, which the guard cannot read: {error}"
-                        ))
-                    }
-                }
-            }
+        if let Some(message) = removed_source(cmd, flag, &sources, place) {
+            return Some(message);
         }
     }
 
@@ -436,39 +505,11 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
         let mut read: Option<(Source, Option<PathBuf>)> = None;
         for landing in landings(cmd, copy, source, &dest, place) {
             let Some(base) = (place.resolve)(&landing) else {
-                // A destination filled in at run time: refuse a source that
-                // holds an enforcement name, or one the guard cannot read.
-                if let Some(flag) = deletes {
-                    return Some(format!(
-                        "`{cmd} {flag}` deletes under its destination `{dest}`, which the guard cannot resolve"
-                    ));
+                let message = run_time_landing(cmd, &dest, source, deletes, &mut read, place);
+                if message.is_some() {
+                    return message;
                 }
-                let (state, path) = read.get_or_insert_with(|| read_source(cmd, source, place));
-                let held = match (state, path) {
-                    (Source::Unread(why), _) => Err(why.clone()),
-                    (Source::Entry, Some(path)) => {
-                        let own = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                        enforcement_name(own.as_deref()).map(|hit| hit.then(|| path.clone()))
-                    }
-                    (Source::Tree(..), Some(path)) => {
-                        holds_enforcement_name(path).and_then(|found| match found {
-                            Some(found) => Ok(Some(found)),
-                            None => enforcement_name(base_name(source))
-                                .map(|hit| hit.then(|| path.clone())),
-                        })
-                    }
-                    (_, None) => Err("it cannot be resolved".into()),
-                };
-                return match held {
-                    Ok(None) => continue,
-                    Ok(Some(found)) => Some(format!(
-                        "`{cmd}` writes to `{dest}`, which the guard cannot resolve, from the source `{source}`, which holds the enforcement entry `{}`",
-                        found.display()
-                    )),
-                    Err(why) => Some(format!(
-                        "`{cmd}` writes to `{dest}`, which the guard cannot resolve, from the source `{source}`, which the guard cannot verify: {why}"
-                    )),
-                };
+                continue;
             };
             let reach = match reached(&base, place) {
                 Ok(reach) => reach,
@@ -519,35 +560,51 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
                     }
                 }
                 Source::Tree(lower, names) => {
-                    if let Some(inside) = &reach.inside {
-                        return Some(format!(
-                            "`{cmd}` writes the contents of the source `{source}` into the enforcement path `{}`",
-                            inside.display()
-                        ));
-                    }
-                    for relative in &reach.below {
-                        let first = relative
-                            .components()
-                            .next()
-                            .map(|c| compared(&c.as_os_str().to_string_lossy()));
-                        if first.is_some_and(|first| lower.contains(&first)) {
-                            return Some(format!(
-                                "`{cmd}` would write the enforcement path `{}` from the source `{source}`",
-                                shown(relative)
-                            ));
-                        }
-                    }
-                    // A link at the landing place that the copy writes
-                    // through, such as `x -> .claude` for a source `x/`.
-                    if let Some(message) = through_link(cmd, source, &base, &landing, names, place)
-                    {
-                        return Some(message);
+                    let found = tree_reaches(cmd, source, &base, &landing, (lower, names.as_slice()), &reach, place);
+                    if found.is_some() {
+                        return found;
                     }
                 }
             }
         }
     }
     None
+}
+
+/// Why a directory source whose top-level names are `lower` (compared) and
+/// `names` (as listed) writes into or onto an enforcement path at the
+/// resolved landing place `base`, or through a link there.
+fn tree_reaches(
+    cmd: &str,
+    source: &str,
+    base: &Path,
+    landing: &str,
+    (lower, names): (&HashSet<String>, &[std::ffi::OsString]),
+    reach: &Reached,
+    place: &Place<'_>,
+) -> Option<String> {
+    if let Some(inside) = &reach.inside {
+        return Some(format!(
+            "`{cmd}` writes the contents of the source `{source}` into the enforcement path `{}`",
+            inside.display()
+        ));
+    }
+    for relative in &reach.below {
+        let first = relative
+            .components()
+            .next()
+            .map(|c| compared(&c.as_os_str().to_string_lossy()));
+        if first.is_some_and(|first| lower.contains(&first)) {
+            return Some(format!(
+                "`{cmd}` would write the enforcement path `{}/{}` from the source `{source}`",
+                landing.trim_end_matches('/'),
+                crate::portable_path::slashed(relative)
+            ));
+        }
+    }
+    // A link at the landing place that the copy writes through, such as
+    // `x -> .claude` for a source `x/`.
+    through_link(cmd, source, base, landing, names, place)
 }
 
 #[cfg(test)]

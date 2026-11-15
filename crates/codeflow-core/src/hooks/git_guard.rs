@@ -6992,6 +6992,59 @@ impl GitWriter<'_> {
             "elsewhere on the line"
         }
     }
+
+    /// A move, or a sync that removes its source, judged by the sources it
+    /// removes; the refusal names the source and its role (TSK-1187).
+    fn removes_source(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let cmd = self.cmd;
+        if let Some(finding) = copy
+            .sources
+            .iter()
+            .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
+        {
+            return Some(finding);
+        }
+        match self.named(&copy.sources) {
+            Some(Named::Spelled(shown)) => {
+                return Some(self.refuse(format!("`{cmd}` removes {shown} as its source")))
+            }
+            Some(Named::Unresolved { word, path }) => {
+                return Some(self.refuse(format!(
+                    "`{cmd}` removes its source `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                )))
+            }
+            None => {}
+        }
+        let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
+        worktree_delete_check(
+            &format!("`{cmd}` removes its source"),
+            &sources,
+            self.level,
+            self.cwd,
+            self.payload_cwd,
+            self.line,
+            None,
+        )
+    }
+
+    /// A recursive copy or sync judged by what it would create, replace or
+    /// delete under its destination (TSK-408).
+    fn copy_reach(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let resolve = |word: &str| {
+            (!unresolved_word(word) && unknown_tilde_rest(word).is_none())
+                .then(|| integrity_shell_path(word, self.cwd))
+        };
+        let roots: Vec<&Path> = if self.cwd == self.payload_cwd {
+            vec![self.cwd]
+        } else {
+            vec![self.cwd, self.payload_cwd]
+        };
+        let place = crate::security::copy_reach::Place {
+            resolve: &resolve,
+            roots: &roots,
+        };
+        crate::security::copy_reach::judge(self.cmd, copy, &place).map(|m| self.refuse(m))
+    }
 }
 
 /// How an integrity path is named among a command's write operands
@@ -7073,34 +7126,7 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
         if cmd == "mv"
             || (cmd == "rsync" && copy.flags.iter().any(|flag| rsync_removes_source(flag)))
         {
-            if let Some(finding) = copy
-                .sources
-                .iter()
-                .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
-            {
-                return Some(finding);
-            }
-            match self.named(&copy.sources) {
-                Some(Named::Spelled(shown)) => {
-                    return Some(self.refuse(format!("`{cmd}` removes {shown} as its source")))
-                }
-                Some(Named::Unresolved { word, path }) => {
-                    return Some(self.refuse(format!(
-                        "`{cmd}` removes its source `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
-                    )))
-                }
-                None => {}
-            }
-            let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
-            if let Some(finding) = worktree_delete_check(
-                &format!("`{cmd}` removes its source"),
-                &sources,
-                self.level,
-                self.cwd,
-                self.payload_cwd,
-                self.line,
-                None,
-            ) {
+            if let Some(finding) = self.removes_source(copy) {
                 return Some(finding);
             }
         }
@@ -7160,23 +7186,8 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
                 return Some(finding);
             }
         }
-        // A recursive copy or sync is judged by what it would create,
-        // replace or delete under its destination (TSK-408).
-        let resolve = |word: &str| {
-            (!unresolved_word(word) && unknown_tilde_rest(word).is_none())
-                .then(|| integrity_shell_path(word, self.cwd))
-        };
-        let roots: Vec<&Path> = if self.cwd == self.payload_cwd {
-            vec![self.cwd]
-        } else {
-            vec![self.cwd, self.payload_cwd]
-        };
-        let place = crate::security::copy_reach::Place {
-            resolve: &resolve,
-            roots: &roots,
-        };
-        if let Some(message) = crate::security::copy_reach::judge(cmd, copy, &place) {
-            return Some(self.refuse(message));
+        if let Some(finding) = self.copy_reach(copy) {
+            return Some(finding);
         }
         let p = git_config_destination(cmd, copy, self.cwd)?;
         Some(self.refuse(format!(
