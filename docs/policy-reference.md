@@ -892,6 +892,85 @@ task PR.
 The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
 judges against the pull request's target only.
 
+## Home moves a sync of main accepts
+
+`main` can move a task's home through a reviewed planning merge, as when it
+retargets tasks to itself. When a sync of `main` into a line carries such a
+record, the import check (`work.import_authority`, TSK-1378) follows every
+home move of that task on the first-parent history of `main`'s trusted
+commit since the line's merge base with it:
+
+- Each move must be a merge whose tree is the clean merge of its parents
+  and whose own diff holds only records (the admitted path classes, records
+  only today). The task must be the same single record on both sides.
+- A move before the last one is accepted only while the task is `todo` or
+  `blocked` with no acceptance block on both sides.
+- The line's copy is compared once, with the last move's new home. When the
+  line already names that home, the move is accepted whatever the task's
+  state. When the line names another home or has no copy, it is accepted
+  only when the task was `todo` or `blocked` with no acceptance block on
+  both sides of the move and the line has not changed its copy since the
+  merge base.
+- Anything else is refused with "the landing changes the task's declared
+  home" and the cause. A later change to the record on `main`, a note or a
+  move back included, does not clear an earlier refused move.
+
+A record that names the line as its home, and that the line does not hold
+with that home, must prove where it came from. Its exact version must
+stand on `main`'s first-parent history since the line's merge base with
+`main`, and the proof depends on what `main` did in that span:
+
+- When `main` created the record there, that introduction must be a
+  records-only planning merge of a `todo` or `blocked` task.
+- When the record already existed at the merge base, `main` must have moved
+  it in that span.
+- In both cases every move in that span passes as above.
+
+A record the line already homes stays under the frozen criteria.
+
+A line can agree to `main`'s version through its own records-only planning
+merge that changes the task's home to that version's exact bytes, while
+the task is `todo` or `blocked` with no acceptance block on both sides.
+That merge must be the line's last change of the task's home, found by the
+task's identity on the line's first-parent history since its merge base
+with `main`. A later edit on the line does not replace it. The walk of the
+task's moves then starts after the first commit on `main` in that span that
+holds the adopted version. A later commit that holds the same bytes again
+does not move that point, so a move away and back after it is still
+judged, as is every later move.
+
+A home change made any other way sets no starting point, and the walk then
+judges every move since the merge base. Such ways include a direct commit,
+a merge that also carries docs, a merge reached only through another
+merge's second parent, a completed task, a copy that differs from `main`'s
+version, a copy of the version the merge base already held, or a new
+record on the line.
+
+When the sync leaves a record unchanged and `main` moved the task in that
+span, the check looks at the line's own history of the task:
+
+- It reads each commit on the line's first-parent history since the merge
+  base, by the task's identity. A commit that changed the task's home or
+  introduced it counts, even when a later commit restored the home the
+  merge base held, with exact bytes or with other text kept.
+- The line's last such change decides. It is the commit that changed the
+  home against its own first parent, and it must be the adoption described
+  above, or a reviewed planning merge of the task while it was `todo` or
+  `blocked` with no acceptance block, or a shared planning introduction.
+  Earlier changes on the line are not judged here.
+- The line's last sync of `main` is compared with the merge base. When it
+  holds the merge base's home, a home it took from `main` is not a change
+  of the line's own. When it keeps another home, the line's landing that
+  set that home before the sync decides, never the sync itself. When no
+  commit on the line set it, the record is refused.
+- A line that never changed the task's home or introduced it in that span
+  is not examined.
+
+Every refused record is named with its own cause. A refused move clears
+through the line's own reviewed planning merge where the task's state
+permits it, or by reopening, replanning or correcting the source record
+through its pull request.
+
 ## An epic's parent line
 
 `codeflow ci` and the pre-push hook bind an epic line
