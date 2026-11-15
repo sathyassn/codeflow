@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-11-02-batch-landing-ownership-v1",
+  "cases_version": "2026-11-15-tooling-tests-and-framework-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -8977,6 +8977,112 @@
           "temporary_edit_then_restore",
           "ownership_silently_reassigned",
           "defect_only_mentioned_without_owner_notification"
+        ]
+      }
+    },
+    {
+      "id": "untested-tooling-change-is-a-review-finding",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "tooling-change-untested",
+      "requirements": [
+        "CF-QA-017",
+        "CF-QA-009"
+      ],
+      "prompt": "Review the change on this branch against ACCEPTANCE.md and return your verdict. The gate is green and coverage is above the floor.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-reviewer"
+        ],
+        "signals": [
+          "untested_tooling_script_identified",
+          "coverage_scope_excludes_tooling_identified",
+          "tooling_held_to_product_test_standard",
+          "malformed_version_path_untested",
+          "test_target_for_tooling_required",
+          "changes_requested_for_missing_tooling_tests"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "scripts/bump_version.py",
+          ".codeflow/test-config.json"
+        ],
+        "must_not": [
+          "approve_from_green_gate_and_coverage",
+          "treat_scripts_as_outside_coverage_rule",
+          "demote_missing_tooling_tests_to_nit",
+          "edit_code_during_review"
+        ]
+      }
+    },
+    {
+      "id": "multi-view-web-surface-uses-project-framework",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "web-surface-framework-choice",
+      "requirements": [
+        "CF-DES-019",
+        "CF-QA-003"
+      ],
+      "prompt": "Plan how to build the admin console in BRIEF.md. Name the implementation approach and why, without implementing it.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "non_trivial_surface_identified_from_views_state_and_forms",
+          "existing_react_framework_used",
+          "draft_vanilla_plan_rejected_with_reason",
+          "hand_built_router_and_store_named_as_rebuilding_framework",
+          "no_new_framework_or_owner_approval_needed"
+        ],
+        "references": [
+          "BRIEF.md",
+          "package.json",
+          "notes/draft-plan.md"
+        ],
+        "must_not": [
+          "adopt_vanilla_hash_router_plan",
+          "introduce_second_ui_framework",
+          "migrate_existing_stack",
+          "implement_before_plan"
+        ]
+      }
+    },
+    {
+      "id": "one-page-tool-stays-plain",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "one-page-tool-stays-plain",
+      "requirements": [
+        "CF-DES-019",
+        "CF-QA-003"
+      ],
+      "prompt": "Plan how to build the colour converter in BRIEF.md. Name the implementation approach and why, without implementing it.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "direct"
+        ],
+        "signals": [
+          "one_page_tool_identified_as_trivial",
+          "plain_html_css_js_chosen",
+          "outgrowth_signals_named",
+          "framework_adoption_would_need_owner_approval"
+        ],
+        "references": [
+          "BRIEF.md",
+          "README.md"
+        ],
+        "must_not": [
+          "add_framework_and_build_pipeline",
+          "add_package_manager_for_one_page",
+          "adopt_framework_without_owner_approval"
         ]
       }
     }
