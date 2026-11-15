@@ -248,6 +248,31 @@ fn update_says_nothing_for_a_copy_on_the_new_default() {
     assert!(!printed.contains(OLD_RUN), "{printed}");
 }
 
+/// The notice only advises: a copy that is not a regular file is said in
+/// the output and never stops update, and doctor reports it.
+#[test]
+fn update_goes_on_when_the_copy_is_not_a_regular_file() {
+    let (_dir, root) = init_standard();
+    std::fs::remove_file(root.join(PIPELINE)).unwrap();
+    std::fs::create_dir(root.join(PIPELINE)).unwrap();
+
+    let printed = update(&root);
+
+    assert!(root.join(PIPELINE).is_dir(), "update replaced the folder");
+    assert!(
+        printed.contains(
+            "verify stage not checked, because the copy could not be read as a regular file"
+        ),
+        "{printed}"
+    );
+    assert!(!printed.contains(EDIT_LEAD), "{printed}");
+    let checked = doctor(&root);
+    assert!(
+        checked.contains(PIPELINE),
+        "doctor names the copy:\n{checked}"
+    );
+}
+
 /// AC-4: doctor reports a copy that runs essential per change, naming the
 /// edit, and nothing for one on targeted checks and quick.
 #[test]

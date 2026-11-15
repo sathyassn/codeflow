@@ -1173,10 +1173,15 @@ fn update_entry(
                 let mut notes = vec![Shown::fixed("user-owned: never mutated by update")];
                 if entry.dest == pipeline_stage::PIPELINE_DEST {
                     // Read only to advise: the copy is never written here.
-                    let live =
-                        std::fs::read(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
-                    if pipeline_stage::runs_essential_per_change(&live) {
-                        notes.push(Shown::fixed(pipeline_stage::UPDATE_NOTICE));
+                    // Read like the doctor check, so a fifo or other
+                    // non-regular file is refused without being opened. An
+                    // unreadable copy is said, never a reason to stop update.
+                    match crate::bounded_file::read_regular(&dest_path) {
+                        Ok(live) if pipeline_stage::runs_essential_per_change(&live) => {
+                            notes.push(Shown::fixed(pipeline_stage::UPDATE_NOTICE));
+                        }
+                        Ok(_) => {}
+                        Err(_) => notes.push(Shown::fixed(pipeline_stage::UNREAD_NOTICE)),
                     }
                 }
                 let is_new_entry = !installed.files.contains_key(&entry.dest);

@@ -38,6 +38,10 @@ pub const UPDATE_NOTICE: &str = concat!(
     " A project that wants an essential run on every change keeps its copy as it is",
 );
 
+/// The note `codeflow update` prints when it cannot read a copy as a
+/// regular file to check its verify stage.
+pub const UNREAD_NOTICE: &str = "verify stage not checked, because the copy could not be read as a regular file; `codeflow doctor --check pipeline` reports it";
+
 /// Whether a pipeline copy still runs a whole essential gate on every
 /// change. The bytes are searched as they are, so nothing is decoded.
 #[must_use]
