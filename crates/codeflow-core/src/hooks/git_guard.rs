@@ -6842,17 +6842,23 @@ fn direct_write_violation(
     if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
         return Some(v);
     }
-    if let Some(p) = write_args.and_then(|paths| {
+    if let Some(named) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
             token_integrity_path(".", cwd, payload_cwd)
+                .map(|path| Named::Spelled(spelled(".", &path)))
         } else {
-            arg_integrity_path(paths, cwd, payload_cwd)
-                .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
+            named_integrity(paths, line, cwd, payload_cwd)
         }
     }) {
+        // The refusal names the operand it rests on (TSK-1187).
         return Some(hook_integrity_violation(
             level,
-            format!("`{cmd}` targets the integrity path `{p}`"),
+            match named {
+                Named::Spelled(shown) => format!("`{cmd}` targets {shown}"),
+                Named::Unresolved { word, path } => format!(
+                    "`{cmd}` targets `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                ),
+            },
         ));
     }
     if let Some(p) = output_writer_paths(cmd, args)
@@ -6964,17 +6970,78 @@ impl GitWriter<'_> {
             .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
     }
 
+    /// [`GitWriter::integrity`], saying which operand the match rests on.
+    fn named(&self, paths: &[String]) -> Option<Named> {
+        named_integrity(paths, self.line, self.cwd, self.payload_cwd)
+    }
+
     fn refuse(&self, message: String) -> Violation {
         hook_integrity_violation(self.level, message)
     }
+
+    /// The role an integrity path named on the line plays in `copy`.
+    fn role(&self, path: &str, copy: &crate::security::unresolved::CopyRead) -> &'static str {
+        let source = copy.sources.iter().any(|source| {
+            arg_integrity_path(std::slice::from_ref(source), self.cwd, self.payload_cwd)
+                .is_some_and(|named| named == path)
+                || normalize_path(source).ends_with(&normalize_path(path))
+        });
+        if source {
+            "as its source"
+        } else {
+            "elsewhere on the line"
+        }
+    }
+}
+
+/// How an integrity path is named among a command's write operands
+/// (TSK-1187): spelled by one of them, or named elsewhere on a line where
+/// one of them is filled in at run time.
+enum Named {
+    /// The operand that spells it, as a refusal shows the two together
+    /// ([`spelled`]).
+    Spelled(String),
+    Unresolved {
+        word: String,
+        path: String,
+    },
+}
+
+/// The operand `word` and the integrity path `path` it names, for a
+/// refusal: the path alone when the word spells it, else both.
+fn spelled(word: &str, path: &str) -> String {
+    if normalize_path(word) == normalize_path(path) {
+        format!("the integrity path `{path}`")
+    } else {
+        format!("`{word}`, which names the integrity path `{path}`")
+    }
+}
+
+fn named_integrity(paths: &[String], line: &str, cwd: &Path, payload_cwd: &Path) -> Option<Named> {
+    if let Some((word, path)) = paths.iter().find_map(|word| {
+        arg_integrity_path(std::slice::from_ref(word), cwd, payload_cwd).map(|path| (word, path))
+    }) {
+        return Some(Named::Spelled(spelled(word, &path)));
+    }
+    let word = paths.iter().find(|word| unresolved_word(word))?;
+    let path = unresolved_names_enforcement(std::slice::from_ref(word), line, cwd, payload_cwd)?;
+    Some(Named::Unresolved {
+        word: word.clone(),
+        path,
+    })
 }
 
 impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
     type Found = Violation;
 
     fn writes(&self, path: &str) -> Option<Violation> {
-        let p = self.integrity(&[path.to_string()])?;
-        Some(self.refuse(format!("`{}` writes the integrity path `{p}`", self.cmd)))
+        Some(self.refuse(match self.named(&[path.to_string()])? {
+            Named::Spelled(shown) => format!("`{}` writes {shown}", self.cmd),
+            Named::Unresolved { word, path } => format!(
+                "`{}` writes to `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`",
+                self.cmd
+            ),
+        }))
     }
 
     fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
@@ -7012,8 +7079,16 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             {
                 return Some(finding);
             }
-            if let Some(path) = self.integrity(&copy.sources) {
-                return Some(self.refuse(format!("`{cmd}` removes the integrity source `{path}`")));
+            match self.named(&copy.sources) {
+                Some(Named::Spelled(shown)) => {
+                    return Some(self.refuse(format!("`{cmd}` removes {shown} as its source")))
+                }
+                Some(Named::Unresolved { word, path }) => {
+                    return Some(self.refuse(format!(
+                        "`{cmd}` removes its source `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                    )))
+                }
+                None => {}
             }
             let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
             if let Some(finding) = worktree_delete_check(
@@ -7028,10 +7103,40 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
                 return Some(finding);
             }
         }
-        if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
-            return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
+        // The refusal names the operand it rests on and its role
+        // (TSK-1187): a destination that spells the path, an operand that
+        // could be the destination, or a run-time destination on a line
+        // that names the path elsewhere.
+        let destinations = copy_destinations(cmd, copy);
+        match self.named(&destinations) {
+            Some(Named::Spelled(shown)) => {
+                let only_destinations: Vec<String> = destinations
+                    .iter()
+                    .filter(|word| !copy.sources.contains(word) || copy.dest.as_ref() == Some(word))
+                    .cloned()
+                    .collect();
+                let role = if arg_integrity_path(&only_destinations, self.cwd, self.payload_cwd)
+                    .is_some()
+                {
+                    "as its destination"
+                } else {
+                    "in an operand that could be its destination"
+                };
+                return Some(self.refuse(format!("`{cmd}` writes {shown} {role}")));
+            }
+            Some(Named::Unresolved { word, path }) => {
+                let role = self.role(&path, copy);
+                return Some(self.refuse(format!(
+                    "`{cmd}` writes to `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}` {role}"
+                )));
+            }
+            None => {}
         }
-        if cmd == "rsync" && copy.flags.iter().any(|flag| flag.starts_with("--delete")) {
+        if let Some(flag) = copy
+            .flags
+            .iter()
+            .find(|flag| cmd == "rsync" && rsync_deletes(flag))
+        {
             if let Some(finding) = copy
                 .dest
                 .iter()
@@ -7043,7 +7148,7 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             // as a recursive removal does (TSK-379 security round 8).
             let dests: Vec<_> = copy.dest.iter().map(String::as_str).collect();
             if let Some(finding) = worktree_delete_check(
-                &format!("`{cmd} --delete` removes from its destination"),
+                &format!("`{cmd} {flag}` removes from its destination"),
                 &dests,
                 self.level,
                 self.cwd,
@@ -7053,6 +7158,24 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             ) {
                 return Some(finding);
             }
+        }
+        // A recursive copy or sync is judged by what it would create,
+        // replace or delete under its destination (TSK-408).
+        let resolve = |word: &str| {
+            (!unresolved_word(word) && unknown_tilde_rest(word).is_none())
+                .then(|| integrity_shell_path(word, self.cwd))
+        };
+        let roots: Vec<&Path> = if self.cwd == self.payload_cwd {
+            vec![self.cwd]
+        } else {
+            vec![self.cwd, self.payload_cwd]
+        };
+        let place = crate::security::copy_reach::Place {
+            resolve: &resolve,
+            roots: &roots,
+        };
+        if let Some(message) = crate::security::copy_reach::judge(cmd, copy, &place) {
+            return Some(self.refuse(message));
         }
         let p = git_config_destination(cmd, copy, self.cwd)?;
         Some(self.refuse(format!(
@@ -11054,13 +11177,7 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     key_write && names_hooks_path
 }
 
-fn rsync_removes_source(flag: &str) -> bool {
-    flag.starts_with("--")
-        && flag.len() > 2
-        && ["--remove-source-files", "--remove-sent-files"]
-            .iter()
-            .any(|full| full.starts_with(flag))
-}
+use crate::security::copy_reach::{rsync_deletes, rsync_removes_source};
 
 pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) -> Option<Violation> {
     if launcher_name(cmd) != "xargs" || !level.is_active() {
