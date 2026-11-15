@@ -1,0 +1,11 @@
+id = "TSK-1512"
+uid = "969eedf4-7f5a-4058-b3b1-529f9cb5644d"
+kind = "TSK"
+title = "The GitLab, Bitbucket and generic pinned runs judge a change by the target's test config"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T23:49:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
