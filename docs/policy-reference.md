@@ -25,6 +25,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.hard_reset_protected` | Level | `block` | off \| warn \| allow \| block | A hard reset on a protected branch. |  |
 | `git.merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A merge commit landing on a protected branch. | PR merge and `codeflow integrate` are the sanctioned paths; a human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.pr_merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A `gh pr merge` whose base branch is protected (git-guard only). |  |
+| `git.agent_push_refused_branches` | string list | `["integration","integration/*"]` | an array of branch names or `*` patterns (e.g. integration/*), matched as `git.protected_branches` is matched; an empty array refuses none | Branches an agent never pushes: git-guard and exec-guard refuse an agent push that updates or deletes one, in any push form and whatever credential Git uses. | Read only from the landed policy at the remote's default branch, like every guard key, so an uncommitted or branch-local edit has no effect until it lands there. A fixed floor stays refused whatever the list holds: the default branch the policy is read at, `main` and `master`. An empty list lets agents push the lines it would name where the credential allows; the GitHub CLI credential admission still never admits an `integration/` name. The guards read a value that is not an array of non-empty strings without a space or control character as the default list, and validation reports a value that is not an array of strings. A push of every branch (`--all`, `--branches`, `--mirror`, a wildcard) is refused, as is a push whose destination the guard does not read: `git send-pack`, `git http-push`, `git subtree push`, a remote helper run by hand, and a push that leaves its destination to `push.default` other than `simple` or `current` or to a `remote.<name>.push` mapping. The git hooks do not read the key, so the operator's own pushes are unaffected. Landing a reviewed pull request with `gh pr merge` is a separate rule, `git.pr_merge_to_protected`, which this key does not change. |
+| `git.agent_remote_urls` | string list | `[]` | an array of remote URLs, each `https://` or a local absolute path, written exactly as `git remote get-url origin` prints it; an empty array admits none | The `origin` URLs for which the guards let an agent's fetch or push use the GitHub CLI credential helper. | Read only from the landed policy at the remote's default branch, so an uncommitted or branch-local edit, or a URL set by hand with `git remote set-url`, has no effect until a reviewed policy naming it lands there. `origin`'s configured URL must equal an entry byte for byte: a trailing slash, a missing `.git` or a change of case is a different URL. Unset or empty, agents' fetches and pushes that reach the helper keep the account finding. The guards read a value that is not an array of non-empty strings as empty, and validation reports a value that is not an array of strings. The git hooks do not read the key. |
 | `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
 | `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). Only the operator runs `codeflow update` and `codeflow init`, which write the files the guards enforce from: exec-guard refuses a run of either verb in every folder, whichever launcher, supplier, package runner or package manager, shell, interpreter, Git runner or `cargo run` starts it and however the binary's path is written. A line is data only in a closed subset the guard lists: each command one of a few programs that print or search (`echo`, `printf` with a format of literal text and `%s` only, `cat`, `head`, `tail`, `wc`, `grep`, `rg` with `--no-config` as its first argument, and the binary by its bare name in its exact help and version forms), each argument read by that program's own grammar and inert in bash, zsh and sh, with no assignment, wrapper, substitution, expansion, subshell, here-document or supplier, with pipes, input read from a named file, and output redirected only to `/dev/null`, since a target's name does not show what it is when the line runs. No Git call is data, since a Git search can fetch a missing object through a transport its configuration names. Every other line that names the binary with a verb refuses, whatever program reads it: in its text as written, in its words as the shell passes them, in what `printf`, `echo` and `print` write from them where that is plain literal text, or in a value the line builds from its own assignments. So give such text to a listed program or leave the binary's name out of a search. The verb is the binary's own subcommand: one command the shell passes exactly as written, plain words with no quote, operator or expansion, that runs the binary with another subcommand that runs no operand (each one but `update`, `init` and `reserve`), such as `codeflow delegate init`, passes this check. Where the line itself hands text it produces to a shell or interpreter on the line (through a pipe, a here-string, a here-document it expands, a process substitution, `eval`, a `-c` or `-e` value it expands, a command word it fills in, or a supplier that runs a command built from what it reads), that text counts only as one `printf`, `echo` or `print` of plain literal text, or a literal here-string or here-document, and is judged as the executor reads it. Text the line spells that any other program on the line receives, by its input, a file operand, an argument or an output stream (a pipe, a redirection, here-string or here-document on any descriptor, an `exec` redirection, a process substitution in either direction, a command substitution, a `$'...'` quote with an escape, or a name the line binds, in an argument, in an assignment to a variable that gives a program a command or a startup file, or in a value the line may export), is judged the same way unless the guard knows the program only reads it as data, and refuses whatever it names when it takes another form. No interpreter and no program with an option that runs a program, such as `sort`, is a data reader. A plain file counts as that file run directly on a line that writes no file. A line of more than one command that writes text it spells to a file refuses whatever else is on it, since a program can run a file the line never names (a default file, a loader option, a configuration file), the shell finds a program's name on the path, where the line may write a file of that name, and the shell itself runs text it evaluates. One simple command whose writes come after everything it runs, such as `printf x > notes.txt`, stays allowed, and so does a file written with a program's own output, such as `cargo build > build.log 2>&1 && grep error build.log`; write the file on one line and run the next command on the next line. Text the shell evaluates as arithmetic is judged as command text, and where it reads a program's output or a value the guard cannot settle, the line refuses; run the program on its own line and compare the number it prints as literal text on the next, such as `[ 12 -gt 3 ]`; `test` or `[` on a program's output passes this check, but the strict text rule (`security.text_guard`) refuses it at its default `strict`. A variable such text reads that the shell sets from text on the line, or that the line assigns in a way no word on it shows, counts as a value the guard cannot settle, and text the shell expands as a prompt has each substitution in it judged as a command line. These refusals take this key's level: `warn` reports them and `off` drops them. A run whose program word or first operand the guard cannot resolve, and a run inside a quoted argument or an assigned value, refuse too (TSK-1476). The guard's checks on printed text are partial. A line these checks allow is still judged by the strict text rule, which at its default `strict` refuses a run-time value such as a command substitution in an argument. Text a line writes to a process started earlier that executes what it reads (a named pipe, a descriptor, a background shell) is a named residual, in the same class as the verb's words written to a file and run later. So are a file one line writes that a later line runs, a file one program's output writes that a later program on the same line reads or runs, a binary an agent renames or copies, text a program on the line runs through its own command language when it is not a shell or interpreter reading code, the output of a program the line runs (other than `printf`, `echo` and `print`) when a program the guard does not know receives it, and state the line does not show (a file's contents, output a program hands to a shell it starts itself such as a Git pager, an exported variable or a variable's attributes, a builtin name that a shell alias, function or loaded module from a profile redefines, a program put first on the path): none of them is named on the line. Other layers hold against these in part: once a repository's remote has a default branch, the session guards read policy from that branch's committed state (before then they read the current commit, which a local commit can change, or the working copy before the first commit); the hosted policy workflow judges a pull request with the default branch's policy; a default branch whose rules require a pull request takes changed install files only through one, though whether that pull request is reviewed depends on approval rules or on the operator reviewing it; and an active harness sandbox (proven on native macOS) denies writes to the core hook, policy, harness-settings and CI files. No layer catches the rest: the commit hooks read their levels from the working copy, and neither they nor the push hook refuse a change to the policy, hook or workflow files, so a rewritten policy or hook takes effect locally at once; instruction files, skills, agents and other workflows outside the sandbox's denies change without a refusal until review; the hook wiring written into a linked worktree's shared Git configuration lies outside the worktree; and on a host or seat without an active sandbox nothing contains the writes. The guards hold each worktree's copies of the enforcement files as they hold the root checkout's, against shell writes and against the file tools edit-guard is bound to. The shipped presets name no worktree path, since a deny there also stops Git's own writes in a sandboxed session, and bind no guard to Claude's own file tools, so in a Claude session those tools can still change a worktree's copies. A write to Git's alternate object lists (`objects/info/alternates`, `objects/info/http-alternates`, in the common directory a linked worktree shares) refuses like a write to hooks, refs or config, since an alternate store adds objects Git reads as its own; reading them stays allowed. Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. Resolved builtin output, shell here-strings and sourced process substitutions are also read as code. When an interpreter takes code from an external producer the guard cannot read, or a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
 | `git.line_sync_interval` | uint | `0` | days; 0 disables reminders | Orient flags integration lines past this interval since their last sync or evidenced creation. | Unknown creation without a sync and lines with no own commits are never flagged. The shipped policy file does not list it, so an older binary never meets the key. |
@@ -94,7 +96,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.headless_peer_runs` | Level | `block` | off \| warn \| allow \| block | Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate). | Default block (ADR-0075 D4): a project that needs a headless run sets security.headless_peer_runs to warn or off. `codeflow update` moves a project still at the old warn default to block. |
 | `security.script_bypass` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 | `security.text_guard` | enum | `absent` | strict \| relaxed | Which text rule the exec-guard applies to shell calls (TSK-397): `strict` adds the strict rule to every call; `relaxed` applies the line's rule by the operator's choice and verifies no sandbox. | Default strict, also when the key is absent. `relaxed` is honoured only from the remote-tracking refs as last fetched (the remote's default branch, the one policy authority since TSK-1077): plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, and no ref file that is a symbolic link. It is never honoured from a working copy, a local branch or tag, or a repository without a remote; a Claude Code call also needs it in the session project's policy. Those refs are local state that a process able to write `.git` can set; the guard does not authenticate them. The strict rule's refusals block whatever `git.hook_integrity` says. Under `relaxed`, a recognized marked retry (`dangerouslyDisableSandbox`) and every call on native Windows still take the strict rule. `codeflow doctor --check sandbox` shows the rule and the ref it was read from. The shipped policy file does not list it, so an older binary never meets the key. |
-| `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
+| `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. The account finding on the GitHub CLI credential helper (`gh auth git-credential`) is skipped for a fetch from `origin` or a push of a work branch in the closed forms the enforcement-planes architecture lists under "Agent fetch and push" (TSK-1479). |
 | `security.interpreter_scan` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 | `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
 | `security.enforcement_baseline` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
@@ -892,6 +894,85 @@ task PR.
 The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
 judges against the pull request's target only.
 
+## Home moves a sync of main accepts
+
+`main` can move a task's home through a reviewed planning merge, as when it
+retargets tasks to itself. When a sync of `main` into a line carries such a
+record, the import check (`work.import_authority`, TSK-1378) follows every
+home move of that task on the first-parent history of `main`'s trusted
+commit since the line's merge base with it:
+
+- Each move must be a merge whose tree is the clean merge of its parents
+  and whose own diff holds only records (the admitted path classes, records
+  only today). The task must be the same single record on both sides.
+- A move before the last one is accepted only while the task is `todo` or
+  `blocked` with no acceptance block on both sides.
+- The line's copy is compared once, with the last move's new home. When the
+  line already names that home, the move is accepted whatever the task's
+  state. When the line names another home or has no copy, it is accepted
+  only when the task was `todo` or `blocked` with no acceptance block on
+  both sides of the move and the line has not changed its copy since the
+  merge base.
+- Anything else is refused with "the landing changes the task's declared
+  home" and the cause. A later change to the record on `main`, a note or a
+  move back included, does not clear an earlier refused move.
+
+A record that names the line as its home, and that the line does not hold
+with that home, must prove where it came from. Its exact version must
+stand on `main`'s first-parent history since the line's merge base with
+`main`, and the proof depends on what `main` did in that span:
+
+- When `main` created the record there, that introduction must be a
+  records-only planning merge of a `todo` or `blocked` task.
+- When the record already existed at the merge base, `main` must have moved
+  it in that span.
+- In both cases every move in that span passes as above.
+
+A record the line already homes stays under the frozen criteria.
+
+A line can agree to `main`'s version through its own records-only planning
+merge that changes the task's home to that version's exact bytes, while
+the task is `todo` or `blocked` with no acceptance block on both sides.
+That merge must be the line's last change of the task's home, found by the
+task's identity on the line's first-parent history since its merge base
+with `main`. A later edit on the line does not replace it. The walk of the
+task's moves then starts after the first commit on `main` in that span that
+holds the adopted version. A later commit that holds the same bytes again
+does not move that point, so a move away and back after it is still
+judged, as is every later move.
+
+A home change made any other way sets no starting point, and the walk then
+judges every move since the merge base. Such ways include a direct commit,
+a merge that also carries docs, a merge reached only through another
+merge's second parent, a completed task, a copy that differs from `main`'s
+version, a copy of the version the merge base already held, or a new
+record on the line.
+
+When the sync leaves a record unchanged and `main` moved the task in that
+span, the check looks at the line's own history of the task:
+
+- It reads each commit on the line's first-parent history since the merge
+  base, by the task's identity. A commit that changed the task's home or
+  introduced it counts, even when a later commit restored the home the
+  merge base held, with exact bytes or with other text kept.
+- The line's last such change decides. It is the commit that changed the
+  home against its own first parent, and it must be the adoption described
+  above, or a reviewed planning merge of the task while it was `todo` or
+  `blocked` with no acceptance block, or a shared planning introduction.
+  Earlier changes on the line are not judged here.
+- The line's last sync of `main` is compared with the merge base. When it
+  holds the merge base's home, a home it took from `main` is not a change
+  of the line's own. When it keeps another home, the line's landing that
+  set that home before the sync decides, never the sync itself. When no
+  commit on the line set it, the record is refused.
+- A line that never changed the task's home or introduced it in that span
+  is not examined.
+
+Every refused record is named with its own cause. A refused move clears
+through the line's own reviewed planning merge where the task's state
+permits it, or by reopening, replanning or correcting the source record
+through its pull request.
+
 ## An epic's parent line
 
 `codeflow ci` and the pre-push hook bind an epic line
@@ -1323,6 +1404,85 @@ to its required-checks answer:
   that cannot be read.
 
 The line pattern is C's when C exists, else `integration/**`.
+
+## Agent fetch and push
+
+Agents fetch from `origin` and push their own work branches (TSK-1479). The
+guards that judge these calls are described under
+[in-session guards](architecture/enforcement-planes.md#in-session-guards).
+
+### The GitHub CLI credential admission
+
+Git starts the configured credential helper on each transport call, and
+exec-guard judges that helper as a command of its own, so the GitHub CLI
+helper `gh auth git-credential` draws the `security.outward_actions` account
+finding. That finding is skipped for that exact helper body, and only on two
+closed forms:
+
+- `git [-C <path>] fetch [-q|-p] [origin [<branch>...]]`;
+- `git [-C <path>] push [-u] [-q] origin <src>:refs/heads/<name>`, or the
+  short forms that push the current branch to its own name.
+
+The repository must have one remote, `origin`, with one URL that no rewrite
+changes, no push, mirror or submodule setting that widens the call, and no
+`.gitmodules`. The URL must use a transport whose programs the guard
+accounts for: `https://`, served by the HTTPS helper Git ships, or a local
+absolute path. Any other URL keeps the finding, because Git starts a
+program named after its scheme (`ssh` for SSH, a remote helper for any
+other scheme, including `HTTPS://` spelled in capitals), and plain `http://`
+would send the token in the clear. The URL must also equal, byte for byte,
+an entry of `git.agent_remote_urls` in the landed policy at `origin`'s
+default branch. The key is empty by default, so agent fetches and pushes
+keep the finding until a reviewed policy naming the project's remote lands
+there; a URL changed with `git remote set-url`, or listed only in an
+uncommitted or branch-local edit, keeps it too. A pushed name
+must sit under a `git.branch_prefixes` entry of the landed policy, and must
+not be protected, `origin`'s default branch, an integration line, a release
+branch (`git.release_branch_pattern`), the ID registry, `main` or `master`.
+Every program the call starts must be a credential helper, and the helpers
+Git selects for `origin`'s URL must be the GitHub CLI helper alone. The guard
+reads that selection as Git makes it: matching `credential.helper` entries
+apply in configuration order, and an empty value clears those before it, so
+a system `osxkeychain` helper that `gh auth setup-git`'s empty `helper =`
+clears does not count. Where the guard cannot read the selection (a
+wildcard, path or user in the pattern, or an origin that is not a plain
+HTTPS URL), every helper the call may start must be the GitHub CLI helper.
+Any read that fails keeps the finding. git-guard still refuses a push to a
+protected branch on its own rule. Other calls that contact a remote, such as
+`git remote update`, `git remote prune`, `git remote show` and
+`git maintenance`, start the helper too and keep the finding. The identity
+the helper serves is the operator's setup; see
+[Mode A setup (operator)](#mode-a-setup-operator).
+
+### Branches agents never push
+
+git-guard and exec-guard refuse an agent push that updates or deletes a
+branch named by `git.agent_push_refused_branches` (default `integration` and
+`integration/*`), `origin`'s default branch, `main` or `master`, whatever
+credential Git uses. Both guards apply one judgement to each git call that
+git-guard's command reader finds on the line; exec-guard runs only that
+judgement, without git-guard's other rules. The list is read only from the
+landed policy, so an uncommitted or branch-local edit has no effect; an
+empty list frees the lines but never the default branch, `main` or `master`;
+a value the guards cannot read counts as the default list.
+
+The guards also refuse:
+
+- a push of every branch (`--all`, `--branches`, `--mirror`, a wildcard, the
+  matching refspec `:`);
+- a push whose destination they do not read (`git send-pack`,
+  `git http-push`, `git subtree push`, a remote helper run by hand);
+- a push into another repository (`git -C <path> push`) whose branch or
+  landed policy they cannot read, explicit refspecs included, since their
+  own policy does not hold that repository's default branch or list;
+- a push that leaves its destination to configuration they cannot read as
+  the source's own name: `push.default` other than `simple` or `current`, a
+  `remote.<name>.push` mapping, a configuration change earlier on the line,
+  or a `-c` option or `GIT_` variable on it.
+
+The git hooks do not read the key, so the operator's own pushes are
+unaffected, and landing a reviewed pull request with `gh pr merge` stays
+under `git.pr_merge_to_protected`.
 
 ## Where a new key goes
 

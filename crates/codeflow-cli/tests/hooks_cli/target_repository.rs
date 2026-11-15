@@ -5101,3 +5101,114 @@ fn worktree_add_reads_includes_through_an_admin_alias() {
         assert!(marker.exists(), "{kind}: the include did not apply");
     }
 }
+
+/// TSK-1479 AC-14: with the GitHub CLI credential helper configured, both
+/// built guards admit a fetch from `origin` and a fast-forward push of the
+/// work branch, and Git then reaches the bare origin; a push of `main` and
+/// of an `integration/` name is refused, naming the rule, and AC-15's rule
+/// refuses the line push in both guards with no helper too. The guards judge
+/// each line as a payload. The fetch and push this test runs itself go to a
+/// local bare repository, so Git starts no credential helper.
+#[test]
+fn agents_fetch_and_push_their_own_work_branch() {
+    let f = Fixture::new();
+    let bare = f.temp.path().join("origin.git");
+    // The landed policy names the origin's URL (AC-5).
+    let policy = serde_json::json!({"git": {
+        "protected_branches": ["main", "master"],
+        "root_checkout_commits": "off",
+        "agent_remote_urls": [shell_path(&bare)],
+    }});
+    super::write_agent_policy(&f.root, &policy.to_string());
+    f.empty_origin();
+    git(
+        &f.root,
+        &["config", "credential.helper", "!gh auth git-credential"],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    git(&f.root, &["fetch", "-q", "origin"]);
+    git(&f.root, &["remote", "set-head", "origin", "main"]);
+    let work = &f.linked;
+    let verdicts = |line: &str| -> Vec<(&str, Output)> {
+        ["exec-guard", "git-guard"]
+            .into_iter()
+            .map(|hook| (hook, f.command(work, hook, line)))
+            .collect()
+    };
+
+    // The admitted fetch passes both guards, then reaches the origin.
+    for (hook, out) in verdicts("git fetch origin") {
+        eprintln!("{hook} `git fetch origin`: exit {:?}", out.status.code());
+        assert_eq!(out.status.code(), Some(0), "{hook} fetch: {out:?}");
+    }
+    git(work, &["fetch", "origin"]);
+
+    // A fast-forward push of the work branch passes both guards, then
+    // lands on the origin.
+    std::fs::write(work.join("agent.txt"), "agent work\n").unwrap();
+    git(work, &["add", "agent.txt"]);
+    git(work, &["commit", "-q", "-m", "feat: agent work"]);
+    for (hook, out) in verdicts("git push origin HEAD:refs/heads/task/w") {
+        eprintln!(
+            "{hook} `git push origin HEAD:refs/heads/task/w`: exit {:?}",
+            out.status.code()
+        );
+        assert_eq!(out.status.code(), Some(0), "{hook} push: {out:?}");
+    }
+    git(work, &["push", "origin", "HEAD:refs/heads/task/w"]);
+    let tip = |dir: &Path, rev: &str| {
+        let out = git_command()
+            .args(["rev-parse", rev])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{rev}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(tip(&bare, "refs/heads/task/w"), tip(work, "HEAD"));
+
+    // A push of `main` and of an integration line is refused by both
+    // guards, naming the rule (AC-15). The account rule still applies to
+    // the helper on both lines, and git-guard also names the protected
+    // branch for `main`.
+    let agent_push = "git.agent_push_refused_branches";
+    let refused = |line: &str, expected: &[(&str, &str)]| {
+        let outcomes = verdicts(line);
+        for (hook, out) in &outcomes {
+            eprintln!("{hook} `{line}`: exit {:?}", out.status.code());
+        }
+        for (hook, rule) in expected {
+            let (_, out) = outcomes.iter().find(|(name, _)| name == hook).unwrap();
+            assert_eq!(out.status.code(), Some(2), "{hook} {line}: {out:?}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains(rule),
+                "{hook} {line} names {rule}: {out:?}"
+            );
+        }
+    };
+    refused(
+        "git push origin HEAD:refs/heads/main",
+        &[
+            ("exec-guard", "security.outward_actions"),
+            ("exec-guard", agent_push),
+            ("git-guard", "git.push_to_protected"),
+            ("git-guard", agent_push),
+        ],
+    );
+    refused(
+        "git push origin HEAD:refs/heads/integration/EPC-001-line",
+        &[
+            ("exec-guard", "security.outward_actions"),
+            ("exec-guard", agent_push),
+            ("git-guard", agent_push),
+        ],
+    );
+    // With no credential helper configured, the integration line is still
+    // refused by both guards under the same rule.
+    git(&f.root, &["config", "--unset", "credential.helper"]);
+    refused(
+        "git push origin HEAD:refs/heads/integration/EPC-001-line",
+        &[("exec-guard", agent_push), ("git-guard", agent_push)],
+    );
+    assert_ne!(tip(&bare, "refs/heads/main"), tip(work, "HEAD"));
+}

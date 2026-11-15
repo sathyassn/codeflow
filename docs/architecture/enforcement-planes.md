@@ -168,6 +168,11 @@ changes, repository or account changes, secret-store reads and user-level
 persistence. Commands inside opaque child programs are not inspected. Ordinary
 builds, a task-branch push and a single-file restore stay ordinary work.
 
+**Agent fetch and push.** exec-guard admits an agent's fetch from `origin`
+and push of its own work branch through the GitHub CLI helper; both guards
+refuse an agent push of a line or the default branch
+([agent fetch and push](../policy-reference.md#agent-fetch-and-push)).
+
 **Refusals and relief.** A refusal names the policy rule and the operator's
 route.
 

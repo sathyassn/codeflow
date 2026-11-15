@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 82] = [
+pub const SCHEMA: [KeySpec; 84] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -247,6 +247,52 @@ pub const SCHEMA: [KeySpec; 82] = [
         valid: LEVEL_VALID,
         purpose: "A `gh pr merge` whose base branch is protected (git-guard only).",
         notes: "",
+    },
+    KeySpec {
+        path: "git.agent_push_refused_branches",
+        kind: KeyKind::StringList,
+        valid: "an array of branch names or `*` patterns (e.g. integration/*), matched as `git.protected_branches` is matched; an empty array refuses none",
+        purpose: "Branches an agent never pushes: git-guard and exec-guard refuse an agent push that updates or deletes one, in any push form and whatever credential Git uses.",
+        notes: "Read only from the landed policy at the remote's default \
+                branch, like every guard key, so an uncommitted or \
+                branch-local edit has no effect until it lands there. A \
+                fixed floor stays refused whatever the list holds: the \
+                default branch the policy is read at, `main` and `master`. \
+                An empty list lets agents push the lines it would name \
+                where the credential allows; the GitHub CLI credential \
+                admission still never admits an `integration/` name. The \
+                guards read a value that is not an array of non-empty \
+                strings without a space or control character as the \
+                default list, and \
+                validation reports a value that is not an array of \
+                strings. A push of every \
+                branch (`--all`, `--branches`, `--mirror`, a wildcard) is \
+                refused, as is a push whose destination the guard does not \
+                read: `git send-pack`, `git http-push`, `git subtree push`, \
+                a remote helper run by hand, and a push that leaves its \
+                destination to `push.default` other than `simple` or \
+                `current` or to a `remote.<name>.push` mapping. The git \
+                hooks do not read the key, so the operator's own pushes are \
+                unaffected. Landing a reviewed pull request with `gh pr \
+                merge` is a separate rule, `git.pr_merge_to_protected`, \
+                which this key does not change.",
+    },
+    KeySpec {
+        path: "git.agent_remote_urls",
+        kind: KeyKind::StringList,
+        valid: "an array of remote URLs, each `https://` or a local absolute path, written exactly as `git remote get-url origin` prints it; an empty array admits none",
+        purpose: "The `origin` URLs for which the guards let an agent's fetch or push use the GitHub CLI credential helper.",
+        notes: "Read only from the landed policy at the remote's default \
+                branch, so an uncommitted or branch-local edit, or a URL \
+                set by hand with `git remote set-url`, has no effect until \
+                a reviewed policy naming it lands there. `origin`'s \
+                configured URL must equal an entry byte for byte: a \
+                trailing slash, a missing `.git` or a change of case is a \
+                different URL. Unset or empty, agents' fetches and pushes \
+                that reach the helper keep the account finding. The guards \
+                read a value that is not an array of non-empty strings as \
+                empty, and validation reports a value that is not an array \
+                of strings. The git hooks do not read the key.",
     },
     KeySpec {
         path: "git.local_ref_protection",
@@ -1067,7 +1113,7 @@ pub const SCHEMA: [KeySpec; 82] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075).",
-        notes: "Default block.",
+        notes: "Default block. The account finding on the GitHub CLI credential helper (`gh auth git-credential`) is skipped for a fetch from `origin` or a push of a work branch in the closed forms the enforcement-planes architecture lists under \"Agent fetch and push\" (TSK-1479).",
     },
     KeySpec {
         path: "security.interpreter_scan",
