@@ -1429,7 +1429,11 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
 /// guards under the rule, with hook integrity at block, at warn and off: an
 /// earlier finding on the same command never hides the rule. Assignments a
 /// launcher reads among its options, before or between them, do not hide
-/// the program. exec-guard holds the rule with the privilege rule at block
+/// the program. A prefix launcher's option outside its grammar, a `--` that
+/// a carrier's other option takes as its value, and a command runner whose
+/// program or shell code comes from its inputs (a separator, a file, its
+/// standard input or a replacement string) leave the command unresolved,
+/// which refuses. exec-guard holds the rule with the privilege rule at block
 /// and off, so a privilege refusal is never what stops the push; git-guard
 /// has no privilege rule.
 #[test]
@@ -1459,6 +1463,30 @@ fn launched_or_carried_line_pushes_still_refuse() {
         "runuser -u root git push origin HEAD:refs/heads/integration/EPC-001-line",
         "script -q /dev/null <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
         "parallel <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "/usr/bin/nice --adjust 5 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "timeout --sig KILL 5 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "stdbuf --out L git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "ionice --cl 3 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "/usr/bin/time --out /dev/null git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "nice --adjust 5 man -P 'git push origin HEAD:refs/heads/integration/EPC-001-line' ls",
+        "tar -cf -- -I 'git push origin HEAD:refs/heads/integration/EPC-001-line' input.txt",
+        "tar --file -- --use-compress-program='git push origin HEAD:refs/heads/integration/EPC-001-line' input.txt",
+        "ssh -l -- -o 'ProxyCommand=git push origin HEAD:refs/heads/integration/EPC-001-line' host",
+        "rsync --log-file -- -e 'git push origin HEAD:refs/heads/integration/EPC-001-line' a b",
+        "sort -o -- --compress-program='git push origin HEAD:refs/heads/integration/EPC-001-line' f",
+        "parallel -- <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "parallel :::: /tmp/jobs",
+        "parallel -a /tmp/jobs",
+        "parallel {} :::: /tmp/jobs",
+        "parallel sh -c :::: /tmp/jobs",
+        "parallel --bogus x ::: 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -0 sh -c <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -I{} sh -c {} <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -I{} sh -c 'echo {}' <<< 'x; git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs env <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs --a /tmp/jobs git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "find . -exec sh -c {} ';'",
+        "find . -exec {} ';'",
     ]);
     let off = SecuritySection {
         privilege_escalation: PolicyLevel::Off,

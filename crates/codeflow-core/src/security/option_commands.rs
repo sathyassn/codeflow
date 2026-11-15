@@ -17,8 +17,9 @@
 //! Any other spelling of an inventory option refuses by name: an
 //! abbreviation or a case variant of a `--` name, or a glued name inside a
 //! cluster. It scans every word up to the program's own `--` (option
-//! permutation), skipping the words of a command an option carries, and
-//! reads a
+//! permutation), skipping the words of a command an option carries; a `--`
+//! that another option may take as its value ends nothing, so the words
+//! after it are read as options too. It reads a
 //! value that names a program path as shell text, so a value may be read as
 //! more than the program runs, never less. A Cargo `--config` value is
 //! parsed as TOML and judged by its decoded key paths. A value in a file the
@@ -600,7 +601,7 @@ fn carried_words(name: &str, args: &[String]) -> Vec<bool> {
             if owned[at - 1] {
                 continue;
             }
-            if word == "--" {
+            if ends_options(name, args, at - 1) {
                 break;
             }
             let start = match option_value(carrier, word) {
@@ -667,7 +668,7 @@ fn run_directories(name: &str, args: &[String]) -> Result<RunDirs, String> {
                 at += 1;
                 continue;
             }
-            if word == "--" {
+            if ends_options(name, args, at) {
                 break;
             }
             if row.away_words.contains(&word.as_str()) {
@@ -812,12 +813,14 @@ fn unparsed_spellings(rows: &[&Carrier], name: &str, args: &[String]) -> Vec<Car
     // The words of a carried command are its own, and a `--` among them
     // never ends the program's options ([`carried_words`]).
     let owned = carried_words(name, args);
-    for word in args
+    let stop = (0..args.len())
+        .find(|&at| !owned[at] && ends_options(name, args, at))
+        .unwrap_or(args.len());
+    for word in args[..stop]
         .iter()
         .zip(owned)
         .filter(|(_, owned)| !owned)
         .map(|(word, _)| word.as_str())
-        .take_while(|word| *word != "--")
     {
         let spelled = word.split_once('=').map_or(word, |(spelled, _)| spelled);
         let form = if spelled.starts_with("--") && spelled.len() > 2 {
@@ -891,7 +894,7 @@ fn carrier_values(carrier: &Carrier, name: &str, args: &[String]) -> Vec<Carried
     }
     while let Some(word) = args.get(at).map(String::as_str) {
         at += 1;
-        if word == "--" {
+        if ends_options(name, args, at - 1) {
             break;
         }
         match option_value(carrier, word) {
@@ -1015,19 +1018,56 @@ fn carried_value(
     at
 }
 
+/// The letters of GNU tar's old-style first word that take a value.
+const OLD_TAR_VALUED: &[char] = &[
+    'b', 'C', 'f', 'F', 'g', 'H', 'I', 'K', 'L', 'N', 'T', 'V', 'X',
+];
+
+/// Where the values of `name`'s old-style first word end: tar's first word
+/// written without a dash takes one later word per value letter. `0` for
+/// any other program or first word.
+fn old_tar_end(name: &str, args: &[String]) -> usize {
+    if !TAR.contains(&name) {
+        return 0;
+    }
+    args.first()
+        .filter(|word| !word.starts_with('-'))
+        .map_or(0, |first| {
+            (1 + first.chars().filter(|c| OLD_TAR_VALUED.contains(c)).count()).min(args.len())
+        })
+}
+
+/// Whether the word at `at` is a `--` that ends `name`'s options for
+/// certain (TSK-1490, carrier option ownership). The reader does not hold
+/// every option of a program, so a `--` right after an option-shaped word
+/// may be that option's value (`tar -cf -- -I CMD`, where `-f` takes `--`
+/// as the archive name): such a `--` never ends the scan, and the words
+/// after it are read as options as well as operands, which can only judge
+/// more, never less. A `--` that is the value of an old-style tar letter
+/// ends nothing either. A `--` first, after an operand, or after a
+/// `--name=value` word ends the options.
+fn ends_options(name: &str, args: &[String], at: usize) -> bool {
+    if args.get(at).map(String::as_str) != Some("--") || at < old_tar_end(name, args) {
+        return false;
+    }
+    let Some(before) = at.checked_sub(1).map(|b| args[b].as_str()) else {
+        return true;
+    };
+    let option_shaped = before.starts_with('-') && before.len() > 1 && before != "--";
+    let attached_long = before.starts_with("--") && before.contains('=');
+    !option_shaped || attached_long
+}
+
 /// GNU tar's old-style first word (`tar cIf PROG x.tar d`): each letter
 /// that takes a value takes the next word in turn. Returns where the
 /// option scan starts.
 fn old_tar_values(carrier: &Carrier, args: &[String], out: &mut Vec<Carried>) -> usize {
-    const VALUED: &[char] = &[
-        'b', 'C', 'f', 'F', 'g', 'H', 'I', 'K', 'L', 'N', 'T', 'V', 'X',
-    ];
     let Some(first) = args.first().filter(|word| !word.starts_with('-')) else {
         return 0;
     };
     let mut next = 1;
     for letter in first.chars() {
-        if !VALUED.contains(&letter) {
+        if !OLD_TAR_VALUED.contains(&letter) {
             continue;
         }
         if carrier.short.contains(&letter) {
@@ -1291,6 +1331,29 @@ mod tests {
                 Carried::Command("cd - && X".into())
             ]
         );
+    }
+
+    #[test]
+    fn a_dash_dash_another_option_may_take_ends_nothing() {
+        let x = || vec![Carried::Command("X".into())];
+        // `-f` may take `--` as its archive name, so the options go on.
+        for line in [
+            "tar -cf -- -I X input.txt",
+            "tar --file -- --use-compress-program=X input.txt",
+            "tar cf -- -I X input.txt",
+            "sort -o -- --compress-program=X f",
+            "rsync --log-file -- -e X a b",
+        ] {
+            assert_eq!(commands(line), x(), "{line}");
+        }
+        // A `--` first, after an operand or after `--name=value` ends them.
+        for line in [
+            "tar -- -I X",
+            "tar -cf a.tar input.txt -- -I X",
+            "tar --file=a.tar -- -I X",
+        ] {
+            assert_eq!(commands(line), vec![], "{line}");
+        }
     }
 
     #[test]

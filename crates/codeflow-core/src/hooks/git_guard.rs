@@ -5860,6 +5860,83 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     args.get(at..).filter(|c| !c.is_empty())
 }
 
+/// The replacement strings an `xargs` puts its inputs in for (`-I R`,
+/// `-J R`, `-i`, `--replace`, whose default is `{}`), reading its options
+/// as [`xargs_command`] does. `None` when an option is outside GNU and BSD
+/// xargs' grammar, a long name that is not whole included, so the place
+/// its command starts is a guess.
+pub(crate) fn xargs_replace(args: &[String]) -> Option<Vec<String>> {
+    const VALUED_LONG: &[&str] = &[
+        "arg-file",
+        "delimiter",
+        "max-args",
+        "max-procs",
+        "max-chars",
+        "process-slot-var",
+    ];
+    const OPTIONAL_LONG: &[&str] = &["eof", "replace", "max-lines"];
+    const FLAGS_LONG: &[&str] = &[
+        "null",
+        "interactive",
+        "verbose",
+        "exit",
+        "no-run-if-empty",
+        "show-limits",
+        "open-tty",
+        "help",
+        "version",
+    ];
+    let mut replace = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        if arg == "--" || !arg.starts_with('-') || arg == "-" {
+            break;
+        }
+        at += 1;
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            if VALUED_LONG.contains(&name) {
+                at += usize::from(value.is_none());
+            } else if OPTIONAL_LONG.contains(&name) {
+                if name == "replace" {
+                    replace.push(value.unwrap_or("{}").to_string());
+                }
+            } else if !(FLAGS_LONG.contains(&name) && value.is_none()) {
+                return None;
+            }
+            continue;
+        }
+        let cluster = &arg[1..];
+        for (offset, letter) in cluster.char_indices() {
+            let attached = &cluster[offset + letter.len_utf8()..];
+            match letter {
+                'I' | 'J' | 'a' | 'd' | 'E' | 'L' | 'n' | 'P' | 's' | 'R' | 'S' => {
+                    let value = if attached.is_empty() {
+                        at += 1;
+                        args.get(at - 1).cloned()
+                    } else {
+                        Some(attached.to_string())
+                    };
+                    if matches!(letter, 'I' | 'J') {
+                        replace.extend(value);
+                    }
+                    break;
+                }
+                'i' => {
+                    replace.push(if attached.is_empty() { "{}" } else { attached }.to_string());
+                    break;
+                }
+                'e' | 'l' => break,
+                '0' | 'o' | 'p' | 'r' | 't' | 'x' => {}
+                _ => return None,
+            }
+        }
+    }
+    Some(replace)
+}
+
 #[cfg(test)]
 thread_local! {
     /// How many times a check of one segment expanded or re-read its whole
@@ -8128,12 +8205,8 @@ fn watch_command(args: &[String]) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" "))
 }
 
-/// The commands `parallel` runs: its command template, and the template
-/// with each `:::` input, quoted as one word, put in for `{}` or after it;
-/// with no template,
-/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
-/// same way. `::::` names input files, which the guard cannot read.
-/// The options GNU `parallel` reads a value for, as a separate word.
+/// The options GNU `parallel` reads a value for, as a separate word or
+/// attached (`-j4`, `--jobs=4`).
 const PARALLEL_VALUED: &[&str] = &[
     "-j",
     "-P",
@@ -8149,7 +8222,10 @@ const PARALLEL_VALUED: &[&str] = &[
     "-s",
     "-C",
     "--jobs",
+    "--max-procs",
     "--sshlogin",
+    "--slf",
+    "--sshloginfile",
     "--arg-file",
     "--delimiter",
     "--colsep",
@@ -8163,16 +8239,97 @@ const PARALLEL_VALUED: &[&str] = &[
     "--delay",
     "--retries",
     "--tagstring",
+    "--ctagstring",
     "--workdir",
     "--wd",
     "--basefile",
     "--return",
     "--halt",
     "--memfree",
+    "--memsuspend",
     "--load",
     "--block",
-    "--sshloginfile",
     "--env",
+    "--header",
+    "--nice",
+    "--trim",
+    "--ssh",
+    "--sshdelay",
+    "--transferfile",
+    "--tf",
+    "--trc",
+    "--id",
+    "--semaphorename",
+    "--recstart",
+    "--recend",
+    "--termseq",
+    "--limit",
+];
+
+/// The options GNU `parallel` reads with no value. Any other option, the
+/// ones that define replacement strings or read a script among them, makes
+/// the line unresolved ([`ParallelLine::unread`]).
+const PARALLEL_FLAGS: &[&str] = &[
+    "-k",
+    "-q",
+    "-v",
+    "-t",
+    "-u",
+    "-0",
+    "-X",
+    "-m",
+    "-r",
+    "--keep-order",
+    "--quote",
+    "--verbose",
+    "--ungroup",
+    "--group",
+    "--line-buffer",
+    "--linebuffer",
+    "--lb",
+    "--null",
+    "--xargs",
+    "--no-run-if-empty",
+    "--dry-run",
+    "--dryrun",
+    "--progress",
+    "--bar",
+    "--eta",
+    "--tag",
+    "--ctag",
+    "--will-cite",
+    "--no-notice",
+    "--citation",
+    "--shuf",
+    "--pipe",
+    "--pipepart",
+    "--keep",
+    "--silent",
+    "--plain",
+    "--files",
+    "--cat",
+    "--fifo",
+    "--compress",
+    "--round-robin",
+    "--roundrobin",
+    "--resume",
+    "--resume-failed",
+    "--retry-failed",
+    "--transfer",
+    "--cleanup",
+    "--tty",
+    "--fg",
+    "--bg",
+    "--onall",
+    "--nonall",
+    "--noswap",
+    "--controlmaster",
+    "--number-of-cpus",
+    "--number-of-cores",
+    "--number-of-sockets",
+    "--number-of-threads",
+    "--help",
+    "--version",
 ];
 
 /// A GNU `parallel` input separator, or the `--` that ends its options.
@@ -8180,30 +8337,120 @@ fn parallel_separator(word: &str) -> bool {
     matches!(word, ":::" | ":::+" | "::::" | "::::+" | "--")
 }
 
-/// Where GNU `parallel`'s command template starts in `args`, after its
-/// options, and whether `-q` or `--quote` is given, so the template's
-/// words reach the command as written rather than through a shell.
-pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
+/// How GNU `parallel` reads its words: options (to the first word that is
+/// not one, a separator, or the `--` that ends them), the command template,
+/// then the inputs after `:::` (on the line) or `::::` (in files).
+#[derive(Debug, Default)]
+pub(crate) struct ParallelLine {
+    /// Where the template starts, after the options and an ending `--`.
+    pub template: usize,
+    /// Where the template ends: the first separator after it, or the end.
+    pub end: usize,
+    /// `-q` or `--quote`: the template's words reach the command as written
+    /// rather than through a shell.
+    pub quoted: bool,
+    /// An option outside [`PARALLEL_VALUED`] and [`PARALLEL_FLAGS`]; read
+    /// as a flag for a first guess at the template.
+    pub unread: bool,
+    /// Inputs from a file: `::::` or `-a`/`--arg-file`.
+    pub files: bool,
+    /// Inputs on the line, after `:::`.
+    pub literal: bool,
+    /// The replacement strings `-I` defines.
+    pub replace: Vec<String>,
+}
+
+/// Read GNU `parallel`'s `args` ([`ParallelLine`]).
+pub(crate) fn parallel_line(args: &[String]) -> ParallelLine {
+    let mut line = ParallelLine::default();
     let mut at = 0;
-    let mut quoted = false;
     while let Some(a) = args.get(at).map(String::as_str) {
+        if a == "--" {
+            at += 1;
+            break;
+        }
         if parallel_separator(a) || !a.starts_with('-') || a.len() < 2 {
             break;
         }
-        quoted |= matches!(a, "-q" | "--quote");
-        at += 1 + usize::from(PARALLEL_VALUED.contains(&a));
+        at += 1;
+        if a.starts_with("--") {
+            let (option, attached) = a.split_once('=').map_or((a, None), |(o, v)| (o, Some(v)));
+            if PARALLEL_VALUED.contains(&option) {
+                if attached.is_none() {
+                    at += 1;
+                }
+                line.files |= option == "--arg-file";
+            } else if PARALLEL_FLAGS.contains(&option) && attached.is_none() {
+                line.quoted |= option == "--quote";
+            } else {
+                line.unread = true;
+            }
+            continue;
+        }
+        let cluster = &a[1..];
+        for (offset, letter) in cluster.char_indices() {
+            let rest = &cluster[offset + letter.len_utf8()..];
+            let short = format!("-{letter}");
+            if PARALLEL_VALUED.contains(&short.as_str()) {
+                let value = if rest.is_empty() {
+                    at += 1;
+                    args.get(at - 1).cloned()
+                } else {
+                    Some(rest.to_string())
+                };
+                match letter {
+                    'a' => line.files = true,
+                    'I' => line.replace.extend(value),
+                    _ => {}
+                }
+                break;
+            }
+            if PARALLEL_FLAGS.contains(&short.as_str()) {
+                line.quoted |= letter == 'q';
+            } else {
+                line.unread = true;
+            }
+        }
     }
-    (at.min(args.len()), quoted)
+    line.template = at.min(args.len());
+    line.end = args[line.template..]
+        .iter()
+        .position(|w| parallel_separator(w))
+        .map_or(args.len(), |e| line.template + e);
+    let mut on_line = false;
+    for word in &args[line.end..] {
+        if parallel_separator(word) {
+            on_line = word.starts_with(":::") && !word.starts_with("::::");
+            line.files |= word.starts_with("::::");
+        } else if on_line {
+            line.literal = true;
+        }
+    }
+    line
 }
 
+/// Where GNU `parallel`'s command template starts in `args`, after its
+/// options and the `--` that ends them, and whether `-q` or `--quote` is
+/// given ([`parallel_line`]).
+pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
+    let line = parallel_line(args);
+    (line.template, line.quoted)
+}
+
+/// The commands `parallel` runs: its command template, and the template
+/// with each `:::` input, quoted as one word, put in for `{}` or after it;
+/// with no template, each input is a command. moreutils' `parallel CMD --
+/// ARGS` reads the same way, and its `parallel -- CMD...` runs each word
+/// after the `--` as a command, which is read as well. `::::` names input
+/// files, which the guard cannot read; [`parallel_mode`] makes a line whose
+/// commands come from them unresolved.
 fn parallel_commands(args: &[String]) -> Vec<String> {
-    let separator = parallel_separator;
-    let (at, quoted) = parallel_template(args);
-    let rest = args.get(at..).unwrap_or_default();
-    let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
+    let line = parallel_line(args);
+    let rest = &args[line.template..];
+    let end = line.end - line.template;
     // With `-q` each word of the command reaches it as written; without,
     // parallel joins them into a shell line.
-    let template = if quoted {
+    let template = if line.quoted {
         quote_words(&rest[..end])
     } else {
         rest[..end].join(" ")
@@ -8211,7 +8458,7 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
     let mut inputs = Vec::new();
     let mut files = false;
     for word in &rest[end..] {
-        if separator(word) {
+        if parallel_separator(word) {
             files = word.starts_with("::::");
         } else if !files {
             inputs.push(word.as_str());
@@ -8221,6 +8468,13 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
         return inputs.into_iter().map(str::to_string).collect();
     }
     let mut commands = vec![template.clone()];
+    if line.template > 0 && args[line.template - 1] == "--" && end > 1 {
+        for word in &rest[..end] {
+            if !commands.contains(word) {
+                commands.push(word.clone());
+            }
+        }
+    }
     for input in inputs {
         // parallel quotes an input it puts into the template.
         let input = quote_words(&[input.to_string()]);
@@ -14521,13 +14775,17 @@ fn launch_walk(tokens: &[String]) -> (Option<usize>, Option<usize>) {
 
 /// What the launcher grammar reads in front of a command (TSK-1490). The
 /// launchers it models are a closed list, each read by its own grammar
-/// ([`is_prefix_launcher`], [`OPTION_LAUNCHERS`], `busybox` and `env`);
-/// a launcher word in any form or mode the grammar does not resolve to a
-/// final program and its words makes the walk unresolved
-/// ([`Walk::unread`]), and the readers then fail closed: every later word
-/// that may start the command is judged ([`unread_starts`]), the
-/// hook-integrity marker refuses ([`launcher_effects`]), and the agent
-/// push rule refuses the command in both guards ([`unresolved_push`]).
+/// ([`is_prefix_launcher`] and [`OPTION_LAUNCHERS`] through
+/// [`launch_after`], `busybox` and `env`); a launcher word in any form or
+/// mode the grammar does not resolve to a final program and its words
+/// makes the walk unresolved ([`Walk::unread`], [`Walk::why`]), and the
+/// readers then fail closed: every later word that may start the command
+/// is judged ([`unread_starts`]), the hook-integrity marker refuses
+/// ([`launcher_effects`]), and the agent push rule refuses the command in
+/// both guards ([`unresolved_push`]). Every reader of launcher context
+/// (the program, the split string, a shell's input, the directory effects,
+/// the repository's environment and the privilege transitions) reads this
+/// one result, so no two readers can disagree on where a command starts.
 #[derive(Debug, Default)]
 pub(crate) struct Walk {
     /// The program's index; `None` for an `env -S` string or no program.
@@ -14535,12 +14793,18 @@ pub(crate) struct Walk {
     /// The first launcher the grammar cannot resolve, past which the
     /// program is a guess.
     pub unread: Option<usize>,
+    /// Why the walk is unresolved, in words for a refusal.
+    pub why: Option<String>,
     /// The `env` whose `-S` string holds the command.
     pub split: Option<usize>,
     /// Every word the grammar read as a launcher, in order. Only these are
     /// launcher positions: a launcher's name written as another
     /// launcher's option value is not one.
     pub launchers: Vec<usize>,
+    /// For each of [`Walk::launchers`], the index of the first word after
+    /// its own options and operands: the words it runs start there, after
+    /// any assignments.
+    pub ends: Vec<usize>,
     /// The program is a privilege launcher given no command, which runs a
     /// shell reading its commands from its input ([`Launch::Shell`]).
     pub implicit_shell: bool,
@@ -14556,17 +14820,43 @@ impl Walk {
             match runner_mode(launcher_name(&tokens[at]), &tokens[at + 1..]) {
                 RunnerMode::Named => {}
                 RunnerMode::InputShell => {
-                    walk.launchers.push(at);
-                    walk.unread.get_or_insert(at);
+                    walk.visit(at, tokens.len());
+                    walk.unresolved(
+                        at,
+                        format!(
+                            "`{}` with no command, which runs a shell reading commands the guard may not see",
+                            tokens[at]
+                        ),
+                    );
                     walk.implicit_shell = true;
                 }
                 RunnerMode::Unnamed => {
-                    walk.launchers.push(at);
-                    walk.unread.get_or_insert(at);
+                    walk.visit(at, tokens.len());
+                    walk.unresolved(
+                        at,
+                        format!(
+                            "`{}` running a command its words do not name to the guard",
+                            tokens[at]
+                        ),
+                    );
                 }
             }
         }
         walk
+    }
+
+    /// Record a launcher at `at` whose own words end before `end`.
+    fn visit(&mut self, at: usize, end: usize) {
+        self.launchers.push(at);
+        self.ends.push(end);
+    }
+
+    /// Record the first word the grammar cannot resolve, and why.
+    fn unresolved(&mut self, at: usize, why: String) {
+        if self.unread.is_none() {
+            self.unread = Some(at);
+            self.why = Some(why);
+        }
     }
 
     /// Whether a launcher the grammar read runs the command as another
@@ -14588,12 +14878,16 @@ enum RunnerMode {
     /// `parallel` with neither a command nor inputs on the line.
     InputShell,
     /// It runs a command its reader here does not name: `runuser` given a
-    /// user, which runs the words after its options.
+    /// user, which runs the words after its options; `parallel` with an
+    /// option it does not read, or with no template and inputs from a
+    /// file; and `parallel`, `xargs` or `find` whose program or shell
+    /// code comes from their inputs.
     Unnamed,
 }
 
 /// The [`RunnerMode`] of the program `name` with `args`, by each runner's
-/// grammar (util-linux `su`, `runuser` and `script`, GNU parallel).
+/// grammar (util-linux `su`, `runuser` and `script`, GNU parallel, GNU and
+/// BSD xargs and find).
 fn runner_mode(name: &str, args: &[String]) -> RunnerMode {
     let short = |a: &str, letter: char| {
         a.strip_prefix('-')
@@ -14606,13 +14900,13 @@ fn runner_mode(name: &str, args: &[String]) -> RunnerMode {
             || a == "--session-command"
             || a.starts_with("--session-command=")
     };
-    if args
-        .iter()
-        .any(|a| matches!(a.as_str(), "--help" | "--version"))
-    {
-        return RunnerMode::Named;
-    }
+    // Help or version only as the first word: elsewhere it may be another
+    // option's value.
+    let asks_help = args
+        .first()
+        .is_some_and(|a| matches!(a.as_str(), "--help" | "--version"));
     match name {
+        "runuser" | "su" | "script" if asks_help => RunnerMode::Named,
         "runuser"
             if args
                 .iter()
@@ -14628,14 +14922,140 @@ fn runner_mode(name: &str, args: &[String]) -> RunnerMode {
         // util-linux `script -c CMD`, or BSD and macOS `script FILE CMD...`,
         // which [`script_command`] reads; with neither it runs a shell.
         "script" if script_command(args).is_none() => RunnerMode::InputShell,
-        "parallel"
-            if args
-                .get(parallel_template(args).0..)
-                .is_none_or(<[String]>::is_empty) =>
-        {
-            RunnerMode::InputShell
-        }
+        "parallel" => parallel_mode(args),
+        "xargs" => xargs_mode(args),
+        "find" => find_mode(args),
         _ => RunnerMode::Named,
+    }
+}
+
+/// [`RunnerMode`] of GNU `parallel` ([`parallel_line`]). With no template
+/// each input is a command: inputs on the line are read by
+/// [`parallel_commands`], inputs from its standard input run as a shell's
+/// commands, and inputs from a file are never read. With a template, the
+/// template's program must be on the line, and its shell code too when
+/// the inputs are not.
+fn parallel_mode(args: &[String]) -> RunnerMode {
+    let line = parallel_line(args);
+    if line.unread {
+        return RunnerMode::Unnamed;
+    }
+    let template = &args[line.template..line.end];
+    if template.is_empty() {
+        return if line.files {
+            RunnerMode::Unnamed
+        } else if line.literal {
+            RunnerMode::Named
+        } else {
+            RunnerMode::InputShell
+        };
+    }
+    let words = if line.quoted {
+        template.to_vec()
+    } else {
+        command_argv(&template.join(" "))
+    };
+    let unread_inputs = line.files || !line.literal;
+    // Every default replacement string opens with `{` (`{}`, `{.}`, `{1}`,
+    // `{= ... =}`); `-I` adds its own.
+    let mut replace = line.replace.clone();
+    replace.push("{".to_string());
+    if input_program(&words, &replace)
+        || (unread_inputs && input_shell_code(&words, &replace, false))
+    {
+        RunnerMode::Unnamed
+    } else {
+        RunnerMode::Named
+    }
+}
+
+/// [`RunnerMode`] of `xargs`: an option it does not read, or a command
+/// whose program or shell code comes from the inputs xargs adds to it.
+fn xargs_mode(args: &[String]) -> RunnerMode {
+    let Some(replace) = xargs_replace(args) else {
+        return RunnerMode::Unnamed;
+    };
+    let Some(command) = xargs_command(args) else {
+        // With no command xargs runs `echo`.
+        return RunnerMode::Named;
+    };
+    if input_program(command, &replace) || input_shell_code(command, &replace, true) {
+        RunnerMode::Unnamed
+    } else {
+        RunnerMode::Named
+    }
+}
+
+/// [`RunnerMode`] of `find`: an `-exec`, `-execdir`, `-ok` or `-okdir`
+/// command whose program or shell code is a found path.
+fn find_mode(args: &[String]) -> RunnerMode {
+    let paths = ["{}".to_string()];
+    let unnamed = args
+        .iter()
+        .enumerate()
+        .filter(|(_, word)| matches!(word.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+        .any(|(at, _)| {
+            let tail = &args[at + 1..];
+            let end = tail
+                .iter()
+                .position(|w| w == ";" || w == "+")
+                .unwrap_or(tail.len());
+            let words = &tail[..end];
+            !words.is_empty()
+                && (input_program(words, &paths) || input_shell_code(words, &paths, true))
+        });
+    if unnamed {
+        RunnerMode::Unnamed
+    } else {
+        RunnerMode::Named
+    }
+}
+
+/// Whether a runner's command `words` takes its program from the runner's
+/// inputs: the launcher grammar cannot resolve it, a launcher in it has no
+/// command of its own (the inputs are added after it), or the program word
+/// holds one of the runner's replacement strings.
+fn input_program(words: &[String], replace: &[String]) -> bool {
+    if words.is_empty() {
+        return false;
+    }
+    let walk = Walk::read(words);
+    if walk.unread.is_some() {
+        return true;
+    }
+    match walk.program {
+        None => walk.split.is_none(),
+        Some(at) => replace
+            .iter()
+            .any(|r| !r.is_empty() && words[at].contains(r.as_str())),
+    }
+}
+
+/// Whether a runner's command `words` runs a shell whose code comes from
+/// the runner's inputs: a code option with no code (the inputs are added
+/// after it), or code that holds a replacement string. `raw` runners
+/// (`xargs`, `find`) put an input into the code as written, so any
+/// replacement string in it counts; `parallel` quotes the input it puts
+/// in, so only code that is a replacement string alone counts.
+fn input_shell_code(words: &[String], replace: &[String], raw: bool) -> bool {
+    let Some(at) = Walk::read(words).program else {
+        return false;
+    };
+    if !is_shell(basename(&words[at])) {
+        return false;
+    }
+    match shell_code_option(&words[at + 1..]) {
+        (has, None) => has,
+        (_, Some(code)) if raw => replace
+            .iter()
+            .any(|r| !r.is_empty() && code.contains(r.as_str())),
+        (_, Some(code)) => {
+            let code = code.trim();
+            replace.iter().any(|r| r == code)
+                || (code.starts_with('{')
+                    && code.ends_with('}')
+                    && !code.contains(char::is_whitespace))
+        }
     }
 }
 
@@ -14654,46 +15074,52 @@ fn launch_walk_into(tokens: &[String], walk: &mut Walk) -> Option<usize> {
             }
         }
         let t = tokens.get(idx)?.as_str();
-        if is_prefix_launcher(t) {
-            walk.launchers.push(idx);
-            match skip_launcher_options(t, tokens, idx + 1) {
-                Some(next) => {
+        // A launcher with options of its own, read by its grammar
+        // (TSK-1490 AC-8). An option or mode the grammar does not resolve
+        // makes the walk unresolved: option-shaped words are skipped for a
+        // first guess at the command, [`launcher_effects`] refuses the
+        // launcher, the agent push rule refuses the command, and the
+        // readers judge every later word that may start it
+        // ([`unread_starts`]).
+        let option_launcher = OPTION_LAUNCHERS.contains(&launcher_name(t));
+        if is_prefix_launcher(t) || option_launcher {
+            let launch = if option_launcher {
+                launch_after(launcher_name(t), tokens, idx + 1)
+            } else {
+                prefix_launch(t, tokens, idx + 1)
+            };
+            match launch {
+                Launch::Runs(next) if !option_launcher || next < tokens.len() => {
+                    walk.visit(idx, next);
                     idx = next;
                     continue;
                 }
                 // `command -v git` only looks the name up; nothing runs.
-                None => return Some(idx),
-            }
-        }
-        // A launcher with options of its own: its command, by its grammar
-        // (TSK-1490 AC-8). An option or mode the grammar does not resolve:
-        // skip option-shaped words for a first guess at the command;
-        // [`launcher_effects`] refuses the launcher, and the readers judge
-        // every later word that may start it ([`unread_starts`]).
-        if OPTION_LAUNCHERS.contains(&launcher_name(t)) {
-            walk.launchers.push(idx);
-            match launch_after(launcher_name(t), tokens, idx + 1) {
-                Launch::Runs(next) if next < tokens.len() => {
-                    idx = next;
-                    continue;
+                Launch::Runs(_) | Launch::Nothing => {
+                    walk.visit(idx, tokens.len());
+                    return Some(idx);
                 }
-                Launch::Runs(_) | Launch::Nothing => return Some(idx),
                 // With no command after it, the launcher runs a shell that
                 // reads its input: the launcher stays the program, the
                 // readers of a shell's input judge that input, and the walk
                 // is unresolved, since what the shell reads may be beyond
                 // them.
                 Launch::Shell => {
-                    walk.unread.get_or_insert(idx);
+                    walk.visit(idx, tokens.len());
+                    walk.unresolved(
+                        idx,
+                        format!(
+                            "`{t}` with no command, which runs a shell reading commands the guard may not see"
+                        ),
+                    );
                     walk.implicit_shell = true;
                     return Some(idx);
                 }
-                Launch::Unread(_) => {
-                    walk.unread.get_or_insert(idx);
-                    idx += 1;
-                    while tokens.get(idx).is_some_and(|a| a.starts_with('-')) {
-                        idx += 1;
-                    }
+                Launch::Unread(why) => {
+                    let next = first_guess(tokens, idx + 1);
+                    walk.visit(idx, next);
+                    walk.unresolved(idx, why);
+                    idx = next;
                     continue;
                 }
             }
@@ -14702,12 +15128,11 @@ fn launch_walk_into(tokens: &[String], walk: &mut Walk) -> Option<usize> {
         // inventory runs that applet as the program; other applets stay
         // `busybox`, which the startup guard refuses by design.
         if basename(t) == "busybox" && tokens.get(idx + 1).is_some_and(|a| busybox_launches(a)) {
-            walk.launchers.push(idx);
+            walk.visit(idx, idx + 1);
             idx += 1;
             continue;
         }
         if launcher_name(t) == "env" {
-            walk.launchers.push(idx);
             // env's options and assignments, up to the wrapped command, read
             // by its full grammar ([`env_words`]).
             match env_words(tokens, idx + 1) {
@@ -14717,30 +15142,44 @@ fn launch_walk_into(tokens: &[String], walk: &mut Walk) -> Option<usize> {
                 // every launcher in front; the string is never a program
                 // name.
                 Ok(words) if words.split.is_some() => {
+                    walk.visit(idx, tokens.len());
                     walk.split = Some(idx);
                     return None;
                 }
-                Ok(words) => idx = words.end,
+                Ok(words) => {
+                    walk.visit(idx, words.end);
+                    idx = words.end;
+                }
                 // An option the grammar does not hold: skip option-shaped
-                // words for a first guess; [`launcher_effects`] refuses the
-                // launcher, and the readers judge every later word that may
-                // start the command ([`unread_starts`]).
-                Err(_) => {
-                    walk.unread.get_or_insert(idx);
-                    idx += 1;
-                    while tokens.get(idx).is_some_and(|a| {
+                // words and assignments for a first guess.
+                Err(why) => {
+                    let mut next = idx + 1;
+                    while tokens.get(next).is_some_and(|a| {
                         a.starts_with('-')
                             || a.split_once('=')
                                 .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
                     }) {
-                        idx += 1;
+                        next += 1;
                     }
+                    walk.visit(idx, next);
+                    walk.unresolved(idx, why);
+                    idx = next;
                 }
             }
             continue;
         }
         return Some(idx);
     }
+}
+
+/// The first guess at the command after a launcher whose options the
+/// grammar cannot read: the first word from `idx` that is not
+/// option-shaped.
+fn first_guess(tokens: &[String], mut idx: usize) -> usize {
+    while tokens.get(idx).is_some_and(|a| a.starts_with('-')) {
+        idx += 1;
+    }
+    idx
 }
 
 /// Whether `word` is a `timeout` duration: a number with an optional
@@ -14756,94 +15195,33 @@ fn is_duration(word: &str) -> bool {
 }
 
 /// The effects of the launchers in front of a command that change how it
-/// runs (TSK-216 round 4): each directory `env -C DIR` or `env
-/// --chdir[=]DIR` moves to, in order, and the first launcher word the
-/// guard cannot read with certainty: an `env` option it does not know, an
-/// `env -C` without a directory, or a `timeout` without a duration. `env
-/// -S`, which packs the command into one word, ends this walk;
-/// [`expand_commands`] reads the packed command as its own segments.
+/// runs (TSK-216 round 4), read from the one launcher walk
+/// ([`Walk::read`]): each directory `env -C DIR` or `env --chdir[=]DIR`
+/// moves to, in order, and why the walk is unresolved, or the first
+/// launcher that runs its command in a directory the guard does not follow
+/// ([`launcher_moves`]). `env -S`, which packs the command into one word,
+/// ends the walk; [`expand_commands`] reads the packed command as its own
+/// segments.
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
+    let walk = Walk::read(tokens);
     let mut dirs = Vec::new();
-    let mut idx = 0;
-    loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
+    for (&at, &end) in walk.launchers.iter().zip(&walk.ends) {
+        if walk.unread.is_some_and(|unread| at >= unread) {
+            break;
         }
-        let Some(t) = tokens.get(idx).map(String::as_str) else {
-            return (dirs, None);
-        };
-        let name = launcher_name(t);
-        if is_prefix_launcher(t) {
-            let Some(next) = skip_launcher_options(t, tokens, idx + 1) else {
-                return (dirs, None);
-            };
-            if name == "timeout"
-                && !tokens
-                    .get(next.saturating_sub(1))
-                    .is_some_and(|d| is_duration(d))
-            {
-                return (
-                    dirs,
-                    Some("`timeout` without a duration the guard can read".to_string()),
-                );
-            }
-            idx = next;
-            continue;
-        }
-        if OPTION_LAUNCHERS.contains(&name) {
-            match launch_after(name, tokens, idx + 1) {
-                Launch::Runs(next) => {
-                    if let Some(why) = launcher_moves(name, &tokens[idx + 1..next]) {
-                        return (dirs, Some(why));
-                    }
-                    idx = next;
-                    continue;
-                }
-                Launch::Nothing => return (dirs, None),
-                Launch::Unread(form) => {
-                    return (
-                        dirs,
-                        Some(format!("{form}, an option the guard does not read")),
-                    );
-                }
-                Launch::Shell => {
-                    return (
-                        dirs,
-                        Some(format!(
-                            "`{t}` with no command, which runs a shell reading commands the guard may not see"
-                        )),
-                    );
-                }
-            }
-        }
-        if basename(t) == "busybox" && tokens.get(idx + 1).is_some_and(|a| busybox_launches(a)) {
-            idx += 1;
-            continue;
-        }
+        let name = launcher_name(&tokens[at]);
         if name == "env" {
-            match env_options(tokens, idx + 1, &mut dirs) {
-                Ok(next) => idx = next,
-                Err(why) => return (dirs, Some(why)),
+            if let Ok(words) = env_words(tokens, at + 1) {
+                dirs.extend(words.dirs);
             }
-            continue;
+        } else if OPTION_LAUNCHERS.contains(&name) && walk.program != Some(at) {
+            // A launcher that is itself the program runs nothing here.
+            if let Some(why) = launcher_moves(name, &tokens[at + 1..end.min(tokens.len())]) {
+                return (dirs, Some(why));
+            }
         }
-        // A command runner in a mode whose command the line does not name
-        // ([`runner_mode`]) is unresolved, as [`Walk::read`] holds it.
-        let why = match runner_mode(name, &tokens[idx + 1..]) {
-            RunnerMode::Named => None,
-            RunnerMode::InputShell => Some(format!(
-                "`{t}` with no command, which runs a shell reading commands the guard may not see"
-            )),
-            RunnerMode::Unnamed => Some(format!(
-                "`{t}` running a command its options do not name to the guard"
-            )),
-        };
-        return (dirs, why);
     }
+    (dirs, walk.why)
 }
 
 /// What the words of an `env` launcher do, read by env's full option
@@ -15101,46 +15479,38 @@ pub(crate) const COMMAND_CARRIERS: &[&str] = &[
     "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find",
 ];
 
-/// Skip the options of a prefix launcher starting at `idx` and return the
-/// index of the command it runs: `command -p`, `exec -c -l -a NAME`,
-/// `time -p -o FILE`, and `--` for all. `None` when the options make
-/// `command` only look the name up (`-v`, `-V`), so nothing after it runs.
-/// Any other option is skipped, never read as "runs nothing": a launcher's
-/// `--help` can be another option's value (`time --format --help git ...`),
-/// so a non-executing form such as `nohup --help git push` is judged as the
-/// command after it and may be refused, which fails closed.
+/// What the prefix launcher `launcher` does with the words from `idx`, read
+/// by its own option grammar ([`launch_grammar`]): `command -p`, `exec -c
+/// -l -a NAME`, `time -p -o FILE`, `nice -n N`, `timeout DURATION` and the
+/// rest, and `--` for all. [`Launch::Nothing`] when the options make
+/// `command` only look the name up (`-v`, `-V`) or `xcrun` only print a
+/// path. Any option outside the grammar, an abbreviation of a long option
+/// included, is [`Launch::Unread`], so the walk fails closed rather than
+/// take an option's value as the command. A launcher's help or version
+/// option is read as a flag, never as "runs nothing": the command after it
+/// is still judged, which fails closed.
+pub(crate) fn prefix_launch(launcher: &str, tokens: &[String], idx: usize) -> Launch {
+    if is_shell_modifier(launcher) {
+        return Launch::Runs(idx);
+    }
+    launch_after(launcher_name(launcher), tokens, idx)
+}
+
+/// [`prefix_launch`] as the index of the command, for a reader that scans
+/// on past a launcher it cannot read: `None` when nothing runs, and the
+/// first word that is not option-shaped when the grammar cannot read the
+/// launcher's options, a guess that only adds words to judge. The launcher
+/// walk ([`Walk::read`]) refuses that launcher in the same line.
 pub(crate) fn skip_launcher_options(
     launcher: &str,
     tokens: &[String],
-    mut idx: usize,
+    idx: usize,
 ) -> Option<usize> {
-    if is_shell_modifier(launcher) {
-        return Some(idx);
+    match prefix_launch(launcher, tokens, idx) {
+        Launch::Runs(next) => Some(next),
+        Launch::Nothing => None,
+        Launch::Unread(_) | Launch::Shell => Some(first_guess(tokens, idx)),
     }
-    let launcher = launcher_name(launcher);
-    while let Some(a) = tokens.get(idx).map(String::as_str) {
-        if a == "--" {
-            // The options end; `timeout`'s duration still follows.
-            idx += 1;
-            break;
-        }
-        if !a.starts_with('-') || a.len() < 2 {
-            break;
-        }
-        if launcher == "command" && a.contains(['v', 'V']) {
-            return None;
-        }
-        // `xcrun --find tool` and `xcrun -f tool` only print a path.
-        if launcher == "xcrun" && matches!(a, "-f" | "--find") {
-            return None;
-        }
-        idx += 1 + usize::from(takes_next_word(launcher, a));
-    }
-    // `timeout [options] DURATION command`.
-    if launcher == "timeout" {
-        idx += 1;
-    }
-    Some(idx)
 }
 
 /// The privilege and scheduling launchers of the inventory
@@ -15156,8 +15526,8 @@ pub(crate) enum Launch {
     Runs(usize),
     /// A mode that runs no command (`sudo -l`, `chrt -p`).
     Nothing,
-    /// An option the reader does not parse exactly, shown as written, or a
-    /// mode whose command the reader cannot name.
+    /// An option the reader does not parse exactly, or a mode whose command
+    /// the reader cannot name, with why in words for a refusal.
     Unread(String),
     /// A privilege launcher given no command, which runs a shell that reads
     /// its commands from its input (`sudo -s`, `pkexec` alone).
@@ -15182,8 +15552,11 @@ const GSUDO_QUIET_VERBS: &[&str] = &[
 /// One launcher's option grammar: the short letters that take a value
 /// (attached or the next word), take only an attached value and otherwise
 /// run nothing, run nothing, or take no value; the long names likewise;
-/// and whether one operand (a priority or a CPU mask) comes before the
-/// command. Any other option is [`Launch::Unread`].
+/// whether a one-dash word is a whole long name (`xcrun -sdk`, `arch
+/// -x86_64`); and whether one operand (a priority or a CPU mask) comes
+/// before the command. Long names match whole: an abbreviation, which a
+/// launcher's own parser may accept, is not read. Any other option is
+/// [`Launch::Unread`].
 struct LaunchGrammar {
     valued: &'static str,
     attached_only: &'static str,
@@ -15192,8 +15565,26 @@ struct LaunchGrammar {
     valued_long: &'static [&'static str],
     stops_long: &'static [&'static str],
     flags_long: &'static [&'static str],
+    one_dash_long: bool,
     operand: bool,
 }
+
+/// A grammar with no options, to fill in from.
+const NO_OPTIONS: LaunchGrammar = LaunchGrammar {
+    valued: "",
+    attached_only: "",
+    stops: "",
+    flags: "",
+    valued_long: &[],
+    stops_long: &[],
+    flags_long: &[],
+    one_dash_long: false,
+    operand: false,
+};
+
+/// The help and version options of the GNU launchers, read as flags: the
+/// command after them is still judged.
+const HELP_LONG: &[&str] = &["help", "version"];
 
 /// `sudo`'s grammar, from its manual and `parse_args.c`: `h` takes an
 /// attached host, or the next word when written alone and that word is
@@ -15239,26 +15630,131 @@ const SUDO_GRAMMAR: LaunchGrammar = LaunchGrammar {
         "stdin",
         "shell",
     ],
-    operand: false,
+    ..NO_OPTIONS
 };
 
-/// The grammar of each [`OPTION_LAUNCHERS`] launcher, from its manual.
+/// The grammar of the prefix launchers ([`PREFIX_LAUNCHERS`]), from the
+/// bash builtins, GNU coreutils, GNU time, util-linux `ionice` and the
+/// macOS manuals.
+fn prefix_grammar(name: &str) -> LaunchGrammar {
+    match name {
+        "command" => LaunchGrammar {
+            stops: "vV",
+            flags: "p",
+            ..NO_OPTIONS
+        },
+        "exec" => LaunchGrammar {
+            valued: "a",
+            flags: "cl",
+            ..NO_OPTIONS
+        },
+        "nohup" => LaunchGrammar {
+            flags_long: HELP_LONG,
+            ..NO_OPTIONS
+        },
+        "time" => LaunchGrammar {
+            valued: "fo",
+            flags: "ahlpqvV",
+            valued_long: &["format", "output"],
+            flags_long: &[
+                "append",
+                "portability",
+                "quiet",
+                "verbose",
+                "help",
+                "version",
+            ],
+            ..NO_OPTIONS
+        },
+        "nice" => LaunchGrammar {
+            valued: "n",
+            valued_long: &["adjustment"],
+            flags_long: HELP_LONG,
+            ..NO_OPTIONS
+        },
+        "timeout" => LaunchGrammar {
+            valued: "ks",
+            flags: "fpv",
+            valued_long: &["kill-after", "signal"],
+            flags_long: &[
+                "foreground",
+                "preserve-status",
+                "verbose",
+                "help",
+                "version",
+            ],
+            ..NO_OPTIONS
+        },
+        "stdbuf" => LaunchGrammar {
+            valued: "ioe",
+            valued_long: &["input", "output", "error"],
+            flags_long: HELP_LONG,
+            ..NO_OPTIONS
+        },
+        "ionice" => LaunchGrammar {
+            valued: "cnpPu",
+            flags: "thV",
+            valued_long: &["class", "classdata", "pid", "pgid", "uid"],
+            flags_long: &["ignore", "help", "version"],
+            ..NO_OPTIONS
+        },
+        "caffeinate" => LaunchGrammar {
+            valued: "tw",
+            flags: "disum",
+            ..NO_OPTIONS
+        },
+        "xcrun" => LaunchGrammar {
+            valued_long: &["sdk", "toolchain"],
+            stops_long: &["find", "f"],
+            flags_long: &[
+                "h",
+                "help",
+                "version",
+                "v",
+                "verbose",
+                "l",
+                "log",
+                "n",
+                "no-cache",
+                "k",
+                "kill-cache",
+                "r",
+                "run",
+                "show-sdk-path",
+                "show-sdk-version",
+                "show-sdk-build-version",
+                "show-sdk-platform-path",
+                "show-sdk-platform-version",
+            ],
+            one_dash_long: true,
+            ..NO_OPTIONS
+        },
+        "arch" => LaunchGrammar {
+            valued_long: &["arch", "d", "e"],
+            flags_long: &[
+                "32", "64", "c", "h", "i386", "x86_64", "x86_64h", "arm64", "arm64e", "arm64_32",
+            ],
+            one_dash_long: true,
+            ..NO_OPTIONS
+        },
+        // `builtin` and any other prefix launcher take no options.
+        _ => NO_OPTIONS,
+    }
+}
+
+/// The grammar of each launcher [`launch_after`] reads: the
+/// [`OPTION_LAUNCHERS`] and the [`PREFIX_LAUNCHERS`], from their manuals.
 fn launch_grammar(name: &str) -> LaunchGrammar {
     match name {
         "sudo" => SUDO_GRAMMAR,
         "doas" => LaunchGrammar {
             valued: "au",
-            attached_only: "",
             stops: "CL",
             flags: "ns",
-            valued_long: &[],
-            stops_long: &[],
-            flags_long: &[],
-            operand: false,
+            ..NO_OPTIONS
         },
         "gsudo" => LaunchGrammar {
             valued: "iu",
-            attached_only: "",
             stops: "hv",
             flags: "dknsw",
             valued_long: &["integrity", "user"],
@@ -15274,21 +15770,17 @@ fn launch_grammar(name: &str) -> LaunchGrammar {
                 "copyns",
                 "debug",
             ],
-            operand: false,
+            ..NO_OPTIONS
         },
         "pkexec" => LaunchGrammar {
             valued: "u",
-            attached_only: "",
-            stops: "",
-            flags: "",
             valued_long: &["user"],
             stops_long: &["help", "version"],
             flags_long: &["disable-internal-agent", "keep-cwd"],
-            operand: false,
+            ..NO_OPTIONS
         },
         "chrt" => LaunchGrammar {
             valued: "DPT",
-            attached_only: "",
             stops: "hmpV",
             flags: "abdefioRrv",
             valued_long: &["sched-runtime", "sched-period", "sched-deadline"],
@@ -15305,28 +15797,40 @@ fn launch_grammar(name: &str) -> LaunchGrammar {
                 "verbose",
             ],
             operand: true,
+            ..NO_OPTIONS
         },
-        // taskset
-        _ => LaunchGrammar {
-            valued: "",
-            attached_only: "",
+        "taskset" => LaunchGrammar {
             stops: "hpV",
             flags: "ac",
-            valued_long: &[],
             stops_long: &["pid", "help", "version"],
             flags_long: &["all-tasks", "cpu-list"],
             operand: true,
+            ..NO_OPTIONS
         },
+        _ => prefix_grammar(name),
     }
 }
 
-/// Where the command after the [`OPTION_LAUNCHERS`] launcher `name` starts,
-/// reading its options from `idx`. A name that is not a whole option of the
-/// launcher (an abbreviation, an unknown letter) is [`Launch::Unread`], so
-/// the caller refuses rather than guess. `chrt`'s priority is skipped only
-/// when it is a number, since some policies let it be left out.
+/// Whether `word` is GNU nice's older adjustment form, `-N`, `--N` or
+/// `-+N`.
+fn nice_adjustment(word: &str) -> bool {
+    let digits = word
+        .strip_prefix('-')
+        .map(|rest| rest.strip_prefix(['-', '+']).unwrap_or(rest));
+    digits.is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Where the command after the launcher `name` starts, reading its options
+/// from `idx` by its grammar ([`launch_grammar`]): the
+/// [`OPTION_LAUNCHERS`] and, through [`prefix_launch`], the prefix
+/// launchers. A name that is not a whole option of the launcher (an
+/// abbreviation, an unknown letter) is [`Launch::Unread`], so the caller
+/// refuses rather than guess. `chrt`'s priority is skipped only when it is
+/// a number, since some policies let it be left out, and `timeout`'s
+/// duration must be one the guard reads.
 pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Launch {
     let grammar = launch_grammar(name);
+    let unread = |form: &str| Launch::Unread(format!("{form}, an option the guard does not read"));
     while let Some(word) = tokens.get(idx).map(String::as_str) {
         if word == "--" {
             idx += 1;
@@ -15344,7 +15848,13 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
             break;
         }
         idx += 1;
-        if let Some(long) = word.strip_prefix("--") {
+        if name == "nice" && nice_adjustment(word) {
+            continue;
+        }
+        let long = word
+            .strip_prefix("--")
+            .or_else(|| grammar.one_dash_long.then(|| &word[1..]));
+        if let Some(long) = long {
             let (option, attached) = long
                 .split_once('=')
                 .map_or((long, false), |(o, _)| (o, true));
@@ -15355,10 +15865,10 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
                 idx += usize::from(!attached);
                 continue;
             }
-            if grammar.flags_long.contains(&option) {
+            if grammar.flags_long.contains(&option) && !attached {
                 continue;
             }
-            return Launch::Unread(format!("`{name} --{option}`"));
+            return unread(&format!("`{name} {word}`"));
         }
         let cluster = &word[1..];
         for (offset, letter) in cluster.char_indices() {
@@ -15387,7 +15897,7 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
                 break;
             }
             if !grammar.flags.contains(letter) {
-                return Launch::Unread(format!("`{name} -{letter}`"));
+                return unread(&format!("`{name} -{letter}`"));
             }
         }
     }
@@ -15398,6 +15908,13 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
     {
         idx += 1;
     }
+    // `timeout [options] DURATION command`.
+    if name == "timeout" {
+        if !tokens.get(idx).is_some_and(|d| is_duration(d)) {
+            return Launch::Unread("`timeout` without a duration the guard can read".to_string());
+        }
+        idx += 1;
+    }
     // gsudo reads a verb after its options: `run` runs the words after it,
     // the quiet verbs run no command, a `!` verb reruns an earlier command
     // the guard cannot name, and any other word is the command.
@@ -15406,7 +15923,9 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
             Some("run") => idx += 1,
             Some(verb) if GSUDO_QUIET_VERBS.contains(&verb) => return Launch::Nothing,
             Some(verb) if verb.starts_with('!') => {
-                return Launch::Unread(format!("`{name} {verb}`"));
+                return Launch::Unread(format!(
+                    "`{name} {verb}`, a verb whose command the guard cannot name"
+                ));
             }
             _ => {}
         }
@@ -15453,41 +15972,6 @@ fn launcher_moves(name: &str, options: &[String]) -> Option<String> {
         _ => false,
     };
     moved.then(|| format!("`{name}`, which can run the command in another directory"))
-}
-
-/// `true` when the option `a` takes the next word as its value: `exec -a
-/// NAME` (a name attached as in `-aNAME` is its own value), `time -o FILE`
-/// or `--output FILE` (`--output=FILE` carries its own), `nice -n N`,
-/// `timeout -s SIG` or `-k DURATION`, `stdbuf -o MODE`, `ionice -c CLASS`,
-/// `caffeinate -t SECONDS` and `xcrun --sdk SDK`.
-fn takes_next_word(launcher: &str, a: &str) -> bool {
-    let long_valued: &[&str] = match launcher {
-        "time" => &["--output", "--format"],
-        "timeout" => &["--signal", "--kill-after"],
-        "nice" => &["--adjustment"],
-        "stdbuf" => &["--input", "--output", "--error"],
-        "ionice" => &["--class", "--classdata", "--pid", "--pgid", "--uid"],
-        "xcrun" => &["--sdk", "--toolchain"],
-        "arch" => &["-arch", "-e", "-d"],
-        _ => &[],
-    };
-    if long_valued.contains(&a) {
-        return true;
-    }
-    let Some(flags) = a.strip_prefix('-').filter(|f| !f.starts_with('-')) else {
-        return false;
-    };
-    let valued: &[char] = match launcher {
-        "exec" => &['a'],
-        "time" => &['o', 'f'],
-        "nice" => &['n'],
-        "timeout" => &['s', 'k'],
-        "stdbuf" => &['i', 'o', 'e'],
-        "ionice" => &['c', 'n', 'p', 'P', 'u'],
-        "caffeinate" => &['t', 'w'],
-        _ => return false,
-    };
-    flags.find(valued).is_some_and(|at| at + 1 == flags.len())
 }
 
 /// Known shell names, including versioned and Windows executable spellings.
@@ -22682,9 +23166,14 @@ mod tests {
     // them, and in a shell's command that a launcher runs as another user.
     // Codex review 07: the same behind a split string after any modelled
     // launcher, behind a launcher's execution verb, and in the input of a
-    // shell a privilege launcher runs with no command. A commit the guard
-    // can place still passes, including one whose launcher only names a
-    // privilege launcher as an option value.
+    // shell a privilege launcher runs with no command. Codex review 08: the
+    // same behind any prefix launcher's option outside its grammar (an
+    // abbreviated long option or an unknown letter), a carrier hidden
+    // behind one, and a carried command whose directory option follows a
+    // `--` that another option takes as its value. A commit the guard can
+    // place still passes, including one whose launcher only names a
+    // privilege launcher as an option value, and each prefix launcher's
+    // documented options.
     #[test]
     fn an_unplaced_commit_keeps_the_protected_branch_rule() {
         let relaxed = GitPolicy {
@@ -22728,6 +23217,16 @@ mod tests {
             "printf 'git commit -m x' | pkexec",
             "su <<< 'git commit -m x'",
             "runuser -u root git commit -m x",
+            "nice --adjust 5 git commit -m x",
+            "/usr/bin/nice --adj 5 sh -c 'git commit -m x'",
+            "timeout --sig KILL 5 git commit -m x",
+            "/usr/bin/time --out /dev/null git commit -m x",
+            "stdbuf --out L git commit -m x",
+            "ionice --cl 3 git commit -m x",
+            "xcrun --sd macosx git commit -m x",
+            "exec -X git commit -m x",
+            "nice --adjust 5 man -P 'git commit -m x' ls",
+            "tar -cf -- -C /scratch-main -I 'git commit -m x' input.txt",
         ] {
             // With hook integrity off the protected-branch rule refuses on
             // its own; with it on, the line refuses under either rule.
@@ -22758,6 +23257,12 @@ mod tests {
             "exec -a sudo sh <<< 'git commit -m x'",
             "exec -a doas sh -c 'git commit -m x'",
             "gsudo status",
+            "nice --adjustment 5 git commit -m x",
+            "nice -10 git commit -m x",
+            "timeout -k 5 10 git commit -m x",
+            "timeout --signal=KILL 5 git commit -m x",
+            "ionice -c 3 git commit -m x",
+            "caffeinate -i git commit -m x",
         ] {
             let r = judged(&relaxed, cmd);
             if !r.violations.is_empty() {

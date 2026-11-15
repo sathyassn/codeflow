@@ -2128,8 +2128,9 @@ pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
 /// which keep passing both guards under the grammar's fail-closed default
 /// (TSK-1490): each modelled launcher with its documented options, a
 /// privilege launcher's name given only as another launcher's option
-/// value, a split string behind a modelled launcher, and a privilege
-/// launcher's verb that runs no command.
+/// value, a split string behind a modelled launcher, a privilege
+/// launcher's verb that runs no command, a carrier's real `--`, and command
+/// runners whose program is named on the line.
 pub const LAUNCHER_ORDINARY: &[&str] = &[
     "nice -n 5 git status",
     "timeout 5 git status",
@@ -2150,6 +2151,24 @@ pub const LAUNCHER_ORDINARY: &[&str] = &[
     "printf 'git status' | sh",
     "script -q -c 'git status' /dev/null",
     "parallel echo ::: a b",
+    "nice --adjustment 5 git status",
+    "nice -10 git status",
+    "timeout --signal KILL 5 git status",
+    "timeout -k 5 10 git status",
+    "time -o /dev/null git status",
+    "ionice -c 3 git status",
+    "stdbuf --output L git status",
+    "caffeinate -i git status",
+    "xcrun --sdk macosx git status",
+    "tar -czf a.tar notes.txt",
+    "tar -cf a.tar -- notes.txt",
+    "parallel -j2 gzip ::: a b",
+    "parallel -- echo ::: a b",
+    "parallel gzip {} :::: files.txt",
+    "xargs wc -l <<< a",
+    "xargs -I{} wc -l {} <<< a",
+    "find . -name x -exec grep -l y {} +",
+    "find . -name x -exec sh -c 'wc -l \"$1\"' _ {} ';'",
 ];
 
 /// A carried command the program runs in a directory the guard cannot
