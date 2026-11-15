@@ -12943,9 +12943,11 @@ fn judge_agent_push(
 /// Whether a segment runs git, so exec-guard's AC-15 pass must read the
 /// line, as git-guard's walker dispatches it.
 fn agent_push_segment(segment: &str) -> bool {
-    let mut words = command_argv(segment);
+    let (mut words, mut marks) = command_argv_marked(segment);
+    let written = words.len();
     strip_reserved_words(&mut words);
-    configuration_launch(&words)
+    marks.drain(..written - words.len());
+    configuration_launch(&words, Some(&marks))
         .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
 }
 
@@ -13058,9 +13060,11 @@ fn agent_push_walk(
             }
             continue;
         }
-        let mut words = command_argv(segment);
+        let (mut words, mut marks) = command_argv_marked(segment);
+        let written = words.len();
         strip_reserved_words(&mut words);
-        let launched = configuration_launch(&words);
+        marks.drain(..written - words.len());
+        let launched = configuration_launch(&words, Some(&marks));
         if top_level {
             let redirected = words.len() != tokens.len();
             shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
