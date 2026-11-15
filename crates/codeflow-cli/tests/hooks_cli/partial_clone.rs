@@ -271,6 +271,102 @@ fn partial_clone_push_refuses_offline_and_passes_after_named_commands() {
 }
 
 #[test]
+fn partial_clone_installed_push_hook_refuses_then_passes_after_named_commands() {
+    for merge in [false, true] {
+        let fixture = Fixture::new(merge);
+        let installed = codeflow()
+            .current_dir(&fixture.clone)
+            .args(["init", "--yes", "--minimal"])
+            .output()
+            .unwrap();
+        assert!(installed.status.success(), "{}", both_streams(&installed));
+        let repo = Repository::open(&fixture.clone).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str(
+                "remote.origin.url",
+                &format!("file://{}/unreachable.git", fixture.dir.path().display()),
+            )
+            .unwrap();
+        let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
+        let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
+        let push = |trace: &Path| {
+            isolated_codeflow(Command::new("git"))
+                .current_dir(&fixture.clone)
+                .args(["push", "destination", "HEAD:refs/heads/feat/partial"])
+                .env("PATH", &path)
+                .env_remove("GIT_NO_LAZY_FETCH")
+                .env_remove("CODEFLOW_HOOK_BINARY")
+                .env("GIT_TRACE", trace)
+                .output()
+                .unwrap()
+        };
+        let trace = fixture.dir.path().join("installed-offline.trace");
+        let refused = push(&trace);
+        let message = both_streams(&refused);
+        assert!(!refused.status.success(), "{message}");
+        assert!(message.contains("partial clone"), "{message}");
+        assert!(message.contains("ordinary.txt"), "{message}");
+        if merge {
+            assert!(message.contains("side.txt"), "{message}");
+        }
+        let calls = std::fs::read_to_string(&trace).unwrap();
+        assert!(calls.contains("pre-push"), "hook did not run: {calls}");
+        let destination = fixture.destination_url.strip_prefix("file://").unwrap();
+        let forbidden: Vec<_> = calls
+            .lines()
+            .filter(|line| {
+                line.contains("fetch ")
+                    || (line.contains("upload-pack") && !line.contains(destination))
+            })
+            .collect();
+        assert!(
+            forbidden.is_empty(),
+            "promisor fetch started: {forbidden:#?}"
+        );
+        repo.config()
+            .unwrap()
+            .set_str("remote.origin.url", &fixture.upstream_url)
+            .unwrap();
+        // Execute only the fixed remediation grammar with parsed object IDs.
+        let mut fetched = std::collections::BTreeSet::new();
+        for tail in message
+            .split("GIT_NO_LAZY_FETCH=0 git cat-file -e ")
+            .skip(1)
+        {
+            let id = tail
+                .get(..40)
+                .and_then(|id| id.parse::<Oid>().ok())
+                .expect("typed object ID in fetch command");
+            if fetched.insert(id) {
+                let output = git_command()
+                    .current_dir(&fixture.clone)
+                    .env("GIT_NO_LAZY_FETCH", "0")
+                    .args(["cat-file", "-e", &id.to_string()])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{}", both_streams(&output));
+            }
+        }
+        assert!(!fetched.is_empty(), "no fetch command: {message}");
+        let repaired = push(&fixture.dir.path().join("installed-repaired.trace"));
+        assert!(repaired.status.success(), "{}", both_streams(&repaired));
+        let destination =
+            Repository::open_bare(fixture.dir.path().join("destination.git")).unwrap();
+        assert_eq!(
+            destination
+                .refname_to_id("refs/heads/feat/partial")
+                .unwrap(),
+            fixture.head,
+            "the repaired push must reach the bare destination"
+        );
+    }
+}
+
+#[test]
 fn partial_clone_push_names_inputs_before_other_ci_content_readers() {
     for path in [
         "docs/notes.md",
