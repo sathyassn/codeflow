@@ -551,8 +551,16 @@ fn indirect_contact_paths_refuse_unless_proven() {
         "submodule--helper update --init",
         "submodule--helper add https://example.test/lib lib",
         "submodule--helper clone --path lib --url https://example.test/lib",
+        "submodule--helper --quiet update",
+        "submodule--helper",
     ] {
         plain.unproven(command, "internal submodule builtin");
+    }
+    for command in [
+        "submodule--helper foreach --quiet true",
+        "submodule--helper status",
+    ] {
+        assert_eq!(plain.helpers(command), Ok(vec![]), "{command}");
     }
 
     let fresh = "remote add -f fresh https://example.test/r";

@@ -238,9 +238,14 @@ pub(super) fn contacts(
         resolver.remote_subcommand(rest, &mut found, probe)?;
     } else if verb == "maintenance" {
         maintenance(rest)?;
-    } else if verb == "submodule--helper" {
+    } else if verb == "submodule--helper"
+        && !rest
+            .first()
+            .is_some_and(|sub| LOCAL_SUBMODULE_HELPERS.contains(&sub.as_str()))
+    {
         // Git's internal builtin behind `submodule` updates, adds and
-        // clones submodules directly.
+        // clones submodules directly; only a subcommand known to stay
+        // local passes.
         return Err(unproven(
             "the internal submodule builtin contacts the remotes of submodule repositories, which the guard does not read",
         ));
@@ -341,6 +346,21 @@ fn names_repository(rest: &[String]) -> bool {
     }
     false
 }
+
+/// The subcommands of Git's internal submodule builtin that never contact a
+/// remote themselves; a command `foreach` runs is judged on its own.
+const LOCAL_SUBMODULE_HELPERS: &[&str] = &[
+    "foreach",
+    "init",
+    "status",
+    "sync",
+    "deinit",
+    "summary",
+    "absorbgitdirs",
+    "set-url",
+    "set-branch",
+    "push-check",
+];
 
 /// The maintenance tasks that never contact a remote, as Git names them;
 /// Git reads a task name without regard to case.
