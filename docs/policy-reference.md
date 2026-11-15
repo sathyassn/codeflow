@@ -819,7 +819,13 @@ its options, is judged in that directory, with that directory's
 configuration, when the directory is a literal path; where the guard
 cannot establish it (a value filled in at run time, a directory per found
 path, a login's home or a workspace), the command is refused under the
-same rule. Edit files with the harness's file tool instead, and set such
+same rule, and every other rule still judges it as run in a directory the
+guard cannot establish, so a protected-branch commit there is refused with
+`git.hook_integrity` relaxed. The words of a carried command belong to it:
+an option among them is never read as the program's own, and a program's
+own directory option after them still counts. A manual program may run
+its pager in the manual's own directory, so a pager command is judged
+there as well, as in a directory the guard cannot establish. Edit files with the harness's file tool instead, and set such
 a program in the project's committed build configuration. A command a
 program reads from its own configuration files or environment is not read
 this way.
@@ -831,7 +837,12 @@ command is judged in, it reads an assignment written after a launcher as
 the launcher passes it on. A launcher that runs the command as another
 user, with that user's environment and configuration, or whose options
 or environment the guard does not model, leaves the repository
-unresolved, which refuses.
+unresolved, which refuses. After a launcher option the guard does not
+read, it cannot tell which later word starts the command, so it judges a
+Git or GitHub CLI call, and a command a shell runs, from every word where
+the command may start, with the repository unresolved; each rule then
+keeps its own verdict, the protected-branch rule included when
+`git.hook_integrity` is relaxed.
 
 ### Program variables the guards judge
 
