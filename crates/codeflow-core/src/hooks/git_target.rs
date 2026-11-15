@@ -380,10 +380,14 @@ pub(super) fn host_path(path: &str) -> String {
 pub(super) const GIT_LOCATION_VARS: &[&str] = &["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
 
 /// The environment a simple command's launchers give the program they run:
-/// leading `NAME=value` words and the assignments of `env`, through
-/// `command`, `builtin` and `exec`. `Err` for an `env` option, whose effect
-/// (`-C`, `-u`, `-S`, `-i`) the guard does not model.
-pub(super) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, String> {
+/// leading `NAME=value` words, the assignments of `env`, and those after
+/// every launcher of the closed list (`security/launchers.rs`) by any
+/// spelling, read through each launcher's options as git-guard's command
+/// reader reads them (TSK-1490 AC-8). `Err` for an `env` option, whose
+/// effect (`-C`, `-u`, `-S`, `-i`) the guard does not model, and for a
+/// launcher whose options or environment it does not model.
+pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, String> {
+    use super::git_guard::{is_prefix_launcher, launcher_name, skip_launcher_options};
     let mut env = Vec::new();
     let mut i = 0;
     loop {
@@ -394,11 +398,32 @@ pub(super) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, S
         let Some(word) = tokens.get(i) else {
             return Ok(env);
         };
-        if matches!(word.as_str(), "command" | "builtin" | "exec") {
+        // A prefix launcher, by `strip_launchers`' own grammar.
+        if is_prefix_launcher(word) {
+            match skip_launcher_options(word, tokens, i + 1) {
+                Some(next) => {
+                    i = next;
+                    continue;
+                }
+                // `command -v git` only looks the name up; nothing runs.
+                None => return Ok(env),
+            }
+        }
+        let name = launcher_name(word);
+        if matches!(name, "setsid" | "unbuffer" | "busybox") {
+            // Options that take no value, or the applet name that follows.
             i += 1;
+            while name != "busybox" && tokens.get(i).is_some_and(|a| a.starts_with('-')) {
+                i += 1;
+            }
             continue;
         }
-        if word.rsplit('/').next() == Some("env") {
+        if name != "env" && crate::security::launchers::LAUNCHERS.contains(&name) {
+            return Err(format!(
+                "the launcher `{word}`, whose options and environment the guard does not read for the repository"
+            ));
+        }
+        if name == "env" {
             i += 1;
             while let Some(arg) = tokens.get(i) {
                 if arg.starts_with('-') {

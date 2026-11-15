@@ -23,6 +23,11 @@
 //! program reads (a configuration file, an environment variable) is outside
 //! this reader.
 //!
+//! A program may run the carried command in another directory (an option
+//! of [`RUN_DIRECTORIES`], or `find -execdir`). A literal directory the
+//! guard can read moves the judgment there as well as where the line
+//! starts; any other directory refuses under `git.hook_integrity`.
+//!
 //! The inventory, one line per row of [`OPTION_COMMANDS`], held equal to it
 //! by a test (`security/launchers.rs`):
 //!
@@ -289,6 +294,69 @@ pub(crate) enum Carried {
     /// A value the guard cannot read, with the program and option that take
     /// it (`vim -c`), as plain words for the refusal.
     Unread(String),
+    /// A startup setting whose value sets the startup-command setting
+    /// again, with the program and option (`wget -e`). The program the
+    /// innermost setting names is not read, so the value refuses.
+    Nested(String),
+    /// A carried command the program runs in a directory the guard cannot
+    /// establish, with the program and option that move it (`su -l`).
+    Elsewhere(String),
+}
+
+impl Carried {
+    /// The refusal message for a value the guard does not judge as a
+    /// command; `None` for a [`Carried::Command`].
+    pub(crate) fn refusal(&self) -> Option<String> {
+        match self {
+            Self::Command(_) => None,
+            Self::Unread(form) => Some(unread_message(form)),
+            Self::Nested(form) => Some(format!(
+                "`{form}` sets a startup setting whose value sets the startup-command setting again, so the program it finally runs is not read and cannot be judged"
+            )),
+            Self::Elsewhere(form) => Some(format!(
+                "`{form}` runs the command it carries in a directory the guard cannot establish, so the command cannot be judged with that directory's configuration"
+            )),
+        }
+    }
+
+    /// The marker segment git-guard's command reader stands in for this
+    /// refusal ([`refusal_marker`] reads it back); `None` for a
+    /// [`Carried::Command`].
+    pub(crate) fn marker(&self) -> Option<String> {
+        match self {
+            Self::Command(_) => None,
+            Self::Unread(form) => Some(format!("{OPTION_UNREAD}{form}")),
+            Self::Nested(form) => Some(format!("{OPTION_NESTED}{form}")),
+            Self::Elsewhere(form) => Some(format!("{OPTION_ELSEWHERE}{form}")),
+        }
+    }
+}
+
+/// The start of the segment that stands for an option value the guard does
+/// not read as a command; the program and option follow it as plain words
+/// (TSK-1490). No shell runs it and the integrity check refuses it.
+pub(crate) const OPTION_UNREAD: &str = "\u{1}codeflow: unread option value: ";
+
+/// The start of the segment that stands for a startup setting nested in
+/// another ([`Carried::Nested`]), read like [`OPTION_UNREAD`].
+pub(crate) const OPTION_NESTED: &str = "\u{1}codeflow: nested startup setting: ";
+
+/// The start of the segment that stands for a carried command run in a
+/// directory the guard cannot establish ([`Carried::Elsewhere`]), read like
+/// [`OPTION_UNREAD`].
+pub(crate) const OPTION_ELSEWHERE: &str = "\u{1}codeflow: carried command elsewhere: ";
+
+/// The refusal a marker segment from [`Carried::marker`] stands for.
+pub(crate) fn refusal_marker(segment: &str) -> Option<Carried> {
+    if let Some(form) = segment.strip_prefix(OPTION_UNREAD) {
+        return Some(Carried::Unread(form.to_string()));
+    }
+    if let Some(form) = segment.strip_prefix(OPTION_ELSEWHERE) {
+        return Some(Carried::Elsewhere(form.to_string()));
+    }
+    segment
+        .strip_prefix(OPTION_NESTED)
+        .map(|form| Carried::Nested(form.to_string()))
 }
 
 /// The refusal message for an [`Carried::Unread`] form.
@@ -298,29 +366,28 @@ pub(crate) fn unread_message(form: &str) -> String {
     )
 }
 
-/// The refusal both guards give an [`Carried::Unread`] form, under
-/// `git.hook_integrity` at `level` (TSK-1490 rulings D2 and D3).
+/// The refusal both guards give a value they do not judge as a command,
+/// under `git.hook_integrity` at `level` (TSK-1490 rulings D2 and D3);
+/// `None` for a [`Carried::Command`].
 pub(crate) fn unread_violation(
-    form: &str,
+    carried: &Carried,
     level: crate::hooks::policy::PolicyLevel,
-) -> crate::hooks::Violation {
-    crate::hooks::Violation::new(
+) -> Option<crate::hooks::Violation> {
+    Some(crate::hooks::Violation::new(
         "git.hook_integrity",
         level,
-        unread_message(form),
+        carried.refusal()?,
         crate::remedy::OPTION_LANGUAGE.remedy(),
-    )
+    ))
 }
 
-/// The first value on the simple command `words` the guard cannot read.
-pub(crate) fn first_unread(words: &[String]) -> Option<String> {
+/// The first value on the simple command `words` the guard does not judge
+/// as a command.
+pub(crate) fn first_unread(words: &[String]) -> Option<Carried> {
     let (program, args) = crate::hooks::git_guard::strip_launchers(words)?;
     option_values(program, args)
         .into_iter()
-        .find_map(|carried| match carried {
-            Carried::Unread(form) => Some(form),
-            Carried::Command(_) => None,
-        })
+        .find(|carried| !matches!(carried, Carried::Command(_)))
 }
 
 /// Every command `program` runs from an option value in `args`, by the
@@ -342,15 +409,26 @@ fn read(program: &str, args: &[String], own: bool) -> Vec<Carried> {
         .filter(|carrier| carrier.programs.contains(&name))
         .collect();
     let mut out = unparsed_spellings(&rows, name, args);
+    if let Some(option) = crate::hooks::git_guard::found_path_directory(name, args) {
+        out.push(Carried::Elsewhere(format!("{name} {option}")));
+    }
+    // The commands git-guard's own launcher reader finds, for its rows and
+    // for a program whose options move where it runs them (`parallel`).
+    let own_reader = rows.iter().any(|carrier| carrier.runs == Runs::OwnReader);
+    let moves = RUN_DIRECTORIES
+        .iter()
+        .any(|row| row.programs.contains(&name));
+    let bodies = if own_reader || moves {
+        launcher_commands(name, args)
+    } else {
+        Vec::new()
+    };
+    let launched = !bodies.is_empty();
+    if own && own_reader {
+        out.extend(bodies.into_iter().map(Carried::Command));
+    }
     for carrier in rows {
         if carrier.runs == Runs::OwnReader {
-            if own {
-                out.extend(
-                    launcher_commands(name, args)
-                        .into_iter()
-                        .map(Carried::Command),
-                );
-            }
             continue;
         }
         if !carrier.subcommands.is_empty() && !opens_with_subcommand(carrier, args) {
@@ -362,7 +440,236 @@ fn read(program: &str, args: &[String], own: bool) -> Vec<Carried> {
             }
         }
     }
+    let carries = launched || out.iter().any(|c| matches!(c, Carried::Command(_)));
+    if !carries {
+        return out;
+    }
+    match run_directories(name, args) {
+        Ok(dirs) => {
+            let mut placed = Vec::new();
+            for carried in out {
+                if let Carried::Command(body) = &carried {
+                    for body in relocated(&dirs, body) {
+                        let command = Carried::Command(body);
+                        if !placed.contains(&command) {
+                            placed.push(command);
+                        }
+                    }
+                } else if !placed.contains(&carried) {
+                    placed.push(carried);
+                }
+            }
+            placed
+        }
+        Err(form) => {
+            let mut kept: Vec<Carried> = out
+                .into_iter()
+                .filter(|c| !matches!(c, Carried::Command(_)))
+                .collect();
+            let away = Carried::Elsewhere(form);
+            if !kept.contains(&away) {
+                kept.push(away);
+            }
+            kept
+        }
+    }
+}
+
+/// The options that make a program run the command it carries in another
+/// directory (TSK-1490 AC-7). A directory value that is a literal path is
+/// read in order, each relative to the last; the command is judged in the
+/// starting directory and after each change, a superset of where it runs.
+/// A login, a workspace, a value filled in at run time or a spelling the
+/// reader does not parse leaves the directory unknown, and the command
+/// refuses ([`Carried::Elsewhere`]).
+struct RunDirectory {
+    programs: &'static [&'static str],
+    /// Options whose value is the directory.
+    short: &'static [char],
+    long: &'static [&'static str],
+    /// Options and words that move the command where the guard cannot
+    /// follow: a login's home, a workspace.
+    away_short: &'static [char],
+    away_long: &'static [&'static str],
+    away_words: &'static [&'static str],
+}
+
+const RUN_DIRECTORIES: &[RunDirectory] = &[
+    RunDirectory {
+        programs: &["fd", "fdfind"],
+        short: &['C'],
+        long: &["--base-directory"],
+        away_short: &[],
+        away_long: &[],
+        away_words: &[],
+    },
+    RunDirectory {
+        programs: TAR,
+        short: &['C'],
+        long: &["--directory"],
+        away_short: &[],
+        away_long: &[],
+        away_words: &[],
+    },
+    RunDirectory {
+        programs: &["npm", "npx"],
+        short: &['C'],
+        long: &["--prefix"],
+        away_short: &['w'],
+        away_long: &["--workspace", "--workspaces"],
+        away_words: &["-ws"],
+    },
+    RunDirectory {
+        programs: &["su", "runuser"],
+        short: &[],
+        long: &[],
+        away_short: &['l'],
+        away_long: &["--login"],
+        away_words: &["-"],
+    },
+    RunDirectory {
+        programs: &["parallel"],
+        short: &[],
+        long: &["--wd", "--workdir"],
+        away_short: &[],
+        away_long: &[],
+        away_words: &[],
+    },
+];
+
+/// The literal directories `name`'s options move a carried command to, in
+/// order, or the program and option that move it where the guard cannot
+/// establish.
+fn run_directories(name: &str, args: &[String]) -> Result<Vec<String>, String> {
+    // A letter that takes the carried command as its value ends a cluster.
+    let valued: Vec<char> = OPTION_COMMANDS
+        .iter()
+        .filter(|carrier| carrier.programs.contains(&name))
+        .flat_map(|carrier| carrier.short.iter().copied())
+        .collect();
+    let mut dirs = Vec::new();
+    for row in RUN_DIRECTORIES
+        .iter()
+        .filter(|row| row.programs.contains(&name))
+    {
+        let directory = |value: Option<&String>, option: &str| -> Result<String, String> {
+            value
+                .map(String::as_str)
+                .filter(|value| literal_directory(value))
+                .map(str::to_string)
+                .ok_or_else(|| format!("{name} {option}"))
+        };
+        // GNU tar's old-style first word may hold the directory letter.
+        if TAR.contains(&name)
+            && args
+                .first()
+                .is_some_and(|first| !first.starts_with('-') && first.contains('C'))
+        {
+            return Err(format!("{name} C"));
+        }
+        let mut at = 0;
+        while let Some(word) = args.get(at) {
+            if word == "--" {
+                break;
+            }
+            if row.away_words.contains(&word.as_str()) {
+                return Err(format!("{name} {word}"));
+            }
+            if let Some(long) = word.strip_prefix("--").filter(|long| !long.is_empty()) {
+                let (option, attached) = match long.split_once('=') {
+                    Some((option, value)) => (format!("--{option}"), Some(value.to_string())),
+                    None => (word.clone(), None),
+                };
+                if row.long.contains(&option.as_str()) {
+                    let value = if attached.is_some() {
+                        attached
+                    } else {
+                        at += 1;
+                        args.get(at).cloned()
+                    };
+                    dirs.push(directory(value.as_ref(), &option)?);
+                } else if row.away_long.contains(&option.as_str())
+                    || row
+                        .long
+                        .iter()
+                        .chain(row.away_long)
+                        .any(|full| full.len() > option.len() && full.starts_with(&option))
+                {
+                    return Err(format!("{name} {option}"));
+                }
+            } else if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.is_empty()) {
+                for (offset, letter) in cluster.char_indices() {
+                    if valued.contains(&letter) && !row.short.contains(&letter) {
+                        break;
+                    }
+                    if row.away_short.contains(&letter) {
+                        return Err(format!("{name} -{letter}"));
+                    }
+                    if row.short.contains(&letter) {
+                        let rest = &cluster[offset + letter.len_utf8()..];
+                        let value = if rest.is_empty() {
+                            at += 1;
+                            args.get(at).cloned()
+                        } else {
+                            Some(rest.trim_start_matches('=').to_string())
+                        };
+                        dirs.push(directory(value.as_ref(), &format!("-{letter}"))?);
+                        break;
+                    }
+                }
+            }
+            at += 1;
+        }
+    }
+    Ok(dirs)
+}
+
+/// Whether `value` names a directory the guard can read as written: not
+/// empty, no option, no home or run-time expansion, no pattern, and none
+/// of a program's own placeholders (`{}`, `...`).
+fn literal_directory(value: &str) -> bool {
+    !value.is_empty()
+        && value != "..."
+        && !value.starts_with(['-', '~'])
+        && !value.contains(['$', '`', '*', '?', '[', '{', '}', '\n'])
+}
+
+/// `body` judged in the starting directory and after each change in
+/// `dirs`, each relative to the last.
+fn relocated(dirs: &[String], body: &str) -> Vec<String> {
+    let mut out = vec![body.to_string()];
+    let mut prefix = String::new();
+    for dir in dirs {
+        prefix.push_str("cd ");
+        prefix.push_str(&literal(dir));
+        prefix.push_str(" && ");
+        out.push(format!("{prefix}{body}"));
+    }
     out
+}
+
+/// [`relocated`] for the commands git-guard's own launcher reader finds
+/// (`launcher_commands`): every body in each directory the program's
+/// options move it to, or none where the directory is unknown, which
+/// [`first_unread`] refuses.
+pub(crate) fn relocated_bodies(program: &str, args: &[String], bodies: Vec<String>) -> Vec<String> {
+    if bodies.is_empty() {
+        return bodies;
+    }
+    match run_directories(program_name(program), args) {
+        Ok(dirs) => {
+            let mut out = Vec::new();
+            for body in &bodies {
+                for moved in relocated(&dirs, body) {
+                    if !out.contains(&moved) {
+                        out.push(moved);
+                    }
+                }
+            }
+            out
+        }
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Every word of `args`, up to `--`, that spells an option of `rows` in a
@@ -578,11 +885,11 @@ fn carried_value(
                 push(carried);
             }
         }
-        Runs::Wgetrc => {
-            if let Some(command) = wgetrc_command(&value) {
-                push(Carried::Command(command));
-            }
-        }
+        Runs::Wgetrc => match wgetrc_command(&value) {
+            Startup::Program(command) => push(Carried::Command(command)),
+            Startup::Nested => push(Carried::Nested(format!("{name} {}", shown_option(word)))),
+            Startup::Other => {}
+        },
         Runs::CloneArguments | Runs::OwnReader => {}
     }
     at
@@ -690,7 +997,7 @@ fn cargo_config(value: &str) -> Vec<Carried> {
             };
             out.push(Carried::Command(format!(
                 "{variable}={} cargo",
-                quoted(text)
+                literal(text)
             )));
         }
     }
@@ -750,21 +1057,38 @@ fn shell_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The program a wget startup command (`-e NAME=VALUE`) runs: wget compares
-/// the name without case and with `-` and `_` dropped, so any spelling of
-/// the askpass command counts. Another command, or one without `=`, runs
-/// nothing here.
-fn wgetrc_command(value: &str) -> Option<String> {
+/// What a wget startup command (`-e NAME=VALUE`) does here.
+enum Startup {
+    /// It names the program the askpass setting runs.
+    Program(String),
+    /// It sets the startup-command setting again, whose own value is a
+    /// further startup command (wget2 reads it so); it refuses at any
+    /// depth rather than being read to a bound.
+    Nested,
+    /// Another setting, or text without `=`, which runs nothing.
+    Other,
+}
+
+/// What a wget startup command (`-e NAME=VALUE`) does: wget compares the
+/// name without case and with `-` and `_` dropped, so any spelling of the
+/// askpass or startup-command setting counts, a leading `--` included.
+fn wgetrc_command(value: &str) -> Startup {
     // wget's own blanks: ASCII spaces, tabs and line ends.
     const BLANKS: &[char] = &[' ', '\t', '\r', '\n', '\u{b}', '\u{c}'];
-    let (key, rest) = value.split_once('=')?;
+    let Some((key, rest)) = value.split_once('=') else {
+        return Startup::Other;
+    };
     let key: String = key
         .chars()
         .filter(|c| !matches!(c, '-' | '_') && !BLANKS.contains(c))
         .collect::<String>()
         .to_ascii_lowercase();
     let rest = rest.trim_matches(BLANKS);
-    (key == "useaskpass" && !rest.is_empty()).then(|| rest.to_string())
+    match key.as_str() {
+        "execute" => Startup::Nested,
+        "useaskpass" if !rest.is_empty() => Startup::Program(rest.to_string()),
+        _ => Startup::Other,
+    }
 }
 
 /// The option as the refusal shows it: its name without a value.
@@ -786,6 +1110,13 @@ fn quoted(word: &str) -> String {
     format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Literal data as shell text that reads back as the same string with no
+/// expansion: single quotes, each `'` written `'\''`. A decoded setting
+/// value is data the program receives, never shell text.
+fn literal(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,6 +1128,24 @@ mod tests {
     fn commands(line: &str) -> Vec<Carried> {
         let all = words(line);
         option_commands(&all[0], &all[1..])
+    }
+
+    // A literal directory moves the command there as well as where the
+    // line starts; a login's home is a directory the reader cannot
+    // establish.
+    #[test]
+    fn a_moved_command_is_read_where_it_runs() {
+        assert_eq!(
+            commands("npm --prefix /tmp exec -c X"),
+            vec![
+                Carried::Command("X".into()),
+                Carried::Command("cd '/tmp' && X".into())
+            ]
+        );
+        assert_eq!(
+            commands("su -lc X"),
+            vec![Carried::Elsewhere("su -l".into())]
+        );
     }
 
     #[test]
@@ -812,13 +1161,12 @@ mod tests {
             "zip -TTX",
             "zip -TT=X",
             "zip --unzip-command=X",
-            "su -lc X",
+            "su -c X",
             "ssh -o ProxyCommand=X",
             "ssh -oLocalCommand=X",
             "tar --checkpoint-action=exec=X",
             "tar cIf X a.tar",
             "npm exec -c X",
-            "npm --prefix /tmp exec -c X",
             "npm install -c X",
             "/usr/bin/gsort --compress-program X",
             "wget --use-askpass=X",
@@ -863,7 +1211,12 @@ mod tests {
         // A Cargo `env` setting is the same assignment written bare.
         assert_eq!(
             commands("cargo --config env.APP_MODE=\"runner\""),
-            vec![Carried::Command("APP_MODE=\"runner\" cargo".into())]
+            vec![Carried::Command("APP_MODE='runner' cargo".into())]
+        );
+        // Its value is literal data, so no expansion in it stays live.
+        assert_eq!(
+            commands("cargo --config env.A=\"$(x)`y`'z\""),
+            vec![Carried::Command("A='$(x)`y`'\\''z' cargo".into())]
         );
         for line in [
             "vim -c x",
@@ -889,6 +1242,25 @@ mod tests {
                 "{line}: {:?}",
                 commands(line)
             );
+        }
+    }
+
+    // A startup setting nested in another refuses at any depth, by any
+    // spelling of its name, and its marker reads back as the same refusal.
+    #[test]
+    fn a_nested_startup_setting_refuses_at_any_depth() {
+        for line in [
+            "wget -e execute=use_askpass=X",
+            "wget2 --execute=--Execute=use-askpass=X",
+            "wget2 -qe execute=execute=robots=off",
+        ] {
+            let got = commands(line);
+            assert!(
+                matches!(got.as_slice(), [Carried::Nested(_)]),
+                "{line}: {got:?}"
+            );
+            let marker = got[0].marker().unwrap();
+            assert_eq!(refusal_marker(&marker).as_ref(), Some(&got[0]), "{line}");
         }
     }
 }

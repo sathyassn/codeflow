@@ -35,7 +35,7 @@ pub mod exec_guard;
 pub mod git_discard;
 pub mod git_guard;
 pub mod git_hook;
-mod git_target;
+pub(crate) mod git_target;
 pub mod gitleaks;
 pub mod guard_deadline;
 pub mod guidance;

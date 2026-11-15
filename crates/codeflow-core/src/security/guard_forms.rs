@@ -1956,6 +1956,8 @@ pub const OPTION_CARRIERS: &[&str] = &[
     "wget -e 'use_askpass = {}' https://example.invalid",
     "wget --execute='useAskPass={}' https://example.invalid",
     "wget -qe 'use-askpass={}' https://example.invalid",
+    "wget2 -e 'use_askpass={}' https://example.invalid",
+    "wget2 --execute 'use-askpass={}' https://example.invalid",
     "su -c '{}'",
     "su --command='{}' root",
     "runuser -c '{}' x",
@@ -2087,6 +2089,71 @@ pub const OPTION_CONTROLS: &[(&str, &str)] = &[
     ),
     ("tar --to-stdout -xf x.tar", "tar -xf x.tar"),
     ("npm --prefix /tmp install", "npm install"),
+    ("npm -w app install", "npm install"),
+    ("tar -C /tmp -xf x.tar", "tar -xf x.tar"),
+    ("fd -C /tmp -e rs", "fd -e rs"),
+    ("find . -execdir wc -l {} ';'", "find . -exec wc -l {} ';'"),
+    (
+        "cargo --config 'env.APP_MODE=\"$(git config core.hooksPath /tmp/h)\"' build",
+        "cargo build",
+    ),
+    (
+        "cargo --config 'env.APP_MODE=\"`git config core.hooksPath /tmp/h`\"' build",
+        "cargo build",
+    ),
+];
+
+/// A carried command the program runs in another directory it is given as
+/// a literal path, beside the command written bare after a change to that
+/// directory, for git-guard's fixture repositories: the carried command is
+/// judged in that directory's repository, as the bare one is (TSK-1490
+/// AC-7). `{}` stands for the payload.
+pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
+    "fd -C /scratch-main -x {}",
+    "fd --base-directory=/scratch-main -x {}",
+    "fdfind --base-directory /scratch-main --exec {}",
+    "tar -C /scratch-main -cf a.tar --checkpoint-action=exec='{}' .",
+    "tar --directory=/scratch-main -I '{}' -cf a.tar .",
+    "tar -cf a.tar -C /tmp -C /scratch-main --to-command='{}' .",
+    "npm --prefix /scratch-main exec -c '{}'",
+    "parallel --wd /scratch-main {} ::: x",
+    "parallel --workdir=/scratch-main {} ::: x",
+];
+
+/// A carried command the program runs in a directory the guard cannot
+/// establish: one set at run time, per found path, by a spelling the reader
+/// does not parse, or by a login or workspace switch. Both guards refuse
+/// it under hook integrity (TSK-1490 AC-7). `{}` stands for the payload.
+pub const OPTION_UNKNOWN_RUN_DIRECTORIES: &[&str] = &[
+    "find . -execdir {} ';'",
+    "find . -name x -okdir {} '+'",
+    "fd -C \"$D\" -x {}",
+    "fd -C ~/w -x {}",
+    "tar xCf /scratch-main a.tar --checkpoint-action=exec='{}'",
+    "tar --dir=/scratch-main -I '{}' -cf a.tar .",
+    "npm -w app exec -c '{}'",
+    "npm --workspaces exec -c '{}'",
+    "npm -ws exec -c '{}'",
+    "su -l root -c '{}'",
+    "su - root -c '{}'",
+    "su -lc '{}' root",
+    "runuser --login u -c '{}'",
+    "parallel --wd ... {} ::: x",
+    "parallel --wd 'w{1}' {} ::: x",
+];
+
+/// A startup setting whose value sets the startup-command setting again,
+/// in each spelling and at more than one level: both guards refuse it
+/// under hook integrity, whatever program the innermost setting names
+/// (TSK-1490, Codex review 02).
+pub const OPTION_NESTED_SETTINGS: &[&str] = &[
+    "wget2 --execute=execute=use-askpass=sudo https://example.invalid",
+    "wget --execute execute=use_askpass=sudo https://example.invalid",
+    "wget -e execute=use_askpass=sudo https://example.invalid",
+    "wget -qe 'execute = use-askpass=sudo' https://example.invalid",
+    "wget2 -e 'Execute=execute=use_askpass=sudo' https://example.invalid",
+    "wget2 -e '--execute=use_askpass=sudo' https://example.invalid",
+    "wget -e execute=robots=off https://example.invalid",
 ];
 
 /// A Cargo `env` setting beside the same assignment written bare before
@@ -2100,7 +2167,9 @@ pub const OPTION_ASSIGNMENTS: &[(&str, &str)] = &[(
 
 /// A carried relative read after a directory change the guard cannot
 /// establish, beside the read written bare, for exec-guard with the text
-/// rule relaxed: both refuse as a possible secret read (TSK-1490).
+/// rule relaxed: both refuse as a possible secret read (TSK-1490). The last
+/// row's name holds the text of the guard's former stand-in directory, so
+/// a finding that quotes it must still count.
 pub const OPTION_UNKNOWN_DIRECTORY: &[(&str, &str)] = &[
     (
         "cd \"$D\"; man -P 'cat auth.json' ls",
@@ -2109,5 +2178,9 @@ pub const OPTION_UNKNOWN_DIRECTORY: &[(&str, &str)] = &[
     (
         "cd \"$D\" && rg --pre 'cat .codex/auth.json' needle",
         "cd \"$D\" && cat .codex/auth.json",
+    ),
+    (
+        "cd \"$D\"; man -P 'cat auth.json.CODEFLOW_UNKNOWN_DIRECTORY' ls",
+        "cd \"$D\"; cat auth.json.CODEFLOW_UNKNOWN_DIRECTORY",
     ),
 ];

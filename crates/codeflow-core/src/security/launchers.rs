@@ -226,7 +226,7 @@ mod tests {
         };
         let git_command = "git config core.hooksPath /tmp/h";
         let exec_command = "cat ~/.ssh/id_rsa";
-        let mut failed = Vec::new();
+        let mut failed = location_reader_failures();
         for row in OPTION_COMMANDS {
             let (git_rule, exec_rule) = match row.runs {
                 Runs::Language | Runs::CargoConfig => ("git.hook_integrity", "git.hook_integrity"),
@@ -253,6 +253,44 @@ mod tests {
             failed.len(),
             failed.join("\n")
         );
+    }
+
+    /// TSK-1490 AC-8, for [`every_option_carrier_is_read_by_both_guards`]:
+    /// git-guard's location reader, which decides the repository a Git
+    /// call is judged in, reads every launcher of the closed list by each
+    /// spelling, with an assignment after it. It either keeps the
+    /// assignment or refuses, never drops it. Each row that drops it.
+    fn location_reader_failures() -> Vec<String> {
+        let mut spellings: Vec<String> = Vec::new();
+        for name in LAUNCHERS {
+            spellings.push((*name).to_string());
+            spellings.push(format!("/usr/bin/{name}"));
+        }
+        for name in crate::hooks::git_guard::GNU_LAUNCHERS {
+            if LAUNCHERS.contains(name) {
+                spellings.push(format!("g{name}"));
+            }
+        }
+        let mut failed = Vec::new();
+        for launcher in &spellings {
+            // `timeout` reads its duration before the command.
+            let duration = if launcher.ends_with("timeout") {
+                " 5"
+            } else {
+                ""
+            };
+            for tail in ["env GIT_DIR=/x git commit", "GIT_DIR=/x git commit"] {
+                let line = format!("{launcher}{duration} {tail}");
+                let words: Vec<String> = line.split(' ').map(str::to_string).collect();
+                match crate::hooks::git_target::launcher_env(&words) {
+                    Ok(env) if !env.iter().any(|(name, _)| name == "GIT_DIR") => {
+                        failed.push(format!("location: {line}: {env:?}"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        failed
     }
 
     /// One inventory row as its line in the option reader's module docs.

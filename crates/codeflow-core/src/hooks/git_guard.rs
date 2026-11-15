@@ -1022,10 +1022,10 @@ fn evaluate_report_with_runners(
 
         // An option value in a command language the guard does not read
         // may hold any command (TSK-1490 rulings D2 and D3).
-        if let Some(form) = segment.strip_prefix(OPTION_UNREAD) {
+        if let Some(refused) = crate::security::option_commands::refusal_marker(segment) {
             if ctx.policy.hook_integrity.is_active() {
-                violations.push(crate::security::option_commands::unread_violation(
-                    form,
+                violations.extend(crate::security::option_commands::unread_violation(
+                    &refused,
                     ctx.policy.hook_integrity,
                 ));
             }
@@ -3731,6 +3731,11 @@ pub(crate) fn run_dirs_from_home(
     let mut repeats = false;
     let mut moves = false;
     for segment in segments {
+        // A refusal marker for an option value refuses on its own, by the
+        // reason it names; it never runs, so it moves nothing.
+        if crate::security::option_commands::refusal_marker(segment).is_some() {
+            continue;
+        }
         let mut tokens = command_argv(segment);
         repeats |= tokens.first().is_some_and(|t| {
             matches!(
@@ -7394,7 +7399,7 @@ fn expand_segments(
         // An option value in a command language the guard does not read
         // stands as a marker the integrity check refuses (TSK-1490).
         let unread_option = crate::security::option_commands::first_unread(&toks)
-            .map(|form| format!("{OPTION_UNREAD}{form}"));
+            .and_then(|refused| refused.marker());
         let mut words = toks;
         strip_reserved_words(&mut words);
         if let Some((program, _)) = strip_launchers(&words) {
@@ -7634,7 +7639,13 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
         // A command a program runs from an option value, by the inventory
         // both guards share (TSK-1490), in the directory its launchers
         // move to, as a shell `-c` body is.
-        let mut out = launcher_commands(name, args);
+        // Each in every directory the program's options move it to; one
+        // moved where the guard cannot follow refuses by its marker.
+        let mut out = crate::security::option_commands::relocated_bodies(
+            prog,
+            args,
+            launcher_commands(name, args),
+        );
         for carried in crate::security::option_commands::option_values(prog, args) {
             if let crate::security::option_commands::Carried::Command(body) = carried {
                 let body = launched_script(toks, &body);
@@ -7825,6 +7836,32 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The option of `find` that runs a command [`launcher_commands`] judges in
+/// the directory of each path it finds (`-execdir`, `-okdir`), a directory
+/// the guard cannot establish, so the command refuses (TSK-1490 AC-7).
+/// `None` for any other program or command.
+pub(crate) fn found_path_directory(name: &str, args: &[String]) -> Option<&'static str> {
+    if name != "find" {
+        return None;
+    }
+    args.iter().enumerate().find_map(|(at, word)| {
+        let option = match word.as_str() {
+            "-execdir" => "-execdir",
+            "-okdir" => "-okdir",
+            _ => return None,
+        };
+        let tail = &args[at + 1..];
+        let end = tail
+            .iter()
+            .position(|w| w == ";" || w == "+")
+            .unwrap_or(tail.len());
+        let words = &tail[..end];
+        let judged = strip_launchers(words).is_some_and(|(program, _)| basename(program) == "git")
+            || !carried_commands(words).is_empty();
+        judged.then_some(option)
+    })
 }
 
 /// The command `flock` runs: after its options (`-w` and `-E` take a
@@ -8949,16 +8986,11 @@ const NESTING_LIMIT: usize = 8;
 /// It is not a command any shell runs, and the integrity check refuses it.
 pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
 
-/// The start of the segment that stands for an option value in a command
-/// language the guard does not read; the program and option follow it as
-/// plain words (TSK-1490). Like [`NESTING_UNREAD`], no shell runs it and
-/// the integrity check refuses it.
-pub(crate) const OPTION_UNREAD: &str = "\u{1}codeflow: unread option value: ";
-
 /// Whether `segment` stands for text the command reader could not read:
-/// [`NESTING_UNREAD`] or an [`OPTION_UNREAD`] marker.
+/// [`NESTING_UNREAD`] or an option value's refusal marker
+/// ([`crate::security::option_commands::refusal_marker`]).
 pub(crate) fn unread_marker(segment: &str) -> bool {
-    segment == NESTING_UNREAD || segment.starts_with(OPTION_UNREAD)
+    segment == NESTING_UNREAD || crate::security::option_commands::refusal_marker(segment).is_some()
 }
 
 /// Words that leave the shell in command position, so a `(` after them
@@ -14261,7 +14293,7 @@ pub(crate) fn is_shell_modifier(name: &str) -> bool {
 /// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
 /// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form, and the
 /// GNU-prefixed names of the coreutils ones ([`launcher_name`]).
-fn is_prefix_launcher(t: &str) -> bool {
+pub(crate) fn is_prefix_launcher(t: &str) -> bool {
     is_shell_modifier(t) || PREFIX_LAUNCHERS.contains(&launcher_name(t))
 }
 
@@ -14296,7 +14328,11 @@ pub(crate) const COMMAND_CARRIERS: &[&str] = &[
 /// `--help` can be another option's value (`time --format --help git ...`),
 /// so a non-executing form such as `nohup --help git push` is judged as the
 /// command after it and may be refused, which fails closed.
-fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
+pub(crate) fn skip_launcher_options(
+    launcher: &str,
+    tokens: &[String],
+    mut idx: usize,
+) -> Option<usize> {
     if is_shell_modifier(launcher) {
         return Some(idx);
     }
@@ -17331,6 +17367,31 @@ mod tests {
             let (got, want) = (rules(cmd), rules(without));
             if got != want {
                 failed.push(format!("keep {cmd}: {got:?}, want {want:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490, Codex review 02: a startup setting whose value sets the
+    /// startup-command setting again refuses under hook integrity with its
+    /// own reason, whatever the innermost setting names.
+    #[test]
+    fn a_startup_setting_nested_in_an_option_value_refuses() {
+        use crate::security::guard_forms::OPTION_NESTED_SETTINGS;
+        let p = default_policy();
+        let mut failed = Vec::new();
+        for cmd in OPTION_NESTED_SETTINGS {
+            let got = evaluate(cmd, &ctx(&p, "feat/x"));
+            if !got
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.message.contains("startup setting"))
+            {
+                failed.push(format!("{cmd}: {got:?}"));
             }
         }
         assert!(
@@ -21473,6 +21534,102 @@ mod tests {
         }
         let r = report("env FOO=1 git -C /scratch commit -m x", "main");
         assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // TSK-1490 AC-7: a carried command the program runs in another literal
+    // directory is judged in that directory's repository, as the command
+    // written bare after a change there is; one run in a directory the
+    // guard cannot establish refuses under hook integrity.
+    #[test]
+    fn a_carried_command_is_judged_where_it_runs() {
+        use crate::security::guard_forms::{
+            OPTION_RUN_DIRECTORIES, OPTION_UNKNOWN_RUN_DIRECTORIES,
+        };
+        let payload = "git commit -m x";
+        let bare = report(&format!("cd /scratch-main && {payload}"), "feat/s");
+        assert!(has_rule(&bare.violations, "git.commit_to_protected"));
+        let mut failed = Vec::new();
+        for form in OPTION_RUN_DIRECTORIES {
+            let cmd = form.replace("{}", payload);
+            let r = report(&cmd, "feat/s");
+            if !has_rule(&r.violations, "git.commit_to_protected") {
+                failed.push(format!("judge where it runs: {cmd}: {:?}", r.violations));
+            }
+        }
+        for form in OPTION_UNKNOWN_RUN_DIRECTORIES {
+            let cmd = form.replace("{}", payload);
+            let r = report(&cmd, "feat/s");
+            if !r
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.message.contains("directory"))
+            {
+                failed.push(format!("refuse: {cmd}: {:?}", r.violations));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    // TSK-1490 AC-8: the location reader reads every launcher of the shared
+    // inventory in front of Git, each spelling, and the assignments after
+    // it; a launcher whose effect it does not model leaves the target
+    // unresolved, which refuses. The launchers the guard does not read
+    // through to Git at all are held by the reader's own test
+    // (`security/launchers.rs`), which requires a refusal for each.
+    #[test]
+    fn every_inventory_launcher_keeps_the_repository_judged() {
+        let mut failed = Vec::new();
+        for launcher in [
+            "nohup",
+            "/usr/bin/nohup",
+            "timeout 5",
+            "gtimeout 5",
+            "nice -n 5",
+            "stdbuf -o L",
+            "ionice -c 3",
+            "time -p",
+            "command -p",
+            "exec -a x",
+            "caffeinate -i",
+            "xcrun",
+            "noglob",
+            "nocorrect",
+            "-",
+            "setsid -f",
+            "unbuffer -p",
+            "genv",
+            "/usr/bin/env",
+        ] {
+            for tail in [
+                "env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+                "GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+            ] {
+                let cmd = format!("R=/scratch; {launcher} {tail}");
+                let r = report(&cmd, "feat/s");
+                if !has_rule(&r.violations, "git.commit_to_protected") {
+                    failed.push(format!("{cmd}: {:?}", r.violations));
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+        // An ordinary launcher with an ordinary assignment keeps its verdict.
+        for cmd in [
+            "nohup env FOO=1 git -C /scratch commit -m x",
+            "timeout 5 git -C /scratch commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
     }
 
     // A git op nested in a substitution runs in a subshell whose own `cd`

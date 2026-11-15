@@ -485,10 +485,11 @@ catalog! {
     INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
         "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change through a human or `codeflow update` (ADR-0009)";
     /// An option value the guard does not read as a command: an editor's
-    /// commands, a program Cargo runs, or an option spelling the reader
-    /// does not parse (TSK-1490).
+    /// commands, a program Cargo runs, an option spelling the reader does
+    /// not parse, a startup setting nested in another, or a carried command
+    /// run in a directory the guard cannot establish (TSK-1490).
     OPTION_LANGUAGE = Step::Edit(".cargo/config.toml"),
-        "the guard cannot judge that value as a command, so it refuses it: edit files with the harness's file tool instead of an editor's command options, set a program Cargo runs in the project's committed `.cargo/config.toml` instead of on the command line, and write a program's option by its full documented name";
+        "the guard cannot judge that value as a command, so it refuses it: edit files with the harness's file tool instead of an editor's command options, set a program Cargo runs in the project's committed `.cargo/config.toml` instead of on the command line, write a program's option by its full documented name, give each startup setting in its own option instead of inside another, and give the directory a carried command runs in as a literal path";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";
