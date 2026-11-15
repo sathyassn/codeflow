@@ -39,6 +39,14 @@
 # that is not the shipped hooks path. Whether a `read_only` directory inside
 # the writable cwd wins over the cwd grant is not yet verified.
 #
+# The operator-authority directory `~/.codeflow/authority` is read only to a
+# seat, as in the Claude and Codex presets (TSK-397 H-5): it is not in `deny`,
+# and `workspace` writes only the cwd, `~/.grok` and temp, so a seat cannot
+# write it. The guard hooks read the SSH configuration allow and the policy
+# baselines there (TSK-1057), and refuse when they cannot. A seat launched
+# with its cwd at or above that directory (the home directory itself) could
+# write it, so seats start in their task worktree as above.
+#
 # Grok runs hooks inside this sandbox, so guard receipts go under
 # `~/.grok/codeflow-probe/`, which a seat can also write: a Grok guard-readiness
 # preflight is cooperative evidence, not proof that the guards ran.
@@ -76,9 +84,6 @@ deny = [
   "/home/*/.cargo/credentials.toml",
   "/Users/*/.codex/auth.json",
   "/home/*/.codex/auth.json",
-  "/Users/*/.codeflow/authority",
-  "/home/*/.codeflow/authority",
-  "/root/.codeflow/authority",
   "/Users/*/.claude/.credentials.json",
   "/home/*/.claude/.credentials.json",
   "/Users/*/.grok/auth.json",
@@ -139,9 +144,6 @@ deny = [
   "/home/*/.cargo/credentials.toml",
   "/Users/*/.codex/auth.json",
   "/home/*/.codex/auth.json",
-  "/Users/*/.codeflow/authority",
-  "/home/*/.codeflow/authority",
-  "/root/.codeflow/authority",
   "/Users/*/.claude/.credentials.json",
   "/home/*/.claude/.credentials.json",
   "/Users/*/.grok/auth.json",

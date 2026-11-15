@@ -1359,9 +1359,17 @@ tracking ref's policy and the baseline's.
 Where it lives: `~/.codeflow/authority/baselines/`, under the account's
 home from the password database (`HOME` and `CODEFLOW_HOME` are not read),
 one JSON record per repository plus a ledger of every repository ever
-recorded. Every shipped agent preset denies writes under
-`~/.codeflow/authority` to the harness sandbox, and edit-guard refuses
-edits there. That directory deny is the boundary.
+recorded. Every shipped agent preset keeps `~/.codeflow/authority` read
+only to the harness sandbox: Claude denies writes there (`denyWrite` and an
+`Edit` deny), Codex grants it `read`, and the Grok profiles leave it out of
+`deny` and out of their write set. Edit-guard refuses edits there. That
+write deny is the boundary. The directory stays readable because the guards
+read the baselines and the SSH configuration allow from inside the sandbox.
+The Grok profile is installed only when absent, so a `.grok/sandbox.toml`
+written by an earlier release still denies the directory whole; once a
+baseline exists, every guard in such a Grok seat refuses until the
+operator removes the three `.codeflow/authority` entries from both
+profiles' `deny` lists.
 
 What a record binds: the canonical common git directory, the authority
 remote and its configured URL, the branch `refs/remotes/<remote>/HEAD`
