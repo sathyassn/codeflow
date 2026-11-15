@@ -2004,7 +2004,11 @@ fn a_completion_edited_in_place_is_archived_as_made_then_as_edited() {
         write(root, "src/lib.rs", "pub fn fixed() {}\n");
         let fixed = commit(root, "fix: repair the regression");
         let closeout = format!("{archive}{}", fix_block(&fixed));
-        write(root, &path, &task("TSK-001", "todo", OWN_JOURNEY, &closeout));
+        write(
+            root,
+            &path,
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
         let verb = status_complete(root, "TSK-001");
         if order == "as made" {
             assert_eq!(verb.0, 0, "{order}: {}", verb.1);
