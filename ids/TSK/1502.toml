@@ -1,0 +1,11 @@
+id = "TSK-1502"
+uid = "da2ffe8f-0308-4117-8813-6fb7a4f5e559"
+kind = "TSK"
+title = "The guards accept git's no-lazy-fetch option and environment setting"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T00:40:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
