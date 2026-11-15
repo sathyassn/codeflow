@@ -844,6 +844,14 @@ the line does not name, is refused under the agent push rule
 (`git.agent_push_refused_branches`) in both guards at every
 `git.hook_integrity` level, and under `git.hook_integrity`. A launcher's
 name given only as another launcher's option value is not a launcher.
+Every launcher's options are read whole: an option the grammar does not
+hold, an abbreviated long option included, leaves the command unresolved
+rather than taking that option's value as the program. A command runner
+whose program or shell code comes from its inputs (inputs read from a
+file or from standard input, or put in for a replacement string) is
+unresolved in the same way. For a program that carries a command in an
+option value, a `--` right after another option may be that option's
+value, so it does not end the reading of options.
 When it decides the repository the
 command is judged in, it reads an assignment written after a launcher as
 the launcher passes it on. A launcher that runs the command as another
