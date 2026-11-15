@@ -489,3 +489,151 @@ fn promisor_remotes_pass_the_same_rule() {
     let missing = Scratch::new(&format!("{HTTPS}[extensions]\n\tpartialClone = gone\n"));
     missing.unproven("status", "remote `gone` is not configured");
 }
+
+#[test]
+fn every_recursion_option_spelling_git_accepts_reads_as_on() {
+    let plain = Scratch::new("");
+    for command in [
+        "clone --recurse-submodules=no https://example.test/r copy",
+        "clone --recurse-submodules=false https://example.test/r copy",
+        "clone --recurs https://example.test/r copy",
+        "clone --recursive=lib https://example.test/r copy",
+        "clone --no-recurse-submodules --recurse-submodules=no https://example.test/r copy",
+    ] {
+        plain.unproven(command, "clone without recursion");
+    }
+    for command in [
+        "clone -c submodule.recurse=true https://example.test/r copy",
+        "clone -qc submodule.active=. https://example.test/r copy",
+        "clone --config=Submodule.Recurse=1 https://example.test/r copy",
+        "clone --con submodule.recurse=1 https://example.test/r copy",
+        "clone -c",
+    ] {
+        plain.unproven(command, "submodule setting");
+    }
+    assert_eq!(
+        plain.helpers("clone --no-recurse-submodules https://example.test/r copy"),
+        Ok(vec![])
+    );
+    assert_eq!(
+        plain.helpers("clone -c core.autocrlf=false https://example.test/r copy"),
+        Ok(vec![])
+    );
+
+    let listed = Scratch::new(HTTPS);
+    std::fs::write(listed.root().join(".gitmodules"), "").unwrap();
+    for command in [
+        "push --no-recurse-submodules --recu=on-demand origin HEAD:refs/heads/task/x",
+        "push --no-recurse-submodules --r=check origin HEAD",
+        "push --recurse-submodules=only origin HEAD",
+        "push --no-recurse-submodules --no-recurse origin HEAD",
+        "fetch --no-recurse-submodules --recurse=no origin",
+    ] {
+        listed.unproven(command, "submodule");
+    }
+    for order in [
+        "[push]\n\trecurseSubmodules = no\n[submodule]\n\trecurse = true\n",
+        "[submodule]\n\trecurse = true\n[push]\n\trecurseSubmodules = no\n",
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}{order}"));
+        std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
+        scratch.unproven("push origin HEAD", "submodule");
+    }
+    let off = Scratch::new(&format!("{HTTPS}[push]\n\trecurseSubmodules = no\n"));
+    std::fs::write(off.root().join(".gitmodules"), "").unwrap();
+    assert_eq!(off.helpers("push origin HEAD"), Ok(vec![]));
+}
+
+#[test]
+fn indirect_contact_paths_refuse_unless_proven() {
+    let plain = Scratch::new(HTTPS);
+    for command in [
+        "submodule--helper update --init",
+        "submodule--helper add https://example.test/lib lib",
+        "submodule--helper clone --path lib --url https://example.test/lib",
+    ] {
+        plain.unproven(command, "internal submodule builtin");
+    }
+
+    let fresh = "remote add -f fresh https://example.test/r";
+    assert_eq!(plain.helpers(fresh), Ok(vec![]));
+    assert_eq!(
+        plain.helpers("remote add --tags --fetch fresh https://example.test/r"),
+        Ok(vec![])
+    );
+    plain.unproven(
+        "remote add -f -t main fresh https://example.test/r",
+        "fetches with settings",
+    );
+    plain.unproven(
+        "remote add -vf fresh https://example.test/r",
+        "fetches with settings",
+    );
+    plain.unproven("remote add -f fresh", "exactly one name and one address");
+
+    let helper = Scratch::new(&format!("{HTTPS}[remote \"fresh\"]\n\tvcs = fixture\n"));
+    for command in [
+        fresh,
+        "remote add --fe fresh https://example.test/r",
+        "remote add --no-fetch fresh https://example.test/r",
+    ] {
+        helper.unproven(command, "already holds settings for remote `fresh`");
+    }
+    assert_eq!(
+        helper.helpers("remote add fresh https://example.test/r"),
+        Ok(vec![])
+    );
+    let group = Scratch::new(&format!("{HTTPS}[remotes]\n\tfresh = origin\n"));
+    group.unproven(fresh, "already holds settings");
+    let legacy = Scratch::new(HTTPS);
+    std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
+    std::fs::write(
+        legacy.root().join(".git/remotes/fresh"),
+        "URL: fixture::x\n",
+    )
+    .unwrap();
+    legacy.unproven(fresh, "legacy remote file");
+}
+
+#[test]
+fn a_maintenance_run_passes_only_a_proven_local_task_list() {
+    let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
+    for command in [
+        "maintenance run --task=PREFETCH",
+        "maintenance run --task=Prefetch",
+        "maintenance run --task=gc --ta=prefetch",
+        "maintenance run --task=gc --t prefetch",
+        "maintenance run --task=gc --auto",
+        "maintenance run --task=gc --schedule=hourly",
+        "maintenance run --task=gc -x",
+        "maintenance run --task=gc extra",
+        "maintenance run --task",
+        "maintenance run --quiet",
+        "maintenance --quiet run --task=gc",
+    ] {
+        scratch.unproven(command, "prefetch");
+    }
+    for command in [
+        "maintenance run --task=GC",
+        "maintenance run --ta=gc --task commit-graph",
+        "maintenance run --task=gc --quiet --no-detach",
+        "maintenance run -q --task=pack-refs",
+        "maintenance register",
+    ] {
+        assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_legacy_remote_name_with_a_backslash_is_checked() {
+    let scratch = Scratch::new(HTTPS);
+    std::fs::create_dir_all(scratch.root().join(".git/remotes")).unwrap();
+    std::fs::write(
+        scratch.root().join(".git/remotes/old\\name"),
+        "URL: fixture::x\n",
+    )
+    .unwrap();
+    scratch.unproven("ls-remote old\\name", "legacy remote file");
+    scratch.unproven("fetch old\\name", "legacy remote file");
+}

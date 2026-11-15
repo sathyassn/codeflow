@@ -82,6 +82,18 @@ impl Scratch {
         )
     }
 
+    /// Judge `command` with `inherited` set in the guard's own environment,
+    /// as a session that exports it would run the hook.
+    fn judge_inheriting(&self, hook: &str, command: &str, inherited: (&str, &str)) -> Output {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", hook, "--contract", "3"])
+                .env(inherited.0, inherited.1)
+                .current_dir(&self.root),
+            &guard_payload(command, &self.root),
+        )
+    }
+
     fn root(&self) -> &Path {
         &self.root
     }
@@ -681,4 +693,104 @@ fn the_landed_policy_admits_a_named_credential_helper_on_a_remote_contact() {
         "{}",
         stderr(&out)
     );
+}
+
+/// git-guard's earlier rule that refuses every `remote add`, before it reads
+/// what Git runs.
+const REMOTE_IDENTITY: &str = "the operator manages remote identity";
+
+#[test]
+fn both_guards_read_every_recursion_option_spelling_as_on() {
+    let plain = Scratch::landed(None);
+    assert_unproven(
+        &plain,
+        &[
+            "git clone --recurse-submodules=no https://127.0.0.1:9/r copy",
+            "git clone --recursive=lib https://127.0.0.1:9/r copy",
+            "git clone -c submodule.recurse=true https://127.0.0.1:9/r copy",
+        ],
+        &["git clone --no-recurse-submodules https://127.0.0.1:9/r copy"],
+    );
+    // The option reader both guards share refuses an abbreviated clone
+    // recursion option before the transport resolution reads it.
+    for hook in HOOKS {
+        let out = plain.judge(hook, "git clone --recurs https://127.0.0.1:9/r copy");
+        let err = stderr(&out);
+        assert_eq!(out.status.code(), Some(2), "{hook}: {err}");
+        assert!(err.contains("ambiguous option `--recurs`"), "{hook}: {err}");
+    }
+    let listed = Scratch::landed(None);
+    listed.write(".gitmodules", b"");
+    assert_unproven(
+        &listed,
+        &["git push --no-recurse-submodules --recu=on-demand origin HEAD:refs/heads/task/x"],
+        &["git push --no-recurse-submodules origin HEAD:refs/heads/task/x"],
+    );
+    let ordered = Scratch::landed(None);
+    ordered
+        .write(".gitmodules", b"")
+        .config("push.recurseSubmodules", "no")
+        .config("submodule.recurse", "true");
+    assert_unproven(
+        &ordered,
+        &["git push origin HEAD:refs/heads/task/x"],
+        &["git push --no-recurse-submodules origin HEAD:refs/heads/task/x"],
+    );
+}
+
+#[test]
+fn both_guards_refuse_indirect_contacts_they_cannot_prove() {
+    let scratch = Scratch::landed(None);
+    scratch
+        .config("remote.fresh.vcs", "fixture")
+        .config("remote.backup.url", "fixture::x");
+    let add = "git remote add -f fresh https://127.0.0.1:9/r";
+    assert_judged_with(
+        &scratch,
+        unproven_refusal,
+        &[
+            "git submodule--helper update --init",
+            add,
+            "git maintenance run --task=PREFETCH",
+            "git maintenance run --task=gc --ta=prefetch",
+        ],
+        &["git maintenance run --task=gc"],
+        &[(add, REMOTE_IDENTITY)],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn both_guards_check_a_legacy_remote_name_with_a_backslash() {
+    let scratch = Scratch::landed(None);
+    scratch.write(".git/remotes/old\\name", b"URL: fixture::x\n");
+    std::fs::write(scratch.root().join(".git/config"), b"").unwrap();
+    for hook in HOOKS {
+        let out = scratch.judge(hook, "git ls-remote 'old\\name'");
+        assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn an_inherited_location_input_admits_nothing() {
+    let a = Scratch::landed(Some(ADMITTING_WARN));
+    a.config("remote.selected.url", "fixture::https://127.0.0.1:9/r");
+    let b = Scratch::landed(None);
+    b.config("remote.selected.url", "fixture::https://127.0.0.1:9/r");
+    let b_git = shell_path(&b.root().join(".git"));
+    for hook in HOOKS {
+        let plain = a.judge(hook, "git fetch selected");
+        assert_eq!(plain.status.code(), Some(0), "{hook}: {}", stderr(&plain));
+        for inherited in [
+            ("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1"),
+            ("GIT_DIR", b_git.as_str()),
+        ] {
+            let out = a.judge_inheriting(hook, "git fetch selected", inherited);
+            assert!(
+                helper_refusal(&out),
+                "{hook} {inherited:?}: {}",
+                stderr(&out)
+            );
+        }
+    }
 }

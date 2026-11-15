@@ -112,19 +112,10 @@ fn landed_helpers(args: &[String], cwd: &Path) -> Vec<String> {
     }
 }
 
-/// The location inputs that can make a Git call work in a repository other
-/// than the one its starting folder finds.
-const ADMISSION_LOCATION_ENVIRONMENT: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_COMMON_DIR",
-    "GIT_CEILING_DIRECTORIES",
-];
-
 /// Whether the call may work in a repository other than the one its
 /// starting folder finds: a Git-directory, work-tree or bare option, or a
-/// location variable set on the line or inherited. An unreadable global
-/// option counts too.
+/// location variable the probe also forwards, set on the line or
+/// inherited. An unreadable global option counts too.
 fn relocated(args: &[String], env: &crate::security::git_config::Environment) -> bool {
     let Ok(words) = globals(args) else {
         return true;
@@ -135,7 +126,7 @@ fn relocated(args: &[String], env: &crate::security::git_config::Environment) ->
             || word.starts_with("--work-tree=")
     });
     option
-        || ADMISSION_LOCATION_ENVIRONMENT
+        || crate::security::git_config::LOCATION_ENVIRONMENT
             .iter()
             .any(|name| env.contains_key(*name) || std::env::var_os(name).is_some())
 }

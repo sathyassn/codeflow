@@ -659,11 +659,16 @@ the form refuses:
   is judged as a program word. Every other form refuses under the same rule
   as one whose transport the guard cannot prove: a push or `ls-remote` that
   names no remote; a fetch of every remote, by option or configuration, a
-  `remote update` with no remote, or a maintenance run that may prefetch;
-  a remote group; a remote with a helper setting, more than one address
-  value or an empty one; a name a legacy remote file may define; and
+  `remote update` with no remote, or a maintenance run unless every task
+  it names is one that never contacts a remote; a remote group; a remote
+  with a helper setting, more than one address value or an empty one; a
+  name a legacy remote file may define; a `remote add` that fetches when
+  the configuration already holds settings for the new name; the
+  submodule commands and internal builtins that update, add or clone; and
   submodule recursion in a repository that has or may have submodules,
-  unless the command line turns it off. A configuration the guard cannot
+  unless the command line provably turns it off. Options are read as Git
+  reads them, abbreviations included, and a recursion option the guard
+  cannot read as off counts as on. A configuration the guard cannot
   read, or a repository it cannot locate, refuses and names the file or
   the cause. Transports Git runs itself or ships (https, http, ftp, ssh in
   both forms, `git://`, a local path or `file://`) keep their verdict. The

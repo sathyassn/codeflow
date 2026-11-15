@@ -25,8 +25,15 @@
 //! Refused by name: an operand-free push or `ls-remote`, every form that
 //! contacts every configured remote, a remote group, a remote with a helper
 //! setting, more than one address value or an empty one, a remote name a
-//! legacy remote file may define, and submodule recursion in a repository
-//! that has or may have submodules unless the command line turns it off.
+//! legacy remote file may define, a `remote add` that fetches unless the
+//! new remote's configuration is proven empty, a maintenance run unless
+//! every task is a proven local one, the submodule builtins that update,
+//! add or clone, and submodule recursion in a repository that has or may
+//! have submodules unless the command line provably turns it off.
+//!
+//! Options are read as Git's option parser reads them: a long option may be
+//! any unambiguous abbreviation, so every recursion or task option form is
+//! matched by prefix, and a form the reading cannot place refuses.
 
 use super::super::shown_word;
 use crate::security::git_config::{EffectiveConfig, Location};
@@ -231,6 +238,12 @@ pub(super) fn contacts(
         resolver.remote_subcommand(rest, &mut found, probe)?;
     } else if verb == "maintenance" {
         maintenance(rest)?;
+    } else if verb == "submodule--helper" {
+        // Git's internal builtin behind `submodule` updates, adds and
+        // clones submodules directly.
+        return Err(unproven(
+            "the internal submodule builtin contacts the remotes of submodule repositories, which the guard does not read",
+        ));
     } else if verb == "submodule" {
         let operands: Vec<&str> = candidates(rest).collect();
         if matches!(operands.first(), Some(&("update" | "add"))) {
@@ -268,6 +281,24 @@ fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
             Some(word.as_str())
         }
     })
+}
+
+/// Whether a `remote add` in `rest` may fetch: any short option cluster
+/// holding `f`, or any long option that abbreviates or negates `--fetch`.
+/// A negation still counts, so the reading never relies on option order.
+fn remote_add_fetches(rest: &[String]) -> bool {
+    rest.iter()
+        .skip_while(|word| *word != "add")
+        .take_while(|word| *word != "--")
+        .any(|word| {
+            if let Some(option) = word.strip_prefix("--") {
+                let name = option.split_once('=').map_or(option, |(name, _)| name);
+                let name = name.strip_prefix("no-").unwrap_or(name);
+                !name.is_empty() && "fetch".starts_with(name)
+            } else {
+                word.len() > 1 && word.starts_with('-') && word.contains('f')
+            }
+        })
 }
 
 /// The values of `archive`'s `--remote` option, the only remote it contacts.
@@ -311,48 +342,173 @@ fn names_repository(rest: &[String]) -> bool {
     false
 }
 
+/// The maintenance tasks that never contact a remote, as Git names them;
+/// Git reads a task name without regard to case.
+const LOCAL_MAINTENANCE_TASKS: &[&str] = &[
+    "gc",
+    "commit-graph",
+    "loose-objects",
+    "incremental-repack",
+    "pack-refs",
+    "reflog-expire",
+    "worktree-prune",
+    "rerere-gc",
+];
+
 /// `maintenance run` contacts every configured remote when its tasks may
-/// include the prefetch task.
+/// include the prefetch task. It passes only when every word after `run`
+/// is a task option, in any abbreviation Git accepts, naming a task that
+/// never contacts a remote, or a known option that selects no task; any
+/// other word refuses, so no spelling hides a task.
 fn maintenance(rest: &[String]) -> Result<(), String> {
-    if candidates(rest).next() != Some("run") {
-        return Ok(());
+    let refuse = || {
+        unproven(
+            "a maintenance run may prefetch from every configured remote; name only tasks that do not prefetch, each with --task=<task>",
+        )
+    };
+    let mut words = rest.iter();
+    match words.next().map(String::as_str) {
+        Some("run") => {}
+        Some(word) if word.starts_with('-') && rest.iter().any(|word| word == "run") => {
+            return Err(refuse())
+        }
+        _ => return Ok(()),
     }
-    let mut tasks = Vec::new();
-    for (at, word) in rest.iter().enumerate() {
-        if let Some(task) = word.strip_prefix("--task=") {
-            tasks.push(task);
-        } else if word == "--task" {
-            tasks.push(rest.get(at + 1).map_or("", String::as_str));
+    let mut tasks = 0;
+    while let Some(word) = words.next() {
+        let Some(option) = word.strip_prefix("--").filter(|o| !o.is_empty()) else {
+            if matches!(word.as_str(), "-q") {
+                continue;
+            }
+            return Err(refuse());
+        };
+        let (name, value) = match option.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (option, None),
+        };
+        if !name.is_empty() && "task".starts_with(name) {
+            let task = match value {
+                Some(task) => task,
+                None => words.next().map_or("", String::as_str),
+            };
+            if !LOCAL_MAINTENANCE_TASKS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(task))
+            {
+                return Err(refuse());
+            }
+            tasks += 1;
+        } else if value.is_some() || !matches!(name, "quiet" | "no-quiet" | "detach" | "no-detach")
+        {
+            return Err(refuse());
         }
     }
-    if tasks.is_empty() || tasks.contains(&"prefetch") {
-        return Err(unproven(
-            "a maintenance run may prefetch from every configured remote; name its tasks without the prefetch task",
-        ));
+    if tasks == 0 {
+        return Err(refuse());
     }
     Ok(())
 }
 
-/// Whether the command line turns submodule recursion on (`Some(true)`) or
-/// off (`Some(false)`); the last such option wins. A spelling the guard does
-/// not know reads as on.
+/// The long options of `rest` before `--`, each as its name without the
+/// dashes and its `=` value.
+fn long_options(rest: &[String]) -> impl Iterator<Item = (&str, Option<&str>)> {
+    rest.iter()
+        .take_while(|word| *word != "--")
+        .filter_map(|word| word.strip_prefix("--"))
+        .filter(|option| !option.is_empty())
+        .map(|option| match option.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (option, None),
+        })
+}
+
+/// Whether the option `name` may be a submodule recursion option: one of
+/// them, an abbreviation Git may accept for one, or a longer spelling that
+/// starts with one.
+fn recursion_name(name: &str) -> bool {
+    [
+        "recurse-submodules",
+        "no-recurse-submodules",
+        "recursive",
+        "no-recursive",
+    ]
+    .iter()
+    .any(|full| full.starts_with(name) || name.starts_with(full))
+}
+
+/// Whether the command line of a fetch, pull or push turns submodule
+/// recursion on (`Some(true)`) or off (`Some(false)`); the last such option
+/// wins. Only the full negation, or the full option with a value Git reads
+/// as false, turns it off; an abbreviation or any other value reads as on.
 fn recursion_on_line(rest: &[String]) -> Option<bool> {
     let mut state = None;
-    for word in rest {
-        if word == "--" {
-            break;
-        }
-        if word == "--no-recurse-submodules" {
+    for (name, value) in long_options(rest) {
+        let off = match (name, value) {
+            ("no-recurse-submodules", None) => true,
+            ("recurse-submodules", Some(value)) => {
+                crate::security::git::config_boolean(value) == Some(false)
+            }
+            _ => false,
+        };
+        if off {
             state = Some(false);
-        } else if word == "--recurse-submodules" || word == "--recursive" {
-            state = Some(true);
-        } else if let Some(value) = word.strip_prefix("--recurse-submodules=") {
-            state = Some(crate::security::git::config_boolean(value) != Some(false));
-        } else if word.starts_with("--recurs") || word.starts_with("--no-recurs") {
+        } else if recursion_name(name) {
             state = Some(true);
         }
     }
     state
+}
+
+/// Whether a clone's command line turns recursion on (`Some(true)`) or off
+/// (`Some(false)`); the last such option wins. A clone reads the value of
+/// its recursion option as a pathspec, never as a boolean, so every
+/// recursion option, abbreviation or value turns it on, and only the full
+/// negation turns it off.
+fn clone_recursion_on_line(rest: &[String]) -> Option<bool> {
+    let mut state = None;
+    for (name, value) in long_options(rest) {
+        if name == "no-recurse-submodules" && value.is_none() {
+            state = Some(false);
+        } else if recursion_name(name) {
+            state = Some(true);
+        }
+    }
+    state
+}
+
+/// The keys of the settings a clone's own `-c` or `--config` options give
+/// the new repository; an option without a value reads as an empty key. A
+/// short-option group that holds `c` counts, read from that letter on, so
+/// no spelling of the option is missed.
+fn clone_setting_keys(rest: &[String]) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut words = rest.iter().take_while(|word| *word != "--");
+    while let Some(word) = words.next() {
+        let short = word
+            .strip_prefix('-')
+            .filter(|cluster| !cluster.starts_with('-'))
+            .and_then(|cluster| cluster.split_once('c'));
+        let setting = if let Some((_, setting)) = short {
+            if setting.is_empty() {
+                words.next().map_or("", String::as_str)
+            } else {
+                setting
+            }
+        } else if let Some((name, value)) = word.strip_prefix("--").and_then(|o| o.split_once('='))
+        {
+            if name.is_empty() || !"config".starts_with(name) {
+                continue;
+            }
+            value
+        } else if word.len() > 2 && "--config".starts_with(word.as_str()) {
+            words.next().map_or("", String::as_str)
+        } else {
+            continue;
+        };
+        let key = setting.split_once('=').map_or(setting, |(key, _)| key);
+        keys.push(key.to_ascii_lowercase());
+    }
+    keys
 }
 
 /// The transport Git selects for `address`, in Git's order: a `<name>::`
@@ -403,10 +559,11 @@ fn scheme(address: &str) -> Option<&str> {
         .then_some(scheme)
 }
 
-/// Git's `valid_remote_nick`: a name Git also looks up in the legacy
-/// remote files.
+/// Every name Git may look up in the legacy remote files: Git's
+/// `valid_remote_nick` excludes only a slash on POSIX, and also a backslash
+/// on Windows, so this reading holds the names of both.
 fn remote_nick(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\'])
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
 
 /// Refuse a name that a legacy remote file in the common Git directory may
@@ -671,12 +828,14 @@ impl<'a> Resolver<'a> {
     /// Refuse submodule recursion in a repository that has or may have
     /// submodules, unless the command line turns it off.
     fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
+        // Git reads the push setting and the general one in configuration
+        // order, so either one turning recursion on reads as on.
         let on = match recursion_on_line(rest) {
             Some(on) => on,
-            None if verb == "push" => self
-                .setting_on("push.recursesubmodules")?
-                .or(self.setting_on("submodule.recurse")?)
-                .unwrap_or(false),
+            None if verb == "push" => {
+                self.setting_on("push.recursesubmodules")?
+                    || self.setting_on("submodule.recurse")?
+            }
             None => true,
         };
         if on && self.may_have_submodules(probe)? {
@@ -692,13 +851,12 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// Whether the setting `key` turns recursion on: `None` when unset, off
-    /// only for a value Git reads as false.
-    fn setting_on(&self, key: &str) -> Result<Option<bool>, String> {
-        Ok(self
-            .config
-            .get(key)?
-            .map(|value| crate::security::git::config_boolean(value) != Some(false)))
+    /// Whether any value of the setting `key` may turn recursion on: every
+    /// value but one Git reads as false.
+    fn setting_on(&self, key: &str) -> Result<bool, String> {
+        Ok(values(self.config, key)?
+            .iter()
+            .any(|value| crate::security::git::config_boolean(value) != Some(false)))
     }
 
     /// Whether the repository has or may have submodules: a submodule
@@ -739,9 +897,17 @@ impl<'a> Resolver<'a> {
                 "the configuration gives a remote a helper setting, which a clone would use",
             ));
         }
-        let on = match recursion_on_line(rest) {
+        if clone_setting_keys(rest)
+            .iter()
+            .any(|key| key.is_empty() || key.starts_with("submodule."))
+        {
+            return Err(unproven(
+                "a clone's own submodule setting may turn recursion on; clone without it",
+            ));
+        }
+        let on = match clone_recursion_on_line(rest) {
             Some(on) => on,
-            None => self.setting_on("submodule.recurse")?.unwrap_or(false),
+            None => self.setting_on("submodule.recurse")?,
         };
         if on {
             return Err(unproven(
@@ -778,16 +944,58 @@ impl<'a> Resolver<'a> {
                 for word in words {
                     self.address(word, Direction::Fetch, found);
                 }
-                if rest
-                    .iter()
-                    .any(|word| matches!(word.as_str(), "-f" | "--fetch"))
-                {
+                if remote_add_fetches(rest) {
+                    self.added_remote(rest, probe)?;
                     self.recursion("remote", &[], probe)?;
                 }
                 Ok(())
             }
             _ => Ok(()),
         }
+    }
+
+    /// A `remote add` that fetches uses the new remote's whole
+    /// configuration, which may already hold settings for its name, such as
+    /// a helper setting. It passes only for one name and one address, with
+    /// no other option that takes a value, a name no setting, remote group
+    /// or legacy remote file defines.
+    fn added_remote(&self, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
+        let mut operands = Vec::new();
+        let mut words = rest.iter().skip_while(|word| *word != "add").skip(1);
+        while let Some(word) = words.next() {
+            if word == "--" {
+                operands.extend(words.by_ref().map(String::as_str));
+            } else if word.len() > 1 && word.starts_with('-') {
+                let fetch = word
+                    .strip_prefix("--")
+                    .map(|name| name.strip_prefix("no-").unwrap_or(name))
+                    .is_some_and(|name| !name.is_empty() && "fetch".starts_with(name));
+                let known = fetch || matches!(word.as_str(), "-f" | "--tags" | "--no-tags");
+                if !known {
+                    return Err(unproven(format!(
+                        "`remote add` with `{}` fetches with settings the guard does not resolve; add the remote, then fetch it by name",
+                        shown_word(word)
+                    )));
+                }
+            } else {
+                operands.push(word);
+            }
+        }
+        let [name, _address] = operands.as_slice() else {
+            return Err(unproven(
+                "`remote add` that fetches needs exactly one name and one address",
+            ));
+        };
+        if self.configured(name) || self.group(name) {
+            return Err(unproven(format!(
+                "the configuration already holds settings for remote `{}`, which the fetch of `remote add` would use",
+                shown_word(name)
+            )));
+        }
+        if remote_nick(name) {
+            legacy(name, probe)?;
+        }
+        Ok(())
     }
 
     /// The remotes a partial clone fetches missing objects from.
