@@ -1678,7 +1678,7 @@ fn a_home_move_outside_a_permitted_state_stays_refused() {
 
 #[test]
 fn a_home_move_through_no_planning_landing_stays_refused() {
-    home_moves_refused(&[
+    let mut cases = vec![
         (
             "evil",
             "the home landing contains an unreviewed merge resolution",
@@ -1689,9 +1689,16 @@ fn a_home_move_through_no_planning_landing_stays_refused() {
         ("symlink", MOVED),
         ("rename out", MOVED),
         ("executable", MOVED),
-        ("docs", MOVED),
         ("direct", "has a commit made directly on the line"),
-    ]);
+    ];
+    // TSK-1378 AC-11: a move beside a doc follows the one exported set of
+    // path classes a planning landing may carry.
+    if !codeflow_core::workgraph::acceptance::PLANNING_LANDING_PATHS
+        .contains(&codeflow_core::workgraph::classify::AmendmentPath::Doc)
+    {
+        cases.push(("docs", MOVED));
+    }
+    home_moves_refused(&cases);
 }
 
 #[test]
