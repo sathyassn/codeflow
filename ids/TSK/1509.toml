@@ -1,0 +1,11 @@
+id = "TSK-1509"
+uid = "d7d11296-50fa-44b1-b04b-609661070169"
+kind = "TSK"
+title = "The managed workflow runs one codeflow test --mode pr judged by the default branch's config"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-15T21:51:41Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
