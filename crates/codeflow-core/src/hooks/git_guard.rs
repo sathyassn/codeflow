@@ -7315,7 +7315,8 @@ fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) ->
     // `src\policy.json` lands at `policy.json` inside the directory.
     let inside = |dir: &str, source: &str| {
         let base = crate::security::copy_reach::last_name(source);
-        format!("{}/{base}", dir.trim_end_matches('/'))
+        let dir = dir.trim_end_matches(crate::security::copy_reach::SEPARATORS);
+        format!("{dir}/{base}")
     };
     let mut paths = read.written.clone();
     if read.directories || read.unknown.is_some() {
@@ -7352,6 +7353,19 @@ fn git_config_destination(
     read: &crate::security::unresolved::CopyRead,
     cwd: &Path,
 ) -> Option<String> {
+    git_config_destination_on(cmd, read, cwd, crate::security::copy_reach::SEPARATORS)
+}
+
+/// [`git_config_destination`] with a source's name, and a destination's
+/// trailing separator, read on `separators`, so each host's reading is
+/// tested on every host.
+fn git_config_destination_on(
+    cmd: &str,
+    read: &crate::security::unresolved::CopyRead,
+    cwd: &Path,
+    separators: &[char],
+) -> Option<String> {
+    let entry = |dir: &Path, source: &str| entry_in(dir, source, separators);
     if !matches!(
         cmd,
         "ln" | "cp" | "mv" | "rsync" | "scp" | "ditto" | "install"
@@ -7361,12 +7375,12 @@ fn git_config_destination(
     let mut destinations: Vec<PathBuf> = match (&read.dest, read.target) {
         (Some(dir), true) => {
             let dir = integrity_shell_path(dir, cwd);
-            read.sources.iter().map(|op| entry_in(&dir, op)).collect()
+            read.sources.iter().map(|op| entry(&dir, op)).collect()
         }
         (Some(dest), false) => {
             let path = integrity_shell_path(dest, cwd);
-            let entries = || read.sources.iter().map(|op| entry_in(&path, op));
-            if dest.ends_with('/') {
+            let entries = || read.sources.iter().map(|op| entry(&path, op));
+            if dest.ends_with(separators) {
                 entries().collect()
             } else {
                 match crate::absence::is_kind(&path, true) {
@@ -7379,7 +7393,7 @@ fn git_config_destination(
             }
         }
         (None, _) if cmd == "ln" && read.sources.len() == 1 => {
-            vec![entry_in(cwd, &read.sources[0])]
+            vec![entry(cwd, &read.sources[0])]
         }
         (None, _) => Vec::new(),
     };
@@ -7396,12 +7410,15 @@ fn git_config_destination(
     destinations.into_iter().find_map(|path| {
         // OS text rule (issue 79): a name that is not text is neither
         // `config` nor `config.worktree`, as its bytes are not. A git
-        // directory the guard cannot read may be one, so it refuses.
+        // directory the guard cannot read may be one, so it refuses. The
+        // name is compared as the filesystem opens it: on Windows a
+        // trailing dot or space is dropped.
         let config = |p: &Path| {
             p.file_name()
                 .and_then(std::ffi::OsStr::to_str)
                 .is_some_and(|name| {
-                    matches!(name.to_lowercase().as_str(), "config" | "config.worktree")
+                    let name = crate::portable_path::filesystem_spelling(name).to_lowercase();
+                    matches!(name.as_str(), "config" | "config.worktree")
                 })
                 && repository_config_file(p, true) != Some(false)
         };
@@ -7410,14 +7427,13 @@ fn git_config_destination(
     })
 }
 
-/// The entry a link, copy or move of `source` makes in the directory `dir`.
-fn entry_in(dir: &Path, source: &str) -> PathBuf {
-    let name = source
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(source);
-    dir.join(name)
+/// The entry a link, copy or move of `source` makes in the directory `dir`:
+/// its last name read on `separators`, so on Windows `payload\config`
+/// makes `config`.
+fn entry_in(dir: &Path, source: &str, separators: &[char]) -> PathBuf {
+    dir.join(crate::security::copy_reach::last_name_on(
+        source, separators,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -11504,8 +11520,13 @@ fn real(path: &Path) -> Option<PathBuf> {
 /// cannot answer: each caller reads that as the answer that refuses.
 fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
     // OS text rule (issue 79): the names compare as text. A name that is
-    // not text is none of the ASCII names below, as its bytes are not.
-    let text = |part: &std::ffi::OsStr| part.to_str().map(str::to_lowercase);
+    // not text is none of the ASCII names below, as its bytes are not. Each
+    // name compares as the filesystem opens it: on Windows a trailing dot
+    // or space is dropped.
+    let text = |part: &std::ffi::OsStr| {
+        part.to_str()
+            .map(|name| crate::portable_path::filesystem_spelling(name).to_lowercase())
+    };
     let name = path.file_name().and_then(text);
     if matches!(name.as_deref(), Some(".gitmodules" | ".lfsconfig")) {
         return Some(true);
@@ -22122,6 +22143,90 @@ mod tests {
                 ),
                 written,
                 "{cmd} {line}"
+            );
+        }
+    }
+}
+
+/// TSK-408 review F1 (round d): the entry a link or copy makes in a
+/// destination directory is named on the host's separators. The Windows
+/// reading is checked on every host through the separator-taking helper.
+#[cfg(test)]
+mod entry_name_tests {
+    use super::*;
+    use crate::security::copy_reach::WINDOWS_SEPARATORS;
+
+    fn read(line: &str) -> crate::security::unresolved::CopyRead {
+        let all: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+        crate::security::unresolved::copy_read(&all[0], &all[1..]).unwrap()
+    }
+
+    /// A git directory with `HEAD` and `objects` and no `refs`, which the
+    /// guard knows only from the disk (the shape of `gd2` in the round
+    /// twelve test).
+    fn bare_git_dir(root: &Path) -> PathBuf {
+        let dir = root.join("gd2");
+        std::fs::create_dir_all(dir.join("objects")).unwrap();
+        std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_entry_is_named_by_its_last_name_on_the_given_separators() {
+        let dir = Path::new("gd");
+        assert_eq!(
+            entry_in(dir, "payload\\config", WINDOWS_SEPARATORS),
+            dir.join("config")
+        );
+        assert_eq!(
+            entry_in(dir, "payload\\config\\", WINDOWS_SEPARATORS),
+            dir.join("config")
+        );
+        assert_eq!(
+            entry_in(dir, "payload/config", WINDOWS_SEPARATORS),
+            dir.join("config")
+        );
+        // Elsewhere a backslash is part of the name.
+        assert_eq!(
+            entry_in(dir, "payload\\config", &['/']),
+            dir.join("payload\\config")
+        );
+        assert_eq!(entry_in(dir, "payload/config/", &['/']), dir.join("config"));
+    }
+
+    #[test]
+    fn a_backslash_source_into_a_git_directory_is_its_config_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let gd = bare_git_dir(&root);
+        let shown = gd.display().to_string();
+        for line in [
+            format!("ln -s payload\\config {shown}/"),
+            format!("ln -s payload\\config {shown}"),
+            format!("cp payload\\config {shown}/"),
+            format!("cp payload\\config {shown}"),
+        ] {
+            let cmd = line.split_whitespace().next().unwrap();
+            let found = git_config_destination_on(cmd, &read(&line), &root, WINDOWS_SEPARATORS);
+            assert_eq!(
+                found,
+                Some(gd.join("config").display().to_string()),
+                "{line}"
+            );
+        }
+        // The same words on a host where a backslash is part of a name
+        // make the entry `payload\config`, which is no configuration.
+        let line = format!("cp payload\\config {shown}/");
+        assert_eq!(
+            git_config_destination_on("cp", &read(&line), &root, &['/']),
+            None
+        );
+        // A plain source name keeps its verdict on either reading.
+        let line = format!("ln -s payload/config {shown}/");
+        for separators in [WINDOWS_SEPARATORS, &['/'][..]] {
+            assert_eq!(
+                git_config_destination_on("ln", &read(&line), &root, separators),
+                Some(gd.join("config").display().to_string()),
             );
         }
     }

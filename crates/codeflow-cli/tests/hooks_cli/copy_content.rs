@@ -410,3 +410,30 @@ fn a_backslash_source_into_the_checkout_is_refused_by_both_guards_on_windows() {
     ];
     assert_both(&f.root, &refused, &[]);
 }
+
+/// Review F1 (round d): on Windows a link or copy of `payload\config` into
+/// a git directory known only from the disk (`HEAD` and `objects`, no
+/// `refs`) makes its `config`, so git-guard refuses it.
+#[cfg(windows)]
+#[test]
+fn a_backslash_source_into_a_git_directory_is_refused_on_windows() {
+    let f = fixture();
+    let gd = f.root.parent().unwrap().join("gd2");
+    std::fs::create_dir_all(gd.join("objects")).unwrap();
+    std::fs::write(gd.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let gd = shell_path(&gd);
+    let mut wrong = Vec::new();
+    for command in [
+        format!(r"ln -s 'payload\config' '{gd}/'"),
+        format!(r"cp 'payload\config' '{gd}/'"),
+        format!(r"ln -s 'payload\config' '{gd}'"),
+        format!(r"cp 'payload\config' '{gd}'"),
+    ] {
+        let out = hook("git-guard", &command, &f.root);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("git-guard should refuse: {command}\n{err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

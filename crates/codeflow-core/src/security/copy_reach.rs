@@ -158,7 +158,7 @@ pub(crate) fn last_name(source: &str) -> &str {
 
 /// [`last_name`] on `separators`, so each host's reading is tested on
 /// every host.
-fn last_name_on<'a>(source: &'a str, separators: &[char]) -> &'a str {
+pub(crate) fn last_name_on<'a>(source: &'a str, separators: &[char]) -> &'a str {
     source
         .trim_end_matches(separators)
         .rsplit(separators)
@@ -168,11 +168,11 @@ fn last_name_on<'a>(source: &'a str, separators: &[char]) -> &'a str {
 
 /// The path separators Windows reads, as `portable_path::filesystem_spelling`
 /// does: a backslash separates names there.
-const WINDOWS_SEPARATORS: &[char] = &['/', '\\'];
+pub(crate) const WINDOWS_SEPARATORS: &[char] = &['/', '\\'];
 
 /// The path separators of this host: a backslash separates names only on
 /// Windows, and elsewhere it is part of a name.
-const SEPARATORS: &[char] = if cfg!(windows) {
+pub(crate) const SEPARATORS: &[char] = if cfg!(windows) {
     WINDOWS_SEPARATORS
 } else {
     &['/']
