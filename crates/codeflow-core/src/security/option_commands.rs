@@ -16,7 +16,9 @@
 //! allows it, or in the next word, and short options alone or in clusters.
 //! Any other spelling of an inventory option refuses by name: an
 //! abbreviation or a case variant of a `--` name, or a glued name inside a
-//! cluster. It scans every word up to `--` (option permutation) and reads a
+//! cluster. It scans every word up to the program's own `--` (option
+//! permutation), skipping the words of a command an option carries, and
+//! reads a
 //! value that names a program path as shell text, so a value may be read as
 //! more than the program runs, never less. A Cargo `--config` value is
 //! parsed as TOML and judged by its decoded key paths. A value in a file the
@@ -26,7 +28,12 @@
 //! A program may run the carried command in another directory (an option
 //! of [`RUN_DIRECTORIES`], or `find -execdir`). A literal directory the
 //! guard can read moves the judgment there as well as where the line
-//! starts; any other directory refuses under `git.hook_integrity`.
+//! starts; any other directory refuses under `git.hook_integrity`, and the
+//! command is still judged as run in an unknown directory, so a rule that
+//! depends on the directory refuses with hook integrity off. A manual
+//! program's pager may run in the manual's own directory (the BSD and macOS
+//! `man` script changes there before it runs the pager), so its carried
+//! command is judged where the line starts and in an unknown directory.
 //!
 //! The inventory, one line per row of [`OPTION_COMMANDS`], held equal to it
 //! by a test (`security/launchers.rs`):
@@ -461,11 +468,20 @@ fn read(program: &str, args: &[String], own: bool) -> Vec<Carried> {
             }
             placed
         }
+        // The directory is unknown: the line refuses under hook integrity
+        // by its marker, and each command is still judged as run in an
+        // unknown directory, so every other rule keeps its own verdict.
         Err(form) => {
-            let mut kept: Vec<Carried> = out
-                .into_iter()
-                .filter(|c| !matches!(c, Carried::Command(_)))
-                .collect();
+            let mut kept: Vec<Carried> = Vec::new();
+            for value in out {
+                let value = match value {
+                    Carried::Command(body) => Carried::Command(unknown_directory(&body)),
+                    other => other,
+                };
+                if !kept.contains(&value) {
+                    kept.push(value);
+                }
+            }
             let away = Carried::Elsewhere(form);
             if !kept.contains(&away) {
                 kept.push(away);
@@ -492,6 +508,10 @@ struct RunDirectory {
     away_short: &'static [char],
     away_long: &'static [&'static str],
     away_words: &'static [&'static str],
+    /// Whether the program may also run the command in a directory of its
+    /// own that no option names: the command is judged there too, as after
+    /// a change to a directory the guard cannot establish.
+    own_directory: bool,
 }
 
 const RUN_DIRECTORIES: &[RunDirectory] = &[
@@ -502,6 +522,7 @@ const RUN_DIRECTORIES: &[RunDirectory] = &[
         away_short: &[],
         away_long: &[],
         away_words: &[],
+        own_directory: false,
     },
     RunDirectory {
         programs: TAR,
@@ -510,6 +531,7 @@ const RUN_DIRECTORIES: &[RunDirectory] = &[
         away_short: &[],
         away_long: &[],
         away_words: &[],
+        own_directory: false,
     },
     RunDirectory {
         programs: &["npm", "npx"],
@@ -518,6 +540,7 @@ const RUN_DIRECTORIES: &[RunDirectory] = &[
         away_short: &['w'],
         away_long: &["--workspace", "--workspaces"],
         away_words: &["-ws"],
+        own_directory: false,
     },
     RunDirectory {
         programs: &["su", "runuser"],
@@ -526,6 +549,7 @@ const RUN_DIRECTORIES: &[RunDirectory] = &[
         away_short: &['l'],
         away_long: &["--login"],
         away_words: &["-"],
+        own_directory: false,
     },
     RunDirectory {
         programs: &["parallel"],
@@ -534,24 +558,94 @@ const RUN_DIRECTORIES: &[RunDirectory] = &[
         away_short: &[],
         away_long: &[],
         away_words: &[],
+        own_directory: false,
+    },
+    // A manual program may run its pager in the manual's own directory, one
+    // its search path decides, not the line.
+    RunDirectory {
+        programs: &["man"],
+        short: &[],
+        long: &[],
+        away_short: &[],
+        away_long: &[],
+        away_words: &[],
+        own_directory: true,
     },
 ];
 
+/// Where a program's options move the command it carries: the literal
+/// directories in order, and whether it may also run in one the guard
+/// cannot establish.
+#[derive(Debug, Default)]
+struct RunDirs {
+    literal: Vec<String>,
+    unknown: bool,
+}
+
+/// The words of `args` that belong to a command the program carries: the
+/// next-word value of one of its inventory options, and the words a
+/// [`Runs::Words`] option takes through its `;`. They are never the
+/// program's own options, and a `--` among them never ends the program's
+/// options (TSK-1490, Codex review 04).
+fn carried_words(name: &str, args: &[String]) -> Vec<bool> {
+    let mut owned = vec![false; args.len()];
+    for carrier in OPTION_COMMANDS
+        .iter()
+        .filter(|carrier| carrier.programs.contains(&name))
+        .filter(|carrier| !matches!(carrier.runs, Runs::OwnReader | Runs::CloneArguments))
+    {
+        let mut at = 0;
+        while let Some(word) = args.get(at).map(String::as_str) {
+            at += 1;
+            if owned[at - 1] {
+                continue;
+            }
+            if word == "--" {
+                break;
+            }
+            let start = match option_value(carrier, word) {
+                Some(Value::Attached(_)) => at,
+                Some(Value::Next) if at < args.len() => {
+                    owned[at] = true;
+                    at + 1
+                }
+                _ => continue,
+            };
+            at = start;
+            if carrier.runs == Runs::Words {
+                let tail = &args[start..];
+                let end = tail
+                    .iter()
+                    .position(|w| w == ";")
+                    .map_or(tail.len(), |e| e + 1);
+                for flag in &mut owned[start..start + end] {
+                    *flag = true;
+                }
+                at = start + end;
+            }
+        }
+    }
+    owned
+}
+
 /// The literal directories `name`'s options move a carried command to, in
 /// order, or the program and option that move it where the guard cannot
-/// establish.
-fn run_directories(name: &str, args: &[String]) -> Result<Vec<String>, String> {
+/// establish. The words of a carried command are skipped
+/// ([`carried_words`]).
+fn run_directories(name: &str, args: &[String]) -> Result<RunDirs, String> {
     // A letter that takes the carried command as its value ends a cluster.
     let valued: Vec<char> = OPTION_COMMANDS
         .iter()
         .filter(|carrier| carrier.programs.contains(&name))
         .flat_map(|carrier| carrier.short.iter().copied())
         .collect();
-    let mut dirs = Vec::new();
+    let owned = carried_words(name, args);
+    let mut dirs = RunDirs::default();
     for row in RUN_DIRECTORIES
         .iter()
         .filter(|row| row.programs.contains(&name))
     {
+        dirs.unknown |= row.own_directory;
         let directory = |value: Option<&String>, option: &str| -> Result<String, String> {
             value
                 .map(String::as_str)
@@ -569,6 +663,10 @@ fn run_directories(name: &str, args: &[String]) -> Result<Vec<String>, String> {
         }
         let mut at = 0;
         while let Some(word) = args.get(at) {
+            if owned[at] {
+                at += 1;
+                continue;
+            }
             if word == "--" {
                 break;
             }
@@ -587,7 +685,7 @@ fn run_directories(name: &str, args: &[String]) -> Result<Vec<String>, String> {
                         at += 1;
                         args.get(at).cloned()
                     };
-                    dirs.push(directory(value.as_ref(), &option)?);
+                    dirs.literal.push(directory(value.as_ref(), &option)?);
                 } else if row.away_long.contains(&option.as_str())
                     || row
                         .long
@@ -613,7 +711,8 @@ fn run_directories(name: &str, args: &[String]) -> Result<Vec<String>, String> {
                         } else {
                             Some(rest.trim_start_matches('=').to_string())
                         };
-                        dirs.push(directory(value.as_ref(), &format!("-{letter}"))?);
+                        dirs.literal
+                            .push(directory(value.as_ref(), &format!("-{letter}"))?);
                         break;
                     }
                 }
@@ -635,23 +734,38 @@ fn literal_directory(value: &str) -> bool {
 }
 
 /// `body` judged in the starting directory and after each change in
-/// `dirs`, each relative to the last.
-fn relocated(dirs: &[String], body: &str) -> Vec<String> {
+/// `dirs`, each relative to the last, and, where the program may run it in
+/// a directory of its own, after a change to a directory the guard cannot
+/// establish ([`unknown_directory`]).
+fn relocated(dirs: &RunDirs, body: &str) -> Vec<String> {
     let mut out = vec![body.to_string()];
     let mut prefix = String::new();
-    for dir in dirs {
+    for dir in &dirs.literal {
         prefix.push_str("cd ");
         prefix.push_str(&literal(dir));
         prefix.push_str(" && ");
         out.push(format!("{prefix}{body}"));
     }
+    if dirs.unknown {
+        out.push(unknown_directory(body));
+    }
     out
+}
+
+/// `body` after a change to a directory the guard cannot establish: a
+/// `cd -`, whose directory neither guard reads. Each rule judges the
+/// command as run there, so a rule that depends on the directory, such
+/// as the protected-branch check or a relative secret read, refuses
+/// whatever other rules are enabled (TSK-1490, Codex reviews 04 and 05).
+pub(crate) fn unknown_directory(body: &str) -> String {
+    format!("cd - && {body}")
 }
 
 /// [`relocated`] for the commands git-guard's own launcher reader finds
 /// (`launcher_commands`): every body in each directory the program's
-/// options move it to, or none where the directory is unknown, which
-/// [`first_unread`] refuses.
+/// options move it to, or, where the directory is unknown, each body as
+/// run in an unknown directory; the line's marker refuses that case
+/// under hook integrity.
 pub(crate) fn relocated_bodies(program: &str, args: &[String], bodies: Vec<String>) -> Vec<String> {
     if bodies.is_empty() {
         return bodies;
@@ -668,11 +782,12 @@ pub(crate) fn relocated_bodies(program: &str, args: &[String], bodies: Vec<Strin
             }
             out
         }
-        Err(_) => Vec::new(),
+        Err(_) => bodies.iter().map(|body| unknown_directory(body)).collect(),
     }
 }
 
-/// Every word of `args`, up to `--`, that spells an option of `rows` in a
+/// Every word of `args` outside a carried command, up to the program's own
+/// `--`, that spells an option of `rows` in a
 /// form the reader does not parse exactly: an abbreviation or a case
 /// variant of a `--` name, or a glued one-dash name inside a cluster. Each
 /// refuses by name, so a spelling the program may accept is never left
@@ -694,9 +809,14 @@ fn unparsed_spellings(rows: &[&Carrier], name: &str, args: &[String]) -> Vec<Car
         .filter(|long| !long.starts_with("--"))
         .collect();
     let mut out = Vec::new();
+    // The words of a carried command are its own, and a `--` among them
+    // never ends the program's options ([`carried_words`]).
+    let owned = carried_words(name, args);
     for word in args
         .iter()
-        .map(String::as_str)
+        .zip(owned)
+        .filter(|(_, owned)| !owned)
+        .map(|(word, _)| word.as_str())
         .take_while(|word| *word != "--")
     {
         let spelled = word.split_once('=').map_or(word, |(spelled, _)| spelled);
@@ -1144,17 +1264,52 @@ mod tests {
         );
         assert_eq!(
             commands("su -lc X"),
-            vec![Carried::Elsewhere("su -l".into())]
+            vec![
+                Carried::Command("cd - && X".into()),
+                Carried::Elsewhere("su -l".into())
+            ]
+        );
+        // A directory option after the carried command's `--` and `;` is
+        // the program's own; one inside the carried command is not.
+        assert_eq!(
+            commands("fd x -x X -- ; --base-directory /tmp"),
+            vec![
+                Carried::Command("\"X\" \"--\"".into()),
+                Carried::Command("cd '/tmp' && \"X\" \"--\"".into())
+            ]
+        );
+        assert_eq!(
+            commands("fd -x printf --base-directory ~/w"),
+            vec![Carried::Command(
+                "\"printf\" \"--base-directory\" \"~/w\"".into()
+            )]
+        );
+        assert_eq!(
+            commands("man -P X ls"),
+            vec![
+                Carried::Command("X".into()),
+                Carried::Command("cd - && X".into())
+            ]
         );
     }
 
     #[test]
     fn option_spellings_read_one_value() {
         let x = || vec![Carried::Command("X".into())];
+        // A manual program's pager is judged where the line starts and in
+        // the manual's own directory, which the guard cannot establish.
+        for line in ["man -PX", "man -aP X"] {
+            assert_eq!(
+                commands(line),
+                vec![
+                    Carried::Command("X".into()),
+                    Carried::Command("cd - && X".into())
+                ],
+                "{line}"
+            );
+        }
         for line in [
             "ack --pager=X",
-            "man -PX",
-            "man -aP X",
             "rsync -avzeX",
             "tar -cf a -I X",
             "zip -TT X",

@@ -2092,6 +2092,8 @@ pub const OPTION_CONTROLS: &[(&str, &str)] = &[
     ("npm -w app install", "npm install"),
     ("tar -C /tmp -xf x.tar", "tar -xf x.tar"),
     ("fd -C /tmp -e rs", "fd -e rs"),
+    ("fd -x printf '%s\\n' --base-directory '$D'", "fd"),
+    ("fd -x echo -C '$D' ';' -e rs", "fd -e rs"),
     ("find . -execdir wc -l {} ';'", "find . -exec wc -l {} ';'"),
     (
         "cargo --config 'env.APP_MODE=\"$(git config core.hooksPath /tmp/h)\"' build",
@@ -2112,6 +2114,8 @@ pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
     "fd -C /scratch-main -x {}",
     "fd --base-directory=/scratch-main -x {}",
     "fdfind --base-directory /scratch-main --exec {}",
+    "fd x -x {} -- ';' --base-directory /scratch-main",
+    "fd x --exec {} -- ';' -C /scratch-main",
     "tar -C /scratch-main -cf a.tar --checkpoint-action=exec='{}' .",
     "tar --directory=/scratch-main -I '{}' -cf a.tar .",
     "tar -cf a.tar -C /tmp -C /scratch-main --to-command='{}' .",

@@ -1168,6 +1168,35 @@ fn evaluate_report_with_runners(
             }
             ProgramKind::Other => {}
         }
+        // After a launcher option the guard does not read, any later word
+        // may start the command: each Git or GitHub CLI call that may start
+        // there is judged, with the repository left unresolved by that
+        // launcher, so each rule keeps its verdict with hook integrity off
+        // (TSK-1490, Codex review 05).
+        let chosen = words.len() - args.len() - 1;
+        for at in unread_starts(&words) {
+            if at == chosen {
+                continue;
+            }
+            let (program, args) = (words[at].as_str(), &words[at + 1..]);
+            match program_kind(program) {
+                ProgramKind::Git => {
+                    let moved = line.moves_for(&shell, top_level, &tokens);
+                    check_git(
+                        args,
+                        &mut branches,
+                        &moved,
+                        ctx,
+                        violations,
+                        &mut notes,
+                        0,
+                        cwd,
+                    );
+                }
+                ProgramKind::Gh => check_gh(args, ctx, violations),
+                ProgramKind::Other => {}
+            }
+        }
     }
     // The closed rule (TSK-242): a line that names a user or system git
     // configuration write and carries a form the guard cannot read refuses,
@@ -7602,7 +7631,28 @@ pub(crate) fn reads_shell_stdin(words: &[String]) -> bool {
 
 /// The command texts a simple command carries: env -S, shell -c, eval,
 /// launcher strings, runner bodies, and commands supplied to xargs or find.
+/// After a launcher option the guard does not read, the commands carried
+/// from each later word that may start the command too, each as run in an
+/// unknown directory, since that launcher's effects are unknown (TSK-1490,
+/// Codex review 05). Those starts cover every later unread launcher as
+/// well, so they are read without looking for further starts.
 fn carried_commands(toks: &[String]) -> Vec<String> {
+    let mut out = carried_from(toks);
+    let mut words = toks.to_vec();
+    strip_reserved_words(&mut words);
+    for at in unread_starts(&words) {
+        for body in carried_from(&words[at..]) {
+            let body = crate::security::option_commands::unknown_directory(&body);
+            if !out.contains(&body) {
+                out.push(body);
+            }
+        }
+    }
+    out
+}
+
+/// [`carried_commands`] for the command [`strip_launchers`] finds.
+fn carried_from(toks: &[String]) -> Vec<String> {
     let mut words = toks.to_vec();
     strip_reserved_words(&mut words);
     let toks = words.as_slice();
@@ -13943,6 +13993,34 @@ fn redirect_operator_len(word: &str) -> Option<usize> {
 /// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
 /// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
 pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
+    let at = launch_walk(tokens).0?;
+    Some((tokens[at].as_str(), &tokens[at + 1..]))
+}
+
+/// Where the command may start after a launcher option the guard does not
+/// read: every word after that launcher that is not option-shaped. The
+/// guard cannot tell which of them starts the command, so its readers
+/// judge each one, with the repository left unresolved by that launcher
+/// (TSK-1490, Codex review 05). Empty when every launcher is read.
+pub(crate) fn unread_starts(tokens: &[String]) -> Vec<usize> {
+    let Some(unread) = launch_walk(tokens).1 else {
+        return Vec::new();
+    };
+    (unread + 1..tokens.len())
+        .filter(|&at| !tokens[at].starts_with('-'))
+        .collect()
+}
+
+/// [`strip_launchers`]' walk: the index of the program, `None` for `env
+/// -S` or no program, and the index of the first launcher with an option
+/// the guard does not read, past which the program is a guess.
+fn launch_walk(tokens: &[String]) -> (Option<usize>, Option<usize>) {
+    let mut unread = None;
+    let program = launch_walk_into(tokens, &mut unread);
+    (program, unread)
+}
+
+fn launch_walk_into(tokens: &[String], unread: &mut Option<usize>) -> Option<usize> {
     let mut idx = 0;
     loop {
         // Skip leading VAR=val assignments.
@@ -13964,13 +14042,14 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                     continue;
                 }
                 // `command -v git` only looks the name up; nothing runs.
-                None => return Some((t, &tokens[idx + 1..])),
+                None => return Some(idx),
             }
         }
         // A launcher with options of its own: its command, by its grammar
         // (TSK-1490 AC-8). An option the grammar does not hold: skip
-        // option-shaped words so the command is still judged;
-        // [`launcher_effects`] refuses the launcher.
+        // option-shaped words for a first guess at the command;
+        // [`launcher_effects`] refuses the launcher, and the readers judge
+        // every later word that may start it ([`unread_starts`]).
         if OPTION_LAUNCHERS.contains(&launcher_name(t)) {
             match launch_after(launcher_name(t), tokens, idx + 1) {
                 // With no command after it (`sudo -s` reading a script from
@@ -13980,8 +14059,9 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                     idx = next;
                     continue;
                 }
-                Launch::Runs(_) | Launch::Nothing => return Some((t, &tokens[idx + 1..])),
+                Launch::Runs(_) | Launch::Nothing => return Some(idx),
                 Launch::Unread(_) => {
+                    unread.get_or_insert(idx);
                     idx += 1;
                     while tokens.get(idx).is_some_and(|a| a.starts_with('-')) {
                         idx += 1;
@@ -14007,8 +14087,11 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 Ok(words) if words.split.is_some() => return None,
                 Ok(words) => idx = words.end,
                 // An option the grammar does not hold: skip option-shaped
-                // words; [`launcher_effects`] refuses the launcher.
+                // words for a first guess; [`launcher_effects`] refuses the
+                // launcher, and the readers judge every later word that may
+                // start the command ([`unread_starts`]).
                 Err(_) => {
+                    unread.get_or_insert(idx);
                     idx += 1;
                     while tokens.get(idx).is_some_and(|a| {
                         a.starts_with('-')
@@ -14021,7 +14104,7 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
             }
             continue;
         }
-        return Some((t, &tokens[idx + 1..]));
+        return Some(idx);
     }
 }
 
@@ -14439,8 +14522,9 @@ struct LaunchGrammar {
     operand: bool,
 }
 
-/// `sudo`'s grammar, from its manual (`h` takes only an attached host;
-/// alone it prints help).
+/// `sudo`'s grammar, from its manual and `parse_args.c`: `h` takes an
+/// attached host, or the next word when written alone and that word is
+/// not an option or an assignment; otherwise it prints help.
 const SUDO_GRAMMAR: LaunchGrammar = LaunchGrammar {
     valued: "aCcDgpRrTtUu",
     attached_only: "h",
@@ -14602,10 +14686,20 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
                 return Launch::Nothing;
             }
             if grammar.attached_only.contains(letter) {
-                if rest.is_empty() {
-                    return Launch::Nothing;
+                if !rest.is_empty() {
+                    break;
                 }
-                break;
+                // sudo's `-h` written alone takes the next word as the host
+                // when it is not an option or an assignment; otherwise it
+                // asks for help (sudo's `parse_args.c`).
+                let host = tokens.get(idx).is_some_and(|next| {
+                    !next.starts_with('-') && (next.starts_with(['/', '=']) || !next.contains('='))
+                });
+                if name == "sudo" && cluster.len() == 1 && host {
+                    idx += 1;
+                    break;
+                }
+                return Launch::Nothing;
             }
             if grammar.valued.contains(letter) {
                 idx += usize::from(rest.is_empty());
@@ -21861,6 +21955,77 @@ mod tests {
                 .any(|v| v.rule == "git.hook_integrity" && v.message.contains("directory"))
             {
                 failed.push(format!("refuse: {cmd}: {:?}", r.violations));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    // TSK-1490, Codex reviews 04 and 05: a commit the guard cannot place
+    // keeps the protected-branch rule with hook integrity off as well as
+    // on: after a launcher option it does not read (a valued unknown option
+    // or an abbreviation), in a directory it cannot establish, through a
+    // manual program's pager, and in a directory option after a carried
+    // command's `--`. A commit the guard can place still passes.
+    #[test]
+    fn an_unplaced_commit_keeps_the_protected_branch_rule() {
+        let relaxed = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let strict = default_policy();
+        let judged = |policy: &GitPolicy, cmd: &str| {
+            fixture_report(
+                cmd,
+                &ctx_with_dir_branch(policy, "feat/s", &fixture_resolver),
+            )
+        };
+        let mut failed = Vec::new();
+        for cmd in [
+            "taskset --cpu-l 0 git commit -m x",
+            "taskset --cpu-l 0 bash -c 'git commit -m x'",
+            "sudo --us root git commit -m x",
+            "sudo --us git git commit -m x",
+            "doas -Z x git commit -m x",
+            "chrt --rr-x 5 git commit -m x",
+            "env --bogus v git commit -m x",
+            "env --bogus v sh -c 'git commit -m x'",
+            "sudo -h host git commit -m x",
+            "fd -C \"$D\" -x git commit -m x",
+            "man -P 'git commit -m x' ls",
+            "fd x -x git commit -m x -- ';' --base-directory /scratch-main",
+        ] {
+            // With hook integrity off the protected-branch rule refuses on
+            // its own; with it on, the line refuses under either rule.
+            let off = judged(&relaxed, cmd);
+            if !has_rule(&off.violations, "git.commit_to_protected") {
+                failed.push(format!("hook integrity off: {cmd}: {:?}", off.violations));
+            }
+            let on = judged(&strict, cmd);
+            if !on.violations.iter().any(|v| {
+                v.level == PolicyLevel::Block
+                    && matches!(
+                        v.rule.as_str(),
+                        "git.commit_to_protected" | "git.hook_integrity"
+                    )
+            }) {
+                failed.push(format!("hook integrity block: {cmd}: {:?}", on.violations));
+            }
+        }
+        for cmd in [
+            "git commit -m x",
+            "taskset -c 0 git commit -m x",
+            "sudo -h",
+            "fd -x printf '%s\\n' --base-directory '$D'",
+            "man -P cat ls",
+        ] {
+            let r = judged(&relaxed, cmd);
+            if !r.violations.is_empty() {
+                failed.push(format!("pass: {cmd}: {:?}", r.violations));
             }
         }
         assert!(

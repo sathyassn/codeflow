@@ -865,6 +865,7 @@ mod tests {
             );
             for carried in [
                 format!("fd -C {ssh} -x cat config"),
+                format!("fd x -x cat config -- ';' -C {ssh}"),
                 format!("tar -C {ssh} -cf /tmp/a.tar -I 'cat config' ."),
             ] {
                 if !found(&carried)
@@ -875,12 +876,15 @@ mod tests {
                 }
             }
         }
+        // Findings merge one per rule, and the command is also judged as run
+        // in an unknown directory, whose Git runner reader may refuse first;
+        // git-guard's own test checks the directory reason.
         for form in OPTION_UNKNOWN_RUN_DIRECTORIES {
             let cmd = form.replace("{}", "git commit -m x");
             let got = found(&cmd);
             if !got
                 .iter()
-                .any(|v| v.rule == "git.hook_integrity" && v.message.contains("directory"))
+                .any(|v| v.rule == "git.hook_integrity" && v.level == PolicyLevel::Block)
             {
                 failed.push(format!("refuse: {cmd}: {got:?}"));
             }
