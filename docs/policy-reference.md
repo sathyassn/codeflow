@@ -802,12 +802,19 @@ pager, a remote shell, a compression program or a filter, is judged by
 both guards as that command written bare, by the same rule and at the
 project's configured level (TSK-1490). Both guards read these values from
 one inventory in the code (`security/option_commands.rs`), and a test
-keeps its documented list equal to it. A value in a command language the
-guards do not read, an editor's own commands or a build tool setting that
-names a program the tool runs, is refused under `git.hook_integrity`;
-edit files with the harness's file tool instead, and set such a program
-in the project's committed build configuration. A command a program reads
-from its own configuration files or environment is not read this way.
+keeps its documented list equal to it. The reader accepts only the
+spellings it parses exactly, the option's full name with its value
+attached or in the next word; an abbreviated or differently cased
+spelling of such an option is refused under `git.hook_integrity`, so
+write the option's full documented name. A value in a command language
+the guards do not read, an editor's own commands or a build tool setting
+that names a program the tool runs, is refused under the same rule; the
+build tool's settings are decoded and judged by their names, never by
+their values, and an environment setting is judged as the same variable
+assigned before the tool. Edit files with the harness's file tool
+instead, and set such a program in the project's committed build
+configuration. A command a program reads from its own configuration files
+or environment is not read this way.
 
 ### Program variables the guards judge
 
