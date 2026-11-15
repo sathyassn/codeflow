@@ -948,9 +948,15 @@ fn load_template(asset: &str) -> Result<String, String> {
     } else {
         RecordKind::Task
     };
-    let (text, source) = record_template::load(&super::repo_root()?, kind, &embedded)?;
+    let root = super::repo_root()?;
+    let (text, source) = record_template::load(&root, kind, &embedded)?;
     if let TemplateSource::Fallback(reason) = source {
         eprintln!("warning: {reason}", reason = crate::cmd::shown(&reason));
     }
-    Ok(text)
+    // The sections the project requires (TSK-1421), from the same lists
+    // `validate --docs` enforces, so the new record passes it.
+    let required = codeflow_core::validate::record_sections::Required::landed(&root);
+    Ok(codeflow_core::validate::record_sections::with_sections(
+        &text, kind, &required,
+    ))
 }

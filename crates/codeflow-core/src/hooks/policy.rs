@@ -502,6 +502,23 @@ pub struct GitPolicy {
     /// range — counts as code). Default `["Testing"]`. Enforced under
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
+    /// Extra `##` sections every task record must carry, as heading names
+    /// without the leading `##` (TSK-1421). CodeFlow's own sections stay
+    /// required whatever this lists. Empty by default; the shipped policy
+    /// file does not list it, so an older binary never meets the key. The
+    /// lists are read from the trusted policy joined with the working copy's
+    /// ([`crate::validate::record_sections`]), so a change cannot drop a
+    /// section it is judged by.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub task_required_sections: Vec<String>,
+    /// Extra `##` sections every epic record must carry; as
+    /// `task_required_sections`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub epic_required_sections: Vec<String>,
+    /// Extra `##` sections every spec record must carry; as
+    /// `task_required_sections`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spec_required_sections: Vec<String>,
     /// The words a PR body may hold before `codeflow ci` warns (TSK-228,
     /// TSK-267): counted as a reader sees them, HTML comments left out.
     /// Default 1000; `0` turns the warning off. Advisory at every level,
@@ -734,6 +751,9 @@ impl Default for GitPolicy {
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
             pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
+            task_required_sections: Vec::new(),
+            epic_required_sections: Vec::new(),
+            spec_required_sections: Vec::new(),
             pr_body_max_words: 1000,
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,

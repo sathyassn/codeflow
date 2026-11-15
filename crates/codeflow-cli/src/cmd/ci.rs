@@ -521,6 +521,10 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     ) else {
         return 2;
     };
+    // The working copy's record sections join the judging policy's
+    // (TSK-1421), so they are kept before the working policy is consumed.
+    let working_sections =
+        codeflow_core::validate::record_sections::ProjectSections::from_git(&working.git);
     let Some(judging) = judging_policy(
         &root,
         authority.as_ref(),
@@ -931,7 +935,15 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             .and_then(classification::Class::task_id)
             .is_some()
     {
-        visible_graph_check(&root, level, &mut tagged, &mut ran);
+        // Extra record sections (TSK-1421): the judging policy's lists joined
+        // with the working copy's, so a head can add a section but never drop
+        // one; records unchanged since the base are warned, not refused.
+        let required = codeflow_core::validate::record_sections::Required::judged(
+            &judging.policy.git,
+            &working_sections,
+            Some(base_sha.clone().unwrap_or_else(|| head.clone())),
+        );
+        visible_graph_check(&root, &required, level, &mut tagged, &mut ran);
     }
     timings.lap("visible-graph");
 
@@ -2004,6 +2016,7 @@ pub(super) fn tracking_judged(root: &Path, base: Option<&str>, head: &str) -> Re
 /// `git.work_planning` level (TSK-133).
 fn visible_graph_check(
     root: &Path,
+    required: &codeflow_core::validate::record_sections::Required,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -2012,7 +2025,7 @@ fn visible_graph_check(
     // in the output.
     ran.push("work.valid_graph");
     println!("codeflow ci: work.valid_graph: the docs validation of this run");
-    let workgraph = validate_workgraph(root);
+    let workgraph = validate_workgraph(root, required);
     if !workgraph.is_clean() {
         let findings = workgraph
             .issues

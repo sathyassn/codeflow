@@ -12,6 +12,7 @@
 
 pub mod docs;
 pub mod portal;
+pub mod record_sections;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -93,8 +94,9 @@ pub struct ValidateOptions {
 }
 
 /// Blocking structural and referential findings for the complete durable
-/// workgraph. This is the shared gate used by `validate --docs`, `work start`,
-/// task-branch pre-commit, and task-branch CI.
+/// workgraph. This is the shared gate used by `validate --docs`, `work start`
+/// and `codeflow ci` (task-branch CI and the pre-push hook, which runs it);
+/// pre-commit does not re-validate the graph (TSK-133).
 #[derive(Debug, Default)]
 pub struct WorkgraphValidationReport {
     pub checked_records: usize,
@@ -112,17 +114,36 @@ impl WorkgraphValidationReport {
     }
 }
 
-/// Validate every durable record and every relationship in one pass.
+/// Validate every durable record and every relationship in one pass, with
+/// the extra sections the project requires (`required`, TSK-1421;
+/// [`record_sections::Required::none`] for none).
 #[must_use]
-pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
+pub fn validate_workgraph(
+    repo_root: &Path,
+    required: &record_sections::Required,
+) -> WorkgraphValidationReport {
     let pm_root = repo_root.join("project-management");
     let opts = ValidateOptions::default();
     let _merges = MergeSourcesScope::open();
     let mut report = WorkgraphValidationReport::default();
     let mut identities = HashMap::<String, String>::new();
+    if let Some(doubt) = required
+        .doubt
+        .as_deref()
+        .filter(|_| !required.sections.is_empty())
+    {
+        report.warnings.push(crate::remedy::Finding::new(
+            format!(
+                "required record sections were read from HEAD and the working copy: the landed policy could not be read ({})",
+                crate::git::display_message(doubt)
+            ),
+            crate::remedy::RECORD_SECTIONS_UNTRUSTED.remedy(),
+        ));
+    }
 
     let record_sets = [
         (
+            crate::workgraph::RecordKind::Epic,
             crate::workgraph::layout::epic_record_files(&pm_root),
             validate_epic
                 as fn(
@@ -133,17 +154,19 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
             is_valid_epic_format_id as fn(&str) -> bool,
         ),
         (
+            crate::workgraph::RecordKind::Spec,
             crate::workgraph::layout::spec_record_files(&pm_root),
             validate_spec,
             is_valid_spec_format_id,
         ),
         (
+            crate::workgraph::RecordKind::Task,
             crate::workgraph::layout::task_record_files(&pm_root),
             validate_task,
             is_valid_task_format_id,
         ),
     ];
-    for (files, validator, valid_identity) in record_sets {
+    for (kind, files, validator, valid_identity) in record_sets {
         let files = match files {
             Ok(files) => files,
             Err(error) => {
@@ -158,7 +181,7 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);
             let display = crate::git::display_key(&crate::portable_path::slashed(relative));
             if let Ok(content) = std::fs::read(&path) {
-                if let Ok((data, _)) = parse_frontmatter(&content) {
+                if let Ok((data, body)) = parse_frontmatter(&content) {
                     if let Some(identity) = supported_identity(&data, valid_identity) {
                         if let Some(first) = identities.get(&identity) {
                             report.issues.push(format!(
@@ -168,6 +191,18 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
                             identities.insert(identity, display.clone());
                         }
                     }
+                    project_sections(
+                        required,
+                        &ProjectRecord {
+                            kind,
+                            repo_root,
+                            relative,
+                            display: &display,
+                            content: &content,
+                            body: &body,
+                        },
+                        &mut report,
+                    );
                 }
             }
             match validator(&path, &opts) {
@@ -215,6 +250,63 @@ fn supported_identity(
     }
     let alias = get_string_field(data, "format_id");
     valid(&alias).then_some(alias)
+}
+
+/// One record, as [`project_sections`] judges it.
+struct ProjectRecord<'a> {
+    kind: crate::workgraph::RecordKind,
+    repo_root: &'a Path,
+    relative: &'a Path,
+    display: &'a str,
+    content: &'a [u8],
+    body: &'a [u8],
+}
+
+/// The sections the project requires that `record` lacks (TSK-1421): an
+/// issue for a record that is new or changed since the trusted commit, and
+/// a warning for one whose bytes are unchanged there, until it next changes.
+fn project_sections(
+    required: &record_sections::Required,
+    record: &ProjectRecord<'_>,
+    report: &mut WorkgraphValidationReport,
+) {
+    use crate::workgraph::RecordKind;
+    let opts = ValidateOptions::default();
+    let (own, noun) = match record.kind {
+        RecordKind::Task => (&opts.task_required_sections, "task"),
+        RecordKind::Epic => (&opts.epic_required_sections, "epic"),
+        RecordKind::Spec => (&opts.spec_required_sections, "spec"),
+    };
+    let body = String::from_utf8_lossy(record.body);
+    let missing = required.missing(record.kind, own, &body);
+    if missing.is_empty() {
+        return;
+    }
+    let key = record_sections::key(record.kind);
+    let unchanged = required.unchanged(record.repo_root, record.relative, record.content);
+    for name in missing {
+        let shown = crate::git::display_text(&name);
+        if unchanged {
+            let warning = ValidationWarning {
+                field: "body".into(),
+                message: format!(
+                    "missing section \"## {shown}\" that the project's policy requires for {noun} records ({key}); the record is unchanged since {}, so it is refused once it next changes",
+                    required.reference_short()
+                ),
+                clearing: &crate::remedy::RECORD_SECTION_MISSING,
+            };
+            report.warnings.push(
+                warning
+                    .finding(Path::new(record.display))
+                    .prefixed(record.display),
+            );
+        } else {
+            report.issues.push(format!(
+                "{}: body: missing section \"## {shown}\" that the project's policy requires for {noun} records ({key})",
+                record.display
+            ));
+        }
+    }
 }
 
 impl Default for ValidateOptions {
@@ -2048,7 +2140,7 @@ Criteria
         std::fs::write(pm.join("epics/EPC-022.md"), valid_epic_content()).unwrap();
         std::fs::write(pm.join("epics/EPC-022/EPC-022.md"), valid_epic_content()).unwrap();
 
-        let report = validate_workgraph(dir.path());
+        let report = validate_workgraph(dir.path(), &record_sections::Required::none());
         assert!(!report.is_clean());
         assert!(report.issues.iter().any(|issue| {
             issue.contains("duplicate work id EPC-022")

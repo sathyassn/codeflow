@@ -358,6 +358,13 @@ catalog! {
     /// A workgraph that does not validate.
     WORKGRAPH_INVALID = Step::Codeflow("codeflow validate"),
         "repair the workgraph until `codeflow validate --docs` passes";
+    /// An unchanged record without a section the project requires
+    /// (TSK-1421).
+    RECORD_SECTION_MISSING = Step::Edit("{path}"),
+        "add the named `##` section to {path}; the next change to the record is refused without it";
+    /// Required record sections read without the landed policy (TSK-1421).
+    RECORD_SECTIONS_UNTRUSTED = Step::Git("git remote set-head"),
+        "run `git remote set-head origin -a` (or `git fetch origin` on git 2.48 or later) so the sections are read from the landed policy; `codeflow ci` judges them at the range's base either way";
     /// A record added by hand, outside the id registry.
     ID_REGISTRY = Step::Codeflow("codeflow ids admit"),
         "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`";

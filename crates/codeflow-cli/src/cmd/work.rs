@@ -535,7 +535,10 @@ fn plan_check(
     target: Option<&str>,
     pins: &[ReviewedPin],
 ) -> Result<VerifiedClaim, Vec<String>> {
-    let workgraph = validate_workgraph(root);
+    let workgraph = validate_workgraph(
+        root,
+        &codeflow_core::validate::record_sections::Required::landed(root),
+    );
     if !workgraph.is_clean() {
         let mut findings = workgraph.issues;
         findings.push("current workgraph is invalid; run `codeflow validate --docs`".to_string());

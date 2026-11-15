@@ -8,6 +8,7 @@ use codeflow_core::hooks::policy_schema;
 use codeflow_core::scaffold::too_old::BinaryAge;
 use codeflow_core::validate::docs::lint_docs;
 use codeflow_core::validate::portal::{validate_portal_with, LookupInputs};
+use codeflow_core::validate::record_sections::Required as RequiredSections;
 use codeflow_core::validate::{
     validate_epic, validate_spec, validate_task, validate_workgraph, ValidateOptions,
 };
@@ -102,7 +103,7 @@ fn run_portal_validation(root: &Path, portal: &Path) -> bool {
 }
 
 fn run_workgraph_validation(root: &Path, age: &BinaryAge) -> bool {
-    let report = validate_workgraph(root);
+    let report = validate_workgraph(root, &RequiredSections::landed(root));
     for note in &report.notes {
         println!("{}", note.line("validate --docs", "note"));
     }

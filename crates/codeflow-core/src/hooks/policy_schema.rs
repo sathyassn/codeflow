@@ -159,11 +159,30 @@ impl KeySpec {
 
 /// Valid-values text shared by every Level key.
 const LEVEL_VALID: &str = "off | warn | allow | block";
+/// The three work-record section keys, whose names are checked (TSK-1421).
+const RECORD_SECTION_KEYS: [&str; 3] = [
+    "git.task_required_sections",
+    "git.epic_required_sections",
+    "git.spec_required_sections",
+];
+/// The valid values of the three work-record section keys (TSK-1421).
+const RECORD_SECTIONS_VALID: &str = "an array of heading names without the leading ## (e.g. Risks); each non-empty, on one line, not starting with #";
+/// The notes the three work-record section keys share (TSK-1421).
+const RECORD_SECTIONS_NOTES: &str = "Empty by default. `validate --docs`, `work start` and \
+    `codeflow ci` (CI and the pre-push hook) refuse a record of that kind that lacks one of \
+    them as its own `## <name>` heading line; `task new`, `epic new` and `spec new` write \
+    them into new records. CodeFlow's own sections (task: Description, Acceptance Criteria; \
+    epic: Summary, Acceptance Criteria; spec: Summary, Behavior, Open questions) stay required \
+    whatever this lists. The lists are read from the trusted policy (the range's base in \
+    `codeflow ci`, the landed policy elsewhere) joined with the working copy's, so a change \
+    cannot drop a section it is judged by. A record unchanged since that trusted commit is \
+    warned, not refused, until it next changes. The shipped policy file does not list it, \
+    so an older binary never meets the key.";
 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 87] = [
+pub const SCHEMA: [KeySpec; 90] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -706,6 +725,28 @@ pub const SCHEMA: [KeySpec; 87] = [
                 docs/**, or a .github template; anything else, or a range \
                 whose files could not be resolved, counts as code. Enforced \
                 under pr_sections.",
+    },
+    // ---- git: work-record sections (TSK-1421) -------------------------------
+    KeySpec {
+        path: "git.task_required_sections",
+        kind: KeyKind::StringList,
+        valid: RECORD_SECTIONS_VALID,
+        purpose: "Extra sections every task record must carry, each as its own ## heading line.",
+        notes: RECORD_SECTIONS_NOTES,
+    },
+    KeySpec {
+        path: "git.epic_required_sections",
+        kind: KeyKind::StringList,
+        valid: RECORD_SECTIONS_VALID,
+        purpose: "Extra sections every epic record must carry, each as its own ## heading line.",
+        notes: RECORD_SECTIONS_NOTES,
+    },
+    KeySpec {
+        path: "git.spec_required_sections",
+        kind: KeyKind::StringList,
+        valid: RECORD_SECTIONS_VALID,
+        purpose: "Extra sections every spec record must carry, each as its own ## heading line.",
+        notes: RECORD_SECTIONS_NOTES,
     },
     KeySpec {
         path: "git.pr_body_max_words",
@@ -1632,6 +1673,21 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                     value,
                     "an array of strings",
                 ));
+            } else if RECORD_SECTION_KEYS.contains(&path)
+                && !value.as_array().is_some_and(|names| {
+                    names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .all(crate::validate::record_sections::is_valid_name)
+                })
+            {
+                // A blank, multi-line or `#`-led name could never match a
+                // heading line, so every record would fail on a typo.
+                errors.push(PolicyError::invalid_value(
+                    path,
+                    value,
+                    RECORD_SECTIONS_VALID,
+                ));
             }
         }
         KeyKind::String => match value.as_str() {
@@ -1958,7 +2014,10 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 13] = [
+        const OPTIONAL: [&str; 16] = [
+            "git.task_required_sections",
+            "git.epic_required_sections",
+            "git.spec_required_sections",
             "security.text_guard",
             "security.trusted_client_configs",
             "git.pr_section_mapping",
@@ -2017,6 +2076,23 @@ mod tests {
         // ...and the shipped scaffold asset validates cleanly.
         let asset = include_str!("../../../../assets/base/policy.json");
         assert!(validate_policy_str(asset).is_ok());
+    }
+
+    #[test]
+    fn record_section_names_must_be_headings() {
+        // TSK-1421: a name that could never be a heading line is refused,
+        // naming the key, instead of failing every record.
+        for key in RECORD_SECTION_KEYS {
+            let leaf = key.trim_start_matches("git.");
+            let good = format!(r#"{{"git":{{"{leaf}":["Risks","Rollback plan"]}}}}"#);
+            validate_policy_str(&good).unwrap();
+            for bad in [r#""""#, r#""  ""#, r###""## Risks""###, r#""Risks\nPlan""#] {
+                let text = format!(r#"{{"git":{{"{leaf}":[{bad}]}}}}"#);
+                let errors = validate_policy_str(&text).unwrap_err();
+                assert_eq!(errors.len(), 1, "{text}");
+                assert_eq!(errors[0].key, key, "{text}");
+            }
+        }
     }
 
     #[test]
