@@ -788,6 +788,8 @@ fn a_pin_whose_target_has_no_fetched_landing_ref_is_refused() {
         assert!(text(&out).contains(fetch), "{}", text(&out));
         assert!(git(root, &["branch", "--list", "task/TSK-002-*"]).is_empty());
         git(root, &["switch", "-qc", "task/TSK-002-work-tsk-002", &pin]);
+        let refs = ["for-each-ref", "--format=%(refname) %(objectname)"];
+        let before = git(root, &refs);
         let out = cli(
             root,
             &["work", "start", "TSK-002", "--on", &on],
@@ -795,6 +797,9 @@ fn a_pin_whose_target_has_no_fetched_landing_ref_is_refused() {
         );
         assert!(!out.status.success(), "{}", text(&out));
         assert!(text(&out).contains(fetch), "{}", text(&out));
+        // Start refuses before any branch, claim or tip changes.
+        assert_eq!(git(root, &refs), before);
+        assert_eq!(git(root, &["rev-parse", "HEAD"]), pin);
     }
 }
 
