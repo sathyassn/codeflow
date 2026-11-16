@@ -289,22 +289,35 @@ fn land_over(fixture: &Fixture, from: &str, to: &str, text: &str) {
     ]);
 }
 
-/// A refused move of TSK-001, then a planning landing that puts the record
-/// at a path another task's record held, then a later edit: that record's
-/// history is not read as this task's, both as the landing's own change and
-/// in the walk.
-#[test]
-fn a_record_at_a_path_another_task_held_is_refused() {
+/// A refused move of TSK-001, then a planning landing that puts its record
+/// at `path_of(occupant_file)`, which `occupant` held until then. Returns
+/// the fixture and that path.
+fn taken_over(occupant_file: &str, occupant: String) -> (Fixture, String) {
     let path = path_of("TSK-001");
-    let occupied = path_of("TSK-002");
-    let fixture = with_occupant("TSK-002", todo("TSK-002", OTHER));
+    let occupied = path_of(occupant_file);
+    let fixture = with_occupant(occupant_file, occupant);
     fixture.land(OTHER, &[(&path, &todo("TSK-001", OTHER)), PRODUCT]);
     land_over(&fixture, &path, &occupied, &todo("TSK-001", OTHER));
+    (fixture, occupied)
+}
+
+/// The record lands at a path another task's record held, on the same
+/// home: that record's history is not read as this task's at the landing.
+#[test]
+fn a_record_at_a_path_another_task_held_is_refused_at_the_landing() {
+    let (fixture, occupied) = taken_over("TSK-002", todo("TSK-002", OTHER));
     refuses(
         &landing(&fixture, &occupied),
         "another task's path at the landing",
         PATH_CHANGED,
     );
+}
+
+/// The same, with a later edit as the landing: the walk does not follow the
+/// other record's history either.
+#[test]
+fn a_record_at_a_path_another_task_held_is_refused_under_a_later_edit() {
+    let (fixture, occupied) = taken_over("TSK-002", todo("TSK-002", OTHER));
     fixture.land(OTHER, &[(&occupied, &edited(OTHER))]);
     refuses(
         &walk(&fixture, &occupied),
@@ -313,22 +326,27 @@ fn a_record_at_a_path_another_task_held_is_refused() {
     );
 }
 
-/// The same takeover where the other record shares the task's id or its
-/// uid: two records match the task before the landing, so it is refused.
+/// The record it replaced shares the task's id under another uid: two
+/// records match the task before the landing, so it is refused.
 #[test]
-fn a_record_whose_id_or_uid_another_record_shares_is_refused() {
-    let path = path_of("TSK-001");
-    let occupied = path_of("TSK-009");
-    let same_id = todo("TSK-001", OTHER).replace("uid: uid-TSK-001", "uid: uid-other");
-    let same_uid = todo("TSK-009", OTHER).replace("uid: uid-TSK-009", "uid: uid-TSK-001");
-    for (what, occupant) in [("same id", same_id), ("same uid", same_uid)] {
-        let fixture = with_occupant("TSK-009", occupant);
-        fixture.land(OTHER, &[(&path, &todo("TSK-001", OTHER)), PRODUCT]);
-        land_over(&fixture, &path, &occupied, &todo("TSK-001", OTHER));
-        refuses(
-            &landing(&fixture, &occupied),
-            &format!("{what} at the landing"),
-            PATH_CHANGED,
-        );
-    }
+fn a_record_whose_id_another_record_shares_is_refused() {
+    let occupant = todo("TSK-001", OTHER).replace("uid: uid-TSK-001", "uid: uid-other");
+    let (fixture, occupied) = taken_over("TSK-009", occupant);
+    refuses(
+        &landing(&fixture, &occupied),
+        "a shared id at the landing",
+        PATH_CHANGED,
+    );
+}
+
+/// The record it replaced shares the task's uid under another id.
+#[test]
+fn a_record_whose_uid_another_record_shares_is_refused() {
+    let occupant = todo("TSK-009", OTHER).replace("uid: uid-TSK-009", "uid: uid-TSK-001");
+    let (fixture, occupied) = taken_over("TSK-009", occupant);
+    refuses(
+        &landing(&fixture, &occupied),
+        "a shared uid at the landing",
+        PATH_CHANGED,
+    );
 }
