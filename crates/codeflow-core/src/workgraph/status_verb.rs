@@ -625,6 +625,20 @@ fn unchecked_pinned_commit(
         };
         let fetched_tip =
             shown(&fetched).map_or_else(|| "absent here".to_string(), |tip| format!("at {tip}"));
+        // A withheld remote's name is in every command that would fix this,
+        // so none is printed; the caller replaces the name in the prose.
+        let root = repo.commondir();
+        if let Some(withheld) =
+            remote.filter(|remote| !crate::security::git::remote_name_shown(root, remote))
+        {
+            return Err(format!(
+                "`{}` is ambiguous here: the local ref {} at {shadow_tip} is spelled like the fetched {} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; no command is printed, since {}",
+                crate::git::display_text(value),
+                crate::git::display_text(&shadow),
+                crate::git::display_text(&fetched),
+                crate::security::git::withheld_remote_step(root, withheld)
+            ));
+        }
         // Each argument a reader may paste is rendered from its raw value:
         // a ref name can hold `$(…)`, `;` or a backtick, and the branch to
         // rename follows `--` when it starts with `-` (TSK-416 review). The
@@ -1353,6 +1367,18 @@ mod tests {
             repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
                 .unwrap();
             let error = target_commit(&repo, Some(value)).unwrap_err();
+            // Withhold remote names from refusal text: a remote whose name
+            // is not shown gets no command, since every command names it.
+            if !crate::security::git::remote_name_shown(dir.path(), remote) {
+                assert!(!error.contains(remote), "{error}");
+                assert!(!error.contains("git branch -m"), "{error}");
+                assert!(!error.contains("`--base "), "{error}");
+                assert!(
+                    error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                    "{error}"
+                );
+                continue;
+            }
             let base = error
                 .split('`')
                 .find(|span| span.starts_with("--base "))
