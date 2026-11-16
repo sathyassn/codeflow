@@ -187,7 +187,7 @@ or CI runs.**
 
 Nothing polls by default: the primary reads hosted results once at batch
 assembly. The pull request carries the cited evidence, the full gate's run
-id and revision, and the review verdict, so they survive the cleanup of
+id and revision, and the review verdict, so they survive cleanup of
 worktrees and build directories.
 
 ### Completed work imported from another line
