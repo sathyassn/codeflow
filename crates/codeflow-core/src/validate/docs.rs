@@ -200,11 +200,16 @@ pub fn ledger_citation(text: &str) -> Option<String> {
 /// first citation in a record is reported.
 fn ledger_citation_issue(rel: &Path, content: &[u8]) -> Option<DocsLintIssue> {
     let text = std::str::from_utf8(content).ok()?;
-    // A citation on any line is also a match in the whole text (a line break
-    // satisfies the pattern's boundaries), so a record with no match in the
-    // whole text has none on any line. Most records have none, and this
+    // Every citation contains `FU-`, `LN-` or `WS-` and three digits, so a
+    // record without that text has no citation on any line. Most records
+    // have none, and this literal search, much faster than the full pattern,
     // skips the line-by-line search for them.
-    ledger_citation(text)?;
+    static LITERAL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let literal =
+        LITERAL.get_or_init(|| regex::Regex::new(r"(?:FU|LN|WS)-[0-9]{3}").expect("valid pattern"));
+    if !literal.is_match(text) {
+        return None;
+    }
     text.lines().enumerate().find_map(|(index, line)| {
         ledger_citation(line).map(|id| DocsLintIssue {
             file: rel.to_path_buf(),
