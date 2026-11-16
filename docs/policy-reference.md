@@ -660,7 +660,10 @@ the form refuses:
   is judged as a program word. Every other form refuses under the same rule
   as one whose transport the guard cannot prove: a push or `ls-remote` that
   names no remote; a fetch of every remote, by option or configuration, a
-  `remote update` with no remote, or a maintenance run unless every task
+  `remote update` with no remote unless every remote it selects (the
+  `default` group's members, or every remote not set to skip the default
+  update) resolves and no legacy remote file may add one, or a maintenance
+  run unless every task
   it names is one that never contacts a remote; a remote group; a remote
   with a helper setting, more than one address value or an empty one; a
   name a legacy remote file may define; a `remote add` that fetches when

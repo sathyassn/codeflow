@@ -352,11 +352,22 @@ fn both_guards_refuse_an_operand_free_contact_they_cannot_prove() {
             "git pull",
             "git fetch --all",
             "git fetch --al",
-            "git remote update",
             "git maintenance run",
             "git maintenance run --task=prefetch",
         ],
         &["git fetch origin", "git maintenance run --task=gc"],
+    );
+    // `remote update` reads the remotes Git selects: here every remote,
+    // so the helper remote refuses by name.
+    assert_rows(&all, &["git remote update"], &[]);
+    let skipped = Scratch::landed(None);
+    skipped
+        .config("remote.backup.url", "fixture::x")
+        .config("remote.backup.skipDefaultUpdate", "true");
+    assert_rows(
+        &skipped,
+        &["git remote update backup"],
+        &["git remote update"],
     );
 
     let ordinary = Scratch::landed(None);
@@ -367,7 +378,11 @@ fn both_guards_refuse_an_operand_free_contact_they_cannot_prove() {
             "git ls-remote",
             "git push --force-with-lease=main",
         ],
-        &["git fetch", "git push origin HEAD:refs/heads/task/x"],
+        &[
+            "git fetch",
+            "git push origin HEAD:refs/heads/task/x",
+            "git remote update",
+        ],
     );
 }
 

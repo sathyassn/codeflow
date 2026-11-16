@@ -18,12 +18,16 @@
 //! - for an operand-free `fetch` or `pull`, the remote the current branch
 //!   names, or `origin` when it names none, under the same conditions and
 //!   with fetching every remote turned off;
+//! - for an operand-free `remote update`, the remotes Git selects: the
+//!   `default` group's members, or every remote not set to skip the default
+//!   update, each under the same conditions, when no legacy remote file
+//!   may add one;
 //! - the promisor remotes of a partial clone, under the same conditions,
 //!   for every Git command, since a missing object can be fetched from them
 //!   by any command.
 //!
-//! Refused by name: an operand-free push or `ls-remote`, every form that
-//! contacts every configured remote, a remote group, a remote with a helper
+//! Refused by name: an operand-free push or `ls-remote`, every other form
+//! that contacts every configured remote, a remote group, a remote with a helper
 //! setting, more than one address value or an empty one, a remote name a
 //! legacy remote file may define, a `remote add` that fetches unless the
 //! new remote's configuration is proven empty, a maintenance run unless
@@ -660,6 +664,27 @@ fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse when a legacy remote file may define a remote: each of the common
+/// Git directory's `remotes` and `branches` folders must be proven absent,
+/// or be a real folder that holds nothing.
+fn no_legacy_remotes(probe: &mut dyn Probe) -> Result<(), String> {
+    let location = probe.location()?;
+    for folder in ["remotes", "branches"] {
+        let path = location.common.join(folder);
+        if absent(&path) {
+            continue;
+        }
+        let empty = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
+            && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_none());
+        if !empty {
+            return Err(unproven(format!(
+                "`remote update` may fetch a remote defined in a legacy remote file in the repository's `{folder}` directory; name the remote"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Whether `path` is proven absent; anything short of that may exist.
 fn absent(path: &Path) -> bool {
     crate::absence::proven_absent(path).unwrap_or(false)
@@ -1005,9 +1030,12 @@ impl<'a> Resolver<'a> {
     ) -> Result<(), String> {
         let operands: Vec<&str> = candidates(rest).collect();
         match operands.split_first() {
-            Some((&"update", [])) => Err(unproven(
-                "`remote update` without a remote contacts every configured remote; name the remote",
-            )),
+            Some((&"update", [])) => {
+                self.default_update(found, probe)?;
+                // `remote update` fetches with no way to turn recursion off
+                // on its own line.
+                self.recursion("remote", &[], probe)
+            }
             Some((sub, names)) if matches!(*sub, "update" | "show" | "prune" | "set-head") => {
                 for name in names {
                     self.word(name, Direction::Fetch, found, probe)?;
@@ -1031,6 +1059,67 @@ impl<'a> Resolver<'a> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// The remotes an operand-free `remote update` fetches, as Git selects
+    /// them (`builtin/remote.c` `update`): the members of the `default`
+    /// group when `remotes.default` is set, else every configured remote
+    /// whose `skipDefaultUpdate` (or `skipFetchAll`) is not true, as
+    /// `fetch --all` reads it. A member that names a group, a setting that
+    /// cannot be read, and a legacy remote file the guard cannot rule out
+    /// each refuse.
+    fn default_update(
+        &self,
+        found: &mut Vec<Contact>,
+        probe: &mut dyn Probe,
+    ) -> Result<(), String> {
+        if self.group("default") {
+            let members = values(self.config, "remotes.default")?;
+            for member in members.iter().flat_map(|value| value.split_whitespace()) {
+                self.word(member, Direction::Fetch, found, probe)?;
+            }
+            return Ok(());
+        }
+        no_legacy_remotes(probe)?;
+        let mut names: Vec<&str> = Vec::new();
+        for key in &self.keys {
+            let Some((name, variable)) = key
+                .strip_prefix("remote.")
+                .and_then(|rest| rest.rsplit_once('.'))
+            else {
+                continue;
+            };
+            if !name.is_empty() && !variable.is_empty() && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        for name in names {
+            if !self.skips_default_update(name)? {
+                self.named(name, Direction::Fetch, found)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `fetch --all` skips remote `name`. Git keeps one flag for
+    /// both settings, and the one set last wins; when both are set and read
+    /// differently, the order is not read here, so the remote counts as
+    /// fetched. A value Git would not read as a boolean refuses.
+    fn skips_default_update(&self, name: &str) -> Result<bool, String> {
+        let mut skips = Vec::new();
+        for variable in ["skipdefaultupdate", "skipfetchall"] {
+            let key = format!("remote.{name}.{variable}");
+            if let Some(value) = self.config.get(&key)? {
+                let Some(skip) = crate::security::git::config_boolean(value) else {
+                    return Err(unproven(format!(
+                        "the setting that makes `remote update` skip remote `{}` cannot be read",
+                        shown_word(name)
+                    )));
+                };
+                skips.push(skip);
+            }
+        }
+        Ok(!skips.is_empty() && skips.iter().all(|skip| *skip))
     }
 
     /// A `remote add` that fetches uses the new remote's whole

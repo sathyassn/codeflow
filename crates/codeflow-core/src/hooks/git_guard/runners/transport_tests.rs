@@ -297,8 +297,11 @@ fn every_remote_forms_and_groups_refuse() {
     scratch.unproven("fetch --all", "every remote");
     scratch.unproven("fetch --al", "every remote");
     scratch.unproven("pull --all", "every remote");
-    scratch.unproven("remote update", "every configured remote");
-    scratch.unproven("remote update --prune", "every configured remote");
+    assert_eq!(scratch.helpers("remote update"), Ok(vec!["fixture".into()]));
+    assert_eq!(
+        scratch.helpers("remote update --prune"),
+        Ok(vec!["fixture".into()])
+    );
     scratch.unproven("maintenance run", "prefetch");
     scratch.unproven("maintenance run --task=prefetch", "prefetch");
     scratch.unproven("maintenance run --task gc --task prefetch", "prefetch");
@@ -307,6 +310,47 @@ fn every_remote_forms_and_groups_refuse() {
     ));
     group.unproven("fetch mirrors", "remote group");
     group.unproven("remote update mirrors", "remote group");
+}
+
+#[test]
+fn an_operand_free_remote_update_reads_the_remotes_git_selects() {
+    let backup = format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n");
+    // Every configured remote, unless it skips the default update.
+    let all = Scratch::new(&backup);
+    assert_eq!(all.helpers("remote update"), Ok(vec!["fixture".into()]));
+    let skipped = Scratch::new(&format!("{backup}\tskipDefaultUpdate = true\n"));
+    assert_eq!(skipped.helpers("remote update"), Ok(vec![]));
+    assert_eq!(
+        skipped.helpers("remote update backup"),
+        Ok(vec!["fixture".into()])
+    );
+    let fetch_all = Scratch::new(&format!("{backup}\tskipFetchAll = yes\n"));
+    assert_eq!(fetch_all.helpers("remote update"), Ok(vec![]));
+    let disagree = Scratch::new(&format!(
+        "{backup}\tskipDefaultUpdate = true\n\tskipFetchAll = false\n"
+    ));
+    assert_eq!(
+        disagree.helpers("remote update"),
+        Ok(vec!["fixture".into()])
+    );
+    let unclear = Scratch::new(&format!("{backup}\tskipDefaultUpdate = maybe\n"));
+    unclear.unproven("remote update", "cannot be read");
+    // The default group, when it is set, replaces every remote.
+    let default = Scratch::new(&format!("{backup}[remotes]\n\tdefault = origin\n"));
+    assert_eq!(default.helpers("remote update"), Ok(vec![]));
+    let both = Scratch::new(&format!("{backup}[remotes]\n\tdefault = origin backup\n"));
+    assert_eq!(both.helpers("remote update"), Ok(vec!["fixture".into()]));
+    let nested = Scratch::new(&format!(
+        "{backup}[remotes]\n\tdefault = origin mirrors\n\tmirrors = backup\n"
+    ));
+    nested.unproven("remote update", "remote group");
+    // A remote a legacy remote file may define refuses.
+    let legacy = Scratch::new(HTTPS);
+    assert_eq!(legacy.helpers("remote update"), Ok(vec![]));
+    std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
+    assert_eq!(legacy.helpers("remote update"), Ok(vec![]));
+    std::fs::write(legacy.root().join(".git/remotes/old"), "URL: fixture::x\n").unwrap();
+    legacy.unproven("remote update", "legacy remote file");
 }
 
 #[test]
