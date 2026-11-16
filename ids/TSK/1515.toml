@@ -1,0 +1,11 @@
+id = "TSK-1515"
+uid = "05c41b02-8e2c-460f-814c-3e7da3f3c489"
+kind = "TSK"
+title = "Two edit guard tests give the same answer in every full test run"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T15:08:32Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
