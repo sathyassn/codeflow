@@ -287,3 +287,71 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
     );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// TSK-1456: seven corpus rows that run an interpreter behind a launcher
+/// keep their verdicts in both outcomes while the leading-word walk
+/// changes. The line allows each one and the strict outcome refuses it.
+/// The baseline must keep the line's allow (the invariant above), and the
+/// strict outcome must keep its refusal, which the invariant does not
+/// assert for a row the line allows. Each row is named by its source and
+/// its text is checked, so a regenerated corpus cannot move the pin.
+#[test]
+fn pinned_launcher_rows_keep_their_verdicts_in_both_outcomes() {
+    let pinned: [(&str, &str); 7] = [
+        (
+            "history.json:724",
+            r#"z; env -S "python3 @T@/read_dir.py $PWD/src/..""#,
+        ),
+        (
+            "history.json:744",
+            r#"z; env -S "python3" @T@/read_dir.py "$PWD/src/..""#,
+        ),
+        (
+            "history.json:761",
+            r#"z; env -S "python3 @T@/read_dir.py $PWD/src/.."; python3 -V"#,
+        ),
+        (
+            "history.json:785",
+            r#"z; env -S python3 @T@/read_dir.py "$PWD/src/..""#,
+        ),
+        (
+            "history.json:788",
+            r#"z; env env -S python3 @T@/read_dir.py "$PWD/src/..""#,
+        ),
+        (
+            "history.json:827",
+            r#"z; genv -S python3 @T@/read_dir.py "$PWD/src/..""#,
+        ),
+        (
+            "history.json:829",
+            r#"z; env --split-string python3 @T@/read_dir.py "$PWD/src/..""#,
+        ),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let t = dir.path().canonicalize().unwrap();
+    build(&t);
+    let rows = read_json("rows.json");
+    let rows = rows.as_array().unwrap();
+    let mut wrong = Vec::new();
+    for (source, text) in pinned {
+        let found: Vec<&Value> = rows
+            .iter()
+            .filter(|row| row["set"] == "codex-rounds" && row["source"] == source)
+            .collect();
+        assert_eq!(found.len(), 1, "{source} is not one corpus row");
+        let row = found[0];
+        assert_eq!(row["command"].as_str().unwrap(), text, "{source} moved");
+        assert_eq!(row["line"].as_i64().unwrap(), 0, "{source}: line column");
+        let baseline = judge(&t, row, false);
+        let tightened = judge(&t, row, true);
+        if baseline != 0 {
+            wrong.push(format!("{source}: the baseline exited {baseline}, not 0"));
+        }
+        if tightened != 2 {
+            wrong.push(format!(
+                "{source}: the tightened outcome exited {tightened}, not 2"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

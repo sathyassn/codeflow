@@ -131,6 +131,7 @@ pub(super) fn expand_alias(
         let query = crate::hooks::git_guard::AliasQuery {
             target: None,
             config: &config,
+            environment: &std::collections::BTreeMap::new(),
             name: subcommand,
         };
         let value = match crate::hooks::git_guard::read_alias(&dir, &query) {
