@@ -13215,7 +13215,10 @@ fn agent_push_segment(segment: &str) -> bool {
     marks.drain(..written - words.len());
     configuration_launch(&words, Some(&marks))
         .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
-        || Walk::read(&words).unread.is_some()
+        || {
+            let walk = Walk::read(&words);
+            walk.unread.is_some() || walk.option_program.is_some()
+        }
 }
 
 /// The agent push rule's refusal for a command the launcher grammar does
@@ -13223,7 +13226,19 @@ fn agent_push_segment(segment: &str) -> bool {
 /// program may run there, a push among them, so the rule fails closed in
 /// both guards at every `git.hook_integrity` level (TSK-1490).
 fn unresolved_push(words: &[String]) -> Option<Violation> {
-    let at = Walk::read(words).unread?;
+    let walk = Walk::read(words);
+    if let (None, Some(at)) = (walk.unread, walk.option_program) {
+        let program = walk.program.map_or("", |p| words[p].as_str());
+        return Some(Violation::always_blocking(
+            AGENT_PUSH_RULE,
+            format!(
+                "`{}` runs `{program}`, an option-shaped word, as its program, so the guard does not admit it",
+                words[at]
+            ),
+            "write the program the launcher runs as a word that does not start with `-`, so the guard reads the command it runs",
+        ));
+    }
+    let at = walk.unread?;
     Some(Violation::always_blocking(
         AGENT_PUSH_RULE,
         format!(
@@ -15569,6 +15584,14 @@ pub(crate) struct Walk {
     /// Who read the words just before the program ([`launched_at_written`]):
     /// `env` after its words, else the shell (TSK-1456).
     pub taker: Taker,
+    /// The launcher whose program word is option-shaped: a launcher's
+    /// options end at its first word that is not one (env after an
+    /// assignment, the others at `--`, an operand or a verb), so it runs
+    /// that word, `env X=1 -p` runs `-p`. The program is read exactly, so
+    /// the walk is not a guess, but the agent push rule refuses the line in
+    /// both guards ([`unresolved_push`]) rather than admit a program the
+    /// guard would read as an option anywhere else (TSK-1490).
+    pub option_program: Option<usize>,
 }
 
 impl Walk {
@@ -15582,6 +15605,15 @@ impl Walk {
     pub(crate) fn read_written(tokens: &[String], marks: Option<&[String]>) -> Self {
         let mut walk = Self::default();
         walk.program = launch_walk_into(tokens, marks, &mut walk);
+        // A program word a launcher runs that is option-shaped
+        // ([`Walk::option_program`]); a launcher left as the program is
+        // not one.
+        if walk
+            .program
+            .is_some_and(|at| tokens[at].starts_with('-') && !walk.launchers.contains(&at))
+        {
+            walk.option_program = walk.launchers.last().copied();
+        }
         // A command runner whose mode runs a shell on its input, or runs
         // a command its grammar here does not name, is unresolved too.
         if let Some(at) = walk.program.filter(|_| !walk.implicit_shell) {
@@ -15783,7 +15815,7 @@ fn literal_command(words: &[String]) -> bool {
         return false;
     }
     let walk = Walk::read(words);
-    if walk.unread.is_some() || walk.split.is_some() {
+    if walk.unread.is_some() || walk.split.is_some() || walk.option_program.is_some() {
         return false;
     }
     let Some(at) = walk.program else {
@@ -24616,6 +24648,87 @@ mod tests {
             );
         }
         assert!(Walk::read(&words("busybox")).unread.is_none());
+    }
+
+    // TSK-1490: a launcher's options end at its first word that is not one
+    // (env after an assignment, the others at `--`, an operand or a verb),
+    // and the word there is what the launcher runs. The walk reads an
+    // option-shaped word there exactly ([`Walk::option_program`]), and the
+    // agent push rule refuses the line with hook integrity off. The walk is
+    // not a guess, so a reader of the exact program, such as the headless
+    // check, still reads it: `env X=/bin/claude -p hello` runs `-p` with
+    // `X` set, and runs no peer.
+    #[test]
+    fn an_option_shaped_program_after_a_launcher_is_refused() {
+        let relaxed = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_string).collect() };
+        let mut failed = Vec::new();
+        for line in [
+            "env X=1 -p",
+            "env -i X=1 -p",
+            "env X=1 -- git push origin HEAD:refs/heads/main",
+            "env -- -p",
+            "nice -- -p",
+            "nohup -p",
+            "noglob -p",
+            "timeout 5 -p",
+            "taskset 0x1 -p",
+            "chrt 10 -p",
+            "sudo -- -p",
+            "doas -- -p",
+            "gsudo run -p",
+            "/usr/bin/time -- -p",
+            "busybox nohup -p",
+        ] {
+            let walk = Walk::read(&words(line));
+            if walk.unread.is_none() && walk.option_program.is_none() {
+                failed.push(format!("walk admitted: {line}"));
+            }
+            let v = evaluate(line, &ctx(&relaxed, "feat/x"));
+            if !has_rule(&v, AGENT_PUSH_RULE) {
+                failed.push(format!("not refused: {line}: {v:?}"));
+            }
+        }
+        // A guarded command after env's assignment is judged as written.
+        let line = "env X=1 git push origin HEAD:refs/heads/main";
+        let v = evaluate(line, &ctx(&relaxed, "feat/x"));
+        if !has_rule(&v, AGENT_PUSH_RULE) {
+            failed.push(format!("not refused: {line}: {v:?}"));
+        }
+        // Main's headless row: the walk reads `-p` exactly, not as a guess.
+        let all = words("env X=/bin/claude -p hello");
+        let walk = Walk::read(&all);
+        if walk.unread.is_some() || walk.program.map(|at| all[at].as_str()) != Some("-p") {
+            failed.push(format!("control: env X=/bin/claude -p hello: {walk:?}"));
+        }
+        for (line, program) in [
+            ("env X=1 git status", "git"),
+            ("nice -n 5 git status", "git"),
+            ("timeout 5 git status", "git"),
+            ("sudo -- git status", "git"),
+        ] {
+            let all = words(line);
+            let walk = Walk::read(&all);
+            if walk.unread.is_some()
+                || walk.option_program.is_some()
+                || walk.program.map(|at| all[at].as_str()) != Some(program)
+            {
+                failed.push(format!("control: {line}: {walk:?}"));
+            }
+            let v = evaluate(line, &ctx(&relaxed, "feat/x"));
+            if !v.is_empty() {
+                failed.push(format!("control refused: {line}: {v:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
     }
 
     // A git op nested in a substitution runs in a subshell whose own `cd`

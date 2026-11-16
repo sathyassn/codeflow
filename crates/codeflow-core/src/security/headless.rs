@@ -14,7 +14,7 @@
 //!   `--prompt-file`, `--prompt-json` and `grok agent`.
 //!
 //! Each simple command is read the way git-guard reads it
-//! (`git_guard::read_simple_commands`: control-structure bodies, groups, substitutions,
+//! (`git_guard::simple_commands`: control-structure bodies, groups, substitutions,
 //! `bash -c` and `eval` strings, quotes and escapes), then the launch
 //! wrappers are unwrapped (`nice`, `timeout`, `nohup`, `sudo`, `xargs`,
 //! `find -exec`, a nested shell `-c`, `grok wrap`, …), and the peer's own

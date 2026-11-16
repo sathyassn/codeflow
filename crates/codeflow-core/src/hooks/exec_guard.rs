@@ -1155,6 +1155,43 @@ mod tests {
         }
     }
 
+    /// TSK-1490: an option-shaped word a launcher runs as its program
+    /// (after env's assignments, or after `--`, an operand or a verb) is
+    /// never taken as a program the guard read, so exec-guard's agent push
+    /// rule refuses it with hook integrity off, as git-guard does. A Git
+    /// push after env's assignment is judged as written.
+    #[test]
+    fn an_option_shaped_program_after_a_launcher_refuses() {
+        use super::super::git_guard::AGENT_PUSH_RULE;
+        let section = SecuritySection::default();
+        let root = std::env::current_dir().unwrap();
+        let mut failed = Vec::new();
+        for command in [
+            "env X=1 -p",
+            "env -i X=1 -p",
+            "env X=1 -- git push origin HEAD:refs/heads/main",
+            "env X=1 git push origin HEAD:refs/heads/main",
+            "nice -- -p",
+            "nohup -p",
+            "timeout 5 -p",
+            "sudo -- -p",
+        ] {
+            let found = evaluate_ruled(
+                command,
+                true,
+                &section,
+                PolicyLevel::Off,
+                &root,
+                &root,
+                &super::super::sandbox_state::Outcome::Relaxed,
+            );
+            if !found.iter().any(|v| v.rule == AGENT_PUSH_RULE) {
+                failed.push(format!("{command}: {found:?}"));
+            }
+        }
+        assert!(failed.is_empty(), "not refused:\n{}", failed.join("\n"));
+    }
+
     #[test]
     fn test_default_levels_block() {
         let s = SecuritySection::default();
