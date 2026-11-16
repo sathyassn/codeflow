@@ -755,7 +755,7 @@ fn update_brings_the_codex_profiles_and_keeps_the_adopters_keys() {
 
 /// AC-6: the Grok profile is installed when absent and an edited copy is
 /// never overwritten, even with a baseline forged to match it. TSK-1057: a
-/// copy whose bytes equal a version CodeFlow shipped is replaced with the
+/// copy whose bytes equal a version `CodeFlow` shipped is replaced with the
 /// current one.
 #[test]
 fn the_grok_profile_is_installed_only_when_absent() {

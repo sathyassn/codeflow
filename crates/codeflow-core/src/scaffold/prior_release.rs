@@ -46,7 +46,7 @@ pub fn policies(src: &str) -> Option<[&'static str; 2]> {
     (src == "policy.json").then_some([POLICY, STAGING_POLICY])
 }
 
-/// The SHA-256 of every Grok profile (`grok/sandbox.toml`) a CodeFlow build
+/// The SHA-256 of every Grok profile (`grok/sandbox.toml`) a `CodeFlow` build
 /// has shipped, oldest first, this version's last.
 ///
 /// - `7b0a0b6c…`: 3.0.0 through 3.1.1.
@@ -64,10 +64,10 @@ const GROK_PROFILE_SHA256: &[&str] = &[
     "d23274b5b6e0635f047136d5a31621b9f9ac86e21d5f5b313b1c3470a965741c",
 ];
 
-/// The SHA-256 of every version of the asset `src` that a CodeFlow build
+/// The SHA-256 of every version of the asset `src` that a `CodeFlow` build
 /// has shipped, for a user-owned file that update replaces while it is
 /// unmodified (`refresh_unmodified`, TSK-1057). A file whose bytes hash to
-/// one of these is CodeFlow's own and carries no adopter edit. The proof is
+/// one of these is `CodeFlow`'s own and carries no adopter edit. The proof is
 /// this list, compiled into the binary: no file in the repository (the
 /// `.codeflow/.baseline/` copy or the installed manifest's hash), which a
 /// session can write, decides it. Empty for any other asset.

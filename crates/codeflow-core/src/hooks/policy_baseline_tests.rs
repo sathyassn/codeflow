@@ -645,6 +645,29 @@ fn the_live_ancestry_reads_or_the_writer_refuses() {
     }
 }
 
+/// The process reader reads a process owned by another account (pid 1,
+/// root-owned launchd or init, whose parent is 0), reads this process with
+/// the parent `getppid` gives, and reports a process that does not exist as
+/// unreadable.
+#[cfg(unix)]
+#[test]
+fn the_process_reader_reads_another_accounts_process_and_fails_closed() {
+    let (name, parent) = process_entry(1).expect("pid 1 reads");
+    assert_eq!(parent, 0, "{name}");
+    assert!(!name.is_empty());
+    #[cfg(target_os = "macos")]
+    assert_eq!(name, "launchd");
+
+    // SAFETY: `getpid` and `getppid` have no preconditions and cannot fail.
+    let (own, ppid) = unsafe { (libc::getpid(), libc::getppid()) };
+    let (name, parent) = process_entry(own).expect("this process reads");
+    assert_eq!(parent, ppid, "{name}");
+    assert!(!name.is_empty());
+
+    let why = process_entry(99_999_999).unwrap_err();
+    assert!(why.contains("process 99999999 cannot be read"), "{why}");
+}
+
 /// Each named in-session command is refused by git-guard's authority check
 /// today; the ordinary reads and fetches stay allowed.
 #[test]

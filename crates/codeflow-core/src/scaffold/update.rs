@@ -1198,7 +1198,7 @@ fn update_entry(
 enum Follow {
     /// The file already equals the new shipped version.
     Current,
-    /// The file's bytes equal a version CodeFlow shipped
+    /// The file's bytes equal a version `CodeFlow` shipped
     /// ([`prior_release::shipped_sha256`]): it carries no edit and is
     /// replaced with the new one.
     Replace,
@@ -1207,7 +1207,7 @@ enum Follow {
     Edited,
 }
 
-/// `shipped` holds the SHA-256 of every version of the asset CodeFlow has
+/// `shipped` holds the SHA-256 of every version of the asset `CodeFlow` has
 /// shipped, compiled into this binary. It is the only proof that a file is
 /// unmodified: the `.codeflow/.baseline/` copy and the installed manifest's
 /// hash are files in the repository, which a session can write, so neither

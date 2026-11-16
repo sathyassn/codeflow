@@ -123,7 +123,10 @@ fn the_writers_refuse_in_an_agent_session_and_write_nothing() {
         assert!(text.contains("CLAUDECODE is set"), "{args:?}: {text}");
         assert!(!text.contains("written:"), "{text}");
         // Without the marker, the harness ancestor or the missing terminal
-        // still refuses: this test runs from a session and from no terminal.
+        // still refuses: stdin is null, so which of the two reasons comes
+        // first depends only on whether the host runs this under a harness.
+        // The ancestry itself must read, including ancestors owned by
+        // another account (a root-owned `login` above a terminal shell).
         let out = scratch.codeflow(args, false);
         let text = said(&out);
         assert_eq!(out.status.code(), Some(2), "{args:?}: {text}");

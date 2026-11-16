@@ -916,24 +916,64 @@ pub fn process_ancestors() -> Result<Vec<String>, String> {
     Err("process ancestry is not read on this platform".into())
 }
 
+/// The size of the 64-bit macOS `struct kinfo_proc` (`<sys/sysctl.h>`):
+/// `struct extern_proc` (296 bytes) then `struct eproc` (352 bytes).
+#[cfg(target_os = "macos")]
+const KINFO_PROC_SIZE: usize = 648;
+/// Offset of `kp_proc.p_pid` (`pid_t`).
+#[cfg(target_os = "macos")]
+const KINFO_PID: usize = 40;
+/// Offset and length of `kp_proc.p_comm` (`char[MAXCOMLEN + 1]`).
+#[cfg(target_os = "macos")]
+const KINFO_COMM: std::ops::Range<usize> = 243..260;
+/// Offset of `kp_eproc.e_ppid` (`pid_t`).
+#[cfg(target_os = "macos")]
+const KINFO_PPID: usize = 560;
+
+/// One process's executable name and parent pid, read the way `ps` reads
+/// them: `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid)`. Unlike
+/// `proc_pidinfo`, this reads a process owned by another account, such as
+/// the root-owned `login` above a terminal shell. A failed call, a reply of
+/// the wrong size, a reply for another process or an empty name is "cannot
+/// be read", so the writer refuses.
 #[cfg(target_os = "macos")]
 fn process_entry(pid: libc::pid_t) -> Result<(String, libc::pid_t), String> {
-    // SAFETY: an all-zero `proc_bsdinfo` is a valid value of a plain C struct.
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size =
-        i32::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).map_err(|e| e.to_string())?;
-    // SAFETY: `info` is valid for `size` bytes for the call.
-    let read =
-        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
-    if read != size {
-        return Err(format!("process {pid} cannot be read"));
+    let unreadable = || format!("process {pid} cannot be read");
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    let mut buffer = [0u8; KINFO_PROC_SIZE];
+    let mut len: libc::size_t = KINFO_PROC_SIZE;
+    // SAFETY: `mib` holds 4 names; `buffer` is writable for `len` bytes; the
+    // kernel writes at most `len` bytes and stores the count it wrote.
+    let status = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            4,
+            buffer.as_mut_ptr().cast(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    // A process that does not exist answers with status 0 and length 0.
+    if status != 0 || len != KINFO_PROC_SIZE {
+        return Err(unreadable());
     }
-    // SAFETY: `pbi_comm` is a NUL-terminated array inside `info`.
-    let name = unsafe { std::ffi::CStr::from_ptr(info.pbi_comm.as_ptr()) }
+    let pid_at = |offset: usize| {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(&buffer[offset..offset + 4]);
+        libc::pid_t::from_ne_bytes(bytes)
+    };
+    if pid_at(KINFO_PID) != pid {
+        return Err(unreadable());
+    }
+    let name = std::ffi::CStr::from_bytes_until_nul(&buffer[KINFO_COMM])
+        .map_err(|_| unreadable())?
         .to_string_lossy()
         .into_owned();
-    let parent = libc::pid_t::try_from(info.pbi_ppid).map_err(|e| e.to_string())?;
-    Ok((name, parent))
+    if name.is_empty() {
+        return Err(unreadable());
+    }
+    Ok((name, pid_at(KINFO_PPID)))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

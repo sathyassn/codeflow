@@ -116,7 +116,7 @@ pub struct ManifestEntry {
     #[serde(default)]
     pub region: Option<RegionFormat>,
     /// `user-owned`, non-JSON only: update replaces the file when its bytes
-    /// equal a version CodeFlow shipped (`prior_release::shipped_sha256`),
+    /// equal a version `CodeFlow` shipped (`prior_release::shipped_sha256`),
     /// and leaves any other copy alone and reports it (TSK-1057).
     #[serde(default)]
     pub refresh_unmodified: bool,
