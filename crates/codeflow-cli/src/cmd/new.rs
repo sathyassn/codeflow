@@ -956,6 +956,11 @@ fn load_template(asset: &str) -> Result<String, String> {
     // The sections the project requires (TSK-1421), from the same lists
     // `validate --docs` enforces, so the new record passes it.
     let required = codeflow_core::validate::record_sections::Required::landed(&root);
+    // A section listed only in an unreadable policy would be left out, so
+    // the verb names the failure and writes nothing, as `work start` does.
+    if let Some(error) = &required.unread_policy {
+        return Err(format!("cannot read policy: {error}"));
+    }
     Ok(codeflow_core::validate::record_sections::with_sections(
         &text, kind, &required,
     ))

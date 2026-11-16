@@ -329,6 +329,39 @@ fn no_listed_section_judges_records_as_before() {
     assert!(!shown.contains("record sections"), "{shown}");
 }
 
+#[test]
+fn the_new_verbs_name_an_unreadable_policy_and_write_nothing() {
+    // A section listed only in the working policy would be left out of the
+    // new record, so each verb names the read failure, as `work start` does.
+    let (_dir, root) = project();
+    plan(&root);
+    std::fs::write(root.join(".codeflow/policy.json"), "{ not json\n").unwrap();
+    let records = |root: &Path| {
+        ["tasks", "epics", "specs"]
+            .iter()
+            .map(|dir| {
+                std::fs::read_dir(root.join("project-management").join(dir))
+                    .unwrap()
+                    .count()
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = records(&root);
+    for args in [
+        &["epic", "new", "second"][..],
+        &["spec", "new", "--for", "EPC-001", "second"][..],
+        &[
+            "task", "new", "--epic", "EPC-001", "--into", TARGET, "second",
+        ][..],
+    ] {
+        let out = codeflow(&root, args);
+        let shown = text(&out);
+        assert!(!out.status.success(), "{args:?}: {shown}");
+        assert!(shown.contains("cannot read policy"), "{args:?}: {shown}");
+        assert_eq!(records(&root), before, "{args:?}: {shown}");
+    }
+}
+
 /// A project whose `main` lists `Risks` for tasks and holds TSK-001 with it,
 /// and a task branch that drops the key from the policy and the section
 /// from the record.

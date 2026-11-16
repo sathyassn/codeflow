@@ -115,6 +115,10 @@ pub struct Required {
     /// Why the trusted policy could not be read, when the run fell back;
     /// shown as a warning while any section is listed.
     pub doubt: Option<String>,
+    /// Why the working copy's policy could not be read, when it could not;
+    /// the trusted lists still apply. `validate --docs` and `work start`
+    /// report that failure themselves; the `new` verbs refuse on it.
+    pub unread_policy: Option<String>,
 }
 
 impl Required {
@@ -139,6 +143,7 @@ impl Required {
             sections,
             reference,
             doubt: None,
+            unread_policy: None,
         }
     }
 
@@ -151,10 +156,11 @@ impl Required {
     #[must_use]
     pub fn landed(root: &Path) -> Self {
         let mut required = Self::default();
-        if let Ok((working, _)) = Policy::load_effective(root) {
-            // An unreadable working policy is reported by `validate` itself;
-            // the trusted lists still apply.
-            required.sections = ProjectSections::from_git(&working.git);
+        match Policy::load_effective(root) {
+            Ok((working, _)) => required.sections = ProjectSections::from_git(&working.git),
+            // The trusted lists still apply; the caller reports the failure
+            // ([`Required::unread_policy`]).
+            Err(error) => required.unread_policy = Some(error),
         }
         match crate::hooks::landed_policy::load_local(root) {
             Ok(landed) => {
@@ -249,14 +255,13 @@ pub fn with_sections(template: &str, kind: RecordKind, required: &Required) -> S
             format!("## {name}\n\n<!-- Required by the project's policy (`{key}`). -->\n\n")
         })
         .collect();
-    let mut offset = 0;
-    for line in template.split_inclusive('\n') {
-        if line.trim_end() == "## Closeout" {
-            let mut text = template.to_string();
-            text.insert_str(offset, &added);
-            return text;
-        }
-        offset += line.len();
+    if let Some((_, offset)) = headings(template)
+        .into_iter()
+        .find(|(name, _)| name == "Closeout")
+    {
+        let mut text = template.to_string();
+        text.insert_str(offset, &added);
+        return text;
     }
     let mut text = template.to_string();
     if !text.is_empty() && !text.ends_with('\n') {
@@ -286,38 +291,55 @@ fn without_cr(bytes: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// The text of each `## ` heading line in `body`, trimmed, outside fenced
-/// code blocks.
+/// The text of each level-2 heading in `body`, trimmed, as `CommonMark`
+/// parses it ([`headings`]).
 fn heading_lines(body: &str) -> Vec<String> {
-    let mut headings = Vec::new();
-    let mut fence: Option<&str> = None;
-    for line in body.lines() {
-        let trimmed = line.trim_end();
-        let start = trimmed.trim_start();
-        let marker = if start.starts_with("```") {
-            Some("```")
-        } else if start.starts_with("~~~") {
-            Some("~~~")
-        } else {
-            None
-        };
-        match (fence, marker) {
-            (None, Some(marker)) => {
-                fence = Some(marker);
-                continue;
+    headings(body).into_iter().map(|(name, _)| name).collect()
+}
+
+/// Each level-2 ATX heading `CommonMark` parses at the top level of `body`,
+/// with its text trimmed and the byte offset where its line starts. A `## `
+/// line in fenced code, an HTML comment (closed or not) or an HTML block is
+/// not a heading, so it never satisfies a listed section. The heading must
+/// start at column zero, and a setext heading does not count, as in
+/// `codeflow ci`'s pull request body outline.
+fn headings(body: &str) -> Vec<(String, usize)> {
+    use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+    let mut found = Vec::new();
+    let mut depth: usize = 0;
+    let mut heading: Option<(String, usize)> = None;
+    for (event, span) in Parser::new(body).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading {
+                level: HeadingLevel::H2,
+                ..
+            }) if depth == 0 && heading.is_none() && atx_at_line_start(body, span.start) => {
+                heading = Some((String::new(), span.start));
             }
-            (Some(open), Some(marker)) if open == marker => {
-                fence = None;
-                continue;
+            Event::End(TagEnd::Heading(_)) if heading.is_some() => {
+                if let Some((name, offset)) = heading.take() {
+                    found.push((name.trim().to_string(), offset));
+                }
             }
-            (Some(_), _) => continue,
-            (None, None) => {}
-        }
-        if let Some(text) = trimmed.strip_prefix("## ") {
-            headings.push(text.trim().to_string());
+            Event::Text(text) | Event::Code(text) if heading.is_some() => {
+                if let Some((name, _)) = heading.as_mut() {
+                    name.push_str(&text);
+                }
+            }
+            // Inline markup inside the heading leaves the depth alone.
+            _ if heading.is_some() => {}
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
         }
     }
-    headings
+    found
+}
+
+/// Whether the heading at `offset` starts its line with `#`.
+fn atx_at_line_start(body: &str, offset: usize) -> bool {
+    let line_start = body[..offset].rfind('\n').map_or(0, |pos| pos + 1);
+    offset == line_start && body[offset..].starts_with('#')
 }
 
 #[cfg(test)]
@@ -350,6 +372,10 @@ mod tests {
             "text ## Risks\n",
             "```\n## Risks\n```\n",
             "~~~md\n## Risks\n~~~\n",
+            "<!--\n## Risks\n-->\n",
+            "<!-- opened earlier\nnotes\n## Risks\n-->\n",
+            "text\n\n<!-- never closed\n## Risks\n",
+            "<div>\n## Risks\n</div>\n",
         ] {
             assert_eq!(
                 required.missing(RecordKind::Task, &own, body),
@@ -391,6 +417,16 @@ mod tests {
         let ended = with_sections("## Summary\nbody", RecordKind::Task, &required);
         assert!(ended.ends_with("body\n\n## Risks\n\n<!-- Required by the project's policy (`git.task_required_sections`). -->\n"), "{ended}");
         assert_eq!(with_sections(&text, RecordKind::Task, &required), text);
+    }
+
+    #[test]
+    fn a_commented_heading_does_not_stop_the_real_section() {
+        let required = required(&["Risks"]);
+        let template = "## Summary\n\n<!--\n## Risks\n## Closeout\n-->\n\n## Closeout\n\nend\n";
+        assert_eq!(
+            with_sections(template, RecordKind::Task, &required),
+            "## Summary\n\n<!--\n## Risks\n## Closeout\n-->\n\n## Risks\n\n<!-- Required by the project's policy (`git.task_required_sections`). -->\n\n## Closeout\n\nend\n"
+        );
     }
 
     #[test]
