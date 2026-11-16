@@ -4551,7 +4551,8 @@ impl Reader<'_> {
                 only_operands = true;
             } else if arg.starts_with("--del") {
                 deletes_destination = true;
-            } else if arg == "--remove-source-files" {
+            } else if super::copy_reach::rsync_removes_source(arg) {
+                // Its aliases and abbreviations remove too (TSK-408).
                 removes_sources = true;
             } else if WITH_VALUE.contains(&arg.as_str()) {
                 at += 1;
