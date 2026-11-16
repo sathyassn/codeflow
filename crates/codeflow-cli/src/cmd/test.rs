@@ -204,6 +204,12 @@ pub fn run(args: &TestArgs) -> i32 {
                 print_target(result);
             }
             print_coverage_report(&coverage);
+            let executed = results
+                .iter()
+                .filter(|r| {
+                    r.status != codeflow_core::testing::runner::deadline::TargetStatus::NotSelected
+                })
+                .count();
             let verdict = if !passed {
                 "FAILED"
             } else if results.is_empty() || !skipped.is_empty() {
@@ -213,9 +219,9 @@ pub fn run(args: &TestArgs) -> i32 {
             };
             println!(
                 "test gate: {verdict} (executed {}; skipped {}{})",
-                results.len(),
+                executed,
                 skipped.len(),
-                evidence_suffix(results.len(), skipped.len(), complete)
+                evidence_suffix(executed, skipped.len(), complete)
             );
             if passed && args.strict && (results.is_empty() || evidence_skipped > 0) {
                 2

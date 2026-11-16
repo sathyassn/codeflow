@@ -115,6 +115,11 @@ pub struct ManifestEntry {
     /// Region marker format; required when `ownership = "managed-region"`.
     #[serde(default)]
     pub region: Option<RegionFormat>,
+    /// `user-owned`, non-JSON only: update replaces the file when its bytes
+    /// equal a version `CodeFlow` shipped (`prior_release::shipped_sha256`),
+    /// and leaves any other copy alone and reports it (TSK-1057).
+    #[serde(default)]
+    pub refresh_unmodified: bool,
 }
 
 impl ManifestEntry {
@@ -173,6 +178,17 @@ impl ScaffoldManifest {
             if entry.ownership == Ownership::ManagedRegion && entry.region.is_none() {
                 return Err(ScaffoldError::ManifestInvalid(shown!(
                     "managed-region entry {} must declare a region format",
+                    Shown::path(&entry.dest)
+                )));
+            }
+            if entry.refresh_unmodified
+                && (entry.ownership != Ownership::UserOwned
+                    || std::path::Path::new(&entry.dest)
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("json")))
+            {
+                return Err(ScaffoldError::ManifestInvalid(shown!(
+                    "entry {} sets refresh_unmodified, which applies only to a user-owned file that is not JSON",
                     Shown::path(&entry.dest)
                 )));
             }
@@ -264,6 +280,26 @@ mod tests {
         "#;
         let manifest: ScaffoldManifest = toml::from_str(toml).unwrap();
         assert!(manifest.validate().is_err());
+    }
+
+    /// TSK-1057: only a user-owned file that is not JSON may follow the
+    /// shipped version while unmodified.
+    #[test]
+    fn refresh_unmodified_applies_only_to_a_user_owned_file_that_is_not_json() {
+        let entry = |ownership: &str, dest: &str| {
+            format!(
+                "schema_version = 1\n[[entry]]\nsrc = \"a\"\ndest = \"{dest}\"\nownership = \"{ownership}\"\ntiers = [\"standard\"]\nrefresh_unmodified = true\n"
+            )
+        };
+        let valid = |text: String| {
+            toml::from_str::<ScaffoldManifest>(&text)
+                .unwrap()
+                .validate()
+                .is_ok()
+        };
+        assert!(valid(entry("user-owned", "x/sandbox.toml")));
+        assert!(!valid(entry("user-owned", "x/policy.json")));
+        assert!(!valid(entry("managed", "x/sandbox.toml")));
     }
 
     #[test]

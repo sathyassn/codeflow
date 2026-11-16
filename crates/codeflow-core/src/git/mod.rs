@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+pub mod baseline_fresh;
 pub mod ci;
 pub mod conflict;
 pub mod name;

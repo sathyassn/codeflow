@@ -939,6 +939,34 @@ impl Scan {
     }
 }
 
+/// The short options whose documented values can start with a dash, so the
+/// next word is their value whatever it looks like, as the program's own
+/// parser reads it: an rsync filter rule (`-f -C`, `-f '-p dir/'`) and a
+/// negative modify window (`-@ -1`), curl's resume offset (`-C -`), byte
+/// range (`-r -500`), time condition (`-z -date`), post-transfer quote
+/// (`-Q -cmd`) and data (`-d`), a zip or unzip password (`-P`), and an
+/// install symbolic mode (`-m -w`). Any other valued option that meets a
+/// word like an option makes the call one the guard does not read
+/// (TSK-408).
+const ANY_VALUE: &[(&str, &str)] = &[
+    ("rsync", "f@"),
+    ("curl", "CrzQd"),
+    ("zip", "P"),
+    ("unzip", "P"),
+    ("install", "m"),
+];
+
+/// Whether the pending short `option` (`-f`) of `writer` takes any word.
+fn any_value(writer: &str, option: &str) -> bool {
+    let mut letters = option.chars().skip(1);
+    let (Some(letter), None) = (letters.next(), letters.next()) else {
+        return false;
+    };
+    ANY_VALUE
+        .iter()
+        .any(|(name, valued)| *name == writer && valued.contains(letter))
+}
+
 /// Read a writer's arguments with [`known_options`]; `None` for a program
 /// with no entry. A short option takes its value from the rest of its
 /// word, or from the next word when it ends the word. A `tar` key without
@@ -977,6 +1005,25 @@ fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
                 scan.values.push((option, a.to_string()));
                 continue;
             }
+        } else if pending
+            .front()
+            .is_some_and(|option| any_value(writer_name(name), option))
+        {
+            // An option whose documented values can start with a dash
+            // takes the next word as getopt does (`rsync -f -C`).
+            let option = pending.pop_front().unwrap_or_default();
+            scan.values.push((option, a.to_string()));
+            continue;
+        } else if !pending.is_empty() {
+            // getopt gives a short option that takes a value the next word
+            // whatever it is (`rsync -T -n` puts its temporary files in
+            // `-n` and is no dry run), while this scan never takes an option
+            // as a value (review round 18). Either reading may be the one
+            // the program makes, so the call is a form the guard does not
+            // read (TSK-408). The option is spent either way, so a later
+            // operand is never taken as its value.
+            scan.unlisted(a);
+            pending.pop_front();
         }
         if a == "--" {
             scan.operands.extend(words.map(|(_, w)| w.clone()));
