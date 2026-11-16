@@ -1,0 +1,11 @@
+id = "TSK-1518"
+uid = "b572ac69-4e13-45dd-9f09-e9bc77d856b3"
+kind = "TSK"
+title = "The command guards refuse a protected action however the shell spells it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T16:52:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
