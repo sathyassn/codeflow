@@ -4487,7 +4487,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 27);
+        assert_eq!(check_names().len(), 28);
     }
 
     #[test]
