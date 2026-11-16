@@ -652,7 +652,9 @@ the form refuses:
   - a fetch, pull, push or `ls-remote` that names no remote in a
     repository whose configuration names no remote, which contacts none
     when no legacy remote file defines `origin`;
-  - the promisor remotes of a partial clone, under the same conditions.
+  - the promisor remotes of a partial clone (a remote set as a promisor or
+    given a partial clone filter, and the one `extensions.partialClone`
+    names), under the same conditions; an empty promisor name refuses.
 
   A transport that starts a remote helper program refuses under
   `git.hook_integrity`, naming the program and the remote, unless the

@@ -23,9 +23,11 @@
 //!   update, each under the same conditions, when no legacy remote file
 //!   may add one; an empty `default` group and a remote section with an
 //!   empty name refuse;
-//! - the promisor remotes of a partial clone, under the same conditions,
-//!   for every Git command, since a missing object can be fetched from them
-//!   by any command.
+//! - the promisor remotes of a partial clone (a remote set as a promisor or
+//!   given a partial clone filter, and the one `extensions.partialClone`
+//!   names), under the same conditions, for every Git command, since a
+//!   missing object can be fetched from them by any command; an empty
+//!   promisor name refuses.
 //!
 //! Refused by name: an operand-free push or `ls-remote`, every other form
 //! that contacts every configured remote, a remote group, a remote with a helper
@@ -739,8 +741,16 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// Whether the configuration has any `remote.<name>.<variable>` key.
+    /// Whether the configuration has any `remote.<name>.<variable>` key. The
+    /// empty name is never configured: Git names the remote of a
+    /// `remote..<variable>` key after the rest of the key (`remote.c`
+    /// `make_remote`), so an empty operand gets a remote with no address,
+    /// which Git and the `address` path both take from the operand itself,
+    /// after the same rewrites.
     fn configured(&self, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
         let prefix = format!("remote.{name}.");
         self.keys.iter().any(|key| {
             key.strip_prefix(&prefix)
@@ -1195,27 +1205,36 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// The remotes a partial clone fetches missing objects from.
+    /// The remotes a partial clone fetches missing objects from, as Git
+    /// registers them (`promisor-remote.c` `promisor_remote_config` and
+    /// `promisor_remote_init`): each `remote.<name>.promisor` value read as
+    /// true (a later false value does not take it back), any
+    /// `remote.<name>.partialclonefilter` whatever the promisor setting, and
+    /// `extensions.partialClone`. The name is the subsection as written; a
+    /// key with no subsection registers the empty name.
     fn promisors(&self) -> Result<Vec<String>, String> {
         let mut names = values(self.config, "extensions.partialclone")?;
         for key in &self.keys {
-            let Some(name) = key
-                .strip_prefix("remote.")
-                .and_then(|rest| rest.strip_suffix(".promisor"))
-            else {
+            let Some(rest) = key.strip_prefix("remote.") else {
                 continue;
             };
-            if let Some(value) = self.config.get(key)? {
-                if crate::security::git::config_boolean(value) != Some(false) {
-                    names.push(name.to_string());
-                }
+            let (name, variable) = rest.rsplit_once('.').unwrap_or(("", rest));
+            let registers = match variable {
+                "promisor" => values(self.config, key)?
+                    .iter()
+                    .any(|value| crate::security::git::config_boolean(value) != Some(false)),
+                "partialclonefilter" => true,
+                _ => false,
+            };
+            if registers {
+                names.push(name.to_string());
             }
         }
         // An empty name is not one `named` can map to the remote Git builds
         // for it (`remote.c` `make_remote`); refuse it.
         if names.iter().any(String::is_empty) {
             return Err(unproven(
-                "a partial clone names a promisor remote with an empty name, which the guard cannot resolve",
+                "Git registers a promisor remote with an empty name, which the guard cannot resolve",
             ));
         }
         names.sort();
