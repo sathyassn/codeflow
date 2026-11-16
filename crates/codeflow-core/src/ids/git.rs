@@ -304,7 +304,7 @@ impl Git {
             self.reads
                 .borrow_mut()
                 .blobs
-                .push(header.split(' ').next().unwrap().to_string());
+                .push(header.split(' ').next().unwrap_or_default().to_string());
             let size: usize = header
                 .rsplit(' ')
                 .next()

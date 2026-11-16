@@ -53,7 +53,7 @@ pub(super) fn read(
     if refs.is_empty() {
         return Ok(Vec::new());
     }
-    let repo = git2::Repository::open(git.root()).map_err(tree_error)?;
+    let repo = git2::Repository::open(git.root()).map_err(|error| tree_error(&error))?;
     let mut trees = HashMap::new();
     let mut unread = Vec::new();
     let mut asked = HashSet::new();
@@ -93,11 +93,11 @@ pub(super) fn read(
 }
 
 fn list(repo: &git2::Repository, sha: &str) -> Result<Vec<Copy>, IdsError> {
-    let oid = git2::Oid::from_str(sha).map_err(tree_error)?;
+    let oid = git2::Oid::from_str(sha).map_err(|error| tree_error(&error))?;
     let tree = repo
         .find_commit(oid)
         .and_then(|commit| commit.tree())
-        .map_err(tree_error)?;
+        .map_err(|error| tree_error(&error))?;
     let mut copies = Vec::new();
     crate::git::walk_tree(repo, &tree, &mut |name, entry| {
         let path = name.bytes();
@@ -130,11 +130,11 @@ fn list(repo: &git2::Repository, sha: &str) -> Result<Vec<Copy>, IdsError> {
         }
         crate::git::Walk::Continue
     })
-    .map_err(tree_error)?;
+    .map_err(|error| tree_error(&error))?;
     Ok(copies)
 }
 
-fn tree_error(error: git2::Error) -> IdsError {
+fn tree_error(error: &git2::Error) -> IdsError {
     IdsError::Git(format!("cannot list code-ref records: {error}"))
 }
 
