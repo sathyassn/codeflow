@@ -74,7 +74,10 @@ evidence" define; the brief follows
      is uncovered or the evidence is from another revision
    - `codeflow validate --docs` (the docs spine ships from standard tier up);
      plain `codeflow validate` at minimal
-   - coverage against the project's configured floor, as measured
+   - coverage against the project's configured floor, as measured; project
+     tooling (scripts, build helpers, code generators, release, CI and hook
+     helpers) is code here, so a tooling change with no test in a test
+     target is a finding, graded as untested product code would be
    - inspect whether changed tests would fail for a material regression; reject
      tautologies, implementation-copied expectations or duplicate production
      algorithms used as oracles, mock-only wiring assertions, weakened

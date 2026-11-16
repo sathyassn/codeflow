@@ -458,6 +458,16 @@
         "ready-pull-requests-share-one-landing-candidate",
         "needed-edit-is-reported-to-work-owner"
       ]
+    },
+    {
+      "id": "tooling-tests-and-framework",
+      "description": "Focused TSK-1031 diagnostics: a reviewer returns a finding for an untested tooling change, a multi-view web surface is planned on the project's framework, and a one-page tool stays plain. Run each case once per lineage as a native diagnostic with retained, independently graded traces. Structural checks prove registration only; this pack is not full binding qualification.",
+      "includes": [],
+      "cases": [
+        "untested-tooling-change-is-a-review-finding",
+        "multi-view-web-surface-uses-project-framework",
+        "one-page-tool-stays-plain"
+      ]
     }
   ]
 }

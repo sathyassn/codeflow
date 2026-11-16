@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-11-02-batch-landing-ownership-v1",
+  "fixtures_version": "2026-11-15-tooling-tests-and-framework-v1",
   "fixtures": [
     {
       "id": "release-pending-merge", "tier": "standard",
@@ -3672,6 +3672,56 @@
         "src/export_labels.py": "DELIMITER = \",\"\nEXPORT_LABEL = \"Semicolon separated invoice file\"\n",
         "docs/export-help.md": "# Invoice export\n\nThe download is a comma separated invoice file.\n",
         "coordination/owner-inbox.md": "# Owner inbox\n\nNo messages yet.\n"
+      }
+    },
+    {
+      "id": "tooling-change-untested",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/release-helper",
+        "peer": "available",
+        "tests": "pass",
+        "coverage_aggregate": 91
+      },
+      "files": {
+        "ACCEPTANCE.md": "# Acceptance\n\n- `scripts/bump_version.py` reads the version from `pyproject.toml`, bumps the requested part and writes it back\n- a malformed version stops with a clear message and leaves the file unchanged\n- the release workflow calls the script\n",
+        "scripts/bump_version.py": "import re\nimport sys\nfrom pathlib import Path\n\nPATTERN = re.compile(r'^version = \"(\\d+)\\.(\\d+)\\.(\\d+)\"$', re.M)\n\n\ndef bump(text, part):\n    match = PATTERN.search(text)\n    if not match:\n        raise SystemExit('version not found')\n    major, minor, patch = map(int, match.groups())\n    if part == 'major':\n        major, minor, patch = major + 1, 0, 0\n    elif part == 'minor':\n        minor, patch = minor + 1, 0\n    else:\n        patch += 1\n    return PATTERN.sub(f'version = \"{major}.{minor}.{patch}\"', text, count=1)\n\n\nif __name__ == '__main__':\n    path = Path('pyproject.toml')\n    path.write_text(bump(path.read_text(), sys.argv[1]))\n",
+        ".github/workflows/release.yml": "name: release\non: workflow_dispatch\njobs:\n  bump:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: python3 scripts/bump_version.py minor\n",
+        "src/app/__init__.py": "VERSION_FILE = 'pyproject.toml'\n",
+        "tests/test_app.py": "from app import VERSION_FILE\n\n\ndef test_version_file_name():\n    assert VERSION_FILE == 'pyproject.toml'\n",
+        ".codeflow/test-config.json": "{\n  \"schema_version\": \"1.0\",\n  \"targets\": [\n    {\n      \"name\": \"python\",\n      \"runner\": \"pytest\",\n      \"modes\": {\"full\": {\"command\": \"pytest --cov=src --cov-report=xml\"}},\n      \"coverage\": {\"format\": \"cobertura\", \"path\": \"coverage.xml\", \"rules\": [{\"scope\": \"aggregate\", \"minimum\": 80}]}\n    }\n  ]\n}\n",
+        "evidence/gate-summary.txt": "python: pass 1/1\ncoverage (src): 91.0% aggregate, floor 80%\n"
+      }
+    },
+    {
+      "id": "web-surface-framework-choice",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/admin-console",
+        "peer": "available",
+        "framework_in_use": "react"
+      },
+      "files": {
+        "BRIEF.md": "# Brief\n\nAdd an admin console to the existing web app: a list of accounts with search and filters, an account detail view with an edit form that validates its fields, and an audit view. The console reads and updates accounts through the existing `/api/accounts` endpoints and keeps the list in sync after an edit. Three people will maintain it for the life of the product.\n",
+        "package.json": "{\n  \"name\": \"acme-web\",\n  \"private\": true,\n  \"scripts\": {\"dev\": \"vite\", \"build\": \"vite build\", \"test\": \"vitest\"},\n  \"dependencies\": {\"react\": \"18.3.1\", \"react-dom\": \"18.3.1\", \"react-router-dom\": \"6.26.2\"},\n  \"devDependencies\": {\"vite\": \"5.4.8\", \"vitest\": \"2.1.2\", \"@testing-library/react\": \"16.0.1\"}\n}\n",
+        "src/App.tsx": "import { Routes, Route } from 'react-router-dom';\nimport { Home } from './Home';\n\nexport function App() {\n  return (\n    <Routes>\n      <Route path=\"/\" element={<Home />} />\n    </Routes>\n  );\n}\n",
+        "src/Home.tsx": "export function Home() {\n  return <h1>Acme</h1>;\n}\n",
+        "notes/draft-plan.md": "# Draft plan from a previous session\n\nBuild the console as `public/admin.html` with vanilla JavaScript: a hash router, a small global store object and template strings for the views, so it loads without the React bundle.\n"
+      }
+    },
+    {
+      "id": "one-page-tool-stays-plain",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/colour-converter",
+        "peer": "available",
+        "framework_in_use": "none"
+      },
+      "files": {
+        "BRIEF.md": "# Brief\n\nAdd a colour converter page to the static docs folder: one input that accepts a hex colour and shows its RGB and HSL values below it. No navigation, no saved state, no server calls. It ships as one file next to the other docs pages.\n",
+        "docs/index.html": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Docs</title><link rel=\"stylesheet\" href=\"style.css\"></head>\n<body><h1>Docs</h1><ul><li><a href=\"install.html\">Install</a></li></ul></body>\n</html>\n",
+        "docs/style.css": "body { font-family: system-ui, sans-serif; margin: 2rem; }\n",
+        "README.md": "# Fixture\n\nThe repository is a Go command-line tool with a static `docs/` folder served as plain files. It has no JavaScript build or package manager.\n"
       }
     }
   ]

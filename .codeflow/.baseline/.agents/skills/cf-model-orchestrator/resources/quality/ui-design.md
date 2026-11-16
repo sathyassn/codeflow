@@ -93,6 +93,10 @@ Check at least:
   application-specific components, and their composition into views or pages;
 - minimal explicit interaction state with one clear owner and framework-native
   data flow;
+- a non-trivial surface built on the project's standard UI framework, while a
+  one-page tool or static page may stay plain, as `cf-stack` sets out; a
+  hand-built router, state store or templating layer beside the framework
+  the project already uses is a finding;
 - no repeated one-off styling, state logic, or components when current reuse is
   evidenced; no new design system or higher-order abstraction for a one-off
   surface without such evidence;
