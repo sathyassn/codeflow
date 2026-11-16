@@ -15,7 +15,11 @@ pub(super) fn blob_ids(git: &Git, specs: &[String]) -> Result<Vec<String>, IdsEr
     }
     let request = format!("{}\n", specs.join("\n"));
     let headers = git.run_input(&["cat-file", "--batch-check"], request.as_bytes())?;
-    let headers: Vec<_> = headers.split_terminator('\n').collect();
+    let mut headers: Vec<_> = headers.split('\n').collect();
+    // Discard only the final LF framing field; preserve CR and empty rows.
+    if headers.last() == Some(&"") {
+        let _ = headers.pop();
+    }
     if headers.len() != specs.len() {
         return Err(IdsError::Git("git cat-file: truncated output".into()));
     }
