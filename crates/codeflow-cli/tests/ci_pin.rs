@@ -1557,10 +1557,16 @@ fn a_scan_error_fails_the_audit_whatever_the_output_size() {
             let with_hook = !base.is_empty();
             let (ok, text) =
                 run_exception_step_with(base, &[], &[("OSV_FAKE", "broken-large")], flags);
-            assert!(text.len() > 64 * 1024, "{flags:?} hook={with_hook}: the scan log is small");
+            assert!(
+                text.len() > 64 * 1024,
+                "{flags:?} hook={with_hook}: the scan log is small"
+            );
             let tail = verdict_tail(&text);
             assert!(!ok, "{flags:?} hook={with_hook}: {tail}");
-            assert!(text.contains("exit 128"), "{flags:?} hook={with_hook}: {tail}");
+            assert!(
+                text.contains("exit 128"),
+                "{flags:?} hook={with_hook}: {tail}"
+            );
             assert!(
                 !text.contains("nothing to audit"),
                 "{flags:?} hook={with_hook}: {tail}"
