@@ -48,13 +48,7 @@ impl Scratch {
         Self { _dir: dir, root }
     }
 
-    fn contacts(&self, command: &str) -> Result<Vec<Contact>, String> {
-        let words: Vec<&str> = command.split_whitespace().collect();
-        self.contacts_of(&words)
-    }
-
-    /// [`Scratch::contacts`] for a command given word by word, so a word
-    /// may be empty.
+    /// The contacts of a command given word by word, so a word may be empty.
     fn contacts_of(&self, words: &[&str]) -> Result<Vec<Contact>, String> {
         let mut env = Environment::new();
         env.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
