@@ -1430,10 +1430,11 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
 /// earlier finding on the same command never hides the rule. Assignments a
 /// launcher reads among its options, before or between them, do not hide
 /// the program. A prefix launcher's option outside its grammar, a `--` that
-/// a carrier's other option takes as its value, and a command runner whose
-/// program or shell code comes from its inputs (a separator, a file, its
-/// standard input or a replacement string) leave the command unresolved,
-/// which refuses. exec-guard holds the rule with the privilege rule at block
+/// a carrier's other option takes as its value, any form of a command
+/// runner the guard keeps no grammar for, and an `xargs` or `find` form
+/// outside their closed daily grammar (an option, a replacement string, a
+/// nested shell or split string, or a missing terminator) leave the command
+/// unresolved, which refuses. exec-guard holds the rule with the privilege rule at block
 /// and off, so a privilege refusal is never what stops the push; git-guard
 /// has no privilege rule.
 #[test]
@@ -1487,6 +1488,25 @@ fn launched_or_carried_line_pushes_still_refuse() {
         "xargs --a /tmp/jobs git push origin HEAD:refs/heads/integration/EPC-001-line",
         "find . -exec sh -c {} ';'",
         "find . -exec {} ';'",
+        "parallel --limit 'git push origin HEAD:refs/heads/integration/EPC-001-line' echo ::: x",
+        "parallel --retry-failed --joblog /tmp/jobs echo",
+        "parallel -I CMD sh -c CMD ::: 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -I CMD env -S CMD < /tmp/jobs",
+        "watch --inter 1 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "flock --conflict 75 /tmp/lock git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "gh repo clone o/r --upstream-remote-name -- -- -u 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "parallel -j 2 git push origin HEAD:refs/heads/integration/EPC-001-line ::: x",
+        "watch -n 1 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "flock /tmp/lock git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "flock -c 'git push origin HEAD:refs/heads/integration/EPC-001-line' /tmp/lock",
+        "setsid git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "unbuffer -p git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "script -q -c 'git push origin HEAD:refs/heads/integration/EPC-001-line' /dev/null",
+        "xargs -n 1 sh -c 'git push origin HEAD:refs/heads/integration/EPC-001-line' <<< x",
+        "xargs -P 2 git push origin HEAD:refs/heads/integration/EPC-001-line <<< x",
+        "find . -exec env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line' ';'",
+        "find . -ok git push origin HEAD:refs/heads/integration/EPC-001-line ';'",
+        "find . -exec git push origin HEAD:refs/heads/integration/EPC-001-line",
     ]);
     let off = SecuritySection {
         privilege_escalation: PolicyLevel::Off,
@@ -1560,6 +1580,94 @@ fn ordinary_launcher_commands_stay_allowed() {
             if blocked(&found) {
                 wrong.push(format!("{guard} should pass: {row}: {}", shown(&found)));
             }
+        }
+    }
+    report(&wrong);
+}
+
+/// TSK-1490: a command runner or carrier the guard keeps no grammar for is
+/// refused under the rule in any spelling, with any options and whatever
+/// command it runs, a harmless one included; so is an `xargs` or `find`
+/// form outside their closed daily grammar. Both guards, with hook
+/// integrity off, so no integrity finding is what refuses. The refusal
+/// names the way through: the inner command run directly.
+#[test]
+fn runners_without_a_grammar_refuse_in_any_spelling() {
+    if !isolated("runners_without_a_grammar_refuse_in_any_spelling") {
+        return;
+    }
+    let mut lines = Vec::new();
+    for name in crate::hooks::git_guard::UNREAD_RUNNERS {
+        for spelling in [(*name).to_string(), format!("/usr/bin/{name}")] {
+            for options in ["", "-x", "--bogus v", "-n 1", "--"] {
+                lines.push(
+                    format!("{spelling} {options} echo hi")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+        }
+    }
+    lines.extend(
+        [
+            "fd -x echo hi",
+            "fd -H -X echo hi",
+            "fdfind --exec echo hi",
+            "fd --exec-batch=echo hi",
+            "xargs -I{} wc -l {} <<< a",
+            "xargs -i wc -l <<< a",
+            "xargs -P 2 wc -l <<< a",
+            "xargs --null wc -l <<< a",
+            "xargs -0r wc -l <<< a",
+            "xargs -n x wc -l <<< a",
+            "xargs -- wc -l <<< a",
+            "xargs sh -c 'wc -l' <<< a",
+            "xargs env -S 'wc -l' <<< a",
+            "xargs {} x <<< a",
+            "xargs parallel wc ::: a <<< a",
+            "find . -ok wc -l {} ';'",
+            "find . -okdir wc -l {} ';'",
+            "find . -exec wc -l {}",
+            "find . -exec wc -l ';' -exec wc -c {}",
+            "find . -exec wc -l '+'",
+            "find . -exec sh -c 'wc -l' ';'",
+            "find . -exec env -S 'wc -l {}' ';'",
+            "find . -exec wc -l {}.bak ';'",
+            "find . -exec {} ';'",
+            "find . -exec watch wc {} ';'",
+        ]
+        .map(str::to_string),
+    );
+    let landed = LANDED_POLICY.replacen(r#"{"git":{"#, r#"{"git":{"hook_integrity":"off","#, 1);
+    let f = Fixture::landed(&landed, "", |_, _| {});
+    let mut wrong = Vec::new();
+    for row in &lines {
+        let git = git_guard_verdict(&f.root, row);
+        if !agent_push_refused(&git) {
+            wrong.push(format!("git-guard should refuse: {row}: {}", shown(&git)));
+        }
+        let found = evaluate_at(
+            row,
+            &SecuritySection::default(),
+            PolicyLevel::Off,
+            &f.root,
+            &f.root,
+        );
+        if !agent_push_refused(&found) {
+            wrong.push(format!(
+                "exec-guard should refuse: {row}: {}",
+                shown(&found)
+            ));
+        }
+        if !found
+            .iter()
+            .any(|finding| finding.remedy.contains("run the inner command directly"))
+        {
+            wrong.push(format!(
+                "exec-guard should name the way through: {row}: {}",
+                shown(&found)
+            ));
         }
     }
     report(&wrong);

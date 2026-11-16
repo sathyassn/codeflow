@@ -143,7 +143,7 @@ fn relaxed_allows_everyday_nested_commands() {
         "bash -lc 'cargo fmt --all -- --check && cargo clippy --workspace'",
         "bash -lc \"sh -c 'echo one; echo two'\"",
         "timeout 60 bash -lc 'make -C sub all'",
-        "find . -type f -exec sh -c 'echo \"$1\"' _ {} \\;",
+        "find . -type f -exec echo {} \\;",
         "for a in 1 2 3; do for b in 1 2 3; do echo $a $b; done; done",
         "f() { echo hi; }; g() { f; }; h() { g; }; h",
         "rm -rf ./build && make",

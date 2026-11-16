@@ -867,19 +867,20 @@ fn opens_with_subcommand(carrier: &Carrier, args: &[String]) -> bool {
 /// The values of one row's options in `args`, read by how the row runs.
 fn carrier_values(carrier: &Carrier, name: &str, args: &[String]) -> Vec<Carried> {
     if carrier.runs == Runs::CloneArguments {
-        // `git clone` with the words after `--`, then the repository and
-        // directory operands the subcommand names before it.
-        let Some(end) = args.iter().position(|word| word == "--") else {
-            return Vec::new();
+        // `git clone` with the words after the `--` that ends gh's own
+        // options, then the repository and directory operands the
+        // subcommand names before it. gh's options are read by a closed
+        // list first, so a `--` that is an option's value is never taken
+        // for the end; any other option is unread.
+        let (end, operands) = match clone_arguments(args) {
+            Ok(Some(read)) => read,
+            Ok(None) => return Vec::new(),
+            Err(option) => return vec![Carried::Unread(format!("{name} {option}"))],
         };
         let flags = &args[end + 1..];
         if flags.is_empty() {
             return Vec::new();
         }
-        let operands = args[..end]
-            .iter()
-            .filter(|word| !word.starts_with('-'))
-            .skip(2);
         let mut line = "git clone".to_string();
         for word in flags.iter().chain(operands) {
             line.push(' ');
@@ -912,6 +913,75 @@ fn carrier_values(carrier: &Carrier, name: &str, args: &[String]) -> Vec<Carried
         }
     }
     out
+}
+
+/// gh's own long options that take a value, for the subcommands that
+/// forward clone arguments after `--` (cli/cli `repo clone`, `repo fork`
+/// and `gist clone`).
+const GH_CLONE_VALUED: &[&str] = &[
+    "--upstream-remote-name",
+    "--remote-name",
+    "--org",
+    "--fork-name",
+];
+
+/// gh's own long flags for the same subcommands.
+const GH_CLONE_FLAGS: &[&str] = &[
+    "--no-upstream",
+    "--clone",
+    "--remote",
+    "--default-branch-only",
+    "--help",
+];
+
+/// Read the words after `gh` of `gh repo clone`, `gh repo fork` or
+/// `gh gist clone` by gh's closed option list, so each option takes its
+/// value before a `--` is read as the end of gh's options: the index of
+/// that `--` and the operands after the two subcommand words, `None` when
+/// no `--` ends the options, or the first option outside the list, which
+/// leaves the end unread.
+fn clone_arguments(args: &[String]) -> Result<Option<(usize, Vec<&String>)>, String> {
+    let mut words = 0;
+    let mut operands = Vec::new();
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        at += 1;
+        if word == "--" {
+            return Ok(Some((at - 1, operands)));
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(name, value)| (name, Some(value)));
+            let option = format!("--{name}");
+            if GH_CLONE_VALUED.contains(&option.as_str()) {
+                at += usize::from(value.is_none());
+            } else if !(GH_CLONE_FLAGS.contains(&option.as_str()) && value.is_none()) {
+                return Err(word.clone());
+            }
+            continue;
+        }
+        if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.is_empty()) {
+            // pflag shorthands: `-h` is help; `-u` takes its value attached
+            // or as the next word.
+            for (offset, letter) in cluster.char_indices() {
+                match letter {
+                    'h' => {}
+                    'u' => {
+                        at += usize::from(cluster[offset + 1..].is_empty());
+                        break;
+                    }
+                    _ => return Err(word.clone()),
+                }
+            }
+            continue;
+        }
+        words += 1;
+        if words > 2 {
+            operands.push(word);
+        }
+    }
+    Ok(None)
 }
 
 /// Where an option word's value is.
@@ -1353,6 +1423,44 @@ mod tests {
             "tar --file=a.tar -- -I X",
         ] {
             assert_eq!(commands(line), vec![], "{line}");
+        }
+    }
+
+    /// gh's own options take their values before a `--` ends them, by a
+    /// closed list; any other option of gh leaves the end unread.
+    #[test]
+    fn clone_arguments_end_after_gh_options() {
+        let clone = |line: &str| vec![Carried::Command(line.into())];
+        assert_eq!(
+            commands("gh repo clone o/r --upstream-remote-name -- -- -u X"),
+            clone("git clone \"-u\" \"X\" \"o/r\"")
+        );
+        assert_eq!(
+            commands("gh repo clone o/r -u up -- -u X"),
+            clone("git clone \"-u\" \"X\" \"o/r\"")
+        );
+        assert_eq!(
+            commands("gh repo clone o/r --upstream-remote-name=up -- -u X"),
+            clone("git clone \"-u\" \"X\" \"o/r\"")
+        );
+        assert_eq!(
+            commands("gh repo fork o/r --clone --remote-name up -- -u X"),
+            clone("git clone \"-u\" \"X\" \"o/r\"")
+        );
+        assert_eq!(
+            commands("gh repo clone o/r --upstream-remote-name --"),
+            vec![]
+        );
+        for line in [
+            "gh repo clone o/r --upstream -- -- -u X",
+            "gh repo clone o/r -x -- -u X",
+            "gh repo fork o/r --clone=true -- -u X",
+        ] {
+            assert!(
+                matches!(commands(line).as_slice(), [Carried::Unread(_)]),
+                "{line}: {:?}",
+                commands(line)
+            );
         }
     }
 

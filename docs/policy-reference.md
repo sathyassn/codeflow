@@ -846,12 +846,24 @@ the line does not name, is refused under the agent push rule
 name given only as another launcher's option value is not a launcher.
 Every launcher's options are read whole: an option the grammar does not
 hold, an abbreviated long option included, leaves the command unresolved
-rather than taking that option's value as the program. A command runner
-whose program or shell code comes from its inputs (inputs read from a
-file or from standard input, or put in for a replacement string) is
-unresolved in the same way. For a program that carries a command in an
-option value, a `--` right after another option may be that option's
-value, so it does not end the reading of options.
+rather than taking that option's value as the program. The guard keeps
+no grammar for command runners except two daily forms. Any form of
+`parallel`, `watch`, `flock`, `script`, `setsid`, `unbuffer`, `su` or
+`runuser`, and `fd` or `fdfind` with an exec option, is unresolved in
+the same way, whatever its options and whatever command it runs, and so
+is a runner added to the inventory later. The two daily forms the guard
+reads exactly are `xargs` with no option or only
+`-0`, `-r` and `-n NUMBER`, and `find` whose `-exec` or `-execdir`
+actions each end in `;` or `{} +`, each running a literal command. Any
+other option, a replacement string (`-I` and its kin), `-ok` or `-okdir`,
+a found path inside a word, a shell, an `env -S` string, or a runner
+inside the command makes those forms unresolved too, and nothing a runner
+adds from its input is expanded. The way through is to run the inner
+command directly, one command per call. For a program that carries a
+command in an option value, a `--` right after another option may be
+that option's value, so it does not end the reading of options; gh's
+clone arguments are read after gh's own options, by a closed list, and
+any other option of gh there is refused under `git.hook_integrity`.
 When it decides the repository the
 command is judged in, it reads an assignment written after a launcher as
 the launcher passes it on. A launcher that runs the command as another

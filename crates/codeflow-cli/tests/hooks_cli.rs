@@ -954,7 +954,7 @@ const REVIEWER_ALLOWED: &[&str] = &[
     "sed -n '1,5p' .codeflow/policy.json",
     "find .codeflow -exec grep -n a {} +",
     r"printf 'README.md\n' | xargs sort",
-    r"printf 'README.md\n' | xargs -I{} uniq {}",
+    r"printf 'README.md\n' | xargs uniq",
     "nice -n 5 sed -n p README.md",
     "timeout 10 sed -i '' s/a/b/ README.md",
     "sed -i '' 's/.*//' README.md",

@@ -5860,83 +5860,6 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     args.get(at..).filter(|c| !c.is_empty())
 }
 
-/// The replacement strings an `xargs` puts its inputs in for (`-I R`,
-/// `-J R`, `-i`, `--replace`, whose default is `{}`), reading its options
-/// as [`xargs_command`] does. `None` when an option is outside GNU and BSD
-/// xargs' grammar, a long name that is not whole included, so the place
-/// its command starts is a guess.
-pub(crate) fn xargs_replace(args: &[String]) -> Option<Vec<String>> {
-    const VALUED_LONG: &[&str] = &[
-        "arg-file",
-        "delimiter",
-        "max-args",
-        "max-procs",
-        "max-chars",
-        "process-slot-var",
-    ];
-    const OPTIONAL_LONG: &[&str] = &["eof", "replace", "max-lines"];
-    const FLAGS_LONG: &[&str] = &[
-        "null",
-        "interactive",
-        "verbose",
-        "exit",
-        "no-run-if-empty",
-        "show-limits",
-        "open-tty",
-        "help",
-        "version",
-    ];
-    let mut replace = Vec::new();
-    let mut at = 0;
-    while let Some(arg) = args.get(at) {
-        if arg == "--" || !arg.starts_with('-') || arg == "-" {
-            break;
-        }
-        at += 1;
-        if let Some(long) = arg.strip_prefix("--") {
-            let (name, value) = long
-                .split_once('=')
-                .map_or((long, None), |(n, v)| (n, Some(v)));
-            if VALUED_LONG.contains(&name) {
-                at += usize::from(value.is_none());
-            } else if OPTIONAL_LONG.contains(&name) {
-                if name == "replace" {
-                    replace.push(value.unwrap_or("{}").to_string());
-                }
-            } else if !(FLAGS_LONG.contains(&name) && value.is_none()) {
-                return None;
-            }
-            continue;
-        }
-        let cluster = &arg[1..];
-        for (offset, letter) in cluster.char_indices() {
-            let attached = &cluster[offset + letter.len_utf8()..];
-            match letter {
-                'I' | 'J' | 'a' | 'd' | 'E' | 'L' | 'n' | 'P' | 's' | 'R' | 'S' => {
-                    let value = if attached.is_empty() {
-                        at += 1;
-                        args.get(at - 1).cloned()
-                    } else {
-                        Some(attached.to_string())
-                    };
-                    if matches!(letter, 'I' | 'J') {
-                        replace.extend(value);
-                    }
-                    break;
-                }
-                'i' => {
-                    replace.push(if attached.is_empty() { "{}" } else { attached }.to_string());
-                    break;
-                }
-                'e' | 'l' => break,
-                '0' | 'o' | 'p' | 'r' | 't' | 'x' => {}
-                _ => return None,
-            }
-        }
-    }
-    Some(replace)
-}
-
 #[cfg(test)]
 thread_local! {
     /// How many times a check of one segment expanded or re-read its whole
@@ -8266,72 +8189,6 @@ const PARALLEL_VALUED: &[&str] = &[
     "--limit",
 ];
 
-/// The options GNU `parallel` reads with no value. Any other option, the
-/// ones that define replacement strings or read a script among them, makes
-/// the line unresolved ([`ParallelLine::unread`]).
-const PARALLEL_FLAGS: &[&str] = &[
-    "-k",
-    "-q",
-    "-v",
-    "-t",
-    "-u",
-    "-0",
-    "-X",
-    "-m",
-    "-r",
-    "--keep-order",
-    "--quote",
-    "--verbose",
-    "--ungroup",
-    "--group",
-    "--line-buffer",
-    "--linebuffer",
-    "--lb",
-    "--null",
-    "--xargs",
-    "--no-run-if-empty",
-    "--dry-run",
-    "--dryrun",
-    "--progress",
-    "--bar",
-    "--eta",
-    "--tag",
-    "--ctag",
-    "--will-cite",
-    "--no-notice",
-    "--citation",
-    "--shuf",
-    "--pipe",
-    "--pipepart",
-    "--keep",
-    "--silent",
-    "--plain",
-    "--files",
-    "--cat",
-    "--fifo",
-    "--compress",
-    "--round-robin",
-    "--roundrobin",
-    "--resume",
-    "--resume-failed",
-    "--retry-failed",
-    "--transfer",
-    "--cleanup",
-    "--tty",
-    "--fg",
-    "--bg",
-    "--onall",
-    "--nonall",
-    "--noswap",
-    "--controlmaster",
-    "--number-of-cpus",
-    "--number-of-cores",
-    "--number-of-sockets",
-    "--number-of-threads",
-    "--help",
-    "--version",
-];
-
 /// A GNU `parallel` input separator, or the `--` that ends its options.
 fn parallel_separator(word: &str) -> bool {
     matches!(word, ":::" | ":::+" | "::::" | "::::+" | "--")
@@ -8339,7 +8196,10 @@ fn parallel_separator(word: &str) -> bool {
 
 /// How GNU `parallel` reads its words: options (to the first word that is
 /// not one, a separator, or the `--` that ends them), the command template,
-/// then the inputs after `:::` (on the line) or `::::` (in files).
+/// then the inputs after `:::` (on the line) or `::::` (in files). This is
+/// a first guess for the readers that add commands to judge; the guard
+/// keeps no grammar for `parallel`, so a line that runs it is unresolved
+/// whatever this reads ([`runner_mode`]).
 #[derive(Debug, Default)]
 pub(crate) struct ParallelLine {
     /// Where the template starts, after the options and an ending `--`.
@@ -8349,15 +8209,10 @@ pub(crate) struct ParallelLine {
     /// `-q` or `--quote`: the template's words reach the command as written
     /// rather than through a shell.
     pub quoted: bool,
-    /// An option outside [`PARALLEL_VALUED`] and [`PARALLEL_FLAGS`]; read
-    /// as a flag for a first guess at the template.
-    pub unread: bool,
     /// Inputs from a file: `::::` or `-a`/`--arg-file`.
     pub files: bool,
     /// Inputs on the line, after `:::`.
     pub literal: bool,
-    /// The replacement strings `-I` defines.
-    pub replace: Vec<String>,
 }
 
 /// Read GNU `parallel`'s `args` ([`ParallelLine`]).
@@ -8380,10 +8235,8 @@ pub(crate) fn parallel_line(args: &[String]) -> ParallelLine {
                     at += 1;
                 }
                 line.files |= option == "--arg-file";
-            } else if PARALLEL_FLAGS.contains(&option) && attached.is_none() {
-                line.quoted |= option == "--quote";
             } else {
-                line.unread = true;
+                line.quoted |= option == "--quote";
             }
             continue;
         }
@@ -8392,24 +8245,13 @@ pub(crate) fn parallel_line(args: &[String]) -> ParallelLine {
             let rest = &cluster[offset + letter.len_utf8()..];
             let short = format!("-{letter}");
             if PARALLEL_VALUED.contains(&short.as_str()) {
-                let value = if rest.is_empty() {
+                if rest.is_empty() {
                     at += 1;
-                    args.get(at - 1).cloned()
-                } else {
-                    Some(rest.to_string())
-                };
-                match letter {
-                    'a' => line.files = true,
-                    'I' => line.replace.extend(value),
-                    _ => {}
                 }
+                line.files |= letter == 'a';
                 break;
             }
-            if PARALLEL_FLAGS.contains(&short.as_str()) {
-                line.quoted |= letter == 'q';
-            } else {
-                line.unread = true;
-            }
+            line.quoted |= letter == 'q';
         }
     }
     line.template = at.min(args.len());
@@ -8441,9 +8283,9 @@ pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
 /// with each `:::` input, quoted as one word, put in for `{}` or after it;
 /// with no template, each input is a command. moreutils' `parallel CMD --
 /// ARGS` reads the same way, and its `parallel -- CMD...` runs each word
-/// after the `--` as a command, which is read as well. `::::` names input
-/// files, which the guard cannot read; [`parallel_mode`] makes a line whose
-/// commands come from them unresolved.
+/// after the `--` as a command, which is read as well. These are only extra
+/// commands to judge: the guard keeps no grammar for `parallel`, so a line
+/// that runs it is unresolved ([`runner_mode`]).
 fn parallel_commands(args: &[String]) -> Vec<String> {
     let line = parallel_line(args);
     let rest = &args[line.template..];
@@ -8535,7 +8377,7 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
     let (at, operand, after) = env_split_at(tokens)?;
     // env reads `\_` in the string as a field separator, which the shell
-    // kept inside one word (TSK-242 review round 15).
+    // kept inside one word.
     let operand = operand.replace("\\_", " ");
     let rest = tokens.get(after..).unwrap_or_default();
     Some(format!(
@@ -12668,7 +12510,7 @@ fn unresolved_push(words: &[String]) -> Option<Violation> {
             "the command after `{}` is one the guard cannot resolve to its program, so it may push to branches agents never push",
             words[at]
         ),
-        "write each launcher with its documented options and an explicit command, so the guard reads the program it runs",
+        "run the inner command directly, one command per call, and write each launcher with its documented options, so the guard reads the program it runs",
     ))
 }
 
@@ -14835,7 +14677,7 @@ impl Walk {
                     walk.unresolved(
                         at,
                         format!(
-                            "`{}` running a command its words do not name to the guard",
+                            "`{}` in a form the guard keeps no grammar for, so the command it runs is not read",
                             tokens[at]
                         ),
                     );
@@ -14870,24 +14712,31 @@ impl Walk {
 
 /// How a command runner that is the program runs what it runs.
 enum RunnerMode {
-    /// Its command is named on the line and read by its own reader, or it
-    /// is no runner.
+    /// No runner, or one of the two daily forms the guard reads exactly
+    /// ([`xargs_literal`], [`find_literal`]), whose command is on the line.
     Named,
-    /// It runs a shell, or commands, read from its input: `su` and
-    /// `runuser` without a command option, `script` without one, and
-    /// `parallel` with neither a command nor inputs on the line.
+    /// A runner that runs a shell, or commands, read from its input: `su`
+    /// and `runuser` without a command option, `script` without one, and
+    /// `parallel` with neither a command nor inputs on the line. The walk
+    /// is unresolved, and the readers of a shell's input read that input.
     InputShell,
-    /// It runs a command its reader here does not name: `runuser` given a
-    /// user, which runs the words after its options; `parallel` with an
-    /// option it does not read, or with no template and inputs from a
-    /// file; and `parallel`, `xargs` or `find` whose program or shell
-    /// code comes from their inputs.
+    /// Any other form of a runner or command carrier: the guard keeps no
+    /// grammar for it, so the walk is unresolved and the line refuses.
     Unnamed,
 }
 
-/// The [`RunnerMode`] of the program `name` with `args`, by each runner's
-/// grammar (util-linux `su`, `runuser` and `script`, GNU parallel, GNU and
-/// BSD xargs and find).
+/// The command runners and carriers the guard keeps no grammar for: any
+/// spelling of these as the program is unresolved ([`runner_mode`]). A
+/// runner added to the inventory later belongs here until a closed grammar
+/// that reads it exactly is written for it.
+pub(crate) const UNREAD_RUNNERS: &[&str] = &[
+    "parallel", "watch", "flock", "script", "setsid", "unbuffer", "su", "runuser",
+];
+
+/// The [`RunnerMode`] of the program `name` with `args`. `xargs` and `find`
+/// keep a closed grammar for their daily forms; `fd` and `fdfind` with an
+/// exec option, and every runner of [`UNREAD_RUNNERS`], are unresolved
+/// whatever their options say.
 fn runner_mode(name: &str, args: &[String]) -> RunnerMode {
     let short = |a: &str, letter: char| {
         a.strip_prefix('-')
@@ -14900,163 +14749,111 @@ fn runner_mode(name: &str, args: &[String]) -> RunnerMode {
             || a == "--session-command"
             || a.starts_with("--session-command=")
     };
-    // Help or version only as the first word: elsewhere it may be another
-    // option's value.
-    let asks_help = args
-        .first()
-        .is_some_and(|a| matches!(a.as_str(), "--help" | "--version"));
-    match name {
-        "runuser" | "su" | "script" if asks_help => RunnerMode::Named,
-        "runuser"
-            if args
-                .iter()
-                .any(|a| short(a, 'u') || a == "--user" || a.starts_with("--user=")) =>
-        {
-            if args.iter().any(|a| command(a)) {
-                RunnerMode::Named
-            } else {
-                RunnerMode::Unnamed
-            }
+    let reads_input = match name {
+        "su" | "runuser" => !args.iter().any(|a| command(a)),
+        "script" => script_command(args).is_none(),
+        "parallel" => {
+            let line = parallel_line(args);
+            line.template == line.end && !line.files && !line.literal
         }
-        "su" | "runuser" if !args.iter().any(|a| command(a)) => RunnerMode::InputShell,
-        // util-linux `script -c CMD`, or BSD and macOS `script FILE CMD...`,
-        // which [`script_command`] reads; with neither it runs a shell.
-        "script" if script_command(args).is_none() => RunnerMode::InputShell,
-        "parallel" => parallel_mode(args),
-        "xargs" => xargs_mode(args),
-        "find" => find_mode(args),
+        _ => false,
+    };
+    match name {
+        _ if UNREAD_RUNNERS.contains(&name) && reads_input => RunnerMode::InputShell,
+        _ if UNREAD_RUNNERS.contains(&name) => RunnerMode::Unnamed,
+        "fd" | "fdfind" if args.iter().any(|a| fd_exec(a)) => RunnerMode::Unnamed,
+        "xargs" if !xargs_literal(args) => RunnerMode::Unnamed,
+        "find" if !find_literal(args) => RunnerMode::Unnamed,
         _ => RunnerMode::Named,
     }
 }
 
-/// [`RunnerMode`] of GNU `parallel` ([`parallel_line`]). With no template
-/// each input is a command: inputs on the line are read by
-/// [`parallel_commands`], inputs from its standard input run as a shell's
-/// commands, and inputs from a file are never read. With a template, the
-/// template's program must be on the line, and its shell code too when
-/// the inputs are not.
-fn parallel_mode(args: &[String]) -> RunnerMode {
-    let line = parallel_line(args);
-    if line.unread {
-        return RunnerMode::Unnamed;
+/// Whether `word` is an exec option of `fd`: `-x`, `-X`, `--exec`,
+/// `--exec-batch`, or a short cluster holding `x` or `X`. A cluster such
+/// as `-etxt` that only holds the letter in a value is read as one too,
+/// which refuses rather than guesses.
+fn fd_exec(word: &str) -> bool {
+    if let Some(long) = word.strip_prefix("--") {
+        let name = long.split_once('=').map_or(long, |(name, _)| name);
+        return name == "exec" || name == "exec-batch";
     }
-    let template = &args[line.template..line.end];
-    if template.is_empty() {
-        return if line.files {
-            RunnerMode::Unnamed
-        } else if line.literal {
-            RunnerMode::Named
-        } else {
-            RunnerMode::InputShell
-        };
-    }
-    let words = if line.quoted {
-        template.to_vec()
-    } else {
-        command_argv(&template.join(" "))
-    };
-    let unread_inputs = line.files || !line.literal;
-    // Every default replacement string opens with `{` (`{}`, `{.}`, `{1}`,
-    // `{= ... =}`); `-I` adds its own.
-    let mut replace = line.replace.clone();
-    replace.push("{".to_string());
-    if input_program(&words, &replace)
-        || (unread_inputs && input_shell_code(&words, &replace, false))
-    {
-        RunnerMode::Unnamed
-    } else {
-        RunnerMode::Named
-    }
+    word.strip_prefix('-')
+        .is_some_and(|cluster| cluster.contains(['x', 'X']))
 }
 
-/// [`RunnerMode`] of `xargs`: an option it does not read, or a command
-/// whose program or shell code comes from the inputs xargs adds to it.
-fn xargs_mode(args: &[String]) -> RunnerMode {
-    let Some(replace) = xargs_replace(args) else {
-        return RunnerMode::Unnamed;
-    };
-    let Some(command) = xargs_command(args) else {
-        // With no command xargs runs `echo`.
-        return RunnerMode::Named;
-    };
-    if input_program(command, &replace) || input_shell_code(command, &replace, true) {
-        RunnerMode::Unnamed
-    } else {
-        RunnerMode::Named
+/// The daily form of `xargs` the guard reads exactly: no option, or only
+/// `-0`, `-r` and `-n NUMBER` (`-nNUMBER`), then either no command (xargs
+/// runs `echo`) or a literal command ([`literal_command`]). Any other
+/// option, a replacement string (`-I`, `-J`, `-i`, `--replace`) included,
+/// is unresolved, and nothing xargs adds from its input is expanded.
+fn xargs_literal(args: &[String]) -> bool {
+    let number = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
+    let mut at = 0;
+    while let Some(word) = args.get(at).map(String::as_str) {
+        match word {
+            "-0" | "-r" => at += 1,
+            "-n" if args.get(at + 1).is_some_and(|n| number(n)) => at += 2,
+            _ if word.strip_prefix("-n").is_some_and(number) => at += 1,
+            _ if word.starts_with('-') => return false,
+            _ => break,
+        }
     }
+    let command = &args[at..];
+    command.is_empty() || literal_command(command)
 }
 
-/// [`RunnerMode`] of `find`: an `-exec`, `-execdir`, `-ok` or `-okdir`
-/// command whose program or shell code is a found path.
-fn find_mode(args: &[String]) -> RunnerMode {
-    let paths = ["{}".to_string()];
-    let unnamed = args
-        .iter()
-        .enumerate()
-        .filter(|(_, word)| matches!(word.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
-        .any(|(at, _)| {
-            let tail = &args[at + 1..];
-            let end = tail
-                .iter()
-                .position(|w| w == ";" || w == "+")
-                .unwrap_or(tail.len());
-            let words = &tail[..end];
-            !words.is_empty()
-                && (input_program(words, &paths) || input_shell_code(words, &paths, true))
-        });
-    if unnamed {
-        RunnerMode::Unnamed
-    } else {
-        RunnerMode::Named
+/// The daily form of `find` the guard reads exactly: each `-exec` or
+/// `-execdir` runs a literal command ([`literal_command`]) whose found-path
+/// operand is a whole `{}` word, ended by `;` or by `{} +`. An `-ok` or
+/// `-okdir`, an action with no terminator, or any other command is
+/// unresolved. A `find` with no action that runs a command is read as
+/// before.
+fn find_literal(args: &[String]) -> bool {
+    let mut at = 0;
+    while let Some(word) = args.get(at).map(String::as_str) {
+        at += 1;
+        match word {
+            "-ok" | "-okdir" => return false,
+            "-exec" | "-execdir" => {
+                let tail = &args[at..];
+                let Some(end) = tail.iter().position(|w| w == ";" || w == "+") else {
+                    return false;
+                };
+                let words = &tail[..end];
+                if tail[end] == "+" && words.last().is_none_or(|w| w != "{}") {
+                    return false;
+                }
+                // The command, without the found paths find puts in.
+                let named: Vec<String> = words.iter().filter(|w| *w != "{}").cloned().collect();
+                if !literal_command(&named) || words.iter().any(|w| w != "{}" && w.contains("{}")) {
+                    return false;
+                }
+                at += end + 1;
+            }
+            _ => {}
+        }
     }
+    true
 }
 
-/// Whether a runner's command `words` takes its program from the runner's
-/// inputs: the launcher grammar cannot resolve it, a launcher in it has no
-/// command of its own (the inputs are added after it), or the program word
-/// holds one of the runner's replacement strings.
-fn input_program(words: &[String], replace: &[String]) -> bool {
+/// Whether a runner's command `words` is literal: the launcher grammar
+/// resolves it to a program word on the line, with no `env -S` string, the
+/// program is no shell, no runner the guard keeps no grammar for, and holds
+/// no `{`. A split string alone never counts as a fixed program, and a
+/// nested shell is never read here.
+fn literal_command(words: &[String]) -> bool {
     if words.is_empty() {
         return false;
     }
     let walk = Walk::read(words);
-    if walk.unread.is_some() {
-        return true;
+    if walk.unread.is_some() || walk.split.is_some() {
+        return false;
     }
-    match walk.program {
-        None => walk.split.is_none(),
-        Some(at) => replace
-            .iter()
-            .any(|r| !r.is_empty() && words[at].contains(r.as_str())),
-    }
-}
-
-/// Whether a runner's command `words` runs a shell whose code comes from
-/// the runner's inputs: a code option with no code (the inputs are added
-/// after it), or code that holds a replacement string. `raw` runners
-/// (`xargs`, `find`) put an input into the code as written, so any
-/// replacement string in it counts; `parallel` quotes the input it puts
-/// in, so only code that is a replacement string alone counts.
-fn input_shell_code(words: &[String], replace: &[String], raw: bool) -> bool {
-    let Some(at) = Walk::read(words).program else {
+    let Some(at) = walk.program else {
         return false;
     };
-    if !is_shell(basename(&words[at])) {
-        return false;
-    }
-    match shell_code_option(&words[at + 1..]) {
-        (has, None) => has,
-        (_, Some(code)) if raw => replace
-            .iter()
-            .any(|r| !r.is_empty() && code.contains(r.as_str())),
-        (_, Some(code)) => {
-            let code = code.trim();
-            replace.iter().any(|r| r == code)
-                || (code.starts_with('{')
-                    && code.ends_with('}')
-                    && !code.contains(char::is_whitespace))
-        }
-    }
+    let program = &words[at];
+    !program.contains('{') && !is_shell(basename(program))
 }
 
 fn launch_walk_into(tokens: &[String], walk: &mut Walk) -> Option<usize> {
@@ -15195,7 +14992,7 @@ fn is_duration(word: &str) -> bool {
 }
 
 /// The effects of the launchers in front of a command that change how it
-/// runs (TSK-216 round 4), read from the one launcher walk
+/// runs, read from the one launcher walk
 /// ([`Walk::read`]): each directory `env -C DIR` or `env --chdir[=]DIR`
 /// moves to, in order, and why the walk is unresolved, or the first
 /// launcher that runs its command in a directory the guard does not follow
@@ -18813,17 +18610,21 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+        for cmd in ["find . -name '*.rs' -exec ls {} \\;"] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+        // The runners the guard keeps no grammar for refuse whatever they
+        // run (TSK-1490); the way through is the inner command run directly.
         for cmd in [
             "flock /tmp/l -c 'git status'",
             "script -q /dev/null git status",
-            "script -q /dev/null git -c color.ui=never log",
             "watch git status",
             "parallel echo ::: a b",
             "setsid git config --global user.name Test",
-            "find . -name '*.rs' -exec ls {} \\;",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
-            assert!(v.is_empty(), "{cmd}: {v:?}");
+            assert!(has_rule(&v, AGENT_PUSH_RULE), "{cmd}: {v:?}");
         }
         // `xargs` and `find -exec` hand over only git or a command string:
         // another program's arguments come from input the guard cannot see.
@@ -20227,7 +20028,7 @@ mod tests {
         let policy = default_policy();
         for command in [
             "printf 'README.md/n' | xargs sort".to_string(),
-            "printf 'README.md/n' | xargs -I{} uniq {}".into(),
+            "printf 'README.md/n' | xargs uniq".into(),
             "rm -f README.md/child".into(),
             format!("rm -f {refused}"),
             format!("rm -f {refused}/child"),
@@ -23226,6 +23027,10 @@ mod tests {
             "exec -X git commit -m x",
             "nice --adjust 5 man -P 'git commit -m x' ls",
             "tar -cf -- -C /scratch-main -I 'git commit -m x' input.txt",
+            "watch --inter 1 git commit -m x",
+            "flock --conflict 75 /tmp/lock git commit -m x",
+            "setsid -f git commit -m x",
+            "gh repo clone o/r --upstream-remote-name -- -- -u 'git commit -m x'",
         ] {
             // With hook integrity off the protected-branch rule refuses on
             // its own; with it on, the line refuses under either rule.
@@ -23248,7 +23053,6 @@ mod tests {
             "git commit -m x",
             "taskset -c 0 git commit -m x",
             "sudo -h",
-            "fd -x printf '%s\\n' --base-directory '$D'",
             "man -P cat ls",
             "sudo LC_ALL=C -n ls",
             "nice -n 5 sh -c 'git commit -m x'",

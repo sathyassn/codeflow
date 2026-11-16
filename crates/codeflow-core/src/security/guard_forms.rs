@@ -2052,7 +2052,6 @@ pub const OPTION_CONTROLS: &[(&str, &str)] = &[
     ("man -P cat ls", "man ls"),
     ("ack --pager='less -R' needle", "ack needle"),
     ("rg --pre pdftotext needle notes", "rg needle notes"),
-    ("fd -x wc -l", "fd"),
     ("sort -S 1G f", "sort f"),
     ("install --strip a b", "install a b"),
     ("zip -T a.zip", "zip a.zip"),
@@ -2092,8 +2091,6 @@ pub const OPTION_CONTROLS: &[(&str, &str)] = &[
     ("npm -w app install", "npm install"),
     ("tar -C /tmp -xf x.tar", "tar -xf x.tar"),
     ("fd -C /tmp -e rs", "fd -e rs"),
-    ("fd -x printf '%s\\n' --base-directory '$D'", "fd"),
-    ("fd -x echo -C '$D' ';' -e rs", "fd -e rs"),
     ("find . -execdir wc -l {} ';'", "find . -exec wc -l {} ';'"),
     (
         "cargo --config 'env.APP_MODE=\"$(git config core.hooksPath /tmp/h)\"' build",
@@ -2129,8 +2126,10 @@ pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
 /// (TSK-1490): each modelled launcher with its documented options, a
 /// privilege launcher's name given only as another launcher's option
 /// value, a split string behind a modelled launcher, a privilege
-/// launcher's verb that runs no command, a carrier's real `--`, and command
-/// runners whose program is named on the line.
+/// launcher's verb that runs no command, a carrier's real `--`, and the
+/// daily `xargs` and `find -exec` forms whose closed grammar the guard
+/// keeps. Every other command runner is refused in any form
+/// (`runners_without_a_grammar_refuse_in_any_spelling`).
 pub const LAUNCHER_ORDINARY: &[&str] = &[
     "nice -n 5 git status",
     "timeout 5 git status",
@@ -2149,8 +2148,6 @@ pub const LAUNCHER_ORDINARY: &[&str] = &[
     "exec -a pkexec git status",
     "taskset -c 0 cargo build",
     "printf 'git status' | sh",
-    "script -q -c 'git status' /dev/null",
-    "parallel echo ::: a b",
     "nice --adjustment 5 git status",
     "nice -10 git status",
     "timeout --signal KILL 5 git status",
@@ -2162,13 +2159,15 @@ pub const LAUNCHER_ORDINARY: &[&str] = &[
     "xcrun --sdk macosx git status",
     "tar -czf a.tar notes.txt",
     "tar -cf a.tar -- notes.txt",
-    "parallel -j2 gzip ::: a b",
-    "parallel -- echo ::: a b",
-    "parallel gzip {} :::: files.txt",
     "xargs wc -l <<< a",
-    "xargs -I{} wc -l {} <<< a",
     "find . -name x -exec grep -l y {} +",
-    "find . -name x -exec sh -c 'wc -l \"$1\"' _ {} ';'",
+    "xargs <<< a",
+    "xargs -0 wc -l <<< a",
+    "xargs -r wc -l <<< a",
+    "xargs -n 1 wc -l <<< a",
+    "xargs -n2 nice -n 5 wc -l <<< a",
+    "find . -name x -exec wc -l {} ';'",
+    "find . -name x -print",
 ];
 
 /// A carried command the program runs in a directory the guard cannot

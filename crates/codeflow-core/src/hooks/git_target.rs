@@ -432,26 +432,16 @@ pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, S
     let name = launcher_name(&tokens[program]);
     // A word of the closed list the walk did not read as a launcher (a
     // path spelling of a shell modifier, or `busybox` with an applet that
-    // runs no other program) leaves the environment unread.
+    // runs no other program) leaves the environment unread. `setsid` and
+    // `unbuffer` never reach here: the walk keeps no grammar for them, so
+    // it is unresolved above.
     if crate::security::launchers::LAUNCHERS.contains(&name)
-        && !matches!(name, "setsid" | "unbuffer")
         && walk.launchers.last() != Some(&program)
     {
         return Err(format!(
             "the launcher `{}`, whose environment for the command the guard does not read",
             tokens[program]
         ));
-    }
-    // `setsid` and `unbuffer` take only options without a value, then run
-    // the words after them, which may hold further launchers.
-    if matches!(name, "setsid" | "unbuffer") {
-        let mut next = program + 1;
-        while tokens.get(next).is_some_and(|a| a.starts_with('-')) {
-            next += 1;
-        }
-        if next < tokens.len() {
-            env.extend(launcher_env(&tokens[next..])?);
-        }
     }
     Ok(env)
 }
