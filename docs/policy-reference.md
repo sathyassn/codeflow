@@ -1898,17 +1898,13 @@ checked, so a symlink does not remove the target owner's protection.
   hooks, regardless of the config file or scope. Reads and command-local
   `git -c` settings keep their existing checks.
   Expanded config keys that cannot be proven literal refuse; explicit
-  config reads can still use regular expressions. Git commands fed by
-  xargs refuse when the subcommand is absent or guarded, because their
-  complete operands are unknown. Exec-guard refuses `xargs git status`
-  too, since every `status` operand is judged and these arrive at run
-  time; `xargs git ls-files` remains available. Exec-guard additionally refuses an unverified filename stream to a file
-  reader, including `git add` and `git grep`; literal ordinary input such as
-  `echo README.md | xargs git add` remains available. Git-guard's
-  `xargs git grep pattern` check keeps the pattern as data:
-  Git stops reading options at that first operand. With only `-e pattern`,
-  add `--` before stdin supplies filenames, or stdin could supply a pager
-  option. Replacement placeholders remain unread. Quoted search patterns
+  config reads can still use regular expressions. A Git command fed by
+  `xargs`, in the daily form or any other, is unresolved in both guards,
+  because `xargs` adds the words it reads from its input to the command,
+  so the guards cannot read every word Git runs. That holds for
+  every subcommand and every input, literal input included. The way
+  through is the Git command written directly, with its paths on the
+  line. Quoted search patterns
   stay data. The arch launcher and Git command runners
   receive the same checks as their command payloads. A shared catalog
   covers command-valued options, effective configuration and environment,

@@ -12510,7 +12510,7 @@ fn unresolved_push(words: &[String]) -> Option<Violation> {
             "the command after `{}` is one the guard cannot resolve to its program, so it may push to branches agents never push",
             words[at]
         ),
-        "run the inner command directly, one command per call, and write each launcher with its documented options, so the guard reads the program it runs",
+        "run the inner command directly, one command per call, such as a Git command written with its paths on the line instead of fed by `xargs` or `find`, and write each launcher with its documented options, so the guard reads the program it runs; `xargs` and `find` still run a program whose words the guards do not read for a command, such as `wc` or `grep`",
     ))
 }
 
