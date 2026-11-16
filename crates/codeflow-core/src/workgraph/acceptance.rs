@@ -682,9 +682,21 @@ pub(crate) fn bind_completion_with_amendment(
     let mut proof = None;
     let mut findings = Vec::new();
     findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
-    if let Some((_, old)) = &reopen {
+    if let Some((at, old)) = &reopen {
+        // A completion recovered from this range's history is judged as
+        // `archive_problem` judges the archive: every completion the history
+        // made before it, an acceptance block edited in place included, is
+        // archived ahead of it.
+        let earlier = if recovered {
+            match unarchived_completions(repo, task, anchor, *at, old) {
+                Ok(earlier) => earlier,
+                Err(error) => return vec![finding(BINDING_RULE, error)].into(),
+            }
+        } else {
+            Vec::new()
+        };
         findings.extend(
-            super::lifecycle::reopen_problems(Some(old), task)
+            super::lifecycle::reopen_problems_after(Some(old), &earlier, task)
                 .into_iter()
                 .map(|message| finding(BINDING_RULE, format!("{}: {message}", task.id))),
         );
@@ -943,6 +955,52 @@ fn archive_problem(
         )));
     }
     Ok(None)
+}
+
+/// The completions this range's history made before the completion `old`
+/// holds at `at` that `old`'s archive does not hold, oldest first, read by
+/// the one rule [`archive_problem`] judges the archive with
+/// ([`completions_made`]). An acceptance block edited in place while
+/// complete is a completion of its own (SPC-013 R-119, each completion an
+/// occurrence; `docs/coordination-ledger.md`, a record that "changes its
+/// acceptance block while complete"), and the edit archives nothing, so a
+/// reopen of `old` archives those completions before `old`'s active block.
+/// Empty when the history does not end in `old`'s active block, or when
+/// `old`'s archive already holds every earlier completion; the plain reopen
+/// rule then applies and `archive_problem` names any other disagreement.
+fn unarchived_completions(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Option<Oid>,
+    at: Oid,
+    old: &RecordView,
+) -> Result<Vec<AcceptanceBlock>, String> {
+    let Some(active) = active_block(old) else {
+        return Ok(Vec::new());
+    };
+    let mut made: Vec<AcceptanceBlock> = completions_made(repo, task, anchor, Landing::Commit(at))?
+        .into_iter()
+        .map(|made| made.block)
+        .collect();
+    if made.pop().as_ref() != Some(&active) {
+        return Ok(Vec::new());
+    }
+    let mut held = Vec::new();
+    for block in old.superseded_blocks() {
+        let Ok(mut parsed) = block.parsed else {
+            return Ok(Vec::new());
+        };
+        parsed.superseded = false;
+        parsed.reason = None;
+        held.push(parsed);
+    }
+    // The archive ends with the completions it already holds; the rest of
+    // the history's list follows them.
+    let kept = (0..=made.len().min(held.len()))
+        .rev()
+        .find(|&count| held[held.len() - count..] == made[..count])
+        .unwrap_or(0);
+    Ok(made.split_off(kept))
 }
 
 /// One completion the range's history made: the commit that introduced
