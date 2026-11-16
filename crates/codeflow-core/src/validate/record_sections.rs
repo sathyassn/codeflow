@@ -3,7 +3,7 @@
 //!
 //! A project lists them in `.codeflow/policy.json` as
 //! `git.task_required_sections`, `git.epic_required_sections` and
-//! `git.spec_required_sections`. CodeFlow's own required sections
+//! `git.spec_required_sections`. `CodeFlow`'s own required sections
 //! ([`super::ValidateOptions`]) are checked as before and stay required
 //! whatever the project lists.
 //!
@@ -17,6 +17,7 @@
 //! changed since the trusted commit, and warned about when its bytes equal
 //! its copy there, so a newly listed section never fails a record nobody
 //! touched.
+use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::hooks::{GitPolicy, Policy};
@@ -32,7 +33,8 @@ pub struct ProjectSections {
 }
 
 impl ProjectSections {
-    /// The lists one policy declares, each name trimmed; names that could
+    /// The lists one policy declares, each name stripped of the spaces and
+    /// tabs `CommonMark` strips from a heading's text; names that could
     /// never be a heading are dropped here because the schema already
     /// refuses them ([`is_valid_name`]).
     #[must_use]
@@ -40,7 +42,7 @@ impl ProjectSections {
         let clean = |names: &[String]| {
             let mut kept = Vec::new();
             for name in names.iter().filter(|name| is_valid_name(name)) {
-                let name = name.trim().to_string();
+                let name = name.trim_matches([' ', '\t']).to_string();
                 if !kept.contains(&name) {
                     kept.push(name);
                 }
@@ -122,7 +124,7 @@ pub struct Required {
 }
 
 impl Required {
-    /// No project sections: the run judges CodeFlow's own sections only.
+    /// No project sections: the run judges `CodeFlow`'s own sections only.
     #[must_use]
     pub fn none() -> Self {
         Self::default()
@@ -182,7 +184,7 @@ impl Required {
         required
     }
 
-    /// The names `body` lacks for `kind`, leaving out any CodeFlow already
+    /// The names `body` lacks for `kind`, leaving out any `CodeFlow` already
     /// requires (`own`, written `## <name>`).
     #[must_use]
     pub fn missing(&self, kind: RecordKind, own: &[String], body: &str) -> Vec<String> {
@@ -190,7 +192,10 @@ impl Required {
         self.sections
             .for_kind(kind)
             .iter()
-            .filter(|name| !own.iter().any(|own| own.trim() == format!("## {name}")))
+            .filter(|name| {
+                !own.iter()
+                    .any(|own| own.trim_matches([' ', '\t']) == format!("## {name}"))
+            })
             .filter(|name| !headings.iter().any(|heading| heading == *name))
             .cloned()
             .collect()
@@ -249,12 +254,13 @@ pub fn with_sections(template: &str, kind: RecordKind, required: &Required) -> S
         return template.to_string();
     }
     let key = key(kind);
-    let added: String = missing
-        .iter()
-        .map(|name| {
-            format!("## {name}\n\n<!-- Required by the project's policy (`{key}`). -->\n\n")
-        })
-        .collect();
+    let mut added = String::new();
+    for name in &missing {
+        let _ = write!(
+            added,
+            "## {name}\n\n<!-- Required by the project's policy (`{key}`). -->\n\n"
+        );
+    }
     if let Some((_, offset)) = headings(template)
         .into_iter()
         .find(|(name, _)| name == "Closeout")
@@ -270,8 +276,9 @@ pub fn with_sections(template: &str, kind: RecordKind, required: &Required) -> S
     if !text.is_empty() && !text.ends_with("\n\n") {
         text.push('\n');
     }
-    text.push_str(added.trim_end());
-    text.push('\n');
+    // `added` ends each section with a blank line; the record ends with one
+    // newline after the last section.
+    text.push_str(added.strip_suffix('\n').unwrap_or(&added));
     text
 }
 
@@ -318,7 +325,7 @@ fn headings(body: &str) -> Vec<(String, usize)> {
             }
             Event::End(TagEnd::Heading(_)) if heading.is_some() => {
                 if let Some((name, offset)) = heading.take() {
-                    found.push((name.trim().to_string(), offset));
+                    found.push((name.trim_matches([' ', '\t']).to_string(), offset));
                 }
             }
             Event::Text(text) | Event::Code(text) if heading.is_some() => {

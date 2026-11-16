@@ -503,7 +503,7 @@ pub struct GitPolicy {
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
     /// Extra `##` sections every task record must carry, as heading names
-    /// without the leading `##` (TSK-1421). CodeFlow's own sections stay
+    /// without the leading `##` (TSK-1421). `CodeFlow`'s own sections stay
     /// required whatever this lists. Empty by default; the shipped policy
     /// file does not list it, so an older binary never meets the key. The
     /// lists are read from the trusted policy joined with the working copy's

@@ -127,19 +127,7 @@ pub fn validate_workgraph(
     let _merges = MergeSourcesScope::open();
     let mut report = WorkgraphValidationReport::default();
     let mut identities = HashMap::<String, String>::new();
-    if let Some(doubt) = required
-        .doubt
-        .as_deref()
-        .filter(|_| !required.sections.is_empty())
-    {
-        report.warnings.push(crate::remedy::Finding::new(
-            format!(
-                "required record sections were read from HEAD and the working copy: the landed policy could not be read ({})",
-                crate::git::display_message(doubt)
-            ),
-            crate::remedy::RECORD_SECTIONS_UNTRUSTED.remedy(),
-        ));
-    }
+    sections_doubt(required, &mut report);
 
     let record_sets = [
         (
@@ -223,6 +211,31 @@ pub fn validate_workgraph(
         }
     }
 
+    finish_workgraph(repo_root, &mut report);
+    report
+}
+
+/// The warning that the required record sections were read from `HEAD`
+/// because the landed policy could not be read, while any section is listed.
+fn sections_doubt(required: &record_sections::Required, report: &mut WorkgraphValidationReport) {
+    if let Some(doubt) = required
+        .doubt
+        .as_deref()
+        .filter(|_| !required.sections.is_empty())
+    {
+        report.warnings.push(crate::remedy::Finding::new(
+            format!(
+                "required record sections were read from HEAD and the working copy: the landed policy could not be read ({})",
+                crate::git::display_message(doubt)
+            ),
+            crate::remedy::RECORD_SECTIONS_UNTRUSTED.remedy(),
+        ));
+    }
+}
+
+/// Add the lifecycle and docs findings to `report`, then sort and dedup its
+/// issues and warnings.
+fn finish_workgraph(repo_root: &Path, report: &mut WorkgraphValidationReport) {
     let lifecycle = crate::workgraph::lifecycle::validate_lifecycle(repo_root);
     report.issues.extend(lifecycle.errors);
     report.warnings.extend(lifecycle.warnings);
@@ -237,7 +250,6 @@ pub fn validate_workgraph(
     report.issues.dedup();
     report.warnings.sort_by(crate::remedy::Finding::by_text);
     report.warnings.dedup();
-    report
 }
 
 fn supported_identity(

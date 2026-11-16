@@ -1616,6 +1616,36 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
     }
 }
 
+/// Validate a string-list leaf: an array of strings, and for a record
+/// section key, names that can be headings.
+fn validate_string_list(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    if !value
+        .as_array()
+        .is_some_and(|a| a.iter().all(Value::is_string))
+    {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an array of strings",
+        ));
+    } else if RECORD_SECTION_KEYS.contains(&path)
+        && !value.as_array().is_some_and(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .all(crate::validate::record_sections::is_valid_name)
+        })
+    {
+        // A blank, multi-line or `#`-led name could never match a
+        // heading line, so every record would fail on a typo.
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            RECORD_SECTIONS_VALID,
+        ));
+    }
+}
+
 /// Validate one leaf `path`/`value` pair against its [`KeySpec`]; a path the
 /// schema does not know is an unknown-key error.
 fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
@@ -1663,33 +1693,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                 ));
             }
         }
-        KeyKind::StringList => {
-            if !value
-                .as_array()
-                .is_some_and(|a| a.iter().all(Value::is_string))
-            {
-                errors.push(PolicyError::invalid_value(
-                    path,
-                    value,
-                    "an array of strings",
-                ));
-            } else if RECORD_SECTION_KEYS.contains(&path)
-                && !value.as_array().is_some_and(|names| {
-                    names
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .all(crate::validate::record_sections::is_valid_name)
-                })
-            {
-                // A blank, multi-line or `#`-led name could never match a
-                // heading line, so every record would fail on a typo.
-                errors.push(PolicyError::invalid_value(
-                    path,
-                    value,
-                    RECORD_SECTIONS_VALID,
-                ));
-            }
-        }
+        KeyKind::StringList => validate_string_list(path, value, errors),
         KeyKind::String => match value.as_str() {
             Some(s) => {
                 // The one string key is a regex; an unparseable pattern would

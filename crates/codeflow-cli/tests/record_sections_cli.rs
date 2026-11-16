@@ -357,7 +357,13 @@ fn the_new_verbs_name_an_unreadable_policy_and_write_nothing() {
         let out = codeflow(&root, args);
         let shown = text(&out);
         assert!(!out.status.success(), "{args:?}: {shown}");
-        assert!(shown.contains("cannot read policy"), "{args:?}: {shown}");
+        // The verb itself names the failure before it allocates an id; a
+        // refusal only from the registry ref's hook is not this check.
+        assert!(
+            shown.contains("error: cannot read policy: cannot parse policy"),
+            "{args:?}: {shown}"
+        );
+        assert!(!shown.contains("update-ref"), "{args:?}: {shown}");
         assert_eq!(records(&root), before, "{args:?}: {shown}");
     }
 }
@@ -422,13 +428,20 @@ fn the_pre_push_hook_refuses_through_codeflow_ci() {
     // range, so the branch that drops the section is refused before it
     // leaves. Pre-commit does not re-validate the graph (TSK-133).
     let (dir, root, base) = dropped_on_a_branch();
-    let bare = dir.path().join("destination.git");
+    let destination = dir.path().join("destination.git");
     git(
         &root,
-        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            destination.to_str().unwrap(),
+        ],
     );
     git(
-        &bare,
+        &destination,
         &[
             "fetch",
             "-q",
@@ -439,12 +452,17 @@ fn the_pre_push_hook_refuses_through_codeflow_ci() {
     );
     git(
         &root,
-        &["remote", "add", "upstream", bare.to_str().unwrap()],
+        &["remote", "add", "upstream", destination.to_str().unwrap()],
     );
     git(&root, &["fetch", "-q", "upstream"]);
     let head = git(&root, &["rev-parse", "HEAD"]);
     let mut child = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
-        .args(["git-hook", "pre-push", "upstream", bare.to_str().unwrap()])
+        .args([
+            "git-hook",
+            "pre-push",
+            "upstream",
+            destination.to_str().unwrap(),
+        ])
         .current_dir(&root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
