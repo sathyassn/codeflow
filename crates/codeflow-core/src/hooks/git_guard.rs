@@ -13228,14 +13228,13 @@ fn agent_push_segment(segment: &str) -> bool {
 fn unresolved_push(words: &[String]) -> Option<Violation> {
     let walk = Walk::read(words);
     if let (None, Some(at)) = (walk.unread, walk.option_program) {
-        let program = walk.program.map_or("", |p| words[p].as_str());
         return Some(Violation::always_blocking(
             AGENT_PUSH_RULE,
             format!(
-                "`{}` runs `{program}`, an option-shaped word, as its program, so the guard does not admit it",
+                "`{}` runs an option-shaped word as a program, which the guard does not admit",
                 words[at]
             ),
-            "write the program the launcher runs as a word that does not start with `-`, so the guard reads the command it runs",
+            "write the program the launcher or runner runs as a word that does not start with `-`, so the guard reads the command it runs",
         ));
     }
     let at = walk.unread?;
@@ -15590,7 +15589,10 @@ pub(crate) struct Walk {
     /// that word, `env X=1 -p` runs `-p`. The program is read exactly, so
     /// the walk is not a guess, but the agent push rule refuses the line in
     /// both guards ([`unresolved_push`]) rather than admit a program the
-    /// guard would read as an option anywhere else (TSK-1490).
+    /// guard would read as an option anywhere else (TSK-1490). A runner
+    /// read in its daily form (`xargs`, `find -exec`) whose command runs
+    /// such a word is recorded here too, with the runner's index
+    /// ([`runs_option_program`]), and stays read, never a guess.
     pub option_program: Option<usize>,
 }
 
@@ -15618,7 +15620,13 @@ impl Walk {
         // a command its grammar here does not name, is unresolved too.
         if let Some(at) = walk.program.filter(|_| !walk.implicit_shell) {
             match runner_mode(launcher_name(&tokens[at]), &tokens[at + 1..]) {
-                RunnerMode::Named => {}
+                // A runner's own command is read exactly; one that runs an
+                // option-shaped program is refused as the launcher's is.
+                RunnerMode::Named => {
+                    if runs_option_program(launcher_name(&tokens[at]), &tokens[at + 1..]) {
+                        walk.option_program = Some(at);
+                    }
+                }
                 RunnerMode::InputShell => {
                     walk.visit(at, tokens.len());
                     walk.unresolved(
@@ -15748,6 +15756,16 @@ fn fd_exec(word: &str) -> bool {
 /// the guards read is unresolved here. Any other option, a replacement
 /// string (`-I`, `-J`, `-i`, `--replace`) included, is unresolved too.
 fn xargs_literal(args: &[String]) -> bool {
+    let Some(at) = xargs_command_at(args) else {
+        return false;
+    };
+    let command = &args[at..];
+    command.is_empty() || (literal_command(command) && !reads_command_words(command))
+}
+
+/// Where the command of the daily form of `xargs` starts, after `-0`, `-r`
+/// and `-n NUMBER`; `None` after any other option ([`xargs_literal`]).
+fn xargs_command_at(args: &[String]) -> Option<usize> {
     let number = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
     let mut at = 0;
     while let Some(word) = args.get(at).map(String::as_str) {
@@ -15755,12 +15773,47 @@ fn xargs_literal(args: &[String]) -> bool {
             "-0" | "-r" => at += 1,
             "-n" if args.get(at + 1).is_some_and(|n| number(n)) => at += 2,
             _ if word.strip_prefix("-n").is_some_and(number) => at += 1,
-            _ if word.starts_with('-') => return false,
+            _ if word.starts_with('-') => return None,
             _ => break,
         }
     }
-    let command = &args[at..];
-    command.is_empty() || (literal_command(command) && !reads_command_words(command))
+    Some(at)
+}
+
+/// Whether a runner read in its daily form ([`RunnerMode::Named`]) runs a
+/// command whose program word is option-shaped: the command's first word,
+/// or the program a launcher in it runs ([`Walk::option_program`]). `xargs`
+/// and `find -exec` exec that word with no shell, as a launcher does, so
+/// the line is refused as for a launcher, with the command still read
+/// exactly (TSK-1490).
+fn runs_option_program(name: &str, args: &[String]) -> bool {
+    let shaped = |words: &[String]| {
+        words.first().is_some_and(|w| w.starts_with('-'))
+            || Walk::read(words).option_program.is_some()
+    };
+    match name {
+        "xargs" => xargs_command_at(args).is_some_and(|at| shaped(&args[at..])),
+        "find" => {
+            let mut at = 0;
+            while let Some(word) = args.get(at).map(String::as_str) {
+                at += 1;
+                if word != "-exec" && word != "-execdir" {
+                    continue;
+                }
+                let tail = &args[at..];
+                let end = tail
+                    .iter()
+                    .position(|w| w == ";" || w == "+")
+                    .unwrap_or(tail.len());
+                if shaped(&tail[..end]) {
+                    return true;
+                }
+                at += end + 1;
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 /// The daily form of `find` the guard reads exactly: each `-exec` or
@@ -15815,7 +15868,7 @@ fn literal_command(words: &[String]) -> bool {
         return false;
     }
     let walk = Walk::read(words);
-    if walk.unread.is_some() || walk.split.is_some() || walk.option_program.is_some() {
+    if walk.unread.is_some() || walk.split.is_some() {
         return false;
     }
     let Some(at) = walk.program else {
@@ -24721,6 +24774,67 @@ mod tests {
             let v = evaluate(line, &ctx(&relaxed, "feat/x"));
             if !v.is_empty() {
                 failed.push(format!("control refused: {line}: {v:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    // TSK-1490: `xargs` and `find -exec` exec their command with no shell,
+    // as a launcher does. A command whose program is option-shaped, as its
+    // first word or behind a launcher in it, is refused with hook
+    // integrity off, and the runner's walk stays read, never a guess, so a
+    // reader of the exact program still reads it. A runner command with an
+    // ordinary program keeps its verdict.
+    #[test]
+    fn a_runner_running_an_option_shaped_program_is_refused() {
+        let relaxed = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_string).collect() };
+        let mut failed = Vec::new();
+        for (line, shell) in [
+            (
+                "find . -exec env X=/bin/claude -p hello {} ;",
+                "find . -exec env X=/bin/claude -p hello '{}' \\;",
+            ),
+            (
+                "find . -execdir nice -- -p {} +",
+                "find . -execdir nice -- -p {} +",
+            ),
+            ("find . -exec -p {} +", "find . -exec -p {} +"),
+            ("xargs env X=1 -p", "xargs env X=1 -p"),
+            ("xargs -0 nice -- -p", "xargs -0 nice -- -p"),
+            ("xargs -p", "xargs -p"),
+            (
+                "sudo find . -exec env X=1 -p {} ;",
+                "sudo find . -exec env X=1 -p {} \\;",
+            ),
+        ] {
+            let walk = Walk::read(&words(line));
+            // `xargs -p` is xargs' own prompt option, outside its daily
+            // form: unread, as before.
+            if line != "xargs -p" && (walk.unread.is_some() || walk.option_program.is_none()) {
+                failed.push(format!("walk: {line}: {walk:?}"));
+            }
+            let v = evaluate(shell, &ctx(&relaxed, "feat/x"));
+            if !has_rule(&v, AGENT_PUSH_RULE) {
+                failed.push(format!("not refused: {shell}: {v:?}"));
+            }
+        }
+        for line in [
+            "find . -exec env X=1 ls {} ;",
+            "xargs env X=1 wc -l",
+            "find . -name x -exec nice -n 5 ls {} +",
+        ] {
+            let walk = Walk::read(&words(line));
+            if walk.unread.is_some() || walk.option_program.is_some() {
+                failed.push(format!("control walk: {line}: {walk:?}"));
             }
         }
         assert!(

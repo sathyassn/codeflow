@@ -1175,6 +1175,9 @@ mod tests {
             "nohup -p",
             "timeout 5 -p",
             "sudo -- -p",
+            "find . -exec env X=/bin/claude -p hello '{}' \\;",
+            "find . -exec -p {} +",
+            "xargs env X=1 -p",
         ] {
             let found = evaluate_ruled(
                 command,

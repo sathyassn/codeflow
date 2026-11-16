@@ -1184,4 +1184,20 @@ mod tests {
             assert_eq!(headless_peer_run(line), None, "{line}");
         }
     }
+
+    /// TSK-1490: a runner whose command runs an option-shaped program is
+    /// refused by the guards, and its command is still read exactly, so
+    /// the headless check sees the program env runs (`-p`), never a guess:
+    /// no peer run, as for the same command run directly.
+    #[test]
+    fn a_runner_running_an_option_shaped_program_runs_no_peer() {
+        for line in [
+            "find . -exec env X=/bin/claude -p hello '{}' \\;",
+            "find . -execdir env X=/bin/claude -p hello {} +",
+            "xargs env X=/bin/claude -p hello",
+            "xargs -0 env X=/bin/claude -p hello",
+        ] {
+            assert_eq!(headless_peer_run(line), None, "{line}");
+        }
+    }
 }
