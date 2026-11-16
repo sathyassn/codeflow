@@ -15495,6 +15495,7 @@ const SUDO_GRAMMAR: LaunchGrammar = LaunchGrammar {
 /// The grammar of the prefix launchers ([`PREFIX_LAUNCHERS`]), from the
 /// bash builtins, GNU coreutils, GNU time, util-linux `ionice` and the
 /// macOS manuals.
+#[allow(clippy::too_many_lines)] // One arm per prefix launcher, each from its own manual.
 fn prefix_grammar(name: &str) -> LaunchGrammar {
     match name {
         "command" => LaunchGrammar {
@@ -18677,10 +18678,9 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
-        for cmd in ["find . -name '*.rs' -exec ls {} \\;"] {
-            let v = evaluate(cmd, &ctx(&p, "feat/x"));
-            assert!(v.is_empty(), "{cmd}: {v:?}");
-        }
+        let cmd = "find . -name '*.rs' -exec ls {} \\;";
+        let v = evaluate(cmd, &ctx(&p, "feat/x"));
+        assert!(v.is_empty(), "{cmd}: {v:?}");
         // The runners the guard keeps no grammar for refuse whatever they
         // run (TSK-1490); the way through is the inner command run directly.
         for cmd in [

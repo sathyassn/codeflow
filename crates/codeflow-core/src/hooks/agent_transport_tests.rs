@@ -1440,6 +1440,7 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
 /// and off, so a privilege refusal is never what stops the push; git-guard
 /// has no privilege rule.
 #[test]
+#[allow(clippy::too_many_lines)] // One table of launched and carried push forms.
 fn launched_or_carried_line_pushes_still_refuse() {
     if !isolated("launched_or_carried_line_pushes_still_refuse") {
         return;
