@@ -5028,6 +5028,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         11,
         "display",
     ),
+    // Drops the line ending YAML adds when a refused `main_landing` value is rendered for the refusal message; the value is only shown, and the marker is judged on the parsed value.
+    (
+        "crates/codeflow-core/src/workgraph/acceptance/landed_review.rs",
+        "marked",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    // Removes ASCII spaces, tabs and quotes around the reviewer a review field names in prose; the text only selects lineage words and is shown in a refusal, never used as an identity.
+    (
+        "crates/codeflow-core/src/workgraph/acceptance/landed_review.rs",
+        "reviewer",
+        "trim_matches",
+        1,
+        "prose",
+    ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
     (
         "crates/codeflow-core/src/workgraph/allocate.rs",
@@ -6502,6 +6518,71 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "completion_bound",
         "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1479: the agent fetch and push admission. Each read below returns
+    // None from repository_allows, so admits is false and exec-guard keeps
+    // the account finding on the helper body, which refuses the line: a
+    // configuration value, URL, mapping, helper key or Git output that is
+    // not UTF-8, a configuration read that fails, and a HEAD that cannot be
+    // read never admit a fetch or push.
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "config_allows",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "current_branch",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "effective_helpers",
+        "obtain-absent:from_utf8",
+        2,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "repository_allows",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "repository_allows",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "source_allowed",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "unrewritten",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // TSK-1479: git2's NotFound for refs/tags/<name> is the ref store's own
+    // answer that no such tag exists, so the name is not shared with a tag;
+    // every other error returns None and withholds the admission.
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "tag_exists",
+        "obtain-absent:find_reference",
         1,
         "unproven",
     ),

@@ -1,14 +1,19 @@
 //! Source attribution for unchanged records imported by an ordinary merge.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::mains_bytes::MainsBytes;
 use super::{
     active_block, bind_completion_with_amendment, bind_epic_completion, commit_of,
     default_target_name, first_parent, history, introduced_at, is_ancestor_or_same,
     is_clean_remerge, own_file_name, owned_paths, presence_at, record_at, record_uid,
-    source_landing_base, CompletionProof, Finding, Graph, Landing, Oid, Presence, RecordKind,
-    RecordView, Repository, RunBases, Transport,
+    source_landing_base, CompletionProof, Graph, Landing, Oid, Presence, RecordKind, RecordView,
+    Repository, RunBases, Transport,
 };
+use crate::workgraph::classify::AmendmentPath;
+
+mod home;
+pub use home::HomeAnchor;
+use home::{MOVED, NO_SOURCE};
 
 /// A record whose exact contents arrived from a verified home landing.
 #[derive(Debug, Clone)]
@@ -21,7 +26,28 @@ pub struct ImportedRecord {
     pub landing: Oid,
     /// The binding of a completed task; absent for other record states.
     pub completion: Option<CompletionProof>,
+    /// The receiving line's own adoption that the walk of this task's home
+    /// moves started from (TSK-1378 AC-13); absent when it started at the
+    /// merge base of the line and the default branch.
+    pub home_anchor: Option<HomeAnchor>,
 }
+
+/// The path classes a planning landing may carry when it moves a task's
+/// home (TSK-1378 AC-11): records and plans only, until the operator
+/// decides otherwise. The line's own planning move and the walk of the
+/// default branch's moves use it; a line's adoption anchor and a shared
+/// planning introduction always admit records only.
+pub const PLANNING_LANDING_PATHS: &[AmendmentPath] = &[AmendmentPath::Record];
+
+/// Why the import check refuses, before it can name each record.
+const UNENUMERATED: &str = "the imported records could not be enumerated, so this refusal may not name every refused record";
+
+/// The routes that clear a refused home move or arrival (TSK-1378 AC-9).
+fn home_repair(default: &str) -> String {
+    format!("move the home through the receiving line's own reviewed planning merge where the task's state permits it, or reopen, replan or correct the source record through its pull request; a later change to the record on `{default}` does not clear the move")
+}
+
+const SOURCE_REPAIR: &str = "fetch the home and repair or reopen the work there through its task pull request, then merge the reviewed result";
 
 type Imports = BTreeMap<String, ImportedRecord>;
 // The outer history judgment and an object fetch clear this cache. A graph's
@@ -109,6 +135,7 @@ fn take_mains_bytes(
                 ),
                 landing: mains.tip,
                 completion: None,
+                home_anchor: None,
             },
         );
         false
@@ -116,28 +143,7 @@ fn take_mains_bytes(
     imported
 }
 
-/// [`refuse_unpublished`] for each changed record homed on the default
-/// branch or an integration line.
-fn refuse_unpublished_homes(
-    repo: &Repository,
-    changed: &[&RecordView],
-    default: &str,
-    default_tip: Oid,
-    (anchor, head): (Oid, Oid),
-) -> Result<(), String> {
-    for record in changed {
-        let home = record
-            .integration_target
-            .as_deref()
-            .map_or(default, super::super::work_start::logical_target);
-        if home == default || home.starts_with("integration/") {
-            refuse_unpublished(repo, record, home, default_tip, anchor, head)?;
-        }
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_lines)] // Resolve homes, then prove and list every record in one judged range.
+#[allow(clippy::too_many_lines)] // Keep enumeration, home and record refusals in one judgment order.
 fn compute_imports(
     repo: &Repository,
     base: Oid,
@@ -150,25 +156,62 @@ fn compute_imports(
     // A target may independently have synced the same source after the
     // receiver forked. Search imports since the shared anchor, while the
     // actual target base still judges competing criteria below.
-    let anchor = history::merge_base(repo, base, head).map_err(|error| error.to_string())?;
-    let mut changed = merged_records(repo, anchor, head, graph)?;
-    if changed.is_empty() {
-        return Ok(BTreeMap::new());
-    }
+    let unenumerated = |error: String| format!("{UNENUMERATED}: {error}");
+    let anchor =
+        history::merge_base(repo, base, head).map_err(|error| unenumerated(error.to_string()))?;
+    let merged = merged_records(repo, anchor, head, graph).map_err(unenumerated)?;
+    let mut changed = merged.clone();
     let trusted = mains.map(|mains| mains.tip);
     let mut imported = match mains {
         Some(mains) => take_mains_bytes(repo, mains, (base, head), graph, &mut changed),
         None => BTreeMap::new(),
     };
-    if changed.is_empty() {
-        return Ok(imported);
-    }
     let root = repo.workdir().unwrap_or_else(|| repo.path());
-    let default = default_target_name(repo)?;
-    let default_tip =
-        home_tip(repo, &default.name)?.ok_or_else(|| unavailable_home(&default.name))?;
-    refuse_unpublished_homes(repo, &changed, &default.name, default_tip, (anchor, head))?;
+    // A range that changes no record by a merge reads the default target
+    // only to judge the records it leaves unchanged; without one, nothing
+    // is imported from it.
+    let default = match default_target_name(repo) {
+        Ok(default) => default,
+        Err(_) if changed.is_empty() => return Ok(imported),
+        Err(error) => return Err(unenumerated(error)),
+    };
+    let default_tip = match home_tip(repo, &default.name) {
+        Ok(Some(tip)) => tip,
+        Ok(None) | Err(_) if changed.is_empty() => return Ok(imported),
+        Ok(None) => return Err(unenumerated(unavailable_home(&default.name))),
+        Err(error) => return Err(unenumerated(error)),
+    };
+    let syncs = home::takes_default(repo, anchor, head, default_tip).map_err(unenumerated)?;
+    // Each refusal names its record; the check never stops at the first.
+    let mut refusals = Vec::new();
+    let refuse = |id: &str, place: &str, reason: &str| refusal(&default.name, id, place, reason);
+    if syncs {
+        refusals.extend(unchanged_refusals(
+            repo,
+            graph,
+            &merged,
+            &default.name,
+            default_tip,
+            anchor,
+            head,
+        ));
+    }
+    if changed.is_empty() {
+        return finish(imported, &refusals);
+    }
+    for record in &changed {
+        let home = record.integration_target.as_deref().map_or(
+            default.name.as_str(),
+            super::super::work_start::logical_target,
+        );
+        if home == default.name || home.starts_with("integration/") {
+            if let Err(reason) = refuse_unpublished(repo, record, home, default_tip, anchor, head) {
+                refusals.push(reason);
+            }
+        }
+    }
     let mut homes = BTreeMap::from([(default.name.clone(), default_tip)]);
+    let mut unverified: BTreeMap<String, String> = BTreeMap::new();
     let mut retired = BTreeMap::new();
     for record in &changed {
         let Some(home) = record.integration_target.as_deref() else {
@@ -178,52 +221,63 @@ fn compute_imports(
         if homes.contains_key(home) || !home.starts_with("integration/") {
             continue;
         }
-        let Some(tip) = home_tip(repo, home)? else {
-            // A retired line's exact record can still be proved at its
-            // published default-target landing. The proof below judges the
-            // landing merge and the source span, not record equality alone.
-            if let Some(landing) = matching_landing(repo, record, default_tip, head, Some(anchor))?
-            {
-                retired.insert(record.id.clone(), landing);
-                continue;
-            }
-            // Unpublished local landings were refused above. A remaining
-            // local branch supplies no import authority (for example a first
-            // push of this very line, or a shared planning merge).
-            if reference_tip(repo, &format!("refs/heads/{home}"))?.is_some() {
-                continue;
-            }
-            return Err(format!("{}: blocks come from target history, but home `{home}` is unavailable and no exact record landing is proven on published default `{}`; fetch the home or default target and its full history, then rerun the range", record.id, default.name));
-        };
-        if is_ancestor_or_same(repo, tip, anchor)? || on_home_chain(repo, head, tip)? {
+        // One unverified home names every record that uses it.
+        if let Some(reason) = unverified.get(home) {
+            refusals.push(format!("{}: blocks come from target history on unverified home `{home}`: {reason}; repair the home through its classified pull requests, then merge its reviewed result", record.id));
             continue;
         }
-        match super::super::work_start::check_epic_line(
-            root,
+        match home_source(
+            repo,
+            record,
             home,
             &default.name,
-            &default_tip.to_string(),
-            &tip.to_string(),
+            default_tip,
+            anchor,
+            head,
+            syncs,
         ) {
-            Ok(_) => {
+            Ok(HomeSource::Line(tip)) => {
                 homes.insert(home.to_string(), tip);
             }
-            Err(reason) => {
-                return Err(format!("{}: blocks come from target history on unverified home `{home}`: {reason}; repair the home through its classified pull requests, then merge its reviewed result", record.id));
+            Ok(HomeSource::Retired(landing)) => {
+                retired.insert(record.id.clone(), landing);
             }
+            Ok(HomeSource::None) => {}
+            Err(HomeRefusal::Line(reason)) => {
+                refusals.push(format!("{}: blocks come from target history on unverified home `{home}`: {reason}; repair the home through its classified pull requests, then merge its reviewed result", record.id));
+                unverified.insert(home.to_string(), reason);
+            }
+            Err(HomeRefusal::Arrival(reason)) => {
+                refusals.push(refuse(&record.id, &format!("`{home}`"), &reason));
+            }
+            Err(HomeRefusal::Record(reason)) => refusals.push(reason),
         }
     }
-    let mut refused: Vec<String> = Vec::new();
     for (home, tip) in homes {
         // A source already contained by the shared anchor supplies no new imports.
-        if is_ancestor_or_same(repo, tip, anchor)? || on_home_chain(repo, head, tip)? {
-            continue;
+        let contained = match is_ancestor_or_same(repo, tip, anchor) {
+            Ok(false) => on_home_chain(repo, head, tip),
+            other => other,
+        };
+        match contained {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(reason) => {
+                refusals.push(unenumerated(reason));
+                continue;
+            }
         }
-        let owned = owned_paths(
+        let owned = match owned_paths(
             root,
             &head.to_string(),
             &[&base.to_string(), &tip.to_string()],
-        )?;
+        ) {
+            Ok(owned) => owned,
+            Err(reason) => {
+                refusals.push(unenumerated(reason));
+                continue;
+            }
+        };
         for record in &changed {
             if owned.contains(&record.path) {
                 continue;
@@ -240,44 +294,224 @@ fn compute_imports(
                 continue;
             }
             let landed = match retired.get(&record.id).filter(|_| home == default.name) {
-                Some(landing) => Some(*landing),
-                None => matching_landing(repo, record, tip, head, Some(anchor))?,
+                Some(landing) => Ok(Some(*landing)),
+                None => matching_landing(repo, record, tip, head, Some(anchor)),
             };
-            let Some(landed) = landed else {
-                continue;
+            let landed = match landed {
+                Ok(Some(landed)) => landed,
+                Ok(None) => continue,
+                Err(reason) => {
+                    refusals.push(refuse(&record.id, &format!("`{home}`"), &reason));
+                    continue;
+                }
             };
-            if !is_new_import(repo, record, landed, anchor, head)? {
-                continue;
+            match is_new_import(repo, record, landed, anchor, head) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(reason) => {
+                    refusals.push(refuse(
+                        &record.id,
+                        &format!("`{home}` at {landed}"),
+                        &reason,
+                    ));
+                    continue;
+                }
             }
-            // Every record whose proof refuses is listed, so one run names
-            // them all; any refusal still refuses the whole range.
-            match prove_record(repo, record, &home, tip, default_tip, landed, base, head, trusted) {
+            // The default branch's home moves are walked from the line's
+            // merge base with it, for a task homed there (TSK-1378).
+            let walk =
+                (home == default.name && tip == default_tip && !retired.contains_key(&record.id))
+                    .then_some(Walk {
+                        receiver: anchor,
+                        default_tip,
+                    });
+            match prove_record(
+                repo,
+                record,
+                &home,
+                tip,
+                default_tip,
+                landed,
+                base,
+                head,
+                walk,
+                trusted,
+            ) {
                 Ok(result) => {
                     imported.insert(record.id.clone(), result);
                 }
-                Err(reason) => refused.push(format!("{}: blocks come from target history on `{home}` at {landed}: {reason}; fetch the home and repair or reopen the work there through its task pull request, then merge the reviewed result", record.id)),
+                Err(reason) => {
+                    refusals.push(refuse(
+                        &record.id,
+                        &format!("`{home}` at {landed}"),
+                        &reason,
+                    ));
+                }
             }
         }
     }
-    if !refused.is_empty() {
-        return Err(refused.join("\n"));
-    }
-    Ok(imported)
+    finish(imported, &refusals)
 }
 
-/// The findings for an [`imported_records`] error: one per line, because
-/// the judge lists each record it cannot prove on its own line. An error
-/// with no line still gives one finding, so it always refuses.
-pub(super) fn refusals(reason: &str) -> Vec<Finding> {
-    let mut found: Vec<Finding> = reason
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| super::finding(super::IMPORT_RULE, line.to_string()))
-        .collect();
-    if found.is_empty() {
-        found.push(super::finding(super::IMPORT_RULE, reason.to_string()));
+/// One record's refusal, with the repair its cause takes, on one line.
+fn refusal(default: &str, id: &str, place: &str, reason: &str) -> String {
+    let repair = if reason.starts_with(MOVED) || reason.starts_with(NO_SOURCE) {
+        home_repair(default)
+    } else {
+        SOURCE_REPAIR.to_string()
+    };
+    format!("{id}: blocks come from target history on {place}: {reason}; {repair}")
+        .replace('\n', " ")
+}
+
+/// The refusals for the tasks the range leaves as the receiving line holds
+/// them, whose home the line re-homed or introduced since its merge base
+/// with the default tip (TSK-1378 AC-13): each still answers for the moves
+/// the default branch made in that span.
+fn unchanged_refusals(
+    repo: &Repository,
+    graph: &Graph,
+    changed: &[&RecordView],
+    default: &str,
+    default_tip: Oid,
+    anchor: Oid,
+    head: Oid,
+) -> Vec<String> {
+    let paths = match home::start_point(repo, anchor, default_tip)
+        .and_then(|start| home::line_paths(repo, anchor, start))
+    {
+        Ok(paths) => paths,
+        Err(reason) => return vec![format!("{UNENUMERATED}: {reason}")],
+    };
+    let mut refusals = Vec::new();
+    for record in graph.records.values() {
+        if record.kind != RecordKind::Task || changed.iter().any(|old| old.id == record.id) {
+            continue;
+        }
+        let judged = match unchanged_line_candidate(repo, record, anchor, head, &paths) {
+            Ok(false) => Ok(()),
+            Ok(true) => home::judge_unchanged(repo, record, default_tip, anchor, head),
+            Err(reason) => Err(reason),
+        };
+        if let Err(reason) = judged {
+            refusals.push(refusal(
+                default,
+                &record.id,
+                &format!("`{default}`"),
+                &reason,
+            ));
+        }
     }
-    found
+    refusals
+}
+
+/// The imports, or every refusal on its own line.
+fn finish(imported: Imports, refusals: &[String]) -> Result<Imports, String> {
+    if refusals.is_empty() {
+        Ok(imported)
+    } else {
+        Err(refusals
+            .iter()
+            .map(|refusal| refusal.replace('\n', " "))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+}
+
+/// Whether `record` is a task the range leaves as the receiving line holds
+/// it, and whose file some commit of the line's first-parent history since
+/// its merge base with the default tip changed (`line_paths`), even when a
+/// later commit restored it: the candidates whose home the line may have
+/// re-homed or introduced (TSK-1378 AC-13). The identity walk in
+/// `judge_unchanged` then decides by the task's home history.
+fn unchanged_line_candidate(
+    repo: &Repository,
+    record: &RecordView,
+    receiver: Oid,
+    head: Oid,
+    line_paths: &BTreeSet<Vec<u8>>,
+) -> Result<bool, String> {
+    let line_entry = home::entry_at(repo, receiver, &record.path)?;
+    if line_entry.is_none() || line_entry != home::entry_at(repo, head, &record.path)? {
+        return Ok(false);
+    }
+    Ok(line_paths.contains(record.path.as_bytes()))
+}
+
+/// Where a changed record's declared integration line supplies imports.
+enum HomeSource {
+    /// A published, verified line tip.
+    Line(Oid),
+    /// A retired line's exact record, proved at its default landing.
+    Retired(Oid),
+    /// No import authority, and nothing to refuse.
+    None,
+}
+
+enum HomeRefusal {
+    /// The line itself is unverified; every record using it is refused.
+    Line(String),
+    /// A record arriving on the receiving line without proof (AC-12).
+    Arrival(String),
+    /// A complete refusal of this record.
+    Record(String),
+}
+
+#[allow(clippy::too_many_arguments)] // The range and the default target it is judged by.
+fn home_source(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    default: &str,
+    default_tip: Oid,
+    anchor: Oid,
+    head: Oid,
+    syncs: bool,
+) -> Result<HomeSource, HomeRefusal> {
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    let unread =
+        |reason: String| HomeRefusal::Record(format!("{}: {UNENUMERATED}: {reason}", record.id));
+    let Some(tip) = home_tip(repo, home).map_err(unread)? else {
+        // A retired line's exact record can still be proved at its
+        // published default-target landing. The proof below judges the
+        // landing merge and the source span, not record equality alone.
+        if let Some(landing) =
+            matching_landing(repo, record, default_tip, head, Some(anchor)).map_err(unread)?
+        {
+            return Ok(HomeSource::Retired(landing));
+        }
+        // Unpublished local landings were refused above. A remaining
+        // local branch supplies no import authority (for example a first
+        // push of this very line, or a shared planning merge).
+        if reference_tip(repo, &format!("refs/heads/{home}"))
+            .map_err(unread)?
+            .is_some()
+        {
+            return Ok(HomeSource::None);
+        }
+        return Err(HomeRefusal::Record(format!("{}: blocks come from target history, but home `{home}` is unavailable and no exact record landing is proven on published default `{default}`; fetch the home or default target and its full history, then rerun the range", record.id)));
+    };
+    let receiving = is_ancestor_or_same(repo, tip, anchor).map_err(unread)?
+        || on_home_chain(repo, head, tip).map_err(unread)?;
+    if receiving {
+        // The receiving line supplies no import to itself. A record the
+        // range takes from the default branch that newly names it as its
+        // home still proves where it came from (TSK-1378 AC-12).
+        if syncs && record.kind == RecordKind::Task {
+            home::judge_arrival(repo, record, default_tip, anchor, head)
+                .map_err(HomeRefusal::Arrival)?;
+        }
+        return Ok(HomeSource::None);
+    }
+    super::super::work_start::check_epic_line(
+        root,
+        home,
+        default,
+        &default_tip.to_string(),
+        &tip.to_string(),
+    )
+    .map(|_| HomeSource::Line(tip))
+    .map_err(HomeRefusal::Line)
 }
 
 fn merged_records<'a>(
@@ -423,7 +657,8 @@ fn is_shared_planning(
     if record.kind != RecordKind::Task {
         return Ok(false);
     }
-    let Some(first) = admissible_planning_landing(repo, landing)? else {
+    let Some(first) = admissible_planning_landing_with(repo, landing, &[AmendmentPath::Record])?
+    else {
         return Ok(false);
     };
     if !permitted_at(repo, landing, record) {
@@ -463,15 +698,22 @@ fn is_shared_planning(
 /// The first parent of `landing` when it is an admissible planning landing
 /// (TSK-1004): a merge whose tree is the clean merge of its parents, and
 /// whose change from its first parent passes the planning-amendment
-/// admissibility check, touches only records and plans (both names of a
-/// rename) and holds only regular, non-executable files on each side.
+/// admissibility check, touches only paths of the `admitted` classes (both
+/// names of a rename) and holds only regular, non-executable files on each
+/// side. A wider set keeps every other condition; the admissibility check
+/// already requires trees with no symbolic link or submodule when a doc is
+/// in the change (TSK-1378 AC-11).
 ///
 /// # Errors
 /// A commit, tree, diff or policy that cannot be read is an error, which
 /// the caller reports as a refusal: unread history never admits a landing.
-fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option<Oid>, String> {
+fn admissible_planning_landing_with(
+    repo: &Repository,
+    landing: Oid,
+    admitted: &[AmendmentPath],
+) -> Result<Option<Oid>, String> {
     use super::super::amendment::{landing_problem, project_at};
-    use super::super::classify::{amendment_path, AmendmentPath};
+    use super::super::classify::amendment_path;
     let commit = repo
         .find_commit(landing)
         .map_err(|error| error.to_string())?;
@@ -506,7 +748,9 @@ fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option
             let name = crate::git::GitName::from_bytes(file.path_bytes().unwrap_or_default());
             let path = name.rule_text().map_err(|odd| odd.display().to_string())?;
             let regular = i32::from(file.mode()) == 0o100_644;
-            if !regular || amendment_path(path, &project) != Some(AmendmentPath::Record) {
+            let admits =
+                amendment_path(path, &project).is_some_and(|kind| admitted.contains(&kind));
+            if !regular || !admits {
                 return Ok(None);
             }
         }
@@ -551,9 +795,11 @@ pub(super) fn is_trusted_planning_move(
     landed: Oid,
     parent: Oid,
 ) -> Result<bool, String> {
-    Ok(admissible_planning_landing(repo, landed)? == Some(parent)
-        && permitted_at(repo, landed, record)
-        && permitted_at(repo, parent, record))
+    Ok(
+        admissible_planning_landing_with(repo, landed, PLANNING_LANDING_PATHS)? == Some(parent)
+            && permitted_at(repo, landed, record)
+            && permitted_at(repo, parent, record),
+    )
 }
 
 /// The record as it stood before `landed`, when `landed` corrected a
@@ -597,7 +843,7 @@ fn home_correction(
         && changes_only_the_target(&before.content, &record.content)
         && on_home_chain(repo, landed, tip)?
         && is_ancestor_or_same(repo, reviewed, parent)?
-        && admissible_planning_landing(repo, landed)? == Some(parent);
+        && admissible_planning_landing_with(repo, landed, PLANNING_LANDING_PATHS)? == Some(parent);
     Ok(admitted.then_some(before))
 }
 
@@ -646,13 +892,14 @@ fn verify_earlier_home_move(
             return Ok(()); // verify_record_home judges this landing.
         }
         let version = record_at(repo, at, record)?.ok_or("the moved record is unreadable")?;
-        let planned = admissible_planning_landing(repo, at)? == Some(parent)
+        let planned = admissible_planning_landing_with(repo, at, PLANNING_LANDING_PATHS)?
+            == Some(parent)
             && permitted_at(repo, at, record)
             && permitted_at(repo, parent, record);
         if planned || home_correction(repo, &version, home, tip, at, parent)?.is_some() {
             return Ok(());
         }
-        return Err("the landing changes the task's declared home".into());
+        return Err(MOVED.into());
     }
 }
 
@@ -837,6 +1084,7 @@ fn prove_retired_record(
         origin,
         base,
         head,
+        None,
         trusted,
     )?;
     Ok(Some(ImportedRecord {
@@ -844,6 +1092,7 @@ fn prove_retired_record(
         home: home.to_string(),
         landing: landed,
         completion: proof.completion,
+        home_anchor: None,
     }))
 }
 
@@ -925,6 +1174,53 @@ fn prove_corrected_completion(
     prove_task_completion(repo, original, home, tip, default_tip, origin, &parents)
 }
 
+/// The walk of the default branch's home moves for a task homed there
+/// (TSK-1378): the receiving line's state and the trusted default tip.
+#[derive(Clone, Copy)]
+struct Walk {
+    receiver: Oid,
+    default_tip: Oid,
+}
+
+/// The home checks of one landing: a home correction (TSK-1185 AC-10), the
+/// record's identity and home at the landing with the default branch's walk
+/// (TSK-1378) or the trusted planning move (TSK-1185 AC-16), and, without a
+/// walk, a home move an earlier commit made. With a walk, every home move of
+/// the task on the default branch since the line's merge base with it is
+/// already judged. Returns the walk's anchor and the record before a
+/// correction.
+#[allow(clippy::too_many_arguments)] // The landing, the range, the walk and the trusted tip.
+fn verify_landing_home(
+    repo: &Repository,
+    record: &RecordView,
+    (home, tip): (&str, Oid),
+    landed: Oid,
+    parents: &[Oid],
+    (base, head): (Oid, Oid),
+    walk: Option<Walk>,
+    trusted: Option<Oid>,
+) -> Result<(Option<HomeAnchor>, Option<RecordView>), String> {
+    let correction = match parents.first() {
+        Some(parent) => home_correction(repo, record, home, tip, landed, *parent)?,
+        None => None,
+    };
+    let home_anchor = verify_record_home(
+        repo,
+        record,
+        home,
+        landed,
+        parents,
+        base,
+        head,
+        walk,
+        (correction.is_some(), trusted),
+    )?;
+    if walk.is_none() {
+        verify_earlier_home_move(repo, record, home, tip, landed, base)?;
+    }
+    Ok((home_anchor, correction))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_record(
     repo: &Repository,
@@ -935,6 +1231,7 @@ fn prove_record(
     landed: Oid,
     base: Oid,
     head: Oid,
+    walk: Option<Walk>,
     trusted: Option<Oid>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
@@ -944,26 +1241,22 @@ fn prove_record(
     if parents.len() > 1 && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())? {
         return Err("the home landing contains an unreviewed merge resolution".into());
     }
-    let correction = match parents.first() {
-        Some(parent) => home_correction(repo, record, home, tip, landed, *parent)?,
-        None => None,
-    };
-    verify_record_home(
+    let (home_anchor, correction) = verify_landing_home(
         repo,
         record,
-        home,
+        (home, tip),
         landed,
         &parents,
-        base,
-        head,
-        (correction.is_some(), trusted),
+        (base, head),
+        walk,
+        trusted,
     )?;
-    verify_earlier_home_move(repo, record, home, tip, landed, base)?;
     let imported = |completion| ImportedRecord {
         path: record.path.clone(),
         home: home.to_string(),
         landing: landed,
         completion,
+        home_anchor,
     };
     if let Some(original) = correction {
         let completion =
@@ -1005,6 +1298,7 @@ fn prove_record(
             origin,
             origin,
             source,
+            None,
             trusted,
         )?
         .completion
@@ -1038,7 +1332,11 @@ fn prove_record(
     Ok(imported(completion))
 }
 
-#[allow(clippy::too_many_arguments)] // The same guarded landing inputs as prove_record.
+/// Prove the record's identity and home at its landing, and the accepted
+/// criteria. With a walk, every home move of the task on the default
+/// branch since the line's merge base with it is judged ([`home`]);
+/// without one, the landing's own change from its first parent is.
+#[allow(clippy::too_many_arguments)] // The landing, the range and the walk.
 fn verify_record_home(
     repo: &Repository,
     record: &RecordView,
@@ -1047,8 +1345,10 @@ fn verify_record_home(
     parents: &[Oid],
     base: Oid,
     head: Oid,
+    walk: Option<Walk>,
     (corrected, trusted): (bool, Option<Oid>),
-) -> Result<(), String> {
+) -> Result<Option<HomeAnchor>, String> {
+    let mut anchor = None;
     if record.kind == RecordKind::Task {
         let uid = record_uid(&record.content);
         match presence_at(
@@ -1061,6 +1361,10 @@ fn verify_record_home(
             Presence::Present(source) if source.content == record.content => {}
             _ => return Err("the home record identity is ambiguous or changed".into()),
         }
+    }
+    if let (RecordKind::Task, Some(walk)) = (record.kind, walk) {
+        anchor = home::judge_home(repo, record, walk.default_tip, walk.receiver, head)?;
+    } else if record.kind == RecordKind::Task {
         if let Some(parent) = parents.first() {
             if record_at(repo, *parent, record)?.is_some_and(|old| {
                 old.integration_target.as_deref().is_some_and(|declared| {
@@ -1073,7 +1377,7 @@ fn verify_record_home(
             }) && !corrected
                 && !is_planning_move(repo, record, landed, *parent, head, trusted)?
             {
-                return Err("the landing changes the task's declared home".into());
+                return Err(MOVED.into());
             }
         }
     }
@@ -1106,7 +1410,7 @@ fn verify_record_home(
             }
         }
     }
-    Ok(())
+    Ok(anchor)
 }
 
 /// The paths whose imports have the same source proof used by acceptance.
@@ -1134,6 +1438,11 @@ pub fn imported_record_paths(
             .collect(),
     )
 }
+
+#[cfg(test)]
+mod home_set_tests;
+#[cfg(test)]
+mod home_tests;
 
 #[cfg(test)]
 thread_local! { static COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }

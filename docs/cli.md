@@ -99,7 +99,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--owner <OWNER>` | Who owns the blocker. |
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
-| | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
+| | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. A task that lands on a `whole-epic` epic's line with no pull request also needs `built_by` (the one lineage that built it), and `reduced_assurance` when its reviewer is of that lineage: one item for each other lineage, separated by `;`, each exactly `<lineage id> probed unavailable` and nothing more, for example `codex probed unavailable; grok probed unavailable`. The form is checked; its truth is not, since the agents under review write it. |
 | `codeflow spec new <TITLE>` | | Allocate the next `SPC-NNN`, scaffold it, and link the consuming work item |
 | | `--for <EPC-NNN\|TSK-NNN>...` | Epic or task that consumes this specification; repeat the flag (or separate ids with commas) for several consumers. Required. |
 | | `<TITLE>` | Specification title. |
@@ -125,7 +125,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--owner <OWNER>` | Who owns the blocker. |
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
-| | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
+| | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. A task that lands on a `whole-epic` epic's line with no pull request also needs `built_by` (the one lineage that built it), and `reduced_assurance` when its reviewer is of that lineage: one item for each other lineage, separated by `;`, each exactly `<lineage id> probed unavailable` and nothing more, for example `codex probed unavailable; grok probed unavailable`. The form is checked; its truth is not, since the agents under review write it. |
 | | `--base <REF>` | The receiving target's tip a task completion binds against, such as `origin/main`. In a clone with remotes, `task status` grants landing, stacking and waiver authority only with `--base` and `--into`, because any process in the clone can change the git settings that would otherwise decide it; hosted CI pins its own base and is the authority. |
 | | `--into <BRANCH>` | The receiving target's branch name, such as `main`; given with `--base`. |
 | `codeflow adr new <TITLE>` | | Number the next ADR and write it from the template as `proposed` |
@@ -235,7 +235,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
 | | `--merge` | Preserve the source head with a no-fast-forward merge commit. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, git-version, config, permissions, policy-source, secret-engine, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, git-version, config, permissions, policy-source, secret-engine, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, remote-ref-protection, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |

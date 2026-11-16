@@ -8,12 +8,12 @@
 use std::path::Path;
 use std::process::Output;
 
-const LINE: &str = "integration/EPC-001-outcome";
+pub(super) const LINE: &str = "integration/EPC-001-outcome";
 const SYNC: &str = "chore/sync-main-into-epc-001";
 
 const EPIC: &str = "---\nid: EPC-001\ntitle: \"outcome\"\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-09-26\n---\n\n# EPC-001: outcome\n\n## Summary\n\nAn outcome.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall deliver.\n";
 
-fn task(id: &str, target: &str) -> String {
+pub(super) fn task(id: &str, target: &str) -> String {
     format!(
         "---\nid: {id}\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: {target}\ntitle: \"work {id}\"\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-09-26\n---\n\n# {id}: work\n\n## Description\n\nWork.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n"
     )
@@ -27,7 +27,7 @@ fn complete_task(id: &str) -> String {
     )
 }
 
-const FRAGMENT: &str = "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **The fixture's landed fix.** It ships once.\n";
+pub(super) const FRAGMENT: &str = "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **The fixture's landed fix.** It ships once.\n";
 
 fn body(task_line: &str) -> String {
     format!(
@@ -35,7 +35,7 @@ fn body(task_line: &str) -> String {
     )
 }
 
-fn stdout_of(dir: &Path, args: &[&str]) -> String {
+pub(super) fn stdout_of(dir: &Path, args: &[&str]) -> String {
     let out = super::git_command(dir)
         .args(args)
         .output()
@@ -48,13 +48,13 @@ fn stdout_of(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-fn write(root: &Path, path: &str, content: &str) {
+pub(super) fn write(root: &Path, path: &str, content: &str) {
     let full = root.join(path);
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(full, content).unwrap();
 }
 
-fn commit(root: &Path, message: &str) {
+pub(super) fn commit(root: &Path, message: &str) {
     super::git(root, &["add", "-A"]);
     super::git(root, &["commit", "-qm", message]);
 }
@@ -62,7 +62,7 @@ fn commit(root: &Path, message: &str) {
 /// `main` holds the epic, a line task TSK-001 and a completed TSK-002; the
 /// line forks and moves on; then main lands TSK-002's product change and
 /// its release note, which the line does not have.
-fn fixture() -> tempfile::TempDir {
+pub(super) fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     super::git(root, &["init", "-q", "-b", "main"]);
@@ -99,14 +99,14 @@ fn fixture() -> tempfile::TempDir {
 }
 
 /// The sync branch: the line with main merged in by git's own merge.
-fn sync_branch(root: &Path) {
+pub(super) fn sync_branch(root: &Path) {
     super::git(root, &["switch", "-q", "-C", SYNC, LINE]);
     super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
 }
 
 /// The hosted check of a pull request into the line, judged with the
 /// default branch's commit as the authority, as the policy workflow passes it.
-fn ci(root: &Path, task_line: &str, authority: Option<&str>) -> Output {
+pub(super) fn ci(root: &Path, task_line: &str, authority: Option<&str>) -> Output {
     let main = stdout_of(root, &["rev-parse", "main"]);
     let mut command = super::codeflow();
     command.args([
@@ -140,7 +140,7 @@ fn local_ci(root: &Path, task_line: &str) -> Output {
         .expect("binary runs")
 }
 
-fn text(out: &Output) -> String {
+pub(super) fn text(out: &Output) -> String {
     format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -148,11 +148,11 @@ fn text(out: &Output) -> String {
     )
 }
 
-fn passes(out: &Output, what: &str) {
+pub(super) fn passes(out: &Output, what: &str) {
     assert_eq!(out.status.code(), Some(0), "{what}: {}", text(out));
 }
 
-fn blocks(out: &Output, what: &str, needle: &str) {
+pub(super) fn blocks(out: &Output, what: &str, needle: &str) {
     let said = text(out);
     assert_eq!(out.status.code(), Some(1), "{what}: {said}");
     assert!(

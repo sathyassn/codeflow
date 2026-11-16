@@ -379,7 +379,13 @@ class GateContracts(unittest.TestCase):
         self.assertIn('python3 -I scripts/policy-admission.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
         self.assertIn('          BASE_REF: ${{ github.event.pull_request.base.ref }}\n', step)
-        self.assertIn('--base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        # Rulings of 2026-11-11: no pull request runs the verdicts (into a
+        # line until the line gate ships, the Director's; into main while main
+        # is relaxed, the operator's), so every base is admitted on the two
+        # security jobs, which run on every pull request.
+        self.assertIn('--base "$BASE_REF" --workflow .github/workflows/codeflow-ci.yml --require "secret scan" --require "security review"\n', step)
+        self.assertNotIn('--require "codeflow gates"', step)
+        self.assertEqual(step.count('python3 -I scripts/policy-admission.py admit '), 1)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
         self.assertNotIn('pull_request.head.ref', step)
         for polling in ('--wait', 'wait=', 'sleep', 'ci-reuse.py admit'):
@@ -469,7 +475,9 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(named('gates-release'), set(release_targets))
         condition = re.search(r'^    if: (.+)$', jobs['gates-release'], re.M).group(1)
         self.assertNotIn('integration/', condition)
-        self.assertIn("contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref)", condition)
+        # Temporary relaxation (operator decision, 2026-11-11): the release
+        # parts run only on the daily schedule and a manual dispatch.
+        self.assertNotIn('pull_request', condition)
         for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
             self.assertIn(event, condition)
         self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
@@ -543,23 +551,21 @@ class GateContracts(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
-    # TSK-1313: a newer first-attempt push to an integration line cancels the
-    # older push run on that line, because no check requires a superseded line
-    # commit's verdict. Pull request runs, reruns included, keep one group per
-    # ref and cancel. Main and master pushes, schedule and dispatch runs are
-    # never cancelled in progress and cancel nothing. The event is in the
-    # group, so a dispatch on a line shares no group with that line's pushes.
-    # A push rerun (run_attempt above 1) gets a group of its own run id and
-    # attempt and cancels nothing. The exact text is pinned so a later edit
-    # cannot widen what cancels, and each case is evaluated from the
-    # workflow's own text with GitHub's rules for the subset it uses.
+    # Pull request runs, reruns included, keep one group per ref and cancel.
+    # Main and master pushes, schedule and dispatch runs are never cancelled
+    # in progress and cancel nothing. A push to an integration line starts no
+    # run (permanent placement, operator ruling 2026-11-11), so no push is
+    # cancelled. The event is in the group. A push rerun (run_attempt above
+    # 1) gets a group of its own run id and attempt and cancels nothing. The
+    # exact text is pinned so a later edit cannot widen what cancels, and
+    # each case is evaluated from the workflow's own text with GitHub's rules
+    # for the subset it uses.
     CI_CONCURRENCY = (
         "\nconcurrency:\n"
         "  group: ${{ (github.event_name != 'push' || github.run_attempt == 1) && "
         "format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) || "
         "format('{0}-push-rerun-{1}-{2}', github.workflow, github.run_id, github.run_attempt) }}\n"
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && "
-        "github.run_attempt == 1 && startsWith(github.ref, 'refs/heads/integration/')) }}\n\n"
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n\n"
     )
     LINE = 'refs/heads/integration/EPC-001-a-line'
 
@@ -600,15 +606,13 @@ class GateContracts(unittest.TestCase):
             with self.subTest(outside=outside), self.assertRaises(AssertionError):
                 evaluate(outside, context)
 
-    def test_ci_cancels_only_pull_request_runs_and_superseded_line_pushes(self):
+    def test_ci_cancels_only_pull_request_runs(self):
         cases = (
-            ('push', self.LINE, True),
-            ('push', 'refs/heads/integration/EPC-002-another-line', True),
             ('pull_request', 'refs/pull/7/merge', True),
             ('push', 'refs/heads/main', False),
             ('push', 'refs/heads/master', False),
-            ('push', 'refs/heads/integration', False),
-            ('push', 'refs/heads/integration-not-a-line', False),
+            # The trigger runs no line push; were one to run, it would not cancel.
+            ('push', self.LINE, False),
             ('schedule', 'refs/heads/main', False),
             ('workflow_dispatch', 'refs/heads/main', False),
             ('workflow_dispatch', self.LINE, False),
@@ -623,13 +627,18 @@ class GateContracts(unittest.TestCase):
                 # these cases can replace each other's runs.
                 self.assertNotIn(group.casefold(), groups)
                 groups[group.casefold()] = (event, ref)
-        # Two first-attempt pushes to one line share its group, and the newer cancels.
-        older, newer = self.ci_concurrency('push', self.LINE, '1'), self.ci_concurrency('push', self.LINE, '2')
-        self.assertEqual(older[0], newer[0])
-        self.assertIs(newer[1], True)
+
+    def test_ci_concurrency_names_no_integration_line(self):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        head, tail = workflow.split('\nconcurrency:\n', 1)
+        block = head.rsplit('\n\n', 1)[1] + tail.split('\n\n', 1)[0]
+        self.assertNotIn('integration', block.lower())
+        push = re.search(r'^  push:\n    branches: \[(.*)\]$', workflow, re.M)
+        self.assertIsNotNone(push, 'the push trigger lists its branches on one line')
+        self.assertEqual(push.group(1), 'main, master')
 
     def test_a_push_rerun_runs_alone_and_cancels_nothing(self):
-        for ref in (self.LINE, 'refs/heads/main'):
+        for ref in ('refs/heads/main', 'refs/heads/master'):
             newest = self.ci_concurrency('push', ref, '9', '1')
             for attempt in ('2', '3'):
                 with self.subTest(ref=ref, attempt=attempt):
@@ -646,35 +655,12 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(self.ci_concurrency('workflow_dispatch', self.LINE, '5', '2'),
                          (f'codeflow-ci-workflow_dispatch-{self.LINE}', False))
 
-    def test_integration_line_names_never_differ_only_in_case(self):
-        # GitHub compares group names without regard to case, and no function
-        # available to a top-level concurrency group can keep case, so two
-        # lines whose names differ only in case would cancel each other's
-        # runs. `codeflow epic new --integration` names a line
-        # `integration/EPC-NNN-<lower-case slug>`, so two lines it makes
-        # never form such a pair. This checks the lines the records name.
-        lower = 'refs/heads/integration/epc-001-a-line'
-        self.assertNotEqual(self.ci_concurrency('push', lower)[0], self.ci_concurrency('push', self.LINE)[0])
-        self.assertEqual(self.ci_concurrency('push', lower)[0].casefold(),
-                         self.ci_concurrency('push', self.LINE)[0].casefold(), 'GitHub treats them as one group')
-        lines = set()
-        for path in sorted((ROOT / 'project-management').rglob('*.md')):
-            lines.update(re.findall(r'(?m)^(?:integration_target|parent_line):\s*"?(integration/[^"\s#]+)',
-                                    path.read_text()))
-        self.assertIn('integration/EPC-022-the-3-2-0-milestone-fixes', lines, 'the scan must find the records')
-        by_folded = {}
-        for line in sorted(lines):
-            by_folded.setdefault(line.casefold(), []).append(line)
-        self.assertEqual([names for names in by_folded.values() if len(names) > 1], [],
-                         'integration lines that differ only in case share a concurrency group')
-
-    def test_the_ci_concurrency_comment_states_the_rule_and_its_limits(self):
+    def test_the_ci_concurrency_comment_states_the_rule(self):
         workflow = read('.github/workflows/codeflow-ci.yml')
         block = workflow.split('\nconcurrency:\n', 1)[0].rsplit('\n\n', 1)[1]
         comment = ' '.join(line.removeprefix('#').strip() for line in block.splitlines())
-        for needle in ('newer push to an integration line', 'push rerun', 'run_attempt',
-                       'does not promise that runs start in push order', "Recovery: rerun the newest tip's run",
-                       'without regard to case', 'must not form such a pair', 'never a reuse source'):
+        for needle in ('Pull request runs, reruns included', 'No other run is cancelled in progress',
+                       'push rerun', 'run_attempt', 'never a reuse source'):
             with self.subTest(needle=needle):
                 self.assertIn(needle, comment)
 

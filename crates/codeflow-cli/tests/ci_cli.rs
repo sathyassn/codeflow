@@ -28,6 +28,8 @@ mod document_indexes;
 mod line_tip;
 #[path = "ci_cli/main_sync.rs"]
 mod main_sync;
+#[path = "ci_cli/main_sync_home.rs"]
+mod main_sync_home;
 #[path = "ci_cli/mains_bytes.rs"]
 mod mains_bytes;
 #[path = "ci_cli/outcome_marker.rs"]
@@ -36,7 +38,7 @@ mod outcome_marker;
 mod pr_body_fixtures;
 #[path = "ci_cli/range_context.rs"]
 mod range_context;
-#[path = "ci_cli/secret_scan_exemption.rs"]
+#[path = "ci_cli/leak_scan_exemption.rs"]
 mod secret_scan_exemption;
 #[path = "ci_cli/status_steps.rs"]
 mod status_steps;

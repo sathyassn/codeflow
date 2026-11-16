@@ -318,6 +318,7 @@ const CHECK_NAMES: &[&str] = &[
     "repo-integrity",
     "ci-perimeter",
     "remote-perimeter",
+    "remote-ref-protection",
     "managed-drift",
     "customization",
     "instructions",
@@ -359,6 +360,10 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("repo-integrity", check_repo_integrity);
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("remote-perimeter", remote_perimeter::check);
+    m.insert(
+        "remote-ref-protection",
+        remote_perimeter::ref_protection::check,
+    );
     m.insert("managed-drift", check_managed_drift);
     m.insert("customization", check_customization);
     m.insert("instructions", check_instructions);

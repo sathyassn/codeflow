@@ -7052,3 +7052,6 @@ mod line_sync_push;
 
 #[path = "acceptance_cli/own_line_criteria.rs"]
 mod own_line_criteria;
+
+#[path = "acceptance_cli/landed_review.rs"]
+mod landed_review;

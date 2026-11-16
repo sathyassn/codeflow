@@ -313,6 +313,12 @@ change earlier behaviour; the rest are still refused.
 | Another path in the same range | Refused; the range is a sync only when its merges are clean merges of `main` |
 | The same blob with another mode, a record that cannot be read, or any run without the verified commit | Refused |
 
+When `main` moved a task's home, the sync keeps that home only if every
+move was a reviewed planning merge of records on `main`, and the line
+already names the new home or kept its copy of a `todo` or `blocked` task
+unchanged. See [home moves a sync of main
+accepts](policy-reference.md#home-moves-a-sync-of-main-accepts).
+
 Refused, naming the cause:
 
 | What the range holds | Why |
@@ -322,6 +328,7 @@ Refused, naming the cause:
 | A merge of the line into the sync branch, after the line moved | Its second parent is the line's, not `main`'s; redo the sync from the line's new tip |
 | A run with no `--policy-from` | No default-branch commit to trust |
 | A change to a record whose home is the line | It changes only on the line, through a planning amendment that names the epic |
+| A task whose home `main` moved by a direct commit, a merge carrying more than records, or in a state the move does not permit | The line did not agree to that home; the import check names each such record |
 | A commit that is not a merge, before or after the merge or as the whole range | The commit is work of its own; it lands through its task |
 | A merge with a resolved conflict or a change of its own | Its tree differs from the clean merge of its parents; land it through a task |
 | A branch named like a sync whose history is not one | A name proves nothing |
