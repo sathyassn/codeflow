@@ -13,6 +13,7 @@ use super::{
     integrity_write_in_run, redirect_writes, run_dirs, shell_tokens, strip_reserved_words,
     Literals, PolicyLevel, Violation,
 };
+use crate::security::shell_lex::{skip_leading, Taker};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
@@ -126,11 +127,7 @@ fn uses_home(text: &str) -> bool {
 
 /// `HOME=...` in front of a command, directly or through `env`.
 fn prefix_home(words: &[String]) -> bool {
-    let assignment = |word: &str| {
-        word.split_once('=')
-            .is_some_and(|(name, _)| super::is_identifier(name))
-    };
-    let leading = words.iter().take_while(|word| assignment(word)).count();
+    let leading = skip_leading(words, Taker::Shell);
     if leading == words.len() {
         return false;
     }
@@ -172,11 +169,7 @@ fn unproven_change(words: &[String]) -> bool {
             .any(|flag| flag.contains('n')),
         "export" | "readonly" => false,
         _ => {
-            let assignment = |word: &String| {
-                word.split_once('=')
-                    .is_some_and(|(name, _)| super::is_identifier(name))
-            };
-            let leading = unwrapped.iter().take_while(|word| assignment(word)).count();
+            let leading = skip_leading(unwrapped, Taker::Shell);
             let statement = leading == unwrapped.len();
             // A plain statement or a prefix is read elsewhere; a `HOME=`
             // word anywhere else is an assignment through a form the
