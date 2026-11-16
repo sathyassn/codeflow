@@ -403,7 +403,8 @@ fn both_guards_refuse_a_remote_update_whose_selection_hides_a_remote() {
             .append_config(group)
             .append_config(b"\n")
             .write(".git/remotes/default", b"URL: fixture::x\n");
-        assert_unproven(&legacy, &["git remote update"], &[]);
+        // git-guard refuses first: `default` is not a configured remote.
+        assert_fetch_without_url(&legacy, "git remote update");
     }
 
     // A remote section with an empty name defines a remote Git fetches.
