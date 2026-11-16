@@ -350,3 +350,93 @@ fn a_record_whose_uid_another_record_shares_is_refused() {
         PATH_CHANGED,
     );
 }
+
+/// The uid the fixture's id registry binds TSK-001 to.
+const REGISTERED: &str = "8c0e3f2a-5b1d-4c7e-9a3f-2d6b8e1f4a70";
+
+/// TSK-001 homed on `OTHER` with `uid` in place of the fixture's uid, or
+/// with no uid line (a legacy record) when `uid` is `None`.
+fn legacy(uid: Option<&str>, note: &str) -> String {
+    let text = task("TSK-001", OTHER, "todo", note, "Pending.");
+    match uid {
+        Some(uid) => text.replace("uid: uid-TSK-001", &format!("uid: {uid}")),
+        None => text.replace("uid: uid-TSK-001\n", ""),
+    }
+}
+
+/// A fixture whose `main` holds TSK-001 as a legacy record without a uid,
+/// homed on `home`, with `OTHER` branched from it and a local id registry
+/// that binds TSK-001 to [`REGISTERED`].
+fn with_registry(home: &str) -> Fixture {
+    let fixture = Fixture::new(&[]);
+    fixture.write(
+        &path_of("TSK-001"),
+        &legacy(None, "Work.").replace(OTHER, home),
+    );
+    fixture.git(&["add", "-A"]);
+    fixture.git(&["commit", "-qm", "docs: plan a legacy task"]);
+    fixture.git(&["branch", OTHER, "main"]);
+    let id = crate::ids::entry::RegId::parse("TSK-001").unwrap();
+    let entry =
+        crate::ids::entry::Entry::issued(id.clone(), REGISTERED.into(), "work", "t", "main");
+    fixture.git(&["switch", "-q", "--orphan", "codeflow/registry"]);
+    fixture.write(&id.registry_path(), &entry.render());
+    fixture.git(&["add", "-A"]);
+    fixture.git(&["commit", "-qm", "ids: issue TSK-001"]);
+    fixture.git(&["switch", "-q", "main"]);
+    fixture
+}
+
+/// [`with_registry`] homed on `OTHER`, then a planning landing on `OTHER`
+/// that adds the uid `backfill` to the record, as `ids backfill` does.
+fn backfilled(backfill: &str) -> Fixture {
+    let fixture = with_registry(OTHER);
+    let path = path_of("TSK-001");
+    fixture.land(OTHER, &[(&path, &legacy(Some(backfill), "Work."))]);
+    fixture
+}
+
+/// The registered uid backfilled onto a legacy record keeps its identity:
+/// the landing that adds it is taken.
+#[test]
+fn a_registered_uid_backfill_is_taken_at_the_landing() {
+    landing(&backfilled(REGISTERED), &path_of("TSK-001")).unwrap();
+}
+
+/// The same backfill under a later edit: the walk crosses it and goes on.
+#[test]
+fn a_registered_uid_backfill_is_taken_under_a_later_edit() {
+    let path = path_of("TSK-001");
+    let fixture = backfilled(REGISTERED);
+    fixture.land(
+        OTHER,
+        &[(&path, &legacy(Some(REGISTERED), "Work, with notes."))],
+    );
+    walk(&fixture, &path).unwrap();
+}
+
+/// A first uid other than the one the registry binds is refused.
+#[test]
+fn an_unregistered_uid_backfill_is_refused() {
+    let fixture = backfilled("1f2e3d4c-6b5a-4978-8a6b-5c4d3e2f1a0b");
+    refuses(
+        &landing(&fixture, &path_of("TSK-001")),
+        "an unregistered backfill at the landing",
+        PATH_CHANGED,
+    );
+}
+
+/// A refused move before a registered backfill is still judged: the
+/// walk crosses the backfill and reaches the move.
+#[test]
+fn a_registered_backfill_does_not_clear_an_earlier_refused_move() {
+    let path = path_of("TSK-001");
+    let fixture = with_registry(LINE);
+    fixture.land(OTHER, &[(&path, &legacy(None, "Work.")), PRODUCT]);
+    fixture.land(OTHER, &[(&path, &legacy(Some(REGISTERED), "Work."))]);
+    refuses(
+        &walk(&fixture, &path),
+        "a refused move, then a registered backfill",
+        MOVED,
+    );
+}

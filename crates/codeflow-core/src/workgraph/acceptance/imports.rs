@@ -878,7 +878,7 @@ fn declared_home(view: &RecordView) -> Option<&str> {
 /// never reads another record, or the task's absence, in its place.
 fn path_changed(at: Oid) -> String {
     format!(
-        "the task's record cannot be identified before {at}: it is not one record with the task's id and uid at the same path (another path, another task's record, two copies, or an unreadable task record), so its earlier home moves cannot be judged; keep the record at one path while another line imports it"
+        "the task's record cannot be identified before {at}: it is not one record with the task's id and uid at the same path (another path, another task's record, two copies, an unreadable task record, or a first uid the id registry does not bind to its id), so its earlier home moves cannot be judged; keep the record at one path while another line imports it"
     )
 }
 
@@ -892,9 +892,12 @@ fn home_undeclared(at: Oid) -> String {
 /// The task's record at `parent`, the first parent of `at`, found by
 /// identity, never by path alone: `None` when no task record there carries
 /// its id or uid, so `at` introduced it. Otherwise exactly one record there
-/// must carry it, with the same id and uid and at the path of `current`,
-/// the task's record at `at`. Another path, another task's record at the
-/// path, two copies, or an unreadable task record is refused.
+/// must carry it, with the same id and at the path of `current`, the
+/// task's record at `at`, which the walk has already tied to the task. Its
+/// uid is `current`'s, or none where `current` carries the first uid the id
+/// registry binds to the id (the backfill, SPC-013 R-24, R-25). Another
+/// path, another task's record at the path, two copies, an unreadable task
+/// record or any other uid change is refused.
 fn version_before(
     repo: &Repository,
     current: &RecordView,
@@ -905,15 +908,48 @@ fn version_before(
     let who = home::Identity::of(record);
     match home::held_at(repo, parent, &who) {
         home::Held::Absent => Ok(None),
-        home::Held::One(old)
-            if old.path == current.path
-                && old.id == record.id
-                && record_uid(&old.content) == record_uid(&record.content) =>
-        {
-            Ok(Some(*old))
+        home::Held::One(old) if old.path == current.path && old.id == record.id => {
+            let before = record_uid(&old.content);
+            let after = record_uid(&current.content);
+            let same = before == after
+                || match (before, after) {
+                    (None, Some(uid)) => registered_uid(repo, &record.id)? == Some(uid),
+                    _ => false,
+                };
+            if same {
+                Ok(Some(*old))
+            } else {
+                Err(path_changed(at))
+            }
         }
         _ => Err(path_changed(at)),
     }
+}
+
+/// The uid the id registry binds `id` to, read as `ids check` binds a
+/// backfilled uid (SPC-013 R-24, R-25): the first addition of the id's
+/// entry on the fetched registry, else on the local registry branch. `None`
+/// when there is no registry, no valid entry, or the id is not a registry
+/// id. A shallow repository, whose registry history may be cut short, and
+/// an unreadable registry are refused.
+fn registered_uid(repo: &Repository, id: &str) -> Result<Option<String>, String> {
+    let Some(id) = crate::ids::entry::RegId::parse(id) else {
+        return Ok(None);
+    };
+    let git = crate::ids::git::Git::new(repo.workdir().unwrap_or_else(|| repo.path()));
+    let unreadable = |error: crate::ids::IdsError| {
+        format!("the id registry cannot be read to bind the uid of {id}: {error}")
+    };
+    if git.is_shallow().map_err(unreadable)? {
+        return Err(format!(
+            "the first uid of {id} cannot be bound to the id registry in a shallow clone; fetch the full history"
+        ));
+    }
+    let Some(registry) = crate::ids::check::registry_ref(&git).map_err(unreadable)? else {
+        return Ok(None);
+    };
+    let ledger = crate::ids::ledger::Ledger::read(&git, &registry).map_err(unreadable)?;
+    Ok(ledger.entry(&id).map(|entry| entry.uid.clone()))
 }
 
 /// Refuse a home change an edit landed after it would hide (TSK-1185).
