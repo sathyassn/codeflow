@@ -291,7 +291,7 @@ fn bind_completion_of(
             "HEAD",
             &graph.with(after.clone()),
         )
-        .map_err(|e| VerbError::Refused(vec![e]))?;
+        .map_err(|e| VerbError::Refused(vec![withheld(&repo, &e)]))?;
         let findings = binding(repo_root, &graph.with(after.clone()), after, change);
         if !frozen.is_empty() {
             // The binding's own refusals follow the frozen criteria, so a
@@ -540,8 +540,12 @@ fn target_commit(
 ) -> Result<Option<git2::Oid>, String> {
     target
         .map(|target| {
-            pinned_commit(repo, target)?
-                .map_err(|error| format!("cannot read acceptance target '{target}': {error}"))
+            pinned_commit(repo, target)?.map_err(|error| {
+                withheld(
+                    repo,
+                    &format!("cannot read acceptance target '{target}': {error}"),
+                )
+            })
         })
         .transpose()
 }
@@ -554,8 +558,24 @@ fn target_commit(
 /// local ref spelled like the fetched one would decide in its place; when
 /// one exists, the read refuses (the outer error), naming both refs and
 /// their commits. Any other value, a full ref or a commit, reads as git
-/// reads it. The inner error is a value that names no commit here.
+/// reads it. The inner error is a value that names no commit here. The
+/// outer refusal has every withheld remote name replaced ([`withheld`]);
+/// a caller that prints the inner error replaces them too.
 fn pinned_commit(
+    repo: &git2::Repository,
+    value: &str,
+) -> Result<Result<git2::Oid, git2::Error>, String> {
+    unchecked_pinned_commit(repo, value).map_err(|reason| withheld(repo, &reason))
+}
+
+/// `text`, which can quote a remote-tracking ref or the value that names
+/// one, with every configured remote name messages withhold replaced
+/// ([`crate::security::git::without_remote_names`]).
+fn withheld(repo: &git2::Repository, text: &str) -> String {
+    crate::security::git::without_remote_names(repo.commondir(), text)
+}
+
+fn unchecked_pinned_commit(
     repo: &git2::Repository,
     value: &str,
 ) -> Result<Result<git2::Oid, git2::Error>, String> {
@@ -769,10 +789,13 @@ fn default_target(
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
         let tip = pinned_commit(repo, base)?.map_err(|error| {
-            format!(
-                "`--base {}` does not name a commit here ({error}); {}",
-                crate::git::display_text(base),
-                super::work_start::fetch_it("origin", &name)
+            withheld(
+                repo,
+                &format!(
+                    "`--base {}` does not name a commit here ({error}); {}",
+                    crate::git::display_text(base),
+                    super::work_start::fetch_it("origin", &name)
+                ),
             )
         })?;
         return Ok(Some((name, tip)));

@@ -667,7 +667,13 @@ fn local_or_upstream(
             })?;
         }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+        // libgit2 quotes the remote an upstream setting names, so withheld
+        // remote names are replaced in its text.
+        Err(error) => {
+            return Err(WorkStartError::Repository(
+                crate::security::git::without_remote_names(repo.commondir(), &error.to_string()),
+            ))
+        }
     }
     let remotes = repo
         .remotes()
@@ -3874,7 +3880,10 @@ pub(crate) fn tracking_reference(
                     Ok(Some(own)) => {
                         WorkStartError::UnresolvableTip(unresolvable_tip(repo, reference, &own))
                     }
-                    _ => WorkStartError::Repository(error.to_string()),
+                    _ => WorkStartError::Repository(crate::security::git::without_remote_names(
+                        repo.commondir(),
+                        &error.to_string(),
+                    )),
                 }
             })
     };

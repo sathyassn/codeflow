@@ -565,10 +565,15 @@ fn line(repo: &Repository, target: &str) -> Result<Option<Line>, String> {
     let Some(names) = crate::workgraph::work_start::target_reference_names(target) else {
         return Ok(None);
     };
+    // libgit2 text can quote the remote-tracking ref, so withheld remote
+    // names are replaced in the refusal.
     let unreadable = |error: git2::Error| {
-        format!(
-            "cannot read the integration target `{target}`: {}",
-            error.message()
+        crate::security::git::without_remote_names(
+            repo.commondir(),
+            &format!(
+                "cannot read the integration target `{target}`: {}",
+                error.message()
+            ),
         )
     };
     let mut tips: Vec<Oid> = Vec::new();

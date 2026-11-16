@@ -503,7 +503,18 @@ fn unavailable_home(home: &str) -> String {
 }
 
 /// Local branches are authority only in an offline repository with no remotes.
+///
+/// # Errors
+/// A refusal can be libgit2 text that quotes the remote-tracking ref, so
+/// every configured remote name messages withhold is replaced in it
+/// ([`crate::security::git::without_remote_names`]) for every caller.
 pub(super) fn home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, String> {
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    unchecked_home_tip(repo, home)
+        .map_err(|reason| crate::security::git::without_remote_names(root, &reason))
+}
+
+fn unchecked_home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, String> {
     let remotes = repo.remotes().map_err(|error| error.to_string())?;
     if remotes.is_empty() {
         return reference_tip(repo, &format!("refs/heads/{home}"));

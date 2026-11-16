@@ -659,3 +659,42 @@ fn a_home_refusal_withholds_remote_names_from_refusal_text() {
         "the refusal does not show the withheld form: {said}"
     );
 }
+
+/// Withhold remote names from refusal text on a line range whose merge
+/// changes no task record: the receiving-merge check reads the home tip
+/// itself, and its refusal shows the withheld form, never the name.
+#[test]
+fn a_line_merge_refusal_withholds_remote_names_from_refusal_text() {
+    const TOKEN: &str = "secret-token-416";
+    let name = format!("https://user:{TOKEN}@example.test/repo");
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
+    let base = fixture.oid(LINE);
+    let head = fixture.land(LINE, &[("docs/notes.md", "A note.\n")]);
+    fixture.git(&[
+        "config",
+        &format!("remote.{name}.url"),
+        "file:///nonexistent/repo.git",
+    ]);
+    fixture.git(&["config", "branch.main.remote", &name]);
+    fixture.git(&["config", "branch.main.merge", "refs/heads/main"]);
+    let repo = Repository::open(fixture.root()).unwrap();
+    let graph = Graph::from_revision(&repo, &head.to_string()).unwrap();
+    let said = match super::super::receiving_merges::findings(
+        &repo,
+        base,
+        head,
+        Some(LINE),
+        &graph,
+        &[],
+        None,
+    ) {
+        Ok(found) => panic!("an unreadable home was accepted: {found:?}"),
+        Err(said) => said,
+    };
+    assert!(!said.contains(TOKEN), "the credential is shown: {said}");
+    assert!(!said.contains(&name), "the remote name is shown: {said}");
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "the refusal does not show the withheld form: {said}"
+    );
+}
