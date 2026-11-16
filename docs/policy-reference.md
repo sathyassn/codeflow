@@ -656,6 +656,10 @@ the form refuses:
     given a partial clone filter, and the one `extensions.partialClone`
     names), under the same conditions; an empty promisor name refuses.
 
+  A key under a remote section with an empty name (`[remote ""]`) refuses
+  every contact that reads the configuration's remotes, naming the key;
+  remove the section or give it a name.
+
   A transport that starts a remote helper program refuses under
   `git.hook_integrity`, naming the program and the remote, unless the
   landed policy's `git.admitted_helpers` names the program; an admitted one
@@ -1212,8 +1216,11 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   remote (a partial clone) also needs git 2.46 or later: the setting arrives
   in 2.45, but only 2.46 stops the diff prefetch from starting a fetch. Before
   any staged object is read, the staged listing, the attribute lookup and the
-  scan read the repository's promisor setting in the scan's own configuration
-  view; an older git, or a setting that cannot be read, is a failed commit.
+  scan read the repository's promisor settings in the scan's own configuration
+  view, by the same rule the guards use for promisor remotes (a remote set
+  as a promisor or given a partial clone filter, and the one
+  `extensions.partialClone` names); an older git, or a configuration that
+  cannot be read, is a failed commit.
   The clone's own `.git/info/attributes` still applies, since
   nothing committed or staged can change it. gitleaks cannot read a path
   with a backslash, double quote or control character reliably (it skips a

@@ -21,13 +21,15 @@
 //! - for an operand-free `remote update`, the remotes Git selects: the
 //!   `default` group's members, or every remote not set to skip the default
 //!   update, each under the same conditions, when no legacy remote file
-//!   may add one; an empty `default` group and a remote section with an
-//!   empty name refuse;
+//!   may add one; an empty `default` group refuses;
 //! - the promisor remotes of a partial clone (a remote set as a promisor or
 //!   given a partial clone filter, and the one `extensions.partialClone`
 //!   names), under the same conditions, for every Git command, since a
 //!   missing object can be fetched from them by any command; an empty
 //!   promisor name refuses.
+//!
+//! A key under a remote section with an empty name (`[remote ""]`) refuses
+//! every contact that reads the configuration's remotes, naming the key.
 //!
 //! Refused by name: an operand-free push or `ls-remote`, every other form
 //! that contacts every configured remote, a remote group, a remote with a helper
@@ -741,16 +743,26 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// Whether the configuration has any `remote.<name>.<variable>` key. The
-    /// empty name is never configured: Git names the remote of a
-    /// `remote..<variable>` key after the rest of the key (`remote.c`
-    /// `make_remote`), so an empty operand gets a remote with no address,
-    /// which Git and the `address` path both take from the operand itself,
-    /// after the same rewrites.
-    fn configured(&self, name: &str) -> bool {
-        if name.is_empty() {
-            return false;
+    /// Refuse when a key defines a remote under a section with an empty
+    /// name (`[remote ""]`, a `remote..<variable>` key). The guard does not
+    /// resolve the remotes Git defines from such a key, so every contact
+    /// that reads the configuration's remotes refuses, naming the key.
+    fn no_empty_section(&self) -> Result<(), String> {
+        let empty = self.keys.iter().find(|key| {
+            key.strip_prefix("remote..")
+                .is_some_and(|variable| !variable.contains('.'))
+        });
+        match empty {
+            None => Ok(()),
+            Some(key) => Err(unproven(format!(
+                "the configuration defines `{}` under a remote section with an empty name; remove the section or give it a name",
+                shown_word(key)
+            ))),
         }
+    }
+
+    /// Whether the configuration has any `remote.<name>.<variable>` key.
+    fn configured(&self, name: &str) -> bool {
         let prefix = format!("remote.{name}.");
         self.keys.iter().any(|key| {
             key.strip_prefix(&prefix)
@@ -777,8 +789,10 @@ impl<'a> Resolver<'a> {
     }
 
     /// The configured remote `name`, when its form is one the resolution
-    /// can prove; `None` when the configuration does not define it.
+    /// can prove; `None` when the configuration does not define it. A
+    /// remote section with an empty name refuses every lookup.
     fn remote(&self, name: &str) -> Result<Option<Remote>, String> {
+        self.no_empty_section()?;
         if !self.configured(name) {
             return Ok(None);
         }
@@ -1007,6 +1021,7 @@ impl<'a> Resolver<'a> {
     /// configuration would give the new remote, and recursion into the
     /// submodules the cloned project names.
     fn clone_settings(&self, rest: &[String]) -> Result<(), String> {
+        self.no_empty_section()?;
         if self.keys.iter().any(|key| {
             key.strip_prefix("remote.")
                 .and_then(|rest| rest.rsplit_once('.'))
@@ -1088,6 +1103,7 @@ impl<'a> Resolver<'a> {
         found: &mut Vec<Contact>,
         probe: &mut dyn Probe,
     ) -> Result<(), String> {
+        self.no_empty_section()?;
         if self.group("default") {
             // Git splits a group's values at spaces, tabs and newlines only
             // (`get_remote_group`); any other character stays in the name.
@@ -1120,9 +1136,8 @@ impl<'a> Resolver<'a> {
             else {
                 continue;
             };
-            // Git names the remote of an empty section name after the rest
-            // of the key (`remote.c` `make_remote`), a name no other key
-            // reaches; refuse it rather than drop it.
+            // `no_empty_section` has refused an empty name; a key that
+            // still reads as one is refused rather than dropped.
             if name.is_empty() || variable.is_empty() {
                 return Err(unproven(
                     "a remote section with an empty name defines a remote `remote update` fetches; name the remote",
@@ -1167,6 +1182,7 @@ impl<'a> Resolver<'a> {
     /// no other option that takes a value, a name no setting, remote group
     /// or legacy remote file defines.
     fn added_remote(&self, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
+        self.no_empty_section()?;
         let mut operands = Vec::new();
         let mut words = rest.iter().skip_while(|word| *word != "add").skip(1);
         while let Some(word) = words.next() {
@@ -1205,40 +1221,22 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// The remotes a partial clone fetches missing objects from, as Git
-    /// registers them (`promisor-remote.c` `promisor_remote_config` and
-    /// `promisor_remote_init`): each `remote.<name>.promisor` value read as
-    /// true (a later false value does not take it back), any
-    /// `remote.<name>.partialclonefilter` whatever the promisor setting, and
-    /// `extensions.partialClone`. The name is the subsection as written; a
-    /// key with no subsection registers the empty name.
+    /// The remotes a partial clone fetches missing objects from, as
+    /// [`crate::security::git_config::promisor_remotes`] reads Git's
+    /// registration. An empty name refuses.
     fn promisors(&self) -> Result<Vec<String>, String> {
-        let mut names = values(self.config, "extensions.partialclone")?;
-        for key in &self.keys {
-            let Some(rest) = key.strip_prefix("remote.") else {
-                continue;
-            };
-            let (name, variable) = rest.rsplit_once('.').unwrap_or(("", rest));
-            let registers = match variable {
-                "promisor" => values(self.config, key)?
-                    .iter()
-                    .any(|value| crate::security::git::config_boolean(value) != Some(false)),
-                "partialclonefilter" => true,
-                _ => false,
-            };
-            if registers {
-                names.push(name.to_string());
+        let mut names = Vec::new();
+        for name in crate::security::git_config::promisor_remotes(self.config.entries()) {
+            if name.is_empty() {
+                return Err(unproven(
+                    "Git registers a promisor remote with an empty name, which the guard cannot resolve",
+                ));
             }
+            names.push(
+                String::from_utf8(name)
+                    .map_err(|_| unproven("a promisor remote's name is not UTF-8"))?,
+            );
         }
-        // An empty name is not one `named` can map to the remote Git builds
-        // for it (`remote.c` `make_remote`); refuse it.
-        if names.iter().any(String::is_empty) {
-            return Err(unproven(
-                "Git registers a promisor remote with an empty name, which the guard cannot resolve",
-            ));
-        }
-        names.sort();
-        names.dedup();
         Ok(names)
     }
 }

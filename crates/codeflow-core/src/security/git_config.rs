@@ -107,6 +107,55 @@ impl EffectiveConfig {
     }
 }
 
+/// The promisor remotes Git registers from the configuration `entries`, as
+/// `promisor-remote.c` reads them. Each entry is a key (section and variable
+/// lower case, subsection as written) and its raw value (`None` for a key
+/// written without `=`), in Git's order. Registered:
+///
+/// - the remote `extensions.partialClone` names;
+/// - each remote with a `promisor` value Git reads as true, or one it does
+///   not read as a boolean; a later false value does not take it back;
+/// - each remote with a `partialCloneFilter`, whatever its `promisor` value.
+///
+/// A key with no subsection, and an `extensions.partialClone` with no
+/// value, give the empty name. Sorted, without duplicates; empty for a
+/// repository that is no partial clone. The guards and the commit-time
+/// secret scan both read promisor state through this one function.
+pub(crate) fn promisor_remotes<'a>(
+    entries: impl IntoIterator<Item = (&'a [u8], Option<&'a [u8]>)>,
+) -> Vec<Vec<u8>> {
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    for (key, value) in entries {
+        if key == b"extensions.partialclone" {
+            names.push(value.unwrap_or_default().to_vec());
+            continue;
+        }
+        let Some(rest) = key.strip_prefix(b"remote.") else {
+            continue;
+        };
+        let (name, variable) = match rest.iter().rposition(|byte| *byte == b'.') {
+            Some(dot) => (&rest[..dot], &rest[dot + 1..]),
+            None => (&rest[..0], rest),
+        };
+        let registers = match variable {
+            b"promisor" => value.is_none_or(|value| {
+                std::str::from_utf8(value)
+                    .ok()
+                    .and_then(super::git::config_boolean)
+                    != Some(false)
+            }),
+            b"partialclonefilter" => true,
+            _ => false,
+        };
+        if registers {
+            names.push(name.to_vec());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// The value of an [`Environment`] entry that removes the variable from the
 /// reading's child process, for a command whose launcher removes it
 /// (`env -u NAME`, `env -i`). No real value holds a NUL byte.

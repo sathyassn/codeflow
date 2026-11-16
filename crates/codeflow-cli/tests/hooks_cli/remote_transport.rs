@@ -482,7 +482,9 @@ fn both_guards_refuse_every_contact_beside_a_remote_section_with_an_empty_name()
     // refuses a fetch of a name it cannot read first, by its earlier rule
     // for a configured remote it cannot read.
     let empty = Scratch::landed(None);
-    empty.append_config(b"[remote \"\"]\n\turl = fixture::x\n\tpushurl = fixture::x\n\tvcs = fixture\n");
+    empty.append_config(
+        b"[remote \"\"]\n\turl = fixture::x\n\tpushurl = fixture::x\n\tvcs = fixture\n",
+    );
     assert_judged_with(
         &empty,
         section_refusal,
