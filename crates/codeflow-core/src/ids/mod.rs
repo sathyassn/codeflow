@@ -118,6 +118,11 @@ impl Standing {
 }
 
 #[cfg(test)]
+mod ref_batch_tests;
+
+mod ref_inventory;
+
+#[cfg(test)]
 pub(crate) mod r22_fixture {
     pub const TASK: &[u8] = b"project-management/tasks/TSK-001.md";
     pub const TEXT: &[u8] = b"---\nid: TSK-001\nuid: 00000000-0000-4000-8000-000000000001\n---\n";

@@ -3,7 +3,7 @@
 //! safety net that holds even without a registry (ADR-0072 option 1b).
 //! Nothing here fetches or writes (R-20: read commands never fetch).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
 use super::git::{z_fields, Git};
@@ -211,9 +211,11 @@ struct Added {
     uid: Option<String>,
 }
 
-/// The record texts a range's merge rule reads, fetched in one
-/// `git cat-file --batch` rather than a process per record.
-struct Texts(HashMap<String, String>);
+/// Range texts by path, retaining their blobs for the later code-ref scan.
+struct Texts {
+    by_path: HashMap<String, String>,
+    by_blob: HashMap<String, Vec<u8>>,
+}
 
 impl Texts {
     fn read(git: &Git, wanted: &[(&str, &str)]) -> Result<Texts, IdsError> {
@@ -221,21 +223,26 @@ impl Texts {
             .iter()
             .map(|(rev, path)| format!("{rev}:{path}"))
             .collect();
-        git.blobs(&specs)?
+        let ids = super::ref_inventory::blob_ids(git, &specs)?;
+        let mut seen = HashSet::new();
+        let unique: Vec<_> = ids.iter().filter(|id| seen.insert(*id)).cloned().collect();
+        let by_blob = git.blobs(&unique)?;
+        let by_path = specs
             .into_iter()
-            .map(|(key, bytes)| {
-                let text = String::from_utf8(bytes).map_err(|error| {
+            .zip(ids)
+            .map(|(key, oid)| {
+                let text = String::from_utf8(by_blob[&oid].clone()).map_err(|error| {
                     IdsError::Git(format!("record {key} is not valid UTF-8: {error}"))
                 })?;
                 Ok((key, text))
             })
-            .collect::<Result<HashMap<_, _>, _>>()
-            .map(Texts)
+            .collect::<Result<HashMap<_, _>, IdsError>>()?;
+        Ok(Texts { by_path, by_blob })
     }
 
     /// The `uid` of the record at `path` in `rev`, if it has one.
     fn uid_at(&self, rev: &str, path: &str) -> Option<String> {
-        let text = self.0.get(&format!("{rev}:{path}"))?;
+        let text = self.by_path.get(&format!("{rev}:{path}"))?;
         frontmatter_value(text, "uid")
     }
 }
@@ -294,7 +301,7 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
     for (_, path) in &modified {
         wanted.extend([(merge_base.as_str(), path.as_str()), (head, path.as_str())]);
     }
-    let texts = Texts::read(git, &wanted)?;
+    let mut texts = Texts::read(git, &wanted)?;
     let mut added = Vec::new();
     let mut backfilled = Vec::new();
     for (id, path) in added_paths {
@@ -338,7 +345,14 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
         bind(git, &mut intros, head, &judged, &mut report)?;
     }
     if !added.is_empty() {
-        scan(git, &mut intros, head, &added, &mut report)?;
+        scan(
+            git,
+            &mut intros,
+            head,
+            &added,
+            &mut texts.by_blob,
+            &mut report,
+        )?;
     }
     Ok(report)
 }
@@ -437,6 +451,7 @@ fn scan(
     intros: &mut inventory::Introductions,
     head: &str,
     added: &[Added],
+    texts: &mut HashMap<String, Vec<u8>>,
     report: &mut Report,
 ) -> Result<(), IdsError> {
     let head_sha = git.rev(head)?.unwrap_or_default();
@@ -462,23 +477,19 @@ fn scan(
     for record in added {
         ours.push(identity(&head_sha, &record.id, record.uid.as_ref())?);
     }
-    let mut cache: HashMap<String, Vec<inventory::Copy>> = HashMap::new();
-    for (refname, sha) in inventory::code_refs(git)? {
-        if sha == head_sha {
-            continue;
-        }
-        if !cache.contains_key(&sha) {
-            cache.insert(sha.clone(), inventory::copies_at(git, &sha)?);
-        }
-        let copies = cache[&sha].clone();
+    let refs = inventory::code_refs(git)?
+        .into_iter()
+        .filter(|(_, sha)| *sha != head_sha)
+        .collect();
+    for records in super::ref_inventory::read(git, refs, texts)? {
         for (record, our) in added.iter().zip(&ours) {
-            for copy in copies.iter().filter(|copy| copy.id == record.id) {
-                let theirs = identity(&sha, &copy.id, copy.uid.as_ref())?;
+            for copy in records.copies.iter().filter(|copy| copy.id == record.id) {
+                let theirs = identity(&records.sha, &copy.id, copy.uid.as_ref())?;
                 if theirs.is_none() || theirs != *our {
                     report.blocks.push(format!(
                         "uniqueness: {} also exists on {} as a different record ({}); renumber this one with `codeflow ids retarget {}`",
                         record.id,
-                        branch_name(&refname),
+                        branch_name(&records.refname),
                         copy.path,
                         record.id
                     ));
@@ -491,6 +502,25 @@ fn scan(
 
 #[cfg(test)]
 mod r21_tests {
+    #[test]
+    fn range_paths_share_one_read_of_the_same_blob() {
+        let (dir, repo, _) = super::super::r22_fixture::repository(b"README.md", b"base");
+        let text = super::super::r22_fixture::TEXT;
+        let paths = [
+            "project-management/tasks/TSK-001.md",
+            "project-management/tasks/TSK-002.md",
+        ];
+        crate::git::add_commit(
+            &repo,
+            &[(paths[0].as_bytes(), text), (paths[1].as_bytes(), text)],
+        );
+        let git = super::Git::new(dir.path());
+        let texts = super::Texts::read(&git, &[("HEAD", paths[0]), ("HEAD", paths[1])]).unwrap();
+        assert_eq!(texts.by_path.len(), 2);
+        assert_eq!(texts.by_blob.len(), 1);
+        assert_eq!(git.reads.borrow().blobs.len(), 1);
+    }
+
     #[test]
     fn r21_record_uid_cache_refuses_undecodable_text() {
         let dir = tempfile::tempdir().unwrap();

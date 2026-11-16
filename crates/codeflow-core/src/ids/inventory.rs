@@ -99,23 +99,7 @@ pub fn copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
 ///
 /// Returns an error when git fails.
 pub fn on_every_ref(git: &Git) -> Result<Vec<RefRecords>, IdsError> {
-    let mut cache: HashMap<String, Vec<Copy>> = HashMap::new();
-    let mut out = Vec::new();
-    for (refname, sha) in code_refs(git)? {
-        let copies = if let Some(copies) = cache.get(&sha) {
-            copies.clone()
-        } else {
-            let copies = copies_at(git, &sha)?;
-            cache.insert(sha.clone(), copies.clone());
-            copies
-        };
-        out.push(RefRecords {
-            refname,
-            sha,
-            copies,
-        });
-    }
-    Ok(out)
+    super::ref_inventory::read(git, code_refs(git)?, &mut HashMap::new())
 }
 
 /// The highest canonical sequence of `kind` on any code ref (R-7).
