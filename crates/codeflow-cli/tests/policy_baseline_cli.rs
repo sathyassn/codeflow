@@ -92,6 +92,7 @@ fn said(out: &Output) -> String {
     )
 }
 
+#[cfg(unix)]
 #[test]
 fn the_writers_refuse_in_an_agent_session_and_write_nothing() {
     let scratch = Scratch::new();
@@ -131,6 +132,7 @@ fn the_writers_refuse_in_an_agent_session_and_write_nothing() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn show_and_doctor_report_a_repository_with_no_baseline() {
     let scratch = Scratch::new();
@@ -151,4 +153,39 @@ fn show_and_doctor_report_a_repository_with_no_baseline() {
         text.contains("policy baseline: none for this repository"),
         "{text}"
     );
+}
+
+/// Outside Unix the account's baseline store is not read, so every form
+/// refuses before any session check or `show`, with or without a marker.
+#[cfg(not(unix))]
+#[test]
+fn every_form_refuses_where_baselines_are_not_read() {
+    let scratch = Scratch::new();
+    for args in [
+        ["policy", "baseline", "init"].as_slice(),
+        [
+            "policy",
+            "baseline",
+            "init",
+            "--confirm",
+            "0000000000000000000000000000000000000000",
+        ]
+        .as_slice(),
+        [
+            "policy", "baseline", "refresh", "--reset", "--reason", "test",
+        ]
+        .as_slice(),
+        ["policy", "baseline", "show"].as_slice(),
+    ] {
+        for marked in [true, false] {
+            let out = scratch.codeflow(args, marked);
+            let text = said(&out);
+            assert_eq!(out.status.code(), Some(2), "{args:?} {marked}: {text}");
+            assert!(
+                text.contains("policy baselines are not read on this platform"),
+                "{args:?} {marked}: {text}"
+            );
+            assert!(!text.contains("written:"), "{text}");
+        }
+    }
 }
