@@ -6842,17 +6842,23 @@ fn direct_write_violation(
     if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
         return Some(v);
     }
-    if let Some(p) = write_args.and_then(|paths| {
+    if let Some(named) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
             token_integrity_path(".", cwd, payload_cwd)
+                .map(|path| Named::Spelled(spelled(".", &path)))
         } else {
-            arg_integrity_path(paths, cwd, payload_cwd)
-                .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
+            named_integrity(paths, line, cwd, payload_cwd)
         }
     }) {
+        // The refusal names the operand it rests on (TSK-1187).
         return Some(hook_integrity_violation(
             level,
-            format!("`{cmd}` targets the integrity path `{p}`"),
+            match named {
+                Named::Spelled(shown) => format!("`{cmd}` targets {shown}"),
+                Named::Unresolved { word, path } => format!(
+                    "`{cmd}` targets `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                ),
+            },
         ));
     }
     if let Some(p) = output_writer_paths(cmd, args)
@@ -6964,17 +6970,131 @@ impl GitWriter<'_> {
             .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
     }
 
+    /// [`GitWriter::integrity`], saying which operand the match rests on.
+    fn named(&self, paths: &[String]) -> Option<Named> {
+        named_integrity(paths, self.line, self.cwd, self.payload_cwd)
+    }
+
     fn refuse(&self, message: String) -> Violation {
         hook_integrity_violation(self.level, message)
     }
+
+    /// The role an integrity path named on the line plays in `copy`.
+    fn role(&self, path: &str, copy: &crate::security::unresolved::CopyRead) -> &'static str {
+        let source = copy.sources.iter().any(|source| {
+            arg_integrity_path(std::slice::from_ref(source), self.cwd, self.payload_cwd)
+                .is_some_and(|named| named == path)
+                || normalize_path(source).ends_with(&normalize_path(path))
+        });
+        if source {
+            "as its source"
+        } else {
+            "elsewhere on the line"
+        }
+    }
+
+    /// A move, or a sync that removes its source, judged by the sources it
+    /// removes; the refusal names the source and its role (TSK-1187).
+    fn removes_source(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let cmd = self.cmd;
+        if let Some(finding) = copy
+            .sources
+            .iter()
+            .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
+        {
+            return Some(finding);
+        }
+        match self.named(&copy.sources) {
+            Some(Named::Spelled(shown)) => {
+                return Some(self.refuse(format!("`{cmd}` removes {shown} as its source")))
+            }
+            Some(Named::Unresolved { word, path }) => {
+                return Some(self.refuse(format!(
+                    "`{cmd}` removes its source `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                )))
+            }
+            None => {}
+        }
+        let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
+        worktree_delete_check(
+            &format!("`{cmd}` removes its source"),
+            &sources,
+            self.level,
+            self.cwd,
+            self.payload_cwd,
+            self.line,
+            None,
+        )
+    }
+
+    /// A recursive copy or sync judged by what it would create, replace or
+    /// delete under its destination (TSK-408).
+    fn copy_reach(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let resolve = |word: &str| {
+            (!unresolved_word(word) && unknown_tilde_rest(word).is_none())
+                .then(|| integrity_shell_path(word, self.cwd))
+        };
+        let roots: Vec<&Path> = if self.cwd == self.payload_cwd {
+            vec![self.cwd]
+        } else {
+            vec![self.cwd, self.payload_cwd]
+        };
+        let place = crate::security::copy_reach::Place {
+            resolve: &resolve,
+            roots: &roots,
+        };
+        crate::security::copy_reach::judge(self.cmd, copy, &place).map(|m| self.refuse(m))
+    }
+}
+
+/// How an integrity path is named among a command's write operands
+/// (TSK-1187): spelled by one of them, or named elsewhere on a line where
+/// one of them is filled in at run time.
+enum Named {
+    /// The operand that spells it, as a refusal shows the two together
+    /// ([`spelled`]).
+    Spelled(String),
+    Unresolved {
+        word: String,
+        path: String,
+    },
+}
+
+/// The operand `word` and the integrity path `path` it names, for a
+/// refusal: the path alone when the word spells it, else both.
+fn spelled(word: &str, path: &str) -> String {
+    if normalize_path(word) == normalize_path(path) {
+        format!("the integrity path `{path}`")
+    } else {
+        format!("`{word}`, which names the integrity path `{path}`")
+    }
+}
+
+fn named_integrity(paths: &[String], line: &str, cwd: &Path, payload_cwd: &Path) -> Option<Named> {
+    if let Some((word, path)) = paths.iter().find_map(|word| {
+        arg_integrity_path(std::slice::from_ref(word), cwd, payload_cwd).map(|path| (word, path))
+    }) {
+        return Some(Named::Spelled(spelled(word, &path)));
+    }
+    let word = paths.iter().find(|word| unresolved_word(word))?;
+    let path = unresolved_names_enforcement(std::slice::from_ref(word), line, cwd, payload_cwd)?;
+    Some(Named::Unresolved {
+        word: word.clone(),
+        path,
+    })
 }
 
 impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
     type Found = Violation;
 
     fn writes(&self, path: &str) -> Option<Violation> {
-        let p = self.integrity(&[path.to_string()])?;
-        Some(self.refuse(format!("`{}` writes the integrity path `{p}`", self.cmd)))
+        Some(self.refuse(match self.named(&[path.to_string()])? {
+            Named::Spelled(shown) => format!("`{}` writes {shown}", self.cmd),
+            Named::Unresolved { word, path } => format!(
+                "`{}` writes to `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`",
+                self.cmd
+            ),
+        }))
     }
 
     fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
@@ -6998,40 +7118,52 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             flags: copy.flags.clone(),
             unknown: copy.unknown.clone(),
         };
-        // A dry run writes nothing at its destination.
-        if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
+        // A dry run writes nothing at its destination. After an option the
+        // reader does not know, `-n` may be that option's value.
+        if cmd == "rsync" && crate::security::copy_reach::dry_run(copy) {
             return None;
         }
         if cmd == "mv"
             || (cmd == "rsync" && copy.flags.iter().any(|flag| rsync_removes_source(flag)))
         {
-            if let Some(finding) = copy
-                .sources
-                .iter()
-                .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
-            {
-                return Some(finding);
-            }
-            if let Some(path) = self.integrity(&copy.sources) {
-                return Some(self.refuse(format!("`{cmd}` removes the integrity source `{path}`")));
-            }
-            let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
-            if let Some(finding) = worktree_delete_check(
-                &format!("`{cmd}` removes its source"),
-                &sources,
-                self.level,
-                self.cwd,
-                self.payload_cwd,
-                self.line,
-                None,
-            ) {
+            if let Some(finding) = self.removes_source(copy) {
                 return Some(finding);
             }
         }
-        if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
-            return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
+        // The refusal names the operand it rests on and its role
+        // (TSK-1187): a destination that spells the path, an operand that
+        // could be the destination, or a run-time destination on a line
+        // that names the path elsewhere.
+        let destinations = copy_destinations(cmd, copy);
+        match self.named(&destinations) {
+            Some(Named::Spelled(shown)) => {
+                let only_destinations: Vec<String> = destinations
+                    .iter()
+                    .filter(|word| !copy.sources.contains(word) || copy.dest.as_ref() == Some(word))
+                    .cloned()
+                    .collect();
+                let role = if arg_integrity_path(&only_destinations, self.cwd, self.payload_cwd)
+                    .is_some()
+                {
+                    "as its destination"
+                } else {
+                    "in an operand that could be its destination"
+                };
+                return Some(self.refuse(format!("`{cmd}` writes {shown} {role}")));
+            }
+            Some(Named::Unresolved { word, path }) => {
+                let role = self.role(&path, copy);
+                return Some(self.refuse(format!(
+                    "`{cmd}` writes to `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}` {role}"
+                )));
+            }
+            None => {}
         }
-        if cmd == "rsync" && copy.flags.iter().any(|flag| flag.starts_with("--delete")) {
+        if let Some(flag) = copy
+            .flags
+            .iter()
+            .find(|flag| cmd == "rsync" && rsync_deletes(flag))
+        {
             if let Some(finding) = copy
                 .dest
                 .iter()
@@ -7043,7 +7175,7 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             // as a recursive removal does (TSK-379 security round 8).
             let dests: Vec<_> = copy.dest.iter().map(String::as_str).collect();
             if let Some(finding) = worktree_delete_check(
-                &format!("`{cmd} --delete` removes from its destination"),
+                &format!("`{cmd} {flag}` removes from its destination"),
                 &dests,
                 self.level,
                 self.cwd,
@@ -7053,6 +7185,9 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             ) {
                 return Some(finding);
             }
+        }
+        if let Some(finding) = self.copy_reach(copy) {
+            return Some(finding);
         }
         let p = git_config_destination(cmd, copy, self.cwd)?;
         Some(self.refuse(format!(
@@ -7176,13 +7311,18 @@ fn contained_git_directory_violation(
 /// whose arity is unknown, every operand could be the destination and
 /// each is returned.
 fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) -> Vec<String> {
-    let inside = |dir: &str, source: &str| {
-        let base = source
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(source);
-        format!("{}/{base}", dir.trim_end_matches('/'))
+    // The entry is named as the host's filesystem opens it
+    // (`copy_reach::Host`), so on Windows `src\policy.json:notes` lands at
+    // `policy.json` inside the directory. A name the guard cannot map is
+    // judged as written and as the directory itself.
+    let host = crate::security::copy_reach::Host::THIS;
+    let inside = |dir: &str, source: &str| -> Vec<String> {
+        let dir = dir.trim_end_matches(host.separators());
+        match host.entry_name(source) {
+            Some(Ok(name)) => vec![format!("{dir}/{name}")],
+            Some(Err(_)) => vec![format!("{dir}/{}", host.last_name(source)), dir.to_string()],
+            None => vec![format!("{dir}/{}", host.last_name(source))],
+        }
     };
     let mut paths = read.written.clone();
     if read.directories || read.unknown.is_some() {
@@ -7201,7 +7341,7 @@ fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) ->
         // case that is a directory (review round 19). For `cp`, `ln` and
         // `rsync` the destination directory itself is judged.
         if read.target || cmd == "install" {
-            paths.extend(read.sources.iter().map(|source| inside(dest, source)));
+            paths.extend(read.sources.iter().flat_map(|source| inside(dest, source)));
         }
     }
     paths
@@ -7219,6 +7359,19 @@ fn git_config_destination(
     read: &crate::security::unresolved::CopyRead,
     cwd: &Path,
 ) -> Option<String> {
+    git_config_destination_on(cmd, read, cwd, crate::security::copy_reach::Host::THIS)
+}
+
+/// [`git_config_destination`] with every name read as `host` reads it
+/// (`copy_reach::Host`), so each host's reading is tested on every host.
+fn git_config_destination_on(
+    cmd: &str,
+    read: &crate::security::unresolved::CopyRead,
+    cwd: &Path,
+    host: crate::security::copy_reach::Host,
+) -> Option<String> {
+    let separators = host.separators();
+    let entry = |dir: &Path, source: &str| entry_in(dir, source, host);
     if !matches!(
         cmd,
         "ln" | "cp" | "mv" | "rsync" | "scp" | "ditto" | "install"
@@ -7228,12 +7381,12 @@ fn git_config_destination(
     let mut destinations: Vec<PathBuf> = match (&read.dest, read.target) {
         (Some(dir), true) => {
             let dir = integrity_shell_path(dir, cwd);
-            read.sources.iter().map(|op| entry_in(&dir, op)).collect()
+            read.sources.iter().map(|op| entry(&dir, op)).collect()
         }
         (Some(dest), false) => {
             let path = integrity_shell_path(dest, cwd);
-            let entries = || read.sources.iter().map(|op| entry_in(&path, op));
-            if dest.ends_with('/') {
+            let entries = || read.sources.iter().map(|op| entry(&path, op));
+            if dest.ends_with(separators) {
                 entries().collect()
             } else {
                 match crate::absence::is_kind(&path, true) {
@@ -7246,7 +7399,7 @@ fn git_config_destination(
             }
         }
         (None, _) if cmd == "ln" && read.sources.len() == 1 => {
-            vec![entry_in(cwd, &read.sources[0])]
+            vec![entry(cwd, &read.sources[0])]
         }
         (None, _) => Vec::new(),
     };
@@ -7263,28 +7416,34 @@ fn git_config_destination(
     destinations.into_iter().find_map(|path| {
         // OS text rule (issue 79): a name that is not text is neither
         // `config` nor `config.worktree`, as its bytes are not. A git
-        // directory the guard cannot read may be one, so it refuses.
+        // directory the guard cannot read may be one, so it refuses. The
+        // name is compared as `host` opens it (`Host::compared`); a name
+        // the guard cannot map may be either, so it is judged as one.
         let config = |p: &Path| {
             p.file_name()
                 .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|name| {
-                    matches!(name.to_lowercase().as_str(), "config" | "config.worktree")
+                .is_some_and(|name| match host.compared(name) {
+                    Ok(name) => matches!(name.as_str(), "config" | "config.worktree"),
+                    Err(_) => true,
                 })
-                && repository_config_file(p, true) != Some(false)
+                && repository_config_file_on(p, true, host) != Some(false)
         };
         (config(&path) || real(&path).as_deref().is_some_and(config))
             .then(|| path.display().to_string())
     })
 }
 
-/// The entry a link, copy or move of `source` makes in the directory `dir`.
-fn entry_in(dir: &Path, source: &str) -> PathBuf {
-    let name = source
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(source);
-    dir.join(name)
+/// The entry a link, copy or move of `source` makes in the directory `dir`,
+/// named as `host` opens it (`Host::entry_name`): on Windows
+/// `payload\config` and `payload\config:notes` make `config`. A name the
+/// guard cannot map (`config::$DATA`) is judged as the directory's
+/// `config`, so it refuses wherever that would.
+fn entry_in(dir: &Path, source: &str, host: crate::security::copy_reach::Host) -> PathBuf {
+    match host.entry_name(source) {
+        Some(Ok(name)) => dir.join(name),
+        Some(Err(_)) => dir.join("config"),
+        None => dir.join(host.last_name(source)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -11054,13 +11213,7 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     key_write && names_hooks_path
 }
 
-fn rsync_removes_source(flag: &str) -> bool {
-    flag.starts_with("--")
-        && flag.len() > 2
-        && ["--remove-source-files", "--remove-sent-files"]
-            .iter()
-            .any(|full| full.starts_with(flag))
-}
+use crate::security::copy_reach::{rsync_deletes, rsync_removes_source};
 
 pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) -> Option<Violation> {
     if launcher_name(cmd) != "xargs" || !level.is_active() {
@@ -11376,10 +11529,28 @@ fn real(path: &Path) -> Option<PathBuf> {
 /// on the case-insensitive file systems git runs on. `None` when the disk
 /// cannot answer: each caller reads that as the answer that refuses.
 fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
+    repository_config_file_on(path, on_disk, crate::security::copy_reach::Host::THIS)
+}
+
+/// [`repository_config_file`] with each name read as `host` reads it.
+fn repository_config_file_on(
+    path: &Path,
+    on_disk: bool,
+    host: crate::security::copy_reach::Host,
+) -> Option<bool> {
     // OS text rule (issue 79): the names compare as text. A name that is
-    // not text is none of the ASCII names below, as its bytes are not.
-    let text = |part: &std::ffi::OsStr| part.to_str().map(str::to_lowercase);
-    let name = path.file_name().and_then(text);
+    // not text is none of the ASCII names below, as its bytes are not. Each
+    // name compares as the filesystem opens it (`Host::compared`); a name
+    // the guard cannot map leaves the answer unknown.
+    let text = |part: &std::ffi::OsStr| -> Result<Option<String>, ()> {
+        part.to_str()
+            .map(|name| host.compared(name).map_err(|_| ()))
+            .transpose()
+    };
+    let name = match path.file_name().map(text).transpose() {
+        Ok(name) => name.flatten(),
+        Err(()) => return None,
+    };
     if matches!(name.as_deref(), Some(".gitmodules" | ".lfsconfig")) {
         return Some(true);
     }
@@ -11390,7 +11561,11 @@ fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
     };
-    let parts: Vec<Option<String>> = dir.components().map(|c| text(c.as_os_str())).collect();
+    let parts: Vec<Option<String>> = dir
+        .components()
+        .map(|c| text(c.as_os_str()))
+        .collect::<Result<_, ()>>()
+        .ok()?;
     let is = |part: &Option<String>, name: &str| part.as_deref() == Some(name);
     if let Some(at) = parts.iter().rposition(|part| is(part, ".git")) {
         let inner = &parts[at + 1..];
@@ -21997,6 +22172,117 @@ mod tests {
                 "{cmd} {line}"
             );
         }
+    }
+}
+
+/// TSK-408 review F1 (round d) and F2 (round e): the entry a link or copy
+/// makes in a destination directory is named as the host's filesystem
+/// opens it (`copy_reach::Host`). The Windows reading is checked on every
+/// host through the host-taking helpers.
+#[cfg(test)]
+mod entry_name_tests {
+    use super::*;
+    use crate::security::copy_reach::Host;
+
+    fn read(line: &str) -> crate::security::unresolved::CopyRead {
+        let all: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+        crate::security::unresolved::copy_read(&all[0], &all[1..]).unwrap()
+    }
+
+    /// A git directory with `HEAD` and `objects` and no `refs`, which the
+    /// guard knows only from the disk (the shape of `gd2` in the round
+    /// twelve test).
+    fn bare_git_dir(root: &Path) -> PathBuf {
+        let dir = root.join("gd2");
+        std::fs::create_dir_all(dir.join("objects")).unwrap();
+        std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_entry_is_named_as_the_host_opens_it() {
+        let dir = Path::new("gd");
+        let w = Host::WINDOWS;
+        for source in [
+            "payload\\config",
+            "payload\\config\\",
+            "payload/config",
+            "payload\\config:notes",
+            "payload\\config.",
+            "C:config",
+        ] {
+            assert_eq!(entry_in(dir, source, w), dir.join("config"), "{source}");
+        }
+        // A name the guard cannot map is judged as the directory's config.
+        for source in [
+            "payload\\config::$DATA",
+            "payload\\x:$I30",
+            "payload\\CONFIG~1",
+        ] {
+            assert_eq!(entry_in(dir, source, w), dir.join("config"), "{source}");
+        }
+        // Elsewhere `\` and `:` are parts of a name.
+        let p = Host::POSIX;
+        assert_eq!(
+            entry_in(dir, "payload\\config", p),
+            dir.join("payload\\config")
+        );
+        assert_eq!(
+            entry_in(dir, "payload/config:notes", p),
+            dir.join("config:notes")
+        );
+        assert_eq!(entry_in(dir, "payload/config/", p), dir.join("config"));
+    }
+
+    #[test]
+    fn a_source_into_a_git_directory_is_its_config_as_windows_opens_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let gd = bare_git_dir(&root);
+        let shown = gd.display().to_string();
+        // The path the guard builds, normalized as the destination word is,
+        // compared by components so a separator spelling cannot differ.
+        let config = integrity_shell_path(&shown, &root).join("config");
+        let same =
+            |found: Option<String>| found.map(PathBuf::from).as_deref() == Some(config.as_path());
+        let mut lines = Vec::new();
+        for source in [
+            "payload\\config",
+            "payload\\config:notes",
+            "payload\\config::$DATA",
+            "payload\\config.",
+        ] {
+            lines.push(format!("ln -s {source} {shown}/"));
+            lines.push(format!("ln -s {source} {shown}"));
+            lines.push(format!("cp {source} {shown}/"));
+            lines.push(format!("cp {source} {shown}"));
+            lines.push(format!("cp -t {shown} {source}"));
+            lines.push(format!("install {source} {shown}/"));
+        }
+        for line in &lines {
+            let cmd = line.split_whitespace().next().unwrap();
+            let found = git_config_destination_on(cmd, &read(line), &root, Host::WINDOWS);
+            assert!(same(found.clone()), "{line}: {found:?}");
+        }
+        // The same words on a host where `\` and `:` are parts of a name
+        // make an entry that is no configuration.
+        for source in ["payload\\config", "payload\\config:notes"] {
+            let line = format!("cp {source} {shown}/");
+            assert_eq!(
+                git_config_destination_on("cp", &read(&line), &root, Host::POSIX),
+                None,
+                "{line}"
+            );
+        }
+        // A plain source name keeps its verdict on either reading.
+        let line = format!("ln -s payload/config {shown}/");
+        for host in [Host::WINDOWS, Host::POSIX] {
+            let found = git_config_destination_on("ln", &read(&line), &root, host);
+            assert!(same(found.clone()), "{host:?}: {found:?}");
+        }
+        // A destination word with a named stream is the file it names.
+        let line = format!("cp payload {shown}/config:notes");
+        assert!(git_config_destination_on("cp", &read(&line), &root, Host::WINDOWS).is_some());
     }
 }
 

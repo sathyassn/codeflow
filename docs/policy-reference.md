@@ -1431,7 +1431,10 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
   One judge reads every writer the table lists, once, with the line's
   option environment, and both guards call it: exec-guard against the
   startup and user git configuration classes, git-guard against the
-  integrity paths and the repository git configuration. It judges the
+  integrity paths and the repository git configuration, and both against
+  the enforcement files a recursive copy or sync reaches under its
+  destination (see "Repository discovery and enforcement targets"). It
+  judges the
   copy's destination, each written path from the command line or the
   option environment (`TAR_OPTIONS="--file=$HOME/.zshrc" tar -c .`,
   `ZIPOPT="-O $HOME/.zshrc"`), each as spelled and joined with the
@@ -1663,6 +1666,51 @@ checked, so a symlink does not remove the target owner's protection.
   empty `rm`, `rmdir` or `find` operand names nothing. Copying a worktree
   does not authorize deleting its source. Use `git worktree move` or
   `git worktree remove` for lifecycle changes.
+- A recursive copy or sync is judged by what it would create, replace or
+  delete, under `git.hook_integrity` in both shell hooks. The commands
+  read are `cp` with `-R`, `-r`, `-a`, `--recursive` or `--archive`,
+  `scp -r`, every `rsync` and every `ditto`. For each source the guard
+  works out where its contents land, by the command's own rules: `cp`
+  into an existing directory at the source's name, into an absent one as
+  that directory, and both when the kind cannot be read; `rsync` at the
+  destination for a source ending in `/` or `/.`, or written as `.`, and
+  at the source's name otherwise; `ditto` at both. It then lists the enforcement files, and
+  the `.git` of every registered checkout, at or below that place.
+  - When there are none, the call keeps its earlier verdict and the
+    source is not read: `cp -R src/ build/`, `rsync -a docs/ site/`, a
+    copy to a folder outside every checkout, and a single-file `cp`.
+  - A source holding an entry on the way to one of them refuses, naming
+    the file and the source: `cp -R /src/.claude .`, `rsync -a /src/ ./`
+    and `ditto /src .` when `/src` holds `.claude` or `.git`. Names are
+    compared ignoring case and, on Windows, without a trailing dot or
+    space, as Windows opens them; there a source entry shaped like a
+    short name is a source the guard cannot verify.
+  - A deleting sync refuses whenever its landing place holds one: `--del`,
+    every option whose name starts with `--delete`, and an abbreviation
+    of `--delete`. A source-removing sync (`--remove-source-files`,
+    `--remove-sent-files` and their abbreviations) refuses when its source
+    is or holds enforcement files.
+  - Cannot verify: a source that is missing, unreadable, filled in at run
+    time, a pattern, or remote (`host:path`, `rsync://`), or an option the
+    guard does not read, refuses when the landing place holds enforcement
+    files. A destination filled in at run time refuses when the source
+    holds `.git`, `.codeflow`, `.claude`, `.github`, `.codex` or `.grok`
+    at any depth, read within 4096 directories, or cannot be read. The
+    search for hidden checkouts under a configured worktree location keeps
+    its 4096-directory bound, and past it the copy refuses.
+  - A dry run (`rsync -n`, `--dry-run`) passes when the guard reads every
+    option on the line, each with its value. The guard does not read
+    filters, so `--exclude .claude` does not clear a refusal; sync a
+    subdirectory, or copy the files you need by name.
+  - A symbolic link at the landing place that a source entry of the same
+    name would be written through refuses when it leads to enforcement
+    files (`./x -> .claude` with a source holding `x/`).
+  - Limits: archive extraction (`tar -x`, `unzip`, `git archive`) names
+    its members inside the archive, so it keeps the destination check.
+    A link deeper in the destination is not followed. The guard reads the
+    source when it judges the call, and a tree that changes before the
+    copy runs is not seen. The OS sandbox's write denies on the
+    enforcement files are the backstop for these.
 - Persistent writes of `core.worktree`, `core.bare` and
   `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
   hooks, regardless of the config file or scope. Reads and command-local

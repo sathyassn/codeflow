@@ -3071,6 +3071,28 @@ impl super::unresolved::WriterGuard for ExecWriter<'_> {
     }
 
     fn copies(&self, copy: &super::unresolved::CopyRead) -> Option<Violation> {
+        // The pass under `git.hook_integrity` also judges a recursive copy
+        // or sync by the enforcement files it would create, replace or
+        // delete under its destination, as git-guard does (TSK-408).
+        if self.line.kind == Kind::GitConfig {
+            for dir in self.dirs {
+                let resolve = |word: &str| {
+                    let relative = !word.starts_with(['/', '~']);
+                    if relative && self.line.unknown.is_some() {
+                        return None;
+                    }
+                    self.line.expand(word, dir)
+                };
+                let roots = [dir.as_path()];
+                let place = super::copy_reach::Place {
+                    resolve: &resolve,
+                    roots: &roots,
+                };
+                if let Some(message) = super::copy_reach::judge(self.name, copy, &place) {
+                    return Some(self.line.finding(message));
+                }
+            }
+        }
         match copy.dest.as_deref() {
             Some(dest) if !copy.directories => {
                 copy_judgment(self.name, copy, dest, self.line, self.dirs)
