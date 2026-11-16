@@ -1,0 +1,11 @@
+id = "TSK-1517"
+uid = "34e883aa-f8a8-4f76-9a55-4edc17aade31"
+kind = "TSK"
+title = "A line sync's records are judged in one shared walk and read with a fixed number of git children"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T16:44:01Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
