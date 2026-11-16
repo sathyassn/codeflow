@@ -235,7 +235,8 @@ fn check_remedy(root: &Path, args: &[&str]) -> codeflow_core::remedy::Remedy {
     match words
         .as_deref()
         .and_then(|line| line.strip_prefix("codeflow ci"))
-        .map(str::trim_start)
+        // `argv` joins its words with one ASCII space.
+        .map(|words| words.strip_prefix(' ').unwrap_or(words))
     {
         Some(words) => codeflow_core::remedy::PUSH_SET_CI.with(&[("args", words)]),
         None => codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),

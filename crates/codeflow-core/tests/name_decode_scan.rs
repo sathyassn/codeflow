@@ -1638,14 +1638,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // still never anchors the binding.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "pinned_commit",
+        "unchecked_pinned_commit",
         "obtain-absent:find_reference",
         1,
         "display",
     ),
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "pinned_commit",
+        "unchecked_pinned_commit",
         "obtain-absent:read",
         1,
         "display",

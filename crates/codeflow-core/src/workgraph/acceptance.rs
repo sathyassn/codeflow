@@ -2727,9 +2727,15 @@ pub(super) fn judged_target_tips(
     let [(local_ref, local_tip)] = local.as_slice() else {
         return Ok(fetched.into_iter().chain(local).collect());
     };
+    // The refs are compared raw; only the message is scrubbed. A withheld
+    // remote name can sit in the branch part of a shown remote's ref, which
+    // `shown_ref` leaves, or in the local ref, so the whole text is scrubbed
+    // (TSK-416 review), as `work_start::unresolvable_tip` does.
+    let scrubbed =
+        |text: String| crate::security::git::without_remote_names(repo.commondir(), &text);
     let descends = |of: Oid, ancestor: Oid, fetched_ref: &str, fetched_tip: Oid| {
         history::descendant_of(repo, of, ancestor).map_err(|error| {
-            format!(
+            scrubbed(format!(
                 "cannot read the ancestry of {} at {local_tip} against {} at {fetched_tip}: {}; {}",
                 crate::git::display_text(local_ref),
                 // The fetched ref holds its remote's name, shown only when
@@ -2737,7 +2743,7 @@ pub(super) fn judged_target_tips(
                 crate::security::git::shown_ref(repo.commondir(), fetched_ref),
                 error.message(),
                 reopen_remedy(repo, fetched_ref)
-            )
+            ))
         })
     };
     let mut held = false;
@@ -2749,12 +2755,12 @@ pub(super) fn judged_target_tips(
             continue;
         }
         if !descends(*local_tip, *fetched_tip, fetched_ref, *fetched_tip)? {
-            return Err(format!(
+            return Err(scrubbed(format!(
                 "the local branch {} at {local_tip} and {} at {fetched_tip} have diverged, so the line this reopen is judged against is ambiguous; {}",
                 crate::git::display_text(local_ref),
                 crate::security::git::shown_ref(repo.commondir(), fetched_ref),
                 reopen_remedy(repo, fetched_ref)
-            ));
+            )));
         }
     }
     if held {
@@ -6879,6 +6885,52 @@ mod judged_tip_tests {
         }
         assert!(!error.contains("worktree add"), "{error}");
         assert!(!error.contains("update-ref"), "{error}");
+    }
+
+    /// TSK-416 review: a withheld remote name can sit in the branch part of
+    /// a shown remote's ref, which `shown_ref` leaves, and in the local
+    /// ref; the diverged and the unreadable-ancestry refusals keep it out of
+    /// the whole text. The name is synthetic.
+    #[test]
+    fn a_withheld_name_in_the_target_branch_is_kept_out_of_both_refusals() {
+        let withheld = "user-OPAQUECANARY@host.invalid";
+        let target = format!("integration/{withheld}");
+        let local_ref = format!("refs/heads/{target}");
+        let fetched_ref = format!("refs/remotes/origin/{target}");
+        for unreadable in [false, true] {
+            let (dir, base) = fixture();
+            let root = dir.path();
+            git(
+                root,
+                &["config", &format!("remote.{withheld}.url"), "/nowhere"],
+            );
+            let (local, fetched) = if unreadable {
+                (broken_commit(root), base)
+            } else {
+                let local = commit(root, "local");
+                git(root, &["switch", "-q", "--detach", &base]);
+                (local, commit(root, "fetched"))
+            };
+            git(root, &["update-ref", &local_ref, &local]);
+            git(root, &["update-ref", &fetched_ref, &fetched]);
+            let repo = Repository::open(root).unwrap();
+            let error = judged_target_tips(&repo, &target).unwrap_err();
+            let cause = if unreadable {
+                "cannot read the ancestry of"
+            } else {
+                "have diverged"
+            };
+            for part in [
+                cause,
+                local.as_str(),
+                fetched.as_str(),
+                crate::security::git::WITHHELD_REMOTE,
+            ] {
+                assert!(error.contains(part), "{unreadable}: {part}: {error}");
+            }
+            assert!(!error.contains("OPAQUECANARY"), "{unreadable}: {error}");
+            assert!(!error.contains("host.invalid"), "{unreadable}: {error}");
+        }
     }
 
     /// TSK-416 AC-9: a fetched tip that names no readable commit refuses

@@ -3460,8 +3460,9 @@ fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused
             &["commit", "-q", "--allow-empty", "-m", "feat: successor"],
         );
         let head = git(root, &["rev-parse", "HEAD"]);
-        // The push runs the installed pre-push hook, which judges it.
-        let pushed = Command::new("git")
+        // The push runs the installed pre-push hook, which judges it. It is
+        // built by the one git constructor (TSK-416 review).
+        let pushed = codeflow_core::git::command()
             .args(["push", "-q", "origin", child])
             .current_dir(root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

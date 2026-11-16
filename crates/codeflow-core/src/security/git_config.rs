@@ -1159,6 +1159,40 @@ mod tests {
         }
     }
 
+    /// A `~/` include resolves under the HOME the child gets: an explicit
+    /// value, this process's HOME when the map leaves it out, and no HOME
+    /// when the map removes it, which refuses naming the entry and no part
+    /// of the value (TSK-416 review).
+    #[test]
+    fn a_home_include_follows_the_child_home_and_refuses_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = "include entry 1 of the repository configuration";
+        let value = "~/OPAQUECANARY-included";
+        let resolve = |environment: &Environment| {
+            include_path(value, "file:.git/config", dir.path(), environment, entry)
+        };
+        let refused = |error: String| {
+            assert!(error.contains(entry), "{error}");
+            assert!(error.contains("needs HOME"), "{error}");
+            assert!(!error.contains("OPAQUECANARY"), "{error}");
+        };
+        let replaced = dir.path().join("replaced-home");
+        let explicit = Environment::from([("HOME".into(), replaced.to_str().unwrap().into())]);
+        assert_eq!(
+            resolve(&explicit).unwrap(),
+            replaced.join("OPAQUECANARY-included")
+        );
+        let removed = Environment::from([("HOME".into(), UNSET.into())]);
+        refused(resolve(&removed).unwrap_err());
+        match std::env::var_os("HOME") {
+            Some(home) => assert_eq!(
+                resolve(&Environment::new()).unwrap(),
+                PathBuf::from(home).join("OPAQUECANARY-included")
+            ),
+            None => refused(resolve(&Environment::new()).unwrap_err()),
+        }
+    }
+
     #[test]
     fn newline_in_a_subsection_cannot_impersonate_an_alias_key() {
         let (dir, env) = fixture();

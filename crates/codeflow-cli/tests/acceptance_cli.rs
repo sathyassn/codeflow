@@ -7703,5 +7703,179 @@ fn tsk416_a_reopen_completes_beside_a_stale_local_holding_the_old_completion() {
         assert_eq!(judged.0, 0, "{}", judged.1);
     }
 }
+
+/// A landed TSK-001, reopened, with its criteria amended on `main`, and a
+/// fix committed on `fix/TSK-001-again`. The remote `withheld` is
+/// configured beside `origin`, and `origin/HEAD` names `target`, which
+/// `origin` holds at the landing.
+struct ReopenedFixture {
+    dir: tempfile::TempDir,
+    _origin: tempfile::TempDir,
+    stale: String,
+    landed: String,
+    again: String,
+}
+
+fn reopened_beside_a_default_target(withheld: &str, target: &str) -> ReopenedFixture {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let origin = tracked_origin(root);
+    git(
+        root,
+        &[
+            "config",
+            &format!("remote.{withheld}.url"),
+            origin.path().to_str().unwrap(),
+        ],
+    );
+    let stale = head(root);
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let first = block(
+        &reviewed,
+        &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    );
+    complete(root, "TSK-001", OWN_JOURNEY, &first);
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "Merge TSK-001", BRANCH],
+    );
+    let landed = head(root);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["push", "-q", "origin", &format!("main:{target}")]);
+    git(root, &["fetch", "-q", "origin"]);
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            &format!("refs/remotes/origin/{target}"),
+        ],
+    );
+    // The reopen and a criteria amendment land on `main`, so the next
+    // completion's criteria differ from the completion it reopened.
+    let reopen = codeflow()
+        .args([
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "a regression",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        reopen.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopen.stderr)
+    );
+    let path = root.join(record_path("TSK-001"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("shall work.", "shall work well.")).unwrap();
+    commit(root, "docs(records): reopen TSK-001 and amend it");
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-q", "-c", "fix/TSK-001-again"]);
+    write(root, "src/lib.rs", "pub fn work_again() {}\n");
+    let again = commit(root, "fix: repair the regression");
+    ReopenedFixture {
+        dir,
+        _origin: origin,
+        stale,
+        landed,
+        again,
+    }
+}
+
+/// A commit whose parent is missing: it resolves, and its ancestry cannot
+/// be read.
+fn missing_parent_commit(root: &Path) -> String {
+    let tree = git_out(root, &["rev-parse", "HEAD^{tree}"]);
+    let scratch = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        scratch.path(),
+        format!(
+            "tree {tree}\nparent {}\nauthor T <t@example.test> 1700000000 +0000\ncommitter T <t@example.test> 1700000000 +0000\n\nbroken\n",
+            "1".repeat(40)
+        ),
+    )
+    .unwrap();
+    git_out(
+        root,
+        &[
+            "hash-object",
+            "-t",
+            "commit",
+            "-w",
+            "--literally",
+            scratch.path().to_str().unwrap(),
+        ],
+    )
+}
+
+/// TSK-416 review: a landed task is reopened and completed again with
+/// changed criteria. The repository's default target, which the reopen is
+/// judged against beside the task's own, is `integration/<withheld remote
+/// name>` (`origin/HEAD` names it), a valid branch name on the shown remote
+/// `origin`. Its local copy has diverged from `origin`'s, or its ancestry
+/// cannot be read, so the reopen's judgement refuses; the output keeps the
+/// withheld name out of every part of the text, the branch part of
+/// `origin`'s ref included. The name is synthetic.
+#[test]
+fn tsk416_a_reopen_refusal_keeps_a_withheld_name_in_the_target_out_of_the_output() {
+    let withheld = "user-OPAQUECANARY@host.invalid";
+    let target = format!("integration/{withheld}");
+    for unreadable in [false, true] {
+        let fixture = reopened_beside_a_default_target(withheld, &target);
+        let root = fixture.dir.path();
+        let local = if unreadable {
+            missing_parent_commit(root)
+        } else {
+            git(root, &["switch", "-q", "--detach", &fixture.stale]);
+            write(root, "notes.txt", "unpushed\n");
+            let local = commit(root, "chore: an unpushed commit");
+            git(root, &["switch", "-q", "fix/TSK-001-again"]);
+            local
+        };
+        git(
+            root,
+            &["update-ref", &format!("refs/heads/{target}"), &local],
+        );
+        let refused = complete_with_block(
+            root,
+            "TSK-001",
+            &inner(&block(
+                &fixture.again,
+                &["AC-1: verified | unit", "AC-2: verified | journey ran"],
+                "verified | tests/journey.rs",
+                "none: nothing deferred",
+            )),
+            true,
+        );
+        let cause = if unreadable {
+            "cannot read the ancestry of"
+        } else {
+            "so the line this reopen is judged against is ambiguous"
+        };
+        assert_ne!(refused.0, 0, "unreadable: {unreadable}: {}", refused.1);
+        for part in [cause, local.as_str(), fixture.landed.as_str()] {
+            assert!(
+                refused.1.contains(part),
+                "unreadable: {unreadable}: {part}: {}",
+                refused.1
+            );
+        }
+        for withheld_part in ["OPAQUECANARY", "host.invalid"] {
+            assert!(
+                !refused.1.contains(withheld_part),
+                "unreadable: {unreadable}: {}",
+                refused.1
+            );
+        }
+    }
+}
 #[path = "acceptance_cli/landed_review.rs"]
 mod landed_review;
