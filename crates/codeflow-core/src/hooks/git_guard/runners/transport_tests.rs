@@ -340,6 +340,10 @@ fn an_operand_free_remote_update_reads_the_remotes_git_selects() {
     assert_eq!(default.helpers("remote update"), Ok(vec![]));
     let both = Scratch::new(&format!("{backup}[remotes]\n\tdefault = origin backup\n"));
     assert_eq!(both.helpers("remote update"), Ok(vec!["fixture".into()]));
+    let tabbed = Scratch::new(&format!(
+        "{backup}[remotes]\n\tdefault = \"origin\\tbackup\"\n"
+    ));
+    assert_eq!(tabbed.helpers("remote update"), Ok(vec!["fixture".into()]));
     let nested = Scratch::new(&format!(
         "{backup}[remotes]\n\tdefault = origin mirrors\n\tmirrors = backup\n"
     ));

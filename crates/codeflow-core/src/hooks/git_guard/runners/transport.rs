@@ -666,7 +666,7 @@ fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
 
 /// Refuse when a legacy remote file may define a remote: each of the common
 /// Git directory's `remotes` and `branches` folders must be proven absent,
-/// or be a real folder that holds nothing.
+/// or be read as a folder that lists no entry; any read error refuses.
 fn no_legacy_remotes(probe: &mut dyn Probe) -> Result<(), String> {
     let location = probe.location()?;
     for folder in ["remotes", "branches"] {
@@ -674,8 +674,7 @@ fn no_legacy_remotes(probe: &mut dyn Probe) -> Result<(), String> {
         if absent(&path) {
             continue;
         }
-        let empty = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
-            && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_none());
+        let empty = std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_none());
         if !empty {
             return Err(unproven(format!(
                 "`remote update` may fetch a remote defined in a legacy remote file in the repository's `{folder}` directory; name the remote"
@@ -1074,8 +1073,14 @@ impl<'a> Resolver<'a> {
         probe: &mut dyn Probe,
     ) -> Result<(), String> {
         if self.group("default") {
+            // Git splits a group's values at spaces, tabs and newlines only
+            // (`get_remote_group`); any other character stays in the name.
             let members = values(self.config, "remotes.default")?;
-            for member in members.iter().flat_map(|value| value.split_whitespace()) {
+            for member in members
+                .iter()
+                .flat_map(|value| value.split([' ', '\t', '\n']))
+                .filter(|member| !member.is_empty())
+            {
                 self.word(member, Direction::Fetch, found, probe)?;
             }
             return Ok(());
