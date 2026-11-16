@@ -51,13 +51,13 @@ pub struct HomeAnchor {
 }
 
 /// A task's identity, and its record as the range holds it.
-struct Identity<'a> {
+pub(super) struct Identity<'a> {
     record: &'a RecordView,
     uid: Option<String>,
 }
 
 impl<'a> Identity<'a> {
-    fn of(record: &'a RecordView) -> Self {
+    pub(super) fn of(record: &'a RecordView) -> Self {
         Self {
             record,
             uid: record_uid(&record.content),
@@ -66,7 +66,7 @@ impl<'a> Identity<'a> {
 }
 
 /// The task at one commit, found by identity.
-enum Held {
+pub(super) enum Held {
     Absent,
     One(Box<RecordView>),
     /// Two records carry the identity, or a task record there cannot be
@@ -84,7 +84,7 @@ impl Held {
     }
 }
 
-fn held_at(repo: &Repository, at: Oid, who: &Identity<'_>) -> Held {
+pub(super) fn held_at(repo: &Repository, at: Oid, who: &Identity<'_>) -> Held {
     let Ok(entries) = task_entries(repo, at) else {
         return Held::Ambiguous;
     };

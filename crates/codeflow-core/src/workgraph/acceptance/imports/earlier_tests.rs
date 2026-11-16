@@ -2,8 +2,9 @@
 //! than the default branch, where no default-branch walk runs. Every earlier
 //! move on the home's first-parent history is judged in its own right, and
 //! the history is followed by identity: a later accepted move or correction
-//! does not clear an earlier one, and a changed path or a side that declares
-//! no home is refused, never read as the record's introduction.
+//! does not clear an earlier one, and a changed path, a record not proved to
+//! be this task, or a side that declares no home is refused, never read as
+//! the record's introduction.
 
 use std::path::Path;
 
@@ -14,7 +15,7 @@ use super::{
 
 const PRODUCT: (&str, &str) = ("src/planned.rs", "pub fn planned() {}\n");
 const NO_HOME: &str = "declares no home on one side of the change";
-const PATH_CHANGED: &str = "the task's record has another path";
+const PATH_CHANGED: &str = "the task's record cannot be identified";
 
 /// The task record at `path` in the tree of `at`.
 fn record_in(repo: &Repository, at: Oid, path: &str) -> RecordView {
@@ -256,4 +257,78 @@ fn a_record_introduced_on_the_home_is_taken() {
         &[(&path, &edited(OTHER).replace("TSK-001", "TSK-002"))],
     );
     walk(&fixture, &path).unwrap();
+}
+
+/// A fixture whose `main` holds TSK-001 homed on `LINE` and `occupant` at
+/// `path_of(occupant_file)`, with `OTHER` branched from it.
+fn with_occupant(occupant_file: &str, occupant: String) -> Fixture {
+    let fixture = Fixture::new(&[
+        ("TSK-001", todo("TSK-001", LINE)),
+        (occupant_file, occupant),
+    ]);
+    fixture.git(&["branch", OTHER, "main"]);
+    fixture
+}
+
+/// Land on `OTHER` a planning change that removes `from` and writes `text`
+/// at `to`, so the task's record takes over the path another record held.
+fn land_over(fixture: &Fixture, from: &str, to: &str, text: &str) {
+    fixture.git(&["switch", "-q", "-c", "plan/over", OTHER]);
+    fixture.git(&["rm", "-q", from]);
+    fixture.write(to, text);
+    fixture.git(&["add", "-A"]);
+    fixture.git(&["commit", "-qm", "docs: file the task at another path"]);
+    fixture.git(&["switch", "-q", OTHER]);
+    fixture.git(&[
+        "merge",
+        "--no-ff",
+        "-q",
+        "-m",
+        "chore: land reviewed planning",
+        "plan/over",
+    ]);
+}
+
+/// A refused move of TSK-001, then a planning landing that puts the record
+/// at a path another task's record held, then a later edit: that record's
+/// history is not read as this task's, both as the landing's own change and
+/// in the walk.
+#[test]
+fn a_record_at_a_path_another_task_held_is_refused() {
+    let path = path_of("TSK-001");
+    let occupied = path_of("TSK-002");
+    let fixture = with_occupant("TSK-002", todo("TSK-002", OTHER));
+    fixture.land(OTHER, &[(&path, &todo("TSK-001", OTHER)), PRODUCT]);
+    land_over(&fixture, &path, &occupied, &todo("TSK-001", OTHER));
+    refuses(
+        &landing(&fixture, &occupied),
+        "another task's path at the landing",
+        PATH_CHANGED,
+    );
+    fixture.land(OTHER, &[(&occupied, &edited(OTHER))]);
+    refuses(
+        &walk(&fixture, &occupied),
+        "another task's path before an edit",
+        PATH_CHANGED,
+    );
+}
+
+/// The same takeover where the other record shares the task's id or its
+/// uid: two records match the task before the landing, so it is refused.
+#[test]
+fn a_record_whose_id_or_uid_another_record_shares_is_refused() {
+    let path = path_of("TSK-001");
+    let occupied = path_of("TSK-009");
+    let same_id = todo("TSK-001", OTHER).replace("uid: uid-TSK-001", "uid: uid-other");
+    let same_uid = todo("TSK-009", OTHER).replace("uid: uid-TSK-009", "uid: uid-TSK-001");
+    for (what, occupant) in [("same id", same_id), ("same uid", same_uid)] {
+        let fixture = with_occupant("TSK-009", occupant);
+        fixture.land(OTHER, &[(&path, &todo("TSK-001", OTHER)), PRODUCT]);
+        land_over(&fixture, &path, &occupied, &todo("TSK-001", OTHER));
+        refuses(
+            &landing(&fixture, &occupied),
+            &format!("{what} at the landing"),
+            PATH_CHANGED,
+        );
+    }
 }

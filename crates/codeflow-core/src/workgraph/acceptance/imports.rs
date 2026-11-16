@@ -872,13 +872,13 @@ fn declared_home(view: &RecordView) -> Option<&str> {
         .map(super::super::work_start::logical_target)
 }
 
-/// The refusal of a task record found at `at` under another path, or with
-/// an unreadable task record there, on its home's first-parent history: its
-/// home history cannot be followed by identity, so it is never taken as the
-/// record's introduction.
+/// The refusal of a task whose record before `at`, on its home's
+/// first-parent history, is not exactly one record with its id and uid at
+/// its path: its home history cannot be followed by identity, so the walk
+/// never reads another record, or the task's absence, in its place.
 fn path_changed(at: Oid) -> String {
     format!(
-        "the task's record has another path, or a task record there is unreadable, at {at}, so its earlier home moves cannot be judged; keep the record at one path while another line imports it"
+        "the task's record cannot be identified before {at}: it is not one record with the task's id and uid at the same path (another path, another task's record, two copies, or an unreadable task record), so its earlier home moves cannot be judged; keep the record at one path while another line imports it"
     )
 }
 
@@ -889,10 +889,12 @@ fn home_undeclared(at: Oid) -> String {
     )
 }
 
-/// The record before `at` when `at` introduced it: it is absent at its own
-/// path there, and no task record there carries its identity. A record
-/// under another path, or an unreadable task record, is refused, never an
-/// introduction.
+/// The task's record at `parent`, the first parent of `at`, found by
+/// identity, never by path alone: `None` when no task record there carries
+/// its id or uid, so `at` introduced it. Otherwise exactly one record there
+/// must carry it, with the same id and uid and at the path of `current`,
+/// the task's record at `at`. Another path, another task's record at the
+/// path, two copies, or an unreadable task record is refused.
 fn version_before(
     repo: &Repository,
     current: &RecordView,
@@ -900,18 +902,16 @@ fn version_before(
     at: Oid,
     parent: Oid,
 ) -> Result<Option<RecordView>, String> {
-    if let Some(old) = record_at(repo, parent, current)? {
-        return Ok(Some(old));
-    }
-    let uid = record_uid(&record.content);
-    match presence_at(
-        repo,
-        parent,
-        &record.id,
-        uid.as_deref(),
-        &own_file_name(record),
-    ) {
-        Presence::Absent => Ok(None),
+    let who = home::Identity::of(record);
+    match home::held_at(repo, parent, &who) {
+        home::Held::Absent => Ok(None),
+        home::Held::One(old)
+            if old.path == current.path
+                && old.id == record.id
+                && record_uid(&old.content) == record_uid(&record.content) =>
+        {
+            Ok(Some(*old))
+        }
         _ => Err(path_changed(at)),
     }
 }
