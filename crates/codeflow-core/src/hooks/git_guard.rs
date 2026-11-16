@@ -15930,9 +15930,10 @@ mod tests {
         std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
         // The deadline is the caller's; the messages name the guard's 3 s.
         // A longer deadline here lets a loaded host start the script, so
-        // each case reaches the refusal it is written for.
+        // each case reaches the refusal it is written for. Each fake `git`
+        // is built by the one git constructor, as every Git child is.
         let bounded = |program: &Path| {
-            let mut command = std::process::Command::new(program);
+            let mut command = crate::git::process(program);
             command.current_dir(temp.path());
             crate::security::git_config::bounded_output(
                 &mut command,

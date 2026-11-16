@@ -9746,7 +9746,9 @@ fn interpreter_argument_refused(output: &Output) -> bool {
 /// Whether the guard refused only because a Git child it runs outlived its
 /// fail-closed 3 s bound (`security/git_config.rs`), as on a busy host.
 /// The `git_guard` verdict comparison reads a pair again when either side
-/// carries this refusal, and no other (TSK-1413 AC-2).
+/// carries this refusal, and no other (TSK-1413 AC-2). Only the Unix test
+/// below calls it.
+#[cfg(unix)]
 fn slow_git_child_refusal(out: &Output) -> bool {
     let err = String::from_utf8_lossy(&out.stderr);
     out.status.code() == Some(2)
