@@ -2128,7 +2128,8 @@ pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
 /// value, a split string behind a modelled launcher, a privilege
 /// launcher's verb that runs no command, a carrier's real `--`, and the
 /// daily `xargs` and `find -exec` forms whose closed grammar the guard
-/// keeps. Every other command runner is refused in any form
+/// keeps, running a program that does not read its words for a push or
+/// a command. Every other command runner is refused in any form
 /// (`runners_without_a_grammar_refuse_in_any_spelling`).
 pub const LAUNCHER_ORDINARY: &[&str] = &[
     "nice -n 5 git status",

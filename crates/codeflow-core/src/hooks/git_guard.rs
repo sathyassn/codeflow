@@ -14783,9 +14783,12 @@ fn fd_exec(word: &str) -> bool {
 
 /// The daily form of `xargs` the guard reads exactly: no option, or only
 /// `-0`, `-r` and `-n NUMBER` (`-nNUMBER`), then either no command (xargs
-/// runs `echo`) or a literal command ([`literal_command`]). Any other
-/// option, a replacement string (`-I`, `-J`, `-i`, `--replace`) included,
-/// is unresolved, and nothing xargs adds from its input is expanded.
+/// runs `echo`) or a literal command ([`literal_command`]) whose program
+/// does not read its words for a push or a command
+/// ([`reads_command_words`]). xargs appends the items it reads from its
+/// input to that command, options among them, so a program whose words
+/// the guards read is unresolved here. Any other option, a replacement
+/// string (`-I`, `-J`, `-i`, `--replace`) included, is unresolved too.
 fn xargs_literal(args: &[String]) -> bool {
     let number = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
     let mut at = 0;
@@ -14799,15 +14802,20 @@ fn xargs_literal(args: &[String]) -> bool {
         }
     }
     let command = &args[at..];
-    command.is_empty() || literal_command(command)
+    command.is_empty() || (literal_command(command) && !reads_command_words(command))
 }
 
 /// The daily form of `find` the guard reads exactly: each `-exec` or
-/// `-execdir` runs a literal command ([`literal_command`]) whose found-path
-/// operand is a whole `{}` word, ended by `;` or by `{} +`. An `-ok` or
-/// `-okdir`, an action with no terminator, or any other command is
-/// unresolved. A `find` with no action that runs a command is read as
-/// before.
+/// `-execdir` runs a literal command ([`literal_command`]), read with its
+/// `{}` words in place, whose found-path operand is a whole `{}` word,
+/// ended by `;` or by `{} +`. A `{}` as the utility or as a launcher's
+/// command word leaves no literal program, so it is unresolved. A `{}`
+/// given to a program that reads its words for a push or a command
+/// ([`reads_command_words`]) is unresolved too: a found path can be a
+/// start point named on the line, which can be a subcommand or an option
+/// value (BSD `find -f` takes any start point). An `-ok` or `-okdir`, an
+/// action with no terminator, or any other command is unresolved. A
+/// `find` with no action that runs a command is read as before.
 fn find_literal(args: &[String]) -> bool {
     let mut at = 0;
     while let Some(word) = args.get(at).map(String::as_str) {
@@ -14823,9 +14831,12 @@ fn find_literal(args: &[String]) -> bool {
                 if tail[end] == "+" && words.last().is_none_or(|w| w != "{}") {
                     return false;
                 }
-                // The command, without the found paths find puts in.
-                let named: Vec<String> = words.iter().filter(|w| *w != "{}").cloned().collect();
-                if !literal_command(&named) || words.iter().any(|w| w != "{}" && w.contains("{}")) {
+                // The words find runs, each `{}` in its place: a `{}` the
+                // walk reads as the program leaves no literal program.
+                if !literal_command(words) || words.iter().any(|w| w != "{}" && w.contains("{}")) {
+                    return false;
+                }
+                if words.iter().any(|w| w == "{}") && reads_command_words(words) {
                     return false;
                 }
                 at += end + 1;
@@ -14854,6 +14865,40 @@ fn literal_command(words: &[String]) -> bool {
     };
     let program = &words[at];
     !program.contains('{') && !is_shell(basename(program))
+}
+
+/// Whether the program a runner's command `words` resolves to is one whose
+/// words the guards read for a push or a command they carry: Git and its
+/// runners, gh, a launcher left with no command, a command runner, a shell,
+/// `eval`, `source`, `sed` (its `e` command), a package runner, or a
+/// program of the option-command inventory. Words a runner adds at run
+/// time, from its input or from the paths it finds, would reach that
+/// reading unseen. An interpreter is not one: the push rule does not read
+/// an interpreter's code on the line either.
+fn reads_command_words(words: &[String]) -> bool {
+    use crate::security::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
+    use crate::security::option_commands::OPTION_COMMANDS;
+    let Some(at) = Walk::read(words).program else {
+        return false;
+    };
+    let program = words[at].as_str();
+    let base = basename(program);
+    let base = base.strip_suffix(".exe").unwrap_or(base);
+    let name = launcher_name(program);
+    runners::arguments(program, &[]).is_some()
+        || base == "gh"
+        || is_shell(base)
+        || matches!(name, "eval" | "source" | "." | "sed")
+        || is_prefix_launcher(program)
+        || OPTION_LAUNCHERS.contains(&name)
+        || LAUNCHERS.contains(&name)
+        || SUPPLIERS.contains(&name)
+        || PACKAGE_RUNNERS.contains(&name)
+        || UNREAD_RUNNERS.contains(&name)
+        || COMMAND_CARRIERS.contains(&name)
+        || OPTION_COMMANDS
+            .iter()
+            .any(|row| row.programs.contains(&name))
 }
 
 fn launch_walk_into(tokens: &[String], walk: &mut Walk) -> Option<usize> {
@@ -20044,7 +20089,7 @@ mod tests {
         };
         let policy = default_policy();
         for command in [
-            "printf 'README.md/n' | xargs sort".to_string(),
+            "printf 'README.md/n' | xargs wc -l".to_string(),
             "printf 'README.md/n' | xargs uniq".into(),
             "rm -f README.md/child".into(),
             format!("rm -f {refused}"),

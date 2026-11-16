@@ -706,15 +706,18 @@ fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
             // A replacement string makes `xargs` a form the guards keep no
             // grammar for (TSK-1490).
             "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
+            // `sed` reads its words for a command (`e`), so a runner that
+            // adds words or found paths to it is unresolved (TSK-1490).
+            r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
+            "git ls-files -z | xargs -0 sed -i '' 's/a/b/'",
         ],
         &[
-            r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
             r"find docs -exec rm {} \;",
             "find docs -delete",
             "printf x | xargs echo",
             "git ls-files | xargs grep -n a",
             "git ls-files | xargs rm -f",
-            "git ls-files -z | xargs -0 sed -i '' 's/a/b/'",
+            "git ls-files -z | xargs -0 wc -l",
             "find . -name '*.md' -print0 | xargs -0 grep -n a",
         ],
         "git.hook_integrity",
@@ -956,7 +959,7 @@ const REVIEWER_ALLOWED: &[&str] = &[
     "git clean --dry-run --force --force .claude/worktrees",
     "sed -n '1,5p' .codeflow/policy.json",
     "find .codeflow -exec grep -n a {} +",
-    r"printf 'README.md\n' | xargs sort",
+    r"printf 'README.md\n' | xargs wc -l",
     r"printf 'README.md\n' | xargs uniq",
     "nice -n 5 sed -n p README.md",
     "timeout 10 sed -i '' s/a/b/ README.md",
@@ -9493,13 +9496,11 @@ fn guards_read_a_search_pattern_as_text() {
     let mut allowed = vec![
         "rg --files | rg '/CHANGELOG.md$'".to_string(),
         "grep -rn '/etc/hosts' docs/".to_string(),
-        "rg --files | xargs rg '.claude/settings.json'".to_string(),
-        "rg --files | xargs rg -e x -e '.codeflow/policy.json'".to_string(),
-        "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
-        // A wrapped `git grep` reads its pattern as plain `git grep` does.
-        "rg --files | xargs git grep '/CHANGELOG.md$'".to_string(),
-        "rg --files | xargs git grep -e '/CHANGELOG.md$' --".to_string(),
-        "find docs -exec git grep '/CHANGELOG.md$' {} +".to_string(),
+        // A runner hands `grep` its paths; `rg` and `git grep` read their
+        // words for a command, so a runner refuses them since TSK-1490.
+        "rg --files | xargs grep '.claude/settings.json'".to_string(),
+        "rg --files | xargs grep -e x -e '.codeflow/policy.json'".to_string(),
+        "find docs -exec grep -l '.claude/settings.json' {} +".to_string(),
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),
     ];
@@ -9534,7 +9535,9 @@ fn guards_read_a_search_pattern_as_text() {
                     allowed.push(long);
                 }
             }
-            if tool != "git grep" {
+            // `rg`, `ag` and `git grep` read their words for a command, so
+            // an `xargs` that appends words to them refuses (TSK-1490).
+            if !matches!(tool, "git grep" | "rg" | "ag") {
                 let appended = format!("rg --files | xargs {tool} {form}");
                 if run_time {
                     cost.push(appended);

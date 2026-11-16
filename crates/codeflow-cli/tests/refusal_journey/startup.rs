@@ -508,12 +508,9 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "bash -c 'git status'",
     "CMD='git status'; sh -c \"$CMD\"",
     "printf '%s\\n' README | xargs ls",
-    // Templated `xargs`, `flock` and `parallel` lines are refused since
-    // TSK-1490, so they left this list.
-    // `status` operands are judged since TSK-1002 review 11, so the
-    // names-only reader stands in for it.
-    "xargs git ls-files",
-    "echo README.md | xargs git add",
+    // Templated `xargs`, `flock` and `parallel` lines, and an `xargs` that
+    // appends words to Git, are refused since TSK-1490, so they left this
+    // list.
     "gtimeout 5 git status",
     "tmux -S /tmp/sock new-session -d",
     "git config --global user.name Probe",

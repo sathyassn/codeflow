@@ -1434,7 +1434,9 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
 /// runner the guard keeps no grammar for, and an `xargs` or `find` form
 /// outside their closed daily grammar (an option, a replacement string, a
 /// nested shell or split string, or a missing terminator) leave the command
-/// unresolved, which refuses. exec-guard holds the rule with the privilege rule at block
+/// unresolved, which refuses. So do an `xargs` whose command is a program
+/// that reads its words for a push or a command, and a `find` action that
+/// gives a found path to such a program or runs it as the command. exec-guard holds the rule with the privilege rule at block
 /// and off, so a privilege refusal is never what stops the push; git-guard
 /// has no privilege rule.
 #[test]
@@ -1507,6 +1509,15 @@ fn launched_or_carried_line_pushes_still_refuse() {
         "find . -exec env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line' ';'",
         "find . -ok git push origin HEAD:refs/heads/integration/EPC-001-line ';'",
         "find . -exec git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "printf '%s\\n' push origin 'HEAD:refs/heads/integration/EPC-001-line' | xargs -n 3 git",
+        "xargs git push origin <<< 'HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -n 3 /usr/bin/git <<< 'push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs taskset -c 0 <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs xargs <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs tar -cf a.tar <<< \"-I 'git push origin HEAD:refs/heads/integration/EPC-001-line'\"",
+        "find /usr/bin -name git -exec {} push origin 'HEAD:refs/heads/integration/EPC-001-line' ';'",
+        "find /usr/bin -name git -exec env {} push origin 'HEAD:refs/heads/integration/EPC-001-line' ';'",
+        "find push -maxdepth 0 -exec git {} origin HEAD:refs/heads/integration/EPC-001-line ';'",
     ]);
     let off = SecuritySection {
         privilege_escalation: PolicyLevel::Off,
@@ -1588,7 +1599,8 @@ fn ordinary_launcher_commands_stay_allowed() {
 /// TSK-1490: a command runner or carrier the guard keeps no grammar for is
 /// refused under the rule in any spelling, with any options and whatever
 /// command it runs, a harmless one included; so is an `xargs` or `find`
-/// form outside their closed daily grammar. Both guards, with hook
+/// form outside their closed daily grammar, a program that reads its words
+/// for a push or a command among them. Both guards, with hook
 /// integrity off, so no integrity finding is what refuses. The refusal
 /// names the way through: the inner command run directly.
 #[test]
@@ -1636,6 +1648,17 @@ fn runners_without_a_grammar_refuse_in_any_spelling() {
             "find . -exec wc -l {}.bak ';'",
             "find . -exec {} ';'",
             "find . -exec watch wc {} ';'",
+            "xargs git status <<< a",
+            "xargs -n 1 /usr/bin/git <<< a",
+            "xargs gh <<< a",
+            "xargs taskset -c 0 <<< a",
+            "xargs sort <<< a",
+            "xargs rg x <<< a",
+            "find . -exec {} wc ';'",
+            "find . -exec env {} wc ';'",
+            "find . -exec nice {} wc ';'",
+            "find . -exec git log {} ';'",
+            "find . -exec rg x {} +",
         ]
         .map(str::to_string),
     );

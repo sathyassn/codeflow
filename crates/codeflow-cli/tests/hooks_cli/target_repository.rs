@@ -2446,30 +2446,16 @@ fn repair2_config_reads() {
 fn repair2_xargs_guarded_verbs() {
     let f = Fixture::new();
     for hook in ["git-guard", "exec-guard"] {
-        for command in ["git diff --name-only | xargs git add", "xargs git status"] {
+        // xargs appends the words it reads to the Git command, so the guards
+        // cannot read the Git call it makes: every form refuses (TSK-1490).
+        for command in [
+            "git diff --name-only | xargs git add",
+            "xargs git status",
+            "echo README.md | xargs git add",
+        ] {
             let out = f.command(&f.root, hook, command);
-            // Every `status` operand is judged since TSK-1002 review 11, so
-            // names supplied at run time are unknown files there too.
-            let unknown_files = hook == "exec-guard";
-            assert_eq!(
-                out.status.code(),
-                Some(if unknown_files { 2 } else { 0 }),
-                "{hook} {command}: {out:?}"
-            );
-            if unknown_files {
-                let diagnostic = String::from_utf8_lossy(&out.stderr);
-                assert!(
-                    diagnostic.contains("security.secret_reads")
-                        && diagnostic.contains("cannot verify")
-                );
-            }
+            assert!(refused(&out), "{hook} {command}: {out:?}");
         }
-        let out = f.command(&f.root, hook, "echo README.md | xargs git add");
-        assert_eq!(
-            out.status.code(),
-            Some(0),
-            "literal file input: {hook}: {out:?}"
-        );
         for tail in [
             "",
             "config",
@@ -3527,6 +3513,8 @@ fn repair3_runner_filter_and_option_sources() {
             "printf payload | xargs git-filter-branch",
             "printf payload | xargs git for-each-repo",
             "printf payload | xargs git grep -e pattern",
+            "printf README.md | xargs git grep pattern",
+            "printf README.md | xargs git grep -e pattern --",
             "git grep \"$UNKNOWN\" docs",
             "git ls-remote 'ext::sh -c rm% -rf% .claude'",
             "git remote-ext fixture 'sh -c rm% -rf% .claude'",
@@ -3557,8 +3545,6 @@ fn repair3_runner_filter_and_option_sources() {
             "git grep needle --literal-filename",
             "git rebase -x ./test.sh HEAD~3",
             "git filter-branch --tree-filter ./test.sh HEAD",
-            "printf README.md | xargs git grep pattern",
-            "printf README.md | xargs git grep -e pattern --",
             "git grep '$UNKNOWN' README.md",
         ] {
             let out = f.command(&f.linked, hook, command);
