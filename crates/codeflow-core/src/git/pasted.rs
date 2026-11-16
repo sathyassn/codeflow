@@ -129,12 +129,33 @@ impl<'a> Pasted<'a> {
     }
 
     /// Whether a raw value holds the name of a remote messages withhold, or
-    /// the remotes cannot be read, so every value is held back.
+    /// the remotes cannot be read, so every value is held back. The words
+    /// joined as raw text and the rendered line are judged too, since a
+    /// name holding a space can span two words that each look clean
+    /// (TSK-416 review).
     fn withheld(&self) -> bool {
         let remotes = WithheldRemotes::read(self.root);
-        self.values()
+        if self
+            .values()
             .flatten()
             .any(|value| remotes.scrub(value) != value)
+        {
+            return true;
+        }
+        let mut raw: Vec<&str> = vec![self.head];
+        for (flag, value) in &self.options {
+            raw.push(*flag);
+            raw.extend(*value);
+        }
+        for operand in &self.operands {
+            match operand {
+                Operand::Value(value) => raw.extend(*value),
+                Operand::Placeholder(text) => raw.push(*text),
+            }
+        }
+        raw.extend(self.trailing.iter().copied());
+        let raw = raw.join(" ");
+        remotes.scrub(&raw) != raw || self.line().is_some_and(|line| remotes.scrub(&line) != line)
     }
 
     /// The command as one line a POSIX shell runs with exactly these
@@ -145,6 +166,11 @@ impl<'a> Pasted<'a> {
         if self.withheld() {
             return None;
         }
+        self.line()
+    }
+
+    /// [`Pasted::render`] without the remote-name check.
+    fn line(&self) -> Option<String> {
         let mut words = vec![self.head.to_string()];
         for (flag, value) in &self.options {
             words.push(rendered_option(flag, (*value)?)?);
@@ -213,10 +239,12 @@ fn shell_word(value: &str) -> Option<String> {
 /// gives it for the repository at `root`.
 #[must_use]
 pub fn option(root: &Path, flag: &'static str, value: &str) -> Option<String> {
-    if !crate::security::git::word_shown(root, value) {
+    if !crate::security::git::word_shown(root, value)
+        || !crate::security::git::word_shown(root, &format!("{flag} {value}"))
+    {
         return None;
     }
-    rendered_option(flag, value)
+    rendered_option(flag, value).filter(|shown| crate::security::git::word_shown(root, shown))
 }
 
 /// [`option`] without the remote-name check, for the renderers here.
@@ -240,7 +268,15 @@ pub fn argv(root: &Path, program: &'static str, args: &[&str]) -> Option<String>
     for arg in args {
         words.push(word(root, arg)?);
     }
-    Some(words.join(" "))
+    // A withheld name holding a space can span two clean words, in the raw
+    // arguments or in the line (TSK-416 review).
+    let raw = std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let line = words.join(" ");
+    (crate::security::git::word_shown(root, &raw) && crate::security::git::word_shown(root, &line))
+        .then_some(line)
 }
 
 /// What a step says in place of a command with no printed form because a
@@ -377,6 +413,54 @@ mod tests {
             None
         );
         assert_eq!(word(unread.path(), "main"), None);
+    }
+
+    /// TSK-416 review: a withheld name holding a space can span two words
+    /// that each hold none of it, such as `origin` and `user:s3cret@host`
+    /// for the remote `origin user:s3cret@host`. Every renderer judges the
+    /// joined words and the line, so no form of such a command is printed;
+    /// the words apart, or in another order, still print.
+    #[test]
+    fn a_withheld_name_spanning_two_words_is_never_printed() {
+        let spanning = "origin user:s3cret@host";
+        let repo = repo_with(&["origin", spanning]);
+        let root = repo.path();
+        let fetch = Pasted::new(root, "git fetch")
+            .value("origin")
+            .value("user:s3cret@host");
+        assert_eq!(fetch.render(), None);
+        assert_eq!(fetch.unprinted(), Some(NOT_PRINTED_WITHHELD));
+        let printed = step(&fetch);
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(
+            printed.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+            "{printed}"
+        );
+        // The fetch hint `task status`, acceptance and `ci` print.
+        let hint = crate::workgraph::work_start::fetch_origin(root, "user:s3cret@host");
+        assert!(!hint.contains("s3cret"), "{hint}");
+        assert!(hint.contains(NOT_PRINTED_WITHHELD), "{hint}");
+        // A span across a flag and its value, or two arguments.
+        let into = Pasted::new(root, "codeflow ci").option("origin", "user:s3cret@host");
+        assert_eq!(into.render(), None);
+        assert_eq!(option(root, "origin", "user:s3cret@host"), None);
+        assert_eq!(
+            argv(root, "codeflow", &["origin", "user:s3cret@host"]),
+            None
+        );
+        // Each word alone, or the words apart, still prints.
+        assert_eq!(
+            word(root, "user:s3cret@host").as_deref(),
+            Some("user:s3cret@host")
+        );
+        assert_eq!(
+            Pasted::new(root, "git fetch")
+                .value("user:s3cret@host")
+                .value("origin")
+                .render()
+                .as_deref(),
+            Some("git fetch user:s3cret@host origin")
+        );
     }
 
     /// The arguments `sh` hands a program named `git` when it runs

@@ -62,7 +62,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "codeflow-core/src/git/remote_query.rs",
         "`git fetch {}` failed",
-        "a URL with its credential stripped, describing a failed run",
+        "the fetch URL through display_url (credential stripped when it has a scheme), describing a failed run; a URL, never a remote name or ref",
     ),
     (
         "codeflow-core/src/hooks/git_guard.rs",

@@ -229,12 +229,15 @@ fn violation(
 /// (TSK-416 review round 3).
 fn check_remedy(root: &Path, args: &[&str]) -> codeflow_core::remedy::Remedy {
     let rest = args.split_first().map_or(args, |(_, rest)| rest);
-    let words: Option<Vec<String>> = rest
-        .iter()
-        .map(|arg| codeflow_core::git::pasted::word(root, arg))
-        .collect();
-    match words {
-        Some(words) => codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &words.join(" "))]),
+    // The whole line is judged, so a withheld name holding a space cannot
+    // span two arguments (TSK-416 review).
+    let words = codeflow_core::git::pasted::argv(root, "codeflow ci", rest);
+    match words
+        .as_deref()
+        .and_then(|line| line.strip_prefix("codeflow ci"))
+        .map(str::trim_start)
+    {
+        Some(words) => codeflow_core::remedy::PUSH_SET_CI.with(&[("args", words)]),
         None => codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
     }
 }
