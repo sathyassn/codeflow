@@ -704,6 +704,7 @@ fn a_remote_section_with_an_empty_name_refuses_every_contact_with_remotes() {
         "clone https://example.test/r copy",
         "remote add -f fresh https://example.test/r",
     ];
+    const SECTION: &str = "[remote \"\"]\n\turl = fixture::x\n";
     for (key, line, selecting) in [
         (
             "remote..url",
@@ -725,7 +726,6 @@ fn a_remote_section_with_an_empty_name_refuses_every_contact_with_remotes() {
         assert_eq!(scratch.helpers("status"), Ok(vec![]), "{key}");
     }
     // A remote the configuration selects by the same name refuses too.
-    const SECTION: &str = "[remote \"\"]\n\turl = fixture::x\n";
     for (config, command) in [
         ("[branch \"main\"]\n\tremote = .url\n", "fetch"),
         ("[extensions]\n\tpartialClone = .url\n", "status"),

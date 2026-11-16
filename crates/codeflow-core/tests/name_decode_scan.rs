@@ -1562,6 +1562,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // A `promisor` value that is not UTF-8 is no boolean Git reads as
+    // false, so the remote counts as a promisor.
+    (
+        "crates/codeflow-core/src/security/git_config.rs",
+        "promisor_remotes",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     (
         "crates/codeflow-core/src/hooks/sandbox_state.rs",
         "claude_layers",
