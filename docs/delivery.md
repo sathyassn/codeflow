@@ -185,10 +185,9 @@ or CI runs.**
 | Epic close | Every task terminal, every criterion verified, every consumed spec implemented or still consumed. The full gate runs every target (`codeflow test --all`) | `codeflow epic status`, `codeflow ci` |
 | Release impact | Required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere optional and checked when present | `codeflow ci` |
 
-Nothing polls by default: the builder's pull request carries its cited
-evidence, and the primary reads hosted results once at batch assembly. The
-pull request cites the full gate by run id and revision, and the review
-verdict lives on the pull request, so the evidence survives the cleanup of
+Nothing polls by default: the primary reads hosted results once at batch
+assembly. The pull request carries the cited evidence, the full gate's run
+id and revision, and the review verdict, so they survive the cleanup of
 worktrees and build directories.
 
 ### Completed work imported from another line
@@ -211,8 +210,7 @@ A receiver's first push still proves its own task landings.
   and hosted CI are the backstop.
 - After a home line lands on the default target and is deleted, the exact
   record's first-parent landing on the published default target supplies
-  the proof. The landing and its source span must still pass the guarded
-  checks; a missing home without that landing remains unavailable.
+  the proof, when that landing and its source span pass the guarded checks.
 - A source task that merged its home after review retains its binding only
   when that merge was clean and came from the home line. A task reopened
   before its first landing keeps the criteria accepted at that landing.
@@ -243,8 +241,8 @@ A receiver's first push still proves its own task landings.
   recorded. A sync of anything the line does not hold, a branch that
   carries no task, a protected branch and the line's own push are judged
   as before.
-  A line push after landing work whose completion is still pending waits
-  until the completion record lands, even if the work was reviewed earlier.
+  A line push after landing work waits until its completion record lands,
+  even if the work was reviewed earlier.
 
 When `work.import_authority` refuses, fetch the named home and its full
 history, or the default target's history if the home has been retired.
@@ -316,10 +314,7 @@ change earlier behaviour; the rest are still refused.
 When `main` moved a task's home, the sync keeps that home only if every
 move was a reviewed planning merge of records on `main`, and the line
 already names the new home or kept its copy of a `todo` or `blocked` task
-unchanged. For a task the line holds as its own, every move also needs the
-run's verified `main` commit. On any home, a move that a later change to
-the record carries is judged at the commit that made it, as it would be at
-its own landing. See [home moves a sync of main
+unchanged. See [home moves a sync of main
 accepts](policy-reference.md#home-moves-a-sync-of-main-accepts).
 
 Refused, naming the cause:
@@ -355,8 +350,8 @@ original SHA-256 digest, source commit and separate redaction review.
 A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
 `acceptance.criteria` records a changed criterion result. The amendment
 changes that criterion and planning records only, and the completion
-contains it. Other planning records in the same commit, such as the epic
-record, the epic plan or other task records, do not disqualify it. A
+contains it. Other planning records in the same commit do not disqualify
+it. A
 planning record is a file under `project-management/` or `docs/plan/` that
 is not hidden, not a harness instruction file and not an adopter-facing path
 under the target's policy. The waiver accepts the commit for this criterion
@@ -370,10 +365,10 @@ endpoint. In `codeflow task status`, a task whose declared integration line
 is not recorded at the default target's tip has no own range unless `--base`
 and `--into` pin that line. A range that reopens a completion that never landed keeps that
 own-range allowance, whatever caused the reopen; a range that reopens a
-landed completion does not. A waiver refused as not on the target says what
-that requires: a receiving line the run pins holds the commit (the pull
-request's base in `codeflow ci`, `--base` in `task status`). The refusal also
-names the route: amend the criterion through a planning pull request into
+landed completion does not. A waiver refused as not on the target names
+what that requires, a receiving line the run pins that holds the commit (the
+pull request's base in `codeflow ci`, `--base` in `task status`), and the
+route: amend the criterion through a planning pull request into
 the target, merge the target into the branch before the review, and name
 that planning commit.
 
