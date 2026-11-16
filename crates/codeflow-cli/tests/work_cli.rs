@@ -674,6 +674,7 @@ fn review_tool_with(
 fn claim_checks_prospective_pin_then_start_checks_actual_ancestry() {
     let dir = fixture();
     let root = dir.path();
+    ensure_origin(root);
     let bin = tempfile::tempdir().unwrap();
     let branch = "task/TSK-001-work";
     git(
@@ -722,6 +723,79 @@ fn claim_checks_prospective_pin_then_start_checks_actual_ancestry() {
     )
     .status
     .success());
+}
+
+/// SF-1 fails closed: in a clone with remotes, a pin's target must have a
+/// fetched landing ref. With only a review remote, or an `origin` never
+/// fetched, claim and start refuse, name the missing fetch and create no
+/// branch; the local `main` is never read in its place.
+#[test]
+#[cfg(unix)]
+fn a_pin_whose_target_has_no_fetched_landing_ref_is_refused() {
+    for origin in [false, true] {
+        let dir = fixture();
+        let root = dir.path();
+        let bin = tempfile::tempdir().unwrap();
+        let branch = "task/TSK-001-work";
+        if origin {
+            let remote = root.join(".git").join("unfetched-origin.git");
+            git(
+                root,
+                &[
+                    "init",
+                    "-q",
+                    "--bare",
+                    "-b",
+                    "main",
+                    remote.to_str().unwrap(),
+                ],
+            );
+            git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        }
+        git(
+            root,
+            &[
+                "config",
+                "remote.review.url",
+                "https://github.com/owner/project.git",
+            ],
+        );
+        git(
+            root,
+            &["config", &format!("branch.{branch}.remote"), "review"],
+        );
+        git(root, &["switch", "-qc", branch]);
+        write(root, "src/a.rs", "pub fn a() {}\n");
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "feat: predecessor"]);
+        let pin = git(root, &["rev-parse", "HEAD"]);
+        let on = format!("TSK-001@{pin}");
+        review_tool(bin.path(), branch, &pin, true);
+        git(root, &["switch", "-q", "main"]);
+        // An unfetched origin is refused when the target is resolved, before
+        // the landing ref is read; a review remote alone reaches SF-1.
+        let fetch = if origin {
+            "source 'main' is not fetched here; fetch its remote"
+        } else {
+            "TSK-001 predecessor target 'main' has no fetched landing ref"
+        };
+        let out = cli(
+            root,
+            &["work", "claim", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        assert!(!out.status.success(), "{}", text(&out));
+        assert!(text(&out).contains(fetch), "{}", text(&out));
+        assert!(git(root, &["branch", "--list", "task/TSK-002-*"]).is_empty());
+        git(root, &["switch", "-qc", "task/TSK-002-work-tsk-002", &pin]);
+        let out = cli(
+            root,
+            &["work", "start", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        assert!(!out.status.success(), "{}", text(&out));
+        assert!(text(&out).contains(fetch), "{}", text(&out));
+    }
 }
 
 #[test]
@@ -894,6 +968,7 @@ fn pinned_review_fixture(level: &str) -> (tempfile::TempDir, tempfile::TempDir, 
     );
     git(root, &["add", ".codeflow/policy.json"]);
     git(root, &["commit", "-qm", "chore: set planning policy"]);
+    ensure_origin(root);
     let branch = "task/TSK-001-work";
     git(
         root,
@@ -1079,6 +1154,7 @@ fn ordinary_planning_findings_keep_their_policy_level() {
 fn next_suggests_only_an_exact_reviewed_predecessor() {
     let dir = fixture();
     let root = dir.path();
+    ensure_origin(root);
     let bin = tempfile::tempdir().unwrap();
     let branch = "task/TSK-001-work";
     git(
@@ -1311,6 +1387,7 @@ fn base_checkout_ci_admits_the_standalone_route_and_a_task_pr() {
 fn stacked_pins_refuse_wrong_identity_advanced_tip_and_nonancestor_head() {
     let dir = fixture();
     let root = dir.path();
+    ensure_origin(root);
     let bin = tempfile::tempdir().unwrap();
     let branch = "task/TSK-001-work";
     git(
@@ -1389,6 +1466,7 @@ fn multiple_pins_require_a_single_prospective_base_before_claim_mutates() {
         );
         git(root, &["add", "."]);
         git(root, &["commit", "-qm", "docs: plan third"]);
+        ensure_origin(root);
         git(
             root,
             &[
@@ -1469,6 +1547,7 @@ fn a_conflicting_remote_arriving_between_pin_lookups_is_refused() {
     );
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "docs: plan third"]);
+    ensure_origin(root);
     git(
         root,
         &[
@@ -1647,11 +1726,15 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
     );
 }
 
-/// A bare origin for `root`, holding `main`, which tracks it.
+/// A bare origin for `root`, holding `main`, which tracks it. It replaces
+/// the fixture origin `ensure_origin` may have added.
 fn with_origin(root: &Path) -> tempfile::TempDir {
     let remote = tempfile::tempdir().unwrap();
     // The remote's default branch is `main`, as a hosted remote's is.
     git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    if git(root, &["remote"]).lines().any(|name| name == "origin") {
+        git(root, &["remote", "remove", "origin"]);
+    }
     git(
         root,
         &["remote", "add", "origin", remote.path().to_str().unwrap()],
@@ -1663,11 +1746,11 @@ fn with_origin(root: &Path) -> tempfile::TempDir {
     remote
 }
 
-/// Give a fixture with no `origin` one inside its own `.git`, holding
-/// `main`, and say whether it was added: `task status` reads the target
-/// from `origin`'s remote-tracking ref in a clone with remotes (TSK-340),
-/// and these fixtures configure a review remote. The caller removes it
-/// after the verb, so the rest of the fixture keeps its remotes.
+/// Give a fixture with no `origin` one inside its own `.git`, holding a
+/// fetched `main`, and say whether it was added. In a clone with remotes,
+/// `task status` (TSK-340) and a reviewed pin (TSK-341) read the target
+/// from `origin`'s remote-tracking ref, as a real clone has it, and these
+/// fixtures configure a review remote.
 #[cfg(unix)]
 fn ensure_origin(root: &Path) -> bool {
     if git(root, &["remote"])
@@ -2652,7 +2735,7 @@ fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
     let reviewed = git(root, &["rev-parse", "HEAD"]);
     let evidence = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(evidence.path(), format!("acceptance:\n  reviewed: {reviewed}\n  review: https://example.test/pr/1#review\n  criteria:\n    AC-1: verified | journey\n    AC-2: verified | unit\n  journey: verified | journey\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n")).unwrap();
-    let added = ensure_origin(root);
+    ensure_origin(root);
     succeeds(&cli(
         root,
         &[
@@ -2665,9 +2748,6 @@ fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
         ],
         None,
     ));
-    if added {
-        git(root, &["remote", "remove", "origin"]);
-    }
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "docs: record the acceptance"]);
     let tip = git(root, &["rev-parse", "HEAD"]);
