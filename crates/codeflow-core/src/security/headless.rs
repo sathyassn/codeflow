@@ -30,7 +30,7 @@
 //! the message says the line was not fully parsed, and a project that needs
 //! such a run sets `security.headless_peer_runs` to `warn`.
 
-use crate::hooks::git_guard::simple_commands;
+use crate::hooks::git_guard::{simple_commands, Launch};
 
 /// A headless peer run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,31 +113,16 @@ fn classify(argv: &[String], depth: usize) -> Found {
                 let after = skip_options(rest, &["-s", "--signal", "-k", "--kill-after"]);
                 after.get(1..).unwrap_or_default()
             }
-            "sudo" | "doas" => skip_assignments(skip_options(
-                rest,
-                &[
-                    "-u",
-                    "--user",
-                    "-g",
-                    "--group",
-                    "-C",
-                    "--close-from",
-                    "-D",
-                    "--chdir",
-                    "-h",
-                    "--host",
-                    "-p",
-                    "--prompt",
-                    "-r",
-                    "--role",
-                    "-t",
-                    "--type",
-                    "-T",
-                    "--command-timeout",
-                    "-U",
-                    "--other-user",
-                ],
-            )),
+            // The guards' launcher grammar reads sudo and doas exactly:
+            // options first, and for sudo the environment assignments it
+            // stores between them, so the program is the one the launcher
+            // runs. An option it does not read, or a shell reading its
+            // input, is unresolved (TSK-1490).
+            "sudo" | "doas" => match crate::hooks::git_guard::launch_after(&name, argv, 1) {
+                Launch::Runs(at) => argv.get(at..).unwrap_or_default(),
+                Launch::Nothing => return Found::Nothing,
+                Launch::Unread(_) | Launch::Shell => return Found::Unresolved,
+            },
             // The options are an allowlist shared with the directory
             // reader: one this grammar does not list may take a value that
             // would be read as the program, so it is unresolved (SR9-3).
@@ -1037,6 +1022,36 @@ mod tests {
         for (help, twin) in HELP_PAIRS {
             assert_eq!(found(help), None, "{help}");
             assert!(found(twin).is_some(), "{twin}");
+        }
+    }
+
+    /// TSK-1490: sudo and doas are read by the guards' launcher grammar.
+    /// sudo reads options again after an assignment and does not check the
+    /// name before `=`, so the program is the word sudo runs; an option the
+    /// grammar does not read is unresolved, so the raw text still finds the
+    /// peer.
+    #[test]
+    fn privilege_launchers_are_read_as_they_run() {
+        for command in [
+            "sudo A=1 -u root claude -p x",
+            "sudo 1A=x claude -p x",
+            "sudo -n LC_ALL=C -u root claude -p x",
+            "sudo -- claude -p x",
+            "doas -u root claude -p x",
+            "doas -n claude -p x",
+        ] {
+            let run = found(command).unwrap_or_else(|| panic!("not found: {command}"));
+            assert!(run.parsed, "read as unresolved: {command}");
+            assert_eq!(run.peer, "claude", "{command}");
+        }
+        for command in ["sudo --bogus-option=1 claude -p x", "doas -Z claude -p x"] {
+            let run = found(command).unwrap_or_else(|| panic!("not found: {command}"));
+            assert!(!run.parsed, "read as parsed: {command}");
+        }
+        // `sudo -l` lists what may run and runs nothing; doas takes no
+        // assignments, so it runs the program `A=1`.
+        for command in ["sudo -l claude -p x", "doas A=1 claude -p x"] {
+            assert_eq!(found(command), None, "{command}");
         }
     }
 
