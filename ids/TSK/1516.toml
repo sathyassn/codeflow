@@ -1,0 +1,11 @@
+id = "TSK-1516"
+uid = "12737b5f-e9a7-4b55-b2be-cc5b92eaee9a"
+kind = "TSK"
+title = "validate --docs on ten thousand records is back within its read budget"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T16:10:54Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
