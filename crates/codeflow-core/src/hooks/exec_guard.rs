@@ -1057,7 +1057,7 @@ mod tests {
         assert_eq!(rules(carried), rules(bare), "{carried}");
     }
 
-    /// TSK-1490 rulings D2 and D3: an option value in a command language
+    /// TSK-1490: an option value in a command language
     /// the guard does not read refuses under hook integrity; an ordinary
     /// value, another option or a form the reader does not reach adds no
     /// rule to the command without it (AC-2).

@@ -1025,7 +1025,7 @@ fn evaluate_report_with_runners(
         }
 
         // An option value in a command language the guard does not read
-        // may hold any command (TSK-1490 rulings D2 and D3).
+        // may hold any command (TSK-1490).
         if let Some(refused) = crate::security::option_commands::refusal_marker(segment) {
             if ctx.policy.hook_integrity.is_active() {
                 violations.extend(crate::security::option_commands::unread_violation(
@@ -1294,17 +1294,25 @@ fn evaluate_report_with_runners(
 /// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
 /// `command`, `builtin` and `exec` launchers stripped. The first element is
 /// the program as written, which may still hold a substitution.
-pub(crate) fn simple_commands(command: &str) -> Vec<Vec<String>> {
+///
+/// Each vector comes with whether the launcher walk in front of it is
+/// unresolved ([`Walk::unread`], or a privilege launcher running a shell on
+/// its input): the program is then only the walk's first guess, so a caller
+/// must treat the command as unresolved. A segment whose walk is unresolved
+/// and names no program comes back as an empty vector, still marked
+/// (TSK-1490).
+pub(crate) fn read_simple_commands(command: &str) -> Vec<(Vec<String>, bool)> {
     expand_commands(command)
         .iter()
         .filter_map(|segment| {
             let mut words = command_argv(segment);
             strip_reserved_words(&mut words);
-            let (program, args) = strip_launchers(&words)?;
-            let mut command = Vec::with_capacity(args.len() + 1);
-            command.push(program.to_string());
-            command.extend(args.iter().cloned());
-            Some(command)
+            let walk = Walk::read(&words);
+            let unresolved = walk.unread.is_some() || walk.implicit_shell;
+            let Some(at) = walk.program else {
+                return unresolved.then_some((Vec::new(), true));
+            };
+            Some((words[at..].to_vec(), unresolved))
         })
         .collect()
 }
@@ -18791,7 +18799,7 @@ mod tests {
         );
     }
 
-    /// TSK-1490 rulings D2 and D3: an option value in a command language
+    /// TSK-1490: an option value in a command language
     /// the guard does not read refuses under hook integrity; an ordinary
     /// value, another option or a form the reader does not reach adds no
     /// rule to the command without it (AC-2).

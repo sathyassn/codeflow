@@ -1993,8 +1993,7 @@ pub const OPTION_CLONE_EXEC: &[&str] = &["--upload-pack='rm -rf /'", "-u 'cat ~/
 /// commands, a Cargo setting naming a program it runs or a Cargo value that
 /// does not parse, and a spelling of an inventory option the reader does
 /// not parse exactly (an abbreviation, a case variant, a value glued inside
-/// a cluster). Both guards refuse them under `git.hook_integrity` (TSK-1490
-/// rulings D2 and D3).
+/// a cluster). Both guards refuse them under `git.hook_integrity` (TSK-1490).
 pub const OPTION_LANGUAGES: &[&str] = &[
     "script --comm 'true' /dev/null",
     "flock /tmp/l --comm 'true'",
@@ -2214,7 +2213,7 @@ pub const OPTION_NESTED_SETTINGS: &[&str] = &[
 
 /// A Cargo `env` setting beside the same assignment written bare before
 /// Cargo, for exec-guard: the setting gets the assignment's verdict
-/// (TSK-1490 ruling D3). The spaced spelling keeps the raw text from
+/// (TSK-1490). The spaced spelling keeps the raw text from
 /// matching the assignment itself.
 pub const OPTION_ASSIGNMENTS: &[(&str, &str)] = &[(
     "cargo --config 'env.LD_PRELOAD = \"/tmp/x.so\"' build",

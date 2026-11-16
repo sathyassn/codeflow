@@ -375,7 +375,7 @@ pub(crate) fn unread_message(form: &str) -> String {
 }
 
 /// The refusal both guards give a value they do not judge as a command,
-/// under `git.hook_integrity` at `level` (TSK-1490 rulings D2 and D3);
+/// under `git.hook_integrity` at `level` (TSK-1490);
 /// `None` for a [`Carried::Command`].
 pub(crate) fn unread_violation(
     carried: &Carried,
@@ -1187,7 +1187,7 @@ fn inert_position(name: &str, word: &str, value: &str) -> bool {
         || (name == "less" && matches!(value, "G" | "g" | "F"))
 }
 
-/// What a Cargo `--config` value carries (TSK-1490 ruling D3). A value
+/// What a Cargo `--config` value carries (TSK-1490). A value
 /// without `=` names a configuration file, outside this reader. Any other
 /// value is parsed as TOML, its keys decoded, and judged by key path, never
 /// by its values: a setting naming a program Cargo runs refuses, an `env`
