@@ -483,6 +483,23 @@ fn corrected_home(case: &str) -> tempfile::TempDir {
         git(root, &["switch", "main"]);
         merge(root, "plan/move-home");
     }
+    let elsewhere = |text: &str| {
+        text.replace(
+            &format!("integration_target: {LINE}"),
+            "integration_target: integration/EPC-009-elsewhere",
+        )
+    };
+    if case == "moved back" {
+        git(root, &["switch", "-c", "plan/move-away", "main"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &elsewhere(&on_line("todo", "Pending.\n")),
+        );
+        commit(root, "docs: move the task to another line");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/move-away");
+    }
     git(root, &["switch", "-c", BRANCH, "main"]);
     write(root, "src/lib.rs", "pub fn source() {}\n");
     let landed = commit(root, "feat: source work");
@@ -498,7 +515,11 @@ fn corrected_home(case: &str) -> tempfile::TempDir {
     } else {
         on_line("complete", &closeout)
     };
-    write(root, &record_path("TSK-001"), &completed);
+    if case == "moved back" {
+        write(root, &record_path("TSK-001"), &elsewhere(&completed));
+    } else {
+        write(root, &record_path("TSK-001"), &completed);
+    }
     commit(root, "docs: complete source work");
     git(root, &["switch", "main"]);
     merge(root, BRANCH);
@@ -507,13 +528,12 @@ fn corrected_home(case: &str) -> tempfile::TempDir {
         merge(root, "main");
         return dir;
     }
-    if case == "earlier direct move" {
-        let elsewhere = completed.replace(
-            &format!("integration_target: {LINE}"),
-            "integration_target: integration/EPC-009-elsewhere",
-        );
-        write(root, &record_path("TSK-001"), &elsewhere);
-        commit(root, "docs: move the task straight on main");
+    if case == "moved back" {
+        git(root, &["switch", "-c", "plan/move-back"]);
+        write(root, &record_path("TSK-001"), &completed);
+        commit(root, "docs: move the complete task back to the line");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/move-back");
     }
     git(root, &["switch", "-c", "plan/correct-home"]);
     let mut corrected = completed.replace(
@@ -549,15 +569,17 @@ fn tsk1185_a_home_correction_on_the_home_proves_at_the_original_landing() {
     );
 }
 
-/// The proved correction is the only move the walk leaves out: an earlier
-/// direct move on main is still judged and refused.
+/// The proved correction does not promote the move before it: a planning
+/// move back to the line's home made while the task was complete stays an
+/// earlier move, and the permitted check refuses it, though the line's copy
+/// names the home it arrived at.
 #[test]
 fn tsk1185_a_home_correction_does_not_clear_an_earlier_move() {
-    let dir = corrected_home("earlier direct move");
+    let dir = corrected_home("moved back");
     assert_blocks(
         &check(dir.path(), LINE, Some(RECEIVER), false),
-        "earlier direct move",
-        &["TSK-001", "is not a reviewed planning merge of records"],
+        "move back while complete",
+        &["TSK-001", "while it was not todo or blocked", "before its last move"],
     );
 }
 

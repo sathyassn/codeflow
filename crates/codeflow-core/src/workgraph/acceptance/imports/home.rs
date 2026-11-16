@@ -504,6 +504,23 @@ fn judge_moves(
     receiver: Oid,
     line_since: Oid,
 ) -> Result<(), String> {
+    judge_moves_except(repo, who, line, moves, (receiver, line_since), None)
+}
+
+/// [`judge_moves`], where `corrected` names a home correction the caller
+/// has proved (TSK-1185 AC-10). The correction stays in `moves`, so every
+/// move before it is still an earlier move with the permitted check and
+/// none of them takes the last move's rules. When the correction is the
+/// last move, it passes the common proof and is exempt from the last
+/// move's rules; anywhere else it is judged as any other move.
+fn judge_moves_except(
+    repo: &Repository,
+    who: &Identity<'_>,
+    line: &Held,
+    moves: &[(Oid, Oid)],
+    (receiver, line_since): (Oid, Oid),
+    corrected: Option<Oid>,
+) -> Result<(), String> {
     let Some(((last, last_parent), earlier)) = moves.split_last() else {
         return Ok(());
     };
@@ -515,6 +532,9 @@ fn judge_moves(
         if !permitted(*at) || !permitted(*parent) {
             return Err(format!("{MOVED}: the task moved at {at} while it was not todo or blocked, or while it held an acceptance block, before its last move"));
         }
+    }
+    if corrected == Some(*last) {
+        return Ok(());
     }
     let Held::One(arrived) = held_at(repo, *last, who) else {
         return Err(ambiguous(*last));
@@ -582,8 +602,8 @@ fn adoption_anchor(
 /// AC-10, AC-13), against the line's copy at `receiver`.
 ///
 /// `corrected` names a home correction the caller has already proved
-/// (TSK-1185 AC-10). That one move is left out of the walk; every other
-/// move is still judged.
+/// (TSK-1185 AC-10). As the last move it is exempt from the last move's
+/// rules; every move before it is still judged as an earlier move.
 ///
 /// # Errors
 /// The refusal names the move and its cause.
@@ -607,11 +627,15 @@ pub(super) fn judge_home(
     let (since, line_since) = anchor.map_or((start, start), |anchor| {
         (anchor.source_version, anchor.line_landing)
     });
-    let mut found = moves_of(repo, &who, default_tip, since, head)?;
-    if let Some(corrected) = corrected {
-        found.moves.retain(|(at, _)| *at != corrected);
-    }
-    judge_moves(repo, &who, &line, &found.moves, receiver, line_since)?;
+    let found = moves_of(repo, &who, default_tip, since, head)?;
+    judge_moves_except(
+        repo,
+        &who,
+        &line,
+        &found.moves,
+        (receiver, line_since),
+        corrected,
+    )?;
     Ok(anchor)
 }
 

@@ -1364,8 +1364,8 @@ fn verify_record_home(
         }
     }
     if let (RecordKind::Task, Some(walk)) = (record.kind, walk) {
-        // A home correction proved by `verify_landing_home` (AC-10) is the
-        // one move the walk leaves out; it still judges every other move.
+        // A home correction proved by `verify_landing_home` (AC-10) is
+        // exempt from the last move's rules; every earlier move is judged.
         anchor = home::judge_home(
             repo,
             record,
