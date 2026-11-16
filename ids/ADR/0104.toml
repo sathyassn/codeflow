@@ -1,0 +1,11 @@
+id = "ADR-0104"
+uid = "b1ba176e-c7a4-43a1-975e-e4a452c73f5e"
+kind = "ADR"
+title = "Records are read by libyaml-safer under the serde_yaml_ng Serde layer"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T08:13:38Z"
+target = "none"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
