@@ -1,0 +1,11 @@
+id = "TSK-1519"
+uid = "c9ff6b8f-281c-4f5c-bd1f-7067fc1246dc"
+kind = "TSK"
+title = "A hook treats a worktree registration whose administrative entry is gone as pruned, not sent to repair"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T17:23:08Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
