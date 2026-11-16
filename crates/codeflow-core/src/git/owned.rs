@@ -33,6 +33,7 @@ pub struct GroupOwner {
     controller: Option<std::os::unix::net::UnixStream>,
     #[cfg(unix)]
     child_end: Option<std::os::unix::net::UnixStream>,
+    #[cfg(unix)]
     group: Option<i32>,
 }
 
@@ -120,7 +121,7 @@ impl GroupOwner {
         #[cfg(not(unix))]
         {
             let _ = command;
-            Ok(Self { group: None })
+            Ok(Self {})
         }
     }
 
@@ -128,8 +129,12 @@ impl GroupOwner {
     /// process's copy of the watcher's end.
     pub fn spawned(&mut self, child: &Child) {
         #[cfg(unix)]
-        drop(self.child_end.take());
-        self.group = i32::try_from(child.id()).ok();
+        {
+            drop(self.child_end.take());
+            self.group = i32::try_from(child.id()).ok();
+        }
+        #[cfg(not(unix))]
+        let _ = child;
     }
 
     /// SIGKILL every process left in the group, the watcher included,
@@ -143,10 +148,6 @@ impl GroupOwner {
             unsafe {
                 libc::killpg(group, libc::SIGKILL);
             }
-        }
-        #[cfg(not(unix))]
-        {
-            self.group = None;
         }
     }
 
