@@ -199,12 +199,12 @@ pub fn ledger_citation(text: &str) -> Option<String> {
 /// (TSK-1516). A record that is not UTF-8 text gets no finding, and only the
 /// first citation in a record is reported.
 fn ledger_citation_issue(rel: &Path, content: &[u8]) -> Option<DocsLintIssue> {
-    let text = std::str::from_utf8(content).ok()?;
     // Every citation contains `FU-`, `LN-` or `WS-` and three digits, so a
     // record without that text has no citation on any line. Most records
     // have none, and this literal search, much faster than the full pattern,
     // skips the line-by-line search for them.
     static LITERAL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let text = std::str::from_utf8(content).ok()?;
     let literal =
         LITERAL.get_or_init(|| regex::Regex::new(r"(?:FU|LN|WS)-[0-9]{3}").expect("valid pattern"));
     if !literal.is_match(text) {
