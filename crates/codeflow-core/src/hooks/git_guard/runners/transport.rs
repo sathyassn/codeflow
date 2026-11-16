@@ -21,7 +21,8 @@
 //! - for an operand-free `remote update`, the remotes Git selects: the
 //!   `default` group's members, or every remote not set to skip the default
 //!   update, each under the same conditions, when no legacy remote file
-//!   may add one;
+//!   may add one; an empty `default` group and a remote section with an
+//!   empty name refuse;
 //! - the promisor remotes of a partial clone, under the same conditions,
 //!   for every Git command, since a missing object can be fetched from them
 //!   by any command.
@@ -666,15 +667,20 @@ fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
 
 /// Refuse when a legacy remote file may define a remote: each of the common
 /// Git directory's `remotes` and `branches` folders must be proven absent,
-/// or be read as a folder that lists no entry; any read error refuses.
+/// or be a real folder, read without following a link, that lists no
+/// entry. A link, any other type and any read error refuse.
 fn no_legacy_remotes(probe: &mut dyn Probe) -> Result<(), String> {
     let location = probe.location()?;
     for folder in ["remotes", "branches"] {
         let path = location.common.join(folder);
-        if absent(&path) {
-            continue;
-        }
-        let empty = std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_none());
+        let empty = match crate::absence::symlink_metadata_optional(&path) {
+            Ok(None) => continue,
+            Ok(Some(metadata)) => {
+                metadata.file_type().is_dir()
+                    && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_none())
+            }
+            Err(_) => false,
+        };
         if !empty {
             return Err(unproven(format!(
                 "`remote update` may fetch a remote defined in a legacy remote file in the repository's `{folder}` directory; name the remote"
@@ -1076,12 +1082,22 @@ impl<'a> Resolver<'a> {
             // Git splits a group's values at spaces, tabs and newlines only
             // (`get_remote_group`); any other character stays in the name.
             let members = values(self.config, "remotes.default")?;
+            let mut listed = false;
             for member in members
                 .iter()
                 .flat_map(|value| value.split([' ', '\t', '\n']))
                 .filter(|member| !member.is_empty())
             {
+                listed = true;
                 self.word(member, Direction::Fetch, found, probe)?;
+            }
+            // A group that lists no remote makes Git fetch the remote the
+            // name `default` selects (`builtin/fetch.c`
+            // `add_remote_or_group`), which the group's own name hides here.
+            if !listed {
+                return Err(unproven(
+                    "`remote update` with an empty `default` remote group fetches the remote named `default`; name the remote",
+                ));
             }
             return Ok(());
         }
@@ -1094,7 +1110,15 @@ impl<'a> Resolver<'a> {
             else {
                 continue;
             };
-            if !name.is_empty() && !variable.is_empty() && !names.contains(&name) {
+            // Git names the remote of an empty section name after the rest
+            // of the key (`remote.c` `make_remote`), a name no other key
+            // reaches; refuse it rather than drop it.
+            if name.is_empty() || variable.is_empty() {
+                return Err(unproven(
+                    "a remote section with an empty name defines a remote `remote update` fetches; name the remote",
+                ));
+            }
+            if !names.contains(&name) {
                 names.push(name);
             }
         }
@@ -1186,6 +1210,13 @@ impl<'a> Resolver<'a> {
                     names.push(name.to_string());
                 }
             }
+        }
+        // An empty name is not one `named` can map to the remote Git builds
+        // for it (`remote.c` `make_remote`); refuse it.
+        if names.iter().any(String::is_empty) {
+            return Err(unproven(
+                "a partial clone names a promisor remote with an empty name, which the guard cannot resolve",
+            ));
         }
         names.sort();
         names.dedup();
