@@ -2570,6 +2570,30 @@ Three rules touch enforcement:
 No gate, hook, CI check or landing reads the ledger; a missing or damaged
 ledger changes no verdict.
 
+## When a hook is skipped
+
+Local hooks protect only the operations that run them. The layers left for
+a protected branch depend on the skipped stage:
+
+| Skipped stage | What still applies locally | What stops a forced update or deletion on the remote |
+|---|---|---|
+| Commit hooks | With the reference hook still installed and `git.local_ref_protection` set to `block`, it refuses the new commit's local ref move. The reference hook also judges other local protected-ref moves and deletions under their policy levels; an exact remote-head sync remains allowed. | The remote host's protection applies to any later push. Local refusal is no evidence of those host rules. |
+| Push hook | The reference hook judges local ref transactions, not the remote destination. A push need not move the local branch. | Only the remote's protection. Without it, no local layer refuses this remote change once the push hook is skipped. |
+
+In-session guards can refuse skips they see; commands outside the session
+do not run those guards. CI supplies a verdict and needs required host
+rules to block a remote change. Skipping or disabling the reference hook
+too removes the commit-side backstop. See [ADR-0009](decisions/ADR-0009-human-authorization-out-of-band.md#residual-clarification-2026-11-13-tsk-1448).
+
+`codeflow doctor --check remote-ref-protection` reads GitHub rules for each
+existing branch matching `git.protected_branches`. A warning names any branch
+whose force-update or deletion protection is missing or cannot be verified,
+the exposure when the push hook is skipped, and the remedy: `codeflow remote
+protect` or the host's settings. Verified protection produces no warning.
+An unreadable branch list leaves the configured patterns unverified;
+unsupported hosts are also reported as unverified. This finding is separate
+from `remote-perimeter`, which checks the merge and CI requirements.
+
 ## Git hook stages
 
 `codeflow git-hook` dispatches five hook stages and answers a `capabilities`

@@ -855,6 +855,13 @@ fn process_group_holds_only_exited_members(pgid: i32) -> Result<bool> {
     }
 }
 
+/// The most `/proc` process entries one scan reads: Linux's `PID_MAX_LIMIT`
+/// on 64-bit systems, the most process ids the kernel can hand out. Each
+/// entry is read in bounded memory, so this only ends a scan of a `/proc`
+/// that no real host can show; a fixed lower count would refuse a busy host.
+#[cfg(all(unix, not(target_os = "macos")))]
+const PROC_ENTRY_BOUND: usize = 4_194_304;
+
 /// Whether `/proc` shows at least one member of process group `pgid` and
 /// every member it shows has exited: state `Z` (exited, not yet reaped) or
 /// `X` (being removed). An exited process runs nothing and is never
@@ -875,7 +882,7 @@ fn linux_group_holds_only_exited_members(proc_root: &Path, pgid: i32) -> Result<
             continue;
         }
         examined += 1;
-        if examined > 65_536 {
+        if examined > PROC_ENTRY_BOUND {
             return Ok(false);
         }
         let mut stat = Vec::new();
@@ -933,24 +940,46 @@ fn linux_stat_group_and_state(stat: &[u8]) -> Option<(i32, u8)> {
 #[cfg(target_os = "macos")]
 fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec<u32>> {
     let mut command = crate::platform::restricted_command("/bin/ps");
-    command.args(["-axww", "-o", "pid=", "-o", "command="]);
-    let output = command
-        .output()
+    command
+        .args(["-axww", "-o", "pid=", "-o", "command="])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = command
+        .spawn()
         .map_err(|error| PresentError::io("/bin/ps", error))?;
-    if !output.status.success() || output.stdout.len() > 4 * 1024 * 1024 {
+    let stdout = child
+        .stdout
+        .take()
+        .expect("the process listing's stdout is piped");
+    // The listing is read as it streams, one bounded line at a time, so its
+    // total size never matters: a busy host lists far more than any fixed
+    // total cap would allow.
+    let scanned =
+        macos_inventory_candidates(std::io::BufReader::new(stdout), instance_id, profile_dir);
+    if scanned.is_err() {
+        // The listing was not read to its end; stop `ps` so it is reaped.
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .map_err(|error| PresentError::io("/bin/ps", error))?;
+    let candidates = scanned?;
+    if !status.success() {
         return Err(PresentError::BrowserUnavailable(
-            "browser process inventory failed or exceeded its bound".to_string(),
+            "browser process inventory failed".to_string(),
         ));
     }
-    macos_inventory_candidates(&output.stdout, instance_id, profile_dir)
+    Ok(candidates)
 }
 
-/// The owned browser processes in a `ps -axww -o pid= -o command=` listing.
+/// The owned browser processes in a `ps -axww -o pid= -o command=` listing,
+/// read line by line in bounded memory.
 #[cfg(any(target_os = "macos", test))]
 // An unreadable candidate PID is unproven: owned_process_candidates propagates
 // BrowserUnavailable, so browser ownership cannot be certified.
 fn macos_inventory_candidates(
-    output: &[u8],
+    mut listing: impl std::io::BufRead,
     instance_id: Uuid,
     profile_dir: &Path,
 ) -> Result<Vec<u32>> {
@@ -963,7 +992,26 @@ fn macos_inventory_candidates(
     let profile = format!("--user-data-dir={}", profile_dir.display());
     let instance = format!("--cf-present-instance={instance_id}");
     let mut candidates = Vec::new();
-    for line in output.split(|byte| *byte == b'\n') {
+    let mut line = Vec::new();
+    loop {
+        let read = read_inventory_line(&mut listing, &mut line, instance.as_bytes())
+            .map_err(|error| PresentError::io("/bin/ps", error))?;
+        match read {
+            InventoryLine::End => break,
+            // Every owned line holds the instance argument, a random UUID
+            // this session chose, so a line too long to keep that does not
+            // hold it is not ours. One that holds it cannot be read whole,
+            // so it is refused, never taken for unrelated.
+            InventoryLine::Overlong { holds_instance } => {
+                if holds_instance {
+                    return Err(PresentError::BrowserUnavailable(
+                        "browser process identity exceeded its bound".to_string(),
+                    ));
+                }
+                continue;
+            }
+            InventoryLine::Whole => {}
+        }
         let line = line.trim_ascii_start();
         let Some(split) = line.iter().position(u8::is_ascii_whitespace) else {
             continue;
@@ -993,6 +1041,83 @@ fn macos_inventory_candidates(
     Ok(candidates)
 }
 
+/// One line of a process listing, as [`read_inventory_line`] read it.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum InventoryLine {
+    /// The listing has no more lines.
+    End,
+    /// The line, without its newline, is in the buffer.
+    Whole,
+    /// The line is longer than [`PROCESS_COMMAND_LINE_BOUND`]. It was read
+    /// to its end without being kept; the buffer holds nothing of it.
+    Overlong {
+        /// Somewhere in the line the needle appeared, byte for byte.
+        holds_instance: bool,
+    },
+}
+
+/// Reads the next line of `listing` into `line`, keeping at most
+/// [`PROCESS_COMMAND_LINE_BOUND`] bytes of it. A longer line is consumed to its
+/// end in bounded memory, and only whether it held `needle` is kept.
+#[cfg(any(target_os = "macos", test))]
+fn read_inventory_line(
+    listing: &mut impl std::io::BufRead,
+    line: &mut Vec<u8>,
+    needle: &[u8],
+) -> std::io::Result<InventoryLine> {
+    line.clear();
+    let mut read_any = false;
+    let mut overlong = false;
+    let mut holds_needle = false;
+    // While a line is overlong: the last bytes of it that could still begin
+    // the needle, followed by the bytes just read.
+    let mut window = Vec::new();
+    let keep = needle.len().saturating_sub(1);
+    loop {
+        let buffer = match listing.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if buffer.is_empty() {
+            break;
+        }
+        read_any = true;
+        let end = buffer.iter().position(|byte| *byte == b'\n');
+        let chunk = &buffer[..end.unwrap_or(buffer.len())];
+        if !overlong && line.len() + chunk.len() > PROCESS_COMMAND_LINE_BOUND {
+            overlong = true;
+            window = std::mem::take(line);
+        }
+        if overlong {
+            window.extend_from_slice(chunk);
+            holds_needle |= !needle.is_empty()
+                && window
+                    .windows(needle.len())
+                    .any(|candidate| candidate == needle);
+            let drop = window.len().saturating_sub(keep);
+            window.drain(..drop);
+        } else {
+            line.extend_from_slice(chunk);
+        }
+        let consumed = end.map_or(buffer.len(), |end| end + 1);
+        listing.consume(consumed);
+        if end.is_some() {
+            break;
+        }
+    }
+    Ok(if !read_any {
+        InventoryLine::End
+    } else if overlong {
+        InventoryLine::Overlong {
+            holds_instance: holds_needle,
+        }
+    } else {
+        InventoryLine::Whole
+    })
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec<u32>> {
     let current_uid = unsafe { libc::geteuid() };
@@ -1019,7 +1144,7 @@ fn owned_process_candidates_from_proc(
             continue;
         };
         examined += 1;
-        if examined > 65_536 {
+        if examined > PROC_ENTRY_BOUND {
             return Err(PresentError::BrowserUnavailable(
                 "browser process inventory exceeded its bound".to_string(),
             ));
@@ -1085,8 +1210,8 @@ fn owned_process_candidates_from_proc(
 }
 
 /// The longest command line that is parsed into arguments for one process of
-/// the inventory.
-#[cfg(any(all(unix, not(target_os = "macos")), test))]
+/// the inventory, and on macOS the longest listing line kept.
+#[cfg(any(unix, test))]
 const PROCESS_COMMAND_LINE_BOUND: usize = 64 * 1024;
 
 /// The most bytes inspected of one command line. The kernel limits the
@@ -1273,11 +1398,29 @@ fn windows_inventory_records(stdout: &[u8]) -> Result<Vec<WindowsProcessRecord>>
     })
 }
 
+/// The `PowerShell` script that lists the qualified browser processes that can
+/// be this session's browser.
+///
+/// Only a process whose command line holds the instance argument, a random
+/// UUID this session chose, or whose command line cannot be read is listed.
+/// Every owned process holds that argument, so the filter drops none of them,
+/// and an unreadable one is still listed so the inventory refuses it. The
+/// listing therefore stays small however many browser processes the user
+/// runs, and its size bound never refuses a busy host. `String.Contains` is
+/// an ordinal comparison, and the UUID is ASCII hex and hyphens, so it cannot
+/// change the script.
+#[cfg(any(windows, test))]
+fn windows_inventory_script(instance_id: Uuid) -> String {
+    format!(
+        "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $n='--cf-present-instance={instance_id}'; $p=@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {{$_.Name -in @('chrome.exe','msedge.exe','chromium.exe') -and ($null -eq $_.CommandLine -or $_.CommandLine.Contains($n))}} | Select-Object ProcessId,Name,CommandLine); [Console]::Out.Write((ConvertTo-Json -Compress -InputObject $p))"
+    )
+}
+
 #[cfg(windows)]
 fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec<u32>> {
-    let script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $p=@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {$_.Name -in @('chrome.exe','msedge.exe','chromium.exe')} | Select-Object ProcessId,Name,CommandLine); [Console]::Out.Write((ConvertTo-Json -Compress -InputObject $p))";
+    let script = windows_inventory_script(instance_id);
     let powershell = crate::platform::trusted_system_path("WindowsPowerShell/v1.0/powershell.exe")?;
-    let output = windows_identity_command(&powershell, script)
+    let output = windows_identity_command(&powershell, &script)
         .output()
         .map_err(|error| PresentError::io(&powershell, error))?;
     if !output.status.success() || output.stdout.len() > 4 * 1024 * 1024 {
@@ -1946,7 +2089,7 @@ mod tests {
         listing
             .extend_from_slice(b"  78 \xe2\x82 /bin/sh --user-data-dir=/state/browser-profile\n");
         assert_eq!(
-            macos_inventory_candidates(&listing, instance, profile).unwrap(),
+            macos_inventory_candidates(listing.as_slice(), instance, profile).unwrap(),
             [34, 56]
         );
         // A line whose identity is split by a stray byte does not match.
@@ -1956,6 +2099,139 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// A busy host lists far more than 4 MiB of processes (8 MiB was seen
+    /// with 963 processes). The listing has no total bound, so an owned line
+    /// after it is still found, and lines over the line bound that do not
+    /// hold this session's instance argument are skipped as not ours.
+    #[test]
+    fn an_inventory_over_four_mib_still_finds_the_owned_process() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let mut listing = Vec::new();
+        let filler = "a".repeat(8 * 1024);
+        for pid in 0..600 {
+            listing.extend_from_slice(format!("{pid:>5} /bin/other {filler}\n").as_bytes());
+        }
+        let long = "b".repeat(PROCESS_COMMAND_LINE_BOUND * 3);
+        listing.extend_from_slice(
+            format!("  700 /bin/long --user-data-dir=/state/browser-profile {long}\n").as_bytes(),
+        );
+        listing.extend_from_slice(
+            format!(
+                "  800 chrome --user-data-dir=/state/browser-profile --cf-present-instance={instance}"
+            )
+            .as_bytes(),
+        );
+        assert!(listing.len() > 4 * 1024 * 1024, "{}", listing.len());
+        assert_eq!(
+            macos_inventory_candidates(listing.as_slice(), instance, profile).unwrap(),
+            [800]
+        );
+        // The same listing read in small pieces gives the same answer.
+        assert_eq!(
+            macos_inventory_candidates(
+                std::io::BufReader::with_capacity(7, listing.as_slice()),
+                instance,
+                profile
+            )
+            .unwrap(),
+            [800]
+        );
+    }
+
+    /// A line too long to keep that holds this session's instance argument
+    /// could be ours, so the inventory refuses it rather than skip it,
+    /// wherever in the line, and across whichever read boundary, the
+    /// argument falls.
+    #[test]
+    fn an_overlong_line_holding_the_instance_argument_is_refused() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let identity =
+            format!("--user-data-dir=/state/browser-profile --cf-present-instance={instance}");
+        let padding = "c".repeat(PROCESS_COMMAND_LINE_BOUND + 1);
+        for line in [
+            format!("  12 chrome {identity} {padding}\n"),
+            format!("  12 chrome {padding} {identity}\n"),
+            format!("  12 chrome {padding}{instance}-{identity}"),
+        ] {
+            for capacity in [1, 7, 8192] {
+                let refused = macos_inventory_candidates(
+                    std::io::BufReader::with_capacity(capacity, line.as_bytes()),
+                    instance,
+                    profile,
+                )
+                .expect_err("an overlong line holding the instance is refused");
+                assert!(
+                    refused.to_string().contains("exceeded its bound"),
+                    "{refused}"
+                );
+            }
+        }
+        // At the bound the line is kept whole and judged on its arguments.
+        let prefix = "  12 chrome ";
+        let room = PROCESS_COMMAND_LINE_BOUND - prefix.len() - identity.len() - 1;
+        let at_bound = format!("{prefix}{} {identity}\n", "d".repeat(room));
+        assert_eq!(at_bound.len(), PROCESS_COMMAND_LINE_BOUND + 1);
+        assert_eq!(
+            macos_inventory_candidates(at_bound.as_bytes(), instance, profile).unwrap(),
+            [12]
+        );
+    }
+
+    /// The line reader keeps a line up to the bound, ends a last line that
+    /// has no newline, and reports the end of the listing.
+    #[test]
+    fn the_inventory_line_reader_bounds_each_line() {
+        let mut line = Vec::new();
+        let mut listing = std::io::BufReader::with_capacity(3, b"one\n\ntwo".as_slice());
+        let mut next =
+            |line: &mut Vec<u8>| read_inventory_line(&mut listing, line, b"xyz").unwrap();
+        assert_eq!(next(&mut line), InventoryLine::Whole);
+        assert_eq!(line, b"one");
+        assert_eq!(next(&mut line), InventoryLine::Whole);
+        assert!(line.is_empty());
+        assert_eq!(next(&mut line), InventoryLine::Whole);
+        assert_eq!(line, b"two");
+        assert_eq!(next(&mut line), InventoryLine::End);
+
+        let mut overlong = vec![b'x'; PROCESS_COMMAND_LINE_BOUND + 1];
+        overlong.extend_from_slice(b"\nafter\n");
+        let mut listing = overlong.as_slice();
+        assert_eq!(
+            read_inventory_line(&mut listing, &mut line, b"needle").unwrap(),
+            InventoryLine::Overlong {
+                holds_instance: false
+            }
+        );
+        assert!(line.is_empty());
+        assert_eq!(
+            read_inventory_line(&mut listing, &mut line, b"needle").unwrap(),
+            InventoryLine::Whole
+        );
+        assert_eq!(line, b"after");
+    }
+
+    /// The Windows inventory lists only qualified browser processes that hold
+    /// this session's instance argument or whose command line cannot be read,
+    /// so many other browser processes never fill its size bound.
+    #[test]
+    fn the_windows_inventory_lists_only_processes_that_can_be_ours() {
+        let instance = Uuid::new_v4();
+        let script = windows_inventory_script(instance);
+        assert!(
+            script.contains(&format!("$n='--cf-present-instance={instance}'")),
+            "{script}"
+        );
+        assert!(
+            script.contains("($null -eq $_.CommandLine -or $_.CommandLine.Contains($n))"),
+            "{script}"
+        );
+        assert!(script.contains(
+            "Where-Object {$_.Name -in @('chrome.exe','msedge.exe','chromium.exe') -and"
+        ));
     }
 
     #[test]
