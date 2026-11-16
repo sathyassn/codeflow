@@ -9,14 +9,15 @@ use crate::hooks::landed_policy;
 use crate::hooks::policy_baseline::{common_dir, configured_url, digest, Fresh};
 
 /// Ask the authority remote for its default branch and commit, fetch that
-/// commit's objects (no ref is written), and read the policy from it. The
+/// commit's objects (no ref is written), require the branch tip the fetch
+/// reports to be that commit, and read the policy from it. The
 /// local tracking refs are never read for the policy: they only have to
 /// agree on which branch is the default.
 ///
 /// # Errors
 /// The remote cannot be selected, verified, asked or fetched; its answer
-/// cannot be read; the local remote `HEAD` names another branch; or the
-/// policy at the commit is invalid.
+/// cannot be read; the local remote `HEAD` names another branch; the fetched
+/// tip is another commit; or the policy at the commit is invalid.
 pub fn fresh(root: &Path, limits: super::remote_query::QueryLimits) -> Result<Fresh, String> {
     let Some(repo) = crate::hooks::repo::open(root)? else {
         return Err("this is not a repository with a commit".into());
@@ -36,7 +37,10 @@ pub fn fresh(root: &Path, limits: super::remote_query::QueryLimits) -> Result<Fr
             super::display_text(&local)
         ));
     }
-    super::remote_query::fetch_objects(root, &url, &[&format!("refs/heads/{branch}")], limits)?;
+    let remote_ref = format!("refs/heads/{branch}");
+    super::remote_query::fetch_objects(root, &url, &[&remote_ref], limits)?;
+    let tip = super::remote_query::fetch_tip(root, &url, &remote_ref, limits)?;
+    require_tip(&remote, &commit, &tip)?;
     let oid = git2::Oid::from_str(&commit).map_err(|e| e.to_string())?;
     if repo.find_commit(oid).is_err() {
         return Err(format!(
@@ -54,6 +58,19 @@ pub fn fresh(root: &Path, limits: super::remote_query::QueryLimits) -> Result<Fr
         commit,
         policy_text,
     })
+}
+
+/// The branch tip the fetch reported must be the commit the remote named as
+/// its default: a policy is read only at a commit both answers agree on, so
+/// a remote whose answers differ binds no record (TSK-1057).
+fn require_tip(remote: &str, commit: &str, tip: &str) -> Result<(), String> {
+    if tip.eq_ignore_ascii_case(commit) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{remote} named commit {commit} as its default branch, and its fetch sent {tip}; nothing was recorded; retry"
+        ))
+    }
 }
 
 /// The default branch and its commit from `git ls-remote --symref <url> HEAD`.
@@ -144,6 +161,38 @@ mod tests {
         let repo = Repository::open(&work).unwrap();
         let tracked = repo.refname_to_id("refs/remotes/origin/main").unwrap();
         assert_ne!(tracked, strong);
+    }
+
+    /// A fetched tip that differs from the commit the remote named binds
+    /// nothing; the porcelain answer is read for its one `FETCH_HEAD` line.
+    #[test]
+    fn a_fetched_tip_other_than_the_named_commit_is_refused() {
+        let named = "a".repeat(40);
+        let other = "b".repeat(40);
+        let zero = "0".repeat(40);
+        assert!(require_tip("origin", &named, &named).is_ok());
+        assert!(require_tip("origin", &named, &named.to_uppercase()).is_ok());
+        let refused = require_tip("origin", &named, &other).unwrap_err();
+        assert!(refused.contains(&other), "{refused}");
+        let fetched = |answer: &str| super::super::remote_query::fetched_tip(answer);
+        assert_eq!(
+            fetched(&format!("* {zero} {other} FETCH_HEAD\n")),
+            Some(other.clone())
+        );
+        assert_eq!(fetched(""), None, "no line");
+        assert_eq!(
+            fetched(&format!(
+                "* {zero} {named} FETCH_HEAD\n* {zero} {other} FETCH_HEAD\n"
+            )),
+            None,
+            "two lines"
+        );
+        assert_eq!(fetched(&format!("* {zero} zz FETCH_HEAD\n")), None);
+        assert_eq!(
+            fetched(&format!("* {zero} {other} refs/remotes/origin/main\n")),
+            None,
+            "a tracking ref is not the fetch's answer"
+        );
     }
 
     #[test]
