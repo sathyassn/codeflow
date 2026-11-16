@@ -97,7 +97,6 @@ fn parse_head(answer: &str) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::process::Command;
 
     use git2::{Oid, Repository, Signature};
 
@@ -132,7 +131,7 @@ mod tests {
             .unwrap();
         bare.set_head("refs/heads/main").unwrap();
         let url = format!("file://{}", remote.display());
-        let status = Command::new("git")
+        let status = crate::git::command()
             .args(["clone", "--quiet", &url, "work"])
             .current_dir(&parent)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

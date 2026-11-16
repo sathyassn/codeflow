@@ -1,6 +1,5 @@
 //! Tests of the policy baseline (TSK-1057).
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use git2::{Oid, Repository, Signature};
 
@@ -487,7 +486,7 @@ fn the_authority_refusals_hold_with_a_baseline() {
 // ---------------------------------------------------------------------------
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = crate::git::command()
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
