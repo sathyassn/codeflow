@@ -1,7 +1,8 @@
 # Grok Build sandbox profiles for a CodeFlow-managed repository (ADR-0075,
 # operator decision D3). `codeflow init` and `codeflow update` install this
-# file when it is absent. Update replaces a copy that still equals the
-# version it installed; a changed copy is yours, and update reports it.
+# file when it is absent. Update replaces a copy whose bytes equal a
+# profile some CodeFlow version shipped; a changed copy is yours, and update
+# reports it.
 #
 # A Grok builder seat keeps `--always-approve` (ADR-0055) and adds a sandbox.
 # Every Grok seat is launched in its own task worktree, the exact directory its

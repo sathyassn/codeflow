@@ -1198,35 +1198,34 @@ fn update_entry(
 enum Follow {
     /// The file already equals the new shipped version.
     Current,
-    /// The file still equals the shipped version it was installed from (its
-    /// baseline), byte for byte: it is replaced with the new one.
+    /// The file's bytes equal a version CodeFlow shipped
+    /// ([`prior_release::shipped_sha256`]): it carries no edit and is
+    /// replaced with the new one.
     Replace,
-    /// The file differs from both, or no baseline proves it unmodified: it
-    /// is the adopter's and is left alone.
+    /// The file matches no shipped version: it is the adopter's and is left
+    /// alone.
     Edited,
 }
 
-/// `baseline` is the stored copy of the shipped version the file was
-/// installed from; without one, `recorded` (the installed manifest's hash of
-/// that version) is the proof.
-fn follow(live: &str, baseline: Option<&str>, recorded: Option<&str>, rendered: &str) -> Follow {
-    let unmodified = match baseline {
-        Some(baseline) => baseline == live,
-        None => recorded == Some(hash::sha256_hex(live.as_bytes()).as_str()),
-    };
+/// `shipped` holds the SHA-256 of every version of the asset CodeFlow has
+/// shipped, compiled into this binary. It is the only proof that a file is
+/// unmodified: the `.codeflow/.baseline/` copy and the installed manifest's
+/// hash are files in the repository, which a session can write, so neither
+/// is read here.
+fn follow(live: &str, shipped: &[&str], rendered: &str) -> Follow {
     if live == rendered {
         Follow::Current
-    } else if unmodified {
+    } else if shipped.contains(&hash::sha256_hex(live.as_bytes()).as_str()) {
         Follow::Replace
     } else {
         Follow::Edited
     }
 }
 
-/// A user-owned file that follows the shipped version while unmodified: an
-/// unmodified copy (byte-equal to its baseline, the shipped version it was
-/// installed from) is replaced and reported; an edited copy is left alone
-/// and reported, with any warning [`kept_file_warning`] has for it.
+/// A user-owned file that follows the shipped version while unmodified: a
+/// copy whose bytes equal a shipped version is replaced and reported; any
+/// other copy is left alone and reported, with any warning
+/// [`kept_file_warning`] has for it.
 fn refresh_unmodified_user_file(
     root: &Path,
     entry: &ManifestEntry,
@@ -1238,9 +1237,8 @@ fn refresh_unmodified_user_file(
 ) -> Result<(), ScaffoldError> {
     let dest_path = root.join(&entry.dest);
     let live = std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
-    let baseline = Baseline::read(root, &entry.dest)?;
-    let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
-    match follow(&live, baseline.as_deref(), recorded.as_deref(), rendered) {
+    let recorded = installed.files.contains_key(&entry.dest);
+    match follow(&live, prior_release::shipped_sha256(&entry.src), rendered) {
         Follow::Current => {
             record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
             Baseline::write(root, &entry.dest, rendered)?;
@@ -1255,16 +1253,16 @@ fn refresh_unmodified_user_file(
                 &entry.dest,
                 Action::Changed,
                 vec![Shown::fixed(
-                    "unmodified since it was installed: replaced with the shipped version",
+                    "equal to a version CodeFlow shipped: replaced with the current one",
                 )],
             );
         }
         Follow::Edited => {
             let mut notes = vec![Shown::fixed(
-                "user-owned and edited: left as it is; compare it with the shipped version",
+                "user-owned and matches no version CodeFlow shipped: left as it is; compare it with the shipped version",
             )];
             notes.extend(kept_file_warning(&entry.dest, &live));
-            if recorded.is_none() {
+            if !recorded {
                 // An existing file adopted into the installed manifest, as
                 // for any user-owned file; nothing proves it was shipped.
                 Baseline::write(root, &entry.dest, rendered)?;
@@ -2057,17 +2055,22 @@ mod tests {
         assert_eq!(user["recall"]["share"], false);
     }
 
-    /// The shipped Grok profile, and the earlier version that denied the
-    /// authority folder in every profile (TSK-1057).
+    /// The shipped Grok profile, and a copy edited to deny the authority
+    /// folder in every profile (TSK-1057). The edited copy matches no
+    /// shipped version.
     fn grok_profiles() -> (String, String) {
         let shipped = include_str!("../../../../assets/base/grok/sandbox.toml").to_string();
         assert!(shipped.contains("deny = [\n"), "the profile lists deny");
-        let earlier = shipped.replace(
+        let denying = shipped.replace(
             "deny = [\n",
             "deny = [\n  \"/Users/*/.codeflow/authority\",\n  \"/root/.codeflow/authority\",\n",
         );
-        (shipped, earlier)
+        (shipped, denying)
     }
+
+    /// The Grok profile 3.1.1 shipped, a version listed in
+    /// [`prior_release::shipped_sha256`].
+    const GROK_3_1_1: &str = include_str!("../../tests/fixtures/grok-3.1.1/sandbox.toml");
 
     fn grok_entry() -> ManifestEntry {
         ManifestEntry {
@@ -2083,33 +2086,52 @@ mod tests {
         }
     }
 
-    /// TSK-1057: a copy equal to the version it was installed from is
-    /// replaced; the proof is the baseline copy, or the recorded hash when
-    /// no baseline exists; anything else is the adopter's.
+    /// A project holding `live` at the Grok profile's path, with `baseline`
+    /// as its `.codeflow/.baseline/` copy and the installed manifest's hash
+    /// of `baseline`, after one update pass over the Grok entry.
+    fn refresh_grok(live: &str, baseline: &str, rendered: &str) -> (tempfile::TempDir, Report) {
+        let entry = grok_entry();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".grok")).unwrap();
+        std::fs::write(root.join(&entry.dest), live).unwrap();
+        Baseline::write(root, &entry.dest, baseline).unwrap();
+        let mut installed = InstalledManifest::new("3.1.1");
+        record(
+            &mut installed,
+            &entry,
+            hash::sha256_hex(baseline.as_bytes()),
+        );
+        let mut report = Report::new(Shown::default());
+        let mut diffs = Shown::default();
+        refresh_unmodified_user_file(
+            root,
+            &entry,
+            rendered,
+            None,
+            &mut installed,
+            &mut report,
+            &mut diffs,
+        )
+        .unwrap();
+        (dir, report)
+    }
+
+    /// TSK-1057: only a copy whose bytes hash to a listed shipped version is
+    /// replaced; the current version is current; anything else is the
+    /// adopter's.
     #[test]
     fn a_file_follows_the_shipped_version_only_while_unmodified() {
         let (old, new) = ("a = 1\n", "a = 2\n");
         let old_hash = hash::sha256_hex(old.as_bytes());
-        assert_eq!(follow(new, Some(old), None, new), Follow::Current);
-        assert_eq!(follow(old, Some(old), None, new), Follow::Replace);
-        assert_eq!(follow(old, None, Some(&old_hash), new), Follow::Replace);
+        let shipped = [old_hash.as_str()];
+        assert_eq!(follow(new, &shipped, new), Follow::Current);
+        assert_eq!(follow(old, &shipped, new), Follow::Replace);
+        assert_eq!(follow("a = 3\n", &shipped, new), Follow::Edited);
         assert_eq!(
-            follow("a = 3\n", Some(old), Some(&old_hash), new),
-            Follow::Edited
-        );
-        assert_eq!(
-            follow("a = 3\n", None, Some(&old_hash), new),
-            Follow::Edited
-        );
-        assert_eq!(
-            follow(old, None, None, new),
+            follow(old, &[], new),
             Follow::Edited,
-            "nothing proves it shipped"
-        );
-        // The baseline outranks a recorded hash that happens to match.
-        assert_eq!(
-            follow(old, Some("a = 0\n"), Some(&old_hash), new),
-            Follow::Edited
+            "nothing in the binary proves it shipped"
         );
     }
 
@@ -2118,91 +2140,72 @@ mod tests {
     /// any other file are not.
     #[test]
     fn a_kept_grok_profile_that_denies_the_authority_folder_is_warned_about() {
-        let (shipped, earlier) = grok_profiles();
+        let (shipped, denying) = grok_profiles();
         assert!(kept_file_warning(".grok/sandbox.toml", &shipped).is_none());
-        let warning = kept_file_warning(".grok/sandbox.toml", &earlier).expect("warned");
+        let warning = kept_file_warning(".grok/sandbox.toml", &denying).expect("warned");
         assert!(
             warning.as_str().contains("~/.codeflow/authority"),
             "{warning}"
         );
         assert!(kept_file_warning(".grok/sandbox.toml", "deny = [").is_some());
-        assert!(kept_file_warning("other/sandbox.toml", &earlier).is_none());
+        assert!(kept_file_warning("other/sandbox.toml", &denying).is_none());
     }
 
-    /// TSK-1057: update replaces an unmodified earlier Grok profile and
-    /// records the new version; an edited one stays byte for byte, is
-    /// reported as kept, and carries the warning.
+    /// TSK-1057 review finding 1: a session copies its edited profile onto
+    /// the baseline and the installed manifest's hash. Update reads neither
+    /// as proof, so the edited profile stays byte for byte, is reported as
+    /// kept, and carries the warning.
     #[test]
-    fn update_replaces_an_unmodified_grok_profile_and_keeps_an_edited_one() {
-        let (shipped, earlier) = grok_profiles();
-        let entry = grok_entry();
-
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join(".grok")).unwrap();
-        std::fs::write(root.join(".grok/sandbox.toml"), &earlier).unwrap();
-        Baseline::write(root, &entry.dest, &earlier).unwrap();
-        let mut installed = InstalledManifest::new("3.1.1");
-        record(&mut installed, &entry, hash::sha256_hex(earlier.as_bytes()));
-        let mut report = Report::new(Shown::default());
-        let mut diffs = Shown::default();
-        refresh_unmodified_user_file(
-            root,
-            &entry,
-            &shipped,
-            None,
-            &mut installed,
-            &mut report,
-            &mut diffs,
-        )
-        .unwrap();
+    fn a_forged_baseline_equal_to_an_edited_profile_keeps_the_profile() {
+        let (shipped, denying) = grok_profiles();
+        let edited = format!("{denying}\n# the adopter's own line\n");
+        let (dir, report) = refresh_grok(&edited, &edited, &shipped);
         assert_eq!(
-            std::fs::read_to_string(root.join(".grok/sandbox.toml")).unwrap(),
-            shipped
-        );
-        assert_eq!(report.count(Action::Changed), 1, "{report}");
-        assert_eq!(
-            installed.files[&entry.dest].sha256,
-            hash::sha256_hex(shipped.as_bytes())
-        );
-        assert_eq!(
-            Baseline::read(root, &entry.dest).unwrap().as_deref(),
-            Some(shipped.as_str())
-        );
-
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let edited = format!("{earlier}\n# the adopter's own line\n");
-        std::fs::create_dir_all(root.join(".grok")).unwrap();
-        std::fs::write(root.join(".grok/sandbox.toml"), &edited).unwrap();
-        Baseline::write(root, &entry.dest, &earlier).unwrap();
-        let mut installed = InstalledManifest::new("3.1.1");
-        record(&mut installed, &entry, hash::sha256_hex(earlier.as_bytes()));
-        let mut report = Report::new(Shown::default());
-        let mut diffs = Shown::default();
-        refresh_unmodified_user_file(
-            root,
-            &entry,
-            &shipped,
-            None,
-            &mut installed,
-            &mut report,
-            &mut diffs,
-        )
-        .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.join(".grok/sandbox.toml")).unwrap(),
+            std::fs::read_to_string(dir.path().join(grok_entry().dest)).unwrap(),
             edited
         );
         assert_eq!(report.count(Action::KeptUserModified), 1, "{report}");
+        assert_eq!(report.count(Action::Changed), 0, "{report}");
         assert!(
             report.to_string().contains("warning: a Grok profile"),
             "{report}"
         );
+    }
+
+    /// TSK-1057: the profile an earlier release shipped is replaced with the
+    /// current one whatever its baseline says, and the new version is
+    /// recorded as the baseline.
+    #[test]
+    fn an_earlier_shipped_grok_profile_is_replaced() {
+        let (shipped, _) = grok_profiles();
+        assert_ne!(GROK_3_1_1, shipped);
+        let entry = grok_entry();
+        for baseline in [GROK_3_1_1, "a baseline the session wrote\n"] {
+            let (dir, report) = refresh_grok(GROK_3_1_1, baseline, &shipped);
+            let root = dir.path();
+            assert_eq!(
+                std::fs::read_to_string(root.join(&entry.dest)).unwrap(),
+                shipped
+            );
+            assert_eq!(report.count(Action::Changed), 1, "{report}");
+            assert_eq!(
+                Baseline::read(root, &entry.dest).unwrap().as_deref(),
+                Some(shipped.as_str())
+            );
+        }
+    }
+
+    /// TSK-1057: the current shipped profile is left as it is and reported
+    /// unchanged.
+    #[test]
+    fn the_current_shipped_grok_profile_is_a_no_op() {
+        let (shipped, _) = grok_profiles();
+        let (dir, report) = refresh_grok(&shipped, GROK_3_1_1, &shipped);
         assert_eq!(
-            Baseline::read(root, &entry.dest).unwrap().as_deref(),
-            Some(earlier.as_str()),
-            "the baseline stays the version it was installed from"
+            std::fs::read_to_string(dir.path().join(grok_entry().dest)).unwrap(),
+            shipped
         );
+        assert_eq!(report.count(Action::Unchanged), 1, "{report}");
+        assert_eq!(report.count(Action::Changed), 0, "{report}");
     }
 }

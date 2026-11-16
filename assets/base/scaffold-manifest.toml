@@ -292,9 +292,10 @@ ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # Grok Build sandbox profiles `cf-guard` and `cf-guard-worktree` (ADR-0075
-# D3). Written when absent. Update replaces a copy that still equals the
-# shipped version it was installed from, and leaves an edited copy alone
-# and reports it, so an adopter's profile stays theirs.
+# D3). Written when absent. Update replaces a copy whose bytes equal a
+# version CodeFlow shipped (hashes compiled into the binary, in
+# `prior_release.rs`), and leaves any other copy alone and reports it, so an
+# adopter's profile stays theirs.
 [[entry]]
 src = "grok/sandbox.toml"
 dest = ".grok/sandbox.toml"

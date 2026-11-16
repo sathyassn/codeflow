@@ -754,8 +754,9 @@ fn update_brings_the_codex_profiles_and_keeps_the_adopters_keys() {
 }
 
 /// AC-6: the Grok profile is installed when absent and an edited copy is
-/// never overwritten. TSK-1057: a copy that still equals the version it was
-/// installed from is replaced with the shipped one.
+/// never overwritten, even with a baseline forged to match it. TSK-1057: a
+/// copy whose bytes equal a version CodeFlow shipped is replaced with the
+/// current one.
 #[test]
 fn the_grok_profile_is_installed_only_when_absent() {
     let (_dir, root) = init_minimal();
@@ -773,20 +774,27 @@ fn the_grok_profile_is_installed_only_when_absent() {
         "update never overwrites an edited copy"
     );
 
-    // An earlier release's profile, installed and never edited: its
-    // baseline is the same bytes, so update replaces it.
-    let earlier = shipped_profile.replace(
-        "deny = [\n",
-        "deny = [\n  \"/Users/*/.codeflow/authority\",\n",
+    // A session copies the edited profile onto its baseline: the baseline
+    // is a repository file, never the proof, so the edit still stays.
+    scaffold::state::Baseline::write(&root, ".grok/sandbox.toml", &edited).unwrap();
+    scaffold::update(&assets(), &root, &update_opts()).unwrap();
+    assert_eq!(
+        text(&path),
+        edited,
+        "a forged baseline does not make update replace an edited copy"
     );
+
+    // The profile 3.1.1 shipped, whose bytes the binary lists: update
+    // replaces it whatever the baseline holds.
+    let earlier =
+        text(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/grok-3.1.1/sandbox.toml"));
     assert_ne!(earlier, shipped_profile);
     std::fs::write(&path, &earlier).unwrap();
-    scaffold::state::Baseline::write(&root, ".grok/sandbox.toml", &earlier).unwrap();
     scaffold::update(&assets(), &root, &update_opts()).unwrap();
     assert_eq!(
         text(&path),
         shipped_profile,
-        "update replaces an unmodified earlier copy"
+        "update replaces an earlier shipped copy"
     );
 
     std::fs::remove_file(&path).unwrap();
