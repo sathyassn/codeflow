@@ -9,7 +9,6 @@ import { hardenedChildEnvironment } from "./process-environment.mjs";
 // not need them. Keeping the exact path and version here makes a lockfile change
 // fail until its lifecycle surface is reviewed; the scripts remain disabled.
 export const REVIEWED_IGNORED_LIFECYCLE_SCRIPTS = new Map([
-  ["node_modules/esbuild", "0.28.1"],
   ["node_modules/fsevents", "2.3.2"],
   ["node_modules/vite/node_modules/fsevents", "2.3.3"],
 ]);

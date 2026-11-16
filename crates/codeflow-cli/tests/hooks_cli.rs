@@ -25,6 +25,15 @@ mod target_repository;
 #[path = "hooks_cli/text_rule.rs"]
 mod text_rule;
 
+#[path = "hooks_cli/leading_words.rs"]
+mod leading_words;
+
+#[path = "hooks_cli/program_word.rs"]
+mod program_word;
+
+#[path = "hooks_cli/skipped_commit.rs"]
+mod skipped_commit;
+
 /// TSK-397: under the strict text rule, the default this suite runs in,
 /// once a line's directory is unknown, the exec guard refuses a word filled in at
 /// run time given to any program; git-guard does not judge it.
