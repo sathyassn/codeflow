@@ -351,6 +351,26 @@ fn a_record_whose_uid_another_record_shares_is_refused() {
     );
 }
 
+/// An unreadable task record before the landing may be a copy of the task,
+/// so the task's earlier version cannot be identified: the landing's own
+/// home check refuses it, and so does the walk.
+#[test]
+fn an_unreadable_task_record_is_refused() {
+    let path = path_of("TSK-001");
+    let fixture = with_occupant("TSK-005", "---\nid: [\n---\n".to_string());
+    fixture.land(OTHER, &[(&path, &edited(LINE))]);
+    refuses(
+        &landing(&fixture, &path),
+        "an unreadable task record at the landing",
+        "identity is ambiguous",
+    );
+    refuses(
+        &walk(&fixture, &path),
+        "an unreadable task record in the walk",
+        PATH_CHANGED,
+    );
+}
+
 /// The uid the fixture's id registry binds TSK-001 to.
 const REGISTERED: &str = "8c0e3f2a-5b1d-4c7e-9a3f-2d6b8e1f4a70";
 
