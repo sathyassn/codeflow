@@ -100,7 +100,9 @@ impl TargetRunResult {
             self.error.as_deref(),
             self.supervision.as_ref(),
         );
-        if self.termination_unconfirmed && status == TargetStatus::Passed {
+        if self.termination_unconfirmed
+            && matches!(status, TargetStatus::Passed | TargetStatus::NotSelected)
+        {
             TargetStatus::CleanupIncomplete
         } else {
             status
@@ -205,7 +207,7 @@ fn run_target_with_workers(
         let _ = writeln!(stderr, "[codeflow test] cleanup: {detail}");
     }
     let exit_code = outcome.exit_code;
-    Ok(TargetRunResult {
+    let mut result = TargetRunResult {
         supervision: Some(outcome.supervision),
         termination_unconfirmed: outcome.termination_unconfirmed,
         error,
@@ -219,7 +221,12 @@ fn run_target_with_workers(
         duration_ms,
         report_path,
         coverage_path,
-    })
+    };
+    if result.status() == TargetStatus::NotSelected {
+        result.report_path = None;
+        result.coverage_path = None;
+    }
+    Ok(result)
 }
 
 /// Run all enabled targets for a mode, sequentially or in parallel.
@@ -835,6 +842,9 @@ fn run_owed_target(
         before,
         after,
     })?);
+    if result.status() == TargetStatus::NotSelected {
+        result.evidence = None;
+    }
 
     if !target.outputs.is_empty() && result.exit_code == 0 {
         let mut failures = Vec::new();
@@ -1453,6 +1463,11 @@ pub(super) fn configure_environment(
 
     // Set TARGET env var
     cmd.env("TARGET", target_name);
+    // Gate-owned hints replace inherited values, including when the exact
+    // path cannot be represented in the target's UTF-8 environment.
+    for key in super::target_inputs::ENV_KEYS {
+        cmd.env_remove(key);
+    }
 
     // Set target-local env vars (validated)
     for (key, val) in env {

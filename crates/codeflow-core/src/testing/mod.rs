@@ -24,5 +24,6 @@ pub mod runner;
 pub mod setup;
 #[cfg(feature = "structural-check")]
 pub mod structural;
+mod target_inputs;
 pub mod threshold;
 pub mod validation;
