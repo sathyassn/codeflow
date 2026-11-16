@@ -97,7 +97,7 @@ pub fn direct_commit_refusal(
     // (TSK-416 review).
     let reset_step = if crate::security::git::word_shown(root, reset) {
         crate::git::pasted::step(
-            &crate::git::Pasted::new("git reset --keep")
+            &crate::git::Pasted::new(root, "git reset --keep")
                 .value(reset)
                 .without_end_of_options(),
         )

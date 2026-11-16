@@ -215,7 +215,7 @@ pub fn create_follow_up_with(
     };
     let switch = |head: &'static str| {
         crate::git::pasted::step(
-            &crate::git::Pasted::new(head)
+            &crate::git::Pasted::new(repo_root, head)
                 .value(start)
                 .without_end_of_options(),
         )

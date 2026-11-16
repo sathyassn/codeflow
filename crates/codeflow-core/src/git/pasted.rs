@@ -14,9 +14,19 @@
 //! that is not valid UTF-8, has no printed form that pastes back as the same
 //! value, so [`Pasted::render`] returns `None` and the caller gives a
 //! recovery that needs no pasted command.
+//!
+//! Every renderer here takes the repository the command is for, and a
+//! value that holds the name of a remote messages withhold
+//! ([`crate::security::git::word_shown`], judged on the raw value before
+//! quoting) is not printed either (TSK-416 review): quoting can split such a
+//! name, so no check of the rendered text could see it. A command a message
+//! prints is built here, so no caller can print one that skips this check.
+
+use std::path::Path;
 
 use super::name::hidden;
 use super::GitName;
+use crate::security::git::WithheldRemotes;
 
 /// How the verb reads an operand that starts with `-`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +53,7 @@ enum Operand<'a> {
 #[derive(Clone, Debug)]
 #[must_use]
 pub struct Pasted<'a> {
+    root: &'a Path,
     head: &'static str,
     options: Vec<(&'static str, Option<&'a str>)>,
     operands: Vec<Operand<'a>>,
@@ -51,10 +62,13 @@ pub struct Pasted<'a> {
 }
 
 impl<'a> Pasted<'a> {
-    /// A command starting with `head`, fixed text such as `git fetch` or
-    /// `git remote set-head --auto`, whose verb ends its options at `--`.
-    pub fn new(head: &'static str) -> Self {
+    /// A command for the repository at `root` starting with `head`, fixed
+    /// text such as `git fetch` or `git remote set-head --auto`, whose verb
+    /// ends its options at `--`. `root` decides which remote names a value
+    /// may not carry.
+    pub fn new(root: &'a Path, head: &'static str) -> Self {
         Self {
+            root,
             head,
             options: Vec::new(),
             operands: Vec::new(),
@@ -102,14 +116,38 @@ impl<'a> Pasted<'a> {
         self
     }
 
+    /// The raw values this command carries: option values and operands,
+    /// `None` for a value that is not valid UTF-8.
+    fn values(&self) -> impl Iterator<Item = Option<&'a str>> + '_ {
+        self.options
+            .iter()
+            .map(|(_, value)| *value)
+            .chain(self.operands.iter().filter_map(|operand| match operand {
+                Operand::Value(value) => Some(*value),
+                Operand::Placeholder(_) => None,
+            }))
+    }
+
+    /// Whether a raw value holds the name of a remote messages withhold, or
+    /// the remotes cannot be read, so every value is held back.
+    fn withheld(&self) -> bool {
+        let remotes = WithheldRemotes::read(self.root);
+        self.values()
+            .flatten()
+            .any(|value| remotes.scrub(value) != value)
+    }
+
     /// The command as one line a POSIX shell runs with exactly these
     /// arguments, or `None` when a value has no printed form that pastes
-    /// back as itself.
+    /// back as itself or holds a withheld remote name.
     #[must_use]
     pub fn render(&self) -> Option<String> {
+        if self.withheld() {
+            return None;
+        }
         let mut words = vec![self.head.to_string()];
         for (flag, value) in &self.options {
-            words.push(option(flag, (*value)?)?);
+            words.push(rendered_option(flag, (*value)?)?);
         }
         let mut operands = Vec::with_capacity(self.operands.len());
         let mut dashed = false;
@@ -118,7 +156,7 @@ impl<'a> Pasted<'a> {
                 Operand::Value(value) => {
                     let value = (*value)?;
                     dashed |= value.starts_with('-');
-                    operands.push(word(value)?);
+                    operands.push(shell_word(value)?);
                 }
                 Operand::Placeholder(text) => operands.push((*text).to_string()),
             }
@@ -141,10 +179,19 @@ impl<'a> Pasted<'a> {
     }
 }
 
-/// `value` as one POSIX shell word, or `None` when it holds a character a
-/// terminal does not show as itself.
+/// `value`, a word of a command for the repository at `root`, as one POSIX
+/// shell word, or `None` when it holds a character a terminal does not show
+/// as itself or the name of a remote messages withhold.
 #[must_use]
-pub fn word(value: &str) -> Option<String> {
+pub fn word(root: &Path, value: &str) -> Option<String> {
+    if !crate::security::git::word_shown(root, value) {
+        return None;
+    }
+    shell_word(value)
+}
+
+/// [`word`] without the remote-name check, for the renderers here.
+fn shell_word(value: &str) -> Option<String> {
     if value.chars().any(hidden) {
         return None;
     }
@@ -163,10 +210,18 @@ pub fn word(value: &str) -> Option<String> {
 /// One option of a printed command, for text that names the option a
 /// reader passes: `flag value`, or `flag=value` when the value starts with
 /// `-`, so the parser keeps it as the option's value; `None` as [`word`]
-/// gives it.
+/// gives it for the repository at `root`.
 #[must_use]
-pub fn option(flag: &'static str, value: &str) -> Option<String> {
-    let shown = word(value)?;
+pub fn option(root: &Path, flag: &'static str, value: &str) -> Option<String> {
+    if !crate::security::git::word_shown(root, value) {
+        return None;
+    }
+    rendered_option(flag, value)
+}
+
+/// [`option`] without the remote-name check, for the renderers here.
+fn rendered_option(flag: &'static str, value: &str) -> Option<String> {
+    let shown = shell_word(value)?;
     Some(if value.starts_with('-') {
         format!("{flag}={shown}")
     } else {
@@ -177,12 +232,13 @@ pub fn option(flag: &'static str, value: &str) -> Option<String> {
 /// A whole argument vector built by codeflow (`program` then `args`, each
 /// already one argument as the command receives it), as one line a POSIX
 /// shell runs with exactly those arguments, or `None` as [`word`] gives it
-/// for any of them. For a rerun line that repeats an invocation as made.
+/// for any of them in the repository at `root`. For a rerun line that
+/// repeats an invocation as made.
 #[must_use]
-pub fn argv(program: &'static str, args: &[&str]) -> Option<String> {
+pub fn argv(root: &Path, program: &'static str, args: &[&str]) -> Option<String> {
     let mut words = vec![program.to_string()];
     for arg in args {
-        words.push(word(arg)?);
+        words.push(word(root, arg)?);
     }
     Some(words.join(" "))
 }
@@ -197,27 +253,30 @@ pub const NOT_PRINTED: &str = "with a git client: a name it needs holds a charac
 /// after `--` (TSK-416 review round 3).
 pub const NOT_PRINTED_DASHED: &str = "with a git client: a name it needs starts with `-`, which this command reads as an option, and after `--` as something other than that name, so no command is printed to paste";
 
+/// What a step says in place of a command with no printed form because a
+/// value holds the name of a remote messages withhold, before
+/// [`crate::security::git::WITHHELD_REMOTE_STEP`] (TSK-416 review).
+pub const NOT_PRINTED_WITHHELD: &str =
+    "with no command printed, since a name it needs holds the name of a remote codeflow withholds";
+
 impl Pasted<'_> {
     /// Why [`Pasted::render`] gives `None`, as the text a step prints in
-    /// the command's place: [`NOT_PRINTED`] for a value with a hidden
-    /// character or invalid UTF-8, which comes first since such a value has
-    /// no printed form under any verb, else [`NOT_PRINTED_DASHED`] for a
-    /// dashed operand the verb cannot take after `--`. `None` when the
-    /// command renders.
+    /// the command's place: [`NOT_PRINTED_WITHHELD`] for a value holding a
+    /// withheld remote name, first, since no form of such a command may be
+    /// printed; [`NOT_PRINTED`] for a value with a hidden character or
+    /// invalid UTF-8, which has no printed form under any verb; else
+    /// [`NOT_PRINTED_DASHED`] for a dashed operand the verb cannot take
+    /// after `--`. `None` when the command renders.
     #[must_use]
     pub fn unprinted(&self) -> Option<&'static str> {
-        let values =
-            self.options
-                .iter()
-                .map(|(_, value)| *value)
-                .chain(self.operands.iter().filter_map(|operand| match operand {
-                    Operand::Value(value) => Some(*value),
-                    Operand::Placeholder(_) => None,
-                }));
-        for value in values {
-            if value.is_none_or(|value| value.chars().any(hidden)) {
-                return Some(NOT_PRINTED);
-            }
+        if self.withheld() {
+            return Some(NOT_PRINTED_WITHHELD);
+        }
+        if self
+            .values()
+            .any(|value| value.is_none_or(|value| value.chars().any(hidden)))
+        {
+            return Some(NOT_PRINTED);
         }
         let dashed = self.operands.iter().any(
             |operand| matches!(operand, Operand::Value(Some(value)) if value.starts_with('-')),
@@ -227,18 +286,98 @@ impl Pasted<'_> {
 }
 
 /// `command` rendered in backticks, or the reason it has no printed form
-/// that pastes back as the values it names ([`Pasted::unprinted`]).
+/// that pastes back as the values it names ([`Pasted::unprinted`]); for a
+/// withheld remote name, that reason and the steps for such a remote.
 #[must_use]
 pub fn step(command: &Pasted<'_>) -> String {
-    command.render().map_or_else(
-        || command.unprinted().unwrap_or(NOT_PRINTED).to_string(),
-        |line| format!("`{line}`"),
-    )
+    if let Some(line) = command.render() {
+        return format!("`{line}`");
+    }
+    match command.unprinted() {
+        Some(NOT_PRINTED_WITHHELD) => format!(
+            "{NOT_PRINTED_WITHHELD}; {}",
+            crate::security::git::WITHHELD_REMOTE_STEP
+        ),
+        reason => reason.unwrap_or(NOT_PRINTED).to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repository with `remotes` configured, each with a plain URL.
+    fn repo_with(remotes: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+        };
+        git(&["init", "-q"]);
+        for remote in remotes {
+            git(&["config", &format!("remote.{remote}.url"), "/nowhere"]);
+        }
+        dir
+    }
+
+    /// A repository with no remotes, shared by the tests here that judge
+    /// how a value is quoted.
+    fn root() -> &'static Path {
+        static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+        ROOT.get_or_init(|| repo_with(&[])).path()
+    }
+
+    /// TSK-416 review: the renderer judges each raw value against the
+    /// repository's withheld remote names before quoting, so a name holding
+    /// `'`, which quoting splits, is caught. Every renderer refuses it, the
+    /// step gives the steps for a withheld remote, a shown remote still
+    /// prints, and a root whose remotes cannot be read prints nothing.
+    #[test]
+    fn a_value_holding_a_withheld_remote_name_is_never_printed() {
+        let withheld = "user:p'ass@host";
+        let repo = repo_with(&["origin", withheld, "p'ass"]);
+        let root = repo.path();
+        let in_branch = format!("refs/remotes/origin/{withheld}");
+        for value in [withheld, in_branch.as_str(), "origin/p'ass"] {
+            let fetch = Pasted::new(root, "git fetch").value("origin").value(value);
+            assert_eq!(fetch.render(), None, "{value}");
+            assert_eq!(fetch.unprinted(), Some(NOT_PRINTED_WITHHELD), "{value}");
+            let printed = step(&fetch);
+            assert!(!printed.contains("git fetch"), "{printed}");
+            assert!(!printed.contains("p'"), "{printed}");
+            assert!(
+                printed.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                "{printed}"
+            );
+            let into = Pasted::new(root, "codeflow ci").option("--into", value);
+            assert_eq!(into.render(), None, "{value}");
+            assert_eq!(word(root, value), None, "{value}");
+            assert_eq!(option(root, "--into", value), None, "{value}");
+            assert_eq!(argv(root, "codeflow", &["ci", "--into", value]), None);
+        }
+        assert_eq!(
+            Pasted::new(root, "git fetch")
+                .value("origin")
+                .value("main")
+                .render()
+                .as_deref(),
+            Some("git fetch origin main")
+        );
+        assert_eq!(word(root, "origin").as_deref(), Some("origin"));
+        let unread = tempfile::tempdir().unwrap();
+        assert_eq!(
+            Pasted::new(unread.path(), "git fetch")
+                .value("origin")
+                .render(),
+            None
+        );
+        assert_eq!(word(unread.path(), "main"), None);
+    }
 
     /// The arguments `sh` hands a program named `git` when it runs
     /// `command`: a shell function stands in for git and prints each one.
@@ -262,10 +401,10 @@ mod tests {
     #[cfg(unix)]
     fn a_value_reaches_the_shell_as_one_literal_argument() {
         assert_eq!(
-            word("refs/remotes/origin/main").as_deref(),
+            word(root(), "refs/remotes/origin/main").as_deref(),
             Some("refs/remotes/origin/main")
         );
-        assert_eq!(word("origin").as_deref(), Some("origin"));
+        assert_eq!(word(root(), "origin").as_deref(), Some("origin"));
         let scratch = tempfile::tempdir().unwrap();
         let marker = scratch.path().join("ran");
         let marker = marker.to_str().unwrap();
@@ -280,7 +419,10 @@ mod tests {
             "caf\u{e9}".to_string(),
             String::new(),
         ] {
-            let printed = Pasted::new("git fetch").value(&value).render().unwrap();
+            let printed = Pasted::new(root(), "git fetch")
+                .value(&value)
+                .render()
+                .unwrap();
             assert_eq!(shell_argv(&printed), ["fetch", value.as_str()], "{printed}");
             assert!(!std::path::Path::new(marker).exists(), "{value} ran");
         }
@@ -292,17 +434,26 @@ mod tests {
     /// its escaped form would paste as a different name.
     #[test]
     fn the_printed_value_is_the_raw_value_or_nothing() {
-        assert_eq!(word(r"a\b").as_deref(), Some(r"'a\b'"));
+        assert_eq!(word(root(), r"a\b").as_deref(), Some(r"'a\b'"));
         for hostile in ["a\u{200b}b", "a\u{202e}b", "a\u{1b}[31mb", "a\nb", "a\tb"] {
-            assert_eq!(word(hostile), None, "{hostile:?}");
-            assert_eq!(Pasted::new("git fetch").value(hostile).render(), None);
-            assert_eq!(option("--into", hostile), None);
+            assert_eq!(word(root(), hostile), None, "{hostile:?}");
+            assert_eq!(
+                Pasted::new(root(), "git fetch").value(hostile).render(),
+                None
+            );
+            assert_eq!(option(root(), "--into", hostile), None);
         }
         let invalid = GitName::from_bytes(b"caf\xe9");
-        assert_eq!(Pasted::new("git switch").name(&invalid).render(), None);
+        assert_eq!(
+            Pasted::new(root(), "git switch").name(&invalid).render(),
+            None
+        );
         let valid = GitName::from_text("feat/x");
         assert_eq!(
-            Pasted::new("git switch").name(&valid).render().as_deref(),
+            Pasted::new(root(), "git switch")
+                .name(&valid)
+                .render()
+                .as_deref(),
             Some("git switch feat/x")
         );
     }
@@ -314,7 +465,7 @@ mod tests {
     #[cfg(unix)]
     fn a_dashed_operand_never_reaches_an_option_position() {
         let fetch = |values: &[&str]| {
-            let mut command = Pasted::new("git fetch --prune");
+            let mut command = Pasted::new(root(), "git fetch --prune");
             for value in values {
                 command = command.value(value);
             }
@@ -337,13 +488,13 @@ mod tests {
             shell_argv(&fetch(&["origin", "-o$(id)"])),
             ["fetch", "--prune", "--", "origin", "-o$(id)"]
         );
-        let renamed = Pasted::new("git branch -m")
+        let renamed = Pasted::new(root(), "git branch -m")
             .value("-y")
             .placeholder("<new-name>")
             .render();
         assert_eq!(renamed.as_deref(), Some("git branch -m -- -y <new-name>"));
         let set_head = |remote: &str| {
-            Pasted::new("git remote set-head")
+            Pasted::new(root(), "git remote set-head")
                 .value(remote)
                 .trailing_flag("-a")
                 .render()
@@ -352,21 +503,21 @@ mod tests {
         assert_eq!(set_head("origin"), "git remote set-head origin -a");
         assert_eq!(set_head("-x"), "git remote set-head -a -- -x");
         assert_eq!(
-            Pasted::new("git reset --keep")
+            Pasted::new(root(), "git reset --keep")
                 .without_end_of_options()
                 .value("-x")
                 .render(),
             None
         );
         assert_eq!(
-            Pasted::new("git reset --keep")
+            Pasted::new(root(), "git reset --keep")
                 .without_end_of_options()
                 .value("refs/remotes/origin/x$(id)")
                 .render()
                 .as_deref(),
             Some("git reset --keep 'refs/remotes/origin/x$(id)'")
         );
-        let into = Pasted::new("codeflow work start")
+        let into = Pasted::new(root(), "codeflow work start")
             .option("--into", "-x")
             .value("TSK-1")
             .render()
@@ -374,6 +525,7 @@ mod tests {
         assert_eq!(into, "codeflow work start --into=-x TSK-1");
         assert_eq!(shell_argv(&into), ["work", "start", "--into=-x", "TSK-1"]);
         let rerun = argv(
+            root(),
             "codeflow",
             &[
                 "ci",
@@ -396,15 +548,18 @@ mod tests {
                 "refs/heads/a b"
             ]
         );
-        assert_eq!(argv("codeflow", &["ci", "--branch", "a\u{202e}b"]), None);
         assert_eq!(
-            option("--line-tip", "a b").as_deref(),
+            argv(root(), "codeflow", &["ci", "--branch", "a\u{202e}b"]),
+            None
+        );
+        assert_eq!(
+            option(root(), "--line-tip", "a b").as_deref(),
             Some("--line-tip 'a b'")
         );
         assert_eq!(
             shell_argv(&format!(
                 "codeflow ci {}",
-                option("--into", "o$(id)").unwrap()
+                option(root(), "--into", "o$(id)").unwrap()
             )),
             ["ci", "--into", "o$(id)"]
         );
@@ -417,7 +572,7 @@ mod tests {
     #[test]
     fn a_step_with_no_printed_form_names_its_own_cause() {
         fn reset(value: &str) -> Pasted<'_> {
-            Pasted::new("git reset --keep")
+            Pasted::new(root(), "git reset --keep")
                 .value(value)
                 .without_end_of_options()
         }
@@ -427,15 +582,18 @@ mod tests {
         assert_eq!(step(&reset("-x\u{200b}$(id)")), NOT_PRINTED);
         assert_eq!(reset("x").unprinted(), None);
         // A verb that ends its options at `--` renders a dashed operand.
-        let fetch = Pasted::new("git fetch").value("-x");
+        let fetch = Pasted::new(root(), "git fetch").value("-x");
         assert_eq!(fetch.unprinted(), None);
         assert_eq!(step(&fetch), "`git fetch -- -x`");
         // A hidden character in an option value, and invalid UTF-8.
-        let into = Pasted::new("codeflow ci").option("--into", "o\u{202e}$(id)");
+        let into = Pasted::new(root(), "codeflow ci").option("--into", "o\u{202e}$(id)");
         assert_eq!(into.render(), None);
         assert_eq!(step(&into), NOT_PRINTED);
         let invalid = GitName::from_bytes(b"a\xffb");
-        assert_eq!(step(&Pasted::new("git switch").name(&invalid)), NOT_PRINTED);
+        assert_eq!(
+            step(&Pasted::new(root(), "git switch").name(&invalid)),
+            NOT_PRINTED
+        );
         // Neither reason claims the other cause.
         assert!(!NOT_PRINTED_DASHED.contains("does not show"));
         assert!(!NOT_PRINTED.contains("starts with"));

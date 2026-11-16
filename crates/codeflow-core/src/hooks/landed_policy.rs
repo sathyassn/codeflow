@@ -210,7 +210,7 @@ fn remote_command(
     if !crate::security::git::remote_name_shown(root, remote) {
         return None;
     }
-    let pasted = crate::git::Pasted::new(command).value(remote);
+    let pasted = crate::git::Pasted::new(root, command).value(remote);
     match flag {
         Some(flag) => pasted.trailing_flag(flag).render(),
         None => pasted.render(),

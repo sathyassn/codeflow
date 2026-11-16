@@ -498,7 +498,7 @@ pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
                 && crate::security::git::word_shown(root, &refspec)
             {
                 crate::git::pasted::step(
-                    &crate::git::Pasted::new("git push")
+                    &crate::git::Pasted::new(root, "git push")
                         .value(remote)
                         .value(&refspec),
                 )

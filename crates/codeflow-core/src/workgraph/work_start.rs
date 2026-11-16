@@ -155,16 +155,16 @@ pub enum WorkStartError {
 /// A local branch and its fetched upstream that have diverged.
 #[derive(Debug, Error)]
 #[error(
-    "local branch '{}' and '{shown_remote}' have diverged ('{}' at {local_tip} \
+    "local branch '{shown_local}' and '{shown_remote}' have diverged ('{shown_local}' at {local_tip} \
      with {ahead} commit(s) only there, '{shown_remote}' at {remote_tip} with {behind} only \
      there), so the work target is ambiguous; {steps}; a plain fetch of the remote \
-     refreshes '{shown_remote}' without moving '{}'",
-    crate::git::display_text(.local),
-    crate::git::display_text(.local),
-    crate::git::display_text(.local)
+     refreshes '{shown_remote}' without moving '{shown_local}'"
 )]
 pub struct DivergedTarget {
     pub local: String,
+    /// The local branch as messages show it: escaped, with any withheld
+    /// remote name in it replaced (TSK-416 review).
+    pub shown_local: String,
     /// The fetched ref the local branch diverged from.
     pub remote: String,
     /// The configured remote that ref belongs to.
@@ -411,10 +411,18 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
     let named = remote
         .as_ref()
         .is_some_and(|(remote, _)| crate::security::git::remote_name_shown(root, remote));
+    // The branch part of a shown remote's ref can hold another remote's
+    // withheld name, so the repair that deletes the ref is offered only for
+    // a ref whose raw name holds none (TSK-416 review); the renderer refuses
+    // such a ref as well.
+    let ref_named = named
+        && remote
+            .as_ref()
+            .is_some_and(|(_, short)| crate::security::git::word_shown(root, short));
     let remedy = match remote {
         Some((remote, _)) if present && named => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain fetch of the remote ({}), which rewrites {shown} from the remote and moves no local branch",
-            step(&Pasted::new("git fetch").value(&remote))
+            step(&Pasted::new(root, "git fetch").value(&remote))
         ),
         // No command names a withheld remote: its steps are a fresh clone
         // or a rename through a Git client (TSK-416 review rounds 9 and
@@ -423,11 +431,11 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
             "the fetched tip cannot be resolved, so the line it names cannot be judged; {}",
             crate::security::git::withheld_remote_step(root, &remote)
         ),
-        Some((remote, short)) if named => format!(
+        Some((remote, short)) if ref_named => format!(
             "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it ({}, then {}), which the guard leaves to the operator",
             fresh_clone(&remote),
-            step(&Pasted::new("git branch -d -r").value(short)),
-            step(&Pasted::new("git fetch").value(&remote))
+            step(&Pasted::new(root, "git branch -d -r").value(short)),
+            step(&Pasted::new(root, "git fetch").value(&remote))
         ),
         // Repairing this clone deletes a ref that holds the withheld name,
         // which no step may name, so only the fresh clone is given.
@@ -447,45 +455,40 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
         }
         None => message,
     };
-    format!("{shown} points at {points_at}, which is not a commit this clone can read ({message}); {remedy}")
-}
-
-/// "fetch it" with the fetch of `branch` from `remote` rendered from the
-/// raw names, for a target that does not resolve here (TSK-416 review).
-#[must_use]
-pub fn fetch_it(remote: &str, branch: &str) -> String {
-    format!(
-        "fetch it ({})",
-        step(&Pasted::new("git fetch").value(remote).value(branch))
+    // A second withheld name can sit in the branch part of a shown remote's
+    // ref, which `shown_ref` leaves, so the whole text is scrubbed; a command
+    // printed above holds no withheld name, so the scrub leaves it whole.
+    crate::security::git::without_remote_names(
+        root,
+        &format!("{shown} points at {points_at}, which is not a commit this clone can read ({message}); {remedy}"),
     )
 }
 
-/// [`fetch_it`] for `branch` of `origin` in the repository at `root`, or,
-/// when either raw word holds a remote name that messages withhold
-/// ([`crate::security::git::word_shown`]), a step that prints no command
+/// "fetch it" with the fetch of `branch` from `origin` in the repository at
+/// `root`, rendered from the raw names, for a target that does not resolve
+/// here; when either raw word holds a remote name messages withhold, the
+/// renderer prints no command and gives the steps for such a remote
 /// (TSK-416 review).
 #[must_use]
 pub fn fetch_origin(root: &Path, branch: &str) -> String {
-    if crate::security::git::word_shown(root, "origin")
-        && crate::security::git::word_shown(root, branch)
-    {
-        return fetch_it("origin", branch);
-    }
     format!(
-        "no fetch command is printed, since {}",
-        crate::security::git::WITHHELD_REMOTE_STEP
+        "fetch it ({})",
+        step(&Pasted::new(root, "git fetch").value("origin").value(branch))
     )
 }
 
 /// The step that names the fetched line `remote`, a full ref, as the work
 /// target with `--into`, rendered from the raw ref (TSK-416 review); a ref
-/// whose remote's name messages withhold is not printed to paste (review
-/// round 7).
+/// whose remote's name messages withhold, or whose branch part holds one,
+/// is not printed to paste (review round 7, TSK-416 review).
 pub(crate) fn into_fetched(repo: &Repository, remote: &str) -> String {
-    if !crate::security::git::remote_name_shown(repo.commondir(), &remote_of(repo, remote)) {
+    let root = repo.commondir();
+    if !crate::security::git::remote_name_shown(root, &remote_of(repo, remote))
+        || !crate::security::git::word_shown(root, remote)
+    {
         return "judge against the fetched line by naming its full ref with `--into` where the command takes it; the ref holds a remote name that can carry a credential, so it is not printed to paste".to_string();
     }
-    match crate::git::pasted::option("--into", remote) {
+    match crate::git::pasted::option(root, "--into", remote) {
         Some(option) => format!(
             "judge against the fetched line by naming it with `{option}` where the command takes it"
         ),
@@ -723,8 +726,17 @@ fn local_or_upstream(
         (0, _) => Ok(Some(ResolvedWorkTarget { target: upstream })),
         (ahead, behind) => Err(WorkStartError::DivergedTarget(Box::new(DivergedTarget {
             local: local.to_string(),
+            // Both names can hold a withheld remote name in their branch
+            // part, which `shown_ref` leaves (TSK-416 review).
+            shown_local: crate::security::git::without_remote_names(
+                repo.commondir(),
+                &crate::git::display_text(local),
+            ),
             line_remote: remote_of(repo, &upstream),
-            shown_remote: crate::security::git::shown_ref(repo.commondir(), &upstream),
+            shown_remote: crate::security::git::without_remote_names(
+                repo.commondir(),
+                &crate::security::git::shown_ref(repo.commondir(), &upstream),
+            ),
             steps: format!(
                 "{}, or {}",
                 into_fetched(repo, &upstream),
@@ -6028,6 +6040,87 @@ mod tests {
             .and_then(|found| found.peel_to_commit())
             .unwrap_err();
         check(&unresolvable_tip(&repo, &missing, &error), "missing object");
+    }
+
+    /// TSK-416 review: a shown remote's ref whose branch part holds another
+    /// remote's withheld name prints no command naming it and keeps it out
+    /// of the prose: the missing-object repair (`git branch -d -r`) and the
+    /// diverged target's `--into`. A plain `origin/main` keeps its command.
+    #[test]
+    fn a_withheld_name_in_a_shown_remotes_ref_is_printed_nowhere() {
+        let withheld = "u'p@host.invalid";
+        let check = |text: &str, case: &str| {
+            assert!(!text.contains("u'p"), "{case}: {text}");
+            assert!(!text.contains("host.invalid"), "{case}: {text}");
+            assert!(!text.contains("git branch -d"), "{case}: {text}");
+            assert!(!text.contains("--into refs"), "{case}: {text}");
+            assert!(
+                text.contains(crate::security::git::WITHHELD_REMOTE),
+                "{case}: {text}"
+            );
+        };
+        let dir = fixture();
+        add_remote(dir.path(), "origin", false);
+        add_remote(dir.path(), withheld, false);
+        let repo = Repository::open(dir.path()).unwrap();
+        let missing_ref = |branch: &str| {
+            let missing = format!("refs/remotes/origin/{branch}");
+            let file = repo.path().join(&missing);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, format!("{}\n", "1".repeat(40))).unwrap();
+            let error = repo
+                .find_reference(&missing)
+                .and_then(|found| found.peel_to_commit())
+                .unwrap_err();
+            unresolvable_tip(&repo, &missing, &error)
+        };
+        check(&missing_ref(withheld), "missing object");
+        let shown = missing_ref("plain");
+        assert!(shown.contains("`git branch -d -r origin/plain`"), "{shown}");
+        let into = into_fetched(&repo, &format!("refs/remotes/origin/{withheld}"));
+        assert!(!into.contains("u'p"), "{into}");
+        assert!(!into.contains("--into refs"), "{into}");
+        let into = into_fetched(&repo, "refs/remotes/origin/main");
+        assert!(into.contains("`--into refs/remotes/origin/main`"), "{into}");
+        // The diverged refusal names the local branch and its upstream.
+        git(dir.path(), &["branch", "-q", withheld]);
+        git(
+            dir.path(),
+            &["config", &format!("branch.{withheld}.remote"), "origin"],
+        );
+        git(
+            dir.path(),
+            &[
+                "config",
+                &format!("branch.{withheld}.merge"),
+                &format!("refs/heads/{withheld}"),
+            ],
+        );
+        git(dir.path(), &["checkout", "-q", "-b", "ahead"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "remote"],
+        );
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{withheld}"),
+                "HEAD",
+            ],
+        );
+        git(dir.path(), &["checkout", "-q", withheld]);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "local"],
+        );
+        git(dir.path(), &["checkout", "-q", "main"]);
+        let diverged = resolve_work_target_checked(dir.path(), Some(withheld)).unwrap_err();
+        assert!(
+            matches!(diverged, WorkStartError::DivergedTarget(_)),
+            "{diverged:?}"
+        );
+        check(&diverged.to_string(), "diverged");
     }
 
     #[cfg(unix)]

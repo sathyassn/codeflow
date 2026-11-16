@@ -1412,7 +1412,12 @@ fn target_tip(
     if let Some(tip) = resolve_base(root, &anchors).map_err(NoTarget::read)? {
         return Ok(tip);
     }
-    let shown = codeflow_core::git::display_text(&branch);
+    // The branch in the prose is scrubbed of withheld remote names; the
+    // renderer keeps them out of the command (TSK-416 review).
+    let shown = codeflow_core::security::git::without_remote_names(
+        root,
+        &codeflow_core::git::display_text(&branch),
+    );
     let remedy = if origin_url(root).map_err(NoTarget::read)?.is_some() {
         format!(
             "name the branch this work lands on with `--into <branch>`, or {}",
@@ -1488,6 +1493,9 @@ fn target_containment_warning(
             codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
         ),
     };
+    // The target named in the warning can hold a withheld remote name
+    // (TSK-416 review).
+    let message = codeflow_core::security::git::without_remote_names(root, &message);
     tagged.push(TaggedViolation {
         sha: None,
         violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),

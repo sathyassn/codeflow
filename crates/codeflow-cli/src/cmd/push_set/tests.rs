@@ -1235,6 +1235,9 @@ fn stale_refs_under_any_fetch_mapping_refuse_with_the_fetch_route() {
 fn a_relayed_check_output_shows_control_characters_escaped() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
+    // The label is rendered with the repository's remotes read, as a push
+    // hook runs it.
+    git2::Repository::init(dir.path()).unwrap();
     let exe = dir.path().join("check-fixture");
     std::fs::write(
         &exe,
@@ -1404,6 +1407,9 @@ fn a_skip_fetch_all_remote_recovers_from_a_fresh_clone() {
 #[cfg(unix)]
 #[test]
 fn the_preflight_branch_option_keeps_a_hostile_branch_as_one_argument() {
+    let repo = tempfile::tempdir().unwrap();
+    git2::Repository::init(repo.path()).unwrap();
+    let root = repo.path();
     for (branch, expected) in [
         ("main", vec!["preflight", "--branch", "main"]),
         ("x$(id)", vec!["preflight", "--branch", "x$(id)"]),
@@ -1411,7 +1417,7 @@ fn the_preflight_branch_option_keeps_a_hostile_branch_as_one_argument() {
         ("-x", vec!["preflight", "--branch=-x"]),
     ] {
         let remedy = codeflow_core::remedy::RELEASE_PREFLIGHT_UNRUN
-            .with(&[("branch_option", &branch_option(branch))])
+            .with(&[("branch_option", &branch_option(root, branch))])
             .to_string();
         let command = remedy
             .split('`')
@@ -1428,7 +1434,7 @@ fn the_preflight_branch_option_keeps_a_hostile_branch_as_one_argument() {
         let arguments: Vec<&str> = printed.split_terminator('\0').collect();
         assert_eq!(arguments, expected, "{remedy}");
     }
-    assert_eq!(branch_option("o\u{200b}x"), "--branch <branch>");
+    assert_eq!(branch_option(root, "o\u{200b}x"), "--branch <branch>");
 }
 
 /// TSK-416 review round 2, finding 1: the push-set check remedy prints the
@@ -1437,8 +1443,11 @@ fn the_preflight_branch_option_keeps_a_hostile_branch_as_one_argument() {
 #[cfg(unix)]
 #[test]
 fn the_check_remedy_keeps_each_argument_as_one_word() {
+    let repo = tempfile::tempdir().unwrap();
+    git2::Repository::init(repo.path()).unwrap();
+    let root = repo.path();
     let args = ["ci", "--range", "a$(id)..b", "--into", "o'x"];
-    let remedy = check_remedy(&args).to_string();
+    let remedy = check_remedy(root, &args).to_string();
     let command = remedy
         .split('`')
         .nth(1)
@@ -1453,7 +1462,7 @@ fn the_check_remedy_keeps_each_argument_as_one_word() {
     let printed = String::from_utf8(out.stdout).unwrap();
     let arguments: Vec<&str> = printed.split_terminator('\0').collect();
     assert_eq!(arguments, args, "{remedy}");
-    let hidden = check_remedy(&["ci", "--into", "o\u{200b}x"]).to_string();
+    let hidden = check_remedy(root, &["ci", "--into", "o\u{200b}x"]).to_string();
     assert_eq!(
         hidden,
         codeflow_core::remedy::PUSH_SET_BY_HAND.remedy().to_string()
@@ -1467,6 +1476,9 @@ fn the_check_remedy_keeps_each_argument_as_one_word() {
 /// remain, so nothing pasted from the output runs the substitution.
 #[test]
 fn a_hidden_character_beside_shell_syntax_prints_no_command_on_any_path() {
+    let repo = tempfile::tempdir().unwrap();
+    git2::Repository::init(repo.path()).unwrap();
+    let root = repo.path();
     for hostile in [
         "feat/a\u{200b}$(id)",
         "feat/a\u{202e}`id`",
@@ -1474,8 +1486,8 @@ fn a_hidden_character_beside_shell_syntax_prints_no_command_on_any_path() {
         "feat/a\u{200b}' ; id ; '",
     ] {
         let args = ["ci", "--base", "abc", "--branch", hostile, "--into", "main"];
-        let (step, named) = check_names(&args);
-        let remedy = check_remedy(&args).to_string();
+        let (step, named) = check_names(root, &args);
+        let remedy = check_remedy(root, &args).to_string();
         for text in [&step, &named, &remedy] {
             for syntax in ["$(", "`id`", "; id", "'"] {
                 assert!(!text.contains(syntax), "{text}");
@@ -1488,7 +1500,39 @@ fn a_hidden_character_beside_shell_syntax_prints_no_command_on_any_path() {
     }
     // A printable hostile name keeps its one-word rendering on every path.
     let args = ["ci", "--branch", "feat/a$(id)"];
-    let (step, named) = check_names(&args);
+    let (step, named) = check_names(root, &args);
     assert_eq!(step, "codeflow ci --branch 'feat/a$(id)'");
     assert_eq!(named, "`codeflow ci --branch 'feat/a$(id)'`");
+}
+
+/// TSK-416 review: an argument or pushed branch holding the name of a
+/// remote messages withhold, judged on the raw value by the renderer, is
+/// printed on no path: not the rerun line, not the check's names, not the
+/// release preflight option.
+#[test]
+fn a_withheld_remote_name_in_an_argument_prints_no_command_on_any_path() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = git2::Repository::init(repo.path()).unwrap();
+    let withheld = "user:p'ass@host";
+    git.config()
+        .unwrap()
+        .set_str(&format!("remote.{withheld}.url"), "/nowhere")
+        .unwrap();
+    let root = repo.path();
+    let into = format!("refs/remotes/origin/{withheld}");
+    let args = ["ci", "--base", "abc", "--into", into.as_str()];
+    let (step, named) = check_names(root, &args);
+    let remedy = check_remedy(root, &args).to_string();
+    let option = branch_option(root, &into);
+    for text in [&step, &named, &remedy, &option] {
+        assert!(!text.contains("p'"), "{text}");
+        assert!(!text.contains("ass@host"), "{text}");
+    }
+    assert_eq!(step, "codeflow ci");
+    assert!(named.contains("its command is not printed"), "{named}");
+    assert_eq!(
+        remedy,
+        codeflow_core::remedy::PUSH_SET_BY_HAND.remedy().to_string()
+    );
+    assert_eq!(option, "--branch <branch>");
 }

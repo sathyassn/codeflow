@@ -227,11 +227,11 @@ fn violation(
 /// When one has no printed form, no command is built from the arguments:
 /// the remedy is the plain `codeflow ci` by hand, which names no value
 /// (TSK-416 review round 3).
-fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
+fn check_remedy(root: &Path, args: &[&str]) -> codeflow_core::remedy::Remedy {
     let rest = args.split_first().map_or(args, |(_, rest)| rest);
     let words: Option<Vec<String>> = rest
         .iter()
-        .map(|arg| codeflow_core::git::pasted::word(arg))
+        .map(|arg| codeflow_core::git::pasted::word(root, arg))
         .collect();
     match words {
         Some(words) => codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &words.join(" "))]),
@@ -246,17 +246,17 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
 /// itself, neither holds any argument: no text built from the arguments
 /// can paste back as them, and a display form joined into a line would
 /// still carry shell syntax such as `$(…)` (TSK-416 review round 3).
-fn check_names(rerun: &[&str]) -> (String, String) {
-    if let Some(line) = codeflow_core::git::pasted::argv("codeflow", rerun) {
+fn check_names(root: &Path, rerun: &[&str]) -> (String, String) {
+    if let Some(line) = codeflow_core::git::pasted::argv(root, "codeflow", rerun) {
         let named = format!("`{line}`");
         return (line, named);
     }
     let verb = rerun
         .first()
-        .and_then(|verb| codeflow_core::git::pasted::word(verb))
+        .and_then(|verb| codeflow_core::git::pasted::word(root, verb))
         .map_or_else(|| "codeflow".to_string(), |verb| format!("codeflow {verb}"));
     let named = format!(
-        "the `{verb}` check of this push (an argument holds a character a terminal does not show as itself, so its command is not printed)"
+        "the `{verb}` check of this push (an argument holds a character a terminal does not show as itself, or a remote name codeflow withholds, so its command is not printed)"
     );
     (verb, named)
 }
@@ -638,9 +638,14 @@ fn ci_base(
         Scoped::Ordinary => {
             let mut notices = Vec::new();
             let range = range_base(root, r, destination, &mut notices)?;
-            report
-                .status
-                .extend(notices.into_iter().map(|text| format!("note: {text}")));
+            report.status.extend(notices.into_iter().map(|text| {
+                // A target named in a notice can hold a withheld remote
+                // name (TSK-416 review).
+                format!(
+                    "note: {}",
+                    codeflow_core::security::git::without_remote_names(root, &text)
+                )
+            }));
             if let Some(RangeBase { base, note }) = range {
                 report.notes.extend(note);
                 Some(base)
@@ -667,7 +672,7 @@ fn release_preflight(
 ) {
     let branch = pushed.remote_branch().unwrap_or_default();
     let shown_branch = display_text(branch);
-    let branch_option = branch_option(branch);
+    let branch_option = branch_option(root, branch);
     let started = Instant::now();
     let result =
         codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote, exe);
@@ -738,7 +743,7 @@ fn run_check_with(
         .map(|(_, arg)| remote_query::display_url(arg))
         .collect();
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
-    let (step_name, shown) = check_names(&rerun);
+    let (step_name, shown) = check_names(root, &rerun);
     // `codeflow ci` names its blocking rules in a file of its own, for the
     // refusal record; its printed findings can quote operation content.
     let rules_out = (args.first() == Some(&"ci"))
@@ -790,7 +795,7 @@ fn run_check_with(
             let mut failed = violation(
                 policy,
                 format!("push set check failed: {shown} (output above)"),
-                check_remedy(&rerun),
+                check_remedy(root, &rerun),
             );
             if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
                 failed.level = codeflow_core::hooks::PolicyLevel::Block;
@@ -922,8 +927,8 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
 /// argument and one starting with `-` is joined with `=`. A name with no
 /// printed form leaves a placeholder for the reader to fill, since the
 /// finding names the branch escaped (TSK-416 review round 2).
-fn branch_option(branch: &str) -> String {
-    codeflow_core::git::pasted::option("--branch", branch)
+fn branch_option(root: &Path, branch: &str) -> String {
+    codeflow_core::git::pasted::option(root, "--branch", branch)
         .unwrap_or_else(|| "--branch <branch>".to_string())
 }
 
@@ -938,7 +943,7 @@ fn prune_step(root: &Path, remote: &str) -> String {
     if !codeflow_core::security::git::remote_name_shown(root, remote) {
         return unnamed();
     }
-    codeflow_core::git::Pasted::new("git fetch --prune")
+    codeflow_core::git::Pasted::new(root, "git fetch --prune")
         .value(remote)
         .render()
         .map_or_else(unnamed, |command| format!("run {command}"))

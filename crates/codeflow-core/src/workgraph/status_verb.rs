@@ -655,7 +655,7 @@ fn unchecked_pinned_commit(
         // a ref name can hold `$(…)`, `;` or a backtick, and the branch to
         // rename follows `--` when it starts with `-` (TSK-416 review). The
         // names in prose are shown escaped (TSK-388).
-        let base = crate::git::pasted::option("--base", &fetched).map_or_else(
+        let base = crate::git::pasted::option(root, "--base", &fetched).map_or_else(
             || "`--base` with the full ref, which is not printed to paste since it holds a character a terminal does not show as itself".to_string(),
             |option| format!("`{option}`"),
         );
@@ -665,7 +665,7 @@ fn unchecked_pinned_commit(
             crate::git::display_text(&shadow),
             crate::git::display_text(&fetched),
             crate::git::pasted::step(
-                &crate::git::Pasted::new("git branch -m")
+                &crate::git::Pasted::new(root, "git branch -m")
                     .value(value)
                     .placeholder("<new-name>")
             )
@@ -744,10 +744,16 @@ fn qualify(
         if default.is_some_and(|(default, _)| default == name) || protected(name)? {
             own_target = true;
             let Some(tip) = receiving_tip(repo, name)? else {
-                return Err(format!(
-                    "the target `{}` does not resolve here; {}",
-                    crate::git::display_text(name),
-                    fetch_step(repo, name)
+                // The name in the prose is scrubbed too: the renderer keeps
+                // a withheld remote name out of the command only (TSK-416
+                // review).
+                return Err(withheld(
+                    repo,
+                    &format!(
+                        "the target `{}` does not resolve here; {}",
+                        crate::git::display_text(name),
+                        fetch_step(repo, name)
+                    ),
                 ));
             };
             target = Some(tip);
@@ -894,8 +900,18 @@ fn unpinned_binding(
 /// The tip of the branch `name` as the clone's receiving source holds it.
 /// A clone with no remotes has only local branches. Otherwise the source
 /// is `origin`'s remote-tracking ref; a clone with remotes but no `origin`,
-/// or whose `origin` lacks the ref, refuses and names what to set up.
+/// or whose `origin` lacks the ref, refuses and names what to set up. The
+/// refusal quotes the target and its ref, so a withheld remote name in
+/// either is replaced in the whole text (TSK-416 review); the command in it
+/// holds none, since the renderer refuses one.
 fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
+    unchecked_receiving_tip(repo, name).map_err(|reason| withheld(repo, &reason))
+}
+
+fn unchecked_receiving_tip(
+    repo: &git2::Repository,
+    name: &str,
+) -> Result<Option<git2::Oid>, String> {
     let remotes = repo
         .remotes()
         .map_err(|error| format!("cannot read the remotes: {error}"))?;
@@ -1464,6 +1480,38 @@ mod tests {
             error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
             "{error}"
         );
+    }
+
+    /// TSK-416 review: both receiving-source refusals name the target in
+    /// prose and print a fetch for it. A target holding a withheld remote's
+    /// name appears in neither, and a plain target keeps both.
+    #[test]
+    fn the_receiving_source_refusals_print_no_withheld_name() {
+        let withheld = "u'p@host.invalid";
+        for (origin, case) in [(true, "no remote-tracking ref"), (false, "no origin")] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            let mut config = repo.config().unwrap();
+            if origin {
+                config.set_str("remote.origin.url", "/nowhere").unwrap();
+            }
+            config
+                .set_str(&format!("remote.{withheld}.url"), "/nowhere")
+                .unwrap();
+            let error = receiving_tip(&repo, &format!("x/{withheld}")).unwrap_err();
+            assert!(!error.contains("u'p"), "{case}: {error}");
+            assert!(!error.contains("host.invalid"), "{case}: {error}");
+            assert!(!error.contains("git fetch"), "{case}: {error}");
+            assert!(
+                error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                "{case}: {error}"
+            );
+            if origin {
+                let plain = receiving_tip(&repo, "main").unwrap_err();
+                assert!(plain.contains("`main`"), "{plain}");
+                assert!(plain.contains("`git fetch origin main`"), "{plain}");
+            }
+        }
     }
 
     /// Withhold remote names from refusal text: a `--base` that names a

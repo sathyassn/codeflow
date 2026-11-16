@@ -69,7 +69,7 @@ pub(super) fn check(
         Ok(None) => return,
         Err((error, source)) => {
             ran.push("line-tip");
-            return refuse(tagged, &error, None, &source);
+            return refuse(root, tagged, &error, None, &source);
         }
     };
     ran.push("line-tip");
@@ -88,7 +88,7 @@ pub(super) fn check(
         codeflow_core::git::display_text(&line)
     );
     if let Err(error) = judge(root, &line, &source, run.head, tagged) {
-        refuse(tagged, &error, Some(&line), &source);
+        refuse(root, tagged, &error, Some(&line), &source);
     }
 }
 
@@ -226,7 +226,7 @@ fn judge(
     let (message, mut remedy) =
         line_adoption::direct_commit_refusal(root, line, &report.unadopted, &remote);
     if let Source::Base { target } = source {
-        let _ = write!(remedy, "; {}", routes(Some(line), target.as_deref()));
+        let _ = write!(remedy, "; {}", routes(root, Some(line), target.as_deref()));
     }
     tagged.push(super::TaggedViolation {
         sha: None,
@@ -237,13 +237,13 @@ fn judge(
 
 /// The remedy for a run that found the line from its base: it names the
 /// role flag for each way the head can land.
-fn routes(line: Option<&str>, target: Option<&str>) -> String {
-    let (line_tip, into) = (flag("--line-tip", line), flag("--into", line));
+fn routes(root: &Path, line: Option<&str>, target: Option<&str>) -> String {
+    let (line_tip, into) = (flag(root, "--line-tip", line), flag(root, "--into", line));
     let mut text = format!(
         "this run found the line from its base and cannot tell how the head reaches it: pass {line_tip} on a landing candidate, or, for a pull request head that lands on the line by merge, {into} or the pull request's body (--pr-body-file or CODEFLOW_PR_BODY)"
     );
     if let Some(target) = target {
-        let into = flag("--into", Some(target));
+        let into = flag(root, "--into", Some(target));
         let _ = write!(
             text,
             "; the base is also the fetched tip of the default target, so for a change into it pass {into}"
@@ -255,13 +255,14 @@ fn routes(line: Option<&str>, target: Option<&str>) -> String {
 /// A flag with its value as a reader passes it, rendered from the raw
 /// value so it pastes back as that value (TSK-416 review round 2): `<LINE>`
 /// when there is no value, and the flag with the value typed by hand when
-/// the value holds a character a terminal does not show as itself.
-fn flag(name: &'static str, value: Option<&str>) -> String {
+/// the value holds a character a terminal does not show as itself, or the
+/// name of a remote messages withhold (TSK-416 review).
+fn flag(root: &Path, name: &'static str, value: Option<&str>) -> String {
     match value {
         None => format!("{name} <LINE>"),
-        Some(value) => codeflow_core::git::pasted::option(name, value).unwrap_or_else(|| {
+        Some(value) => codeflow_core::git::pasted::option(root, name, value).unwrap_or_else(|| {
             format!(
-                "{name} with the line's name typed by hand, since it holds a character a terminal does not show as itself"
+                "{name} with the line's name typed by hand, since it holds a character a terminal does not show as itself, or a remote name codeflow withholds"
             )
         }),
     }
@@ -271,6 +272,7 @@ fn flag(name: &'static str, value: Option<&str>) -> String {
 /// the hard line (charter D19), so an unreadable, unbound or ambiguous line
 /// is never skipped.
 fn refuse(
+    root: &Path,
     tagged: &mut Vec<super::TaggedViolation>,
     message: &str,
     line: Option<&str>,
@@ -279,12 +281,12 @@ fn refuse(
     let remedy = match source {
         Source::Flag => format!(
             "fetch the line (`git fetch origin`) and pass {} for a landing candidate cut from its fetched tip, or {} for a pull request head that lands by merge",
-            flag("--line-tip", line),
-            flag("--into", line)
+            flag(root, "--line-tip", line),
+            flag(root, "--into", line)
         ),
         Source::Base { target } => format!(
             "fetch the lines (`git fetch origin`); {}",
-            routes(line, target.as_deref())
+            routes(root, line, target.as_deref())
         ),
     };
     tagged.push(super::TaggedViolation {
@@ -307,14 +309,17 @@ mod tests {
     /// not printed to paste.
     #[test]
     fn a_role_flag_renders_the_raw_line_name() {
+        let repo = tempfile::tempdir().unwrap();
+        git2::Repository::init(repo.path()).unwrap();
+        let root = repo.path().to_path_buf();
         assert_eq!(
-            flag("--line-tip", Some("integration/EPC-001-x")),
+            flag(&root, "--line-tip", Some("integration/EPC-001-x")),
             "--line-tip integration/EPC-001-x"
         );
-        assert_eq!(flag("--into", Some("o$(id)")), "--into 'o$(id)'");
-        assert_eq!(flag("--into", Some("-x")), "--into=-x");
-        assert_eq!(flag("--into", None), "--into <LINE>");
-        let hidden = flag("--into", Some("a\u{200b}b"));
+        assert_eq!(flag(&root, "--into", Some("o$(id)")), "--into 'o$(id)'");
+        assert_eq!(flag(&root, "--into", Some("-x")), "--into=-x");
+        assert_eq!(flag(&root, "--into", None), "--into <LINE>");
+        let hidden = flag(&root, "--into", Some("a\u{200b}b"));
         assert!(
             !hidden.contains('\u{200b}') && !hidden.contains("200b"),
             "{hidden}"

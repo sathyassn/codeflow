@@ -1685,7 +1685,9 @@ fn finish_leaves_a_registered_submodule_tracked() {
 
 #[test]
 fn the_report_lists_what_changed_and_the_next_steps() {
+    let scratch = tempfile::tempdir().unwrap();
     let report = WorkspaceReport {
+        root: repo_with_commit(scratch.path()),
         branch: BranchStep::Created {
             branch: WORKSPACE_ROOT_BRANCH.into(),
             from: "main".into(),
@@ -2344,7 +2346,7 @@ fn a_dashed_root_or_branch_is_never_printed_where_git_reads_options() {
         "{step}"
     );
     let commit = CommitFinding {
-        repo: "repo".to_string(),
+        repo: root.display().to_string(),
         head: Head::Branch(GitName::from_text("-y")),
         root_branch: dashed,
     }
@@ -2440,7 +2442,7 @@ fn a_hidden_character_in_a_branch_name_prints_no_command() {
         finding.message
     );
     let commit = CommitFinding {
-        repo: "repo".to_string(),
+        repo: root.display().to_string(),
         head: Head::Branch(GitName::from_text("fe\u{200b}at")),
         root_branch: hidden_root,
     }
@@ -2523,7 +2525,9 @@ fn the_checkpoint_hint_keeps_a_hostile_root_branch_as_one_argument() {
         ("w$(id)", vec!["integrate", "w$(id)", "--into", "main"]),
         ("-x", vec!["integrate", "--into", "main", "--", "-x"]),
     ] {
+        let scratch = tempfile::tempdir().unwrap();
         let report = WorkspaceReport {
+            root: repo_with_commit(scratch.path()),
             branch: BranchStep::AlreadyOn(branch.into()),
             policy_changed: false,
             ignored: Vec::new(),
@@ -2547,7 +2551,9 @@ fn the_checkpoint_hint_keeps_a_hostile_root_branch_as_one_argument() {
         let arguments: Vec<&str> = printed.split_terminator('\0').collect();
         assert_eq!(arguments, expected, "{report}");
     }
+    let scratch = tempfile::tempdir().unwrap();
     let hidden = WorkspaceReport {
+        root: repo_with_commit(scratch.path()),
         branch: BranchStep::AlreadyOn("w\u{200b}x".into()),
         policy_changed: false,
         ignored: Vec::new(),

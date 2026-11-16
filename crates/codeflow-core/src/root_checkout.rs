@@ -362,7 +362,7 @@ impl CommitFinding {
         // `--` (TSK-416 review). The operand is rendered from the exact
         // bytes; a name with no printed form leaves the placeholder, and the
         // finding's message names the branch escaped (review round 2).
-        let root = crate::git::Pasted::new("git switch")
+        let root = crate::git::Pasted::new(Path::new(&self.repo), "git switch")
             .name(&self.root_branch.name)
             .render();
         let operand = root
@@ -1183,10 +1183,10 @@ fn canonical(path: &Path) -> PathBuf {
 /// The step that moves a linked worktree into `.worktrees/`. The path is
 /// rendered from its exact text, so a space or `$(…)` in it stays one
 /// argument (TSK-416 review round 2).
-fn worktree_move_step(path: &Path) -> String {
+fn worktree_move_step(root: &Path, path: &Path) -> String {
     path.to_str()
         .and_then(|path| {
-            crate::git::Pasted::new("git worktree move")
+            crate::git::Pasted::new(root, "git worktree move")
                 .value(path)
                 .placeholder(".worktrees/<slug>")
                 .without_end_of_options()
@@ -1262,7 +1262,7 @@ pub fn worktree_findings(
                 next_step: format!(
                     "move it with {}, or add its folder to {LOCATIONS_KEY} in \
                      .codeflow/policy.json",
-                    worktree_move_step(&path)
+                    worktree_move_step(&root, &path)
                 ),
             });
             continue;
@@ -1480,17 +1480,17 @@ fn missing_branch_finding(
 /// branch, so the step renames the branch first (TSK-416 review). Each
 /// command is rendered from the branch's exact bytes, never its display form
 /// (review round 2).
-fn continue_in_worktree(b: &GitName, saved: bool) -> String {
+fn continue_in_worktree(root: &Path, b: &GitName, saved: bool) -> String {
     let pop = if saved {
         ", and git stash pop inside it if you stashed"
     } else {
         ""
     };
-    let add = crate::git::Pasted::new("git worktree add .worktrees/<slug>")
+    let add = crate::git::Pasted::new(root, "git worktree add .worktrees/<slug>")
         .name(b)
         .without_end_of_options()
         .render();
-    let rename = crate::git::Pasted::new("git branch -m")
+    let rename = crate::git::Pasted::new(root, "git branch -m")
         .name(b)
         .placeholder("<new-name>")
         .render();
@@ -1503,7 +1503,8 @@ fn continue_in_worktree(b: &GitName, saved: bool) -> String {
         ),
         (None, None) => format!(
             ", then rename the branch with a git client, since its name holds a character a \
-             terminal does not show as itself and no command is printed to paste, and run git \
+             terminal does not show as itself, or a remote name codeflow withholds, and no \
+             command is printed to paste, and run git \
              worktree add .worktrees/<slug> <new-name> to continue it in a worktree{pop}"
         ),
     }
@@ -1519,6 +1520,7 @@ fn head_finding(
 ) -> Option<Finding> {
     // Advice only: a status that cannot be read adds no change to the report.
     let changes = tracked_changes(repo).unwrap_or_default();
+    let root = repo.commondir();
     match match head(repo) {
         Ok(head) => head,
         Err(error) => return Some(cannot_read_finding(error)),
@@ -1563,17 +1565,18 @@ fn head_finding(
                 )
             };
             let continue_step = match &found {
-                Head::Branch(b) => continue_in_worktree(b, !save_step.is_empty()),
+                Head::Branch(b) => continue_in_worktree(root, b, !save_step.is_empty()),
                 Head::Detached(_) => String::new(),
             };
-            let switch = crate::git::Pasted::new("git switch")
+            let switch = crate::git::Pasted::new(root, "git switch")
                 .name(&root_branch.name)
                 .render()
                 .map_or_else(
                     || {
                         "switch the root to its root branch with a git client, since the \
-                         branch name holds a character a terminal does not show as itself \
-                         and no command is printed to paste"
+                         branch name holds a character a terminal does not show as itself, \
+                         or a remote name codeflow withholds, and no command is printed to \
+                         paste"
                             .to_string()
                     },
                     |switch| format!("run {switch} at the root"),
@@ -2000,6 +2003,9 @@ pub fn gitignore_with_nested(text: &str, nested: &[NestedRepo]) -> Option<String
 /// What `init --workspace` did, for its report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceReport {
+    /// The repository the report is for, which decides what its printed
+    /// command may name.
+    pub root: PathBuf,
     pub branch: BranchStep,
     pub policy_changed: bool,
     pub ignored: Vec<NestedRepo>,
@@ -2075,6 +2081,7 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
         verify_ignored(root, &ignored)?;
     }
     Ok(WorkspaceReport {
+        root: root.to_path_buf(),
         branch,
         policy_changed,
         ignored,
@@ -2177,13 +2184,14 @@ impl WorkspaceReport {
         // Rendered from the raw configured name, so a name holding `$(…)`
         // pastes back as itself and one starting with `-` follows `--`
         // (TSK-416 review round 2).
-        let integrate = crate::git::Pasted::new("codeflow integrate")
+        let integrate = crate::git::Pasted::new(&self.root, "codeflow integrate")
             .value(self.branch.name())
             .trailing_flag("--into main")
             .render()
             .unwrap_or_else(|| {
                 "codeflow integrate on the root branch, whose name holds a character a \
-                 terminal does not show as itself, so no command is printed to paste"
+                 terminal does not show as itself, or a remote name codeflow withholds, so no \
+                 command is printed to paste"
                     .to_string()
             });
         writeln!(

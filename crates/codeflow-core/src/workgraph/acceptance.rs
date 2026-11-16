@@ -2355,10 +2355,15 @@ fn judge_reopened(
             }
         }
         if found.is_empty() {
-            return TaskJudgement::unreadable(format!(
-                "the target `{}`, which this task's record names, does not resolve here; {}",
-                crate::git::display_text(name),
-                super::work_start::fetch_origin(repo.commondir(), name)
+            // The target in the prose is scrubbed too; the renderer keeps a
+            // withheld remote name out of the command (TSK-416 review).
+            return TaskJudgement::unreadable(crate::security::git::without_remote_names(
+                repo.commondir(),
+                &format!(
+                    "the target `{}`, which this task's record names, does not resolve here; {}",
+                    crate::git::display_text(name),
+                    super::work_start::fetch_origin(repo.commondir(), name)
+                ),
             ));
         }
         // The epic line's pull request into its target judges the line's
@@ -2376,16 +2381,19 @@ fn judge_reopened(
                 Err(reason) => return TaskJudgement::unreadable(reason),
             };
             if found.is_empty() {
-                return TaskJudgement::unreadable(format!(
-                    "the default target `{}`{} does not resolve here; {}",
-                    crate::git::display_text(&name.name),
-                    // `origin/HEAD` names it, as the remote said (TSK-388).
-                    if name.from_origin_head {
-                        ", which `origin/HEAD` names,"
-                    } else {
-                        ""
-                    },
-                    super::work_start::fetch_origin(repo.commondir(), &name.name)
+                return TaskJudgement::unreadable(crate::security::git::without_remote_names(
+                    repo.commondir(),
+                    &format!(
+                        "the default target `{}`{} does not resolve here; {}",
+                        crate::git::display_text(&name.name),
+                        // `origin/HEAD` names it, as the remote said (TSK-388).
+                        if name.from_origin_head {
+                            ", which `origin/HEAD` names,"
+                        } else {
+                            ""
+                        },
+                        super::work_start::fetch_origin(repo.commondir(), &name.name)
+                    ),
                 ));
             }
             tips.extend(found);
