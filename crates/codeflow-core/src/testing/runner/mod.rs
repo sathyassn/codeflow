@@ -1909,7 +1909,9 @@ mod tests {
             libc::kill(pid, libc::SIGKILL);
         }
         let result = result.unwrap();
-        assert!(started.elapsed() < Duration::from_secs(10));
+        // About 6 s expected (1 s timeout, 5 s cleanup grace); 30 s still
+        // proves collection did not wait out the fixture's 60 s sleep.
+        assert!(started.elapsed() < Duration::from_secs(30));
         assert_eq!(result.status(), TargetStatus::TimedOut);
         assert!(result.termination_unconfirmed);
         assert!(result

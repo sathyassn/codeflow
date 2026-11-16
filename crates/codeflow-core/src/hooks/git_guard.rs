@@ -14731,7 +14731,8 @@ mod tests {
                 tv_nsec: 0,
             };
             // SAFETY: `now` is a valid, writable timespec for the call.
-            let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+            let status =
+                unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &raw mut now) };
             assert_eq!(status, 0, "the thread CPU clock is readable");
             std::time::Duration::new(
                 u64::try_from(now.tv_sec).unwrap(),
