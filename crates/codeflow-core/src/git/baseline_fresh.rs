@@ -131,14 +131,10 @@ mod tests {
             .unwrap();
         bare.set_head("refs/heads/main").unwrap();
         let url = format!("file://{}", remote.display());
-        let status = crate::git::command()
-            .args(["clone", "--quiet", &url, "work"])
-            .current_dir(&parent)
+        codeflow_fixture::clone(&parent, &url, "work")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "git clone");
+            .run();
         let work = parent.join("work");
         let repo = Repository::open(&work).unwrap();
         let weak = commit(&repo, WEAK);

@@ -7,14 +7,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const MARKERS: [&str; 5] = [
-    "CLAUDECODE",
-    "CODEX_SESSION_ID",
-    "CODEX_THREAD_ID",
-    "CODEX_CI",
-    "GROK_SESSION_ID",
-];
-
 struct Scratch {
     temp: tempfile::TempDir,
 }
@@ -67,6 +59,10 @@ impl Scratch {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE");
+        // Every git and codeflow command plays a human unless a case marks it.
+        for name in codeflow_core::root_checkout::AGENT_MARKERS {
+            c.env_remove(name);
+        }
         c
     }
 
@@ -81,9 +77,6 @@ impl Scratch {
 
     fn codeflow(&self, args: &[&str], marked: bool) -> Output {
         let mut command = self.command(Path::new(env!("CARGO_BIN_EXE_codeflow")));
-        for marker in MARKERS {
-            command.env_remove(marker);
-        }
         if marked {
             command.env("CLAUDECODE", "1");
         }
