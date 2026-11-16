@@ -167,17 +167,18 @@ fn compute_imports(
         None => BTreeMap::new(),
     };
     let root = repo.workdir().unwrap_or_else(|| repo.path());
-    // A range that changes no record by a merge reads the default target
-    // only to judge the records it leaves unchanged; without one, nothing
-    // is imported from it.
+    // Only a range that merges no record may skip the default target.
+    // Records admitted from main's bytes still arrived by merge, so an
+    // unreadable default refuses them too, and the walk over the records
+    // the range leaves unchanged always runs.
     let default = match default_target_name(repo) {
         Ok(default) => default,
-        Err(_) if changed.is_empty() => return Ok(imported),
+        Err(_) if merged.is_empty() => return Ok(BTreeMap::new()),
         Err(error) => return Err(unenumerated(error)),
     };
     let default_tip = match home_tip(repo, &default.name) {
         Ok(Some(tip)) => tip,
-        Ok(None) | Err(_) if changed.is_empty() => return Ok(imported),
+        Ok(None) | Err(_) if merged.is_empty() => return Ok(BTreeMap::new()),
         Ok(None) => return Err(unenumerated(unavailable_home(&default.name))),
         Err(error) => return Err(unenumerated(error)),
     };
@@ -1363,7 +1364,15 @@ fn verify_record_home(
         }
     }
     if let (RecordKind::Task, Some(walk)) = (record.kind, walk) {
-        anchor = home::judge_home(repo, record, walk.default_tip, walk.receiver, head)?;
+        // A home correction proved by `verify_landing_home` (AC-10) is the
+        // one move the walk leaves out; it still judges every other move.
+        anchor = home::judge_home(
+            repo,
+            record,
+            walk.default_tip,
+            (walk.receiver, head),
+            corrected.then_some(landed),
+        )?;
     } else if record.kind == RecordKind::Task {
         if let Some(parent) = parents.first() {
             if record_at(repo, *parent, record)?.is_some_and(|old| {

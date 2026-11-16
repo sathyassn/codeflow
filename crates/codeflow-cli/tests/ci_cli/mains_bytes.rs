@@ -249,6 +249,25 @@ fn tsk1185_a_sync_takes_a_completion_main_admitted() {
     refused(&local, "no verified tip");
 }
 
+/// A record taken from main's bytes still arrived by merge, so when the
+/// default branch's local tip cannot be read the import refuses the range
+/// and never returns what it took unjudged. The destination still verifies
+/// the tip, so the rule stays on.
+#[test]
+fn tsk1185_an_unreadable_default_tip_refuses_main_s_records() {
+    let fx = Fixture::new();
+    fx.main_completes();
+    fx.publish();
+    fx.sync();
+    passes(&fx.hosted(SYNC, "Task: EPC-001"), "readable default tip");
+    super::git(fx.root(), &["update-ref", "-d", "refs/remotes/origin/main"]);
+    let hosted = fx.hosted(SYNC, "Task: EPC-001");
+    refused(&hosted, "unreadable default tip");
+    says(&hosted, "rule on", ON);
+    says(&hosted, "home unavailable", "published home `main` is unavailable");
+    says(&hosted, "unenumerated", "could not be enumerated");
+}
+
 /// AC-11 on a reviewed hand-resolved task: the task branch merges main by
 /// hand, so the range is no sync, and the matching record is still taken.
 #[test]

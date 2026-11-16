@@ -507,6 +507,14 @@ fn corrected_home(case: &str) -> tempfile::TempDir {
         merge(root, "main");
         return dir;
     }
+    if case == "earlier direct move" {
+        let elsewhere = completed.replace(
+            &format!("integration_target: {LINE}"),
+            "integration_target: integration/EPC-009-elsewhere",
+        );
+        write(root, &record_path("TSK-001"), &elsewhere);
+        commit(root, "docs: move the task straight on main");
+    }
     git(root, &["switch", "-c", "plan/correct-home"]);
     let mut corrected = completed.replace(
         &format!("integration_target: {LINE}"),
@@ -538,6 +546,18 @@ fn tsk1185_a_home_correction_on_the_home_proves_at_the_original_landing() {
     assert_passes(
         &check(dir.path(), LINE, Some(RECEIVER), false),
         "corrected home",
+    );
+}
+
+/// The proved correction is the only move the walk leaves out: an earlier
+/// direct move on main is still judged and refused.
+#[test]
+fn tsk1185_a_home_correction_does_not_clear_an_earlier_move() {
+    let dir = corrected_home("earlier direct move");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "earlier direct move",
+        &["TSK-001", "is not a reviewed planning merge of records"],
     );
 }
 

@@ -581,14 +581,18 @@ fn adoption_anchor(
 /// Judge a record the range imports from the default tip (AC-1, AC-6,
 /// AC-10, AC-13), against the line's copy at `receiver`.
 ///
+/// `corrected` names a home correction the caller has already proved
+/// (TSK-1185 AC-10). That one move is left out of the walk; every other
+/// move is still judged.
+///
 /// # Errors
 /// The refusal names the move and its cause.
 pub(super) fn judge_home(
     repo: &Repository,
     record: &RecordView,
     default_tip: Oid,
-    receiver: Oid,
-    head: Oid,
+    (receiver, head): (Oid, Oid),
+    corrected: Option<Oid>,
 ) -> Result<Option<HomeAnchor>, String> {
     let who = Identity::of(record);
     let start = start_point(repo, receiver, default_tip)?;
@@ -603,7 +607,10 @@ pub(super) fn judge_home(
     let (since, line_since) = anchor.map_or((start, start), |anchor| {
         (anchor.source_version, anchor.line_landing)
     });
-    let found = moves_of(repo, &who, default_tip, since, head)?;
+    let mut found = moves_of(repo, &who, default_tip, since, head)?;
+    if let Some(corrected) = corrected {
+        found.moves.retain(|(at, _)| *at != corrected);
+    }
     judge_moves(repo, &who, &line, &found.moves, receiver, line_since)?;
     Ok(anchor)
 }
