@@ -14887,6 +14887,54 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Measures the work this thread does, for the tests that bound the
+    /// cost of a pure computation (TSK-1413 AC-6). On Unix it reads the
+    /// thread's CPU clock, which a busy host does not stretch the way it
+    /// stretches wall-clock time; elsewhere it reads the wall clock.
+    struct WorkTimer {
+        #[cfg(unix)]
+        start: std::time::Duration,
+        #[cfg(not(unix))]
+        start: std::time::Instant,
+    }
+
+    impl WorkTimer {
+        #[cfg(unix)]
+        fn thread_cpu() -> std::time::Duration {
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            // SAFETY: `now` is a valid, writable timespec for the call.
+            let status =
+                unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &raw mut now) };
+            assert_eq!(status, 0, "the thread CPU clock is readable");
+            std::time::Duration::new(
+                u64::try_from(now.tv_sec).unwrap(),
+                u32::try_from(now.tv_nsec).unwrap(),
+            )
+        }
+
+        fn start() -> Self {
+            Self {
+                #[cfg(unix)]
+                start: Self::thread_cpu(),
+                #[cfg(not(unix))]
+                start: std::time::Instant::now(),
+            }
+        }
+
+        #[cfg(unix)]
+        fn elapsed(&self) -> std::time::Duration {
+            Self::thread_cpu().saturating_sub(self.start)
+        }
+
+        #[cfg(not(unix))]
+        fn elapsed(&self) -> std::time::Duration {
+            self.start.elapsed()
+        }
+    }
+
     /// TSK-1002 Fable review 16: a `^` after a literal part of its
     /// component matches only names that start with that part.
     #[test]
@@ -15311,7 +15359,7 @@ mod tests {
     /// chain of single-word groups recursed once per group.
     #[test]
     fn brace_expansion_stays_bounded_on_long_words() {
-        let started = std::time::Instant::now();
+        let started = WorkTimer::start();
         // Unmatched `{` inside the length bound read as text, in one pass.
         let unmatched = "{".repeat(BRACE_WORD_BYTES);
         assert_eq!(brace_expand(&unmatched), Some(vec![unmatched.clone()]));
@@ -15994,10 +16042,114 @@ mod tests {
                 }
             }
         }
-        for (line, fresh) in corpus.iter().zip(&fresh_verdicts) {
-            let kept = format!("{:?}", super::evaluate_report_at(line, &context, &root));
-            assert_eq!(&kept, fresh, "{line}");
+        // Every line's cached verdict is compared with its fresh one. A
+        // verdict that needs a Git child can meet the guard's fail-closed
+        // 3 s bound on a busy host, which decides that verdict by timing
+        // alone; such a pair is read again until neither side carries that
+        // refusal, so no line goes uncompared (TSK-1413 AC-2). Any other
+        // difference fails at once.
+        let verdict = |line: &str, off: bool| {
+            set_off(off);
+            let report = format!("{:?}", super::evaluate_report_at(line, &context, &root));
+            set_off(false);
+            report
+        };
+        let safety = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut compared = 0;
+        for (line, first_fresh) in corpus.iter().zip(fresh_verdicts) {
+            let mut fresh = first_fresh;
+            loop {
+                let kept = verdict(line, false);
+                if !slow_git_child_refusal(&fresh) && !slow_git_child_refusal(&kept) {
+                    assert_eq!(kept, fresh, "{line}");
+                    compared += 1;
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < safety,
+                    "{line}: the Git child bound decided every reading: {kept}"
+                );
+                fresh = verdict(line, true);
+            }
         }
+        assert_eq!(compared, corpus.len());
+    }
+
+    /// Whether a guard verdict, as text, carries the refusal the guard gives
+    /// when a Git child it runs outlives its fail-closed 3 s bound
+    /// (`security/git_config.rs`), and only that refusal: its two
+    /// messages, for a child that does not exit and for output not read in
+    /// time (TSK-1413 AC-2).
+    fn slow_git_child_refusal(verdict: &str) -> bool {
+        verdict.contains("cannot verify Git configuration: child exceeded 3 seconds")
+            || verdict
+                .contains("cannot verify Git configuration: read failed or exceeded 3 seconds")
+    }
+
+    /// TSK-1413 AC-2: a `git` that sleeps past the 3 s bound makes the Git
+    /// child reader refuse with the bound's message, which
+    /// [`slow_git_child_refusal`] recognizes; the same reader's other
+    /// refusals, and a guard refusal for any other reason, are not
+    /// recognized. A unit test cannot change this process's `PATH`
+    /// without changing it for every test running beside it, so the case
+    /// with a slow `git` on `PATH` behind a whole verdict is the
+    /// `hooks_cli` test
+    /// `a_slow_git_child_is_the_only_refusal_a_verdict_comparison_reads_again`.
+    #[cfg(unix)]
+    #[test]
+    fn only_the_git_child_bound_is_read_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let slow = temp.path().join("git");
+        std::fs::write(&slow, "#!/bin/sh\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The deadline is the caller's; the messages name the guard's 3 s.
+        // A longer deadline here lets a loaded host start the script, so
+        // each case reaches the refusal it is written for. Each fake `git`
+        // is built by the one git constructor, as every Git child is.
+        let bounded = |program: &Path| {
+            let mut command = crate::git::process(program);
+            command.current_dir(temp.path());
+            crate::security::git_config::bounded_output(
+                &mut command,
+                std::time::Instant::now() + std::time::Duration::from_secs(8),
+            )
+        };
+        let refused = bounded(&slow).unwrap_err();
+        assert!(
+            refused.contains("read failed or exceeded 3 seconds"),
+            "{refused}"
+        );
+        assert!(slow_git_child_refusal(&refused), "{refused}");
+        // A child that closes its output and then outlives the bound.
+        let lingering = temp.path().join("lingering-git");
+        std::fs::write(&lingering, "#!/bin/sh\nexec >&-\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&lingering, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let refused = bounded(&lingering).unwrap_err();
+        assert!(refused.contains("child exceeded 3 seconds"), "{refused}");
+        assert!(slow_git_child_refusal(&refused), "{refused}");
+        // A child that cannot start fails at once, whatever the host load.
+        let missing = bounded(&temp.path().join("no-such-git")).unwrap_err();
+        assert!(
+            missing.starts_with("cannot verify Git configuration"),
+            "{missing}"
+        );
+        assert!(!slow_git_child_refusal(&missing), "{missing}");
+        let root = temp.path().join("repo");
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+        let policy = default_policy();
+        let other = format!(
+            "{:?}",
+            evaluate_report_at(
+                "rm -f .codeflow/policy.json",
+                &ctx(&policy, "feat/x"),
+                &root
+            )
+        );
+        assert!(other.contains("git.hook_integrity"), "{other}");
+        assert!(!slow_git_child_refusal(&other), "{other}");
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
@@ -18566,7 +18718,7 @@ mod tests {
         assert_eq!(one.dirs, [PathBuf::from("/r"), PathBuf::from("/r/d29")]);
         let commands: Vec<String> = (0..30).map(|n| format!("env -C d{n} true")).collect();
         let line = commands.join("; ");
-        let started = std::time::Instant::now();
+        let started = WorkTimer::start();
         let run = run_dirs(&expand_commands(&line), Path::new("/r"));
         assert!(run.dirs.len() <= RUN_DIR_LIMIT, "{}", run.dirs.len());
         assert!(run.unknown.is_some());
@@ -18894,7 +19046,7 @@ mod tests {
     #[test]
     fn test_nested_word_groups_are_read_once_per_level() {
         let nested = |n: usize| format!("{}x{}", "@(".repeat(n), ")".repeat(n));
-        let start = std::time::Instant::now();
+        let start = WorkTimer::start();
         let segments = expand_commands(&format!("bash -O extglob -c 'echo {}'", nested(24)));
         assert!(
             start.elapsed() < std::time::Duration::from_secs(2),
@@ -18924,6 +19076,11 @@ mod tests {
     #[test]
     fn test_folder_names_above_a_word_stay_literal() {
         for folder in ["RUNNER~1", "Program Files (x86)", "a#b^c"] {
+            // One guard invocation reads each folder above the word once, in
+            // its facts scope (`cmd/hook.rs`). Without one, every check here
+            // read and case-normalized each ancestor folder again, 40 to 100
+            // s on a busy host with a crowded temporary folder (TSK-1413).
+            let _scope = super::super::edit_guard::RepoFactsScope::enter();
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().join(folder).join("repo");
             std::fs::create_dir_all(root.join("build")).unwrap();
@@ -18943,11 +19100,8 @@ mod tests {
             // short name stays plain, while `(`, `#` or `^` there is read
             // as pattern syntax, since quotes are gone by then.
             let absolute = crate::portable_path::slashed(&root.join("build/a.o"));
-            assert_eq!(
-                token_integrity_path(&absolute, &root, &root).is_none(),
-                folder == "RUNNER~1",
-                "{folder}"
-            );
+            let found = token_integrity_path(&absolute, &root, &root);
+            assert_eq!(found.is_none(), folder == "RUNNER~1", "{folder}: {found:?}");
             assert!(
                 token_integrity_path(".codeflow/policy.json~x", &root, &root).is_some(),
                 "{folder}"

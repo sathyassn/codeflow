@@ -9189,6 +9189,24 @@ fn first_push_without_declared_target_survives_default_branch_advancing() {
 #[test]
 #[allow(clippy::too_many_lines)] // One journey: refusal payloads, then controls.
 fn exec_guard_judges_the_paths_an_interpreter_is_given() {
+    // TSK-1413 AC-4: each guard decision is timed, and the slowest are
+    // printed (`--nocapture`), so a decision near the guard's 20 s deadline
+    // is named rather than hidden in the test's total.
+    let timings = std::cell::RefCell::new(Vec::new());
+    let exec_guard_contract_3 = |dir: &Path, command: &str| {
+        let started = std::time::Instant::now();
+        let out = exec_guard_contract_3(dir, command);
+        let shown = format!("exec-guard in {}: {command:.100}", dir.display());
+        timings.borrow_mut().push((started.elapsed(), shown));
+        out
+    };
+    let guard_run = |command: &str, session: &Path| {
+        let started = std::time::Instant::now();
+        let out = guard_run(command, session);
+        let shown = format!("git-guard in {}: {command:.100}", session.display());
+        timings.borrow_mut().push((started.elapsed(), shown));
+        out
+    };
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");
     std::fs::create_dir_all(&root).unwrap();
@@ -9655,6 +9673,13 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             "should refuse in another repository: {command}: {err}"
         ));
     }
+    let mut timings = timings.into_inner();
+    timings.sort_by(|a, b| b.0.cmp(&a.0));
+    let total: std::time::Duration = timings.iter().map(|(took, _)| *took).sum();
+    eprintln!("guard decisions: {} in {total:?}; slowest:", timings.len());
+    for (took, shown) in timings.iter().take(8) {
+        eprintln!("  {took:?} {shown}");
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -9719,6 +9744,81 @@ fn interpreter_argument_refused(output: &Output) -> bool {
         && (err.contains("git.hook_integrity") || err.contains("security.text_guard"))
         && err.contains("interpreter")
         && !err.contains("interpreter code")
+}
+
+/// Whether the guard refused only because a Git child it runs outlived its
+/// fail-closed 3 s bound (`security/git_config.rs`), as on a busy host.
+/// The `git_guard` verdict comparison reads a pair again when either side
+/// carries this refusal, and no other (TSK-1413 AC-2). Only the Unix test
+/// below calls it.
+#[cfg(unix)]
+fn slow_git_child_refusal(out: &Output) -> bool {
+    let err = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(2)
+        && (err.contains("cannot verify Git configuration: child exceeded 3 seconds")
+            || err.contains("cannot verify Git configuration: read failed or exceeded 3 seconds"))
+}
+
+/// TSK-1413 AC-2: a `git` on `PATH` that sleeps past the guard's 3 s bound
+/// makes the guard refuse, failing closed, and [`slow_git_child_refusal`]
+/// recognizes that refusal. The same command with the real `git` passes,
+/// and a refusal for any other reason is not recognized. Sleeping only
+/// before `rev-parse --show-prefix` keeps the case deterministic (the
+/// wrapper of TSK-1318 AC-9).
+#[cfg(unix)]
+#[test]
+fn a_slow_git_child_is_the_only_refusal_a_verdict_comparison_reads_again() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    assert!(!real.is_empty(), "git is on PATH");
+    let slow = tmp.path().join("slow-git");
+    std::fs::create_dir(&slow).unwrap();
+    let wrapper = slow.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *' --show-prefix '*) sleep 4 ;; esac\nexec '{real}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let host_path = std::env::var_os("PATH").unwrap();
+    let slow_path = std::env::join_paths(
+        std::iter::once(slow.clone()).chain(std::env::split_paths(&host_path)),
+    )
+    .unwrap();
+    let stage = tmp.path().join("stage");
+    std::fs::create_dir(&stage).unwrap();
+    let run = |command: &str, path: &std::ffi::OsStr| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard", "--contract", "3"])
+                .current_dir(&stage)
+                .env("HOME", tmp.path())
+                .env("USERPROFILE", tmp.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("PATH", path),
+            &guard_payload(command, &stage),
+        )
+    };
+    let out = run("git -C . status", &slow_path);
+    assert!(slow_git_child_refusal(&out), "{out:?}");
+    let fast = run("git -C . status", &host_path);
+    assert_eq!(fast.status.code(), Some(0), "{fast:?}");
+    assert!(!slow_git_child_refusal(&fast), "{fast:?}");
+    // A refusal for any other reason is never read as the slow child.
+    std::fs::create_dir(stage.join("x")).unwrap();
+    let other = run(
+        "printf 'gitdir: /nonexistent\\n' > x/.git && git -C x status",
+        &host_path,
+    );
+    assert_eq!(other.status.code(), Some(2), "{other:?}");
+    assert!(!slow_git_child_refusal(&other), "{other:?}");
 }
 
 #[test]
