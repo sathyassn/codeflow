@@ -2483,10 +2483,22 @@ ledger changes no verdict.
 Local hooks protect only the operations that run them. The layers left for
 a protected branch depend on the skipped stage:
 
-| Skipped stage | What still applies locally | What stops a forced update or deletion on the remote |
-|---|---|---|
-| Commit hooks | With the reference hook still installed and `git.local_ref_protection` set to `block`, it refuses the new commit's local ref move. The reference hook also judges other local protected-ref moves and deletions under their policy levels; an exact remote-head sync remains allowed. | The remote host's protection applies to any later push. Local refusal is no evidence of those host rules. |
-| Push hook | The reference hook judges local ref transactions, not the remote destination. A push need not move the local branch. | Only the remote's protection. Without it, no local layer refuses this remote change once the push hook is skipped. |
+- **Commit hooks skipped.**
+  - What still applies locally: with the reference hook still installed and
+    `git.local_ref_protection` set to `block`, it refuses the new commit's
+    local ref move. The reference hook also judges other local
+    protected-ref moves and deletions under their policy levels; an exact
+    remote-head sync remains allowed.
+  - What stops a forced update or deletion on the remote: the remote host's
+    protection applies to any later push. Local refusal is no evidence of
+    those host rules.
+- **Push hook skipped.**
+  - What still applies locally: the reference hook judges local ref
+    transactions, not the remote destination. A push need not move the
+    local branch.
+  - What stops a forced update or deletion on the remote: only the remote's
+    protection. Without it, no local layer refuses this remote change once
+    the push hook is skipped.
 
 In-session guards can refuse skips they see; commands outside the session
 do not run those guards. CI supplies a verdict and needs required host
