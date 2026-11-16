@@ -15795,10 +15795,15 @@ pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Lau
     Launch::Runs(idx)
 }
 
-/// Whether sudo reads `word` as an environment assignment: it holds `=`
-/// and starts with neither `/` nor `=` (sudo's `parse_args.c`).
+/// Whether sudo reads `word` as an environment assignment. sudo hands each
+/// word to `getopt_long` first and tests for an assignment only when getopt
+/// finds no option there, so a word starting with `-` is always an option
+/// (an unknown one is a usage error), never an assignment. Of the words
+/// getopt leaves, an assignment holds `=` and starts with neither `/` nor
+/// `=` (`is_envar` in sudo's `parse_args.c`); sudo does not check the name
+/// before `=`, so neither does this.
 fn sudo_assignment(word: &str) -> bool {
-    word.contains('=') && !word.starts_with(['/', '='])
+    word.contains('=') && !word.starts_with(['-', '/', '='])
 }
 
 /// Whether `busybox APPLET` runs `applet` as the program for the readers:

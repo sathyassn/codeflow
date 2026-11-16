@@ -2399,7 +2399,7 @@ fn a_search_pattern_is_never_a_write_target() {
         "rg --files | xargs -0 egrep -e '^/etc/.*'",
         "rg --files | xargs rg --regexp '/CHANGELOG.md$'",
         "find docs -name '*.md' -exec fgrep -l '/CHANGELOG.md$' {} +",
-        "find docs -exec rg \"$HOME/x\" {} \\;",
+        "find docs -exec grep \"$HOME/x\" {} \\;",
     ] {
         let found = f.judge(command);
         if !found.is_empty() {
@@ -2444,6 +2444,11 @@ fn a_search_pattern_is_never_a_write_target() {
         "rg --files | xargs grep '/x$' ~/.zshrc",
         "find docs -exec grep -l x ~/.zshrc \\;",
         "rg --files | tee ~/.zshrc",
+        // `find -exec rg` is unresolved (TSK-1490 round 10): the rg that
+        // find runs may read a configuration that runs a command, so the
+        // line that names the home is refused although the home is only
+        // a pattern. The `grep` form above keeps the pattern point.
+        "find docs -exec rg \"$HOME/x\" {} \\;",
     ] {
         if !refused(&f.judge(command)) {
             wrong.push(format!("allowed: {command}"));
