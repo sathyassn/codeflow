@@ -126,6 +126,10 @@ fn unproven_refusal(out: &Output) -> bool {
 /// differs from the configured one, before it reads what Git runs.
 const DIFFERENT_URL: &str = "differs from remote.";
 
+/// git-guard's earlier `git.policy_authority` refusal of a remote section
+/// with an empty name, which it cannot read.
+const UNREADABLE_EMPTY_REMOTE: &str = "policy rule git.policy_authority (block)\n  cannot read configured remote : '' is not a valid remote name.";
+
 /// git-guard's earlier rule for a configuration environment override.
 const CONFIG_OVERRIDE: &str = "after changing environment variable GIT_CONFIG_COUNT";
 
@@ -236,6 +240,46 @@ fn both_guards_refuse_an_implicit_contact_with_a_helper_program() {
         .config("remote.lazy.url", "fixture::x")
         .config("remote.lazy.promisor", "true");
     assert_rows(&promisor, &["git log -1"], &[]);
+}
+
+#[test]
+fn both_guards_judge_every_promisor_registration_git_reads() {
+    // A partial clone filter registers the remote whatever its promisor
+    // setting, and a true value counts even when a later one is false.
+    let filtered = Scratch::landed(None);
+    filtered
+        .config("remote.shadow.url", "fixture::x")
+        .config("remote.shadow.partialCloneFilter", "blob:none");
+    assert_rows(&filtered, &["git log -1"], &[]);
+    let unset = Scratch::landed(None);
+    unset
+        .config("remote.shadow.url", "fixture::x")
+        .config("remote.shadow.promisor", "false")
+        .config("remote.shadow.partialCloneFilter", "blob:none");
+    assert_rows(&unset, &["git log -1"], &[]);
+    let retracted = Scratch::landed(None);
+    retracted
+        .config("remote.shadow.url", "fixture::x")
+        .config("remote.shadow.promisor", "true")
+        .config("remote.shadow.promisor", "false");
+    assert_rows(&retracted, &["git log -1"], &[]);
+    // A helper remote that is no promisor is not contacted.
+    let plain = Scratch::landed(None);
+    plain
+        .config("remote.shadow.url", "fixture::x")
+        .config("remote.shadow.promisor", "false");
+    assert_rows(&plain, &[], &["git log -1"]);
+    // The empty name, from an empty section name or from a key with no
+    // section name, refuses.
+    for config in [
+        &b"[remote \"\"]\n\tpartialCloneFilter = blob:none\n"[..],
+        &b"[remote]\n\tpartialCloneFilter = blob:none\n"[..],
+        &b"[remote]\n\tpromisor = true\n"[..],
+    ] {
+        let empty = Scratch::landed(None);
+        empty.append_config(config);
+        assert_unproven(&empty, &["git log -1"], &[]);
+    }
 }
 
 #[test]
@@ -408,9 +452,17 @@ fn both_guards_refuse_a_remote_update_whose_selection_hides_a_remote() {
     }
 
     // A remote section with an empty name defines a remote Git fetches.
+    // git-guard refuses it first, by its earlier rule for a configured
+    // remote it cannot read.
     let empty = Scratch::landed(None);
     empty.append_config(b"[remote \"\"]\n\turl = fixture::x\n");
-    assert_unproven(&empty, &["git remote update"], &[]);
+    assert_judged_with(
+        &empty,
+        unproven_refusal,
+        &["git remote update"],
+        &[],
+        &[("git remote update", UNREADABLE_EMPTY_REMOTE)],
+    );
     // A dotted name and names that differ only in case are each read.
     let dotted = Scratch::landed(None);
     dotted.config("remote.a.b.url", "fixture::x");

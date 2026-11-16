@@ -49,21 +49,34 @@ impl Scratch {
     }
 
     fn contacts(&self, command: &str) -> Result<Vec<Contact>, String> {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        self.contacts_of(&words)
+    }
+
+    /// [`Scratch::contacts`] for a command given word by word, so a word
+    /// may be empty.
+    fn contacts_of(&self, words: &[&str]) -> Result<Vec<Contact>, String> {
         let mut env = Environment::new();
         env.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
         env.insert("GIT_CONFIG_SYSTEM".into(), "/dev/null".into());
         env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         env.insert("HOME".into(), self.root.display().to_string());
         let config = read(&self.root, &[], &env)?;
-        let words: Vec<String> = command.split_whitespace().map(str::to_string).collect();
+        let words: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
         let (verb, rest) = words.split_first().unwrap();
         contacts(verb, rest, &config, &mut RootProbe(&self.root))
     }
 
     /// The helper programs `command` starts, or the refusal.
     fn helpers(&self, command: &str) -> Result<Vec<String>, String> {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        self.helpers_of(&words)
+    }
+
+    /// [`Scratch::helpers`] for a command given word by word.
+    fn helpers_of(&self, words: &[&str]) -> Result<Vec<String>, String> {
         Ok(self
-            .contacts(command)?
+            .contacts_of(words)?
             .into_iter()
             .filter_map(|contact| match contact.selected {
                 Selected::Helper(name) => Some(name),
@@ -626,6 +639,54 @@ fn promisor_remotes_pass_the_same_rule() {
     set.unproven("status", "helper through its configuration");
     let missing = Scratch::new(&format!("{HTTPS}[extensions]\n\tpartialClone = gone\n"));
     missing.unproven("status", "remote `gone` is not configured");
+}
+
+#[test]
+fn every_promisor_registration_git_reads_is_judged() {
+    const SHADOW: &str = "[remote \"shadow\"]\n\turl = fixture::x\n";
+    // A partial clone filter registers the remote whatever its promisor
+    // setting, and a true value counts even when a later one is false.
+    for extra in [
+        "\tpartialCloneFilter = blob:none\n",
+        "\tpromisor = false\n\tpartialCloneFilter = blob:none\n",
+        "\tpromisor = true\n\tpromisor = false\n",
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}{SHADOW}{extra}"));
+        assert_eq!(
+            scratch.helpers("status"),
+            Ok(vec!["fixture".into()]),
+            "{extra}"
+        );
+    }
+    // A remote with none of them is no promisor.
+    let plain = Scratch::new(&format!("{HTTPS}{SHADOW}"));
+    assert_eq!(plain.helpers("status"), Ok(vec![]));
+    let unset = Scratch::new(&format!("{HTTPS}{SHADOW}\tpromisor = false\n"));
+    assert_eq!(unset.helpers("status"), Ok(vec![]));
+    // The empty name, from an empty section name or from a key with no
+    // section name, refuses.
+    for config in [
+        "[remote \"\"]\n\tpartialCloneFilter = blob:none\n",
+        "[remote]\n\tpartialCloneFilter = blob:none\n",
+        "[remote]\n\tpromisor = true\n",
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}{config}"));
+        scratch.unproven("status", "promisor remote with an empty name");
+    }
+}
+
+#[test]
+fn an_empty_operand_reads_as_the_address_git_builds_for_it() {
+    // Git gives an empty operand a remote with no address, so it fetches
+    // the operand itself after the rewrites; a `remote ""` section, whose
+    // remote Git names otherwise, does not supply it.
+    let scratch = Scratch::new(&format!(
+        "{HTTPS}[remote \"\"]\n\turl = https://example.test/r\n[url \"https://ok.test/\"]\n\tinsteadOf = https://\n[url \"fixture::x\"]\n\tinsteadOf = \"\"\n"
+    ));
+    assert_eq!(
+        scratch.helpers_of(&["fetch", ""]),
+        Ok(vec!["fixture".into()])
+    );
 }
 
 #[test]
