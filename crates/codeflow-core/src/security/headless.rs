@@ -30,7 +30,10 @@
 //! the message says the line was not fully parsed, and a project that needs
 //! such a run sets `security.headless_peer_runs` to `warn`.
 
-use crate::hooks::git_guard::simple_commands;
+use crate::hooks::git_guard::{assumed_marks, other_readings, simple_commands};
+use crate::security::shell_lex::{
+    leading_word, leading_word_written, skip_leading, LeadingWord, Taker,
+};
 
 /// A headless peer run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +45,10 @@ pub struct HeadlessRun {
     /// `false` when the line could not be parsed and its raw text named the
     /// peer with a headless marker.
     pub parsed: bool,
+    /// The program words the guard could not fill in when the run is one
+    /// reading of them (TSK-1456), so the refusal says to write the program
+    /// name literally; empty otherwise.
+    pub unread: Vec<String>,
 }
 
 /// The first headless peer run in `command`, if any.
@@ -63,9 +70,14 @@ fn find(command: &str, depth: usize) -> Option<HeadlessRun> {
         return raw_run(command);
     }
     let mut unresolved = command.contains("<<<");
-    for argv in simple_commands(command) {
-        match classify(&argv, depth) {
-            Found::Run(run) => return Some(run),
+    for simple in simple_commands(command) {
+        match classify_written(&simple.words, Some(&simple.marks), depth) {
+            Found::Run(mut run) => {
+                if run.unread.is_empty() {
+                    run.unread = simple.unread;
+                }
+                return Some(run);
+            }
             Found::Unresolved => unresolved = true,
             Found::Nothing => {}
         }
@@ -79,7 +91,16 @@ fn find(command: &str, depth: usize) -> Option<HeadlessRun> {
 
 /// Classify one simple command's argument vector, unwrapping launchers.
 fn classify(argv: &[String], depth: usize) -> Found {
+    classify_written(argv, None, depth)
+}
+
+/// [`classify`] with the words as written ([`simple_commands`]), parallel
+/// to `argv`, when the caller has them (TSK-1456).
+fn classify_written(argv: &[String], marks: Option<&[String]>, depth: usize) -> Found {
+    let written = argv.len();
     let mut argv = argv;
+    // Who reads the words in front of the next program (TSK-1456).
+    let mut taker = Taker::Shell;
     for _ in 0..8 {
         let Some(program) = argv.first() else {
             return Found::Nothing;
@@ -89,8 +110,34 @@ fn classify(argv: &[String], depth: usize) -> Found {
         if program.contains(['$', '`']) || program.chars().any(char::is_control) {
             return Found::Unresolved;
         }
+        // Each launcher below leaves a tail of the words, so the same tail
+        // of the words as written stays parallel to them.
+        let tail = marks
+            .filter(|marks| marks.len() == written)
+            .map(|marks| &marks[written - argv.len()..]);
+        let placed = match tail {
+            Some(tail) => leading_word_written(&tail[0], taker),
+            None => leading_word(program, taker),
+        };
+        // A word that may be an assignment or the program: each other
+        // reading is judged here, and the word as the program below.
+        if placed == LeadingWord::Unplaced {
+            let marks = tail.map_or_else(|| assumed_marks(argv), <[String]>::to_vec);
+            let (readings, incomplete) = other_readings(&marks, 0);
+            if let Some(run) = readings.iter().find_map(|reading| find(reading, depth + 1)) {
+                return Found::Run(run);
+            }
+            if incomplete {
+                return Found::Unresolved;
+            }
+        }
         let name = basename(program);
         let rest = &argv[1..];
+        taker = if matches!(name.as_str(), "env" | "sudo" | "doas") {
+            Taker::Env
+        } else {
+            Taker::Shell
+        };
         argv = match name.as_str() {
             "claude" | "codex" | "grok" => return peer_run(&name, rest, depth),
             "alias" | "function" | "source" | "." => return Found::Unresolved,
@@ -113,7 +160,7 @@ fn classify(argv: &[String], depth: usize) -> Found {
                 let after = skip_options(rest, &["-s", "--signal", "-k", "--kill-after"]);
                 after.get(1..).unwrap_or_default()
             }
-            "sudo" | "doas" => skip_assignments(skip_options(
+            "sudo" | "doas" => skip_env_assignments(skip_options(
                 rest,
                 &[
                     "-u",
@@ -430,13 +477,9 @@ pub(crate) fn skip_options<'a>(args: &'a [String], with_value: &[&str]) -> &'a [
     args.get(at..).unwrap_or_default()
 }
 
-/// Skip `NAME=value` words.
-pub(crate) fn skip_assignments(args: &[String]) -> &[String] {
-    let at = args
-        .iter()
-        .position(|arg| !is_assignment(arg))
-        .unwrap_or(args.len());
-    &args[at..]
+/// Skip the `NAME=value` words a launcher such as `sudo` reads itself.
+fn skip_env_assignments(args: &[String]) -> &[String] {
+    &args[skip_leading(args, Taker::Env)..]
 }
 
 /// `env`'s options and assignments up to its command; `None` for `env -S`,
@@ -456,7 +499,7 @@ pub(crate) fn skip_env(args: &[String]) -> Option<&[String]> {
         }
         if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
             at += 2;
-        } else if arg.starts_with('-') || is_assignment(arg) {
+        } else if arg.starts_with('-') || leading_word(arg, Taker::Env) == LeadingWord::Assignment {
             at += 1;
         } else {
             break;
@@ -832,6 +875,7 @@ fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
             peer: cli.peer,
             form,
             parsed: true,
+            unread: Vec::new(),
         }),
         _ => Found::Nothing,
     }
@@ -888,6 +932,7 @@ pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
             peer,
             form,
             parsed: false,
+            unread: Vec::new(),
         })
     })
 }
@@ -899,15 +944,6 @@ fn basename(program: &str) -> String {
     let name = name.to_ascii_lowercase();
     let name = name.strip_suffix(".exe").unwrap_or(&name);
     crate::hooks::git_guard::program_name(name).to_string()
-}
-
-/// `NAME=value` before a program.
-fn is_assignment(token: &str) -> bool {
-    token.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty()
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            && !name.starts_with(|c: char| c.is_ascii_digit())
-    })
 }
 
 #[cfg(test)]
@@ -1072,5 +1108,40 @@ mod tests {
         // A runner of anything else is no peer run.
         assert_eq!(headless_peer_run("npx prettier -p x"), None);
         assert_eq!(headless_peer_run("pnpm install -p"), None);
+    }
+
+    /// TSK-1456: a peer behind a word that may be read either way is found,
+    /// in front of the shell's command and of every launcher that reads
+    /// assignments; a line with no peer run behind such a word stays none.
+    #[test]
+    fn a_peer_behind_an_unplaced_leading_word_is_found() {
+        for line in [
+            "X+=1 claude -p x",
+            "a[0]=1 claude -p x",
+            "env X[0]=1 claude -p x",
+            "env {X=1,claude} -p x",
+            "sudo X+=1 claude -p x",
+            "sudo -u me a[0]=1 codex exec y",
+            "doas X+=1 grok -p z",
+            "nohup env X[0]=1 claude -p x",
+            "sudo env X[0]=1 claude -p x",
+            "env '=x' claude -p x",
+            "env -i = codex exec y",
+            "sudo =x claude -p x",
+        ] {
+            assert!(headless_peer_run(line).is_some(), "{line}");
+        }
+        for line in [
+            "'=x' claude -p x",
+            "X+=1 claude",
+            "env X[0]=1 ls -p",
+            "sudo X+=1 git status",
+            "FOO=1 ls -p",
+            "env FOO=1 ls -p",
+            "env X=/bin/claude -p hello",
+            "doas X=/bin/claude -p hello",
+        ] {
+            assert_eq!(headless_peer_run(line), None, "{line}");
+        }
     }
 }

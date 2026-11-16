@@ -1183,6 +1183,22 @@ pub(super) fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'stat
 /// to keep; it records the reason as a Closeout line `- reopened: <reason>`
 /// and no block is invented.
 pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
+    reopen_problems_after(before, &[], after)
+}
+
+/// [`reopen_problems`] for a completion `before` that the history made after
+/// `earlier`: the completions, oldest first, that the history made before
+/// `before`'s active block and that `before`'s own archive does not hold. An
+/// acceptance block edited in place while complete is a completion of its
+/// own (SPC-013 R-119: each completion an occurrence, a commit that
+/// introduced it), and the edit archived nothing, so the reopen archives
+/// those completions first, in the order they were made, then `before`'s
+/// active block. Empty `earlier` is the plain rule.
+pub(super) fn reopen_problems_after(
+    before: Option<&RecordView>,
+    earlier: &[AcceptanceBlock],
+    after: &RecordView,
+) -> Vec<String> {
     let mut problems = Vec::new();
     if after.status != "complete" && !after.active_blocks().is_empty() {
         problems
@@ -1226,11 +1242,16 @@ pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -
                 old.inner == new.inner
             }
         });
-    let kept = superseded.len() > old_archive.len()
+    let first = old_archive.len() + earlier.len();
+    let kept = superseded.len() > first
         && superseded.iter().all(|block| block.parsed.is_ok())
+        && earlier
+            .iter()
+            .zip(&superseded[old_archive.len()..])
+            .all(|(made, archived)| same_completion(made, archived))
         && old_active
             .as_ref()
-            .is_none_or(|old| same_block_content(old, &superseded[old_archive.len()]));
+            .is_none_or(|old| same_block_content(old, &superseded[first]));
     if !in_order {
         problems.push(
             "the `acceptance_superseded:` blocks stay as they were archived, in chronological order and unchanged (only a validated redaction rewords one); a reopen appends the block it archives after them"
@@ -1261,14 +1282,23 @@ fn same_provenance(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
 }
 
 fn same_block_content(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
-    match (&old.parsed, &new.parsed) {
-        (Ok(old), Ok(new)) => {
+    match &old.parsed {
+        Ok(old) => same_completion(old, new),
+        Err(_) => false,
+    }
+}
+
+/// Whether the archived block `new` holds the completion `made`: the same
+/// block apart from the superseded mark and its reopen reason.
+fn same_completion(made: &AcceptanceBlock, new: &FencedAcceptance) -> bool {
+    match &new.parsed {
+        Ok(new) => {
             let mut new = new.clone();
             new.superseded = false;
             new.reason = None;
-            *old == new
+            *made == new
         }
-        _ => false,
+        Err(_) => false,
     }
 }
 
