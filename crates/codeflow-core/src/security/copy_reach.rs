@@ -63,33 +63,115 @@ pub(crate) fn dry_run(copy: &CopyRead) -> bool {
     copy.unknown.is_none() && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run")
 }
 
-/// A directory entry's name as the guard compares it: case is ignored, and
-/// on Windows a trailing dot or space is dropped, as Win32 drops it when it
-/// opens the name.
-fn compared(name: &str) -> String {
-    crate::portable_path::filesystem_spelling(name).to_lowercase()
+/// How a host's filesystem reads the names a copy or link makes. Every
+/// entry or landing name the shell guards compare against an enforcement
+/// name goes through [`Host::opened`], the reading the path word gets from
+/// `portable_path`: the host's separators, then on Windows the
+/// alternate-stream refusal of `namespace_spelling`, the stream strip of
+/// `without_streams`, the trailing dot or space `filesystem_spelling`
+/// drops, and the short-name refusal. The Windows reading is a value, so
+/// every host tests it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Host {
+    windows: bool,
 }
 
-/// Whether a source entry's name is one Windows may read as the 8.3 short
-/// name of another entry at the landing place, which the guard cannot map
-/// before the entry exists.
-fn short_alias(name: &str) -> bool {
-    cfg!(windows) && crate::portable_path::has_short_component(name)
+impl Host {
+    /// The host the guard runs on.
+    pub(crate) const THIS: Host = Host {
+        windows: cfg!(windows),
+    };
+    /// Windows, for tests on every host.
+    #[cfg(test)]
+    pub(crate) const WINDOWS: Host = Host { windows: true };
+    /// A host where `\`, `:` and a trailing dot are parts of a name.
+    #[cfg(test)]
+    pub(crate) const POSIX: Host = Host { windows: false };
+
+    /// The separators of names: `/` and `\` on Windows, `/` elsewhere.
+    pub(crate) fn separators(self) -> &'static [char] {
+        if self.windows {
+            WINDOWS_SEPARATORS
+        } else {
+            &['/']
+        }
+    }
+
+    /// The last name of `source`, as written: the name a copy of it gets
+    /// inside a directory, `source` itself when it has no separator, and
+    /// on Windows without the drive of a drive-relative word (`C:name`).
+    pub(crate) fn last_name(self, source: &str) -> &str {
+        let name = last_name_on(source, self.separators());
+        let bytes = name.as_bytes();
+        let first = name.len() == source.trim_end_matches(self.separators()).len();
+        if self.windows
+            && first
+            && bytes.len() >= 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+        {
+            &name[2..]
+        } else {
+            name
+        }
+    }
+
+    /// The name the filesystem opens for the entry name `name`, with its
+    /// case kept. On Windows a named stream (`config:notes`) opens the file
+    /// before its first `:`, and a trailing dot or space is dropped. `Err`
+    /// when the guard cannot map the name: stream type syntax (`::`, `:$`),
+    /// which `namespace_spelling` refuses, a name that is only a stream or
+    /// only dots, or a name Windows may read as the short name of another
+    /// entry.
+    pub(crate) fn opened(self, name: &str) -> Result<String, String> {
+        if !self.windows || matches!(name, "." | "..") {
+            return Ok(name.to_string());
+        }
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("::") || lower.contains(":$") {
+            return Err(format!(
+                "`{name}` uses Windows alternate-stream syntax, which the guard cannot map"
+            ));
+        }
+        let file = name.split(':').next().unwrap_or(name);
+        let file = file.trim_end_matches(['.', ' ']);
+        if file.is_empty() {
+            return Err(format!("`{name}` names no file the guard can map"));
+        }
+        if crate::portable_path::has_short_component(file) {
+            return Err(format!(
+                "`{name}` may be read by Windows as the short name of another entry"
+            ));
+        }
+        Ok(file.to_string())
+    }
+
+    /// [`Host::opened`] with case ignored, as names are compared.
+    pub(crate) fn compared(self, name: &str) -> Result<String, String> {
+        self.opened(name).map(|name| name.to_lowercase())
+    }
+
+    /// The entry a copy or link of `source` makes in a directory, named as
+    /// the filesystem opens it; `None` for `.`, `..` and a root, whose
+    /// contents are copied.
+    pub(crate) fn entry_name(self, source: &str) -> Option<Result<String, String>> {
+        let name = self.last_name(source);
+        (!name.is_empty() && name != "." && name != "..").then(|| self.opened(name))
+    }
+}
+
+/// A name as the guard compares it on this host ([`Host::compared`]).
+fn compared(name: &str) -> Result<String, String> {
+    Host::THIS.compared(name)
 }
 
 /// Whether a source's own name is an enforcement name, compared as the
-/// filesystem opens it; a name Windows may read as a short name is one the
-/// guard cannot verify.
+/// filesystem opens it; `Err` when the guard cannot map the name.
 fn enforcement_name(name: Option<&str>) -> Result<bool, String> {
     let Some(name) = name else {
         return Ok(false);
     };
-    if short_alias(name) {
-        return Err(format!(
-            "it is named `{name}`, which Windows may read as the short name of another entry"
-        ));
-    }
-    Ok(ENFORCEMENT_NAMES.contains(&compared(name).as_str()))
+    Ok(ENFORCEMENT_NAMES.contains(&compared(name)?.as_str()))
 }
 
 /// Whether a long option `flag` is `full` or an abbreviation of it.
@@ -143,17 +225,11 @@ fn pattern(word: &str) -> bool {
     word.contains(['*', '?', '['])
 }
 
-/// The last name of `source`, the name a copy of it gets in a directory,
-/// or `None` for `.`, `..` and a root, whose contents are copied.
-fn base_name(source: &str) -> Option<&str> {
-    let name = last_name(source);
-    (!name.is_empty() && name != "." && name != "..").then_some(name)
-}
-
-/// The last name of `source` on this host's separators, the name a copy of
-/// it gets inside a directory; `source` itself when it has none.
-pub(crate) fn last_name(source: &str) -> &str {
-    last_name_on(source, SEPARATORS)
+/// The entry a copy of `source` makes in a directory, named as this host's
+/// filesystem opens it ([`Host::entry_name`]); `None` for `.`, `..` and a
+/// root, whose contents are copied; `Err` when the guard cannot map it.
+fn base_name(source: &str) -> Option<Result<String, String>> {
+    Host::THIS.entry_name(source)
 }
 
 /// [`last_name`] on `separators`, so each host's reading is tested on
@@ -214,8 +290,10 @@ fn landings(
     let mut out = Vec::new();
     match cmd {
         "rsync" => {
-            match named {
-                Some(name) if !contents => out.push(join(name)),
+            // A name the guard cannot map lands at the destination itself,
+            // which holds every place below it.
+            match &named {
+                Some(Ok(name)) if !contents => out.push(join(name)),
                 _ => out.push(dest.to_string()),
             }
             // `-R` keeps the source's path below the destination.
@@ -228,15 +306,27 @@ fn landings(
                     .split_once("/./")
                     .or_else(|| cfg!(windows).then(|| source.split_once("\\.\\")).flatten())
                     .map_or(source, |(_, rest)| rest);
-                let kept = marked.trim_start_matches(SEPARATORS);
+                let kept = marked
+                    .trim_start_matches(SEPARATORS)
+                    .trim_end_matches(SEPARATORS);
                 if !kept.is_empty() {
-                    out.push(join(kept.trim_end_matches(SEPARATORS)));
+                    // The kept path's last name is read as the filesystem
+                    // opens it; one the guard cannot map keeps the
+                    // destination itself.
+                    let last = last_name_on(kept, SEPARATORS);
+                    match Host::THIS.opened(last) {
+                        Ok(opened) => {
+                            let parent = &kept[..kept.len() - last.len()];
+                            out.push(join(&format!("{parent}{opened}")));
+                        }
+                        Err(_) => out.push(dest.to_string()),
+                    }
                 }
             }
         }
         "ditto" => {
             out.push(dest.to_string());
-            if let Some(name) = named {
+            if let Some(Ok(name)) = &named {
                 out.push(join(name));
             }
         }
@@ -245,11 +335,11 @@ fn landings(
                 .flags
                 .iter()
                 .any(|f| f == "-T" || long_is(f, "--no-target-directory"));
-            match named {
-                None => out.push(dest.to_string()),
-                Some(name) if copy.target => out.push(join(name)),
+            match &named {
+                None | Some(Err(_)) => out.push(dest.to_string()),
+                Some(Ok(name)) if copy.target => out.push(join(name)),
                 Some(_) if no_target => out.push(dest.to_string()),
-                Some(name) => {
+                Some(Ok(name)) => {
                     // Into an existing directory a source lands at its name
                     // there, and BSD cp copies the contents of `src/`; an
                     // absent destination takes the contents. A destination
@@ -296,12 +386,12 @@ fn read_source(cmd: &str, source: &str, place: &Place<'_>) -> (Source, Option<Pa
                         Ok(entry) => {
                             let name = entry.file_name();
                             let text = name.to_string_lossy();
-                            if short_alias(&text) {
-                                failed = Some(format!(
-                                    "it holds `{text}`, which Windows may read as the short name of another entry"
-                                ));
+                            match compared(&text) {
+                                Ok(compared) => {
+                                    lower.insert(compared);
+                                }
+                                Err(why) => failed = Some(format!("it holds {why}")),
                             }
-                            lower.insert(compared(&text));
                             names.push(name);
                         }
                         Err(error) => failed = Some(format!("cannot list it: {error}")),
@@ -349,13 +439,9 @@ fn holds_enforcement_name(dir: &Path) -> Result<Option<PathBuf>, String> {
         for entry in entries {
             let entry = entry.map_err(|e| format!("cannot list it: {e}"))?;
             let text = entry.file_name().to_string_lossy().into_owned();
-            if ENFORCEMENT_NAMES.contains(&compared(&text).as_str()) {
+            let name = compared(&text).map_err(|why| format!("it holds {why}"))?;
+            if ENFORCEMENT_NAMES.contains(&name.as_str()) {
                 return Ok(Some(entry.path()));
-            }
-            if short_alias(&text) {
-                return Err(format!(
-                    "it holds `{text}`, which Windows may read as the short name of another entry"
-                ));
             }
             if entry
                 .file_type()
@@ -485,7 +571,12 @@ fn run_time_landing(
         (Source::Tree(..), Some(path)) => {
             holds_enforcement_name(path).and_then(|found| match found {
                 Some(found) => Ok(Some(found)),
-                None => enforcement_name(base_name(source)).map(|hit| hit.then(|| path.clone())),
+                None => match base_name(source) {
+                    None => Ok(None),
+                    Some(name) => name
+                        .and_then(|name| enforcement_name(Some(&name)))
+                        .map(|hit| hit.then(|| path.clone())),
+                },
             })
         }
         (_, None) => Err("it cannot be resolved".into()),
@@ -575,6 +666,11 @@ pub(crate) fn judge(cmd: &str, copy: &CopyRead, place: &Place<'_>) -> Option<Str
                     "`{cmd}` is given `{option}`, an option the guard does not read, and its destination `{landing}` holds enforcement files"
                 ));
             }
+            if let Some(Err(why)) = base_name(source) {
+                return Some(format!(
+                    "`{cmd}` copies the source `{source}` to `{landing}`, which holds enforcement files, and the guard cannot map the name it lands under: {why}"
+                ));
+            }
             let (state, _) = read.get_or_insert_with(|| read_source(cmd, source, place));
             match state {
                 Source::Unread(why) => {
@@ -625,7 +721,11 @@ fn tree_reaches(
             .components()
             .next()
             .map(|c| compared(&c.as_os_str().to_string_lossy()));
-        if first.is_some_and(|first| lower.contains(&first)) {
+        // A name the guard cannot map may be any of the source's names.
+        if first.is_some_and(|first| match first {
+            Ok(first) => lower.contains(&first),
+            Err(_) => true,
+        }) {
             return Some(format!(
                 "`{cmd}` would write the enforcement path `{}/{}` from the source `{source}`",
                 landing.trim_end_matches(SEPARATORS),

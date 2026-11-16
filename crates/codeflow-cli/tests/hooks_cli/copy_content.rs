@@ -407,6 +407,14 @@ fn a_backslash_source_into_the_checkout_is_refused_by_both_guards_on_windows() {
         row(r"rsync -a 'src\.claude' ./".to_string(), &[".claude"]),
         row(r"cp -R '.\.claude.' .".to_string(), &[".claude"]),
         row(r"rsync -a '.\.claude.' ./".to_string(), &[".claude"]),
+        // Review F2 (round e): a named stream lands at the file it names,
+        // and stream type syntax cannot be mapped.
+        row(r"cp -R 'src\.claude:notes' .".to_string(), &[".claude"]),
+        row(r"rsync -a 'src\.claude:notes' ./".to_string(), &[".claude"]),
+        row(
+            r"cp -R 'src\.claude::$INDEX_ALLOCATION' .".to_string(),
+            &[".claude"],
+        ),
     ];
     assert_both(&f.root, &refused, &[]);
 }
@@ -428,6 +436,13 @@ fn a_backslash_source_into_a_git_directory_is_refused_on_windows() {
         format!(r"cp 'payload\config' '{gd}/'"),
         format!(r"ln -s 'payload\config' '{gd}'"),
         format!(r"cp 'payload\config' '{gd}'"),
+        // Review F2 (round e): a named stream writes the file it names,
+        // and stream type syntax cannot be mapped.
+        format!(r"cp 'payload\config:notes' '{gd}/'"),
+        format!(r"cp 'payload\config::$DATA' '{gd}/'"),
+        format!(r"ln -s 'payload\config:notes' '{gd}/'"),
+        format!(r"cp -t '{gd}' 'payload\config:notes'"),
+        format!(r"install 'payload\config:notes' '{gd}/'"),
     ] {
         let out = hook("git-guard", &command, &f.root);
         let err = String::from_utf8_lossy(&out.stderr);

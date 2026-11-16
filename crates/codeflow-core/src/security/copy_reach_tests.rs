@@ -79,7 +79,7 @@ fn remote_and_pattern_spellings_are_recognised() {
     assert!(!remote("./a"));
     assert!(pattern("/src/s*/"));
     assert!(!pattern("/src/plain/"));
-    assert_eq!(base_name("/src/.claude/"), Some(".claude"));
+    assert_eq!(base_name("/src/.claude/"), Some(Ok(".claude".to_string())));
     assert_eq!(base_name("."), None);
     assert_eq!(base_name("/"), None);
 }
@@ -226,16 +226,16 @@ fn a_dry_run_letter_that_may_be_an_option_value_is_no_dry_run() {
 /// Review F2: names are compared as Windows opens them.
 #[test]
 fn names_are_compared_as_the_filesystem_opens_them() {
-    assert_eq!(compared(".CLAUDE"), ".claude");
+    assert_eq!(compared(".CLAUDE"), Ok(".claude".to_string()));
     if cfg!(windows) {
-        assert_eq!(compared(".claude."), ".claude");
-        assert_eq!(compared(".Git "), ".git");
-        assert!(short_alias("CLAUDE~1"));
+        assert_eq!(compared(".claude."), Ok(".claude".to_string()));
+        assert_eq!(compared(".Git "), Ok(".git".to_string()));
+        assert!(compared("CLAUDE~1").is_err());
     } else {
-        assert_eq!(compared(".claude."), ".claude.");
-        assert!(!short_alias("CLAUDE~1"));
+        assert_eq!(compared(".claude."), Ok(".claude.".to_string()));
+        assert_eq!(compared("CLAUDE~1"), Ok("claude~1".to_string()));
     }
-    assert!(!short_alias("docs"));
+    assert_eq!(compared("docs"), Ok("docs".to_string()));
 }
 
 /// Review N1: a filter rule or another documented value that starts with
@@ -283,23 +283,24 @@ fn a_source_own_name_is_compared_as_the_filesystem_opens_it() {
 /// separators, for its landing place and for its own name.
 #[test]
 fn a_source_name_is_read_on_the_host_separators() {
-    assert_eq!(base_name("src/.claude"), Some(".claude"));
-    assert_eq!(base_name("src/.claude/"), Some(".claude"));
+    let ok = |name: &str| Some(Ok(name.to_string()));
+    assert_eq!(base_name("src/.claude"), ok(".claude"));
+    assert_eq!(base_name("src/.claude/"), ok(".claude"));
     assert!(names_contents("src/"));
     assert!(names_contents("src/."));
     assert!(names_contents("."));
     assert!(!names_contents("src"));
-    assert_eq!(last_name("src/policy.json"), "policy.json");
+    assert_eq!(Host::THIS.last_name("src/policy.json"), "policy.json");
     if cfg!(windows) {
-        assert_eq!(last_name("src\\policy.json"), "policy.json");
-        assert_eq!(base_name("src\\.claude"), Some(".claude"));
-        assert_eq!(base_name(".\\.claude."), Some(".claude."));
+        assert_eq!(Host::THIS.last_name("src\\policy.json"), "policy.json");
+        assert_eq!(base_name("src\\.claude"), ok(".claude"));
+        assert_eq!(base_name(".\\.claude."), ok(".claude"));
         assert!(names_contents("src\\"));
         assert!(names_contents("src\\."));
     } else {
         // Elsewhere a backslash is part of the name.
-        assert_eq!(last_name("src\\policy.json"), "src\\policy.json");
-        assert_eq!(base_name("src\\.claude"), Some("src\\.claude"));
+        assert_eq!(Host::THIS.last_name("src\\policy.json"), "src\\policy.json");
+        assert_eq!(base_name("src\\.claude"), ok("src\\.claude"));
         assert!(!names_contents("src\\"));
     }
 }
@@ -324,9 +325,57 @@ fn the_windows_reading_of_a_source_name_splits_on_both_separators() {
     // The name Win32 opens: the trailing dot is dropped, so `.claude.` is
     // `.claude` once its parent written with `\` is split off.
     assert_eq!(
-        last_name_on(".\\.claude.", windows).trim_end_matches(['.', ' ']),
-        ".claude"
+        Host::WINDOWS.entry_name(".\\.claude."),
+        Some(Ok(".claude".to_string()))
     );
+}
+
+/// Review F2 (round e): every entry or landing name goes through one
+/// reading, `Host::opened`. On Windows a named stream opens the file before
+/// its first `:`, stream type syntax and a short name cannot be mapped, and
+/// a drive-relative word is named after its drive. Checked on every host.
+#[test]
+fn an_entry_name_is_read_as_windows_opens_it_on_every_host() {
+    let w = Host::WINDOWS;
+    let ok = |name: &str| Some(Ok(name.to_string()));
+    for (source, name) in [
+        ("src\\.claude:notes", ".claude"),
+        ("src/.claude:notes", ".claude"),
+        ("src\\.claude. ", ".claude"),
+        ("payload\\config:notes", "config"),
+        ("payload\\config.:x", "config"),
+        ("C:.claude", ".claude"),
+        ("C:\\work\\.codeflow", ".codeflow"),
+        ("plain", "plain"),
+    ] {
+        assert_eq!(w.entry_name(source), ok(name), "{source}");
+    }
+    for source in [
+        "payload\\config::$DATA",
+        "src\\.claude::$INDEX_ALLOCATION",
+        "src\\.claude:$I30:$INDEX_ALLOCATION",
+        "src\\:notes",
+        "src\\CLAUDE~1",
+        "src\\...",
+    ] {
+        assert!(
+            matches!(w.entry_name(source), Some(Err(_))),
+            "{source}: {:?}",
+            w.entry_name(source)
+        );
+    }
+    assert_eq!(w.entry_name("C:"), None);
+    assert_eq!(w.entry_name("src\\."), None);
+    assert_eq!(w.compared(".Claude:notes"), Ok(".claude".to_string()));
+    // Elsewhere `\`, `:` and a trailing dot are parts of a name.
+    let p = Host::POSIX;
+    assert_eq!(
+        p.entry_name("payload\\config:notes"),
+        ok("payload\\config:notes")
+    );
+    assert_eq!(p.entry_name("src/.claude."), ok(".claude."));
+    assert_eq!(p.entry_name("C:.claude"), ok("C:.claude"));
+    assert_eq!(p.entry_name("src/a::$DATA"), ok("a::$DATA"));
 }
 
 /// Review F1 (round c): on Windows a source written with backslashes
