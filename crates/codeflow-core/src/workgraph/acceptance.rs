@@ -4195,7 +4195,10 @@ pub fn completions_in_range(
 /// judged branch when it is an epic line (a line push), else the pull
 /// request's target when that is one (a task pull request into a line).
 /// The judged branch always wins, so naming a target only adds a check.
-fn receiving_line<'a>(branch: Option<&'a str>, into: Option<&'a str>) -> Option<&'a str> {
+/// The import check takes the same line as the one whose own tasks keep a
+/// home move only from a verified default tip ([`imported_records`]).
+#[must_use]
+pub fn receiving_line<'a>(branch: Option<&'a str>, into: Option<&'a str>) -> Option<&'a str> {
     let epic_line = |name: &'a str| {
         let name = super::work_start::logical_target(name);
         super::line_adoption::epic_id(name).is_ok().then_some(name)
@@ -4246,7 +4249,7 @@ fn completions_received(
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
-    let imported = match imported_records(repo, base_oid, head_oid, &after, mains) {
+    let imported = match imported_records(repo, base_oid, head_oid, &after, mains, receiving) {
         Ok(imported) => imported,
         Err(reason) => return Ok(import_findings(&reason)),
     };
@@ -4875,7 +4878,14 @@ pub fn pull_request_findings_into(
             ),
         },
     };
-    let imported = match imported_records(&repo, target_tip, head_tip, &at_head, mains.as_ref()) {
+    let imported = match imported_records(
+        &repo,
+        target_tip,
+        head_tip,
+        &at_head,
+        mains.as_ref(),
+        receiving_line(branch, into),
+    ) {
         Ok(imported) => imported,
         Err(reason) => {
             mains_notes.extend(import_findings(&reason));

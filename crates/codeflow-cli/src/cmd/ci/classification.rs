@@ -722,6 +722,7 @@ pub(super) fn dispatch(
                 head: range.head,
                 exemption: class.is_secret_scan_exemption(),
                 mains: verified.map(|tip| (tip, range.target)),
+                target: Some(range.target),
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
             range_journey(root, git, task_id, range, tagged);
@@ -1060,6 +1061,9 @@ struct Anchor<'a> {
     /// The default tip this run verified and the range's target, which turn
     /// on main's bytes for a target that is an epic line (TSK-1185).
     mains: Option<(codeflow_core::git::Oid, &'a str)>,
+    /// The range's target as the run names it, which with `branch` names the
+    /// receiving line the import check judges home moves against.
+    target: Option<&'a str>,
 }
 
 fn anchor_failure(
@@ -1180,6 +1184,7 @@ fn task_record_additions(
         anchor.base,
         anchor.head,
         mains.as_ref(),
+        codeflow_core::workgraph::acceptance::receiving_line(Some(anchor.branch), anchor.target),
     ) {
         Ok(paths) => paths,
         Err(error) => {
@@ -1437,6 +1442,7 @@ mod tests {
                         base: &head,
                         head: &head,
                         mains: None,
+                        target: None,
                     },
                     &[],
                     &[],
@@ -1469,6 +1475,7 @@ mod tests {
                     base: "HEAD",
                     head: "HEAD",
                     mains: None,
+                    target: None,
                 },
                 &["src/lib.rs".into()],
                 &[],
@@ -1499,6 +1506,7 @@ mod tests {
                     base: &head,
                     head: &head,
                     mains: None,
+                    target: None,
                 },
                 &["docs/research/findings.md".into()],
                 &[],

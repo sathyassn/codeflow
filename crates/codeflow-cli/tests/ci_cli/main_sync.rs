@@ -452,9 +452,9 @@ fn a_later_edit_cannot_hide_a_re_home_from_a_clean_sync() {
 
 /// TSK-1185: a planning landing's move of a line task is refused at the import
 /// check while it is the record's landing, because a sync brings it in off the
-/// receiving head's chain. Under a later edit the earlier-move walk admits it,
-/// since that walk does not ask for the chain, so the sync route must refuse:
-/// a sync changes no record whose home is the line.
+/// receiving head's chain. Under a later edit the move is still judged at the
+/// commit that made it, and the sync route refuses as well: a sync changes no
+/// record whose home is the line.
 #[test]
 fn a_planned_re_home_of_a_line_task_stays_frozen_on_a_clean_sync() {
     let dir = fixture();

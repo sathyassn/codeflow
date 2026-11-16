@@ -913,6 +913,11 @@ commit since the line's merge base with it:
   only when the task was `todo` or `blocked` with no acceptance block on
   both sides of the move and the line has not changed its copy since the
   merge base.
+- When the line's copy names the line itself as its home, or names no
+  home, or the run names no receiving line (`--into`, or a line as the
+  judged branch), every move must also stand on the first-parent history
+  of the commit the run verified as `main`'s tip (TSK-1185). The hosted
+  check verifies it with `--policy-from`; a run without it refuses the move.
 - Anything else is refused with "the landing changes the task's declared
   home" and the cause. A later change to the record on `main`, a note or a
   move back included, does not clear an earlier refused move.

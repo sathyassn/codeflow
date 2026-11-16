@@ -316,7 +316,10 @@ change earlier behaviour; the rest are still refused.
 When `main` moved a task's home, the sync keeps that home only if every
 move was a reviewed planning merge of records on `main`, and the line
 already names the new home or kept its copy of a `todo` or `blocked` task
-unchanged. See [home moves a sync of main
+unchanged. For a task the line holds as its own, every move also needs the
+run's verified `main` commit. On any home, a move that a later change to
+the record carries is judged at the commit that made it, as it would be at
+its own landing. See [home moves a sync of main
 accepts](policy-reference.md#home-moves-a-sync-of-main-accepts).
 
 Refused, naming the cause:

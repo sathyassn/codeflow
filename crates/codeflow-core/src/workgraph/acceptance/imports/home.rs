@@ -605,6 +605,11 @@ fn adoption_anchor(
 /// (TSK-1185 AC-10). As the last move it is exempt from the last move's
 /// rules; every move before it is still judged as an earlier move.
 ///
+/// When the line's copy is the receiving line's own task, or is not proved
+/// to be homed elsewhere ([`held_by_receiving_line`]), every move but that
+/// correction must also be on the first-parent history of `verified`, the
+/// default tip this run verified (TSK-1185 AC-16).
+///
 /// # Errors
 /// The refusal names the move and its cause.
 pub(super) fn judge_home(
@@ -613,6 +618,7 @@ pub(super) fn judge_home(
     default_tip: Oid,
     (receiver, head): (Oid, Oid),
     corrected: Option<Oid>,
+    (receiving, verified): (Option<&str>, Option<Oid>),
 ) -> Result<Option<HomeAnchor>, String> {
     let who = Identity::of(record);
     let start = start_point(repo, receiver, default_tip)?;
@@ -636,7 +642,49 @@ pub(super) fn judge_home(
         (receiver, line_since),
         corrected,
     )?;
+    if let Some(held) = held_by_receiving_line(&line, record, receiving) {
+        for (at, _) in &found.moves {
+            if corrected == Some(*at) {
+                continue;
+            }
+            let on_verified = match verified {
+                Some(tip) => super::on_home_chain(repo, *at, tip)?,
+                None => false,
+            };
+            if !on_verified {
+                return Err(format!("{MOVED}: {held}, and the move at {at} is on the first-parent history of no default-branch tip this run verified; the move is taken on a run that verifies the default branch's tip, as the hosted check does with --policy-from, or through the receiving line's own reviewed planning merge of the moved record"));
+            }
+        }
+    }
     Ok(anchor)
+}
+
+/// Why the line's copy counts as the receiving line's own task, whose home
+/// moves on the default branch are taken only from a verified tip
+/// (TSK-1185 AC-16), or `None` when the copy is proved to be homed
+/// elsewhere. The receiving line is named by the run (`receiving`), never
+/// read from a record or a ref. The copy is proved elsewhere only when the
+/// line holds none, or it names the record's own home, or it names a home
+/// other than the receiving line (TSK-1378 AC-6 (a)). A copy with no home,
+/// or a run that names no receiving line, is not proved (fail closed).
+fn held_by_receiving_line(
+    line: &Held,
+    record: &RecordView,
+    receiving: Option<&str>,
+) -> Option<String> {
+    let Held::One(copy) = line else {
+        return None;
+    };
+    let copy_home = declared(copy);
+    if copy_home.is_some() && copy_home == declared(record) {
+        return None;
+    }
+    match (copy_home, receiving.map(logical_target)) {
+        (Some(home), Some(receiving)) if home != receiving => None,
+        (Some(home), Some(_)) => Some(format!("the line's copy names the receiving line `{home}`")),
+        (None, _) => Some("the line's copy names no home, so it is not proved to be homed off the receiving line".into()),
+        (Some(home), None) => Some(format!("the line's copy names `{home}` and the run names no receiving line, so the copy is not proved to be homed off it")),
+    }
 }
 
 /// Judge a record the range leaves unchanged whose home the line changed,

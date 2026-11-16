@@ -598,15 +598,22 @@ fn tsk1185_a_home_correction_needs_the_reviewed_head_on_the_home() {
     );
 }
 
-/// A task moved by a planning landing on its home and completed there later
-/// stays admitted: the earlier move is judged on the home, so it need not be
-/// on the receiving head's own chain.
+/// A task the line holds as its own, moved by a planning landing on the
+/// default branch and completed there later, is not taken on a run that
+/// verified no default tip: a later landing does not stand in for the move's
+/// proof. The same journey with the verified tip is taken
+/// (`ci_cli` `mains_bytes::tsk1185_a_planned_move_then_completed_on_main_is_taken_with_the_verified_tip`).
 #[test]
-fn tsk1185_a_planned_re_home_completed_on_its_home_is_admitted() {
+fn tsk1185_a_planned_re_home_completed_on_its_home_needs_the_verified_tip() {
     let dir = corrected_home("planned");
-    assert_passes(
+    assert_blocks(
         &check(dir.path(), LINE, Some(RECEIVER), false),
-        "planned re-home",
+        "planned re-home without a verified tip",
+        &[
+            "TSK-001",
+            "the landing changes the task's declared home",
+            "no default-branch tip this run verified",
+        ],
     );
 }
 
@@ -1790,8 +1797,9 @@ fn land_move(root: &Path, case: &str, branch: &str) {
 /// both lines advance, and the home is published. `twice` and `twice bad`
 /// move it on to `LINE_C` (the second landing also carries a product file
 /// for `twice bad`), `back` moves it back to `LINE_A`, and `second parent`
-/// makes the move on `LINE_B`, which `LINE_A` then merges. Returns the
-/// repository on `LINE_A`.
+/// makes the move on `LINE_B`, which `LINE_A` then merges. A case ending in
+/// `later edit` edits the moved record by a later planning merge on the
+/// line that made the move. Returns the repository on `LINE_A`.
 fn home_move(case: &str) -> tempfile::TempDir {
     let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
     let root = dir.path();
@@ -1823,7 +1831,8 @@ fn home_move(case: &str) -> tempfile::TempDir {
     merge(root, "plan/home");
     // The line as it stood before the move, for a push that updates it.
     git(root, &["tag", "before-move"]);
-    let mover = if case == "second parent" {
+    let off_line = case.starts_with("second parent");
+    let mover = if off_line {
         git(root, &["branch", LINE_B]);
         LINE_B
     } else {
@@ -1838,6 +1847,19 @@ fn home_move(case: &str) -> tempfile::TempDir {
         write_move(root, case, &after);
         git(root, &["switch", mover]);
         land_move(root, case, "plan/move");
+    }
+    if case.ends_with("later edit") {
+        // A later planning merge on the mover edits the moved record, so the
+        // record's landing is that edit and the move is an earlier commit.
+        git(root, &["switch", "-c", "plan/record-edit", mover]);
+        write(
+            root,
+            &record_path("TSK-002"),
+            &homed(LINE_B, "todo", "Pending, with notes.\n"),
+        );
+        commit(root, "docs: edit the moved task");
+        git(root, &["switch", mover]);
+        merge(root, "plan/record-edit");
     }
     let mut home = LINE_B;
     if matches!(case, "twice" | "twice bad" | "back") {
@@ -1855,7 +1877,7 @@ fn home_move(case: &str) -> tempfile::TempDir {
         git(root, &["switch", LINE_A]);
         merge(root, "plan/move-again");
     }
-    if case != "second parent" && home != LINE_A {
+    if !off_line && home != LINE_A {
         git(root, &["branch", home, LINE_A]);
     }
     // Both lines advance past the move, as the 3.2.0 and EPC-025 lines did.
@@ -1869,7 +1891,7 @@ fn home_move(case: &str) -> tempfile::TempDir {
         git(root, &["fetch", "origin"]);
     }
     git(root, &["switch", LINE_A]);
-    if case == "second parent" {
+    if off_line {
         merge(root, LINE_B);
     }
     dir
@@ -1897,8 +1919,34 @@ fn line_into_main(root: &Path) -> (i32, String) {
 
 #[test]
 fn a_planning_merge_moves_a_todo_task_to_another_line() {
+    home_moves_taken(&["todo", "todo to blocked", "twice", "back"]);
+}
+
+/// TSK-1185 AC-16: a move on the checked line's own first-parent chain is
+/// still taken when a later planning merge edits the moved record, so the
+/// record's landing is the edit and the move is an earlier commit.
+#[test]
+fn tsk1185_a_move_on_the_checked_line_is_taken_under_a_later_edit() {
+    home_moves_taken(&["later edit"]);
+}
+
+/// TSK-1185 AC-16: the same journey with the move made off the checked
+/// line's first-parent chain is refused at the move, as it is when the move
+/// is the record's own landing (`second parent`), and the refusal names the
+/// route that takes it.
+#[test]
+fn tsk1185_a_later_edit_does_not_clear_a_move_off_the_checked_line() {
+    home_moves_refused(&[(
+        "second parent, later edit",
+        "on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself",
+    )]);
+}
+
+/// Every case is taken through CI into the default branch and through the
+/// real pre-push entry, with no home-move refusal.
+fn home_moves_taken(cases: &[&str]) {
     let mut failures = Vec::new();
-    for case in ["todo", "todo to blocked", "twice", "back"] {
+    for case in cases {
         let dir = home_move(case);
         let root = dir.path();
         // The receiving range through CI into the default branch, and

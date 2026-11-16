@@ -470,6 +470,122 @@ fn tsk1185_a_planned_move_on_main_s_chain_is_taken() {
     refused(&fx.run(SYNC, "Task: EPC-001", &[]), "no verified tip");
 }
 
+/// AC-16: a planning landing on main's chain moved the line task to main
+/// while it was `todo`, and main then completed it. The hosted job, which
+/// verifies the default tip, takes main's record; a run without the verified
+/// tip refuses the move, though a later landing carries the record, and
+/// names the verified run as the route.
+#[test]
+fn tsk1185_a_planned_move_then_completed_on_main_is_taken_with_the_verified_tip() {
+    let fx = Fixture::new();
+    let root = fx.root();
+    land(
+        root,
+        "plan/move-home",
+        &[(
+            "project-management/tasks/TSK-001.md",
+            &task("TSK-001", "main"),
+        )],
+        "docs: move the task to main",
+    );
+    write(root, "src/lib.rs", "pub fn base() {}\npub fn fixed() {}\n");
+    write(root, "changelog.d/TSK-001.md", FRAGMENT);
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &admitted_completion("TSK-001"),
+    );
+    commit(root, "fix: land TSK-001");
+    fx.publish();
+    fx.sync();
+    let hosted = fx.hosted(SYNC, "Task: EPC-001");
+    passes(&hosted, "a planned move completed on main");
+    says(
+        &hosted,
+        "record taken",
+        "TSK-001 at project-management/tasks/TSK-001.md is the default branch's record",
+    );
+    let local = fx.run(SYNC, "Task: EPC-001", &[]);
+    refused(&local, "no verified tip");
+    says(
+        &local,
+        "the move's refusal and route",
+        "no default-branch tip this run verified; the move is taken on a run that verifies the default branch's tip",
+    );
+}
+
+/// AC-16, the verified-tip route for a move an earlier commit made on a home
+/// that is not the default branch: a planning landing on main's first-parent
+/// chain moves TSK-003 to a sibling line while it is `todo`, the sibling line
+/// branches from main after the move and edits the record by a later
+/// planning merge, and a task branch of the line merges the sibling line.
+/// The record's landing is the edit, so the move is judged as an earlier
+/// commit, off the head's first-parent chain. The hosted job, which verifies
+/// the default tip, takes it; a run without the verified tip refuses it and
+/// names the routes.
+#[test]
+fn tsk1185_an_earlier_move_on_main_s_chain_to_another_line_is_taken_with_the_verified_tip() {
+    const SIDE: &str = "integration/EPC-002-side";
+    let fx = Fixture::new();
+    let root = fx.root();
+    let on_side = |work: &str| {
+        task("TSK-003", SIDE)
+            .replace("epic_id: EPC-001", "epic_id: EPC-002")
+            .replace("Work.", work)
+    };
+    write(
+        root,
+        "project-management/tasks/TSK-009.md",
+        &task("TSK-009", LINE),
+    );
+    commit(root, "docs: plan the receiver");
+    super::git(root, &["switch", "-q", LINE]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", "main"]);
+    super::git(root, &["switch", "-q", "main"]);
+    land(
+        root,
+        "plan/move-side",
+        &[
+            (
+                "project-management/epics/EPC-002.md",
+                &EPIC.replace("EPC-001", "EPC-002"),
+            ),
+            ("project-management/tasks/TSK-003.md", &on_side("Work.")),
+        ],
+        "docs: move the task to the side line",
+    );
+    super::git(root, &["switch", "-q", "-c", SIDE, "main"]);
+    super::git(root, &["switch", "-q", "-c", "plan/edit-side"]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &on_side("Work, with notes."),
+    );
+    commit(root, "docs: edit the moved task");
+    super::git(root, &["switch", "-q", SIDE]);
+    super::git(
+        root,
+        &["merge", "--no-ff", "-q", "--no-edit", "plan/edit-side"],
+    );
+    super::git(root, &["switch", "-q", "main"]);
+    fx.publish();
+    super::git(root, &["push", "-q", "origin", SIDE]);
+    super::git(root, &["fetch", "-q", "origin"]);
+    super::git(root, &["switch", "-q", "-c", RECEIVER, LINE]);
+    super::git(root, &["merge", "--no-ff", "-q", "--no-edit", SIDE]);
+    passes(
+        &fx.hosted(RECEIVER, "Task: TSK-009"),
+        "an earlier move on main's chain to another line",
+    );
+    let local = fx.run(RECEIVER, "Task: TSK-009", &[]);
+    refused(&local, "no verified tip");
+    says(
+        &local,
+        "the earlier move's refusal and routes",
+        "on the first-parent history of neither the head under check nor a default-branch tip this run verified",
+    );
+}
+
 /// AC-12: another line moved the task, and the move reached main inside
 /// that line's checkpoint merge, which carries product. Only the merge is on
 /// main's first-parent chain, and it is no planning landing, so nothing on

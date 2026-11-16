@@ -52,7 +52,14 @@ const SOURCE_REPAIR: &str = "fetch the home and repair or reopen the work there 
 type Imports = BTreeMap<String, ImportedRecord>;
 // The outer history judgment and an object fetch clear this cache. A graph's
 // contents distinguish callers that have removed records from the same head.
-type ImportKey = (std::path::PathBuf, Oid, Oid, String, Option<MainsBytes>);
+type ImportKey = (
+    std::path::PathBuf,
+    Oid,
+    Oid,
+    String,
+    Option<MainsBytes>,
+    Option<String>,
+);
 thread_local! {
     static IMPORTS: std::cell::RefCell<BTreeMap<ImportKey, Result<Imports, String>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
 }
@@ -72,6 +79,12 @@ pub(crate) fn clear_cache() {
 /// verified default tip without re-proof; its completion is the one the
 /// default branch admitted.
 ///
+/// `receiving` is the epic line the range lands on, as the run names it
+/// (`--into`, or the judged branch when that is the line), never read from
+/// a record or a ref. A task whose line copy names it, or whose copy this
+/// check cannot place because the run names no line, takes a home move on
+/// the default branch only from a verified tip (TSK-1185 AC-16).
+///
 /// # Errors
 /// Refuses unreadable or overlaid history and an invalid source binding.
 pub fn imported_records(
@@ -80,6 +93,7 @@ pub fn imported_records(
     head: Oid,
     graph: &Graph,
     mains: Option<&MainsBytes>,
+    receiving: Option<&str>,
 ) -> Result<BTreeMap<String, ImportedRecord>, String> {
     let _judgment = history::judgment();
     history::check(repo).map_err(|error| error.to_string())?;
@@ -97,11 +111,12 @@ pub fn imported_records(
         head,
         digest,
         mains.cloned(),
+        receiving.map(str::to_string),
     );
     if let Some(result) = IMPORTS.with(|memo| memo.borrow().get(&key).cloned()) {
         return result;
     }
-    let result = compute_imports(repo, base, head, graph, mains);
+    let result = compute_imports(repo, (base, head), graph, mains, receiving);
     IMPORTS.with(|memo| memo.borrow_mut().insert(key, result.clone()));
     result
 }
@@ -146,10 +161,10 @@ fn take_mains_bytes(
 #[allow(clippy::too_many_lines)] // Keep enumeration, home and record refusals in one judgment order.
 fn compute_imports(
     repo: &Repository,
-    base: Oid,
-    head: Oid,
+    (base, head): (Oid, Oid),
     graph: &Graph,
     mains: Option<&MainsBytes>,
+    receiving: Option<&str>,
 ) -> Result<Imports, String> {
     #[cfg(test)]
     COMPUTATIONS.with(|count| count.set(count.get() + 1));
@@ -325,6 +340,7 @@ fn compute_imports(
                     .then_some(Walk {
                         receiver: anchor,
                         default_tip,
+                        receiving,
                     });
             match prove_record(
                 repo,
@@ -852,14 +868,18 @@ fn home_correction(
 /// [`matching_landing`] finds only the landing of the record's current text,
 /// whose parent already names the new home, so the commit that moved the
 /// task is found here, on the home's first-parent history past the receiver,
-/// and must be a planning move or a home correction in its own right.
+/// and must be a planning move or a home correction in its own right. A
+/// planning move is judged as [`is_planning_move`] judges one at its own
+/// landing: on the first-parent history of the head under check or of the
+/// default tip this run verified (`trusted`), so a later landing never
+/// lowers the bar (TSK-1004 AC-8, TSK-1185 AC-16).
 fn verify_earlier_home_move(
     repo: &Repository,
     record: &RecordView,
-    home: &str,
-    tip: Oid,
+    (home, tip): (&str, Oid),
     landed: Oid,
-    base: Oid,
+    (base, head): (Oid, Oid),
+    trusted: Option<Oid>,
 ) -> Result<(), String> {
     use super::super::work_start::logical_target;
     if record.kind != RecordKind::Task {
@@ -893,14 +913,18 @@ fn verify_earlier_home_move(
             return Ok(()); // verify_record_home judges this landing.
         }
         let version = record_at(repo, at, record)?.ok_or("the moved record is unreadable")?;
-        let planned = admissible_planning_landing_with(repo, at, PLANNING_LANDING_PATHS)?
-            == Some(parent)
-            && permitted_at(repo, at, record)
-            && permitted_at(repo, parent, record);
-        if planned || home_correction(repo, &version, home, tip, at, parent)?.is_some() {
+        if home_correction(repo, &version, home, tip, at, parent)?.is_some() {
             return Ok(());
         }
-        return Err(MOVED.into());
+        if !is_trusted_planning_move(repo, record, at, parent)? {
+            return Err(MOVED.into());
+        }
+        if is_planning_move(repo, record, at, parent, head, trusted)? {
+            return Ok(());
+        }
+        return Err(format!(
+            "{MOVED}: the earlier move at {at} is a planning landing on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself, or on a run that verifies the default branch's tip, as the hosted check does with --policy-from, for a move made there"
+        ));
     }
 }
 
@@ -1176,11 +1200,13 @@ fn prove_corrected_completion(
 }
 
 /// The walk of the default branch's home moves for a task homed there
-/// (TSK-1378): the receiving line's state and the trusted default tip.
+/// (TSK-1378): the receiving line's state and the trusted default tip, and
+/// the receiving line's name as the run gives it.
 #[derive(Clone, Copy)]
-struct Walk {
+struct Walk<'a> {
     receiver: Oid,
     default_tip: Oid,
+    receiving: Option<&'a str>,
 }
 
 /// The home checks of one landing: a home correction (TSK-1185 AC-10), the
@@ -1198,7 +1224,7 @@ fn verify_landing_home(
     landed: Oid,
     parents: &[Oid],
     (base, head): (Oid, Oid),
-    walk: Option<Walk>,
+    walk: Option<Walk<'_>>,
     trusted: Option<Oid>,
 ) -> Result<(Option<HomeAnchor>, Option<RecordView>), String> {
     let correction = match parents.first() {
@@ -1217,7 +1243,7 @@ fn verify_landing_home(
         (correction.is_some(), trusted),
     )?;
     if walk.is_none() {
-        verify_earlier_home_move(repo, record, home, tip, landed, base)?;
+        verify_earlier_home_move(repo, record, (home, tip), landed, (base, head), trusted)?;
     }
     Ok((home_anchor, correction))
 }
@@ -1232,7 +1258,7 @@ fn prove_record(
     landed: Oid,
     base: Oid,
     head: Oid,
-    walk: Option<Walk>,
+    walk: Option<Walk<'_>>,
     trusted: Option<Oid>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
@@ -1346,7 +1372,7 @@ fn verify_record_home(
     parents: &[Oid],
     base: Oid,
     head: Oid,
-    walk: Option<Walk>,
+    walk: Option<Walk<'_>>,
     (corrected, trusted): (bool, Option<Oid>),
 ) -> Result<Option<HomeAnchor>, String> {
     let mut anchor = None;
@@ -1366,12 +1392,15 @@ fn verify_record_home(
     if let (RecordKind::Task, Some(walk)) = (record.kind, walk) {
         // A home correction proved by `verify_landing_home` (AC-10) is
         // exempt from the last move's rules; every earlier move is judged.
+        // A task the receiving line holds as its own takes the walk's moves
+        // only from the verified tip (TSK-1185 AC-16).
         anchor = home::judge_home(
             repo,
             record,
             walk.default_tip,
             (walk.receiver, head),
             corrected.then_some(landed),
+            (walk.receiving, trusted),
         )?;
     } else if record.kind == RecordKind::Task {
         if let Some(parent) = parents.first() {
@@ -1431,6 +1460,7 @@ pub fn imported_record_paths(
     base: &str,
     head: &str,
     mains: Option<&MainsBytes>,
+    receiving: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let repo = Repository::discover(root).map_err(|error| error.to_string())?;
     let resolve = |name: &str| {
@@ -1440,12 +1470,17 @@ pub fn imported_record_paths(
             .map_err(|error| error.to_string())
     };
     let graph = Graph::from_revision(&repo, head)?;
-    Ok(
-        imported_records(&repo, resolve(base)?, resolve(head)?, &graph, mains)?
-            .into_values()
-            .map(|record| record.path)
-            .collect(),
-    )
+    Ok(imported_records(
+        &repo,
+        resolve(base)?,
+        resolve(head)?,
+        &graph,
+        mains,
+        receiving,
+    )?
+    .into_values()
+    .map(|record| record.path)
+    .collect())
 }
 
 #[cfg(test)]
@@ -1469,13 +1504,13 @@ mod tests {
         {
             let _run = history::judgment();
             for _ in 0..3 {
-                assert!(imported_records(&repo, head, head, &graph, None)
+                assert!(imported_records(&repo, head, head, &graph, None, None)
                     .unwrap()
                     .is_empty());
             }
             assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 1);
         }
-        assert!(imported_records(&repo, head, head, &graph, None)
+        assert!(imported_records(&repo, head, head, &graph, None, None)
             .unwrap()
             .is_empty());
         assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 2);
