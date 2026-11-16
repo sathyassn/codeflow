@@ -1,6 +1,6 @@
 //! Skipping commit hooks leaves the installed reference hook active.
 
-use super::{codeflow, git, git_command, init_repo};
+use super::{codeflow, git_command, init_repo};
 
 #[test]
 fn doctor_reports_unverified_remote_ref_protection_without_a_host() {
@@ -82,8 +82,11 @@ fn installed_reference_hook_refuses_a_commit_with_commit_hooks_skipped() {
     assert_eq!(after.stdout, before.stdout, "protected branch moved");
 
     // The same skip on a feature branch succeeds, including an otherwise
-    // invalid message. This proves the skip took effect in the fixture.
-    git(dir.path(), &["switch", "-c", "feat/control"]);
+    // invalid message. This proves the skip took effect in the fixture. The
+    // switch moves a ref, so the installed reference hook runs: it needs the
+    // built binary first on PATH, as every other git step here does.
+    let switched = run(&["switch", "-c", "feat/control"]);
+    assert!(switched.status.success(), "{switched:?}");
     let control = run(&[
         "commit",
         "--no-verify",
