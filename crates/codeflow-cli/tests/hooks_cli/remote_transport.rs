@@ -474,6 +474,42 @@ fn both_guards_refuse_a_remote_update_whose_selection_hides_a_remote() {
     assert_rows(&cased, &["git remote update"], &[]);
 }
 
+#[test]
+fn both_guards_refuse_every_contact_beside_a_remote_section_with_an_empty_name() {
+    // Each key under `[remote ""]` defines a remote the guards do not
+    // resolve, so every contact that reads the configuration's remotes
+    // refuses, whatever name or address the command gives. git-guard
+    // refuses a fetch of a name it cannot read first, by its earlier rule
+    // for a configured remote it cannot read.
+    let empty = Scratch::landed(None);
+    empty.append_config(b"[remote \"\"]\n\turl = fixture::x\n\tpushurl = fixture::x\n\tvcs = fixture\n");
+    assert_judged_with(
+        &empty,
+        section_refusal,
+        &[
+            "git ls-remote .url",
+            "git fetch .url",
+            "git ls-remote .vcs",
+            "git push .pushurl HEAD:refs/heads/task/x",
+            "git ls-remote origin",
+            "git fetch origin",
+            "git ls-remote https://127.0.0.1:9/r",
+        ],
+        &["git log -1"],
+        &[("git fetch .url", UNREADABLE_EMPTY_REMOTE)],
+    );
+    // A section whose name starts with a dot is an ordinary remote.
+    let dotted = Scratch::landed(None);
+    dotted.append_config(b"[remote \".a\"]\n\turl = fixture::x\n");
+    assert_rows(&dotted, &["git ls-remote .a"], &["git fetch origin"]);
+}
+
+/// A refusal by this task's rule for a remote section with an empty name,
+/// naming the key it reads.
+fn section_refusal(out: &Output) -> bool {
+    unproven_refusal(out) && stderr(out).contains("`remote..")
+}
+
 /// Replace the legacy remote folder `folder` of `scratch` with `form`.
 #[cfg(unix)]
 fn legacy_folder(scratch: &Scratch, folder: &str, form: &str) {

@@ -672,15 +672,73 @@ fn every_promisor_registration_git_reads_is_judged() {
 #[test]
 fn an_empty_operand_reads_as_the_address_git_builds_for_it() {
     // Git gives an empty operand a remote with no address, so it fetches
-    // the operand itself after the rewrites; a `remote ""` section, whose
-    // remote Git names otherwise, does not supply it.
-    let scratch = Scratch::new(&format!(
-        "{HTTPS}[remote \"\"]\n\turl = https://example.test/r\n[url \"https://ok.test/\"]\n\tinsteadOf = https://\n[url \"fixture::x\"]\n\tinsteadOf = \"\"\n"
-    ));
+    // the operand itself after the rewrites.
+    const REWRITES: &str = "[url \"https://ok.test/\"]\n\tinsteadOf = https://\n[url \"fixture::x\"]\n\tinsteadOf = \"\"\n";
+    let scratch = Scratch::new(&format!("{HTTPS}{REWRITES}"));
     assert_eq!(
         scratch.helpers_of(&["fetch", ""]),
         Ok(vec!["fixture".into()])
     );
+    // Beside a remote section with an empty name, it refuses.
+    let section = Scratch::new(&format!(
+        "{HTTPS}[remote \"\"]\n\turl = https://example.test/r\n{REWRITES}"
+    ));
+    let error = section.helpers_of(&["fetch", ""]).unwrap_err();
+    assert!(
+        error.starts_with(UNPROVEN) && error.contains("`remote..url`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_remote_section_with_an_empty_name_refuses_every_contact_with_remotes() {
+    // Each key under `[remote ""]` defines a remote the guard does not
+    // resolve, so every contact that reads the configuration's remotes
+    // refuses, naming the key, whatever name or address the command gives.
+    const CONTACTS: &[&str] = &[
+        "fetch origin",
+        "ls-remote origin",
+        "fetch https://example.test/r",
+        "ls-remote https://example.test/r",
+        "remote update origin",
+        "clone https://example.test/r copy",
+        "remote add -f fresh https://example.test/r",
+    ];
+    for (key, line, selecting) in [
+        (
+            "remote..url",
+            "\turl = fixture::x\n",
+            &["ls-remote .url", "fetch .url", "archive --remote=.url HEAD"][..],
+        ),
+        (
+            "remote..pushurl",
+            "\tpushurl = fixture::x\n",
+            &["push .pushurl HEAD:refs/heads/task/x"][..],
+        ),
+        ("remote..vcs", "\tvcs = fixture\n", &["ls-remote .vcs"][..]),
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}[remote \"\"]\n{line}"));
+        for command in selecting.iter().chain(CONTACTS) {
+            scratch.unproven(command, &format!("`{key}`"));
+        }
+        // A command that contacts no remote is not judged by it.
+        assert_eq!(scratch.helpers("status"), Ok(vec![]), "{key}");
+    }
+    // A remote the configuration selects by the same name refuses too.
+    const SECTION: &str = "[remote \"\"]\n\turl = fixture::x\n";
+    for (config, command) in [
+        ("[branch \"main\"]\n\tremote = .url\n", "fetch"),
+        ("[extensions]\n\tpartialClone = .url\n", "status"),
+        ("[remotes]\n\tdefault = .url\n", "remote update"),
+        ("", "remote update"),
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}{SECTION}{config}"));
+        scratch.unproven(command, "`remote..url`");
+    }
+    // A section whose name starts with a dot is an ordinary remote.
+    let dotted = Scratch::new(&format!("{HTTPS}[remote \".a\"]\n\turl = fixture::x\n"));
+    assert_eq!(dotted.helpers("ls-remote .a"), Ok(vec!["fixture".into()]));
+    assert_eq!(dotted.helpers("fetch origin"), Ok(vec![]));
 }
 
 #[test]

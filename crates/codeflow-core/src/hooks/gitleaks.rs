@@ -1235,6 +1235,39 @@ mod tests {
         assert!(git_refusal("not git", false).is_some());
     }
 
+    /// Every promisor registration Git reads marks the repository as one
+    /// that fetches missing objects on demand, and nothing else does.
+    #[test]
+    fn every_promisor_registration_marks_the_repository() {
+        for (config, promisor) in [
+            ("", false),
+            ("[remote \"origin\"]\n\turl = /srv/r.git\n", false),
+            ("[remote \"origin\"]\n\tpromisor = false\n", false),
+            ("[remote \"origin\"]\n\tpromisor = true\n", true),
+            ("[remote \"origin\"]\n\tpromisor = false\n\tpromisor = true\n", true),
+            ("[remote \"origin\"]\n\tpromisor = true\n\tpromisor = false\n", true),
+            ("[remote \"origin\"]\n\tpartialCloneFilter = blob:none\n", true),
+            (
+                "[remote \"origin\"]\n\tpromisor = false\n\tpartialCloneFilter = blob:none\n",
+                true,
+            ),
+            ("[remote \"\"]\n\tpartialCloneFilter = blob:none\n", true),
+            ("[remote]\n\tpartialCloneFilter = blob:none\n", true),
+            ("[remote]\n\tpromisor\n", true),
+            ("[extensions]\n\tpartialClone = origin\n", true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            git2::Repository::init(dir.path()).unwrap();
+            let file = dir.path().join(".git/config");
+            let mut bytes = std::fs::read(&file).unwrap();
+            bytes.extend_from_slice(b"\n");
+            bytes.extend_from_slice(config.as_bytes());
+            std::fs::write(&file, bytes).unwrap();
+            let (_, found) = version_and_promisor(dir.path()).unwrap();
+            assert_eq!(found, promisor, "{config}");
+        }
+    }
+
     #[test]
     fn git_versions_are_read_from_each_platform_format() {
         assert_eq!(git_version("git version 2.53.0"), Some((2, 53)));
