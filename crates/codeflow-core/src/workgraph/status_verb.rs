@@ -575,6 +575,20 @@ fn withheld(repo: &git2::Repository, text: &str) -> String {
     crate::security::git::without_remote_names(repo.commondir(), text)
 }
 
+/// "fetch it" with the fetch of `branch` from `origin`, or, when either
+/// raw word holds a remote name messages withhold, no command and the steps
+/// for a withheld remote. The raw words are judged, never the rendered
+/// command: quoting can split a name so the rendered text no longer holds it.
+fn fetch_step(repo: &git2::Repository, branch: &str) -> String {
+    if withheld(repo, "origin") == "origin" && withheld(repo, branch) == branch {
+        return super::work_start::fetch_it("origin", branch);
+    }
+    format!(
+        "no command is printed, since {}",
+        crate::security::git::WITHHELD_REMOTE_STEP
+    )
+}
+
 fn unchecked_pinned_commit(
     repo: &git2::Repository,
     value: &str,
@@ -735,7 +749,7 @@ fn qualify(
                 return Err(format!(
                     "the target `{}` does not resolve here; {}",
                     crate::git::display_text(name),
-                    super::work_start::fetch_it("origin", name)
+                    fetch_step(repo, name)
                 ));
             };
             target = Some(tip);
@@ -803,17 +817,7 @@ fn default_target(
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
         let tip = pinned_commit(repo, base)?.map_err(|error| {
-            // A fetch command that would hold a withheld remote's name is
-            // not printed; the withheld-remote steps are given instead.
-            let fetch = super::work_start::fetch_it("origin", &name);
-            let step = if withheld(repo, &fetch) == fetch {
-                fetch
-            } else {
-                format!(
-                    "no command is printed, since {}",
-                    crate::security::git::WITHHELD_REMOTE_STEP
-                )
-            };
+            let step = fetch_step(repo, &name);
             withheld(
                 repo,
                 &format!(
@@ -1435,7 +1439,11 @@ mod tests {
     /// remote name would be in it; a withheld remote gets the steps for it.
     #[test]
     fn a_missing_base_prints_no_fetch_command_for_a_withheld_remote() {
-        for (remote, shown) in [("origin", true), ("--upload-pack=touch_pwned", false)] {
+        for (remote, shown) in [
+            ("origin", true),
+            ("--upload-pack=touch_pwned", false),
+            ("user:p'ass@host", false),
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let repo = git2::Repository::init(dir.path()).unwrap();
             repo.config()
@@ -1454,6 +1462,7 @@ mod tests {
             }
             assert!(!error.contains(remote), "{error}");
             assert!(!error.contains("git fetch"), "{error}");
+            assert!(!error.contains("p'"), "a fragment of the name: {error}");
             assert!(
                 error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
                 "{error}"
