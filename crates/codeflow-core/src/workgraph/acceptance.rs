@@ -2358,7 +2358,7 @@ fn judge_reopened(
             return TaskJudgement::unreadable(format!(
                 "the target `{}`, which this task's record names, does not resolve here; {}",
                 crate::git::display_text(name),
-                super::work_start::fetch_it("origin", name)
+                super::work_start::fetch_origin(repo.commondir(), name)
             ));
         }
         // The epic line's pull request into its target judges the line's
@@ -2385,7 +2385,7 @@ fn judge_reopened(
                     } else {
                         ""
                     },
-                    super::work_start::fetch_it("origin", &name.name)
+                    super::work_start::fetch_origin(repo.commondir(), &name.name)
                 ));
             }
             tips.extend(found);

@@ -577,16 +577,11 @@ fn withheld(repo: &git2::Repository, text: &str) -> String {
 
 /// "fetch it" with the fetch of `branch` from `origin`, or, when either
 /// raw word holds a remote name messages withhold, no command and the steps
-/// for a withheld remote. The raw words are judged, never the rendered
-/// command: quoting can split a name so the rendered text no longer holds it.
+/// for a withheld remote ([`super::work_start::fetch_origin`]). The raw
+/// words are judged, never the rendered command: quoting can split a name
+/// so the rendered text no longer holds it.
 fn fetch_step(repo: &git2::Repository, branch: &str) -> String {
-    if withheld(repo, "origin") == "origin" && withheld(repo, branch) == branch {
-        return super::work_start::fetch_it("origin", branch);
-    }
-    format!(
-        "no command is printed, since {}",
-        crate::security::git::WITHHELD_REMOTE_STEP
-    )
+    super::work_start::fetch_origin(repo.commondir(), branch)
 }
 
 fn unchecked_pinned_commit(
@@ -642,9 +637,12 @@ fn unchecked_pinned_commit(
         // A withheld remote's name is in every command that would fix this,
         // so none is printed; the caller replaces the name in the prose.
         let root = repo.commondir();
-        if let Some(withheld) =
-            remote.filter(|remote| !crate::security::git::remote_name_shown(root, remote))
-        {
+        // The raw value is judged too: the part after the remote can hold
+        // another remote's name, which the commands below would carry.
+        if let Some(withheld) = remote.filter(|remote| {
+            !crate::security::git::remote_name_shown(root, remote)
+                || !crate::security::git::word_shown(root, value)
+        }) {
             return Err(format!(
                 "`{}` is ambiguous here: the local ref {} at {shadow_tip} is spelled like the fetched {} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; no command is printed, since {}",
                 crate::git::display_text(value),
@@ -909,9 +907,9 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
             .any(|remote| matches!(remote, Ok(Some("origin"))));
         if !origin {
             return Err(format!(
-                "this clone has remotes but no `origin`, so the target `{}` has no receiving source; add the remote that carries it as `origin` and {}",
+                "this clone has remotes but no `origin`, so the target `{}` has no receiving source; add the remote that carries it as `origin`; then {}",
                 crate::git::display_text(name),
-                super::work_start::fetch_it("origin", name)
+                fetch_step(repo, name)
             ));
         }
         format!("refs/remotes/origin/{name}")
@@ -926,10 +924,10 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
                 Ok(None)
             } else {
                 Err(format!(
-                    "the target `{}` has no remote-tracking ref {} here, and a local branch is never the target's authority; {} and run this again",
+                    "the target `{}` has no remote-tracking ref {} here, and a local branch is never the target's authority, so run this again once the target is fetched; {}",
                     crate::git::display_text(name),
                     crate::git::display_text(&reference),
-                    super::work_start::fetch_it("origin", name)
+                    fetch_step(repo, name)
                 ))
             }
         }
@@ -1432,6 +1430,40 @@ mod tests {
                 "{rename}"
             );
         }
+    }
+
+    /// The ambiguity remedy judges the raw value, not only the remote that
+    /// prefixes it: a shown remote's ref whose branch part holds another,
+    /// withheld remote's name gets no command, since quoting could split
+    /// that name inside a printed one.
+    #[test]
+    fn the_ambiguity_remedy_prints_no_command_for_a_value_holding_a_withheld_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("remote.origin.url", "/nowhere").unwrap();
+        config.set_str("remote.p'ass.url", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let tip = repo
+            .commit(None, &signature, &signature, "tip", &tree, &[])
+            .unwrap();
+        let value = "origin/p'ass";
+        repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+            .unwrap();
+        repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+            .unwrap();
+        let error = target_commit(&repo, Some(value)).unwrap_err();
+        assert!(error.contains("is ambiguous here"), "{error}");
+        assert!(!error.contains("git branch -m"), "{error}");
+        assert!(!error.contains("`--base "), "{error}");
+        assert!(!error.contains("p'"), "{error}");
+        assert!(
+            error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+            "{error}"
+        );
     }
 
     /// Withhold remote names from refusal text: a `--base` that names a

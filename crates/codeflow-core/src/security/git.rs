@@ -509,6 +509,16 @@ pub fn without_remote_names(root: &Path, text: &str) -> String {
     WithheldRemotes::read(root).scrub(text)
 }
 
+/// Whether `word`, one raw value a printed command would carry, holds no
+/// name of a remote that messages withhold. It is judged on the raw word,
+/// before the command is rendered: rendering quotes a value and can split
+/// a name inside it (TSK-416 review), so a check of the rendered text can
+/// miss one. Remotes that cannot be read hold every word back.
+#[must_use]
+pub fn word_shown(root: &Path, word: &str) -> bool {
+    without_remote_names(root, word) == word
+}
+
 /// The configured remotes of one repository whose names messages withhold,
 /// read once for a report that shows many names: each raw name, its
 /// escaped form, and the form [`shown_remote`] gives it. When the remotes

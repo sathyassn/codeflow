@@ -489,17 +489,29 @@ pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
     let Some(tip) = git.rev(&tracking_ref(remote))? else {
         if let Some(last) = state::load(git)?.last_verified.get(remote) {
             // The push is rendered from the raw remote name and the
-            // recorded tip (TSK-416 review round 2).
+            // recorded tip (TSK-416 review round 2). A remote whose name
+            // messages withhold, judged on the raw words, gets no command
+            // (TSK-416 review).
+            let root = git.root();
             let refspec = format!("{last}:refs/heads/{}", super::REGISTRY_BRANCH);
-            return Err(IdsError::Rewritten(format!(
-                "`{branch}` is absent from {} although this clone verified {} there; nothing was pushed. A maintainer republishes the verified history ({}), then repairs any file it lacks with `codeflow ids restore <id>`",
-                crate::git::display_text(remote),
-                short(last),
+            let push = if crate::security::git::remote_name_shown(root, remote)
+                && crate::security::git::word_shown(root, &refspec)
+            {
                 crate::git::pasted::step(
                     &crate::git::Pasted::new("git push")
                         .value(remote)
-                        .value(&refspec)
-                ),
+                        .value(&refspec),
+                )
+            } else {
+                format!(
+                    "no push command is printed, since {}",
+                    crate::security::git::withheld_remote_step(root, remote)
+                )
+            };
+            return Err(IdsError::Rewritten(format!(
+                "`{branch}` is absent from {} although this clone verified {} there; nothing was pushed. A maintainer republishes the verified history ({push}), then repairs any file it lacks with `codeflow ids restore <id>`",
+                crate::security::git::shown_remote(root, remote),
+                short(last),
                 branch = super::REGISTRY_BRANCH,
             )));
         }
@@ -1144,27 +1156,48 @@ mod tests {
 
     /// TSK-416 review round 2, finding 1: the republish step a deleted
     /// registry refusal prints hands git the remote and the recorded tip
-    /// as the arguments they are: pasting runs no substitution, and a
-    /// remote starting with `-` follows `--`.
+    /// as the arguments they are, and a remote starting with `-` follows
+    /// `--`. A remote whose name messages withhold, judged on the raw name,
+    /// gets no command at all (TSK-416 review).
     #[cfg(unix)]
     #[test]
-    fn the_republish_step_keeps_a_hostile_remote_as_one_argument() {
+    fn the_republish_step_prints_a_command_only_for_a_shown_remote() {
         let last = "a".repeat(40);
-        for (remote, expected_remote) in [("o$(id)", vec!["o$(id)"]), ("-x", vec!["--", "-x"])] {
+        for (remote, shown) in [
+            ("origin", Some(vec!["origin"])),
+            ("-x", Some(vec!["--", "-x"])),
+            ("o$(id)", None),
+            ("user:p'ass@host", None),
+        ] {
             let root = tempfile::tempdir().unwrap();
-            let init = crate::git::command()
-                .arg("-C")
-                .arg(root.path())
-                .args(["init", "-q"])
-                .output()
-                .unwrap();
-            assert!(init.status.success());
+            let git_in = |args: &[&str]| {
+                let out = crate::git::command()
+                    .arg("-C")
+                    .arg(root.path())
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{args:?}");
+            };
+            git_in(&["init", "-q"]);
+            let key = format!("remote.{remote}.url");
+            git_in(&["config", &key, "https://example.test/repo"]);
             let git = super::Git::new(root.path());
             super::state::update(&git, |state| {
                 state.last_verified.insert(remote.to_string(), last.clone());
             })
             .unwrap();
             let error = super::verify_descent(&git, remote).unwrap_err().to_string();
+            let Some(expected_remote) = shown else {
+                assert!(!error.contains("git push"), "{error}");
+                assert!(!error.contains(remote), "{error}");
+                assert!(!error.contains("p'"), "{error}");
+                assert!(
+                    error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                    "{error}"
+                );
+                continue;
+            };
             let command = error
                 .split('`')
                 .find(|span| span.starts_with("git push "))

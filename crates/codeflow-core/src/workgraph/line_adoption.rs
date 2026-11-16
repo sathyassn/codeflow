@@ -75,30 +75,45 @@ impl AdoptionReport {
 /// would receive, as `(message, remedy)`. `reset` is the ref the remedy's
 /// `git reset --keep` returns the line to. The pre-push hook and
 /// `codeflow ci` share it, so both name the same commits and the same
-/// remedy (TSK-1155).
+/// remedy (TSK-1155). `root` is the repository whose remotes decide
+/// whether `reset`, which can name a remote-tracking ref, is printed.
 #[must_use]
-pub fn direct_commit_refusal(line: &str, unadopted: &[String], reset: &str) -> (String, String) {
+pub fn direct_commit_refusal(
+    root: &Path,
+    line: &str,
+    unadopted: &[String],
+    reset: &str,
+) -> (String, String) {
     let epic = epic_id(line).unwrap_or("its epic");
     let ids = unadopted
         .iter()
         .map(|id| id.get(..9).unwrap_or(id))
         .collect::<Vec<_>>()
         .join(", ");
+    // The ref is rendered from its raw value: a full ref can hold `$(…)`,
+    // and `git reset` reads paths after `--`, so a ref that starts with `-`
+    // is not printed (TSK-416 review round 2). A ref holding a remote name
+    // messages withhold, judged on the raw ref, is not printed either
+    // (TSK-416 review).
+    let reset_step = if crate::security::git::word_shown(root, reset) {
+        crate::git::pasted::step(
+            &crate::git::Pasted::new("git reset --keep")
+                .value(reset)
+                .without_end_of_options(),
+        )
+    } else {
+        format!(
+            "return the line to its fetched tip (no command is printed, since {})",
+            crate::security::git::WITHHELD_REMOTE_STEP
+        )
+    };
     (
         format!(
             "{} would receive a commit made directly on the line ({ids})",
             crate::git::display_text(line)
         ),
-        // The ref is rendered from its raw value: a full ref can hold
-        // `$(…)`, and `git reset` reads paths after `--`, so a ref that
-        // starts with `-` is not printed (TSK-416 review round 2).
         format!(
-            "land it by a pull request: save it on a task or planning branch, then {} and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")",
-            crate::git::pasted::step(
-                &crate::git::Pasted::new("git reset --keep")
-                    .value(reset)
-                    .without_end_of_options()
-            )
+            "land it by a pull request: save it on a task or planning branch, then {reset_step} and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
         ),
     )
 }
@@ -450,7 +465,20 @@ mod tests {
             "refs/remotes/origin/integration/EPC-001-x$(touch {})",
             marker.display()
         );
-        let (_, remedy) = direct_commit_refusal("integration/EPC-001-x", &["a".repeat(40)], &reset);
+        let repo = tempfile::tempdir().unwrap();
+        let git_in = |args: &[&str]| {
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+        };
+        git_in(&["init", "-q"]);
+        let root = repo.path();
+        let (_, remedy) =
+            direct_commit_refusal(root, "integration/EPC-001-x", &["a".repeat(40)], &reset);
         let command = remedy
             .split('`')
             .find(|span| span.starts_with("git reset "))
@@ -465,7 +493,7 @@ mod tests {
         let arguments: Vec<&str> = printed.split_terminator('\0').collect();
         assert_eq!(arguments, ["reset", "--keep", reset.as_str()], "{remedy}");
         assert!(!marker.exists(), "{remedy}");
-        let (_, dashed) = direct_commit_refusal("x", &["a".repeat(40)], "-x");
+        let (_, dashed) = direct_commit_refusal(root, "x", &["a".repeat(40)], "-x");
         assert!(!dashed.contains("git reset"), "{dashed}");
         // Round 3: the reason names the dash, not a hidden character.
         assert!(
@@ -473,9 +501,22 @@ mod tests {
             "{dashed}"
         );
         assert!(!dashed.contains("does not show as itself"), "{dashed}");
-        let (_, hidden) = direct_commit_refusal("x", &["a".repeat(40)], "x\u{200b}$(id)");
+        let (_, hidden) = direct_commit_refusal(root, "x", &["a".repeat(40)], "x\u{200b}$(id)");
         assert!(!hidden.contains("git reset"), "{hidden}");
         assert!(!hidden.contains("$(id)"), "{hidden}");
         assert!(hidden.contains(crate::git::pasted::NOT_PRINTED), "{hidden}");
+        // A ref holding a remote name messages withhold is judged on the raw
+        // ref, so quoting cannot split the name past the check.
+        let withheld_remote = "user:p'ass@host";
+        let key = format!("remote.{withheld_remote}.url");
+        git_in(&["config", &key, "https://example.test/repo"]);
+        let reset = format!("refs/remotes/origin/{withheld_remote}");
+        let (_, withheld) = direct_commit_refusal(root, "x", &["a".repeat(40)], &reset);
+        assert!(!withheld.contains("git reset"), "{withheld}");
+        assert!(!withheld.contains("p'"), "{withheld}");
+        assert!(
+            withheld.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+            "{withheld}"
+        );
     }
 }

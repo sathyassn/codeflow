@@ -1559,6 +1559,7 @@ fn epic_line_push(
         format!("refs/remotes/origin/{branch}")
     };
     let (message, remedy) = crate::workgraph::line_adoption::direct_commit_refusal(
+        root,
         branch,
         &adoptions.unadopted,
         &reset,

@@ -224,7 +224,7 @@ fn judge(
         return Ok(());
     }
     let (message, mut remedy) =
-        line_adoption::direct_commit_refusal(line, &report.unadopted, &remote);
+        line_adoption::direct_commit_refusal(root, line, &report.unadopted, &remote);
     if let Source::Base { target } = source {
         let _ = write!(remedy, "; {}", routes(Some(line), target.as_deref()));
     }

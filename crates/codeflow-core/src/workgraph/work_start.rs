@@ -460,6 +460,23 @@ pub fn fetch_it(remote: &str, branch: &str) -> String {
     )
 }
 
+/// [`fetch_it`] for `branch` of `origin` in the repository at `root`, or,
+/// when either raw word holds a remote name that messages withhold
+/// ([`crate::security::git::word_shown`]), a step that prints no command
+/// (TSK-416 review).
+#[must_use]
+pub fn fetch_origin(root: &Path, branch: &str) -> String {
+    if crate::security::git::word_shown(root, "origin")
+        && crate::security::git::word_shown(root, branch)
+    {
+        return fetch_it("origin", branch);
+    }
+    format!(
+        "no fetch command is printed, since {}",
+        crate::security::git::WITHHELD_REMOTE_STEP
+    )
+}
+
 /// The step that names the fetched line `remote`, a full ref, as the work
 /// target with `--into`, rendered from the raw ref (TSK-416 review); a ref
 /// whose remote's name messages withhold is not printed to paste (review
