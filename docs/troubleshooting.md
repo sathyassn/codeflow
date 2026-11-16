@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-seven health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-eight health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-seven checks fall into six groups by the surface each one reads.
+The twenty-eight checks fall into six groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -73,7 +73,7 @@ check failed. Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
 `delegate-roundtrip`, `repo-integrity`, `id-registry` and `adopter-fit`. The
 other fifteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-seven names and exits 0.
+- `codeflow doctor --list` prints the twenty-eight names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
