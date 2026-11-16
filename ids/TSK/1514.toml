@@ -1,0 +1,11 @@
+id = "TSK-1514"
+uid = "9ad75933-830d-4ea7-a3ec-e23cc86be284"
+kind = "TSK"
+title = "The docs portal lease test waits for a complete ready file and never leaves its coordinator running"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-16T07:48:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
