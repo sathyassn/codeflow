@@ -31,9 +31,11 @@ records the required interactive seat unavailable and the reduced assurance.
 4. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
       with tests through the plan's named interfaces first, and internal unit
-      tests where they carry the risk. Apply the neighbour rule in the
-      discipline rules' "Write only what earns its keep". Keep modular
-      boundaries and explicit failure handling; add no speculative
+      tests where they carry the risk. Tooling the change adds or alters
+      (scripts, build helpers, generators, release, CI and hook helpers)
+      gets its tests in a test target, like product code. Apply the
+      neighbour rule in the discipline rules' "Write only what earns its
+      keep". Keep modular boundaries and explicit failure handling; add no speculative
       behavior, abstraction or dependency. Name each identifier, flag,
       message, log line, comment, test and example value with the ordinary
       word for what it does, and check what a plausible reader takes it to

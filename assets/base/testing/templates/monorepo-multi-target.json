@@ -1,5 +1,5 @@
 {
-  "_description": "Monorepo with three targets (Go, Node, Python) running in parallel.",
+  "_description": "Monorepo with three targets running in parallel: a Go service, a Node web app and Python project tooling under tools/.",
   "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {

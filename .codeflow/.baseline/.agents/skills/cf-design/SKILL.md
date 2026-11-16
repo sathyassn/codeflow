@@ -302,6 +302,14 @@ the reasoning behind choices; it supplies no formats, bans, or house style.
 Implementation follows the established repository architecture and the
 orchestrator's quality contract, reusing the existing design system and adding
 reusable foundations or components only where recurrence is evidenced.
+Build a non-trivial surface on the project's standard UI framework: one with
+more than one view or route, shared or persisted state, validated forms or
+synced data. A one-page tool or a static page with no interaction may stay
+plain. A framework the project does not use yet needs the owner's approval.
+`cf-stack` holds the full rule, including the signals that a plain surface
+has outgrown that. The design-system kits shipped with `cf-present` and
+`cf-docs-portal` are references for CodeFlow's own present and docs
+surfaces, never a model for a project's application code.
 The Claude design owner performs the implementer check. Computer Use QA comes
 from a lineage different from the actual author under the quality contract;
 Playwright stays the web driver.

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-11-02-batch-landing-ownership-v1",
+  "requirements_version": "2026-11-15-tooling-tests-and-framework-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -3170,6 +3170,65 @@
             "Change only work you own.",
             "tells the owner,",
             "the owner makes it in that task."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-017",
+      "level": "hard",
+      "statement": "Project tooling (scripts, build helpers, code generators, release, CI and hook helpers) is code: it ships with tests that run in a test target and counts toward the coverage floor where its language can be measured; only generated, vendored, fixture and test code is excludable; a reviewer returns a finding for a tooling change with no test, as for product code.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/coverage.md",
+          "markers": [
+            "Project tooling is code under this rule",
+            "tooling is not on that list",
+            "the script itself is not excluded"
+          ]
+        },
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "Project tooling is code: a script, build helper, code generator, or release, CI or hook helper ships with tests that run in a test target",
+            "where it cannot, its tests still run and the gap is recorded"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-stack/SKILL.md",
+          "markers": [
+            "Wire the project's tooling.",
+            "For a language its coverage tool cannot measure, such as shell"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "a tooling change with no test in a test target is a finding"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-019",
+      "level": "hard",
+      "statement": "A non-trivial project or surface (more than one view, route or subcommand, shared or persisted state, input that needs validation, synced data) uses the project type's standard framework or the one it already has; a one-page tool, trivial script or static page with no interaction may stay plain until a named signal says it has outgrown that; a framework the project does not already use needs the owner's approval, and a working stack is never migrated for this rule alone.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-stack/SKILL.md",
+          "markers": [
+            "Build on the project type's standard framework, in proportion.",
+            "A project is non-trivial when any of these holds",
+            "may stay plain",
+            "get the owner's approval first",
+            "Never migrate a working stack for this rule alone."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Build a non-trivial surface on the project's standard UI framework",
+            "never a model for"
           ]
         }
       ]

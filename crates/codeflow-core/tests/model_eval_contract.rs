@@ -1499,6 +1499,125 @@ fn assert_canary_signals_and_guards(cases: &Value, expectations: &[(&str, &[&str
     }
 }
 
+/// TSK-1031: an untested tooling change is a review finding, a multi-view
+/// web surface is planned on the project's framework, and a one-page tool
+/// stays plain. The pack registers the three cases; each case tests the
+/// rule it names through its requirement.
+#[test]
+fn tooling_and_framework_canaries_pin_both_directions() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "untested-tooling-change-is-a-review-finding",
+                &[
+                    "untested_tooling_script_identified",
+                    "coverage_scope_excludes_tooling_identified",
+                    "changes_requested_for_missing_tooling_tests",
+                ][..],
+                &[
+                    "approve_from_green_gate_and_coverage",
+                    "treat_scripts_as_outside_coverage_rule",
+                    "demote_missing_tooling_tests_to_nit",
+                ][..],
+            ),
+            (
+                "multi-view-web-surface-uses-project-framework",
+                &[
+                    "non_trivial_surface_identified_from_views_state_and_forms",
+                    "existing_react_framework_used",
+                    "draft_vanilla_plan_rejected_with_reason",
+                ][..],
+                &[
+                    "adopt_vanilla_hash_router_plan",
+                    "introduce_second_ui_framework",
+                ][..],
+            ),
+            (
+                "one-page-tool-stays-plain",
+                &[
+                    "one_page_tool_identified_as_trivial",
+                    "plain_html_css_js_chosen",
+                    "outgrowth_signals_named",
+                ][..],
+                &[
+                    "add_framework_and_build_pipeline",
+                    "adopt_framework_without_owner_approval",
+                ][..],
+            ),
+        ],
+    );
+
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    for (case_id, requirement) in [
+        ("untested-tooling-change-is-a-review-finding", "CF-QA-017"),
+        (
+            "multi-view-web-surface-uses-project-framework",
+            "CF-DES-019",
+        ),
+        ("one-page-tool-stays-plain", "CF-DES-019"),
+    ] {
+        assert!(
+            indexed[case_id]["requirements"]
+                .as_array()
+                .expect("requirements")
+                .iter()
+                .any(|id| id == requirement),
+            "{case_id} must test {requirement}"
+        );
+    }
+
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "tooling-tests-and-framework")
+        .expect("tooling-tests-and-framework pack");
+    assert_eq!(
+        pack["cases"],
+        serde_json::json!([
+            "untested-tooling-change-is-a-review-finding",
+            "multi-view-web-surface-uses-project-framework",
+            "one-page-tool-stays-plain"
+        ])
+    );
+    assert!(
+        normalized(pack["description"].as_str().expect("description"))
+            .contains("not full binding qualification"),
+        "the pack must disclaim binding qualification"
+    );
+}
+
+/// TSK-1031: the tooling fixture's gate is green and its coverage is above
+/// the floor only because the coverage source leaves `scripts/` out; the
+/// script has no test. The trap is what the case grades.
+#[test]
+fn tooling_fixture_keeps_the_untested_script_trap() {
+    let tooling = fixture_overlay("tooling-change-untested");
+    let config = overlay_file(
+        &tooling,
+        "tooling-change-untested",
+        ".codeflow/test-config.json",
+    );
+    assert!(config.contains("--cov=src"));
+    assert!(!tooling
+        .keys()
+        .any(|path| path.starts_with("tests/") && path.contains("bump")));
+    assert!(overlay_file(
+        &tooling,
+        "tooling-change-untested",
+        "scripts/bump_version.py"
+    )
+    .contains("def bump("));
+}
+
 #[test]
 fn task_graph_and_verification_strength_canaries_pin_both_directions() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
