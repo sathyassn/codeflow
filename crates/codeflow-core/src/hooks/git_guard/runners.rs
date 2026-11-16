@@ -2432,8 +2432,15 @@ fn launched(tokens: &[String]) -> Result<Launched, String> {
         };
         let name = super::launcher_name(word);
         if super::is_prefix_launcher(word) {
-            let Some(next) = super::skip_launcher_options(word, tokens, index + 1) else {
-                return Ok(launched);
+            // A launcher the walk cannot read is an error, never the
+            // guessed program's environment (TSK-1490).
+            let next = match super::prefix_launch(word, tokens, index + 1) {
+                super::Launch::Runs(next) => next,
+                super::Launch::Nothing => return Ok(launched),
+                super::Launch::Unread(why) => return Err(why),
+                super::Launch::Shell => {
+                    return Err(format!("`{name}` with no command, which runs a shell"))
+                }
             };
             launcher_options(
                 name,
@@ -2453,7 +2460,7 @@ fn launched(tokens: &[String]) -> Result<Launched, String> {
 }
 
 /// Apply the option words `words` of the prefix launcher `name`, as
-/// [`super::skip_launcher_options`] bounds them: `exec -c` empties the
+/// [`super::prefix_launch`] bounds them: `exec -c` empties the
 /// environment, and an option's value is never read as an option (`exec
 /// -a NAME`, a name attached as in `-aNAME`, which ends the cluster);
 /// `arch -e NAME=VALUE` assigns and `arch -d NAME` removes. The other
@@ -2932,5 +2939,33 @@ mod tests {
         );
         assert_eq!(written("restore", "--source HEAD~1 a.txt"), vec!["a.txt"]);
         assert_eq!(written("restore", "--staged a.txt"), none);
+    }
+
+    /// The environment a launcher leaves its program is read past each
+    /// launcher by its grammar; a launcher the walk cannot read is an error,
+    /// never the environment of a guessed program (TSK-1490).
+    #[test]
+    fn launcher_environment_fails_closed_on_an_unread_launcher() {
+        let words =
+            |line: &str| -> Vec<String> { line.split_whitespace().map(str::to_string).collect() };
+        for line in [
+            "nice --unknown value git status",
+            "time -Z out git status",
+            "timeout --bogus-option=1 5 git status",
+            "A=1 exec -Q name git status",
+        ] {
+            assert!(launched(&words(line)).is_err(), "{line}");
+        }
+        for line in [
+            "nice -n 5 git status",
+            "time -o out git status",
+            "exec -a name git status",
+            "timeout -s KILL 5 git status",
+            "command -v git",
+        ] {
+            assert!(launched(&words(line)).is_ok(), "{line}");
+        }
+        let cleared = launched(&words("exec -c git status")).unwrap();
+        assert!(cleared.cleared, "exec -c");
     }
 }
