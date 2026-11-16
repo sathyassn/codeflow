@@ -1464,6 +1464,29 @@ mod tests {
         }
     }
 
+    /// An option the reader does not know never hides a carrier option:
+    /// the scan reads every word up to the program's own `--`, and a `--`
+    /// right after an option-shaped word ends nothing, so an unknown
+    /// option, valued or not, before or after the carrier option, leaves
+    /// the carried command read.
+    #[test]
+    fn an_unknown_option_never_hides_a_carried_command() {
+        let x = Carried::Command("X".into());
+        for line in [
+            "tar --bogus v -I X a.tar",
+            "tar -I X --bogus v a.tar",
+            "tar --bogus -- -I X a.tar",
+            "tar -Q -- --use-compress-program=X a.tar",
+            "sort --bogus -- --compress-program=X f",
+            "rsync --bogus v -e X a b",
+            "rsync -e X --bogus -- a b",
+            "rg --bogus v --pre X pattern",
+            "split --bogus v --filter=X f",
+        ] {
+            assert!(commands(line).contains(&x), "{line}: {:?}", commands(line));
+        }
+    }
+
     #[test]
     fn option_spellings_read_one_value() {
         let x = || vec![Carried::Command("X".into())];

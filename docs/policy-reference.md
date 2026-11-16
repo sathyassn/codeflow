@@ -846,7 +846,10 @@ the line does not name, is refused under the agent push rule
 name given only as another launcher's option value is not a launcher.
 Every launcher's options are read whole: an option the grammar does not
 hold, an abbreviated long option included, leaves the command unresolved
-rather than taking that option's value as the program. The guard keeps
+rather than taking that option's value as the program. `busybox` is read
+only through an applet that is a shell, a file copier or a launcher of
+the closed list; any other applet, or an option, leaves the command
+unresolved in the same way. The guard keeps
 no grammar for command runners except two daily forms. Any form of
 `parallel`, `watch`, `flock`, `script`, `setsid`, `unbuffer`, `su` or
 `runuser`, and `fd` or `fdfind` with an exec option, is unresolved in

@@ -14922,12 +14922,29 @@ fn launch_walk_into(tokens: &[String], walk: &mut Walk) -> Option<usize> {
             }
         }
         // `busybox` running a shell, a file copier or a launcher of the
-        // inventory runs that applet as the program; other applets stay
-        // `busybox`, which the startup guard refuses by design.
-        if basename(t) == "busybox" && tokens.get(idx + 1).is_some_and(|a| busybox_launches(a)) {
-            walk.visit(idx, idx + 1);
-            idx += 1;
-            continue;
+        // inventory runs that applet as the program. Any other applet, or
+        // an option, is a form the grammar keeps no reading for: the walk
+        // is unresolved, so the readers judge every later word that may
+        // start a command, and the program stays `busybox`, which the
+        // startup guard refuses by design. `busybox` alone runs nothing.
+        if basename(t) == "busybox" {
+            match tokens.get(idx + 1) {
+                Some(applet) if busybox_launches(applet) => {
+                    walk.visit(idx, idx + 1);
+                    idx += 1;
+                    continue;
+                }
+                Some(applet) => {
+                    walk.unresolved(
+                        idx,
+                        format!(
+                            "`{t} {applet}`, an applet the guard keeps no grammar for, so the command it runs is not read"
+                        ),
+                    );
+                    return Some(idx);
+                }
+                None => {}
+            }
         }
         if launcher_name(t) == "env" {
             // env's options and assignments, up to the wrapped command, read
@@ -23169,6 +23186,72 @@ mod tests {
             let r = report(cmd, "main");
             assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
         }
+    }
+
+    // TSK-1490: a launcher option outside a launcher's closed grammar is
+    // never skipped to reach the command. Each launcher read by an option
+    // grammar, bare and as a path, with an unknown long option in front
+    // of a Git call: the walk is unresolved, or names the unknown word
+    // itself as the program, and never resolves to the Git call.
+    #[test]
+    fn every_launcher_grammar_leaves_an_unknown_option_unresolved() {
+        let mut names: Vec<&str> = PREFIX_LAUNCHERS.to_vec();
+        names.extend(OPTION_LAUNCHERS);
+        names.push("env");
+        let mut failed = Vec::new();
+        for name in names {
+            for spelling in [name.to_string(), format!("/usr/bin/{name}")] {
+                for unknown in ["--bogus-option", "--bogus-option=1", "--bogus-option 1"] {
+                    let line = format!("{spelling} {unknown} git push origin HEAD:refs/heads/x");
+                    let words: Vec<String> = line.split(' ').map(str::to_string).collect();
+                    let walk = Walk::read(&words);
+                    let reached_git = walk.program.is_some_and(|at| words[at] == "git");
+                    if walk.unread.is_none() && reached_git {
+                        failed.push(line);
+                    }
+                }
+            }
+        }
+        assert!(failed.is_empty(), "guessed past:\n{}", failed.join("\n"));
+    }
+
+    // TSK-1490: `busybox` is read only through the applets the walk
+    // models (a shell, a file copier, a launcher of the inventory). Any
+    // other applet, a runner among them, and any option leave the walk
+    // unresolved, and the agent push rule refuses the line.
+    #[test]
+    fn busybox_reads_only_the_applets_it_models() {
+        let push = "git push origin HEAD:refs/heads/integration/EPC-001-line";
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_string).collect() };
+        for line in [
+            format!("busybox xargs {push}"),
+            format!("busybox watch {push}"),
+            format!("busybox flock /tmp/l {push}"),
+            format!("busybox find . -exec {push} ;"),
+            format!("busybox frobnicate {push}"),
+            format!("/bin/busybox chpst -u x {push}"),
+            format!("busybox --list {push}"),
+            "busybox ls".to_string(),
+        ] {
+            assert!(Walk::read(&words(&line)).unread.is_some(), "{line}");
+            assert!(unresolved_push(&words(&line)).is_some(), "{line}");
+        }
+        for (line, program) in [
+            ("busybox nohup git status", "git"),
+            ("busybox env FOO=1 git status", "git"),
+            ("busybox sh -c x", "sh"),
+            ("busybox ln -s a b", "ln"),
+        ] {
+            let all = words(line);
+            let walk = Walk::read(&all);
+            assert!(walk.unread.is_none(), "{line}");
+            assert_eq!(
+                walk.program.map(|at| all[at].as_str()),
+                Some(program),
+                "{line}"
+            );
+        }
+        assert!(Walk::read(&words("busybox")).unread.is_none());
     }
 
     // A git op nested in a substitution runs in a subshell whose own `cd`

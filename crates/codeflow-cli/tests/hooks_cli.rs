@@ -703,6 +703,9 @@ fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
             "find . -type d -name .codeflow -exec rm -rf {} +",
             r"find . -name settings.json -execdir rm {} \;",
             r"find . -maxdepth 0 -exec sh -c 'rm -rf .codeflow' \;",
+            // A replacement string makes `xargs` a form the guards keep no
+            // grammar for (TSK-1490).
+            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
         ],
         &[
             r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
@@ -711,7 +714,7 @@ fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
             "printf x | xargs echo",
             "git ls-files | xargs grep -n a",
             "git ls-files | xargs rm -f",
-            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
+            "git ls-files -z | xargs -0 sed -i '' 's/a/b/'",
             "find . -name '*.md' -print0 | xargs -0 grep -n a",
         ],
         "git.hook_integrity",

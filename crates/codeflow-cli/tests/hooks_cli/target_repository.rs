@@ -1614,6 +1614,9 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
         "fd -L . clean -x cat",
         "fd --mystery . clean -x cat",
         "cd ~ && fd auth -x cat",
+        // `fd` with an exec option refuses in any directory (TSK-1490).
+        "fd . clean -x cat",
+        "fd -e md . clean -x wc -l",
         "cdpath=(~) cd .codex; cat auth.json",
         "cdpath=($HOME) cd .codex; cat auth.json",
         "cdpath=(~ /tmp) cd .codex; cat auth.json",
@@ -1645,8 +1648,6 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
         "git log HEAD~^",
         "git show main^0",
         "git checkout HEAD^",
-        "fd . clean -x cat",
-        "fd -e md . clean -x wc -l",
         "fd notes",
         "cd clean; cat notes.md",
         "GIT_PROXY_COMMAND=connect cargo test",
@@ -1702,14 +1703,17 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
         "fd . ~/.codex --exec=env",
         "fd . ~/.codex -x env",
         "fd . ~/.codex -x nice",
+        // `fd` with an exec option is a runner the guards keep no grammar
+        // for, so it refuses whatever directory it searches (TSK-1490).
+        "fd . clean -x cat",
+        "fd . clean --exec=cat",
+        "fd -e md . clean -xwc",
     ]
     .iter()
     .map(ToString::to_string)
     .collect();
     let allowed: Vec<String> = [
-        "fd . clean -x cat",
-        "fd . clean --exec=cat",
-        "fd -e md . clean -xwc",
+        "fd . clean",
         "MANPAGER=less git help",
         "BROWSER=open git help --web",
         "cd clean && git rev-list ^main HEAD",
