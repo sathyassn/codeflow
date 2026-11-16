@@ -123,6 +123,14 @@ fn refused(out: &Output) -> bool {
         && String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity")
 }
 
+/// Refused under the agent push rule: `xargs` appends the words it reads
+/// to a Git command, so neither guard can read the Git call it makes
+/// (TSK-1490). Hook integrity may or may not appear beside it.
+fn refused_as_unread_push(out: &Output) -> bool {
+    out.status.code() == Some(2)
+        && String::from_utf8_lossy(&out.stderr).contains("git.agent_push_refused_branches")
+}
+
 /// `Ok(true)` when the guard allowed the command, `Ok(false)` when it
 /// refused only because a Git child it runs to read state outlived its
 /// 3 s bound, as on a busy hosted runner, and `Err` for any other result.
@@ -2454,7 +2462,7 @@ fn repair2_xargs_guarded_verbs() {
             "echo README.md | xargs git add",
         ] {
             let out = f.command(&f.root, hook, command);
-            assert!(refused(&out), "{hook} {command}: {out:?}");
+            assert!(refused_as_unread_push(&out), "{hook} {command}: {out:?}");
         }
         for tail in [
             "",
@@ -3513,8 +3521,6 @@ fn repair3_runner_filter_and_option_sources() {
             "printf payload | xargs git-filter-branch",
             "printf payload | xargs git for-each-repo",
             "printf payload | xargs git grep -e pattern",
-            "printf README.md | xargs git grep pattern",
-            "printf README.md | xargs git grep -e pattern --",
             "git grep \"$UNKNOWN\" docs",
             "git ls-remote 'ext::sh -c rm% -rf% .claude'",
             "git remote-ext fixture 'sh -c rm% -rf% .claude'",
@@ -3524,6 +3530,15 @@ fn repair3_runner_filter_and_option_sources() {
         ] {
             let out = f.command(&f.linked, hook, command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        // xargs appends file names to `git grep`, so the agent push rule
+        // refuses them in both guards (TSK-1490).
+        for command in [
+            "printf README.md | xargs git grep pattern",
+            "printf README.md | xargs git grep -e pattern --",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused_as_unread_push(&out), "{hook} {command}: {out:?}");
         }
         // The exec floor owns unread xargs replacement before integrity runs.
         let replacement = f.command(

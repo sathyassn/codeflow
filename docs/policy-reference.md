@@ -857,7 +857,10 @@ the same way, whatever its options and whatever command it runs, and so
 is a runner added to the inventory later. The two daily forms the guard
 reads exactly are `xargs` with no option or only
 `-0`, `-r` and `-n NUMBER`, and `find` whose `-exec` or `-execdir`
-actions each end in `;` or `{} +`, each running a literal command. Any
+actions each end in `;` or `{} +`, each running a literal command.
+Reading a form exactly does not allow it: exec-guard's deletion check
+does not model `-n`, so it still refuses a line such as
+`xargs -n 1 wc -l` under `security.dangerous_commands`, as before. Any
 other option, a replacement string (`-I` and its kin), `-ok` or `-okdir`,
 a found path inside a word, a shell, an `env -S` string, or a runner
 inside the command makes those forms unresolved too. `xargs` adds the

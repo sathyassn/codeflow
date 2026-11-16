@@ -1593,6 +1593,27 @@ fn ordinary_launcher_commands_stay_allowed() {
             }
         }
     }
+    // exec-guard's deletion reader does not model `xargs -n`, so it fails
+    // closed there; the launcher grammar adds no refusal of its own.
+    for row in crate::security::guard_forms::XARGS_COUNT_DELETION_UNPROVEN {
+        let git = git_guard_verdict(&f.root, row);
+        if blocked(&git) {
+            wrong.push(format!("git-guard should pass: {row}: {}", shown(&git)));
+        }
+        let found = verdict(&f.root, row);
+        let deletion = found.iter().any(|finding| {
+            finding.rule == "security.dangerous_commands" && finding.level == PolicyLevel::Block
+        });
+        let other = found.iter().any(|finding| {
+            finding.level == PolicyLevel::Block && finding.rule != "security.dangerous_commands"
+        });
+        if !deletion || other {
+            wrong.push(format!(
+                "exec-guard should refuse only under security.dangerous_commands: {row}: {}",
+                shown(&found)
+            ));
+        }
+    }
     report(&wrong);
 }
 

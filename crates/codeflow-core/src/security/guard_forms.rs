@@ -2165,11 +2165,16 @@ pub const LAUNCHER_ORDINARY: &[&str] = &[
     "xargs <<< a",
     "xargs -0 wc -l <<< a",
     "xargs -r wc -l <<< a",
-    "xargs -n 1 wc -l <<< a",
-    "xargs -n2 nice -n 5 wc -l <<< a",
     "find . -name x -exec wc -l {} ';'",
     "find . -name x -print",
 ];
+
+/// `xargs -n` forms that git-guard passes and exec-guard refuses under
+/// `security.dangerous_commands`: exec-guard's deletion reader does not
+/// model `-n`, so it fails closed on the command xargs builds. Checked by
+/// `ordinary_launcher_commands_stay_allowed`.
+pub const XARGS_COUNT_DELETION_UNPROVEN: &[&str] =
+    &["xargs -n 1 wc -l <<< a", "xargs -n2 nice -n 5 wc -l <<< a"];
 
 /// A carried command the program runs in a directory the guard cannot
 /// establish: one set at run time, per found path, by a spelling the reader
