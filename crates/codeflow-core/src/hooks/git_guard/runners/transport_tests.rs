@@ -358,6 +358,96 @@ fn an_operand_free_remote_update_reads_the_remotes_git_selects() {
 }
 
 #[test]
+fn an_empty_default_group_refuses_since_git_falls_back_to_its_name() {
+    const FALLBACK: &str = "[remote \"default\"]\n\turl = fixture::x\n";
+    for group in ["\"\"", "\" \\t \""] {
+        let configured = Scratch::new(&format!(
+            "{HTTPS}{FALLBACK}[remotes]\n\tdefault = {group}\n"
+        ));
+        configured.unproven("remote update", "empty `default` remote group");
+        let legacy = Scratch::new(&format!("{HTTPS}[remotes]\n\tdefault = {group}\n"));
+        std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
+        std::fs::write(
+            legacy.root().join(".git/remotes/default"),
+            "URL: fixture::x\n",
+        )
+        .unwrap();
+        legacy.unproven("remote update", "empty `default` remote group");
+    }
+    // A group that lists a remote still reads its members.
+    let listed = Scratch::new(&format!("{HTTPS}{FALLBACK}[remotes]\n\tdefault = origin\n"));
+    assert_eq!(listed.helpers("remote update"), Ok(vec![]));
+}
+
+#[test]
+fn a_remote_section_with_an_empty_name_refuses() {
+    let empty = Scratch::new(&format!("{HTTPS}[remote \"\"]\n\turl = fixture::x\n"));
+    empty.unproven("remote update", "empty name");
+    // A dotted name and names that differ only in case are each read.
+    let dotted = Scratch::new(&format!("{HTTPS}[remote \"a.b\"]\n\turl = fixture::x\n"));
+    assert_eq!(dotted.helpers("remote update"), Ok(vec!["fixture".into()]));
+    let cased = Scratch::new(&format!(
+        "{HTTPS}[remote \"Up\"]\n\turl = fixture::x\n[remote \"up\"]\n\turl = https://example.test/r\n\tskipDefaultUpdate = true\n"
+    ));
+    assert_eq!(cased.helpers("remote update"), Ok(vec!["fixture".into()]));
+    // The same section, or an empty name, as a promisor remote.
+    let promisor = Scratch::new(&format!(
+        "{HTTPS}[remote \"\"]\n\turl = https://example.test/r\n\tpromisor = true\n"
+    ));
+    promisor.unproven("status", "promisor remote with an empty name");
+    let partial = Scratch::new(&format!("{HTTPS}[extensions]\n\tpartialClone = \"\"\n"));
+    partial.unproven("status", "promisor remote with an empty name");
+}
+
+/// Replace the legacy remote folder `folder` of `scratch` with `form`.
+#[cfg(unix)]
+fn legacy_folder(scratch: &Scratch, folder: &str, form: &str) {
+    let path = scratch.root().join(".git").join(folder);
+    // A link or file goes with `remove_file`; a folder needs the other call.
+    if std::fs::remove_file(&path).is_err() {
+        let _ = std::fs::remove_dir_all(&path);
+    }
+    let target = scratch.root().join("empty-target");
+    std::fs::create_dir_all(&target).unwrap();
+    match form {
+        "empty" => std::fs::create_dir(&path).unwrap(),
+        "link to empty" => std::os::unix::fs::symlink(&target, &path).unwrap(),
+        "dangling link" => std::os::unix::fs::symlink(target.join("gone"), &path).unwrap(),
+        "file" => std::fs::write(&path, "").unwrap(),
+        "populated" => {
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("old"), "URL: fixture::x\n").unwrap();
+        }
+        _ => unreachable!("{form}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_legacy_remote_folder_passes_only_as_a_real_empty_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new(HTTPS);
+    for folder in ["remotes", "branches"] {
+        legacy_folder(&scratch, folder, "empty");
+        assert_eq!(scratch.helpers("remote update"), Ok(vec![]), "{folder}");
+        for form in ["link to empty", "dangling link", "file", "populated"] {
+            legacy_folder(&scratch, folder, form);
+            scratch.unproven("remote update", "legacy remote file");
+        }
+        // A real folder that cannot be read; skipped where the reader can
+        // read it anyway, as a superuser can.
+        legacy_folder(&scratch, folder, "empty");
+        let path = scratch.root().join(".git").join(folder);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&path).is_err() {
+            scratch.unproven("remote update", "legacy remote file");
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        legacy_folder(&scratch, folder, "empty");
+    }
+}
+
+#[test]
 fn a_remote_with_more_than_one_address_value_refuses() {
     for remote in [
         "\turl = https://example.test/r\n\turl = fixture::x\n",

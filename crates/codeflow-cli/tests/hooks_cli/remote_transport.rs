@@ -387,6 +387,79 @@ fn both_guards_refuse_an_operand_free_contact_they_cannot_prove() {
 }
 
 #[test]
+fn both_guards_refuse_a_remote_update_whose_selection_hides_a_remote() {
+    // An empty `default` group makes Git fetch the remote named `default`,
+    // from the configuration or from a legacy remote file.
+    for group in [&b"\"\""[..], &b"\" \\t \""[..]] {
+        let configured = Scratch::landed(None);
+        configured
+            .append_config(b"[remote \"default\"]\n\turl = fixture::x\n[remotes]\n\tdefault = ")
+            .append_config(group)
+            .append_config(b"\n");
+        assert_unproven(&configured, &["git remote update"], &[]);
+        let legacy = Scratch::landed(None);
+        legacy
+            .append_config(b"[remotes]\n\tdefault = ")
+            .append_config(group)
+            .append_config(b"\n")
+            .write(".git/remotes/default", b"URL: fixture::x\n");
+        assert_unproven(&legacy, &["git remote update"], &[]);
+    }
+
+    // A remote section with an empty name defines a remote Git fetches.
+    let empty = Scratch::landed(None);
+    empty.append_config(b"[remote \"\"]\n\turl = fixture::x\n");
+    assert_unproven(&empty, &["git remote update"], &[]);
+    // A dotted name and names that differ only in case are each read.
+    let dotted = Scratch::landed(None);
+    dotted.config("remote.a.b.url", "fixture::x");
+    assert_rows(&dotted, &["git remote update"], &[]);
+    let cased = Scratch::landed(None);
+    cased.append_config(
+        b"[remote \"Up\"]\n\turl = fixture::x\n[remote \"up\"]\n\turl = https://127.0.0.1:9/r\n\tskipDefaultUpdate = true\n",
+    );
+    assert_rows(&cased, &["git remote update"], &[]);
+}
+
+/// Replace the legacy remote folder `folder` of `scratch` with `form`.
+#[cfg(unix)]
+fn legacy_folder(scratch: &Scratch, folder: &str, form: &str) {
+    let path = scratch.root().join(".git").join(folder);
+    // A link or file goes with `remove_file`; a folder needs the other call.
+    if std::fs::remove_file(&path).is_err() {
+        let _ = std::fs::remove_dir_all(&path);
+    }
+    let target = scratch.base.join("empty-target");
+    std::fs::create_dir_all(&target).unwrap();
+    match form {
+        "empty" => std::fs::create_dir(&path).unwrap(),
+        "link to empty" => std::os::unix::fs::symlink(&target, &path).unwrap(),
+        "dangling link" => std::os::unix::fs::symlink(target.join("gone"), &path).unwrap(),
+        "file" => std::fs::write(&path, "").unwrap(),
+        "populated" => {
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("old"), "URL: fixture::x\n").unwrap();
+        }
+        _ => unreachable!("{form}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn both_guards_read_a_legacy_remote_folder_only_as_a_real_empty_folder() {
+    let scratch = Scratch::landed(None);
+    for folder in ["remotes", "branches"] {
+        legacy_folder(&scratch, folder, "empty");
+        assert_unproven(&scratch, &[], &["git remote update"]);
+        for form in ["link to empty", "dangling link", "file", "populated"] {
+            legacy_folder(&scratch, folder, form);
+            assert_unproven(&scratch, &["git remote update"], &[]);
+        }
+        legacy_folder(&scratch, folder, "empty");
+    }
+}
+
+#[test]
 fn both_guards_refuse_each_operand_free_fetch_state_they_cannot_prove() {
     let detached = Scratch::landed(None);
     git(detached.root(), &["checkout", "-q", "--detach"]);
