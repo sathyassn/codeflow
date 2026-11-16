@@ -264,7 +264,11 @@ fn tsk1185_an_unreadable_default_tip_refuses_main_s_records() {
     let hosted = fx.hosted(SYNC, "Task: EPC-001");
     refused(&hosted, "unreadable default tip");
     says(&hosted, "rule on", ON);
-    says(&hosted, "home unavailable", "published home `main` is unavailable");
+    says(
+        &hosted,
+        "home unavailable",
+        "published home `main` is unavailable",
+    );
     says(&hosted, "unenumerated", "could not be enumerated");
 }
 

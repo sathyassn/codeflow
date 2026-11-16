@@ -579,7 +579,11 @@ fn tsk1185_a_home_correction_does_not_clear_an_earlier_move() {
     assert_blocks(
         &check(dir.path(), LINE, Some(RECEIVER), false),
         "move back while complete",
-        &["TSK-001", "while it was not todo or blocked", "before its last move"],
+        &[
+            "TSK-001",
+            "while it was not todo or blocked",
+            "before its last move",
+        ],
     );
 }
 
