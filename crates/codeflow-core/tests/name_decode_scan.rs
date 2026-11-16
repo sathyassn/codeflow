@@ -6384,7 +6384,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
     (
         "crates/codeflow-core/src/validate/docs.rs",
-        "lint_ledger_citations",
+        "ledger_citation_issue",
         "lines",
         1,
         "prose",
