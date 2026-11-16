@@ -438,6 +438,7 @@ fn tsk1185_a_later_record_edit_keeps_a_catch_up_landing_proved() {
 /// TSK-1185 AC-10: TSK-001 declares `LINE`, but its reviewed work landed on
 /// main, and a planning merge on main then corrects its home. The receiving
 /// branch merges main. `case` is what the correction carries or rests on.
+#[allow(clippy::too_many_lines)] // One fixture per correction case, sharing the plan and the line.
 fn corrected_home(case: &str) -> tempfile::TempDir {
     let dir = repo(
         &[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)],
