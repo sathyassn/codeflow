@@ -333,16 +333,22 @@ pub(crate) fn target_fetch_remote(
         "refs/heads/{}",
         declared.strip_prefix("refs/heads/").unwrap_or(declared)
     );
+    // libgit2 text can quote a branch's upstream setting, which holds the
+    // remote's name, so withheld remote names are replaced in it.
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    let scrubbed = |text: String| crate::security::git::without_remote_names(root, &text);
     match repo.find_reference(&local) {
         Ok(_) => match repo.branch_upstream_remote(&local) {
             Ok(remote) => owned(remote).map(Some),
             Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(error) => Err(format!(
+            Err(error) => Err(scrubbed(format!(
                 "cannot read upstream remote for '{declared}': {error}"
-            )),
+            ))),
         },
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(Some("origin".to_string())),
-        Err(error) => Err(format!("cannot read target branch '{declared}': {error}")),
+        Err(error) => Err(scrubbed(format!(
+            "cannot read target branch '{declared}': {error}"
+        ))),
     }
 }
 

@@ -626,3 +626,36 @@ fn a_same_destination_own_move_still_judges_mains_moves() {
     fixture.sync();
     passes(&fixture, "a planning move beside the line's own");
 }
+
+/// Withhold remote names from refusal text: the default branch tracks a
+/// remote whose name holds a URL with a credential. Its remote-tracking ref
+/// is not a valid ref name, so libgit2's refusal quotes it, and the refusal
+/// a finding is made from shows the withheld form, never the name.
+#[test]
+fn a_home_refusal_withholds_remote_names_from_refusal_text() {
+    const TOKEN: &str = "secret-token-1396";
+    let name = format!("https://user:{TOKEN}@example.test/repo");
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.land("main", &[(&path_of("TSK-001"), &moved("TSK-001", "main"))]);
+    fixture.git(&[
+        "config",
+        &format!("remote.{name}.url"),
+        "file:///nonexistent/repo.git",
+    ]);
+    fixture.git(&["config", "branch.main.remote", &name]);
+    fixture.git(&["config", "branch.main.merge", "refs/heads/main"]);
+    fixture.sync();
+    let said = match fixture.judge() {
+        Ok(found) => panic!(
+            "an unreadable home was accepted, importing {:?}",
+            found.keys().collect::<Vec<_>>()
+        ),
+        Err(said) => said,
+    };
+    assert!(!said.contains(TOKEN), "the credential is shown: {said}");
+    assert!(!said.contains(&name), "the remote name is shown: {said}");
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "the refusal does not show the withheld form: {said}"
+    );
+}

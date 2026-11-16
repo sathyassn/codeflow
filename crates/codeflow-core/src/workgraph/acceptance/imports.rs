@@ -68,7 +68,22 @@ pub(crate) fn clear_cache() {
 ///
 /// # Errors
 /// Refuses unreadable or overlaid history and an invalid source binding.
+/// A refusal can carry libgit2 text that quotes a remote-tracking ref, so
+/// every configured remote name messages withhold is replaced in it
+/// ([`crate::security::git::without_remote_names`]) before any caller
+/// turns it into a finding.
 pub fn imported_records(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    graph: &Graph,
+) -> Result<BTreeMap<String, ImportedRecord>, String> {
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    unchecked_imports(repo, base, head, graph)
+        .map_err(|reason| crate::security::git::without_remote_names(root, &reason))
+}
+
+fn unchecked_imports(
     repo: &Repository,
     base: Oid,
     head: Oid,
