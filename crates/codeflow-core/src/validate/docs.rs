@@ -1382,12 +1382,9 @@ mod tests {
         issues
     }
 
-    /// TSK-1516 AC-1: folding the ledger scan into the ADR, epic and task
-    /// reads keeps every ledger finding, its line and message, its place
-    /// after every other finding, and the task, epic, ADR order, on a
-    /// fixture that holds each case the separate pass handled.
-    #[test]
-    fn folded_ledger_findings_equal_the_separate_pass() {
+    /// The AC-1 fixture: a clean repository plus a task, an epic and an
+    /// ADR that each cite a ledger id, and the edge cases the scan handles.
+    fn citation_fixture() -> tempfile::TempDir {
         let dir = clean_repo();
         let root = dir.path();
         // Twelve lines of front matter and body, then a blank line, so the
@@ -1438,7 +1435,17 @@ mod tests {
         let mut adr_text = std::fs::read_to_string(root.join(adr_path)).unwrap();
         adr_text.push_str("\nFrom WS-003.\n");
         write(root, adr_path, &adr_text);
+        dir
+    }
 
+    /// TSK-1516 AC-1: folding the ledger scan into the ADR, epic and task
+    /// reads keeps every ledger finding, its line and message, its place
+    /// after every other finding, and the task, epic, ADR order, on a
+    /// fixture that holds each case the separate pass handled.
+    #[test]
+    fn folded_ledger_findings_equal_the_separate_pass() {
+        let dir = citation_fixture();
+        let root = dir.path();
         let report = lint_docs(root);
         let shown: Vec<String> = report.issues.iter().map(ToString::to_string).collect();
         let is_ledger = |issue: &DocsLintIssue| issue.message.contains("coordination ledger id");
