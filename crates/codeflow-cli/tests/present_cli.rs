@@ -1126,6 +1126,71 @@ fn show_after_the_browser_exited_ignores_unreadable_command_lines() {
     drop(unrelated);
 }
 
+/// Stand-in processes of the same user whose long arguments make the process
+/// listing larger than 4 MiB, as on a busy host. Each argument stays under
+/// Linux's 128 KiB limit for one argument, and each process under macOS's
+/// 1 MiB limit for arguments and environment together.
+fn large_inventory_processes() -> Vec<StandIn> {
+    use std::os::unix::process::CommandExt as _;
+
+    let argument = "y".repeat(120 * 1024);
+    (0..6)
+        .map(|_| {
+            StandIn(vec![Command::new("/bin/sh")
+                .args(["-c", "read -r line", "stand-in-large"])
+                .args(std::iter::repeat_n(&argument, 7))
+                .stdin(std::process::Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap()])
+        })
+        .collect()
+}
+
+/// A busy host lists more than 4 MiB of processes. `present show` finds the
+/// running browser in that listing, and after the browser exits, `show`
+/// reports the session ready and `present close` closes it.
+#[test]
+fn show_and_close_work_when_the_process_listing_is_over_four_mib() {
+    let large = large_inventory_processes();
+    #[cfg(target_os = "macos")]
+    {
+        let listing = Command::new("/bin/ps")
+            .args(["-axww", "-o", "pid=", "-o", "command="])
+            .output()
+            .unwrap();
+        assert!(listing.status.success());
+        assert!(
+            listing.stdout.len() > 4 * 1024 * 1024,
+            "the planted listing is {} bytes",
+            listing.stdout.len()
+        );
+    }
+    let fixture = setup_project();
+    let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    let browser = register_stand_in_browser(&fixture, &session_id);
+
+    let address = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id, "--no-launch"],
+    ));
+    assert!(address.starts_with("http://127.0.0.1:"), "{address}");
+
+    drop(browser.with_unreaped_member());
+    let shown = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id, "--no-launch"],
+    ));
+    assert!(
+        shown.contains(&format!("session {session_id} ready")),
+        "{shown}"
+    );
+    close_and_clear(&fixture, &session_id);
+    drop(large);
+}
+
 /// The browser was just closed: its leader is gone and reaped, while another
 /// member of its process group has exited and waits to be reaped. The group
 /// still answers a signal probe but runs nothing, so `present show` reports
