@@ -77,6 +77,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a unit test that classifies a URL's host name; it asks no remote",
     ),
     (
+        "codeflow-core/src/doctor/remote_perimeter/ref_protection.rs",
+        "github.com",
+        "the fixture names a GitHub origin while every gh lookup and call is mocked",
+    ),
+    (
         "codeflow-core/src/hooks/ref_authority.rs",
         "example.invalid",
         "the default URL of a fixture whose tests read configuration only; the logging-proxy run of this module saw no request",

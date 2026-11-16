@@ -180,6 +180,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "a test re-running its own binary",
     ),
     (
+        "codeflow-core/src/hooks/agent_transport_tests.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "the agent fetch and push table re-running its own binary with the host's Git configuration cut off (TSK-1479)",
+    ),
+    (
         "codeflow-core/src/testing/runner/mod.rs",
         "std::env::current_exe().unwrap()",
         1,

@@ -89,6 +89,15 @@ impl EffectiveConfig {
             .collect()
     }
 
+    /// Every entry in Git's precedence order, as its key (section and
+    /// variable folded, subsection as written) and its raw value; `None` for
+    /// a key written without `=`.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&[u8], Option<&[u8]>)> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.key.as_slice(), entry.value.as_deref()))
+    }
+
     pub(crate) fn boolean(&self, key: &str) -> Result<bool, String> {
         match self.get(key)? {
             None => Ok(false),
