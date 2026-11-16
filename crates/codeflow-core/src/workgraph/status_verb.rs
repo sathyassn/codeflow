@@ -803,12 +803,22 @@ fn default_target(
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
         let tip = pinned_commit(repo, base)?.map_err(|error| {
+            // A fetch command that would hold a withheld remote's name is
+            // not printed; the withheld-remote steps are given instead.
+            let fetch = super::work_start::fetch_it("origin", &name);
+            let step = if withheld(repo, &fetch) == fetch {
+                fetch
+            } else {
+                format!(
+                    "no command is printed, since {}",
+                    crate::security::git::WITHHELD_REMOTE_STEP
+                )
+            };
             withheld(
                 repo,
                 &format!(
-                    "`--base {}` does not name a commit here ({error}); {}",
+                    "`--base {}` does not name a commit here ({error}); {step}",
                     crate::git::display_text(base),
-                    super::work_start::fetch_it("origin", &name)
                 ),
             )
         })?;
@@ -1416,6 +1426,37 @@ mod tests {
             assert!(
                 repo.find_reference(&format!("refs/heads/{value}")).is_err(),
                 "{rename}"
+            );
+        }
+    }
+
+    /// Withhold remote names from refusal text: a `--base` that names a
+    /// fetched line not here gets a fetch command only when no withheld
+    /// remote name would be in it; a withheld remote gets the steps for it.
+    #[test]
+    fn a_missing_base_prints_no_fetch_command_for_a_withheld_remote() {
+        for (remote, shown) in [("origin", true), ("--upload-pack=touch_pwned", false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str(&format!("remote.{remote}.url"), "/nowhere")
+                .unwrap();
+            let change = StatusChange {
+                base: Some(format!("{remote}/main")),
+                ..StatusChange::default()
+            };
+            let error = default_target(&repo, &change).unwrap_err();
+            assert!(error.contains("does not name a commit here"), "{error}");
+            if shown {
+                assert!(error.contains("git fetch"), "{error}");
+                continue;
+            }
+            assert!(!error.contains(remote), "{error}");
+            assert!(!error.contains("git fetch"), "{error}");
+            assert!(
+                error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                "{error}"
             );
         }
     }
