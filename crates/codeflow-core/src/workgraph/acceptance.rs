@@ -466,7 +466,18 @@ mod landed_review;
 mod planning_move;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
-pub use imports::{imported_record_paths, imported_records, ImportedRecord};
+pub use imports::{
+    imported_record_paths, imported_records, HomeAnchor, ImportedRecord, PLANNING_LANDING_PATHS,
+};
+
+/// One import-authority finding per refused record (TSK-1378 AC-8).
+fn import_findings(reason: &str) -> Vec<Finding> {
+    // The import check joins its refusals with '\n' alone.
+    reason
+        .split('\n')
+        .map(|line| finding(IMPORT_RULE, line.to_string()))
+        .collect()
+}
 use receiving_merges::LineSyncTip;
 
 /// The source and completion endpoints established by the binding.
@@ -669,9 +680,21 @@ pub(crate) fn bind_completion_with_amendment(
     let mut proof = None;
     let mut findings = Vec::new();
     findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
-    if let Some((_, old)) = &reopen {
+    if let Some((at, old)) = &reopen {
+        // A completion recovered from this range's history is judged as
+        // `archive_problem` judges the archive: every completion the history
+        // made before it, an acceptance block edited in place included, is
+        // archived ahead of it.
+        let earlier = if recovered {
+            match unarchived_completions(repo, task, anchor, *at, old) {
+                Ok(earlier) => earlier,
+                Err(error) => return vec![finding(BINDING_RULE, error)].into(),
+            }
+        } else {
+            Vec::new()
+        };
         findings.extend(
-            super::lifecycle::reopen_problems(Some(old), task)
+            super::lifecycle::reopen_problems_after(Some(old), &earlier, task)
                 .into_iter()
                 .map(|message| finding(BINDING_RULE, format!("{}: {message}", task.id))),
         );
@@ -930,6 +953,52 @@ fn archive_problem(
         )));
     }
     Ok(None)
+}
+
+/// The completions this range's history made before the completion `old`
+/// holds at `at` that `old`'s archive does not hold, oldest first, read by
+/// the one rule [`archive_problem`] judges the archive with
+/// ([`completions_made`]). An acceptance block edited in place while
+/// complete is a completion of its own (SPC-013 R-119, each completion an
+/// occurrence; `docs/coordination-ledger.md`, a record that "changes its
+/// acceptance block while complete"), and the edit archives nothing, so a
+/// reopen of `old` archives those completions before `old`'s active block.
+/// Empty when the history does not end in `old`'s active block, or when
+/// `old`'s archive already holds every earlier completion; the plain reopen
+/// rule then applies and `archive_problem` names any other disagreement.
+fn unarchived_completions(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Option<Oid>,
+    at: Oid,
+    old: &RecordView,
+) -> Result<Vec<AcceptanceBlock>, String> {
+    let Some(active) = active_block(old) else {
+        return Ok(Vec::new());
+    };
+    let mut made: Vec<AcceptanceBlock> = completions_made(repo, task, anchor, Landing::Commit(at))?
+        .into_iter()
+        .map(|made| made.block)
+        .collect();
+    if made.pop().as_ref() != Some(&active) {
+        return Ok(Vec::new());
+    }
+    let mut held = Vec::new();
+    for block in old.superseded_blocks() {
+        let Ok(mut parsed) = block.parsed else {
+            return Ok(Vec::new());
+        };
+        parsed.superseded = false;
+        parsed.reason = None;
+        held.push(parsed);
+    }
+    // The archive ends with the completions it already holds; the rest of
+    // the history's list follows them.
+    let kept = (0..=made.len().min(held.len()))
+        .rev()
+        .find(|&count| held[held.len() - count..] == made[..count])
+        .unwrap_or(0);
+    Ok(made.split_off(kept))
 }
 
 /// One completion the range's history made: the commit that introduced
@@ -3429,7 +3498,9 @@ fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
 /// one of these. Records whose home is elsewhere, a task of `epic` that
 /// targets the default branch included, come along at the default branch's
 /// version, judged by the criteria freeze and the completion binding; a
-/// record the range adds is new, not a change.
+/// record the range adds is new, not a change. A record the range adds or
+/// re-homes onto the line proves its history on the default branch in the
+/// import check instead (TSK-1378 AC-12, `imports::home::judge_arrival`).
 fn line_records_changed(
     (head, target): (&Graph, &Graph),
     changed_paths: &[String],
@@ -4258,7 +4329,7 @@ fn completions_received(
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let imported = match imported_records(repo, base_oid, head_oid, &after) {
         Ok(imported) => imported,
-        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+        Err(reason) => return Ok(import_findings(&reason)),
     };
     let mut local = after.clone();
     for id in imported.keys() {
@@ -4863,7 +4934,7 @@ pub fn pull_request_findings_into(
     let mut at_head = Graph::from_revision(&repo, head)?;
     let imported = match imported_records(&repo, target_tip, head_tip, &at_head) {
         Ok(imported) => imported,
-        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+        Err(reason) => return Ok(import_findings(&reason)),
     };
     let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
     let before = Graph::from_revision(&repo, &anchor.to_string())?;

@@ -17,8 +17,70 @@ use Source::{
     Transport,
 };
 
-pub(super) const REMOTE: &str =
-    "clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential";
+/// Verbs that may contact a remote, so its transport programs and credential
+/// helpers run. `remote` is judged by [`source_verb`]; `maintenance` (its
+/// prefetch task) and `request-pull` (its `ls-remote`) contact one too
+/// (TSK-1479).
+pub(super) const REMOTE: &str = "clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential remote maintenance request-pull";
+
+/// The verb the source inventory judges a call by. `git remote` contacts a
+/// remote for `update`, `prune`, `show` without `-n`, `add` with a fetch and
+/// `set-head` with `-a`; a `git remote` call that only reads or writes local
+/// configuration reads as `remote --local`, which no source names. Anything
+/// this cannot read as local stays `remote` (TSK-1479).
+pub(super) fn source_verb<'a>(verb: &'a str, rest: &[String]) -> &'a str {
+    if verb == "remote" && remote_stays_local(rest) {
+        "remote --local"
+    } else {
+        verb
+    }
+}
+
+/// Whether the `git remote` arguments `rest` name a subcommand that never
+/// contacts a remote. Unknown options and subcommands read as contacting.
+fn remote_stays_local(rest: &[String]) -> bool {
+    let mut words = rest.iter().map(String::as_str).peekable();
+    while words
+        .peek()
+        .is_some_and(|word| matches!(*word, "-v" | "--verbose"))
+    {
+        words.next();
+    }
+    let Some(subcommand) = words.next() else {
+        // `git remote` and `git remote -v` list the configured remotes.
+        return true;
+    };
+    let rest: Vec<&str> = words.collect();
+    // Only plain operands, and the options each subcommand lists here that
+    // never fetch; `--` ends the options.
+    let only = |allowed: &[&str]| {
+        rest.iter()
+            .take_while(|word| **word != "--")
+            .all(|word| !word.starts_with('-') || allowed.contains(word))
+    };
+    match subcommand {
+        "get-url" => only(&["--push", "--all"]),
+        "set-url" => only(&["--push", "--add", "--delete"]),
+        "rename" => only(&["--progress", "--no-progress"]),
+        "remove" | "rm" => only(&[]),
+        "set-branches" => only(&["--add"]),
+        "set-head" => only(&["-d", "--delete"]),
+        "show" => rest.contains(&"-n") && only(&["-n"]),
+        "add" => only(&[
+            "-t",
+            "--track",
+            "-m",
+            "--master",
+            "--mirror",
+            "--mirror=fetch",
+            "--mirror=push",
+            "--tags",
+            "--no-tags",
+            "--no-fetch",
+        ]),
+        _ => false,
+    }
+}
 const DIFF: &str = "diff difftool log show grep blame diff-files diff-index diff-tree format-patch range-diff stash cat-file";
 const EDITOR: &str = "commit tag merge rebase notes branch am config cherry-pick revert add reset checkout restore stash replace send-email pull";
 const SIGNING: &str =

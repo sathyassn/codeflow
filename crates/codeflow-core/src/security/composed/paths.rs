@@ -1106,13 +1106,8 @@ fn nul_stdout(program: &str, args: &[String]) -> Option<String> {
 
 /// Whether `word` is a `NAME=value` shell assignment.
 fn is_assignment_word(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty()
-            && !name.starts_with(|ch: char| ch.is_ascii_digit())
-            && name
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    })
+    use crate::security::shell_lex::{leading_word, LeadingWord, Taker};
+    leading_word(word, Taker::Shell) == LeadingWord::Assignment
 }
 
 /// The body recorded for a directory a recursive copy wrote: every file

@@ -2823,6 +2823,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Every variable Git reads, and PATH, has an ASCII name, so a removed variable whose name is not UTF-8 cannot change what the reading child reads and needs no entry (TSK-1456).
+    (
+        "crates/codeflow-core/src/hooks/git_guard/runners.rs",
+        "removed_variables",
+        "obtain-absent:into_string",
+        1,
+        "ascii-marker",
+    ),
     // Space, tab and newline are idempotent shell separators between command segments; no quote or path framing is removed.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
@@ -6487,6 +6495,71 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "completion_bound",
         "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-1479: the agent fetch and push admission. Each read below returns
+    // None from repository_allows, so admits is false and exec-guard keeps
+    // the account finding on the helper body, which refuses the line: a
+    // configuration value, URL, mapping, helper key or Git output that is
+    // not UTF-8, a configuration read that fails, and a HEAD that cannot be
+    // read never admit a fetch or push.
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "config_allows",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "current_branch",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "effective_helpers",
+        "obtain-absent:from_utf8",
+        2,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "repository_allows",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "repository_allows",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "source_allowed",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "unrewritten",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // TSK-1479: git2's NotFound for refs/tags/<name> is the ref store's own
+    // answer that no such tag exists, so the name is not shared with a tag;
+    // every other error returns None and withholds the admission.
+    (
+        "crates/codeflow-core/src/hooks/agent_transport.rs",
+        "tag_exists",
+        "obtain-absent:find_reference",
         1,
         "unproven",
     ),
