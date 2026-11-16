@@ -1751,7 +1751,7 @@ fn write_move(root: &Path, case: &str, after: &str) {
     }
     write(root, &path, after);
     match case {
-        "product" => write(root, "src/planned.rs", "pub fn planned() {}\n"),
+        "product" | BAD_EDIT_GOOD => write(root, "src/planned.rs", "pub fn planned() {}\n"),
         "agents" => write(root, "project-management/AGENTS.md", "Notes.\n"),
         "hidden" => write(root, "project-management/.agents/notes.md", "Notes.\n"),
         "docs" => write(root, "docs/note.md", "A note.\n"),
@@ -1799,7 +1799,9 @@ fn land_move(root: &Path, case: &str, branch: &str) {
 /// for `twice bad`), `back` moves it back to `LINE_A`, and `second parent`
 /// makes the move on `LINE_B`, which `LINE_A` then merges. A case ending in
 /// `later edit` edits the moved record by a later planning merge on the
-/// line that made the move. Returns the repository on `LINE_A`.
+/// line that made the move. [`BAD_EDIT_GOOD`] makes the first move with a
+/// product file, edits the record, then moves it on to `LINE_C` by a
+/// reviewed records-only merge. Returns the repository on `LINE_A`.
 fn home_move(case: &str) -> tempfile::TempDir {
     let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
     let root = dir.path();
@@ -1848,7 +1850,7 @@ fn home_move(case: &str) -> tempfile::TempDir {
         git(root, &["switch", mover]);
         land_move(root, case, "plan/move");
     }
-    if case.ends_with("later edit") {
+    if case.ends_with("later edit") || case == BAD_EDIT_GOOD {
         // A later planning merge on the mover edits the moved record, so the
         // record's landing is that edit and the move is an earlier commit.
         git(root, &["switch", "-c", "plan/record-edit", mover]);
@@ -1862,7 +1864,7 @@ fn home_move(case: &str) -> tempfile::TempDir {
         merge(root, "plan/record-edit");
     }
     let mut home = LINE_B;
-    if matches!(case, "twice" | "twice bad" | "back") {
+    if matches!(case, "twice" | "twice bad" | "back" | BAD_EDIT_GOOD) {
         home = if case == "back" { LINE_A } else { LINE_C };
         git(root, &["switch", "-c", "plan/move-again", LINE_A]);
         write(
@@ -1940,6 +1942,17 @@ fn tsk1185_a_later_edit_does_not_clear_a_move_off_the_checked_line() {
         "second parent, later edit",
         "on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself",
     )]);
+}
+
+/// The case of a refused move, a later edit, then an accepted move.
+const BAD_EDIT_GOOD: &str = "refused move, edit, accepted move";
+
+/// TSK-1185 AC-16: an accepted move, here the record's own landing, does
+/// not clear an earlier refused move on the home's history, with a records
+/// edit between them.
+#[test]
+fn tsk1185_an_accepted_move_does_not_clear_an_earlier_refused_one() {
+    home_moves_refused(&[(BAD_EDIT_GOOD, MOVED)]);
 }
 
 /// Every case is taken through CI into the default branch and through the

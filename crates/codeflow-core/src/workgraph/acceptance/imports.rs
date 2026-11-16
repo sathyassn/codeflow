@@ -864,15 +864,70 @@ fn home_correction(
     Ok(admitted.then_some(before))
 }
 
+/// The task's declared home in `view`, by its logical name, or `None` when
+/// the record declares none.
+fn declared_home(view: &RecordView) -> Option<&str> {
+    view.integration_target
+        .as_deref()
+        .map(super::super::work_start::logical_target)
+}
+
+/// The refusal of a task record found at `at` under another path, or with
+/// an unreadable task record there, on its home's first-parent history: its
+/// home history cannot be followed by identity, so it is never taken as the
+/// record's introduction.
+fn path_changed(at: Oid) -> String {
+    format!(
+        "the task's record has another path, or a task record there is unreadable, at {at}, so its earlier home moves cannot be judged; keep the record at one path while another line imports it"
+    )
+}
+
+/// The refusal of a home change where one side declares no home.
+fn home_undeclared(at: Oid) -> String {
+    format!(
+        "{MOVED}: the record declares no home on one side of the change at {at}, so the change cannot be judged; declare the home on both sides"
+    )
+}
+
+/// The record before `at` when `at` introduced it: it is absent at its own
+/// path there, and no task record there carries its identity. A record
+/// under another path, or an unreadable task record, is refused, never an
+/// introduction.
+fn version_before(
+    repo: &Repository,
+    current: &RecordView,
+    record: &RecordView,
+    at: Oid,
+    parent: Oid,
+) -> Result<Option<RecordView>, String> {
+    if let Some(old) = record_at(repo, parent, current)? {
+        return Ok(Some(old));
+    }
+    let uid = record_uid(&record.content);
+    match presence_at(
+        repo,
+        parent,
+        &record.id,
+        uid.as_deref(),
+        &own_file_name(record),
+    ) {
+        Presence::Absent => Ok(None),
+        _ => Err(path_changed(at)),
+    }
+}
+
 /// Refuse a home change an edit landed after it would hide (TSK-1185).
 /// [`matching_landing`] finds only the landing of the record's current text,
-/// whose parent already names the new home, so the commit that moved the
+/// whose parent already names the new home, so every commit that moved the
 /// task is found here, on the home's first-parent history past the receiver,
 /// and must be a planning move or a home correction in its own right. A
 /// planning move is judged as [`is_planning_move`] judges one at its own
 /// landing: on the first-parent history of the head under check or of the
 /// default tip this run verified (`trusted`), so a later landing never
-/// lowers the bar (TSK-1004 AC-8, TSK-1185 AC-16).
+/// lowers the bar (TSK-1004 AC-8, TSK-1185 AC-16). An accepted move or
+/// correction clears only itself: the walk goes on to the receiver. It
+/// stops early only where the record was introduced, proved by identity; a
+/// changed path or a side that declares no home is refused.
 fn verify_earlier_home_move(
     repo: &Repository,
     record: &RecordView,
@@ -881,14 +936,10 @@ fn verify_earlier_home_move(
     (base, head): (Oid, Oid),
     trusted: Option<Oid>,
 ) -> Result<(), String> {
-    use super::super::work_start::logical_target;
     if record.kind != RecordKind::Task {
         return Ok(());
     }
-    let target = record
-        .integration_target
-        .as_deref()
-        .map_or(home, logical_target);
+    let mut current = record.clone();
     let mut at = landed;
     loop {
         // A commit the receiver holds is past the walk; its child is not, so
@@ -899,33 +950,51 @@ fn verify_earlier_home_move(
         let Some(parent) = first_parent(repo, at)? else {
             return Ok(());
         };
-        let Some(old) = record_at(repo, parent, record)? else {
+        let Some(old) = version_before(repo, &current, record, at, parent)? else {
             return Ok(());
         };
-        let Some(declared) = old.integration_target.as_deref().map(logical_target) else {
-            return Ok(());
-        };
-        if declared == target {
-            at = parent;
-            continue;
+        // `verify_record_home` judges the landing's own change.
+        if at != landed && declared_home(&old) != declared_home(&current) {
+            judge_earlier_move(
+                repo,
+                (&current, &old, record),
+                (home, tip),
+                (at, parent),
+                (head, trusted),
+            )?;
         }
-        if at == landed {
-            return Ok(()); // verify_record_home judges this landing.
-        }
-        let version = record_at(repo, at, record)?.ok_or("the moved record is unreadable")?;
-        if home_correction(repo, &version, home, tip, at, parent)?.is_some() {
-            return Ok(());
-        }
-        if !is_trusted_planning_move(repo, record, at, parent)? {
-            return Err(MOVED.into());
-        }
-        if is_planning_move(repo, record, at, parent, head, trusted)? {
-            return Ok(());
-        }
-        return Err(format!(
-            "{MOVED}: the earlier move at {at} is a planning landing on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself, or on a run that verifies the default branch's tip, as the hosted check does with --policy-from, for a move made there"
-        ));
+        current = old;
+        at = parent;
     }
+}
+
+/// One earlier home move at `at` over `parent`, where `current` is the
+/// record at `at` and `old` at `parent`: a proved home correction (TSK-1185
+/// AC-10), else a planning move in a permitted state on the head's or the
+/// verified tip's first-parent history. A side that declares no home is
+/// refused unless the move is a proved correction.
+fn judge_earlier_move(
+    repo: &Repository,
+    (current, old, record): (&RecordView, &RecordView, &RecordView),
+    (home, tip): (&str, Oid),
+    (at, parent): (Oid, Oid),
+    (head, trusted): (Oid, Option<Oid>),
+) -> Result<(), String> {
+    if home_correction(repo, current, home, tip, at, parent)?.is_some() {
+        return Ok(());
+    }
+    if declared_home(current).is_none() || declared_home(old).is_none() {
+        return Err(home_undeclared(at));
+    }
+    if !is_trusted_planning_move(repo, record, at, parent)? {
+        return Err(MOVED.into());
+    }
+    if is_planning_move(repo, record, at, parent, head, trusted)? {
+        return Ok(());
+    }
+    Err(format!(
+        "{MOVED}: the earlier move at {at} is a planning landing on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself, or on a run that verifies the default branch's tip, as the hosted check does with --policy-from, for a move made there"
+    ))
 }
 
 /// Whether two record texts differ in exactly one line, the
@@ -1234,7 +1303,6 @@ fn verify_landing_home(
     let home_anchor = verify_record_home(
         repo,
         record,
-        home,
         landed,
         parents,
         base,
@@ -1367,7 +1435,6 @@ fn prove_record(
 fn verify_record_home(
     repo: &Repository,
     record: &RecordView,
-    home: &str,
     landed: Oid,
     parents: &[Oid],
     base: Oid,
@@ -1404,18 +1471,20 @@ fn verify_record_home(
         )?;
     } else if record.kind == RecordKind::Task {
         if let Some(parent) = parents.first() {
-            if record_at(repo, *parent, record)?.is_some_and(|old| {
-                old.integration_target.as_deref().is_some_and(|declared| {
-                    super::super::work_start::logical_target(declared)
-                        != record
-                            .integration_target
-                            .as_deref()
-                            .map_or(home, super::super::work_start::logical_target)
-                })
-            }) && !corrected
-                && !is_planning_move(repo, record, landed, *parent, head, trusted)?
-            {
-                return Err(MOVED.into());
+            // The landing's own home change. Absent at its path and by
+            // identity is an introduction; another path, or a side that
+            // declares no home, is refused unless the landing is a proved
+            // correction.
+            if let Some(old) = version_before(repo, record, record, landed, *parent)? {
+                let (was, now) = (declared_home(&old), declared_home(record));
+                if was != now && !corrected {
+                    if was.is_none() || now.is_none() {
+                        return Err(home_undeclared(landed));
+                    }
+                    if !is_planning_move(repo, record, landed, *parent, head, trusted)? {
+                        return Err(MOVED.into());
+                    }
+                }
             }
         }
     }
@@ -1483,6 +1552,8 @@ pub fn imported_record_paths(
     .collect())
 }
 
+#[cfg(test)]
+mod earlier_tests;
 #[cfg(test)]
 mod home_set_tests;
 #[cfg(test)]

@@ -891,8 +891,9 @@ task PR.
   versions and the one the merge keeps; a reviewer confirms which the task
   keeps.
 
-The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
-judges against the pull request's target only.
+The hosted `codeflow-policy.yml` job passes `--policy-from` but no
+`--into`, so it judges these criteria against the pull request's target
+only.
 
 ## Home moves a sync of main accepts
 
@@ -915,9 +916,11 @@ commit since the line's merge base with it:
   merge base.
 - When the line's copy names the line itself as its home, or names no
   home, or the run names no receiving line (`--into`, or a line as the
-  judged branch), every move must also stand on the first-parent history
-  of the commit the run verified as `main`'s tip (TSK-1185). The hosted
-  check verifies it with `--policy-from`; a run without it refuses the move.
+  judged branch), every move except a proved home correction must also
+  stand on the first-parent history of the commit the run verified as
+  `main`'s tip (TSK-1185). This does not apply when the line holds no copy
+  or its copy names the record's own home. The hosted check verifies the
+  tip with `--policy-from`; a run without it refuses such a move.
 - Anything else is refused with "the landing changes the task's declared
   home" and the cause. A later change to the record on `main`, a note or a
   move back included, does not clear an earlier refused move.
