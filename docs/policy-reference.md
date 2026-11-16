@@ -860,8 +860,17 @@ reads exactly are `xargs` with no option or only
 actions each end in `;` or `{} +`, each running a literal command. Any
 other option, a replacement string (`-I` and its kin), `-ok` or `-okdir`,
 a found path inside a word, a shell, an `env -S` string, or a runner
-inside the command makes those forms unresolved too, and nothing a runner
-adds from its input is expanded. The way through is to run the inner
+inside the command makes those forms unresolved too. `xargs` adds the
+words it reads from its input to the command it runs, and `find` puts a
+found path in each `{}`, so the guard does not read those words. A form
+whose command is a program whose words the guards read for a push or a
+command it runs is unresolved for that reason: Git and its runners, `gh`,
+a launcher left without a command, a command runner, a shell, `sed`, a
+package runner, or a program that runs a command from an option value. For
+`find`, that holds when the action holds a `{}`, and a `{}` as the
+program or as a launcher's command is unresolved for any program. A
+`find` action that gives a found path to any other program, such as
+`wc`, `grep` or `rm`, keeps its verdict. The way through is to run the inner
 command directly, one command per call. For a program that carries a
 command in an option value, a `--` right after another option may be
 that option's value, so it does not end the reading of options; gh's
