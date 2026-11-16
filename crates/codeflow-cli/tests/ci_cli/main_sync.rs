@@ -453,8 +453,10 @@ fn a_later_edit_cannot_hide_a_re_home_from_a_clean_sync() {
 /// TSK-1185: a planning landing's move of a line task is refused at the import
 /// check while it is the record's landing, because a sync brings it in off the
 /// receiving head's chain. Under a later edit the move is still judged at the
-/// commit that made it, and the sync route refuses as well: a sync changes no
-/// record whose home is the line.
+/// commit that made it, so the import check refuses it again. That refusal
+/// comes first and masks the criteria freeze here;
+/// `a_clean_sync_cannot_change_the_lines_records` still proves the freeze on
+/// a sync whose imports pass.
 #[test]
 fn a_planned_re_home_of_a_line_task_stays_frozen_on_a_clean_sync() {
     let dir = fixture();
@@ -485,8 +487,8 @@ fn a_planned_re_home_of_a_line_task_stays_frozen_on_a_clean_sync() {
     sync_branch(root);
     let edited = ci(root, "Task: EPC-001", None);
     let what = "a planned re-home under a later edit";
-    blocks(&edited, what, "work.criteria_frozen");
-    blocks(&edited, what, "whose home is the line");
+    blocks(&edited, what, "work.import_authority");
+    blocks(&edited, what, "no default-branch tip this run verified");
 }
 
 /// A task with no `integration_target`, as a hand-written record may be.

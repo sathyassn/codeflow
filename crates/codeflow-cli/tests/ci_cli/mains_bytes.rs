@@ -568,6 +568,8 @@ fn tsk1185_an_earlier_move_on_main_s_chain_to_another_line_is_taken_with_the_ver
         &["merge", "--no-ff", "-q", "--no-edit", "plan/edit-side"],
     );
     super::git(root, &["switch", "-q", "main"]);
+    // The side line adds EPC-002 to the line's range, so the registry holds it.
+    fx.seed_registry();
     fx.publish();
     super::git(root, &["push", "-q", "origin", SIDE]);
     super::git(root, &["fetch", "-q", "origin"]);

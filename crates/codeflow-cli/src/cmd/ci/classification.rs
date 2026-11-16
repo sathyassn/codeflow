@@ -721,8 +721,7 @@ pub(super) fn dispatch(
                 base: range.base,
                 head: range.head,
                 exemption: class.is_secret_scan_exemption(),
-                mains: verified.map(|tip| (tip, range.target)),
-                target: Some(range.target),
+                target: (Some(range.target), verified),
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
             range_journey(root, git, task_id, range, tagged);
@@ -1058,12 +1057,11 @@ struct Anchor<'a> {
     base: &'a str,
     head: &'a str,
     exemption: bool,
-    /// The default tip this run verified and the range's target, which turn
-    /// on main's bytes for a target that is an epic line (TSK-1185).
-    mains: Option<(codeflow_core::git::Oid, &'a str)>,
-    /// The range's target as the run names it, which with `branch` names the
-    /// receiving line the import check judges home moves against.
-    target: Option<&'a str>,
+    /// The range's target as the run names it and the default tip this run
+    /// verified. The two turn on main's bytes for a target that is an epic
+    /// line, and the target with `branch` names the receiving line the
+    /// import check judges home moves against (TSK-1185).
+    target: (Option<&'a str>, Option<codeflow_core::git::Oid>),
 }
 
 fn anchor_failure(
@@ -1176,15 +1174,14 @@ fn task_record_additions(
     changes: &[(String, GitName)],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
-    let mains = anchor
-        .mains
-        .and_then(|(tip, target)| mains_bytes(target, Some(tip)));
+    let (target, verified) = anchor.target;
+    let mains = target.and_then(|target| mains_bytes(target, verified));
     let imported_paths = match codeflow_core::workgraph::acceptance::imported_record_paths(
         root,
         anchor.base,
         anchor.head,
         mains.as_ref(),
-        codeflow_core::workgraph::acceptance::receiving_line(Some(anchor.branch), anchor.target),
+        codeflow_core::workgraph::acceptance::receiving_line(Some(anchor.branch), target),
     ) {
         Ok(paths) => paths,
         Err(error) => {
@@ -1441,8 +1438,7 @@ mod tests {
                         branch: "task/TSK-001-test",
                         base: &head,
                         head: &head,
-                        mains: None,
-                        target: None,
+                        target: (None, None),
                     },
                     &[],
                     &[],
@@ -1474,8 +1470,7 @@ mod tests {
                     branch: "spike/TSK-001-test",
                     base: "HEAD",
                     head: "HEAD",
-                    mains: None,
-                    target: None,
+                    target: (None, None),
                 },
                 &["src/lib.rs".into()],
                 &[],
@@ -1505,8 +1500,7 @@ mod tests {
                     branch: "spike/TSK-001-test",
                     base: &head,
                     head: &head,
-                    mains: None,
-                    target: None,
+                    target: (None, None),
                 },
                 &["docs/research/findings.md".into()],
                 &[],

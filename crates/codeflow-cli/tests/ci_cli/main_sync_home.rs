@@ -122,9 +122,12 @@ fn a_task_completed_between_two_planning_moves_passes() {
     );
 }
 
-/// Decision 1 of 2026-11-12: a todo task homed on the line that `main`
-/// moves by a planning merge passes the import check (its line copy is
-/// unchanged), and the criteria freeze still refuses the sync.
+/// Decision 1 of 2026-11-12, as amended by TSK-1185 AC-16 on 2026-11-15: a
+/// todo task homed on the line that `main` moves by a planning merge is the
+/// line's own task, so a run without the verified default tip refuses the
+/// move at the import check, and the sync stays refused. That refusal comes
+/// first and masks the criteria freeze here; `a_clean_sync_cannot_change_the_lines_records`
+/// still proves the freeze on a sync whose imports pass.
 #[test]
 fn a_line_homed_todo_task_moved_by_main_stays_frozen() {
     let dir = fixture();
@@ -140,8 +143,12 @@ fn a_line_homed_todo_task_moved_by_main_stays_frozen() {
     );
     sync_branch(root);
     let refused = ci(root, "Task: EPC-001", None);
-    blocks(&refused, "a line-homed task", "work.criteria_frozen");
-    blocks(&refused, "a line-homed task", "whose home is the line");
+    blocks(&refused, "a line-homed task", "work.import_authority");
+    blocks(
+        &refused,
+        "a line-homed task",
+        "no default-branch tip this run verified",
+    );
 }
 
 /// AC-8: the refusal names every refused record with its own cause.
