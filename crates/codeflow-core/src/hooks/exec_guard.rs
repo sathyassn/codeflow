@@ -526,7 +526,7 @@ pub(crate) fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Viola
                  headless flag, which inline text such as a heredoc or quoted message \
                  may not do)"
             }
-        ),
+        ) + &crate::hooks::git_guard::unread_program_hint(&run.unread),
         crate::remedy::HEADLESS_PEER_RUN.with(&[("enforcement", enforcement)]),
     )
 }

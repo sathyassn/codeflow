@@ -101,6 +101,104 @@ impl Token {
     }
 }
 
+/// Who reads the words in front of a command (TSK-1456): the shell, at the
+/// start of a simple command, or `env` (and `sudo`), which read their own
+/// argument list up to the command they run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Taker {
+    /// The shell's own words in front of a simple command.
+    #[default]
+    Shell,
+    /// The words a launcher such as `env` reads before its command.
+    Env,
+}
+
+/// How one word in front of a command is read ([`leading_word`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeadingWord {
+    /// An assignment every guard skips: a name made of ASCII letters,
+    /// digits and `_`, not starting with a digit, then `=`.
+    Assignment,
+    /// A word holding `=` that some shell or launcher may read as an
+    /// assignment and another as the program. It is never skipped: a
+    /// reader judges it as the program, and the segment reader adds the
+    /// other reading as a command of its own, so each reading is judged.
+    Unplaced,
+    /// The program the command runs.
+    Program,
+}
+
+/// How `word`, standing in front of a command, is read by `taker`. The one
+/// decision every guard uses to find the program behind the words in front
+/// of it (TSK-1456): only [`LeadingWord::Assignment`] is ever skipped.
+pub(crate) fn leading_word(word: &str, taker: Taker) -> LeadingWord {
+    let Some((name, _)) = word.split_once('=') else {
+        return LeadingWord::Program;
+    };
+    // A shell word with nothing before its `=` is the program. `env` takes
+    // every operand holding `=` before its command as an assignment, so
+    // such a word is never the program `env` runs.
+    if name.is_empty() {
+        return match taker {
+            Taker::Shell => LeadingWord::Program,
+            Taker::Env => LeadingWord::Unplaced,
+        };
+    }
+    let mut chars = name.chars();
+    let identifier = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if identifier {
+        return LeadingWord::Assignment;
+    }
+    // No shell takes a name holding a path or a parenthesis, so the shell
+    // runs such a word; `env` takes any word holding `=`.
+    let head = name.split('[').next().unwrap_or(name);
+    if taker == Taker::Shell && head.contains(['/', '(']) {
+        return LeadingWord::Program;
+    }
+    LeadingWord::Unplaced
+}
+
+/// [`leading_word`] for a word as written, with its expansion provenance
+/// (`ShellWord::marked` in git-guard, TSK-1456). `env` reads the word after
+/// quote removal, as [`leading_word`] does. The shell takes an assignment
+/// only when the name and its `=` are unquoted, so a word whose text reads
+/// as one but whose name or `=` a quote or escape made literal is
+/// [`LeadingWord::Unplaced`]: the shell runs it as the program, and a
+/// reader that has only the text skips it, so each reading is judged.
+pub(crate) fn leading_word_written(marked: &str, taker: Taker) -> LeadingWord {
+    let text = crate::hooks::git_guard::unmarked(marked);
+    let read = leading_word(&text, taker);
+    if taker == Taker::Env || read != LeadingWord::Assignment {
+        return read;
+    }
+    let name = text.split_once('=').map(|(name, _)| name);
+    if marked.split_once('=').map(|(name, _)| name) == name {
+        LeadingWord::Assignment
+    } else {
+        LeadingWord::Unplaced
+    }
+}
+
+/// How many of `words`, from the first, are assignments `taker` skips
+/// ([`LeadingWord::Assignment`]).
+pub(crate) fn skip_leading(words: &[String], taker: Taker) -> usize {
+    words
+        .iter()
+        .take_while(|word| leading_word(word, taker) == LeadingWord::Assignment)
+        .count()
+}
+
+/// [`skip_leading`] for words as written ([`leading_word_written`]).
+pub(crate) fn skip_leading_written(marks: &[String], taker: Taker) -> usize {
+    marks
+        .iter()
+        .take_while(|word| leading_word_written(word, taker) == LeadingWord::Assignment)
+        .count()
+}
+
 /// A lexed line.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Lexed {

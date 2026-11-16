@@ -2843,6 +2843,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Every variable Git reads, and PATH, has an ASCII name, so a removed variable whose name is not UTF-8 cannot change what the reading child reads and needs no entry (TSK-1456).
+    (
+        "crates/codeflow-core/src/hooks/git_guard/runners.rs",
+        "removed_variables",
+        "obtain-absent:into_string",
+        1,
+        "ascii-marker",
+    ),
     // Space, tab and newline are idempotent shell separators between command segments; no quote or path framing is removed.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
