@@ -2151,10 +2151,10 @@ mod tests {
         assert!(kept_file_warning("other/sandbox.toml", &denying).is_none());
     }
 
-    /// TSK-1057 review finding 1: a session copies its edited profile onto
-    /// the baseline and the installed manifest's hash. Update reads neither
-    /// as proof, so the edited profile stays byte for byte, is reported as
-    /// kept, and carries the warning.
+    /// A session copies its edited profile onto the baseline and the
+    /// installed manifest's hash. Update reads neither as proof, so the
+    /// edited profile stays byte for byte, is reported as kept, and carries
+    /// the warning.
     #[test]
     fn a_forged_baseline_equal_to_an_edited_profile_keeps_the_profile() {
         let (shipped, denying) = grok_profiles();
