@@ -1347,6 +1347,81 @@ to its required-checks answer:
 
 The line pattern is C's when C exists, else `integration/**`.
 
+## The policy baseline
+
+The guards read the policy from the remote's default branch as last
+fetched (TSK-1077). Those refs are local state, so a process that can write
+`.git` could point them at a commit with a weaker policy. A policy baseline
+is an operator-confirmed copy of the policy at one commit of that branch
+(TSK-1057). Once one is recorded, the guards enforce the stricter of the
+tracking ref's policy and the baseline's.
+
+Where it lives: `~/.codeflow/authority/baselines/`, under the account's
+home from the password database (`HOME` and `CODEFLOW_HOME` are not read),
+one JSON record per repository plus a ledger of every repository ever
+recorded. Every shipped agent preset keeps `~/.codeflow/authority` read
+only to the harness sandbox: Claude denies writes there (`denyWrite` and an
+`Edit` deny), Codex grants it `read`, and the Grok profiles leave it out of
+`deny` and out of their write set. Edit-guard refuses edits there. That
+write deny is the boundary. The directory stays readable because the guards
+read the baselines and the SSH configuration allow from inside the sandbox.
+A `.grok/sandbox.toml` written by an earlier release denied the directory
+whole. `codeflow update` replaces such a copy only when its bytes equal a
+profile some CodeFlow version shipped, which the binary knows by the
+SHA-256 of each one. No file in the repository is taken as that proof, so
+a copied baseline cannot make update replace an edited profile. Update
+leaves any other copy alone and reports it as kept, with a warning when a
+profile there still denies
+`.codeflow/authority`. Once a baseline exists, every guard in such a Grok
+seat refuses until the operator removes those entries from each profile's
+`deny` list.
+
+What a record binds: the canonical common git directory, the authority
+remote and its configured URL, the branch `refs/remotes/<remote>/HEAD`
+names, the commit, and the policy text with its SHA-256.
+
+| Command | What it does |
+|---|---|
+| `codeflow policy baseline show` | Prints the record and how it bears on the policy read. Read only; runs anywhere. |
+| `codeflow policy baseline init` | Asks the remote for its default branch and commit (`git ls-remote --symref`), fetches that commit's objects without writing a ref, refuses when the branch tip the fetch reports is another commit, and prints the commit and policy digest. With `--confirm <commit>` it writes the record. |
+| `codeflow policy baseline refresh` | The same read, then moves the record to a commit that descends from the recorded one with a policy no weaker. Anything else needs `--reset --reason <text>`, which is recorded. |
+
+`init` and `refresh` refuse when a harness marker is set (`CLAUDECODE`,
+`CODEX_SESSION_ID`, `CODEX_THREAD_ID`, `CODEX_CI`, `GROK_SESSION_ID`), when
+an ancestor process is `claude`, `codex` or `grok`, when the ancestry
+cannot be read, and when standard input is not a terminal. These checks
+refuse early. They cannot stop a process outside the harness sandbox that
+has no marker, no harness ancestor and a pseudo-terminal; the directory
+deny is what holds inside the sandbox.
+
+How a recorded baseline bears on each read:
+
+| State | Policy enforced |
+|---|---|
+| the tracking ref is at the recorded commit | unchanged |
+| the ref descends from the recorded commit | the stricter of the two; doctor names the refresh |
+| the ref does not descend from it | the baseline's |
+| the remote is gone, or advertises no refs | the baseline's; doctor names the removed remote |
+| no record, and the ledger does not list the repository | unchanged; doctor notes that none is recorded |
+| the ledger lists the repository but the record is gone, the record cannot be read, is writable by others, fails its digest, or names another repository, remote URL or default branch | none: the policy check blocks until the operator repairs it |
+
+The stricter of two: every level takes the higher of block, warn, allow
+and off. Lists where more entries refuse more take the union (protected
+branches, blocked names, protected paths, required checks, required
+sections and footers, watched paths, product paths). Lists where more
+entries allow more take the intersection (worktree locations, claim
+remotes, commit types and footer tokens, ticket keys, branch prefixes,
+document indexes, automation profiles, regenerable paths, sandbox retry
+allowances, trusted client configs, ignored-file allowances). A list one
+side leaves at its default keeps the baseline's value.
+`security.text_guard` is `relaxed` only when both say so. Every other
+value is the baseline's until the operator refreshes it, so the result is
+never weaker than the baseline.
+
+No sandbox deny on `refs/remotes` is added: the baseline holds whatever the
+refs say. The hosted verdict reads its policy from the default branch at
+one commit (ADR-0091) and does not read the baseline.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It

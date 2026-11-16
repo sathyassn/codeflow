@@ -2326,6 +2326,19 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
             password_database_home().join(".codeflow/authority/config.toml"),
             2,
         ),
+        // TSK-1057: the policy baselines and their ledger live in the same
+        // directory, under the account's home from the password database.
+        (
+            &home,
+            home.join(".codeflow/authority/baselines/initialized"),
+            2,
+        ),
+        #[cfg(unix)]
+        (
+            &home,
+            password_database_home().join(".codeflow/authority/baselines/0a.json"),
+            2,
+        ),
     ];
     for (home, file, code) in cases {
         for tool in ["Write", "Edit"] {
@@ -2382,23 +2395,62 @@ fn agents_cannot_write_the_ssh_configuration_allow() {
                 "the {name} Claude preset lets agents write the authority directory"
             ));
         }
+        // TSK-1057: the guards read the policy baselines there inside the
+        // sandbox, so the directory stays readable.
+        let read_denied = preset["sandbox"]["filesystem"]["denyRead"]
+            .as_array()
+            .is_some_and(|list| {
+                list.iter().any(|item| {
+                    item.as_str()
+                        .is_some_and(|s| s.contains(".codeflow/authority"))
+                })
+            });
+        if read_denied {
+            wrong.push(format!(
+                "the {name} Claude preset hides the authority directory from the guards"
+            ));
+        }
     }
+    // TSK-1057: the Grok profiles keep the directory read only, as Claude and
+    // Codex do. It is not in `deny` (which also blocks reads, so the guards
+    // could not read the baseline or the SSH allow), and nothing adds it to
+    // the write set: `workspace` writes only the cwd, `~/.grok` and temp.
     let grok = include_str!("../../../assets/base/grok/sandbox.toml");
     let grok: toml::Value = toml::from_str(grok).unwrap();
+    let names = |list: &toml::Value| -> Vec<String> {
+        list.as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     for profile in ["cf-guard", "cf-guard-worktree"] {
-        let denied = grok["profiles"][profile]["deny"]
-            .as_array()
-            .is_some_and(|deny| {
-                [
-                    "/Users/*/.codeflow/authority",
-                    "/home/*/.codeflow/authority",
-                ]
-                .iter()
-                .all(|entry| deny.iter().any(|item| item.as_str() == Some(entry)))
-            });
-        if !denied {
+        let profile_value = &grok["profiles"][profile];
+        if profile_value["extends"].as_str() != Some("workspace") {
             wrong.push(format!(
-                "the Grok {profile} profile lets agents write the authority directory"
+                "the Grok {profile} profile no longer extends workspace, so its write set is unknown"
+            ));
+        }
+        if names(&profile_value["deny"])
+            .iter()
+            .any(|entry| entry.contains(".codeflow"))
+        {
+            wrong.push(format!(
+                "the Grok {profile} profile hides the authority directory from the guards"
+            ));
+        }
+        let written = profile_value
+            .get("read_write")
+            .map(names)
+            .unwrap_or_default();
+        if written
+            .iter()
+            .any(|entry| entry.starts_with('/') || entry.starts_with('~'))
+        {
+            wrong.push(format!(
+                "the Grok {profile} profile adds a home path to its write set: {written:?}"
             ));
         }
     }
