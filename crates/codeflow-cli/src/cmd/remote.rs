@@ -36,6 +36,11 @@ pub enum RemoteCommand {
     /// the host as an administrator; there is no command for it. The checks
     /// are refused until the default branch's policy workflow declares the
     /// names they require.
+    ///
+    /// On a public repository whose policy workflow runs on
+    /// `pull_request_target`, it also creates the Actions event policy
+    /// "codeflow policy check" for that workflow alone when no policy of
+    /// that name exists; an existing one is never changed.
     Protect {
         /// Remote provider (only `github` has an adapter; others print the
         /// manual checklist).

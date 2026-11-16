@@ -26,9 +26,17 @@
 //! profile; and it reports classic protection that does not bind
 //! administrators, a non-strict or pull-request-free rule on the
 //! integration lines, an `authority:` check pinned to GitHub Actions, an
-//! authority environment that admits more than the default branch or that
-//! a second job references, and a foreign ruleset that requires a name no
-//! workflow on the default branch produces.
+//! authority environment that a second job references, and a foreign
+//! ruleset that requires a name no workflow on the default branch produces.
+//!
+//! It **fails** when the authority environment admits more than the default
+//! branch, or when the authority App's key is stored outside that
+//! environment (TSK-1347 AC-9, `authority_key`), since either lets
+//! head-branch code read the key.
+//!
+//! On a public repository it also reads the Actions event policies, since
+//! GitHub blocks `pull_request_target` there unless one allows it
+//! (TSK-1347, `event_policy`).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -38,6 +46,9 @@ use serde_json::Value;
 
 use super::{CheckResult, Options, Status};
 use crate::remedy;
+
+mod authority_key;
+mod event_policy;
 use crate::remote::{
     self, Profile, Targeting, AUTHORITY_PREFIX, DEFAULT_LINES, GITHUB_ACTIONS_APP_ID,
     POLICY_WORKFLOW, RULESET_AUTHORITY_CHECKS, RULESET_AUTHORITY_UPDATES, RULESET_LINE_CHECKS,
@@ -102,7 +113,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Ok((required, _)) => required,
         Err(why) => return note(why.clone()),
     };
-    let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, GH_TIMEOUT);
+    let gh = |args: &[&str]| opts.do_read_bounded("gh", args, GH_TIMEOUT);
     let parse = |text: &str| serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
 
     let repo = match gh(&["api", &format!("repos/{nwo}")]) {
@@ -140,7 +151,15 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Some(Ok(profile)) => Some(profile),
         Some(Err(why)) => return note(why),
     };
-    let extra = perimeter(&gh, &nwo, &branch, classic.as_ref(), profile, &problems);
+    let extra = perimeter(
+        &gh,
+        &nwo,
+        &repo,
+        &branch,
+        classic.as_ref(),
+        profile,
+        &problems,
+    );
     let base = base_answer(
         &nwo,
         &branch,
@@ -153,7 +172,13 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let mut message = match &base {
         Answer::Pass(m) | Answer::Warn(m) | Answer::Note(m) => m.clone(),
     };
-    for part in extra.warns.iter().chain(&extra.unread) {
+    for part in extra
+        .warns
+        .iter()
+        .chain(&extra.event_warns)
+        .chain(&extra.unread)
+        .chain(&extra.event_unread)
+    {
         message = format!("{message}; {part}");
     }
     if !extra.fails.is_empty() {
@@ -162,18 +187,34 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             format!("{nwo}: {}; {message}", extra.fails.join("; ")),
         );
     }
-    let warn = || {
-        result(
-            Status::Warn(remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", &branch)])),
-            message.clone(),
-        )
+    result(status(&base, &extra, &branch), message)
+}
+
+/// The status of an answer without failures. Each part keeps its own
+/// remedy: the event policy is cleared on the host's Actions settings, not
+/// by `remote protect` (TSK-1347).
+fn status(base: &Answer, extra: &Perimeter, branch: &str) -> Status {
+    let rules_warn = matches!(base, Answer::Warn(_)) || !extra.warns.is_empty();
+    let rules_note = matches!(base, Answer::Note(_)) || !extra.unread.is_empty();
+    let event_warn = !extra.event_warns.is_empty();
+    let event_note = !extra.event_unread.is_empty();
+    let both = |rules: Option<remedy::Remedy>, event: Option<remedy::Remedy>| match (rules, event) {
+        (Some(rules), Some(event)) => rules.and(&event),
+        (Some(only), None) | (None, Some(only)) => only,
+        (None, None) => unreachable!("a status with a remedy has a part to clear"),
     };
-    match base {
-        Answer::Warn(_) => warn(),
-        _ if !extra.warns.is_empty() => warn(),
-        Answer::Note(_) => note(message.clone()),
-        Answer::Pass(_) if !extra.unread.is_empty() => note(message.clone()),
-        Answer::Pass(_) => result(Status::Pass, message.clone()),
+    if rules_warn || event_warn {
+        Status::Warn(both(
+            rules_warn.then(|| remedy::DOCTOR_REMOTE_PERIMETER.with(&[("branch", branch)])),
+            event_warn.then(|| remedy::DOCTOR_EVENT_POLICY.remedy()),
+        ))
+    } else if rules_note || event_note {
+        Status::Note(both(
+            rules_note.then(|| remedy::DOCTOR_REMOTE_UNREAD.remedy()),
+            event_note.then(|| remedy::DOCTOR_EVENT_POLICY_UNREAD.remedy()),
+        ))
+    } else {
+        Status::Pass
     }
 }
 
@@ -244,13 +285,19 @@ struct Perimeter {
     fails: Vec<String>,
     warns: Vec<String>,
     unread: Vec<String>,
+    /// The Actions event policy findings, which clear on the host's Actions
+    /// settings (TSK-1347).
+    event_warns: Vec<String>,
+    event_unread: Vec<String>,
 }
 
-/// Judge the owned rulesets, the line rules, the authority environment and
-/// the rulesets that require names nothing produces.
+/// Judge the Actions event policies, the owned rulesets, the line rules,
+/// the authority environment and the rulesets that require names nothing
+/// produces.
 fn perimeter(
     gh: &dyn Fn(&[&str]) -> Result<String, String>,
     nwo: &str,
+    repo: &Value,
     branch: &str,
     classic: Option<&Value>,
     profile: Option<Profile>,
@@ -267,6 +314,36 @@ fn perimeter(
             "classic branch protection on {branch} does not bind administrators (enforce_admins is off)"
         ));
     }
+    // What the default branch declares is read first, so a ruleset list
+    // that cannot be read does not hide the event policies.
+    // A workflow that cannot be read or parsed leaves the declaration
+    // unknown for the ruleset checks, but the event policies are still
+    // judged for every workflow that parsed, and each skipped one is named.
+    let declared = match remote::read_declared_each(gh, nwo, branch) {
+        Ok((declared, failures)) => {
+            event_policy::judge(gh, nwo, repo, &declared, &mut out);
+            event_policy::skipped(nwo, repo, &declared, &failures, &mut out);
+            match failures.into_iter().next() {
+                None => Ok(declared),
+                Some((_, why)) => Err(why),
+            }
+        }
+        Err(why) => {
+            if event_policy::affected(repo) {
+                out.event_unread.push(format!(
+                "the Actions event policies of {nwo} were not judged, since its workflows could not be listed"
+                ));
+            }
+            Err(why)
+        }
+    };
+    if let Err(why) = &declared {
+        out.unread.push(why.clone());
+    }
+    // Likewise the authority environment and where its key is stored, so a
+    // failure there is never hidden behind an unread ruleset.
+    let environment = authority_environment(gh, nwo, branch, &mut out);
+    authority_key::judge(gh, nwo, repo, &mut out);
     let rulesets = match all_rulesets(gh, nwo) {
         Ok(rulesets) => rulesets,
         Err(why) => {
@@ -292,7 +369,13 @@ fn perimeter(
     line_rules(&rulesets, &lines, profile.is_some(), &mut out);
 
     loose_authority_pins(&rulesets, &mut out);
-    declared_findings(gh, nwo, branch, &rulesets, &mut out);
+    declared_findings(
+        branch,
+        &rulesets,
+        environment,
+        declared.ok().as_ref(),
+        &mut out,
+    );
     out
 }
 
@@ -358,20 +441,20 @@ fn loose_authority_pins(rulesets: &[Value], out: &mut Perimeter) {
     }
 }
 
-/// What the authority environment and the default branch's workflows
-/// show: a second reference to the environment, and a foreign ruleset that
+/// What the default branch's workflows show: a second reference to the
+/// authority environment (when it exists), and a foreign ruleset that
 /// requires a name nothing produces.
 fn declared_findings(
-    gh: &dyn Fn(&[&str]) -> Result<String, String>,
-    nwo: &str,
     branch: &str,
     rulesets: &[Value],
+    environment: bool,
+    declared: Option<&remote::Declared>,
     out: &mut Perimeter,
 ) {
-    let environment = authority_environment(gh, nwo, branch, out);
-    match remote::read_declared(gh, nwo, branch) {
-        Err(why) => out.unread.push(why),
-        Ok(declared) => {
+    // An unreadable declaration is already named by `perimeter`.
+    match declared {
+        None => {}
+        Some(declared) => {
             if environment {
                 let references: Vec<String> = declared
                     .environments
@@ -654,8 +737,9 @@ fn line_rules(rulesets: &[Value], lines: &str, asked: bool, out: &mut Perimeter)
     }
 }
 
-/// Whether the authority environment exists, warning when its branch rule
-/// admits more than the default branch.
+/// Whether the authority environment exists, failing when its branch rule
+/// admits more than the default branch, since code from another branch
+/// could then read the key and post `authority:` checks (TSK-1347 AC-9).
 fn authority_environment(
     gh: &dyn Fn(&[&str]) -> Result<String, String>,
     nwo: &str,
@@ -686,9 +770,9 @@ fn authority_environment(
     };
     let policy = &environment["deployment_branch_policy"];
     if policy.is_null() {
-        out.warns.push(admits("every branch".to_string()));
+        out.fails.push(admits("every branch".to_string()));
     } else if policy["protected_branches"] == true {
-        out.warns.push(admits("every protected branch".to_string()));
+        out.fails.push(admits("every protected branch".to_string()));
     } else if policy["custom_branch_policies"] == true {
         match gh(&[
             "api",
@@ -709,7 +793,7 @@ fn authority_environment(
                     })
                     .collect();
                 if policies != [(branch.to_string(), "branch".to_string())] {
-                    out.warns.push(admits(format!(
+                    out.fails.push(admits(format!(
                         "the patterns {}",
                         policies
                             .iter()
@@ -974,7 +1058,7 @@ fn bypass_of(opts: &Options, nwo: &str, source: &Source) -> Bypass {
     let Some(id) = source.ruleset_id else {
         return Bypass::Unknown(format!("{} bypass list not readable", source.label));
     };
-    match opts.do_exec_bounded(
+    match opts.do_read_bounded(
         "gh",
         &["api", &format!("repos/{nwo}/rulesets/{id}")],
         GH_TIMEOUT,
@@ -1364,7 +1448,9 @@ mod tests {
         bypass: &str,
     ) -> Result<String, String> {
         match args {
-            ["api", "repos/o/r"] => Ok(r#"{"default_branch":"main"}"#.into()),
+            ["api", "repos/o/r"] => {
+                Ok(r#"{"default_branch":"main","visibility":"private"}"#.into())
+            }
             // The first page; a later page is empty unless a test serves one.
             ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
                 Ok(if url.ends_with("&page=1") || !url.contains("page=") {
@@ -1384,8 +1470,14 @@ mod tests {
                 actors => Ok(format!(r#"{{"id":7,"bypass_actors":{actors}}}"#)),
             },
             // No repository ruleset beyond those `rules` names, no
-            // authority environment and no workflow folder.
+            // authority environment, no secret and no workflow folder.
             ["api", url] if url.starts_with("repos/o/r/rulesets?") => Ok("[]".into()),
+            ["api", url] if url.starts_with("repos/o/r/actions/secrets?") => {
+                Ok(r#"{"total_count":0,"secrets":[]}"#.into())
+            }
+            ["api", url] if url.starts_with("repos/o/r/environments?") => {
+                Ok(r#"{"total_count":0,"environments":[]}"#.into())
+            }
             ["api", "repos/o/r/environments/codeflow-authority"] => {
                 Err("gh: Not Found (HTTP 404)".into())
             }
@@ -1589,6 +1681,142 @@ mod tests {
         assert_eq!(result.status, Status::Pass, "{}", result.message);
         assert!(
             result.message.contains("o/r main requires"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// TSK-1347: on a public repository whose default branch carries the
+    /// shipped policy workflow, the answer follows its Actions event
+    /// policies: allowed passes, blocked warns, unreadable is a note.
+    #[test]
+    fn a_public_repository_is_judged_by_its_event_policies() {
+        const SHIPPED: &str = include_str!("../../../../assets/base/ci/codeflow-policy.yml");
+        const ALLOW: &str = r#"{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active","conditions":{"workflow_path":{"exclude":[],"include":[".github/workflows/codeflow-policy.yml"]}},"rules":[{"type":"restrict_action_events","parameters":{"allowed_events":["pull_request_target"]}}]}"#;
+        const LIST: &str = r#"{"total_count":1,"policies":[{"id":11322,"name":"codeflow policy check","source_type":"Repository","source":"o/r","enforcement":"active"}]}"#;
+        fn public(args: &[&str], policies: Result<&str, &str>) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r"] => Ok(
+                    r#"{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{"login":"o","type":"User"}}"#
+                        .into(),
+                ),
+                ["api", "repos/o/r/contents/.github/workflows?ref=main"] => Ok(
+                    r#"[{"path":".github/workflows/codeflow-policy.yml","type":"file"}]"#.into(),
+                ),
+                ["api", "-H", _, "repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main"] => {
+                    Ok(SHIPPED.into())
+                }
+                ["api", "repos/o/r/actions/policies?per_page=100&page=1"] => {
+                    policies.map(str::to_string).map_err(str::to_string)
+                }
+                ["api", "repos/o/r/actions/policies/11322"] => Ok(ALLOW.into()),
+                _ => host(args, &ruleset(true), None, "[]"),
+            }
+        }
+        fn allowed(_: &str, args: &[&str]) -> Result<String, String> {
+            public(args, Ok(LIST))
+        }
+        fn blocked(_: &str, args: &[&str]) -> Result<String, String> {
+            public(args, Ok(r#"{"total_count":0,"policies":[]}"#))
+        }
+        fn unreadable(_: &str, args: &[&str]) -> Result<String, String> {
+            public(
+                args,
+                Err("gh: Resource not accessible by integration (HTTP 403)"),
+            )
+        }
+        let dir = project();
+
+        let result = check(&opts(dir.path(), allowed));
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+
+        let text = warn_text(&check(&opts(dir.path(), blocked)));
+        assert!(
+            text.contains("no Actions event policy allows pull_request_target for .github/workflows/codeflow-policy.yml"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gh api --method POST repos/o/r/actions/policies --input -"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "| as a repository administrator, create or narrow the Actions event policy"
+            ),
+            "{text}"
+        );
+
+        let result = check(&opts(dir.path(), unreadable));
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(
+            result.message.contains(
+                "the Actions event policies of o/r are unreadable: needs an administrator's token"
+            ),
+            "{}",
+            result.message
+        );
+        let Status::Note(remedy) = &result.status else {
+            unreachable!()
+        };
+        assert!(
+            remedy.contains("read the Actions event policies"),
+            "{remedy}"
+        );
+    }
+
+    /// Grok finding 3 at `6e04f03b7`: a sibling workflow that is not one
+    /// YAML document must not stop the event policies being judged for the
+    /// workflows that parsed, and the skipped file is named.
+    #[test]
+    fn an_unparsed_workflow_never_hides_the_event_policy_judgment() {
+        const SHIPPED: &str = include_str!("../../../../assets/base/ci/codeflow-policy.yml");
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r"] => Ok(
+                    r#"{"default_branch":"main","visibility":"public","name":"r","id":1,"owner":{"login":"o","type":"User"}}"#
+                        .into(),
+                ),
+                ["api", "repos/o/r/contents/.github/workflows?ref=main"] => Ok(
+                    r#"[{"path":".github/workflows/codeflow-ci.yml","type":"file"},{"path":".github/workflows/codeflow-policy.yml","type":"file"}]"#.into(),
+                ),
+                ["api", "-H", _, "repos/o/r/contents/.github/workflows/codeflow-ci.yml?ref=main"] => {
+                    Ok("on: push\n---\non: pull_request\n".into())
+                }
+                ["api", "-H", _, "repos/o/r/contents/.github/workflows/codeflow-policy.yml?ref=main"] => {
+                    Ok(SHIPPED.into())
+                }
+                ["api", "repos/o/r/actions/policies?per_page=100&page=1"] => {
+                    Ok(r#"{"total_count":0,"policies":[]}"#.into())
+                }
+                _ => host(args, &ruleset(true), None, "[]"),
+            }
+        }
+        let dir = project();
+        let result = check(&opts(dir.path(), exec));
+        assert_ne!(result.status, Status::Pass, "{}", result.message);
+        assert!(
+            result.message.contains(
+                "no Actions event policy allows pull_request_target for .github/workflows/codeflow-policy.yml"
+            ),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains(
+                "the Actions event policies were not judged for .github/workflows/codeflow-ci.yml"
+            ),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains(".github/workflows/codeflow-ci.yml on main: not YAML"),
             "{}",
             result.message
         );
@@ -1982,10 +2210,51 @@ mod tests {
         environment: Option<Value>,
         branch_policies: Option<Value>,
         workflows: Vec<(&'static str, String)>,
+        /// An organization owns the repository.
+        organization: bool,
+        /// Environments besides the authority one.
+        environments: Vec<&'static str>,
+        /// Secret names, by the list that holds them (its path).
+        secrets: Vec<(&'static str, &'static str)>,
+        /// Lists (their paths) the token cannot read.
+        denied: Vec<&'static str>,
     }
 
     thread_local! {
         static WORLD: std::cell::RefCell<World> = std::cell::RefCell::new(World::default());
+    }
+
+    /// A secret or environment list of `world`, on one page.
+    fn world_list(world: &World, url: &str) -> Result<String, String> {
+        let path = url.split('?').next().unwrap();
+        if world.denied.contains(&path) {
+            return Err("gh: Resource not accessible by integration (HTTP 403)".into());
+        }
+        let (key, names): (&str, Vec<&str>) = if path == "repos/o/r/environments" {
+            let authority = world.environment.as_ref().map(|_| AUTHORITY_ENVIRONMENT);
+            (
+                "environments",
+                authority
+                    .into_iter()
+                    .chain(world.environments.iter().copied())
+                    .collect(),
+            )
+        } else {
+            (
+                "secrets",
+                world
+                    .secrets
+                    .iter()
+                    .filter(|(list, _)| *list == path)
+                    .map(|(_, name)| *name)
+                    .collect(),
+            )
+        };
+        let rows: Vec<Value> = names
+            .iter()
+            .map(|name| serde_json::json!({ "name": name }))
+            .collect();
+        Ok(serde_json::json!({ "total_count": rows.len(), key: rows }).to_string())
     }
 
     fn world_exec(_: &str, args: &[&str]) -> Result<String, String> {
@@ -1993,7 +2262,20 @@ mod tests {
             let world = world.borrow();
             let not_found = || Err("gh: Not Found (HTTP 404)".to_string());
             match args {
-                ["api", "repos/o/r"] => Ok(r#"{"default_branch":"main"}"#.into()),
+                // A private repository: GitHub's `pull_request_target` block
+                // does not apply, so no event policy is read (TSK-1347).
+                ["api", "repos/o/r"] => Ok(serde_json::json!({
+                    "default_branch": "main", "visibility": "private",
+                    "owner": { "login": "o",
+                        "type": if world.organization { "Organization" } else { "User" } }
+                })
+                .to_string()),
+                // Secret and environment lists, on one page.
+                ["api", url]
+                    if url.contains("secrets?") || url.starts_with("repos/o/r/environments?") =>
+                {
+                    world_list(&world, url)
+                }
                 ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
                     if !url.ends_with("&page=1") {
                         return Ok("[]".into());
@@ -2041,6 +2323,9 @@ mod tests {
                         .iter()
                         .find(|r| r["id"] == id)
                         .map_or_else(not_found, |r| Ok(r.to_string()))
+                }
+                ["api", url] if world.denied.contains(url) => {
+                    Err("gh: Resource not accessible by integration (HTTP 403)".into())
                 }
                 ["api", "repos/o/r/environments/codeflow-authority"] => world
                     .environment
@@ -2374,10 +2659,12 @@ jobs:
         assert!(!text.contains("authority: secret scan from"), "{text}");
     }
 
-    /// AC-3: an authority environment that admits more than the default
-    /// branch warns; one that admits `main` alone does not.
+    /// TSK-1347 AC-9 (was a warning under TSK-1080 AC-3): an authority
+    /// environment that admits more than the default branch fails, since a
+    /// head-branch workflow could read the key; one that admits `main`
+    /// alone passes.
     #[test]
-    fn an_environment_that_admits_more_than_the_default_branch_warns() {
+    fn an_environment_that_admits_more_than_the_default_branch_fails() {
         let custom =
             serde_json::json!({ "protected_branches": false, "custom_branch_policies": true });
         for (policy, branches, expected) in [
@@ -2411,11 +2698,140 @@ jobs:
             let result = judge(world, None);
             match expected {
                 Some(expected) => {
-                    let text = warn_text(&result);
-                    assert!(text.contains(expected), "{expected}: {text}");
+                    assert_eq!(
+                        result.status,
+                        Status::Fail,
+                        "{expected}: {}",
+                        result.message
+                    );
+                    assert!(
+                        result.message.contains(expected),
+                        "{expected}: {}",
+                        result.message
+                    );
                 }
                 None => assert_eq!(result.status, Status::Pass, "{}", result.message),
             }
+        }
+    }
+
+    /// The authority environment as `remote protect` leaves it: `main` alone.
+    fn keyed_world() -> World {
+        let mut world = protected_world();
+        world.environment = Some(serde_json::json!({
+            "name": "codeflow-authority",
+            "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true }
+        }));
+        world.branch_policies =
+            Some(serde_json::json!({ "branch_policies": [{ "name": "main", "type": "branch" }] }));
+        world
+    }
+
+    /// TSK-1347 AC-9: the authority App's key anywhere but its environment
+    /// fails: at repository level, shared from the organization, or in
+    /// another environment. In its own environment it passes.
+    #[test]
+    fn the_authority_key_outside_its_environment_fails() {
+        for (list, organization, place) in [
+            ("repos/o/r/actions/secrets", false, "the repository o/r"),
+            (
+                "repos/o/r/actions/organization-secrets",
+                true,
+                "the organization (shared with o/r)",
+            ),
+            (
+                "repos/o/r/environments/deploy/secrets",
+                false,
+                "the environment deploy",
+            ),
+        ] {
+            let mut world = keyed_world();
+            world.organization = organization;
+            world.environments = vec!["deploy"];
+            world.secrets = vec![(list, "CODEFLOW_AUTHORITY_APP_KEY"), (list, "OTHER")];
+            let result = judge(world, None);
+            assert_eq!(result.status, Status::Fail, "{place}: {}", result.message);
+            assert!(
+                result.message.contains(&format!(
+                    "an Actions secret named CODEFLOW_AUTHORITY_APP_KEY is set in {place}"
+                )),
+                "{place}: {}",
+                result.message
+            );
+        }
+
+        // GitHub stores secret names in upper case; any case is the key.
+        let mut world = keyed_world();
+        world.secrets = vec![("repos/o/r/actions/secrets", "codeflow_authority_app_key")];
+        assert_eq!(judge(world, None).status, Status::Fail);
+
+        // In its own environment, beside another environment's secrets.
+        let mut world = keyed_world();
+        world.organization = true;
+        world.environments = vec!["deploy"];
+        world.secrets = vec![
+            (
+                "repos/o/r/environments/codeflow-authority/secrets",
+                "CODEFLOW_AUTHORITY_APP_KEY",
+            ),
+            ("repos/o/r/environments/deploy/secrets", "DEPLOY_TOKEN"),
+        ];
+        let result = judge(world, None);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+    }
+
+    /// TSK-1347 AC-9: a secret or environment list doctor cannot read is a
+    /// note naming it, never a pass.
+    #[test]
+    fn an_unreadable_secret_list_is_a_note_never_a_pass() {
+        for (denied, organization, expected) in [
+            (
+                "repos/o/r/actions/secrets",
+                false,
+                "the Actions secrets of the repository o/r are not readable",
+            ),
+            (
+                "repos/o/r/actions/organization-secrets",
+                true,
+                "the Actions secrets of the organization (shared with o/r) are not readable",
+            ),
+            (
+                "repos/o/r/environments",
+                false,
+                "the environments of o/r are not readable",
+            ),
+            (
+                "repos/o/r/environments/deploy/secrets",
+                false,
+                "the Actions secrets of the environment deploy are not readable",
+            ),
+            (
+                "repos/o/r/environments/codeflow-authority",
+                false,
+                "the environment codeflow-authority is not readable",
+            ),
+            (
+                "repos/o/r/environments/codeflow-authority/deployment-branch-policies",
+                false,
+                "the environment codeflow-authority is not readable",
+            ),
+        ] {
+            let mut world = keyed_world();
+            world.organization = organization;
+            world.environments = vec!["deploy"];
+            world.denied = vec![denied];
+            let result = judge(world, None);
+            assert!(
+                matches!(result.status, Status::Note(_)),
+                "{denied}: {:?} {}",
+                result.status,
+                result.message
+            );
+            assert!(
+                result.message.contains(expected),
+                "{denied}: {}",
+                result.message
+            );
         }
     }
 

@@ -52,14 +52,18 @@
 # The body is logged as a sha256 digest, never as text: it is written to a
 # file in the runner's temp directory and handed to `codeflow ci` as a file,
 # never through `env:` or an argument, because the runner prints a step's
-# `env:` values in its log. Each run makes two API reads on the job's token.
+# `env:` values in its log. Each run makes three API reads on the job's
+# token. The first, before anything is checked out, stops a run whose head
+# the pull request has moved past, so superseded runs in the queue clear
+# quickly; it fails such a run, never passes it, and an unclear read judges
+# in full.
 #
 # This repository's copy: CodeFlow is its own first consumer, so the verdict
 # jobs build the authority's own source in place of the pinned release, and
 # a second verdict job, `trusted: release impact`, runs scripts/release.py
 # check-pr from the authority with the authority's binary, the pull request
 # body and its range as data. That job reads, logs and rechecks the body as the
-# commit standards job does, with its own two API reads. `codeflow update` keeps
+# commit standards job does, with its own three API reads. `codeflow update` keeps
 # it as a user-modified file.
 name: codeflow-policy
 
@@ -91,11 +95,21 @@ jobs:
       # started for. A run whose ref is not the default branch (an older
       # host's pull_request_target semantics, or any other event) fails
       # closed rather than judge with another branch's code.
+      #
+      # A run started for a head the pull request has since moved past
+      # stops here, before anything is checked out, so the superseded runs
+      # the queue keeps (never cancelled) clear in seconds and the current
+      # head's run starts sooner. It fails, never passes: the run for the
+      # current head decides. A read that fails, or an answer that is not
+      # one full commit id, is unclear, and the run judges in full.
       - name: Resolve the authority
         env:
           EVENT: ${{ github.event_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           AUTHORITY_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
@@ -103,6 +117,18 @@ jobs:
           fi
           if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
             echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          now=""
+          if [ -n "${GH_TOKEN:-}" ] && [ -n "${PR_NUMBER:-}" ] && [ -n "${GITHUB_API_URL:-}" ]; then
+            now=$(curl -fsS --retry 2 --max-time 30 \
+              -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" | jq -r '.head.sha // empty') || now=""
+          fi
+          if [[ "$now" =~ ^[0-9a-f]{40}$ ]] && [[ "${EVENT_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] && [ "$now" != "$EVENT_HEAD" ]; then
+            echo "::error::this run is for head ${EVENT_HEAD}, but the pull request head is now ${now}; it stops before judging, and the run queued by the new head decides"; exit 1
+          fi
+          if [ "$now" != "${EVENT_HEAD:-}" ]; then
+            echo "the pull request's current head could not be read clearly, so this run judges in full"
           fi
           echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -408,11 +434,21 @@ jobs:
       # started for. A run whose ref is not the default branch (an older
       # host's pull_request_target semantics, or any other event) fails
       # closed rather than judge with another branch's code.
+      #
+      # A run started for a head the pull request has since moved past
+      # stops here, before anything is checked out, so the superseded runs
+      # the queue keeps (never cancelled) clear in seconds and the current
+      # head's run starts sooner. It fails, never passes: the run for the
+      # current head decides. A read that fails, or an answer that is not
+      # one full commit id, is unclear, and the run judges in full.
       - name: Resolve the authority
         env:
           EVENT: ${{ github.event_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           AUTHORITY_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ "$EVENT" != pull_request_target ] || [ -z "$DEFAULT_BRANCH" ] || [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
@@ -420,6 +456,18 @@ jobs:
           fi
           if ! printf '%s\n' "$AUTHORITY_SHA" | grep -Eqx '[0-9a-f]{40}'; then
             echo "::error::the run's commit '${AUTHORITY_SHA}' is not a full commit id; nothing is judged"; exit 1
+          fi
+          now=""
+          if [ -n "${GH_TOKEN:-}" ] && [ -n "${PR_NUMBER:-}" ] && [ -n "${GITHUB_API_URL:-}" ]; then
+            now=$(curl -fsS --retry 2 --max-time 30 \
+              -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" | jq -r '.head.sha // empty') || now=""
+          fi
+          if [[ "$now" =~ ^[0-9a-f]{40}$ ]] && [[ "${EVENT_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] && [ "$now" != "$EVENT_HEAD" ]; then
+            echo "::error::this run is for head ${EVENT_HEAD}, but the pull request head is now ${now}; it stops before judging, and the run queued by the new head decides"; exit 1
+          fi
+          if [ "$now" != "${EVENT_HEAD:-}" ]; then
+            echo "the pull request's current head could not be read clearly, so this run judges in full"
           fi
           echo "judged by ${DEFAULT_BRANCH}@${AUTHORITY_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
 

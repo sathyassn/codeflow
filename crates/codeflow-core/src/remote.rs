@@ -81,6 +81,72 @@ pub const DEFAULT_LINES: &str = "integration/**";
 /// and C require.
 pub const POLICY_WORKFLOW: &str = ".github/workflows/codeflow-policy.yml";
 
+/// The event GitHub blocks in public repositories, from 2026-12-02, unless
+/// an Actions event policy allows it; the policy workflow runs on it.
+pub const GATED_EVENT: &str = "pull_request_target";
+
+/// The name of the Actions event policy `remote protect` creates and
+/// doctor prints (TSK-1347).
+pub const EVENT_POLICY_NAME: &str = "codeflow policy check";
+
+/// The Actions event policy that allows exactly `events` for the workflow
+/// at `path` alone. Event rules are allowlists, so every event the
+/// workflow runs on is listed.
+#[must_use]
+pub fn event_policy_body(path: &str, events: &[String]) -> Value {
+    json!({
+        "name": EVENT_POLICY_NAME,
+        "enforcement": "active",
+        "conditions": { "workflow_path": { "include": [path], "exclude": [] } },
+        "rules": [{
+            "type": "restrict_action_events",
+            "parameters": { "allowed_events": events }
+        }]
+    })
+}
+
+/// Rows read per page of a host list that reports its `total_count`.
+const LIST_PAGE_SIZE: usize = 100;
+
+/// More pages than this is not a list `CodeFlow` can judge.
+const LIST_MAX_PAGES: usize = 20;
+
+/// Every row under `key` of the paged list at `url` (an answer of the form
+/// `{"total_count": n, key: [...]}`), or why not. A list that ends before
+/// its count, or runs past `LIST_MAX_PAGES`, is not read.
+///
+/// # Errors
+///
+/// Returns why when a page cannot be read or is not such a list.
+pub(crate) fn paged_list(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    url: &str,
+    key: &str,
+) -> Result<Vec<Value>, String> {
+    let mut all = Vec::new();
+    for page in 1..=LIST_MAX_PAGES {
+        let text = gh(&[
+            "api",
+            &format!("{url}?per_page={LIST_PAGE_SIZE}&page={page}"),
+        ])
+        .map_err(|error| first_line(&error).to_string())?;
+        let body: Value = serde_json::from_str(&text).map_err(|_| "not JSON".to_string())?;
+        let Some(rows) = body[key].as_array() else {
+            return Err(format!("no {key} list in the answer"));
+        };
+        let total = body["total_count"].as_u64();
+        let empty = rows.is_empty();
+        all.extend(rows.iter().cloned());
+        match total {
+            Some(total) if all.len() as u64 >= total => return Ok(all),
+            None if empty || rows.len() < LIST_PAGE_SIZE => return Ok(all),
+            _ if empty => return Err("the list ended before its total_count".to_string()),
+            _ => {}
+        }
+    }
+    Err(format!("more than {LIST_MAX_PAGES} pages"))
+}
+
 /// The prefix of the policy verdict job names the policy workflow runs from
 /// the default branch's file for every pull request.
 pub const TRUSTED_PREFIX: &str = "trusted: ";
@@ -745,6 +811,9 @@ impl ProtectionPlan {
             lines.push(format!(
                 "a policy pattern that names the default branch gets no ruleset of its own: {RULESET_AUTHORITY_UPDATES} and {RULESET_AUTHORITY_CHECKS} protect it, and the dry run reads no host to know its name"
             ));
+            lines.push(format!(
+                "on a public repository whose {POLICY_WORKFLOW} runs on {GATED_EVENT}: Actions event policy '{EVENT_POLICY_NAME}' allowing the events that workflow declares, for it alone; created only when no policy has that name, and an existing one is never changed"
+            ));
         }
         for rule in self.pattern_rules(None) {
             // The pattern is policy text: a fixed label starts the line.
@@ -834,6 +903,8 @@ pub struct Declared {
     /// `(file, job id)` for each job that references an environment, with
     /// the environment as written.
     pub environments: Vec<(String, String, String)>,
+    /// `(file, events)` for each workflow: the events its `on:` names.
+    pub events: Vec<(String, Vec<String>)>,
 }
 
 impl Declared {
@@ -900,6 +971,38 @@ pub fn workflow_environments(text: &str) -> Result<Vec<(String, String)>, String
         .collect())
 }
 
+/// The events a workflow's `on:` names, in the order written: a single
+/// event, a list of events, or the keys of a mapping. A workflow without
+/// `on:` names none.
+///
+/// # Errors
+///
+/// Returns an error when the text is not a YAML workflow or `on:` is not an
+/// event, a list of events or a mapping keyed by event.
+pub fn workflow_events(text: &str) -> Result<Vec<String>, String> {
+    let doc: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|error| format!("not YAML: {error}"))?;
+    // A YAML 1.1 reader takes a bare `on` as true, so both keys are read.
+    let Some(on) = doc
+        .get("on")
+        .or_else(|| doc.get(serde_yaml::Value::Bool(true)))
+    else {
+        return Ok(Vec::new());
+    };
+    let name = |value: &serde_yaml::Value| {
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "an event in `on:` is not a string".to_string())
+    };
+    match on {
+        serde_yaml::Value::String(event) => Ok(vec![event.clone()]),
+        serde_yaml::Value::Sequence(events) => events.iter().map(name).collect(),
+        serde_yaml::Value::Mapping(events) => events.keys().map(name).collect(),
+        _ => Err("`on:` is not an event, a list or a mapping".to_string()),
+    }
+}
+
 fn workflow_jobs(text: &str) -> Result<Vec<(String, serde_yaml::Mapping)>, String> {
     let doc: serde_yaml::Value =
         serde_yaml::from_str(text).map_err(|error| format!("not YAML: {error}"))?;
@@ -946,6 +1049,26 @@ pub fn read_declared(
     nwo: &str,
     branch: &str,
 ) -> Result<Declared, String> {
+    let (declared, mut failures) = read_declared_each(gh, nwo, branch)?;
+    if failures.is_empty() {
+        Ok(declared)
+    } else {
+        Err(failures.swap_remove(0).1)
+    }
+}
+
+/// What the workflows on `branch` declare, file by file: the declaration of
+/// every workflow that could be read and parsed, and `(path, why)` for each
+/// that could not. A file that fails adds nothing to the declaration.
+///
+/// # Errors
+///
+/// Returns an error when the workflow folder cannot be read.
+pub fn read_declared_each(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+) -> Result<(Declared, Vec<(String, String)>), String> {
     let reference = query_value(branch);
     let listing = match gh(&[
         "api",
@@ -953,7 +1076,7 @@ pub fn read_declared(
     ]) {
         Ok(text) => text,
         Err(error) if error.contains("404") || error.contains("Not Found") => {
-            return Ok(Declared::default())
+            return Ok((Declared::default(), Vec::new()))
         }
         Err(error) => {
             return Err(format!(
@@ -968,6 +1091,7 @@ pub fn read_declared(
         ));
     };
     let mut declared = Declared::default();
+    let mut failures = Vec::new();
     for entry in &entries {
         let Some(path) = entry.get("path").and_then(Value::as_str) else {
             continue;
@@ -979,34 +1103,51 @@ pub fn read_declared(
         {
             continue;
         }
-        let text = gh(&[
+        let text = match gh(&[
             "api",
             "-H",
             "Accept: application/vnd.github.raw",
             &format!("repos/{nwo}/contents/{path}?ref={reference}"),
-        ])
-        .map_err(|error| {
-            format!(
-                "{path} on {branch} is not readable ({})",
-                first_line(&error)
-            )
-        })?;
-        let names =
-            workflow_job_names(&text).map_err(|why| format!("{path} on {branch}: {why}"))?;
-        for (job, environment) in
-            workflow_environments(&text).map_err(|why| format!("{path} on {branch}: {why}"))?
-        {
+        ]) {
+            Ok(text) => text,
+            Err(error) => {
+                failures.push((
+                    path.to_string(),
+                    format!(
+                        "{path} on {branch} is not readable ({})",
+                        first_line(&error)
+                    ),
+                ));
+                continue;
+            }
+        };
+        let parsed = workflow_job_names(&text).and_then(|names| {
+            Ok((
+                names,
+                workflow_environments(&text)?,
+                workflow_events(&text)?,
+            ))
+        });
+        let (names, environments, events) = match parsed {
+            Ok(parsed) => parsed,
+            Err(why) => {
+                failures.push((path.to_string(), format!("{path} on {branch}: {why}")));
+                continue;
+            }
+        };
+        for (job, environment) in environments {
             declared
                 .environments
                 .push((path.to_string(), job, environment));
         }
+        declared.events.push((path.to_string(), events));
         if path == POLICY_WORKFLOW {
             declared.policy_workflow = true;
             declared.policy_text.clone_from(&text);
         }
         declared.job_names.extend(names);
     }
-    Ok(declared)
+    Ok((declared, failures))
 }
 
 fn first_line(text: &str) -> &str {
@@ -2225,6 +2366,7 @@ impl GithubProvider {
             limitations: Vec::new(),
             checklist: Vec::new(),
             steps: Vec::new(),
+            event_policy: None,
             private: repo.private,
         };
         if let Some(authority) = &plan.authority {
@@ -2277,6 +2419,12 @@ impl GithubProvider {
                 },
             }
         }
+        self.prepare_event_policy(
+            &repo,
+            declared.as_ref(),
+            plan.scope.branch.as_deref(),
+            &mut out,
+        );
         Ok(out)
     }
 
@@ -2320,6 +2468,106 @@ impl GithubProvider {
             kept.push(entry);
         }
         kept
+    }
+
+    /// On a public repository whose policy workflow runs on
+    /// `pull_request_target`, plan the Actions event policy that allows the
+    /// workflow's events for that workflow alone (TSK-1347 AC-8), or leave
+    /// the one with its name as it is. A policy is never updated, so its
+    /// events, actors and targets are never widened. Returns the report line
+    /// when nothing is to be written; reading needs an administrator's token.
+    fn plan_event_policy(&self, nwo: &str, declared: &Declared) -> Result<EventPolicyStep, String> {
+        let Some((_, events)) = declared
+            .events
+            .iter()
+            .find(|(path, _)| path == POLICY_WORKFLOW)
+        else {
+            return Ok(EventPolicyStep::Unchanged(format!(
+                "no Actions event policy written: the default branch has no {POLICY_WORKFLOW}"
+            )));
+        };
+        if !events.iter().any(|event| event == GATED_EVENT) {
+            return Ok(EventPolicyStep::Unchanged(format!(
+                "no Actions event policy written: {POLICY_WORKFLOW} does not run on {GATED_EVENT}"
+            )));
+        }
+        let gh = |args: &[&str]| self.run_gh(args, None);
+        let policies = paged_list(&gh, &format!("repos/{nwo}/actions/policies"), "policies")
+            .map_err(|why| {
+                format!("the Actions event policies are not readable ({why}); reading and creating one needs an administrator's token")
+            })?;
+        let named: Vec<&Value> = policies
+            .iter()
+            .filter(|policy| policy["name"] == EVENT_POLICY_NAME)
+            .collect();
+        match named.as_slice() {
+            [] => Ok(EventPolicyStep::Create(EventPolicyWrite {
+                events: events.clone(),
+                request: HostRequest {
+                    method: "POST",
+                    path: format!("repos/{nwo}/actions/policies"),
+                    body: event_policy_body(POLICY_WORKFLOW, events),
+                },
+            })),
+            [policy] => Ok(EventPolicyStep::Unchanged(format!(
+                "Actions event policy '{EVENT_POLICY_NAME}' ({}) exists and was left as it is; `codeflow doctor --check remote-perimeter` judges what it allows",
+                policy["id"]
+            ))),
+            _ => Err(format!(
+                "{} Actions event policies are named '{EVENT_POLICY_NAME}', so remote protect cannot tell which it owns; keep one on the host",
+                named.len()
+            )),
+        }
+    }
+
+    /// The Actions event policy part of `prepare`: on a public repository,
+    /// its report line, the planned write, or the limitation and checklist
+    /// item. A `--branch` run plans none, since the policy applies to the
+    /// whole repository.
+    fn prepare_event_policy(
+        &self,
+        repo: &RepoInfo,
+        declared: Option<&Result<Declared, String>>,
+        branch: Option<&str>,
+        out: &mut Prepared,
+    ) {
+        if repo.private {
+            out.lines.push(format!(
+                "no Actions event policy written: GitHub blocks {GATED_EVENT} by default only in public repositories"
+            ));
+            return;
+        }
+        // Without the authority rulesets nothing reads the workflows.
+        let Some(declared) = declared else { return };
+        if let Some(branch) = branch {
+            out.lines.push(format!(
+                "--branch {branch}: the repository's Actions event policy is not planned because the run is limited to a branch; a run without --branch creates it when it is missing"
+            ));
+            return;
+        }
+        let planned = match declared {
+            Err(why) => Err(why.clone()),
+            Ok(declared) => self.plan_event_policy(&repo.nwo, declared),
+        };
+        match planned {
+            Ok(EventPolicyStep::Unchanged(line)) => out.lines.push(line),
+            Ok(EventPolicyStep::Create(write)) => out.event_policy = Some(write),
+            Err(why) => out.fail_event_policy(&why),
+        }
+    }
+
+    /// Send the planned Actions event policy, exactly as planned. Returns
+    /// the report line; writing needs an administrator's token.
+    fn send_event_policy(&self, write: &EventPolicyWrite) -> Result<String, String> {
+        let request = &write.request;
+        let answer = self.run_gh(
+            &["api", "-X", request.method, &request.path, "--input", "-"],
+            Some(&request.body.to_string()),
+        )?;
+        let written: Value = serde_json::from_str(&answer).map_err(|_| {
+            "the Actions event policy was sent, but the host's answer is not JSON; read it on the host".to_string()
+        })?;
+        Ok(write.line(Some(&written["id"])))
     }
 
     /// Classify a failed gh call into a precise limitation message.
@@ -2641,16 +2889,58 @@ impl Write {
     }
 }
 
+/// What a run does about the Actions event policy (TSK-1347).
+enum EventPolicyStep {
+    /// Nothing to write: the report line.
+    Unchanged(String),
+    /// The policy to create.
+    Create(EventPolicyWrite),
+}
+
+/// The Actions event policy a run creates: the events it allows and the
+/// one request that creates it.
+struct EventPolicyWrite {
+    events: Vec<String>,
+    request: HostRequest,
+}
+
+impl EventPolicyWrite {
+    /// The report line: the policy created, with the id the host answered,
+    /// or, with no answer, the one a run would create.
+    fn line(&self, answered_id: Option<&Value>) -> String {
+        let events = self.events.join(", ");
+        match answered_id {
+            Some(id) => format!(
+                "created Actions event policy '{EVENT_POLICY_NAME}' ({id}) for {POLICY_WORKFLOW} alone, allowing {events}"
+            ),
+            None => format!(
+                "would create Actions event policy '{EVENT_POLICY_NAME}' for {POLICY_WORKFLOW} alone, allowing {events}"
+            ),
+        }
+    }
+}
+
 /// A run read and planned, before anything is sent.
 struct Prepared {
     lines: Vec<String>,
     limitations: Vec<String>,
     checklist: Vec<String>,
     steps: Vec<Step>,
+    /// The Actions event policy to create, when one is needed.
+    event_policy: Option<EventPolicyWrite>,
     private: bool,
 }
 
 impl Prepared {
+    /// Record that the Actions event policy is not written, and why.
+    fn fail_event_policy(&mut self, why: &str) {
+        self.limitations
+            .push(format!("Actions event policy was not written: {why}"));
+        self.checklist.push(
+            "[ ] Actions event policy: `codeflow doctor --check remote-perimeter` prints the policy to create; create it as a repository administrator".to_string(),
+        );
+    }
+
     /// Record that the owned ruleset `name` is not written, and why: a
     /// refusal of the plan itself, or a host answer.
     fn fail(&mut self, plan: &ProtectionPlan, name: &str, why: &str, refused: bool) {
@@ -2721,6 +3011,12 @@ impl RemoteProvider for GithubProvider {
                 },
             }
         }
+        if let Some(write) = prepared.event_policy.take() {
+            match self.send_event_policy(&write) {
+                Ok(line) => prepared.lines.push(line),
+                Err(why) => prepared.fail_event_policy(&why),
+            }
+        }
         prepared.report(ProtectStatus::Applied, !plan.scope.adopt.is_empty())
     }
 
@@ -2751,6 +3047,13 @@ impl RemoteProvider for GithubProvider {
                         .push(format!("  request: {}", write.request.render()));
                 }
             }
+        }
+        if let Some(write) = prepared.event_policy.take() {
+            writes += 1;
+            prepared.lines.push(write.line(None));
+            prepared
+                .lines
+                .push(format!("  request: {}", write.request.render()));
         }
         prepared.lines.push(format!("{writes} request(s) planned"));
         prepared.report(ProtectStatus::DryRun, !plan.scope.adopt.is_empty())
@@ -3629,6 +3932,14 @@ jobs:
         answer_conditions: Option<Value>,
         /// The branches the host has besides `main`; any other answers 404.
         branches: Vec<String>,
+        /// The repository's Actions event policies (TSK-1347).
+        policies: RefCell<Vec<Value>>,
+        /// Whether the token is refused the policy list.
+        policies_denied: bool,
+        /// The Actions event policy writes, in order.
+        policy_writes: RefCell<Vec<Value>>,
+        /// The repository is private.
+        private: bool,
     }
 
     impl Fake {
@@ -3660,10 +3971,11 @@ jobs:
 
         fn handle(&self, args: &[&str], input: Option<&str>) -> Result<String, String> {
             match args {
-                ["repo", "view", ..] => Ok(
-                    r#"{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{"name":"main"}}"#
-                        .into(),
-                ),
+                ["repo", "view", ..] => Ok(json!({
+                    "nameWithOwner": "o/r", "isPrivate": self.private,
+                    "defaultBranchRef": { "name": "main" }
+                })
+                .to_string()),
                 ["api", url] if url.starts_with("repos/o/r/rulesets?") => {
                     let list: Vec<Value> = self
                         .rulesets
@@ -3713,50 +4025,83 @@ jobs:
                     .find(|(path, _)| *url == format!("repos/o/r/contents/{path}?ref=main"))
                     .map(|(_, text)| text.clone())
                     .ok_or_else(|| format!("gh: Not Found (HTTP 404) {url}")),
+                ["api", url] if url.starts_with("repos/o/r/actions/policies") => {
+                    self.policy_api(None, input)
+                }
+                ["api", "-X", "POST", url, "--input", "-"]
+                    if *url == "repos/o/r/actions/policies" =>
+                {
+                    self.policy_api(Some("POST"), input)
+                }
                 ["api", "-X", method, path, "--input", "-"] => {
-                    let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
-                    self.writes
-                        .borrow_mut()
-                        .push((format!("{method} {path}"), body.clone()));
-                    let id = if *method == "POST" {
-                        1000 + self.rulesets.borrow().len() as u64
-                    } else {
-                        path.rsplit('/').next().unwrap().parse().unwrap()
-                    };
-                    body["id"] = json!(id);
-                    body["source_type"] = json!("Repository");
-                    // As the scratch repository stored a write on
-                    // 2026-10-30: an `update` rule loses its parameter when
-                    // it is off, and a `pull_request` rule gains defaults.
-                    for rule in body["rules"].as_array_mut().into_iter().flatten() {
-                        let kind = rule["type"].as_str().unwrap_or_default().to_string();
-                        if kind == "update"
-                            && rule["parameters"]["update_allows_fetch_and_merge"] == json!(false)
-                        {
-                            rule.as_object_mut().unwrap().remove("parameters");
-                            continue;
-                        }
-                        if let ("pull_request", Some(p)) =
-                            (kind.as_str(), rule["parameters"].as_object_mut())
-                        {
-                            p.entry("required_reviewers").or_insert(json!([]));
-                            p.entry("require_extra_approval_for_unattributed_changes")
-                                .or_insert(json!(true));
-                            p.entry("allowed_merge_methods")
-                                .or_insert(json!(["merge", "squash", "rebase"]));
-                        }
-                    }
-                    self.rulesets.borrow_mut().insert(id, body.clone());
-                    if let Some(bypass) = &self.answer_bypass {
-                        body["bypass_actors"] = bypass.clone();
-                    }
-                    if let Some(conditions) = &self.answer_conditions {
-                        body["conditions"] = conditions.clone();
-                    }
-                    Ok(body.to_string())
+                    Ok(self.ruleset_write(method, path, input))
                 }
                 other => Err(format!("unexpected gh call {other:?}")),
             }
+        }
+
+        /// A ruleset `POST` or `PUT`: record it, store the body as the host
+        /// would, and answer it.
+        fn ruleset_write(&self, method: &str, path: &str, input: Option<&str>) -> String {
+            let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
+            self.writes
+                .borrow_mut()
+                .push((format!("{method} {path}"), body.clone()));
+            let id = if method == "POST" {
+                1000 + self.rulesets.borrow().len() as u64
+            } else {
+                path.rsplit('/').next().unwrap().parse().unwrap()
+            };
+            body["id"] = json!(id);
+            body["source_type"] = json!("Repository");
+            // As the scratch repository stored a write on
+            // 2026-10-30: an `update` rule loses its parameter when
+            // it is off, and a `pull_request` rule gains defaults.
+            for rule in body["rules"].as_array_mut().into_iter().flatten() {
+                let kind = rule["type"].as_str().unwrap_or_default().to_string();
+                if kind == "update"
+                    && rule["parameters"]["update_allows_fetch_and_merge"] == json!(false)
+                {
+                    rule.as_object_mut().unwrap().remove("parameters");
+                    continue;
+                }
+                if let ("pull_request", Some(p)) =
+                    (kind.as_str(), rule["parameters"].as_object_mut())
+                {
+                    p.entry("required_reviewers").or_insert(json!([]));
+                    p.entry("require_extra_approval_for_unattributed_changes")
+                        .or_insert(json!(true));
+                    p.entry("allowed_merge_methods")
+                        .or_insert(json!(["merge", "squash", "rebase"]));
+                }
+            }
+            self.rulesets.borrow_mut().insert(id, body.clone());
+            if let Some(bypass) = &self.answer_bypass {
+                body["bypass_actors"] = bypass.clone();
+            }
+            if let Some(conditions) = &self.answer_conditions {
+                body["conditions"] = conditions.clone();
+            }
+            body.to_string()
+        }
+
+        /// The Actions event policy endpoint (TSK-1347): the list, or a
+        /// `POST` that stores the body with the next id.
+        fn policy_api(&self, method: Option<&str>, input: Option<&str>) -> Result<String, String> {
+            if method.is_none() {
+                if self.policies_denied {
+                    return Err("gh: Resource not accessible by integration (HTTP 403)".into());
+                }
+                let policies = self.policies.borrow();
+                return Ok(
+                    json!({ "total_count": policies.len(), "policies": &*policies }).to_string(),
+                );
+            }
+            let mut body: Value = serde_json::from_str(input.unwrap()).unwrap();
+            self.policy_writes.borrow_mut().push(body.clone());
+            body["id"] = json!(5000 + self.policies.borrow().len());
+            self.policies.borrow_mut().push(body.clone());
+            Ok(body.to_string())
         }
 
         fn provider(self: &Rc<Self>) -> GithubProvider {
@@ -3787,6 +4132,173 @@ jobs:
             scope: Scope::default(),
         };
         host.provider().apply(&plan)
+    }
+
+    /// A standard host changed by `edit` before any call.
+    fn standard_with(edit: impl FnOnce(&mut Fake)) -> Rc<Fake> {
+        let mut fake = Rc::try_unwrap(Fake::standard(&[])).ok().unwrap();
+        edit(&mut fake);
+        Rc::new(fake)
+    }
+
+    /// TSK-1347 AC-8: on a public repository whose policy workflow runs on
+    /// `pull_request_target`, `remote protect` creates the policy for that
+    /// workflow alone, allowing every event it declares.
+    #[test]
+    fn remote_protect_creates_the_event_policy_on_a_public_repository() {
+        let host = Fake::standard(&[]);
+        let report = apply_authority(&host, solo());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{:?}",
+            report.render()
+        );
+        assert_eq!(
+            *host.policy_writes.borrow(),
+            [json!({
+                "name": "codeflow policy check",
+                "enforcement": "active",
+                "conditions": { "workflow_path": {
+                    "include": [".github/workflows/codeflow-policy.yml"], "exclude": [] } },
+                "rules": [{ "type": "restrict_action_events",
+                    "parameters": { "allowed_events": ["pull_request_target"] } }]
+            })]
+        );
+        assert!(
+            report.lines.iter().any(|line| line == "created Actions event policy 'codeflow policy check' (5000) for .github/workflows/codeflow-policy.yml alone, allowing pull_request_target"),
+            "{:?}",
+            report.lines
+        );
+
+        // Every event the workflow runs on is allowed, since event rules
+        // are allowlists.
+        let host = Fake::new(
+            &[(
+                POLICY_WORKFLOW,
+                &POLICY_WITH_TRUSTED.replace(
+                    "on: pull_request_target",
+                    "on:\n  pull_request_target:\n  workflow_dispatch:",
+                ),
+            )],
+            &[],
+        );
+        apply_authority(&host, solo());
+        assert_eq!(
+            host.policy_writes.borrow()[0]["rules"][0]["parameters"]["allowed_events"],
+            json!(["pull_request_target", "workflow_dispatch"])
+        );
+    }
+
+    /// TSK-1347 AC-8: a policy with the name is left as it is, whether it
+    /// matches what `remote protect` would write or differs from it (here
+    /// wider, for every workflow and one more event), so nothing is widened
+    /// or narrowed; two of the name, or a list it cannot read, write
+    /// nothing and say so.
+    #[test]
+    fn remote_protect_never_changes_an_event_policy() {
+        let mut matching = event_policy_body(POLICY_WORKFLOW, &[GATED_EVENT.to_string()]);
+        matching["id"] = json!(77);
+        let mut different = matching.clone();
+        different["conditions"]["workflow_path"]["include"] = json!(["~ALL"]);
+        different["rules"][0]["parameters"]["allowed_events"] =
+            json!([GATED_EVENT, "pull_request"]);
+        for existing in [&matching, &different] {
+            let host = standard_with(|fake| fake.policies = RefCell::new(vec![existing.clone()]));
+            let report = apply_authority(&host, solo());
+            assert!(host.policy_writes.borrow().is_empty(), "{existing}");
+            assert_eq!(*host.policies.borrow(), std::slice::from_ref(existing));
+            assert_eq!(report.status, ProtectStatus::Applied);
+            assert!(
+                report.lines.iter().any(|line| {
+                    line.starts_with(
+                    "Actions event policy 'codeflow policy check' (77) exists and was left as it is"
+                )
+                }),
+                "{existing}: {:?}",
+                report.lines
+            );
+        }
+        let existing = matching;
+
+        let host = standard_with(|fake| {
+            fake.policies = RefCell::new(vec![
+                existing.clone(),
+                json!({ "id": 78, "name": "codeflow policy check" }),
+            ]);
+        });
+        let report = apply_authority(&host, solo());
+        assert!(host.policy_writes.borrow().is_empty());
+        assert_eq!(report.status, ProtectStatus::Degraded);
+        assert!(
+            report.limitations.iter().any(|l| l.contains(
+                "2 Actions event policies are named 'codeflow policy check', so remote protect cannot tell which it owns"
+            )),
+            "{:?}",
+            report.limitations
+        );
+
+        let host = standard_with(|fake| fake.policies_denied = true);
+        let report = apply_authority(&host, solo());
+        assert!(host.policy_writes.borrow().is_empty());
+        assert_eq!(report.status, ProtectStatus::Degraded);
+        assert!(
+            report
+                .limitations
+                .iter()
+                .any(|l| l.contains("needs an administrator's token")),
+            "{:?}",
+            report.limitations
+        );
+        assert!(
+            report
+                .checklist
+                .iter()
+                .any(|item| item.starts_with("[ ] Actions event policy:")),
+            "{:?}",
+            report.checklist
+        );
+    }
+
+    /// TSK-1347 AC-8: a private repository, or a policy workflow that does
+    /// not run on the event, reads and writes no policy.
+    #[test]
+    fn remote_protect_writes_no_event_policy_where_none_is_needed() {
+        let host = standard_with(|fake| {
+            fake.private = true;
+            fake.policies_denied = true;
+        });
+        let report = apply_authority(&host, solo());
+        assert!(host.policy_writes.borrow().is_empty());
+        assert!(
+            report.lines.iter().any(|line| line.contains(
+                "GitHub blocks pull_request_target by default only in public repositories"
+            )),
+            "{:?}",
+            report.lines
+        );
+        assert!(report
+            .limitations
+            .iter()
+            .all(|l| !l.contains("event policy")));
+
+        let host = Fake::new(
+            &[(
+                POLICY_WORKFLOW,
+                &POLICY_WITH_TRUSTED.replace("on: pull_request_target", "on: pull_request"),
+            )],
+            &[],
+        );
+        let report = apply_authority(&host, solo());
+        assert!(host.policy_writes.borrow().is_empty());
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("does not run on pull_request_target")),
+            "{:?}",
+            report.lines
+        );
     }
 
     fn check_pins(body: &Value) -> Vec<(String, u64)> {
@@ -4554,7 +5066,9 @@ jobs:
         }
     }
 
-    /// AC-2: `--branch` plans only the owned rulesets that target it.
+    /// AC-2: `--branch` plans only the owned rulesets that target it, and
+    /// never the repository-wide Actions event policy, which a run without
+    /// `--branch` creates (TSK-1347 AC-8).
     #[test]
     fn branch_limits_the_run_to_the_owned_rulesets_that_target_it() {
         for (branch, expected) in [
@@ -4580,6 +5094,11 @@ jobs:
                 .apply(&plan_with(r#"["main", "release/*"]"#, true, scope));
             let text = report.render().as_str().to_string();
             assert_eq!(written_names(&host), expected, "{branch}: {text}");
+            assert!(host.policy_writes.borrow().is_empty(), "{branch}: {text}");
+            assert!(
+                text.contains(&format!("--branch {branch}: the repository's Actions event policy is not planned because the run is limited to a branch; a run without --branch creates it when it is missing")),
+                "{text}"
+            );
             if expected.is_empty() {
                 assert!(
                     text.contains("--branch feature/x: no ruleset remote protect owns targets it, so nothing is planned"),
@@ -4587,6 +5106,15 @@ jobs:
                 );
             }
         }
+
+        // The same plan without `--branch` creates the policy.
+        let host = Fake::standard(&[]);
+        host.provider().apply(&plan_with(
+            r#"["main", "release/*"]"#,
+            true,
+            Scope::default(),
+        ));
+        assert_eq!(host.policy_writes.borrow().len(), 1);
     }
 
     /// AC-2: a literal policy branch the host does not have is reported
@@ -4847,6 +5375,7 @@ esac
         let text = preview.render().as_str().to_string();
         assert_eq!(preview.status, ProtectStatus::DryRun, "{text}");
         assert!(previewed.writes().is_empty(), "{text}");
+        assert!(previewed.policy_writes.borrow().is_empty(), "{text}");
         let printed: Vec<String> = preview
             .lines
             .iter()
@@ -4857,19 +5386,32 @@ esac
         let applied = Fake::standard(&rulesets);
         let report = applied.provider().apply(&plan());
         assert_eq!(report.status, ProtectStatus::Applied);
+        // The ruleset writes, then the Actions event policy (TSK-1347).
         let sent: Vec<String> = applied
             .writes()
             .iter()
             .map(|(call, body)| format!("{call} {body}"))
+            .chain(
+                applied
+                    .policy_writes
+                    .borrow()
+                    .iter()
+                    .map(|body| format!("POST repos/o/r/actions/policies {body}")),
+            )
             .collect();
         assert_eq!(printed, sent, "{text}");
-        assert_eq!(sent.len(), 5, "{sent:#?}");
+        assert_eq!(sent.len(), 6, "{sent:#?}");
         assert!(
             sent.iter()
                 .any(|request| request.starts_with("PUT repos/o/r/rulesets/400 ")),
             "{sent:#?}"
         );
-        assert!(text.contains("5 request(s) planned"), "{text}");
+        assert!(
+            sent.last()
+                .is_some_and(|request| request.starts_with("POST repos/o/r/actions/policies ")),
+            "{sent:#?}"
+        );
+        assert!(text.contains("6 request(s) planned"), "{text}");
     }
 }
 
