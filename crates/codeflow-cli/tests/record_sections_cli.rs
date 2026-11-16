@@ -6,7 +6,7 @@
 //! on `PATH` is never used.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 #[path = "support/outcome.rs"]
 mod outcome;
@@ -18,7 +18,6 @@ const TASK: &str = "project-management/tasks/TSK-001.md";
 const EPIC: &str = "project-management/epics/EPC-001.md";
 const SPEC: &str = "project-management/specs/SPC-001.md";
 const TARGET: &str = "integration/EPC-001-work";
-const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -427,6 +426,8 @@ fn the_pre_push_hook_refuses_through_codeflow_ci() {
     // AC-2 (the hook plane): pre-push runs `codeflow ci` on the pushed
     // range, so the branch that drops the section is refused before it
     // leaves. Pre-commit does not re-validate the graph (TSK-133).
+    use std::process::Stdio;
+    const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
     let (dir, root, base) = dropped_on_a_branch();
     let destination = dir.path().join("destination.git");
     git(
