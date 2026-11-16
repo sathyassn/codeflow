@@ -356,7 +356,8 @@ fn a_sync_naming_another_epic_is_refused() {
 /// AC-2: every other refusal still applies. A clean sync that would change
 /// the criteria, status or text of a task whose home is the line, or the
 /// epic's criteria, is refused by the frozen criteria. Under the one-home
-/// rule main never holds such a change; these fixtures force one.
+/// rule main never holds such a change; these fixtures force one. The import
+/// check takes each range, so the freeze is proved on its own here.
 #[test]
 fn a_clean_sync_cannot_change_the_lines_records() {
     for (path, content, what) in [
@@ -400,6 +401,10 @@ fn a_clean_sync_cannot_change_the_lines_records() {
         );
         blocks(&refused, what, "work.criteria_frozen");
         blocks(&refused, what, "whose home is the line");
+        assert!(
+            !said.contains("work.import_authority"),
+            "{what}: the import check takes this range, so the freeze alone refuses it: {said}"
+        );
     }
 }
 
