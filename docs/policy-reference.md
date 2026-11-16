@@ -1366,9 +1366,12 @@ only to the harness sandbox: Claude denies writes there (`denyWrite` and an
 write deny is the boundary. The directory stays readable because the guards
 read the baselines and the SSH configuration allow from inside the sandbox.
 A `.grok/sandbox.toml` written by an earlier release denied the directory
-whole. `codeflow update` replaces such a copy while it still equals the
-version it installed. It leaves an edited copy alone and reports it as
-kept, with a warning when a profile there still denies
+whole. `codeflow update` replaces such a copy only when its bytes equal a
+profile some CodeFlow version shipped, which the binary knows by the
+SHA-256 of each one. No file in the repository is taken as that proof, so
+a copied baseline cannot make update replace an edited profile. Update
+leaves any other copy alone and reports it as kept, with a warning when a
+profile there still denies
 `.codeflow/authority`. Once a baseline exists, every guard in such a Grok
 seat refuses until the operator removes those entries from each profile's
 `deny` list.
@@ -1380,7 +1383,7 @@ names, the commit, and the policy text with its SHA-256.
 | Command | What it does |
 |---|---|
 | `codeflow policy baseline show` | Prints the record and how it bears on the policy read. Read only; runs anywhere. |
-| `codeflow policy baseline init` | Asks the remote for its default branch and commit (`git ls-remote --symref`), fetches that commit's objects without writing a ref, and prints the commit and policy digest. With `--confirm <commit>` it writes the record. |
+| `codeflow policy baseline init` | Asks the remote for its default branch and commit (`git ls-remote --symref`), fetches that commit's objects without writing a ref, refuses when the branch tip the fetch reports is another commit, and prints the commit and policy digest. With `--confirm <commit>` it writes the record. |
 | `codeflow policy baseline refresh` | The same read, then moves the record to a commit that descends from the recorded one with a policy no weaker. Anything else needs `--reset --reason <text>`, which is recorded. |
 
 `init` and `refresh` refuse when a harness marker is set (`CLAUDECODE`,
