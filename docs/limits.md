@@ -21,7 +21,6 @@ Set a limit by adding its key to the file its section names. An absent key keeps
 | `coord.heartbeat_timeout_seconds` | `1800` seconds | a whole number of seconds, at least 1; no ceiling beyond what the number can hold | operational | coordination heartbeat timeout | three missed check intervals: a session that is working reports well inside it |
 | `limits.coord_max_recheck_seconds` | `86400` seconds | a whole number of seconds, at least 1; no ceiling beyond what the number can hold | operational | longest coordination recheck | a recheck further out than a day would hide a waiting item |
 | `git.line_sync_interval` | `0` days | a whole number of days, at least 0; no ceiling beyond what the number can hold | operational | line sync reminder interval | reminders are off until a project chooses an interval; zero disables them |
-| `git.candidate_search_depth` | `200` commits | a whole number of commits, at least 1; no ceiling beyond what the number can hold | operational | candidate search depth | covers a line's recent first-parent history; a line with longer history raises it |
 | `git.commit_desc_max_len` | `50` characters | a whole number of characters, at least 0; no ceiling beyond what the number can hold | operational | commit description length | the conventional limit for a commit description |
 | `git.commit_subject_max_len` | `72` characters | a whole number of characters, at least 0; no ceiling beyond what the number can hold | operational | commit subject length | git's 72-column wrap |
 | `git.commit_body_max_bullets` | `3` bullets | a whole number of bullets, at least 0; no ceiling beyond what the number can hold | operational | commit body bullets | a commit that needs more bullets is usually more than one commit |
@@ -312,6 +311,12 @@ Set a limit by adding its key to the file its section names. An absent key keeps
 | none | `64` entries | fixed | security | deletion reader variants | security bound, not project-settable |
 | none | `6` levels | fixed | security | deletion reader depth | security bound, not project-settable |
 | none | `6` passes | fixed | security | deletion reader loop passes | security bound, not project-settable |
+| none | `16` levels | fixed | security | deletion reader nesting | security bound, not project-settable |
+| none | `64` groups | fixed | security | deletion reader brace groups | security bound, not project-settable |
+| none | `64` levels | fixed | security | shell lexer expansion depth | security bound, not project-settable |
+| none | `200000` entries | fixed | security | path writer entry limit | security bound, not project-settable |
+| none | `10000` commits | fixed | security | path writer commit limit | security bound, not project-settable |
+| none | `67108864` bytes | fixed | security | path writer patch | security bound, not project-settable |
 | none | `40` links | fixed | security | startup link limit | security bound, not project-settable |
 | none | `4096` entries | fixed | security | argument walk limit | security bound, not project-settable |
 | none | `8` levels | fixed | security | guard nesting limit | security bound, not project-settable |

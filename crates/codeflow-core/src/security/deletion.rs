@@ -220,10 +220,10 @@ const LOOP_PASSES: usize = codeflow_limits::DELETION_READER_LOOP_PASSES.default_
 /// Compound commands nested inside one another in one script. Parsing and
 /// reading both recurse on this, once per nested script, so it keeps a line
 /// well inside the stack; hand-written and generated lines stay far below it.
-const MAX_NESTING: usize = 16;
+const MAX_NESTING: usize = codeflow_limits::DELETION_READER_NESTING.default_count();
 /// Brace expressions expanded in one word. Expansion recurses once per
 /// expression, so past this the word's further values are unknown.
-const MAX_BRACE_GROUPS: usize = 64;
+const MAX_BRACE_GROUPS: usize = codeflow_limits::DELETION_READER_BRACE_GROUPS.default_count();
 
 // ---------------------------------------------------------------------------
 // Words and tokens

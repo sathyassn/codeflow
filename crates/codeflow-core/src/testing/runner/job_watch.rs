@@ -418,7 +418,7 @@ fn watch(args: &[OsString]) -> Result<(), String> {
             Some((JOB_KEY, JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO)) => return Ok(()),
             Some((END_KEY, _)) => break,
             Some(_) => {}
-            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+            None => std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait()),
         }
     }
     // SAFETY: the handle carries JOB_OBJECT_TERMINATE.
@@ -429,7 +429,7 @@ fn watch(args: &[OsString]) -> Result<(), String> {
             Some(_) => {}
             // A timeout, or a failed wait: read the count again, after a
             // pause so that a wait that fails at once cannot spin.
-            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+            None => std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait()),
         }
     }
     // The tree is gone: the fences free as this process exits.

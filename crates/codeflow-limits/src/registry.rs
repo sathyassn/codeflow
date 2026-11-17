@@ -72,7 +72,6 @@ limits! {
 
     // Policy keys that predate the registry.
     GIT_LINE_SYNC_INTERVAL = operational_u32("git.line_sync_interval", "line sync reminder interval", "days", 0, 0, "reminders are off until a project chooses an interval; zero disables them");
-    GIT_CANDIDATE_SEARCH_DEPTH = operational_u32("git.candidate_search_depth", "candidate search depth", "commits", 200, 1, "covers a line's recent first-parent history; a line with longer history raises it");
     GIT_COMMIT_DESC_MAX_LEN = operational_u32("git.commit_desc_max_len", "commit description length", "characters", 50, 0, "the conventional limit for a commit description");
     GIT_COMMIT_SUBJECT_MAX_LEN = operational_u32("git.commit_subject_max_len", "commit subject length", "characters", 72, 0, "git's 72-column wrap");
     GIT_COMMIT_BODY_MAX_BULLETS = operational_u32("git.commit_body_max_bullets", "commit body bullets", "bullets", 3, 0, "a commit that needs more bullets is usually more than one commit");
@@ -346,6 +345,12 @@ limits! {
     DELETION_READER_VARIANTS = fixed(LimitClass::Security, "deletion reader variants", "entries", 64, BOUND);
     DELETION_READER_DEPTH = fixed(LimitClass::Security, "deletion reader depth", "levels", 6, BOUND);
     DELETION_READER_LOOP_PASSES = fixed(LimitClass::Security, "deletion reader loop passes", "passes", 6, BOUND);
+    DELETION_READER_NESTING = fixed(LimitClass::Security, "deletion reader nesting", "levels", 16, BOUND);
+    DELETION_READER_BRACE_GROUPS = fixed(LimitClass::Security, "deletion reader brace groups", "groups", 64, BOUND);
+    SHELL_LEXER_EXPANSION_DEPTH = fixed(LimitClass::Security, "shell lexer expansion depth", "levels", 64, BOUND);
+    PATH_WRITER_ENTRY_LIMIT = fixed(LimitClass::Security, "path writer entry limit", "entries", 200_000, BOUND);
+    PATH_WRITER_COMMIT_LIMIT = fixed(LimitClass::Security, "path writer commit limit", "commits", 10_000, BOUND);
+    PATH_WRITER_PATCH_BYTES = fixed(LimitClass::Security, "path writer patch", BYTES, 64 * 1024 * 1024, BOUND);
     STARTUP_LINK_LIMIT = fixed(LimitClass::Security, "startup link limit", "links", 40, BOUND);
     ARGUMENT_WALK_LIMIT = fixed(LimitClass::Security, "argument walk limit", "entries", 4096, BOUND);
     GUARD_NESTING_LIMIT = fixed(LimitClass::Security, "guard nesting limit", "levels", 8, BOUND);
