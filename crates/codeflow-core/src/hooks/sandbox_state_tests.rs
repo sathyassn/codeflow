@@ -91,7 +91,7 @@ fn the_largest_settings_read_limit_still_reads_a_file_whole() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     fs::write(&path, "{}").unwrap();
-    assert!(matches!(read_text_within(&path, largest), Read::Parsed(text) if text == "{}"));
+    assert!(matches!(read_text(&path, largest), Read::Parsed(text) if text == "{}"));
 }
 
 fn assert_strict(outcome: &Outcome, needle: &str) {

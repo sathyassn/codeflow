@@ -254,7 +254,7 @@ fn main_checkout(dir: &Path) -> Result<Option<PathBuf>, String> {
         _ => false,
     };
     let points_back = same(&back, &common)
-        || read_text(&back).parsed().is_some_and(|text| {
+        || read_settings_text(&back).parsed().is_some_and(|text| {
             text.strip_prefix("gitdir:")
                 .map(str::trim)
                 .is_some_and(|named| same(&main.join(named), &common))
@@ -312,16 +312,16 @@ impl<T> Read<T> {
     }
 }
 
-/// A settings file's text. It must be a regular file (a link to one is
-/// followed); it is opened without blocking, so a FIFO cannot stall the
-/// reader, checked again on the open handle, and read up to the limit.
-fn read_text(path: &Path) -> Read<String> {
-    read_text_within(path, codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value())
+/// A settings file's text, read up to `limits.sandbox_settings_read_bytes`.
+fn read_settings_text(path: &Path) -> Read<String> {
+    read_text(path, codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value())
 }
 
-/// [`read_text`] with its limit given, so a test can pass the largest value
-/// `limits.sandbox_settings_read_bytes` accepts.
-fn read_text_within(path: &Path, limit: u64) -> Read<String> {
+/// A file's text. It must be a regular file (a link to one is followed); it
+/// is opened without blocking, so a FIFO cannot stall the reader, checked
+/// again on the open handle, and read up to `limit` bytes. The limit is a
+/// parameter so a test can pass the largest value the policy key accepts.
+fn read_text(path: &Path, limit: u64) -> Read<String> {
     use std::io::Read as _;
     match crate::absence::metadata_optional(path) {
         Ok(None) => return Read::Absent,
@@ -423,7 +423,7 @@ fn claude_layers(host: &Host, problems: &mut Vec<String>) -> Vec<Layer> {
         if layers.iter().any(|layer: &Layer| layer.name == name) {
             continue;
         }
-        match read_text(&path) {
+        match read_settings_text(&path) {
             Read::Absent => {}
             Read::Unreadable(why) => {
                 problems.push(format!("the Claude settings {name} cannot be read ({why})"));
