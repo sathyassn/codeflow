@@ -529,7 +529,13 @@ pub(crate) fn bounded_output(
                 codeflow_limits::GUARD_GIT_READ_SECONDS.value()
             ));
         }
-        std::thread::sleep(codeflow_limits::POLL_CHILD_OUTPUT_MILLIS.wait());
+        // The poll is a policy key with no ceiling; never sleep past the
+        // deadline whatever it is set to.
+        std::thread::sleep(
+            codeflow_limits::POLL_CHILD_OUTPUT_MILLIS
+                .wait()
+                .min(deadline.saturating_duration_since(Instant::now())),
+        );
     };
     if !status.success() {
         return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
@@ -896,6 +902,37 @@ mod tests {
         .unwrap_err()
         .contains("3 seconds"));
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// TSK-1299 review finding (Major 2): the largest
+    /// `limits.poll_child_output_millis` a project may set does not carry
+    /// the guard's Git read past its deadline by more than one default poll.
+    #[cfg(unix)]
+    #[test]
+    fn the_largest_child_output_poll_still_ends_at_the_read_deadline() {
+        use crate::limit_child_tests::{child_passes_within, in_child_with_largest, SCHEDULING};
+        let poll = &codeflow_limits::POLL_CHILD_OUTPUT_MILLIS;
+        let read = codeflow_limits::GUARD_GIT_READ_SECONDS.wait();
+        if in_child_with_largest(&[poll]) {
+            // The output closes at once and the child stays, so the read
+            // waits in its exit poll.
+            let mut child = std::process::Command::new("sh");
+            child.args(["-c", "exec 1>&-; exec sleep 30"]);
+            let start = Instant::now();
+            assert!(bounded_output(&mut child, start + read)
+                .unwrap_err()
+                .contains("seconds"));
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed <= read + Duration::from_millis(poll.default) + SCHEDULING,
+                "the read took {elapsed:?}"
+            );
+            return;
+        }
+        assert!(child_passes_within(
+            "security::git_config::tests::the_largest_child_output_poll_still_ends_at_the_read_deadline",
+            Duration::from_secs(90),
+        ));
     }
 
     #[test]
