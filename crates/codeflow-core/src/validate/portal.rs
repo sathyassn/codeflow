@@ -2382,8 +2382,10 @@ fn reserved_file_size(entry: &std::fs::DirEntry, child: &Path) -> Result<u64, St
 
 /// Whether reserved public output has passed what a corpus may hold.
 fn past_public_corpus(files: usize, bytes: u64) -> bool {
-    files > codeflow_limits::PORTAL_MAX_PAGES.count() + 1_000
-        || bytes > codeflow_limits::PORTAL_MAX_TOTAL_ARTIFACT_BYTES.value()
+    let most_files = codeflow_limits::PORTAL_MAX_PAGES
+        .count()
+        .saturating_add(1_000);
+    files > most_files || bytes > codeflow_limits::PORTAL_MAX_TOTAL_ARTIFACT_BYTES.value()
 }
 
 #[allow(clippy::too_many_arguments)] // Recursive bounded walker carries one shared budget and report.

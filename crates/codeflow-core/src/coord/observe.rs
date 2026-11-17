@@ -92,7 +92,7 @@ pub fn command(
 ) -> Option<std::process::Output> {
     use std::process::Stdio;
     use std::sync::mpsc;
-    let deadline = Instant::now() + limit;
+    let deadline = codeflow_limits::deadline_after(Instant::now(), limit);
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut child = command

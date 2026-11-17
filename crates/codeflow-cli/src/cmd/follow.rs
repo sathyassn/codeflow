@@ -296,7 +296,7 @@ fn bound_actor() -> Result<Actor, CoordError> {
 fn schedule(text: Option<&str>, now: u64) -> Result<u64, CoordError> {
     match text {
         Some(text) => coord::parse_schedule(text, now).map_err(refused),
-        None => Ok(now + codeflow_limits::COORD_CHECK_INTERVAL.value()),
+        None => Ok(now.saturating_add(codeflow_limits::COORD_CHECK_INTERVAL.value())),
     }
 }
 

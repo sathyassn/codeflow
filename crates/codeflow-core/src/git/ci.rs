@@ -310,7 +310,10 @@ where
     S: Fn(Duration) -> SFut,
     SFut: std::future::Future<Output = ()>,
 {
-    let deadline = now() + Duration::from_secs(cfg.timeout_minutes * 60);
+    let deadline = codeflow_limits::deadline_after(
+        now(),
+        Duration::from_secs(cfg.timeout_minutes.saturating_mul(60)),
+    );
     let poll = Duration::from_secs(cfg.poll_interval_seconds.max(1));
     loop {
         // Classify gh failures into transient (network, rate-limit,

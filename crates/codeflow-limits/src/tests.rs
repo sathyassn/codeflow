@@ -175,10 +175,29 @@ fn these_security_bounds_are_not_project_settable() {
         &GUARD_ALIAS_DEPTH,
         &GUARD_UNREAD_ARGS_LIMIT,
         &GUARD_SCRIPT_REPARSE_DEPTH,
+        &LEDGER_REFUSAL_LOCK_WAIT_SECONDS,
+        &POLL_LEDGER_LOCK_MILLIS,
     ] {
         assert_eq!(limit.route, Route::Fixed, "{}", limit.name);
         assert_eq!(limit.key, None, "{}", limit.name);
     }
+}
+
+#[test]
+fn the_largest_wait_still_gives_a_deadline() {
+    let start = Instant::now();
+    for wait in [
+        Duration::from_secs(u64::MAX),
+        Duration::from_millis(u64::MAX),
+        Duration::MAX,
+    ] {
+        let deadline = deadline_after(start, wait);
+        assert!(deadline > start + Duration::from_secs(365 * 24 * 60 * 60));
+    }
+    assert_eq!(
+        deadline_after(start, Duration::from_secs(5)),
+        start + Duration::from_secs(5)
+    );
 }
 
 #[test]

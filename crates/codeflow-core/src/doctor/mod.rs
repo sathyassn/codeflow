@@ -1976,7 +1976,7 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
     }
     let file = std::fs::File::open(path).map_err(|error| format!("open: {error}"))?;
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1)
+    file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| format!("read: {error}"))?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
@@ -2197,8 +2197,13 @@ fn spawn_probe_reader<R: Read + Send + 'static>(
 ) -> std::sync::mpsc::Receiver<ProbeCapture> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut retained =
-            Vec::with_capacity(codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES.count());
+        // Reserve no more than the shipped bound up front: a raised bound
+        // grows the buffer only as output arrives.
+        let mut retained = Vec::with_capacity(
+            codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES
+                .count()
+                .min(codeflow_limits::DOCTOR_VERSION_PROBE_OUTPUT_BYTES.default_count()),
+        );
         let mut dropped = 0;
         let mut error = None;
         let mut chunk = [0_u8; 8192];

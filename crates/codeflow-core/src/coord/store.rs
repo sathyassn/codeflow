@@ -369,7 +369,7 @@ fn lock(paths: &Paths, wait: Duration) -> Result<Locked, CoordError> {
     private_dir(&paths.common_dir.join("codeflow"))?;
     private_dir(&paths.dir)?;
     let lock = private_file(&paths.lock, false)?;
-    let deadline = Instant::now() + wait;
+    let deadline = codeflow_limits::deadline_after(Instant::now(), wait);
     loop {
         match lock.try_lock_exclusive() {
             Ok(()) => break,

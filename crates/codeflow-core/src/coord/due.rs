@@ -778,7 +778,7 @@ pub fn capped_next_check(item: &Item, requested: u64, now: u64) -> u64 {
             .iter()
             .any(|link| link.kind == LinkKind::Prerequisite);
     if waits {
-        requested.min(now + codeflow_limits::COORD_MAX_RECHECK.value())
+        requested.min(now.saturating_add(codeflow_limits::COORD_MAX_RECHECK.value()))
     } else {
         requested
     }

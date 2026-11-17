@@ -737,7 +737,6 @@ fn copy_folder(
     destination: &crate::contained::Tree,
     to: &str,
 ) -> Result<(), (bool, String, std::io::Error)> {
-    use std::io::Read as _;
     let read_side = |relative: &str| {
         let relative = relative.to_string();
         move |error| (false, relative, error)
@@ -768,23 +767,36 @@ fn copy_folder(
         }
         let file = source.open_regular(&child).map_err(read_side(&child))?;
         crate::contained::single_name(&file).map_err(read_side(&child))?;
-        let mut limited = file.take(codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value() + 1);
         destination
             .create_new_with(&target, None, |out| {
-                let copied = std::io::copy(&mut limited, out)?;
-                if copied > codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "{child} is larger than {gate_evidence_file_limit} bytes",
-                            gate_evidence_file_limit =
-                                codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value()
-                        ),
-                    ));
-                }
-                Ok(())
+                copy_evidence_file(
+                    file,
+                    out,
+                    &child,
+                    codeflow_limits::GATE_EVIDENCE_FILE_LIMIT.value(),
+                )
             })
             .map_err(|error| (true, target.clone(), error))?;
+    }
+    Ok(())
+}
+
+/// Copy one evidence file named `child` into `out`, refusing one larger
+/// than `limit` bytes. The read takes one byte past the limit to see that,
+/// and saturates, so the largest limit copies the whole file.
+fn copy_evidence_file(
+    file: impl std::io::Read,
+    out: &mut impl std::io::Write,
+    child: &str,
+    limit: u64,
+) -> std::io::Result<()> {
+    use std::io::Read as _;
+    let copied = std::io::copy(&mut file.take(limit.saturating_add(1)), out)?;
+    if copied > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{child} is larger than {limit} bytes"),
+        ));
     }
     Ok(())
 }
@@ -1006,6 +1018,29 @@ fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1299: the largest evidence file limit copies a file whole. The
+    /// read takes one byte past the limit, which must not wrap to an empty
+    /// copy or panic at the largest value.
+    #[test]
+    fn the_largest_evidence_file_limit_still_copies_the_whole_file() {
+        let evidence = b"target output\n".repeat(64);
+        let mut copied = Vec::new();
+        super::copy_evidence_file(evidence.as_slice(), &mut copied, "run/log", u64::MAX).unwrap();
+        assert_eq!(copied, evidence);
+    }
+
+    /// A file past the limit is refused, never truncated.
+    #[test]
+    fn an_evidence_file_past_its_limit_is_refused() {
+        let mut copied = Vec::new();
+        let error =
+            super::copy_evidence_file(b"12345".as_slice(), &mut copied, "run/log", 4).unwrap_err();
+        assert!(
+            error.to_string().contains("run/log is larger than 4 bytes"),
+            "{error}"
+        );
+    }
+
     /// TSK-1305 review nit 1: when the gate fails before any target runs,
     /// its one `(gate)` result names no target, and each scheduled target
     /// is still listed as not run, with the gate's error.

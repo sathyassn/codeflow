@@ -701,7 +701,7 @@ fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<Rea
         .spawn()
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
     let mut child = ChildGuard::new(child);
-    let deadline = Instant::now() + codeflow_limits::PRESENT_SERVICE_START_SECONDS.wait();
+    let deadline = codeflow_limits::PRESENT_SERVICE_START_SECONDS.deadline();
     loop {
         if ready_path.is_file() {
             let ready = read_ready_record(&ready_path, id)?;

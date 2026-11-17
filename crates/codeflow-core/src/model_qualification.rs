@@ -487,7 +487,10 @@ fn read_bounded_json_with_hook(
         ));
     }
     let mut data = Vec::new();
-    file.take(codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES.value() + 1)
+    let past_limit = codeflow_limits::QUALIFICATION_MAX_RECORD_BYTES
+        .value()
+        .saturating_add(1);
+    file.take(past_limit)
         .read_to_end(&mut data)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     if u64::try_from(data.len()).unwrap_or(u64::MAX)

@@ -26,7 +26,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod registry;
 
@@ -308,6 +308,13 @@ impl Limit {
         }
     }
 
+    /// The instant [`Self::wait`] from now, as [`deadline_after`] computes
+    /// it, so the largest accepted value never overflows the clock.
+    #[must_use]
+    pub fn deadline(&self) -> Instant {
+        deadline_after(Instant::now(), self.wait())
+    }
+
     /// The default as a `usize`, for a constant.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)]
@@ -358,6 +365,21 @@ impl Limit {
                 self.unit, self.min
             ),
         }
+    }
+}
+
+/// The instant `wait` after `start`. A wait longer than the clock can hold
+/// ends at a later instant than any run reaches, the furthest the clock
+/// holds within a factor of two, so adding the largest accepted wait never
+/// panics.
+#[must_use]
+pub fn deadline_after(start: Instant, wait: Duration) -> Instant {
+    let mut wait = wait;
+    loop {
+        if let Some(deadline) = start.checked_add(wait) {
+            return deadline;
+        }
+        wait /= 2;
     }
 }
 

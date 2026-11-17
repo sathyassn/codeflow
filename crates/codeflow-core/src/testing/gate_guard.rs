@@ -2036,7 +2036,7 @@ fn rewrite_serialized(lock: &Held, path: &Path) -> Vec<String> {
 fn with_record_lock<T>(lock: &Path, rewrite: impl FnOnce() -> T) -> std::io::Result<T> {
     with_record_lock_before(
         lock,
-        std::time::Instant::now() + codeflow_limits::GATE_LOCK_RETAKE_SECONDS.wait(),
+        codeflow_limits::GATE_LOCK_RETAKE_SECONDS.deadline(),
         rewrite,
     )
 }

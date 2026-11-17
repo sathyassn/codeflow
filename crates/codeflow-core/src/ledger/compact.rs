@@ -330,15 +330,16 @@ fn acquire_file_locks(
 /// contended: `Ok(false)` when it is still held after that, an error when
 /// the lock cannot be taken for another reason.
 fn lock_within(lock: &fs::File, path: &Path) -> Result<bool, LedgerError> {
-    let deadline = std::time::Instant::now() + codeflow_limits::LEDGER_LOCK_SETTLE_SECONDS.wait();
+    let deadline = codeflow_limits::LEDGER_LOCK_SETTLE_SECONDS.deadline();
     loop {
         match lock.try_lock_exclusive() {
             Ok(()) => return Ok(true),
             Err(error) if error.kind() == fs2::lock_contended_error().kind() => {
-                if std::time::Instant::now() >= deadline {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
                     return Ok(false);
                 }
-                std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait());
+                std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait().min(left));
             }
             Err(error) => {
                 return Err(LedgerError::Lock(format!(
