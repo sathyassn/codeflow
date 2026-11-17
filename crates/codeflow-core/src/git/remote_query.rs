@@ -177,8 +177,8 @@ impl QueryLimits {
             Source::Guard => format!(
                 "a session guard waits at most {}s for each such lookup, whatever {TIMEOUT_KEY} says, and its {}s deadline bounds the whole command inside the harness's {}s hook timeout",
                 codeflow_limits::GUARD_REMOTE_QUERY_WAIT.value(),
-                crate::hooks::guard_deadline::GUARD_DEADLINE_SECS,
-                crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS,
+                codeflow_limits::GUARD_DEADLINE.value(),
+                codeflow_limits::GUARD_HOOK_TIMEOUT.value(),
             ),
         }
     }

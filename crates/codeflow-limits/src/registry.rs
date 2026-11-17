@@ -54,7 +54,7 @@ limits! {
     GUARD_REMOTE_QUERY_WAIT = fixed(LimitClass::Security, "guard remote lookup wait", SECONDS, 10, "a guard waits this long only while it is still working out which policy applies, so no policy can set it; a 10 s buffer under the 20 s guard deadline for the guard's other work; `git fetch` removes the need to ask");
     /// Seconds the git guard waits for `gh pr view` to name a pull request's
     /// base branch, the guard's other network wait.
-    GUARD_PR_LOOKUP_WAIT = security("limits.guard_pr_lookup_wait_seconds", "guard pull request lookup wait", SECONDS, 5, 1, 7, "fits after one guard remote lookup with a 5 s buffer under the 20 s guard deadline; no answer in time is doubt, and the guard blocks on doubt");
+    GUARD_PR_LOOKUP_WAIT = security("limits.guard_pr_lookup_wait_seconds", "guard pull request lookup wait", SECONDS, 5, 1, 7, "fits after one 10 s guard remote lookup inside the guard deadline: at the defaults it leaves 5 s of the 20 s deadline for the guard's other work, and 3 s at this 7 s ceiling; no answer in time is doubt, and the guard blocks on doubt");
     /// Seconds the deadline's refusal waits for its reason to reach stderr
     /// before the guard exits 2 regardless.
     GUARD_REFUSAL_WRITE_WAIT = fixed(LimitClass::Security, "guard refusal write wait", SECONDS, 1, "a stderr pipe nobody reads must not hold the exit; the guard deadline's ceiling is sized around this exact second, so moving it would break the nesting under the hook timeout");
@@ -150,7 +150,7 @@ limits! {
     // operational: a slower value spends less CPU and answers later.
     POLL_GATE_RECORD_MILLIS = operational("limits.poll_gate_record_millis", "gate record lock poll", MILLISECONDS, 2, 1, "the gate's record lock is held for microseconds, so its waiters check often");
     POLL_CHILD_OUTPUT_MILLIS = operational("limits.poll_child_output_millis", "child output poll", MILLISECONDS, 5, 1, "a child that has finished should be read at once");
-    POLL_LEDGER_LOCK_MILLIS = operational("limits.poll_ledger_lock_millis", "ledger lock poll", MILLISECONDS, 10, 1, "the ledger lock is held for one append");
+    POLL_LEDGER_LOCK_MILLIS = fixed(LimitClass::Security, "ledger lock poll", MILLISECONDS, 10, "the ledger lock is held for one append; every guard and git hook polls it while it writes its refusal record, which spends the guard's time budget, so no policy can set it");
     POLL_LOCK_MILLIS = operational("limits.poll_lock_millis", "lock and process poll", MILLISECONDS, 20, 1, "short enough to feel immediate, long enough to cost nothing");
     POLL_PROCESS_MILLIS = operational("limits.poll_process_millis", "child process poll", MILLISECONDS, 25, 1, "a child process usually ends within a few polls");
     POLL_WAIT_MILLIS = operational("limits.poll_wait_millis", "bounded wait poll", MILLISECONDS, 50, 1, "the wait is for work that takes seconds");
@@ -199,7 +199,7 @@ limits! {
     SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES = operational("limits.scaffold_portal_max_managed_file_bytes", "scaffold portal max managed file", BYTES, 4 * 1024 * 1024, 1, "bounds one read of a project file, so a stray huge file cannot exhaust memory; a project with larger files raises it");
     SCAFFOLD_PORTAL_MAX_RECONCILIATION_READ_BYTES = operational("limits.scaffold_portal_max_reconciliation_read_bytes", "scaffold portal max reconciliation read", BYTES, 64 * 1024 * 1024, 1, "bounds one read of a project file, so a stray huge file cannot exhaust memory; a project with larger files raises it");
     TEST_CONFIG_NAMED_CONFIG_MAX_BYTES = operational("limits.test_config_named_config_max_bytes", "test config named config max", BYTES, 4 * 1024 * 1024, 1, "The largest named test config `codeflow test --config` reads.");
-    GATE_EVIDENCE_FILE_LIMIT = operational("limits.gate_evidence_file_limit", "gate evidence file limit", "entries", 1 << 30, 1, "The largest file and the most names in one folder that the durable copy takes; a run folder beyond either is refused, never truncated.");
+    GATE_EVIDENCE_FILE_LIMIT = operational("limits.gate_evidence_file_limit", "gate evidence file limit", BYTES, 1 << 30, 1, "The largest file the durable evidence copy takes; a larger file is refused, never truncated.");
     GATE_EVIDENCE_ENTRY_LIMIT = operational("limits.gate_evidence_entry_limit", "gate evidence entry limit", "entries", 100_000, 1, "bounds what a gate reads as evidence");
     RUNNER_OUTPUT_CAPTURE_LIMIT = operational("limits.runner_output_capture_limit", "runner output capture limit", "entries", 1024 * 1024, 1, "Maximum retained bytes for each child output stream. Readers keep the tail so the most recent failure context survives noisy commands.");
     FIGURES_MAX_PAGE_CLASSES = operational("limits.figures_max_page_classes", "figures max page classes", "entries", 256, 1, "bounds what the figure check reads from a portal build");
@@ -248,7 +248,7 @@ limits! {
     COORD_COMMAND_WAIT_SECONDS = operational("limits.coord_command_wait_seconds", "coord command wait", SECONDS, 10, 1, "How long a command waits for the lock.");
     DELEGATE_RUN_LOCK_TIMEOUT_SECONDS = operational("limits.delegate_run_lock_timeout_seconds", "delegate run lock timeout", SECONDS, 1, 1, "the wait for a delegate run lock");
     LEDGER_LOCK_SETTLE_SECONDS = operational("limits.ledger_lock_settle_seconds", "ledger lock settle", SECONDS, 1, 1, "How long a compaction waits for a contended lock before it treats the holder as a real compaction or writer. A child process spawned by any thread while a lock descriptor was open keeps that lock until it execs, so a lock just released can read as held for a moment.");
-    LEDGER_REFUSAL_LOCK_WAIT_SECONDS = operational("limits.ledger_refusal_lock_wait_seconds", "ledger refusal lock wait", SECONDS, 1, 1, "How long a hook or guard waits for another writer's lock on this ledger before it gives up on the record and keeps its verdict.");
+    LEDGER_REFUSAL_LOCK_WAIT_SECONDS = fixed(LimitClass::Security, "ledger refusal lock wait", SECONDS, 1, "How long a hook or guard waits for another writer's lock on the refusal ledger before it gives up on the record and keeps its verdict. Every guard and git hook writes this record while its verdict waits, so the wait spends the guard's time budget; a settable wait could outlast the guard deadline, so no policy can set it.");
     DOCTOR_VERSION_PROBE_TIMEOUT_SECONDS = operational("limits.doctor_version_probe_timeout_seconds", "doctor version probe timeout", SECONDS, 5, 1, "the wait for a tool to print its version");
     DOCTOR_CODEX_LOAD_TIMEOUT_SECONDS = operational("limits.doctor_codex_load_timeout_seconds", "doctor codex load timeout", SECONDS, 20, 1, "How long one Codex command may take before it counts as not run.");
     DOCTOR_GH_TIMEOUT_SECONDS = operational("limits.doctor_gh_timeout_seconds", "doctor gh timeout", SECONDS, 15, 1, "Each `gh` call is bounded, so an unreachable host cannot hang doctor.");
