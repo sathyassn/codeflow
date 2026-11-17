@@ -648,14 +648,34 @@ fn landed_floor_staged_content_refuses_planted_content() {
     // Direct verification of the worktree binary. Repository git hooks use
     // the installed binary under the operator's hook-binary rule.
     let out = fixture.hook("pre-commit", "fix: check", "");
-    let evidence = format!(
+    println!(
         "binary={}\nexit={}\n{}\n{}",
         env!("CARGO_BIN_EXE_codeflow"),
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    std::fs::write("/private/tmp/TSK-1078-staged-content-output.txt", &evidence).unwrap();
-    println!("{evidence}");
     refused(&out, "git.secret_scan");
+}
+
+/// AC-2: a checked-out `block` over a landed `warn` blocks, as a stale tree
+/// and as an uncommitted file.
+#[test]
+fn landed_floor_checkout_block_over_landed_warn_blocks() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let fixture = Fixture::new(
+            json!({"secret_scan":"warn"}),
+            json!({"secret_scan":"block"}),
+            stale,
+        );
+        fixture.stage(&format!("key = {}{}\n", "AKIA", "Q3ZWJ2X5LMN8RT4V"));
+        collect_refusal(
+            &fixture.hook("pre-commit", "fix: check", ""),
+            "git.secret_scan",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

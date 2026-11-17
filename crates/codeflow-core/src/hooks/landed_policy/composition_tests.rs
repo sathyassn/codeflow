@@ -96,8 +96,10 @@ fn hook_floor_lists_limits_and_unordered_fields() {
 #[test]
 fn hook_floor_candidate_naming_keeps_the_landed_value() {
     let landed = git(json!({"branch_prefixes":["task/"]}));
-    let local = git(json!({"branch_prefixes":["task/"], "candidate_prefix":"loose/",
-        "candidate_search_depth":5000}));
+    let local = git(
+        json!({"branch_prefixes":["task/"], "candidate_prefix":"loose/",
+        "candidate_search_depth":5000}),
+    );
     let judged = compose_git(&landed, &local).unwrap();
     assert_eq!(judged.candidate_prefix, landed.candidate_prefix);
     assert_eq!(judged.candidate_search_depth, landed.candidate_search_depth);
