@@ -1247,7 +1247,7 @@ mod tests {
     /// Every promisor registration Git reads marks the repository as one
     /// that fetches missing objects on demand, and nothing else does.
     #[test]
-    fn every_promisor_registration_marks_the_repository() {
+    fn every_registration_marks_the_repository() {
         for (config, promisor) in [
             ("", false),
             ("[remote \"origin\"]\n\turl = /srv/r.git\n", false),
@@ -1290,7 +1290,7 @@ mod tests {
     /// promisor reader: a git below 2.46 refuses a promisor repository and
     /// scans a plain one; 2.46 or later scans both.
     #[test]
-    fn every_promisor_shape_decides_the_scan_at_each_git_version() {
+    fn every_registration_shape_decides_the_scan_at_each_git_version() {
         let shapes: [(&[u8], bool); 13] = [
             (b"", false),
             (b"remote.origin.url\n/srv/r.git\0", false),

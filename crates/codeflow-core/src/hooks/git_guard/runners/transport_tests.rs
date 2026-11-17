@@ -162,7 +162,7 @@ fn addresses_select_the_transport_git_selects() {
 }
 
 #[test]
-fn ordinary_transports_select_no_helper() {
+fn ordinary_transports_start_no_program() {
     for address in [
         "https://example.test/project.git",
         "ssh://example.test/project.git",
@@ -191,7 +191,7 @@ fn ordinary_transports_select_no_helper() {
 }
 
 #[test]
-fn a_remote_address_selects_a_helper() {
+fn a_remote_resolves_to_the_program_git_starts() {
     let scratch = Scratch::new("[remote \"fixture\"]\n\turl = fixture::https://example.test/r\n");
     assert_eq!(scratch.helpers("fetch fixture"), Ok(vec!["fixture".into()]));
     assert_eq!(
@@ -223,7 +223,7 @@ fn a_remote_address_selects_a_helper() {
 }
 
 #[test]
-fn a_remote_with_a_helper_setting_refuses() {
+fn a_program_chosen_by_remote_settings_refuses() {
     for setting in ["vcs = fixture", "vcs = https", "vcs ="] {
         let with_url = Scratch::new(&format!(
             "[remote \"fixture\"]\n\turl = https://example.test/r\n\t{setting}\n"
@@ -238,7 +238,7 @@ fn a_remote_with_a_helper_setting_refuses() {
 }
 
 #[test]
-fn an_operand_free_fetch_reads_the_current_branch_remote() {
+fn an_implicit_contact_reads_the_remote_git_picks() {
     let default = Scratch::new("[remote \"origin\"]\n\turl = fixture::x\n");
     assert_eq!(default.helpers("fetch"), Ok(vec!["fixture".into()]));
     assert_eq!(default.helpers("pull"), Ok(vec!["fixture".into()]));
@@ -252,7 +252,7 @@ fn an_operand_free_fetch_reads_the_current_branch_remote() {
 }
 
 #[test]
-fn an_operand_free_contact_with_no_remote_configured_contacts_nothing() {
+fn an_implicit_contact_with_no_remote_contacts_nothing() {
     let none = Scratch::new("");
     for command in ["fetch", "pull -r", "push", "ls-remote -h"] {
         assert_eq!(none.helpers(command), Ok(vec![]), "{command}");
@@ -270,7 +270,7 @@ fn an_operand_free_contact_with_no_remote_configured_contacts_nothing() {
 }
 
 #[test]
-fn an_operand_free_contact_refuses_each_state_it_cannot_prove() {
+fn an_implicit_contact_refuses_each_state_it_cannot_prove() {
     let ordinary = Scratch::new(HTTPS);
     ordinary.unproven("push", "names no remote");
     ordinary.unproven("ls-remote", "names no remote");
@@ -319,7 +319,7 @@ fn an_operand_free_contact_refuses_each_state_it_cannot_prove() {
 }
 
 #[test]
-fn every_remote_forms_and_groups_refuse() {
+fn selections_of_several_remotes_refuse() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
     assert_eq!(scratch.helpers("fetch origin"), Ok(vec![]));
     assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
@@ -347,7 +347,7 @@ fn every_remote_forms_and_groups_refuse() {
 }
 
 #[test]
-fn an_operand_free_remote_update_reads_the_remotes_git_selects() {
+fn a_default_selection_reads_the_remotes_git_selects() {
     let backup = format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n");
     // Every configured remote, unless it skips the default update.
     let all = Scratch::new(&backup);
@@ -392,7 +392,7 @@ fn an_operand_free_remote_update_reads_the_remotes_git_selects() {
 }
 
 #[test]
-fn an_empty_default_group_refuses_since_git_falls_back_to_its_name() {
+fn an_empty_default_selection_refuses() {
     const FALLBACK: &str = "[remote \"default\"]\n\turl = fixture::x\n";
     for group in ["\"\"", "\" \\t \""] {
         let configured = Scratch::new(&format!(
@@ -414,7 +414,7 @@ fn an_empty_default_group_refuses_since_git_falls_back_to_its_name() {
 }
 
 #[test]
-fn a_remote_section_with_an_empty_name_refuses() {
+fn an_unnamed_remote_definition_refuses() {
     let empty = Scratch::new(&format!("{HTTPS}[remote \"\"]\n\turl = fixture::x\n"));
     empty.unproven("remote update", "empty name");
     // A dotted name and names that differ only in case are each read.
@@ -458,7 +458,7 @@ fn legacy_folder(scratch: &Scratch, folder: &str, form: &str) {
 
 #[cfg(unix)]
 #[test]
-fn a_legacy_remote_folder_passes_only_as_a_real_empty_folder() {
+fn an_older_definition_store_passes_only_when_proven_empty() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new(HTTPS);
     for folder in ["remotes", "branches"] {
@@ -482,7 +482,7 @@ fn a_legacy_remote_folder_passes_only_as_a_real_empty_folder() {
 }
 
 #[test]
-fn a_remote_with_more_than_one_address_value_refuses() {
+fn a_remote_with_ambiguous_addresses_refuses() {
     for remote in [
         "\turl = https://example.test/r\n\turl = fixture::x\n",
         "\turl = fixture::x\n\turl =\n\turl = https://example.test/r\n",
@@ -512,7 +512,7 @@ fn a_remote_with_more_than_one_address_value_refuses() {
 }
 
 #[test]
-fn a_fetch_rewrite_selects_a_helper() {
+fn an_address_change_for_both_directions_is_judged() {
     let scratch = Scratch::new(&format!(
         "{HTTPS}[url \"fixture::https://example.test/\"]\n\tinsteadOf = https://example.test/\n"
     ));
@@ -526,7 +526,7 @@ fn a_fetch_rewrite_selects_a_helper() {
 }
 
 #[test]
-fn a_push_rewrite_selects_a_helper_for_push_only() {
+fn an_address_change_for_one_direction_is_judged_there() {
     let scratch = Scratch::new(&format!(
         "{HTTPS}[url \"fixture::https://example.test/\"]\n\tpushInsteadOf = https://example.test/\n"
     ));
@@ -538,7 +538,7 @@ fn a_push_rewrite_selects_a_helper_for_push_only() {
 }
 
 #[test]
-fn a_push_rewrite_takes_precedence_for_push() {
+fn address_changes_apply_in_git_order() {
     // Both rewrites match: a push reads the push rewrite, a fetch the other.
     let scratch = Scratch::new(&format!(
         "{HTTPS}[url \"fixture::https://example.test/\"]\n\tpushInsteadOf = https://example.test/\n[url \"https://mirror.test/\"]\n\tinsteadOf = https://example.test/\n"
@@ -584,7 +584,7 @@ fn an_unresolved_selection_refuses_naming_the_remote() {
 }
 
 #[test]
-fn submodule_recursion_refuses_unless_the_line_turns_it_off() {
+fn nested_contacts_refuse_unless_the_line_turns_them_off() {
     let configured = Scratch::new(&format!("{HTTPS}[submodule \"lib\"]\n\turl = fixture::x\n"));
     let active = Scratch::new(&format!("{HTTPS}[submodule]\n\tactive = .\n"));
     let listed = Scratch::new(HTTPS);
@@ -644,7 +644,7 @@ fn submodule_recursion_refuses_unless_the_line_turns_it_off() {
 }
 
 #[test]
-fn promisor_remotes_pass_the_same_rule() {
+fn remotes_any_command_may_contact_pass_the_same_rule() {
     let promisor = Scratch::new(&format!(
         "{HTTPS}[remote \"lazy\"]\n\turl = fixture::x\n\tpromisor = true\n"
     ));
@@ -663,7 +663,7 @@ fn promisor_remotes_pass_the_same_rule() {
 }
 
 #[test]
-fn every_promisor_registration_git_reads_is_judged() {
+fn every_registration_of_such_remotes_is_judged() {
     const SHADOW: &str = "[remote \"shadow\"]\n\turl = fixture::x\n";
     // A partial clone filter registers the remote whatever its promisor
     // setting, and a true value counts even when a later one is false.
@@ -697,7 +697,7 @@ fn every_promisor_registration_git_reads_is_judged() {
 }
 
 #[test]
-fn an_empty_operand_reads_as_the_address_git_builds_for_it() {
+fn an_empty_word_reads_as_git_reads_it() {
     // Git gives an empty operand a remote with no address, so it fetches
     // the operand itself after the rewrites.
     const REWRITES: &str = "[url \"https://ok.test/\"]\n\tinsteadOf = https://\n[url \"fixture::x\"]\n\tinsteadOf = \"\"\n";
@@ -718,7 +718,7 @@ fn an_empty_operand_reads_as_the_address_git_builds_for_it() {
 }
 
 #[test]
-fn a_remote_section_with_an_empty_name_refuses_every_contact_with_remotes() {
+fn an_unnamed_remote_definition_refuses_every_contact() {
     // Each key under `[remote ""]` defines a remote the guard does not
     // resolve, so every contact that reads the configuration's remotes
     // refuses, naming the key, whatever name or address the command gives.
@@ -769,7 +769,7 @@ fn a_remote_section_with_an_empty_name_refuses_every_contact_with_remotes() {
 }
 
 #[test]
-fn every_recursion_option_spelling_git_accepts_reads_as_on() {
+fn every_spelling_that_turns_nested_contacts_on_reads_as_on() {
     let plain = Scratch::new("");
     for command in [
         "clone --recurse-submodules=no https://example.test/r copy",
@@ -957,7 +957,7 @@ fn a_listed_contacting_verb_without_a_resolution_refuses() {
 }
 
 #[test]
-fn a_maintenance_run_passes_only_a_proven_local_task_list() {
+fn a_batch_task_passes_only_when_proven_local() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
     for command in [
         "maintenance run --task=PREFETCH",
@@ -986,7 +986,7 @@ fn a_maintenance_run_passes_only_a_proven_local_task_list() {
 
 #[cfg(unix)]
 #[test]
-fn a_legacy_remote_name_with_a_backslash_is_checked() {
+fn an_older_definition_name_is_checked_as_git_reads_it() {
     let scratch = Scratch::new(HTTPS);
     std::fs::create_dir_all(scratch.root().join(".git/remotes")).unwrap();
     std::fs::write(
@@ -1001,7 +1001,7 @@ fn a_legacy_remote_name_with_a_backslash_is_checked() {
 /// Round j, first row: a last selection word Git replaces with a wider
 /// selection when no group of that name is set.
 #[test]
-fn a_last_selection_word_reads_as_git_reads_it() {
+fn a_selection_word_reads_as_git_reads_it() {
     let backup = format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n");
     let scratch = Scratch::new(&backup);
     for command in [
@@ -1058,7 +1058,7 @@ fn every_word_git_keeps_as_an_operand_names_the_remote() {
 /// Round j, third row: a new copy uses the first address its remote has,
 /// and a wider configuration scope may give that remote one first.
 #[test]
-fn a_new_copy_judges_every_configured_address() {
+fn a_copy_judges_every_address_it_may_use() {
     for name in ["origin", "upstream"] {
         let scratch = Scratch::new("");
         let global = format!("[remote \"{name}\"]\n\turl = fixture::x\n");
@@ -1129,7 +1129,7 @@ fn nested_in_index_only(scratch: &Scratch, path: &str) {
 /// Round j, fourth row: a nested repository the index alone records is
 /// one Git may fetch inside, so only a line that turns that off passes.
 #[test]
-fn a_nested_repository_with_no_other_marker_refuses() {
+fn nested_contacts_with_one_marker_refuse() {
     let scratch = Scratch::new(HTTPS);
     nested_in_index_only(&scratch, "lib");
     for command in [

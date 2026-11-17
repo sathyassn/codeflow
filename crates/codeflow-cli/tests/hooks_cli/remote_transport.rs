@@ -243,7 +243,7 @@ fn both_guards_refuse_an_implicit_contact_with_a_helper_program() {
 }
 
 #[test]
-fn both_guards_judge_every_promisor_registration_git_reads() {
+fn both_guards_judge_every_implicit_remote_registration() {
     // A partial clone filter registers the remote whatever its promisor
     // setting, and a true value counts even when a later one is false.
     let filtered = Scratch::landed(None);
@@ -316,7 +316,7 @@ fn ordinary_transports_keep_their_verdict() {
 }
 
 #[test]
-fn rewrites_and_push_destinations_are_resolved_per_direction() {
+fn destinations_are_resolved_per_direction() {
     let rewrite = Scratch::landed(None);
     rewrite
         .config("remote.web.url", "https://127.0.0.1:9/r.git")
@@ -346,7 +346,7 @@ fn rewrites_and_push_destinations_are_resolved_per_direction() {
 }
 
 #[test]
-fn both_guards_refuse_a_remote_with_a_helper_setting() {
+fn both_guards_refuse_a_program_chosen_by_remote_settings() {
     let scratch = Scratch::landed(None);
     scratch
         .config("remote.conflict.url", "fixture::https://127.0.0.1:9/r")
@@ -378,7 +378,7 @@ fn both_guards_refuse_a_remote_with_a_helper_setting() {
 }
 
 #[test]
-fn both_guards_refuse_an_operand_free_contact_they_cannot_prove() {
+fn both_guards_refuse_an_implicit_contact_they_cannot_prove() {
     // A sole remote other than `origin`, which Git falls back to.
     let sole = Scratch::landed(None);
     git(sole.root(), &["remote", "rename", "origin", "backup"]);
@@ -431,7 +431,7 @@ fn both_guards_refuse_an_operand_free_contact_they_cannot_prove() {
 }
 
 #[test]
-fn both_guards_refuse_a_remote_update_whose_selection_hides_a_remote() {
+fn both_guards_refuse_a_selection_that_hides_a_remote() {
     // An empty `default` group makes Git fetch the remote named `default`,
     // from the configuration or from a legacy remote file.
     for group in [&b"\"\""[..], &b"\" \\t \""[..]] {
@@ -475,7 +475,7 @@ fn both_guards_refuse_a_remote_update_whose_selection_hides_a_remote() {
 }
 
 #[test]
-fn both_guards_refuse_every_contact_beside_a_remote_section_with_an_empty_name() {
+fn both_guards_refuse_every_contact_beside_an_unnamed_remote_definition() {
     // Each key under `[remote ""]` defines a remote the guards do not
     // resolve, so every contact that reads the configuration's remotes
     // refuses, whatever name or address the command gives. git-guard
@@ -537,7 +537,7 @@ fn legacy_folder(scratch: &Scratch, folder: &str, form: &str) {
 
 #[cfg(unix)]
 #[test]
-fn both_guards_read_a_legacy_remote_folder_only_as_a_real_empty_folder() {
+fn both_guards_pass_an_older_definition_store_only_when_proven_empty() {
     let scratch = Scratch::landed(None);
     for folder in ["remotes", "branches"] {
         legacy_folder(&scratch, folder, "empty");
@@ -551,7 +551,7 @@ fn both_guards_read_a_legacy_remote_folder_only_as_a_real_empty_folder() {
 }
 
 #[test]
-fn both_guards_refuse_each_operand_free_fetch_state_they_cannot_prove() {
+fn both_guards_refuse_each_implicit_fetch_state_they_cannot_prove() {
     let detached = Scratch::landed(None);
     git(detached.root(), &["checkout", "-q", "--detach"]);
     assert_unproven(&detached, &["git fetch", "git pull"], &["git fetch origin"]);
@@ -599,7 +599,7 @@ fn both_guards_refuse_each_operand_free_fetch_state_they_cannot_prove() {
 }
 
 #[test]
-fn both_guards_refuse_a_remote_name_that_is_also_a_group() {
+fn both_guards_refuse_an_ambiguous_remote_name() {
     let scratch = Scratch::landed(None);
     scratch
         .config("remote.mirrors.url", "https://127.0.0.1:9/m")
@@ -613,7 +613,7 @@ fn both_guards_refuse_a_remote_name_that_is_also_a_group() {
 }
 
 #[test]
-fn an_unresolved_group_refuses_in_both_guards() {
+fn an_unresolved_selection_refuses_in_both_guards() {
     let scratch = Scratch::landed(None);
     scratch.config("remotes.mirrors", "origin missing");
     for (hook, command) in HOOKS
@@ -635,7 +635,7 @@ fn an_unresolved_group_refuses_in_both_guards() {
 }
 
 #[test]
-fn both_guards_refuse_submodule_recursion_they_cannot_prove() {
+fn both_guards_refuse_nested_contacts_they_cannot_prove() {
     let listed = Scratch::landed(None);
     listed.write(".gitmodules", b"");
     let initialized = Scratch::landed(None);
@@ -698,7 +698,7 @@ fn a_command_line_setting_does_not_move_the_repository_probe() {
 }
 
 #[test]
-fn both_guards_refuse_a_remote_with_more_than_one_address_value() {
+fn both_guards_refuse_a_remote_with_ambiguous_addresses() {
     let scratch = Scratch::landed(None);
     scratch
         .config("remote.web.url", "https://127.0.0.1:9/r")
@@ -750,7 +750,7 @@ fn a_recovery_fetch_is_withheld_for_a_helper_transport() {
 }
 
 #[test]
-fn both_guards_refuse_a_name_a_legacy_remote_file_may_define() {
+fn both_guards_refuse_a_name_an_older_definition_may_define() {
     for folder in ["remotes", "branches"] {
         let scratch = Scratch::landed(None);
         scratch.write(&format!(".git/{folder}/old"), b"URL: fixture::x\n");
@@ -779,7 +779,7 @@ fn an_unreadable_configuration_refuses_naming_the_file() {
 }
 
 #[test]
-fn the_landed_policy_admits_a_named_remote_helper() {
+fn the_landed_policy_admits_a_named_program() {
     let scratch = Scratch::landed(Some(ADMITTING));
     scratch
         .config("remote.selected.url", "fixture::https://127.0.0.1:9/r")
@@ -795,7 +795,7 @@ fn the_landed_policy_admits_a_named_remote_helper() {
 }
 
 #[test]
-fn only_the_landed_policy_admits_a_helper() {
+fn only_the_landed_policy_admits_a_program() {
     // The list committed on `main` after `origin` was fetched is not the
     // landed policy; nor is a working-copy edit.
     let committed = Scratch::landed(None);
@@ -853,7 +853,7 @@ fn account_finding(out: &Output) -> bool {
 }
 
 #[test]
-fn the_landed_policy_admits_a_named_credential_helper_on_a_remote_contact() {
+fn the_landed_policy_skips_the_account_finding_for_a_named_entry() {
     let fetch = "git fetch origin";
     let push = "git push origin HEAD:refs/heads/task/x";
     let read = "git credential fill";
@@ -902,7 +902,7 @@ fn the_landed_policy_admits_a_named_credential_helper_on_a_remote_contact() {
 const REMOTE_IDENTITY: &str = "the operator manages remote identity";
 
 #[test]
-fn both_guards_read_every_recursion_option_spelling_as_on() {
+fn both_guards_read_every_spelling_that_turns_nested_contacts_on() {
     let plain = Scratch::landed(None);
     assert_unproven(
         &plain,
@@ -991,7 +991,7 @@ fn both_guards_read_a_consumed_word_as_a_value() {
 /// configuration gives the new name a helper setting. git-guard refuses
 /// every `remote add` first by its remote identity rule.
 #[test]
-fn both_guards_read_a_remote_add_past_a_consumed_terminator() {
+fn both_guards_read_a_new_remote_definition_as_git_does() {
     let scratch = Scratch::landed(None);
     let global = scratch.base.join("global.gitconfig");
     std::fs::write(&global, "[remote \"fresh\"]\n\tvcs = fixture\n").unwrap();
@@ -1021,7 +1021,7 @@ fn both_guards_refuse_a_listed_contacting_verb_they_do_not_resolve() {
 
 #[cfg(unix)]
 #[test]
-fn both_guards_check_a_legacy_remote_name_with_a_backslash() {
+fn both_guards_check_an_older_definition_name_as_git_reads_it() {
     let scratch = Scratch::landed(None);
     scratch.write(".git/remotes/old\\name", b"URL: fixture::x\n");
     std::fs::write(scratch.root().join(".git/config"), b"").unwrap();
@@ -1064,7 +1064,7 @@ const AGENT_PUSH: &str = "git.agent_push_refused_branches";
 /// admitted helper relaxes no agent push refusal of a protected or
 /// integration branch.
 #[test]
-fn the_remote_url_list_and_the_helper_list_keep_to_their_own_rules() {
+fn the_two_policy_lists_keep_to_their_own_rules() {
     const HELPER_URL: &str = "fixture::https://127.0.0.1:9/r";
     let urls_only = Scratch::landed_with(|origin| {
         let policy = serde_json::json!({"git": {
@@ -1108,7 +1108,7 @@ fn the_remote_url_list_and_the_helper_list_keep_to_their_own_rules() {
 /// Round j, first row, through both guards: a last selection word Git
 /// replaces with a wider selection.
 #[test]
-fn both_guards_read_a_last_selection_word_as_git_reads_it() {
+fn both_guards_read_a_selection_word_as_git_reads_it() {
     let scratch = Scratch::landed(None);
     scratch.config("remote.backup.url", "fixture::x");
     assert_rows(
@@ -1139,7 +1139,7 @@ fn both_guards_read_every_word_git_keeps_as_an_operand() {
 /// Round j, third row, through both guards: a new copy judges the address
 /// a wider configuration scope gives its remote.
 #[test]
-fn both_guards_judge_every_address_a_new_copy_may_use() {
+fn both_guards_judge_every_address_a_copy_may_use() {
     let scratch = Scratch::landed(None);
     let global = scratch.base.join("global.gitconfig");
     std::fs::write(&global, "[remote \"upstream\"]\n\turl = fixture::x\n").unwrap();
@@ -1166,7 +1166,7 @@ fn both_guards_judge_every_address_a_new_copy_may_use() {
 /// records with no other marker refuses unless the line turns recursion
 /// off, and so does one recorded in the index file the call selects.
 #[test]
-fn both_guards_refuse_a_nested_repository_with_no_other_marker() {
+fn both_guards_refuse_nested_contacts_with_one_marker() {
     let scratch = Scratch::landed(None);
     git(scratch.root(), &["init", "-q", "lib"]);
     git(
