@@ -1,0 +1,11 @@
+id = "TSK-1523"
+uid = "8b90d37a-a2f7-431c-b3e3-3b12e0ecc6f8"
+kind = "TSK"
+title = "Release-automation test timeout under load"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T00:06:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
