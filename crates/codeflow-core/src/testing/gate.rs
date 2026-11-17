@@ -790,7 +790,6 @@ fn copy_evidence_file(
     child: &str,
     limit: u64,
 ) -> std::io::Result<()> {
-    use std::io::Read as _;
     let copied = std::io::copy(&mut file.take(limit.saturating_add(1)), out)?;
     if copied > limit {
         return Err(std::io::Error::new(
