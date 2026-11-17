@@ -411,6 +411,8 @@ fn hooked_fixture() -> Fixture {
             LINE,
         ],
     );
+    // As a clone records it: the hooks read the landed policy there.
+    git(root, &["remote", "set-head", "origin", "main"]);
     let hooks = root.join(".git/codeflow-hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     let shim = hooks.join("pre-push");

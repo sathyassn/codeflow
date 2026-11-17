@@ -101,6 +101,8 @@ fn fixture() -> Fixture {
     );
     git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
     seed_push(root, &["main", LINE]);
+    // As a clone records it: the hooks read the landed policy there.
+    git(root, &["remote", "set-head", "origin", "main"]);
 
     git(root, &["switch", "-q", "-c", RECEIVER, LINE]);
     write(root, TOOL, "task edit\n");
