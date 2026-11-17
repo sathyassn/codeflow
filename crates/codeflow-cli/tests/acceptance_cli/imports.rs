@@ -2063,7 +2063,7 @@ fn a_home_move_off_the_checked_line_stays_refused() {
 /// controls and the ordering must never read.
 fn commit_dated(root: &Path, message: &str, date: &str) -> String {
     git(root, &["add", "-A"]);
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .args(["commit", "-m", message])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
