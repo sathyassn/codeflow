@@ -750,7 +750,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
                 directories.extend(next);
                 directories.sort();
                 directories.dedup();
-                if directories.len() > DIR_SET_LIMIT {
+                if directories.len() > codeflow_limits::GUARD_DIR_SET_LIMIT.count() {
                     // The literal action reader also visits whole lines. Once
                     // its alternatives exceed the shared bound, judge later
                     // actions with an unknown directory instead of multiplying
@@ -819,9 +819,6 @@ pub(crate) struct DirSet {
     pub(crate) unknown: bool,
 }
 
-/// The most directories a [`DirSet`] lists before it reads as unknown.
-const DIR_SET_LIMIT: usize = 64;
-
 impl DirSet {
     /// Apply one change: a literal directory joins every listed one, a
     /// change the guard cannot resolve makes the set unknown.
@@ -839,7 +836,7 @@ impl DirSet {
                 };
                 for dir in next {
                     if !self.dirs.contains(&dir) {
-                        if self.dirs.len() == DIR_SET_LIMIT {
+                        if self.dirs.len() == codeflow_limits::GUARD_DIR_SET_LIMIT.count() {
                             self.unknown = true;
                         } else {
                             self.dirs.push(dir);
@@ -881,7 +878,7 @@ impl DirSet {
                 }
                 for dir in next {
                     if !self.dirs.contains(&dir) {
-                        if self.dirs.len() == DIR_SET_LIMIT {
+                        if self.dirs.len() == codeflow_limits::GUARD_DIR_SET_LIMIT.count() {
                             self.unknown = true;
                             break;
                         }
@@ -1604,7 +1601,7 @@ pub(crate) fn line_directories(
         set.unknown |= local.unknown;
         for dir in local.dirs {
             if seen.insert(dir.clone()) {
-                if set.dirs.len() == DIR_SET_LIMIT {
+                if set.dirs.len() == codeflow_limits::GUARD_DIR_SET_LIMIT.count() {
                     set.unknown = true;
                 } else {
                     set.dirs.push(dir);

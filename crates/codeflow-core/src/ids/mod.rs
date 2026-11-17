@@ -45,10 +45,6 @@ pub const REGISTRY_REF: &str = "refs/heads/codeflow/registry";
 /// The authority remote.
 pub const AUTHORITY: &str = "origin";
 
-/// Attempts at one push before giving up: the first and five retries
-/// (SPC-013 planning resolution 4).
-pub const PUSH_ATTEMPTS: usize = 6;
-
 /// Today's UTC date, `YYYY-MM-DD`.
 #[must_use]
 pub fn today() -> String {

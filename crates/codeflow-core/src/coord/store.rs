@@ -31,11 +31,6 @@ use super::schema::{Data, Envelope, SCHEMA_VERSION};
 use super::transition::{fold, Folded, Ledger};
 use super::CoordError;
 
-/// How long a command waits for the lock.
-pub const COMMAND_WAIT: Duration = Duration::from_secs(10);
-/// How long a hook waits for the lock before it reports busy.
-pub const HOOK_WAIT: Duration = Duration::from_secs(2);
-
 /// The ledger's files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -382,7 +377,7 @@ fn lock(paths: &Paths, wait: Duration) -> Result<Locked, CoordError> {
                 if Instant::now() >= deadline {
                     return Err(CoordError::Busy);
                 }
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(codeflow_limits::POLL_LOCK_MILLIS.wait());
             }
             Err(error) => return Err(unwritten(&paths.lock, &error)),
         }
@@ -685,7 +680,12 @@ fn status_name(instance: &str) -> String {
 /// Overwrite the actor's liveness file through the bounded observer, within
 /// the heartbeat limit. Only a bound mutation calls this; a read never does.
 fn heartbeat(paths: &Paths, actor: &RecordedBy, sequence: u64) -> Result<(), CoordError> {
-    heartbeat_within(paths, actor, sequence, super::observe::HEARTBEAT_TIMEOUT)
+    heartbeat_within(
+        paths,
+        actor,
+        sequence,
+        codeflow_limits::COORD_OBSERVE_HEARTBEAT_TIMEOUT_SECONDS.wait(),
+    )
 }
 
 fn heartbeat_within(
@@ -758,7 +758,12 @@ pub fn refresh_liveness(
     actor: &RecordedBy,
     sequence: u64,
 ) -> Result<(), CoordError> {
-    refresh_liveness_within(paths, actor, sequence, super::observe::HEARTBEAT_TIMEOUT)
+    refresh_liveness_within(
+        paths,
+        actor,
+        sequence,
+        codeflow_limits::COORD_OBSERVE_HEARTBEAT_TIMEOUT_SECONDS.wait(),
+    )
 }
 
 /// [`refresh_liveness`] within `limit`: a write that does not finish in

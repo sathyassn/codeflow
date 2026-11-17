@@ -9,9 +9,7 @@ use serde_json::{Map, Value};
 
 use super::{PolicyLevel, Violation};
 use crate::security::actions;
-use crate::security::pattern::{
-    match_extended_glob, GlobMatch, MAX_GLOB_PATH_BYTES, PATH_PAST_BOUND,
-};
+use crate::security::pattern::{match_extended_glob, GlobMatch, PATH_PAST_BOUND};
 
 /// An input which the edit guard cannot safely interpret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,7 +528,7 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
 fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
     // Refused before any read, with the cause the glob matcher would give, so
     // the host's path limit cannot change the verdict or its reason (TSK-1258).
-    if path.as_os_str().len() > MAX_GLOB_PATH_BYTES {
+    if path.as_os_str().len() > codeflow_limits::GLOB_PATH_BYTES.count() {
         return Err(EditError(format!(
             "cannot check the edit path against the protected paths: {PATH_PAST_BOUND}"
         )));
@@ -1247,10 +1245,6 @@ pub(crate) fn repository_enforcement_target(
     Ok(false)
 }
 
-/// How many entries a protected directory is walked for before the walk
-/// gives up and stands for the whole directory.
-const CANDIDATE_WALK_LIMIT: usize = 4096;
-
 /// The paths a `find` starting at `start` may hand to its action that hold
 /// enforcement state or a registered checkout, resolved through symlinks:
 /// each enforcement path and registered checkout root under `start`, every
@@ -1322,7 +1316,7 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>,
                             format!("cannot read protected directory entry: {error}")
                         })?;
                         seen += 1;
-                        if seen > CANDIDATE_WALK_LIMIT {
+                        if seen > codeflow_limits::EDIT_GUARD_WALK_LIMIT.count() {
                             push(path.join("*"));
                             stack.clear();
                             break;
@@ -1645,9 +1639,8 @@ mod tests {
     fn a_path_at_the_glob_bound_is_judged() {
         let fixture = Fixture::new();
         let root = normalized(&fixture.root, true).unwrap();
-        let space = crate::security::pattern::MAX_GLOB_PATH_BYTES
-            - root.as_os_str().len()
-            - "/notes/".len();
+        let space =
+            codeflow_limits::GLOB_PATH_BYTES.count() - root.as_os_str().len() - "/notes/".len();
         let deep = "a/".repeat(space / 2);
         assert!(!fixture.refused(&format!("notes/{deep}")));
         let protected = format!(".git/hooks/{}", &deep[..deep.len() - 8]);

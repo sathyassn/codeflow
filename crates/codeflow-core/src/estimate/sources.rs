@@ -1,9 +1,6 @@
 //! Read-only evidence resolution, never a second persisted work graph.
 
-use super::model::{
-    Forecast, ForecastReport, Package, Pin, Source, SourceAssurance, SourceDigest,
-    MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES,
-};
+use super::model::{Forecast, ForecastReport, Package, Pin, Source, SourceAssurance, SourceDigest};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
@@ -47,7 +44,7 @@ impl Reader {
         root.is_dir().then_some(Self {
             root,
             confined,
-            remaining: MAX_TOTAL_SOURCE_BYTES,
+            remaining: codeflow_limits::ESTIMATE_MAX_TOTAL_SOURCE_BYTES.value(),
             cache: BTreeMap::new(),
         })
     }
@@ -64,10 +61,12 @@ impl Reader {
             );
             return None;
         };
-        let Ok(bytes) = self
-            .confined
-            .read(Path::new(path), MAX_SOURCE_BYTES.min(self.remaining))
-        else {
+        let Ok(bytes) = self.confined.read(
+            Path::new(path),
+            codeflow_limits::ESTIMATE_MAX_SOURCE_BYTES
+                .value()
+                .min(self.remaining),
+        ) else {
             report.finding("source_read","sources","Source is missing, unreadable, changed, non-regular, or exceeds the source byte budget.");
             return None;
         };

@@ -6,14 +6,10 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// The review states that count as a submitted review round.
 const SUBMITTED: &str = "APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED";
-/// Pull requests asked for in one query.
-const BATCH: usize = 50;
-/// How long one `gh` call may take before it counts as failed.
-const TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Where review data comes from. The CLI uses [`Gh`]; tests supply their
 /// own.
@@ -34,7 +30,7 @@ pub struct Gh;
 impl ReviewHost for Gh {
     fn rounds(&self, repo_root: &Path, numbers: &[u64]) -> Result<BTreeMap<u64, u64>, String> {
         let mut rounds = BTreeMap::new();
-        for batch in numbers.chunks(BATCH) {
+        for batch in numbers.chunks(codeflow_limits::CEREMONY_BATCH.count()) {
             let fields: Vec<String> = batch
                 .iter()
                 .map(|n| {
@@ -98,7 +94,7 @@ fn first_error(value: &serde_json::Value) -> String {
         )
 }
 
-/// Run `gh` with `args` in `dir`, bounded by [`TIMEOUT`]. Its standard
+/// Run `gh` with `args` in `dir`, bounded by [`codeflow_limits::CEREMONY_HOST_TIMEOUT_SECONDS`]. Its standard
 /// output is returned when it is a GraphQL answer, even on a nonzero exit,
 /// since `gh` exits nonzero for a partial answer.
 fn gh(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -124,13 +120,20 @@ fn gh(dir: &Path, args: &[&str]) -> Result<String, String> {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(25));
+            Ok(None)
+                if started.elapsed() < codeflow_limits::CEREMONY_HOST_TIMEOUT_SECONDS.wait() =>
+            {
+                std::thread::sleep(codeflow_limits::POLL_PROCESS_MILLIS.wait());
             }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("`gh` gave no answer in {}s", TIMEOUT.as_secs()));
+                return Err(format!(
+                    "`gh` gave no answer in {}s",
+                    codeflow_limits::CEREMONY_HOST_TIMEOUT_SECONDS
+                        .wait()
+                        .as_secs()
+                ));
             }
             Err(e) => return Err(format!("`gh` could not be waited on: {e}")),
         }

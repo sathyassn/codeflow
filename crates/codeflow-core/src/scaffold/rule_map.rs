@@ -30,11 +30,12 @@ pub const SHARED_HOME_RULES: usize = 3;
 /// The project section a complete `AGENTS.md` must leave room for: a
 /// realistic adopter section of this size still fits Codex's instruction
 /// limit at every tier (`rule_map_contract`, TSK-150).
-pub const PROJECT_SECTION_ROOM_BYTES: usize = 16 * 1024;
+pub const PROJECT_SECTION_ROOM_BYTES: usize =
+    codeflow_limits::SHARED_PROJECT_SECTION_ROOM_BYTES.default_count();
 
 /// The room the header above the managed block takes: the title, the
 /// one-line product description and the stack, areas and tier lines.
-pub const HEADER_ROOM_BYTES: usize = 1024;
+pub const HEADER_ROOM_BYTES: usize = codeflow_limits::SHARED_HEADER_ROOM_BYTES.default_count();
 
 /// Codex reads at most this many bytes of project instructions by default
 /// (`project_doc_max_bytes`) and silently cuts the rest of an `AGENTS.md`.
@@ -42,7 +43,8 @@ pub const HEADER_ROOM_BYTES: usize = 1024;
 /// check that stays a failure for the generated document (TSK-150). A
 /// project that raises the setting in its `.codex/config.toml` is measured
 /// against its own value by `codeflow doctor` ([`codex_instruction_limit`]).
-pub const CODEX_INSTRUCTION_LIMIT_BYTES: usize = 32 * 1024;
+pub const CODEX_INSTRUCTION_LIMIT_BYTES: usize =
+    codeflow_limits::CODEX_INSTRUCTION_BYTES.default_count();
 
 /// Advisory guideline for the managed block of one tier's `AGENTS.md`,
 /// markers included: the always-read kernel. Derived, not chosen: what

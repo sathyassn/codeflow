@@ -326,17 +326,11 @@ fn acquire_file_locks(
     Ok(Some(held))
 }
 
-/// How long a compaction waits for a contended lock before it treats the
-/// holder as a real compaction or writer. A child process spawned by any
-/// thread while a lock descriptor was open keeps that lock until it execs,
-/// so a lock just released can read as held for a moment.
-const LOCK_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Take `lock` exclusively, waiting up to [`LOCK_SETTLE`] while it is
+/// Take `lock` exclusively, waiting up to [`codeflow_limits::LEDGER_LOCK_SETTLE_SECONDS`] while it is
 /// contended: `Ok(false)` when it is still held after that, an error when
 /// the lock cannot be taken for another reason.
 fn lock_within(lock: &fs::File, path: &Path) -> Result<bool, LedgerError> {
-    let deadline = std::time::Instant::now() + LOCK_SETTLE;
+    let deadline = std::time::Instant::now() + codeflow_limits::LEDGER_LOCK_SETTLE_SECONDS.wait();
     loop {
         match lock.try_lock_exclusive() {
             Ok(()) => return Ok(true),
@@ -344,7 +338,7 @@ fn lock_within(lock: &fs::File, path: &Path) -> Result<bool, LedgerError> {
                 if std::time::Instant::now() >= deadline {
                     return Ok(false);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait());
             }
             Err(error) => {
                 return Err(LedgerError::Lock(format!(

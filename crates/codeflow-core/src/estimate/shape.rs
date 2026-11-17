@@ -1,6 +1,6 @@
 //! Cheap structural/size checks before reading referenced evidence.
 
-use super::model::{Forecast, ForecastReport, Pin, Source, MAX_HORIZON};
+use super::model::{Forecast, ForecastReport, Pin, Source};
 use std::collections::BTreeSet;
 
 pub(super) fn valid_id(value: &str) -> bool {
@@ -81,7 +81,7 @@ pub(super) fn check(f: &Forecast, report: &mut ForecastReport) {
     }
     require(valid_id(&f.id), report, "id");
     require(
-        f.horizon_seconds > 0 && f.horizon_seconds <= MAX_HORIZON,
+        f.horizon_seconds > 0 && f.horizon_seconds <= codeflow_limits::ESTIMATE_MAX_HORIZON.value(),
         report,
         "horizon_seconds",
     );

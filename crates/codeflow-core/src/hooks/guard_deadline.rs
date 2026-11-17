@@ -26,25 +26,11 @@
 /// a session.
 pub const GUARD_HOOK_TIMEOUT_SECS: u64 = super::limits::GUARD_HOOK_TIMEOUT.default;
 
-/// Seconds after which a guard process refuses on its own, well inside
-/// [`GUARD_HOOK_TIMEOUT_SECS`] so the refusal reaches the harness before
-/// the harness stops waiting.
+/// Seconds after which a guard process refuses on its own by default, well
+/// inside [`GUARD_HOOK_TIMEOUT_SECS`] so the refusal reaches the harness
+/// before the harness stops waiting. A project can move it within the
+/// bounds of `codeflow_limits::GUARD_DEADLINE`.
 pub const GUARD_DEADLINE_SECS: u64 = super::limits::GUARD_DEADLINE.default;
-
-/// Seconds a guard waits for one remote lookup, inside
-/// [`GUARD_DEADLINE_SECS`] with room for its other work (TSK-1301). A remote
-/// that does not answer in time gets a named refusal from the guard, never
-/// the harness kill. A command naming several repositories can make several
-/// lookups, and the deadline bounds them all.
-pub const GUARD_REMOTE_QUERY_SECS: u64 = super::limits::GUARD_REMOTE_QUERY_WAIT.default;
-
-/// Seconds the git guard waits for `gh pr view` to name a pull request's
-/// base branch; no answer in time is doubt, and the guard blocks on doubt.
-pub const GUARD_PR_LOOKUP_SECS: u64 = super::limits::GUARD_PR_LOOKUP_WAIT.default;
-
-/// Seconds the deadline's refusal waits for its reason to be written before
-/// the guard exits 2 regardless.
-pub const GUARD_REFUSAL_WRITE_SECS: u64 = super::limits::GUARD_REFUSAL_WRITE_WAIT.default;
 
 /// The session guards whose hook entries carry these bounds.
 pub const GUARDS: [&str; 3] = ["git-guard", "exec-guard", "edit-guard"];
@@ -68,8 +54,23 @@ mod tests {
 
     #[test]
     fn the_deadline_falls_inside_the_harness_timeout() {
+        use crate::hooks::limits::{
+            GUARD_DEADLINE, GUARD_PR_LOOKUP_WAIT, GUARD_REFUSAL_WRITE_WAIT, GUARD_REMOTE_QUERY_WAIT,
+        };
         const { assert!(GUARD_DEADLINE_SECS + 5 <= GUARD_HOOK_TIMEOUT_SECS) };
-        const { assert!(GUARD_REMOTE_QUERY_SECS + 5 <= GUARD_DEADLINE_SECS) };
+        // The same nesting holds at every ceiling a project can reach.
+        const {
+            assert!(
+                GUARD_DEADLINE.most() + GUARD_REFUSAL_WRITE_WAIT.default + 5
+                    <= GUARD_HOOK_TIMEOUT_SECS
+            );
+        };
+        const {
+            assert!(
+                GUARD_REMOTE_QUERY_WAIT.default + GUARD_PR_LOOKUP_WAIT.most() + 5
+                    <= GUARD_DEADLINE.most()
+            );
+        };
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 pub struct ReserveArgs {
     /// Maximum seconds to wait while a host-exclusive target holds the host.
     /// Zero refuses immediately. Other heavy runs never make a reserve wait.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = codeflow_limits::HEAVY_WAIT.default)]
     pub wait_seconds: u64,
     /// Stop the command and its descendants after this many seconds.
     #[arg(long, default_value_t = 3600)]
@@ -59,22 +59,25 @@ pub fn run(args: &ReserveArgs) -> i32 {
                         args.wait_seconds
                     );
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
             }
         }
     };
     for note in &lock.notes {
         eprintln!("codeflow reserve: {note}");
     }
-    let host = capacity::host_jobs(execution.host_jobs);
-    // Always bounded by the host's job budget, the first run included
-    // (R483-05); `worker_budget` only caps it further.
-    let jobs = capacity::run_jobs(host, execution.worker_budget, lock.runs);
-    if capacity::lowered(host, execution.worker_budget, lock.runs) {
+    // Bounded by the host's job budget, the first run included (R483-05),
+    // unless the project set `worker_budget` and left the budget to memory.
+    let share = capacity::run_share(execution.host_jobs, execution.worker_budget, lock.runs);
+    let (host, jobs) = (share.host, share.jobs);
+    if share.lowered {
         eprintln!(
             "codeflow reserve: {} heavy runs share this host's {host} jobs; this command uses {jobs}",
             lock.runs
         );
+    }
+    if let Some(warning) = share.warning {
+        eprintln!("codeflow reserve: {warning} (about {host} jobs; this command uses {jobs})");
     }
     let workers = Some(jobs);
     let cwd = std::env::current_dir().unwrap_or(root);

@@ -67,6 +67,26 @@ impl Git {
         })
     }
 
+    /// Run git within `deadline` and return its raw output, whatever the exit
+    /// status, or `None` when the deadline passed and git was stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when git cannot be started.
+    pub fn output_within(
+        &self,
+        args: &[&str],
+        deadline: std::time::Duration,
+    ) -> Result<Option<Output>, IdsError> {
+        self.check_history(args)?;
+        crate::git::remote_query::output_within(self.command(args), deadline).map_err(|error| {
+            IdsError::Git(format!(
+                "git {}: {error}",
+                crate::git::remote_query::display_urls(&args.join(" "))
+            ))
+        })
+    }
+
     /// Run git with extra environment and return its raw output.
     ///
     /// # Errors

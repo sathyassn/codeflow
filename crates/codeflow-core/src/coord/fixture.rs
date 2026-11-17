@@ -6,7 +6,7 @@
 
 use super::actor::{RecordedBy, UNKNOWN};
 use super::schema::{Claim, Data, LaneOpen, Scope, Seat, SeatKind};
-use super::store::{commit, Draft, Paths, SubjectId, COMMAND_WAIT};
+use super::store::{commit, Draft, Paths, SubjectId};
 use super::CoordError;
 
 /// The operator, as the fixture records it.
@@ -58,19 +58,24 @@ pub fn lane(lane: &str, instance: &str, generation: u64) -> RecordedBy {
 ///
 /// As [`commit`].
 pub fn open_stream(paths: &Paths, stream: &str, instance: &str) -> Result<(), CoordError> {
-    commit(paths, &operator(), COMMAND_WAIT, |_| {
-        Ok(vec![Draft::new(
-            SubjectId::Given(stream.into()),
-            Data::StreamOpened(Scope {
-                slug: None,
-                scope: vec!["fixture".into()],
-            }),
-        )])
-    })?;
+    commit(
+        paths,
+        &operator(),
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+        |_| {
+            Ok(vec![Draft::new(
+                SubjectId::Given(stream.into()),
+                Data::StreamOpened(Scope {
+                    slug: None,
+                    scope: vec!["fixture".into()],
+                }),
+            )])
+        },
+    )?;
     commit(
         paths,
         &coordinator(stream, instance, 1),
-        COMMAND_WAIT,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
         |_| {
             Ok(vec![Draft::new(
                 SubjectId::Given(stream.into()),
@@ -94,30 +99,40 @@ pub fn open_lane(
     seat_instance: &str,
 ) -> Result<String, CoordError> {
     let lead = coordinator(stream, coordinator_instance, 1);
-    let opened = commit(paths, &lead, COMMAND_WAIT, |_| {
-        Ok(vec![Draft::new(
-            SubjectId::NextLane,
-            Data::LaneOpened(LaneOpen {
-                stream: stream.into(),
-                slug: None,
-                scope: vec!["fixture".into()],
-            }),
-        )])
-    })?;
+    let opened = commit(
+        paths,
+        &lead,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+        |_| {
+            Ok(vec![Draft::new(
+                SubjectId::NextLane,
+                Data::LaneOpened(LaneOpen {
+                    stream: stream.into(),
+                    slug: None,
+                    scope: vec!["fixture".into()],
+                }),
+            )])
+        },
+    )?;
     let id = opened
         .envelopes
         .first()
         .map(|envelope| envelope.subject_id.clone())
         .ok_or_else(|| CoordError::Refused("no lane was opened".into()))?;
-    commit(paths, &lead, COMMAND_WAIT, |_| {
-        Ok(vec![Draft::new(
-            SubjectId::Given(id.clone()),
-            Data::SeatAttached(Seat {
-                seat_instance: seat_instance.into(),
-                kind: SeatKind::External,
-                harness: UNKNOWN.into(),
-            }),
-        )])
-    })?;
+    commit(
+        paths,
+        &lead,
+        codeflow_limits::COORD_COMMAND_WAIT_SECONDS.wait(),
+        |_| {
+            Ok(vec![Draft::new(
+                SubjectId::Given(id.clone()),
+                Data::SeatAttached(Seat {
+                    seat_instance: seat_instance.into(),
+                    kind: SeatKind::External,
+                    harness: UNKNOWN.into(),
+                }),
+            )])
+        },
+    )?;
     Ok(id)
 }

@@ -256,6 +256,7 @@ dependencies = [
  "clap",
  "codeflow-core",
  "codeflow-fixture",
+ "codeflow-limits",
  "codeflow-present",
  "git2",
  "libc",
@@ -279,6 +280,7 @@ version = "4.0.0"
 dependencies = [
  "base64",
  "codeflow-fixture",
+ "codeflow-limits",
  "diffy",
  "fs2",
  "git2",
@@ -317,11 +319,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codeflow-limits"
+version = "0.0.0"
+
+[[package]]
 name = "codeflow-present"
 version = "4.0.0"
 dependencies = [
  "axum",
  "base64",
+ "codeflow-limits",
  "cssparser",
  "fs2",
  "getrandom 0.4.3",

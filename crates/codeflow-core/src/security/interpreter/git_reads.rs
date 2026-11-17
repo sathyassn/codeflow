@@ -57,7 +57,7 @@ const ALIAS_NEUTRAL_GLOBALS: &[&str] = &[
 ];
 
 /// The deepest alias chain the guard follows, as the git guard does.
-const ALIAS_DEPTH: usize = 8;
+const ALIAS_DEPTH: usize = codeflow_limits::GUARD_ALIAS_DEPTH.default_count();
 
 /// `call` with a Git alias expanded the way Git prepends its value
 /// (TSK-1002 review 07): `Ok(None)` when `call` is not Git, its subcommand

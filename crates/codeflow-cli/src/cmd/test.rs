@@ -317,7 +317,8 @@ fn guard_gate(
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or(0));
+    let wait =
+        std::time::Duration::from_secs(wait_seconds.unwrap_or(codeflow_limits::HEAVY_WAIT.default));
     let start = std::time::Instant::now();
     let mut announced = false;
     let lock = loop {
@@ -328,7 +329,7 @@ fn guard_gate(
                     announced = true;
                     eprintln!("codeflow test: waiting up to {}s: {held}", wait.as_secs());
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::thread::sleep(codeflow_limits::POLL_WAIT_MILLIS.wait());
             }
             Err(held) => {
                 let mut message = held.to_string();

@@ -13,7 +13,7 @@ use super::git::Git;
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::issue::{self, Fetched, Pushed, Request};
 use super::ledger::{short, Ledger};
-use super::{state, tracking_ref, IdsError, Standing, AUTHORITY, PUSH_ATTEMPTS, REGISTRY_REF};
+use super::{state, tracking_ref, IdsError, Standing, AUTHORITY, REGISTRY_REF};
 use crate::scaffold::state::guard_beneath_root;
 
 /// A maintainer's explicit mapping: for each id, the introducing shas of
@@ -106,7 +106,7 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
     let online = git.has_remote(AUTHORITY)?;
     let tracking = tracking_ref(AUTHORITY);
     let mut reason = String::new();
-    for _ in 0..PUSH_ATTEMPTS {
+    for _ in 0..codeflow_limits::IDS_PUSH_ATTEMPTS.count() {
         if online {
             if let Fetched::Offline(reason) = issue::fetch(git, AUTHORITY)? {
                 return Err(IdsError::Offline(reason));
@@ -168,7 +168,10 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
             Pushed::Unclear(why) => return Err(IdsError::Transport(why)),
         }
     }
-    Err(IdsError::Contended(PUSH_ATTEMPTS, reason))
+    Err(IdsError::Contended(
+        codeflow_limits::IDS_PUSH_ATTEMPTS.count(),
+        reason,
+    ))
 }
 
 /// The entries a seed would add: every id on every ref or in retained
