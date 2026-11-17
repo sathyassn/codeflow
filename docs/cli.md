@@ -225,6 +225,9 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--template <NAME>` | Write an embedded test-config template by name. |
 | | `--replace` | Explicitly replace an existing config when applying --template. |
 | | `--add-target` | Interactively append one target to the existing config. |
+| `codeflow test guards` | | Name the tests that guard each path this change touches, from the config's `guards` rules, and print each path no rule matches as unguarded. Also lists the targets the declared inputs would select, which no run applies yet: every run executes every eligible target (ADR-0089). Runs nothing itself |
+| | `--since <REV>` | Compare the working tree with this commit. Default: the merge base of HEAD with the integration target of the task the branch names. |
+| | `--mode <MODE>` | The mode whose targets the declared selection lists. One of `full`, `quick`, `essential`. Default `quick`. |
 | `codeflow reserve <COMMAND>...` | | Run a direct heavy command in a heavy-run slot, beside other heavy runs |
 | | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait while a host-exclusive target holds the host. Zero refuses immediately. Other heavy runs never make a reserve wait. Default `0`. |
 | | `--timeout-seconds <TIMEOUT_SECONDS>` | Stop the command and its descendants after this many seconds. Default `3600`. |
@@ -549,6 +552,7 @@ and CI runs it again.
 | Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
+| `test guards` | Runs nothing. For the change from the merge base of `HEAD` with the task's line (or `--since <rev>`) to the working tree, names the tests the config's `guards` rules give each touched path, prints each path no rule covers as unguarded, and lists the targets the declared inputs would select. Run the named tests as the build loop's targeted tests. No run applies that selection while no local record earns selection credit (ADR-0089) |
 
 Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
