@@ -42,51 +42,6 @@ fn require_environment(applied: bool) {
     );
 }
 
-#[cfg(test)]
-mod environment_tests {
-    use super::{cargo_environment_applied, require_environment, CARGO_ENVIRONMENT_PROBE};
-
-    #[test]
-    fn forced_values_establish_that_the_cargo_table_was_applied() {
-        let config = include_str!("../../../.cargo/config.toml");
-        for (key, value) in CARGO_ENVIRONMENT_PROBE {
-            assert!(config.contains(&format!("{key} = {{ value = \"{value}\", force = true }}")));
-        }
-        assert!(cargo_environment_applied(|key| {
-            CARGO_ENVIRONMENT_PROBE
-                .iter()
-                .find_map(|(name, value)| (*name == key).then(|| (*value).into()))
-        }));
-        for missing in CARGO_ENVIRONMENT_PROBE.map(|(key, _)| key) {
-            assert!(!cargo_environment_applied(|key| {
-                CARGO_ENVIRONMENT_PROBE.iter().find_map(|(name, value)| {
-                    (*name == key && key != missing).then(|| (*value).into())
-                })
-            }));
-            assert!(!cargo_environment_applied(|key| {
-                CARGO_ENVIRONMENT_PROBE.iter().find_map(|(name, value)| {
-                    (*name == key).then(|| {
-                        if key == missing {
-                            "host-value".into()
-                        } else {
-                            (*value).into()
-                        }
-                    })
-                })
-            }));
-        }
-        assert!(!cargo_environment_applied(|key| {
-            (key == "CARGO_MANIFEST_DIR").then(|| "/a/manifest/path".into())
-        }));
-    }
-
-    #[test]
-    #[should_panic(expected = "run `cargo test` from the repository root or a worktree root")]
-    fn a_missing_table_refuses_with_the_cause_and_fix() {
-        require_environment(false);
-    }
-}
-
 /// A clone with only the options used by workspace fixtures.
 #[must_use]
 pub struct Clone {
@@ -216,5 +171,50 @@ impl Clone {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::{cargo_environment_applied, require_environment, CARGO_ENVIRONMENT_PROBE};
+
+    #[test]
+    fn forced_values_establish_that_the_cargo_table_was_applied() {
+        let config = include_str!("../../../.cargo/config.toml");
+        for (key, value) in CARGO_ENVIRONMENT_PROBE {
+            assert!(config.contains(&format!("{key} = {{ value = \"{value}\", force = true }}")));
+        }
+        assert!(cargo_environment_applied(|key| {
+            CARGO_ENVIRONMENT_PROBE
+                .iter()
+                .find_map(|(name, value)| (*name == key).then(|| (*value).into()))
+        }));
+        for missing in CARGO_ENVIRONMENT_PROBE.map(|(key, _)| key) {
+            assert!(!cargo_environment_applied(|key| {
+                CARGO_ENVIRONMENT_PROBE.iter().find_map(|(name, value)| {
+                    (*name == key && key != missing).then(|| (*value).into())
+                })
+            }));
+            assert!(!cargo_environment_applied(|key| {
+                CARGO_ENVIRONMENT_PROBE.iter().find_map(|(name, value)| {
+                    (*name == key).then(|| {
+                        if key == missing {
+                            "host-value".into()
+                        } else {
+                            (*value).into()
+                        }
+                    })
+                })
+            }));
+        }
+        assert!(!cargo_environment_applied(|key| {
+            (key == "CARGO_MANIFEST_DIR").then(|| "/a/manifest/path".into())
+        }));
+    }
+
+    #[test]
+    #[should_panic(expected = "run `cargo test` from the repository root or a worktree root")]
+    fn a_missing_table_refuses_with_the_cause_and_fix() {
+        require_environment(false);
     }
 }
