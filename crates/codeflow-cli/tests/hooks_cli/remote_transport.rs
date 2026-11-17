@@ -806,6 +806,17 @@ fn only_the_landed_policy_admits_a_helper() {
     write_policy(edited.root(), ADMITTING);
     edited.config("remote.selected.url", "fixture::https://127.0.0.1:9/r");
     assert_rows(&edited, &["git fetch selected"], &[]);
+    // Nor is a setting on the command line, whatever key it uses.
+    let line = Scratch::landed(None);
+    line.config("remote.selected.url", "fixture::https://127.0.0.1:9/r");
+    assert_rows(
+        &line,
+        &[
+            "git -c git.admittedHelpers=git-remote-fixture fetch selected",
+            "git -c codeflow.admittedHelpers=git-remote-fixture fetch selected",
+        ],
+        &[],
+    );
 }
 
 /// The admitting policy with the secret-read rule at warn, so the
@@ -863,9 +874,15 @@ fn the_landed_policy_admits_a_named_credential_helper_on_a_remote_contact() {
         assert!(!account_finding(&out), "{command}: {}", stderr(&out));
         assert_eq!(out.status.code(), Some(0), "{command}: {}", stderr(&out));
     }
-    // Reading the credential directly stays refused.
+    // Reading the credential directly stays refused, by the account rule.
     let out = admitted.judge("exec-guard", read);
-    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        out.status.code() == Some(2)
+            && err.contains("security.outward_actions")
+            && account_finding(&out),
+        "{err}"
+    );
     // A helper the list does not name keeps its finding.
     let other = Scratch::landed(Some(ADMITTING));
     other.config(
