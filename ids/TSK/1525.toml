@@ -1,0 +1,11 @@
+id = "TSK-1525"
+uid = "61acd483-7d05-434d-b059-36efe3f57579"
+kind = "TSK"
+title = "The ids check reads legacy records and each record blob without extra git work per branch"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T01:29:01Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
