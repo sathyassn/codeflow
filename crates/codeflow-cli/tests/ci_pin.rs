@@ -98,15 +98,47 @@ fn sha256(path: &Path) -> String {
 /// A local release for `version`: the archive holding a fake `codeflow`
 /// that prints its version, and `sha256.sum` listing it.
 fn publish(releases: &Path, version: &str) -> PathBuf {
+    publish_executable(releases, version, None)
+}
+
+/// Use the installer's release layout with the test host's native candidate.
+/// The candidate path is an archive input, never a verdict executable.
+fn publish_candidate(releases: &Path, version: &str) -> PathBuf {
+    // Cache bytes, not a temporary directory: each fixture owns its files,
+    // and the suite compresses the large candidate only once per process.
+    static ARCHIVE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let bytes = ARCHIVE.get_or_init(|| {
+        let stage = tempfile::tempdir().unwrap();
+        let release = publish_executable(
+            stage.path(),
+            env!("CARGO_PKG_VERSION"),
+            Some(Path::new(env!("CARGO_BIN_EXE_codeflow"))),
+        );
+        std::fs::read(release.join(format!("{ASSET}.tar.xz"))).unwrap()
+    });
+    let dir = releases.join(format!("v{version}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join(format!("{ASSET}.tar.xz"));
+    std::fs::write(&archive, bytes).unwrap();
+    write_release_checksum(&dir, &archive);
+    dir
+}
+
+fn publish_executable(releases: &Path, version: &str, candidate: Option<&Path>) -> PathBuf {
     let dir = releases.join(format!("v{version}"));
     let stage = releases.join(format!("stage-{version}")).join(ASSET);
     std::fs::create_dir_all(&stage).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     let bin = stage.join("codeflow");
-    std::fs::write(&bin, format!("#!/bin/sh\necho \"codeflow {version}\"\n")).unwrap();
+    if let Some(candidate) = candidate {
+        std::fs::copy(candidate, &bin).unwrap();
+    } else {
+        std::fs::write(&bin, format!("#!/bin/sh\necho \"codeflow {version}\"\n")).unwrap();
+    }
     Command::new("chmod").arg("755").arg(&bin).status().unwrap();
     let archive = dir.join(format!("{ASSET}.tar.xz"));
     let status = Command::new("tar")
+        .env("XZ_OPT", "-0")
         .arg("-cJf")
         .arg(&archive)
         .arg("-C")
@@ -115,15 +147,19 @@ fn publish(releases: &Path, version: &str) -> PathBuf {
         .status()
         .unwrap();
     assert!(status.success());
+    write_release_checksum(&dir, &archive);
+    dir
+}
+
+fn write_release_checksum(dir: &Path, archive: &Path) {
     std::fs::write(
         dir.join("sha256.sum"),
         format!(
             "{}  {ASSET}.tar.xz\n0000  codeflow-cli-installer.sh\n",
-            sha256(&archive)
+            sha256(archive)
         ),
     )
     .unwrap();
-    dir
 }
 
 fn project_toml(version: &str) -> String {
@@ -150,9 +186,12 @@ struct Install {
 }
 
 impl Install {
+    fn binary(&self) -> PathBuf {
+        self.home.path().join(".codeflow/bin/codeflow")
+    }
+
     fn installed_version(&self) -> Option<String> {
-        let bin = self.home.path().join(".codeflow/bin/codeflow");
-        let out = Command::new(bin).output().ok()?;
+        let out = Command::new(self.binary()).arg("--version").output().ok()?;
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
     fn stderr(&self) -> String {
@@ -2002,135 +2041,590 @@ fn the_verdict_job_refuses_a_run_not_for_the_default_branch() {
     }
 }
 
-/// A pull request that edits the enforcing workflow to pass, raises the pin
-/// and relaxes the policy changes nothing: the `pull_request_target` run
-/// reads the workflow, the pin and the policy from the target.
+/// TSK-365 AC-1: the installer must deliver the candidate whose policy
+/// judgment the journey claims to exercise, rather than a version-only stub.
 #[test]
-fn a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict() {
-    judge_a_forged_head("9.9.9");
-}
-
-/// SPC-013 R-104 (TSK-110): a head that lowers the pin while it touches the
-/// workflow and the policy is judged by the target's binary, as a raise is.
-#[test]
-fn a_pr_lowering_the_pin_is_still_judged_by_the_target_binary() {
-    judge_a_forged_head("1.0.0");
-}
-
-/// A head that sets its own pin to `head_pin`, forges the workflow, relaxes
-/// the policy and breaks the commit format; the target's pinned binary
-/// judges it and blocks.
-fn judge_a_forged_head(head_pin: &str) {
+fn the_installed_candidate_matches_the_release_binary() {
     let dir = tempfile::tempdir().unwrap();
     let releases = dir.path().join("releases");
-    publish(&releases, "1.2.3");
-    publish(&releases, head_pin);
-    let origin = dir.path().join("origin");
-    std::fs::create_dir_all(&origin).unwrap();
-    repo(&origin, "1.2.3");
-    std::fs::create_dir_all(origin.join(".github/workflows")).unwrap();
-    std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), POLICY).unwrap();
-    std::fs::write(
-        origin.join(".codeflow/policy.json"),
-        include_str!("../../../assets/base/policy.json"),
-    )
-    .unwrap();
-    git(&origin, &["add", "."]);
-    git(&origin, &["commit", "-m", "ci: add the enforcing workflow"]);
-
-    // The head: an always-green workflow, its own pin, a relaxed policy and
-    // a commit that breaks the target's format rule.
-    git(&origin, &["checkout", "-b", "feat/x"]);
-    // The forgery replaces the whole verdict block (the policy presence
-    // check and the `codeflow ci` call) with a step that always passes.
-    let start = POLICY
-        .find("        run: |\n          if ! git cat-file -e \"${AUTHORITY_SHA}:.codeflow/policy.json\"")
-        .expect("the verdict block");
-    let call = "--policy-from \"$AUTHORITY_SHA\" --baseline-from \"$AUTHORITY_SHA\" \
-                --pr-body-file \"$BODY_FILE\"\n";
-    let end = start + POLICY[start..].find(call).expect("the verdict call") + call.len();
-    assert!(POLICY[start..end].contains("\n          codeflow ci --base \"$BASE_SHA\""));
-    let forged = [&POLICY[..start], "        run: exit 0\n", &POLICY[end..]].concat();
-    assert_ne!(forged, POLICY);
-    assert!(!forged.contains("codeflow ci --base"), "never judges");
-    std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), forged).unwrap();
-    std::fs::write(
-        origin.join(".codeflow/project.toml"),
-        project_toml(head_pin),
-    )
-    .unwrap();
-    let relaxed = include_str!("../../../assets/base/policy.json")
-        .replace("\"commit_format\": \"block\"", "\"commit_format\": \"off\"");
-    std::fs::write(origin.join(".codeflow/policy.json"), relaxed).unwrap();
-    git(&origin, &["add", "."]);
-    git(&origin, &["commit", "-m", "Make every check pass"]);
-    let head = git(&origin, &["rev-parse", "HEAD"]);
-    git(&origin, &["checkout", "main"]);
-    let base = git(&origin, &["rev-parse", "main"]);
-
-    // The pull_request_target run: the target checkout, the head as data.
-    let target = dir.path().join("target");
-    codeflow_fixture::clone(
-        dir.path(),
-        origin.to_str().unwrap(),
-        target.to_str().unwrap(),
-    )
-    .env("GIT_CONFIG_GLOBAL", "/dev/null")
-    .env("GIT_CONFIG_SYSTEM", "/dev/null")
-    .run();
-    git(
-        &target,
-        &["fetch", "-q", "origin", "feat/x:refs/codeflow/pr-head"],
-    );
-    assert_eq!(git(&target, &["rev-parse", "refs/codeflow/pr-head"]), head);
-
-    let workflow =
-        std::fs::read_to_string(target.join(".github/workflows/codeflow-policy.yml")).unwrap();
-    assert_eq!(workflow, POLICY, "the run uses the target's workflow");
-    let install = run_install(&install_script(&workflow), &target, "HEAD", &releases);
+    let version = env!("CARGO_PKG_VERSION");
+    publish_candidate(&releases, version);
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, version);
+    let install = run_install(&install_script(POLICY), &work, "HEAD", &releases);
     assert!(install.out.status.success(), "{}", install.stderr());
-    assert_eq!(
-        install.installed_version().as_deref(),
-        Some("codeflow 1.2.3")
+    let installed = install.home.path().join(".codeflow/bin/codeflow");
+    let digest = sha256(&installed);
+    eprintln!(
+        "installed candidate: {} sha256={digest}",
+        installed.display()
     );
+    assert_eq!(
+        digest,
+        sha256(Path::new(env!("CARGO_BIN_EXE_codeflow"))),
+        "the installed executable must contain the actual candidate binary"
+    );
+}
 
-    let verdict = |cwd: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_codeflow"))
-            .args([
-                "ci", "--base", &base, "--head", &head, "--branch", "feat/x", "--actor", "unknown",
-            ])
-            .current_dir(cwd)
-            .env("CODEFLOW_HOME", dir.path().join("home"))
+/// SPC-013 R-104: a head that replaces the enforcing workflow with an
+/// always-green one changes neither the install nor the verdict. The steps
+/// executed are the authority checkout's, byte for byte the shipped
+/// workflow's, and the verdict they run reports the head's workflow edit.
+#[test]
+fn a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict() {
+    InstalledCi::new().check(HeadChange::Workflow).unwrap();
+}
+
+/// SPC-013 R-104 (TSK-110): a head that lowers its pin to a published
+/// release does not change what the authority's install step installs: the
+/// installed file is the candidate, never the head's 1.0.0 executable.
+#[test]
+fn a_pr_lowering_the_pin_is_still_judged_by_the_target_binary() {
+    InstalledCi::new().check(HeadChange::LowerPin).unwrap();
+}
+
+/// A head that turns `commit_format` off cannot pass its own invalid
+/// subject: the policy is read at the authority commit, whichever branch is
+/// checked out.
+#[test]
+fn a_pr_relaxing_its_policy_cannot_override_the_authority() {
+    InstalledCi::new().check(HeadChange::Policy).unwrap();
+}
+
+#[test]
+fn the_installed_candidate_accepts_a_valid_pull_request() {
+    InstalledCi::new().check(HeadChange::Valid).unwrap();
+}
+
+/// TSK-365 AC-2/AC-3: use the same installed path and behavioral checks
+/// before and after substituting an executable that approves everything.
+#[test]
+fn the_installed_journey_rejects_a_substituted_version_only_executable() {
+    let fixture = InstalledCi::new();
+    fixture.check_journey().unwrap();
+    let version = env!("CARGO_PKG_VERSION");
+    std::fs::write(
+        fixture.install.binary(),
+        format!("#!/bin/sh\necho \"codeflow {version}\"\nexit 0\n"),
+    )
+    .unwrap();
+    let expected = format!("codeflow {version}");
+    assert_eq!(
+        fixture.install.installed_version().as_deref(),
+        Some(expected.as_str()),
+        "the impostor passes the old version-only check"
+    );
+    eprintln!("impostor passes the old version-only check: {expected}");
+    for change in HEAD_CHANGES {
+        let refusal = fixture.check(change).expect_err(
+            "a version-printing, always-approving executable must fail every installed case",
+        );
+        eprintln!("impostor rejected by the installed journey: {refusal}");
+    }
+}
+
+/// TSK-365 AC-3: a refusal counts only when it names the commit under test.
+/// This executable reads its arguments, prints every banner they allow and
+/// a fixed commit-format refusal for the policy fixture's branch, and never
+/// reads the repository. The subject is fresh for each run, so it cannot
+/// name it.
+#[test]
+fn the_installed_journey_rejects_a_fixed_output_executable() {
+    let fixture = InstalledCi::new();
+    fixture.check(HeadChange::Policy).unwrap();
+    std::fs::write(
+        fixture.install.binary(),
+        FIXED_OUTPUT_STUB.replace("VERSION", env!("CARGO_PKG_VERSION")),
+    )
+    .unwrap();
+    let refusal = fixture
+        .check(HeadChange::Policy)
+        .expect_err("a fixed-output executable must fail the installed journey");
+    assert!(
+        refusal.contains("does not name the commit's subject"),
+        "{refusal}"
+    );
+    eprintln!("fixed-output executable rejected: {refusal}");
+}
+
+/// An executable that answers from its arguments and fixed text only: the
+/// head and authority banners are copied from `--head` and `--policy-from`,
+/// and the policy branch gets a commit-format refusal whenever the authority
+/// is the base, with the subject an earlier fixture used.
+const FIXED_OUTPUT_STUB: &str = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "codeflow VERSION"; exit 0; fi
+base= head= branch= authority=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base) base=$2; shift ;;
+    --head) head=$2; shift ;;
+    --branch) branch=$2; shift ;;
+    --policy-from) authority=$2; shift ;;
+  esac
+  shift
+done
+short=${authority%"${authority#????????}"}
+echo "codeflow ci: head $head (--head: $head); branch context '$branch' (--branch)" >&2
+echo "codeflow ci: verifying against .codeflow/policy.json at $short, the commit --policy-from names" >&2
+if [ "$branch" = feat/policy ] && [ "$authority" = "$base" ]; then
+  echo "codeflow ci commit 00000000: BLOCKED - policy rule git.commit_format (block)" >&2
+  echo '  subject does not match `type(scope): description` - got "Make every check pass"' >&2
+  exit 1
+fi
+exit 0
+"#;
+
+/// The always-green workflow a hostile head writes over the enforcing one.
+const FORGED_WORKFLOW: &str = "name: forged\non: pull_request_target\njobs:\n  commit-lint:\n    name: 'trusted: commit standards'\n    runs-on: ubuntu-latest\n    steps:\n      - run: exit 0\n";
+
+/// The published release a hostile head pins in place of the authority's.
+const HEAD_PIN: &str = "1.0.0";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeadChange {
+    Valid,
+    LowerPin,
+    Workflow,
+    Policy,
+}
+
+const HEAD_CHANGES: [HeadChange; 4] = [
+    HeadChange::Valid,
+    HeadChange::LowerPin,
+    HeadChange::Workflow,
+    HeadChange::Policy,
+];
+
+impl HeadChange {
+    fn branch(self) -> &'static str {
+        match self {
+            Self::Valid => "feat/valid",
+            Self::LowerPin => "feat/lower-pin",
+            Self::Workflow => "feat/workflow",
+            Self::Policy => "feat/policy",
+        }
+    }
+
+    /// The head commit's subject, carrying `token` so it and the commit's
+    /// sha are fresh for each fixture. Every subject is conventional except
+    /// the policy case's, which is invalid under the authority's
+    /// `commit_format` and valid once the head turns that rule off.
+    fn subject(self, token: &str) -> String {
+        match self {
+            Self::Valid => format!("docs: add a valid fixture in run {token}"),
+            Self::LowerPin => format!("chore: lower the codeflow pin in run {token}"),
+            Self::Workflow => format!("ci: make the policy workflow pass in run {token}"),
+            Self::Policy => format!("Make every check pass in run {token}"),
+        }
+    }
+}
+
+/// Eight hex digits that differ between fixtures, in one process or many.
+fn fresh_token() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    #[allow(clippy::cast_possible_truncation)]
+    let low = nanos as u32;
+    let mixed = low
+        ^ std::process::id().rotate_left(16)
+        ^ COUNT
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9e37_79b9);
+    format!("{mixed:08x}")
+}
+
+/// The first `name` on this process's `PATH`.
+fn on_path(name: &str) -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("{name} on PATH"))
+}
+
+/// The output of a verdict run, or why it is not a verdict that judged
+/// `head` under the policy at `authority` and exited `expected`.
+fn judged(
+    label: &str,
+    out: &Output,
+    expected: i32,
+    head: &str,
+    authority: &str,
+) -> Result<String, String> {
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    eprintln!(
+        "installed journey {label}: exit {:?}\n{text}",
+        out.status.code()
+    );
+    let banner = format!(
+        "verifying against .codeflow/policy.json at {}, the commit --policy-from names",
+        &authority[..8]
+    );
+    let why = if out.status.code() != Some(expected) {
+        format!("expected exit {expected}, got {:?}", out.status.code())
+    } else if !text.contains(&format!("codeflow ci: head {head} (--head: {head})")) {
+        format!("the verdict does not name the head {head}")
+    } else if !text.contains(&banner) {
+        format!("the verdict does not name the policy authority {authority}")
+    } else {
+        return Ok(text);
+    };
+    Err(format!("{label}: {why}\n{text}"))
+}
+
+/// Fail unless `text` is the authority's commit-format refusal of
+/// `subject`, a value the commit under test holds and no earlier run did.
+fn refuses_subject(label: &str, text: &str, subject: &str) -> Result<(), String> {
+    if !text.contains("git.commit_format") {
+        return Err(format!(
+            "{label}: expected a git.commit_format refusal\n{text}"
+        ));
+    }
+    if !text.contains(&format!("got {subject:?}")) {
+        return Err(format!(
+            "{label}: the refusal does not name the commit's subject {subject:?}\n{text}"
+        ));
+    }
+    Ok(())
+}
+
+struct InstalledCi {
+    dir: tempfile::TempDir,
+    work: PathBuf,
+    releases: PathBuf,
+    base: String,
+    /// Fresh for this fixture; every head subject carries it.
+    token: String,
+    /// The install and verdict scripts of the authority checkout's workflow.
+    install_step: String,
+    verdict_step: String,
+    /// `PATH` for a step after the install: the directories the install
+    /// step registered, then a directory holding only `git`.
+    step_path: String,
+    install: Install,
+    /// The digest of the executable the head's lowered pin names.
+    head_pin_digest: String,
+}
+
+impl InstalledCi {
+    /// The `pull_request_target` run: the authority commit checked out,
+    /// every head present beside it as data, and the authority workflow's
+    /// install step run from that checkout once the heads exist.
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let releases = dir.path().join("releases");
+        let version = env!("CARGO_PKG_VERSION");
+        let release = publish_candidate(&releases, version);
+        // A second published release, a different executable, which the
+        // lowered head pins.
+        publish(&releases, HEAD_PIN);
+        let head_pin_digest = sha256(
+            &releases
+                .join(format!("stage-{HEAD_PIN}"))
+                .join(ASSET)
+                .join("codeflow"),
+        );
+        assert_ne!(
+            head_pin_digest,
+            sha256(Path::new(env!("CARGO_BIN_EXE_codeflow")))
+        );
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        repo(&work, version);
+        std::fs::create_dir_all(work.join(".github/workflows")).unwrap();
+        std::fs::write(work.join(".github/workflows/codeflow-policy.yml"), POLICY).unwrap();
+        std::fs::write(
+            work.join(".codeflow/policy.json"),
+            include_str!("../../../assets/base/policy.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            work.join(".codeflow/project.toml"),
+            pinned_state(
+                version,
+                version,
+                Some(&sha256(&release.join(format!("{ASSET}.tar.xz")))),
+            ),
+        )
+        .unwrap();
+        git(&work, &["add", "."]);
+        git(&work, &["commit", "-m", "ci: add the enforcing workflow"]);
+        let base = git(&work, &["rev-parse", "HEAD"]);
+        let token = fresh_token();
+        for change in HEAD_CHANGES {
+            Self::add_head(&work, &base, change, &token);
+        }
+
+        assert_eq!(git(&work, &["rev-parse", "HEAD"]), base);
+        assert_eq!(git(&work, &["status", "--porcelain"]), "");
+        let workflow =
+            std::fs::read_to_string(work.join(".github/workflows/codeflow-policy.yml")).unwrap();
+        assert_eq!(workflow, POLICY, "the run uses the authority's workflow");
+        let job_text = job(&workflow, "commit-lint");
+        assert!(
+            job_text.contains("PIN_REF: HEAD"),
+            "the pin is the checkout's"
+        );
+        let install_step = install_script(job_text);
+        let verdict_step = run_blocks(job_text, "codeflow ci (")
+            .into_iter()
+            .next()
+            .expect("the verdict step");
+        let install = run_install(&install_step, &work, "HEAD", &releases);
+        assert!(install.out.status.success(), "{}", install.stderr());
+        let binary = install.binary();
+        let registered = std::fs::read_to_string(&install.path_file).unwrap();
+        assert_eq!(
+            registered.trim(),
+            binary.parent().unwrap().to_str().unwrap(),
+            "the installer registers the directory containing the installed file"
+        );
+        eprintln!(
+            "installed candidate: {} sha256={}",
+            binary.display(),
+            sha256(&binary)
+        );
+        let tools = dir.path().join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::os::unix::fs::symlink(on_path("git"), tools.join("git")).unwrap();
+        let step_path = registered
+            .lines()
+            .filter(|line| !line.is_empty())
+            .chain([tools.to_str().unwrap()])
+            .collect::<Vec<_>>()
+            .join(":");
+        Self {
+            dir,
+            work,
+            releases,
+            base,
+            token,
+            install_step,
+            verdict_step,
+            step_path,
+            install,
+            head_pin_digest,
+        }
+    }
+
+    /// One head, branched from the authority commit, which is checked out
+    /// again afterwards.
+    fn add_head(work: &Path, base: &str, change: HeadChange, token: &str) {
+        git(work, &["checkout", "-b", change.branch(), base]);
+        match change {
+            HeadChange::Valid => {
+                std::fs::write(work.join("README.md"), "A valid fixture change.\n").unwrap();
+            }
+            HeadChange::LowerPin => {
+                std::fs::write(work.join(".codeflow/project.toml"), project_toml(HEAD_PIN))
+                    .unwrap();
+            }
+            HeadChange::Workflow => {
+                std::fs::write(
+                    work.join(".github/workflows/codeflow-policy.yml"),
+                    FORGED_WORKFLOW,
+                )
+                .unwrap();
+            }
+            HeadChange::Policy => {
+                let relaxed = include_str!("../../../assets/base/policy.json")
+                    .replace("\"commit_format\": \"block\"", "\"commit_format\": \"off\"");
+                assert!(relaxed.contains("\"commit_format\": \"off\""));
+                std::fs::write(work.join(".codeflow/policy.json"), relaxed).unwrap();
+            }
+        }
+        git(work, &["add", "."]);
+        git(work, &["commit", "-m", &change.subject(token)]);
+        git(work, &["checkout", "main"]);
+    }
+
+    /// The authority workflow's verdict step for `change`, executed as the
+    /// runner executes it: the step's own script from the authority
+    /// checkout, `AUTHORITY_SHA` set to `authority`, from whatever the work
+    /// tree has checked out, with `codeflow` found only where the install
+    /// step registered it.
+    fn run_verdict(&self, change: HeadChange, authority: &str) -> Output {
+        let head = git(&self.work, &["rev-parse", change.branch()]);
+        let body_file = self.dir.path().join("pr-body.md");
+        std::fs::write(
+            &body_file,
+            "## Summary\n\nA fixture change.\n\n- One change.\n\n## Changes\n\n- The fixture files.\n\n\
+             ## Testing\n\n- Local installed-binary fixture.\n\n## Reviews\n\nFixture review.\n\nTask: fixture-unit\n",
+        )
+        .unwrap();
+        Command::new(on_path("bash"))
+            .args(["-c", &self.verdict_step])
+            .current_dir(&self.work)
+            .env("PATH", &self.step_path)
+            .env("AUTHORITY_SHA", authority)
+            .env("BASE_SHA", &self.base)
+            .env("HEAD_SHA", &head)
+            .env("HEAD_REF", change.branch())
+            .env("BODY_FILE", &body_file)
+            .env("ACTOR", "unknown")
+            .env("HOME", self.install.home.path())
+            .env("CODEFLOW_HOME", self.dir.path().join("home"))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_ACTIONS")
             .env_remove("GITHUB_EVENT_NAME")
+            .env_remove("GITHUB_EVENT_PATH")
             .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
             .output()
             .unwrap()
-    };
-    // The verdict step as the default branch's workflow writes it, with
-    // the default branch as the authority.
-    let enforced = run_verdict_step(
-        &target,
-        &dir.path().join("home"),
-        &base,
-        &base,
-        &head,
-        "feat/x",
-    );
-    let text = String::from_utf8_lossy(&enforced.stderr);
-    assert_eq!(enforced.status.code(), Some(1), "{text}");
-    assert!(text.contains("git.commit_format"), "{text}");
+    }
 
-    // Run from the head's own tree, the relaxed policy no longer judges
-    // the range: the policy is read at the base as git data
-    // (sathyassn/codeflow#22), so the checkout cannot choose it.
-    git(&origin, &["checkout", "-q", "feat/x"]);
-    let forged_run = verdict(&origin);
-    let forged_text = String::from_utf8_lossy(&forged_run.stderr);
-    assert_eq!(forged_run.status.code(), Some(1), "{forged_text}");
-    assert!(forged_text.contains("git.commit_format"), "{forged_text}");
+    /// Each case is proved by its own evidence: the valid head passes; the
+    /// lowered pin by the installed file's digest; the forged workflow by
+    /// the bytes of the steps executed and the verdict's report of the
+    /// edit; the relaxed policy by the commit-format refusal of its fresh
+    /// subject, with the base or the head checked out.
+    fn check(&self, change: HeadChange) -> Result<(), String> {
+        let head = git(&self.work, &["rev-parse", change.branch()]);
+        let label = format!("{change:?}");
+        let expected = i32::from(change == HeadChange::Policy);
+        let out = self.run_verdict(change, &self.base);
+        let text = judged(&label, &out, expected, &head, &self.base)?;
+        match change {
+            HeadChange::Valid => {
+                if text.contains("BLOCKED") {
+                    return Err(format!("{label}: a blocking finding\n{text}"));
+                }
+                Ok(())
+            }
+            HeadChange::LowerPin => self.check_pin(),
+            HeadChange::Workflow => {
+                if !text.contains("ci.workflow_change")
+                    || !text.contains(".github/workflows/codeflow-policy.yml")
+                {
+                    return Err(format!(
+                        "{label}: the verdict does not report the head's workflow edit\n{text}"
+                    ));
+                }
+                self.check_workflow()
+            }
+            HeadChange::Policy => {
+                refuses_subject(&label, &text, &change.subject(&self.token))?;
+                self.check_policy(&head)
+            }
+        }
+    }
+
+    /// The head lowers its pin to a published, different executable, which
+    /// an install step reading the head's pin would install; the install
+    /// run from the authority checkout installed the candidate.
+    fn check_pin(&self) -> Result<(), String> {
+        let branch = HeadChange::LowerPin.branch();
+        let lowered = git(
+            &self.work,
+            &["show", &format!("{branch}:.codeflow/project.toml")],
+        );
+        if !lowered.contains(&format!("scaffold_version = \"{HEAD_PIN}\"")) {
+            return Err(format!("LowerPin: the head does not pin {HEAD_PIN}"));
+        }
+        let control = run_install(&self.install_step, &self.work, branch, &self.releases);
+        let wanted = format!("codeflow {HEAD_PIN}");
+        if !control.out.status.success()
+            || sha256(&control.binary()) != self.head_pin_digest
+            || control.installed_version().as_deref() != Some(wanted.as_str())
+        {
+            return Err(format!(
+                "LowerPin: the head's pin does not install the {HEAD_PIN} executable\n{}",
+                control.stderr()
+            ));
+        }
+        let installed = sha256(&self.install.binary());
+        let candidate = sha256(Path::new(env!("CARGO_BIN_EXE_codeflow")));
+        if installed != candidate || installed == self.head_pin_digest {
+            return Err(format!(
+                "LowerPin: the installed file is {installed}, not the candidate {candidate} \
+                 (the {HEAD_PIN} executable is {})",
+                self.head_pin_digest
+            ));
+        }
+        let shown = self.install.installed_version().unwrap_or_default();
+        if !shown.starts_with(&format!("codeflow {} ", env!("CARGO_PKG_VERSION"))) {
+            return Err(format!("LowerPin: the installed file reports {shown:?}"));
+        }
+        Ok(())
+    }
+
+    /// The head carries the forged workflow; the install and verdict
+    /// scripts executed are the shipped workflow's, which the forged file
+    /// does not contain.
+    fn check_workflow(&self) -> Result<(), String> {
+        let branch = HeadChange::Workflow.branch();
+        let forged = git(
+            &self.work,
+            &[
+                "show",
+                &format!("{branch}:.github/workflows/codeflow-policy.yml"),
+            ],
+        );
+        if forged != FORGED_WORKFLOW.trim_end() {
+            return Err("Workflow: the head does not carry the forged workflow".into());
+        }
+        let checkout =
+            std::fs::read_to_string(self.work.join(".github/workflows/codeflow-policy.yml"))
+                .unwrap();
+        let shipped = job(POLICY, "commit-lint");
+        let shipped_verdict = run_blocks(shipped, "codeflow ci (").into_iter().next();
+        if checkout != POLICY
+            || self.install_step != install_script(shipped)
+            || shipped_verdict.as_deref() != Some(self.verdict_step.as_str())
+        {
+            return Err("Workflow: the executed steps are not the shipped workflow's".into());
+        }
+        if FORGED_WORKFLOW.contains(self.install_step.trim())
+            || FORGED_WORKFLOW.contains(self.verdict_step.trim())
+        {
+            return Err("Workflow: the forged workflow holds the executed steps".into());
+        }
+        Ok(())
+    }
+
+    /// The head relaxes `commit_format`, which would pass its subject with
+    /// the head as the authority; the authority's refusal holds with the
+    /// head checked out.
+    fn check_policy(&self, head: &str) -> Result<(), String> {
+        let change = HeadChange::Policy;
+        let relaxed = git(
+            &self.work,
+            &[
+                "show",
+                &format!("{}:.codeflow/policy.json", change.branch()),
+            ],
+        );
+        if !relaxed.contains("\"commit_format\": \"off\"") {
+            return Err("Policy: the head does not turn commit_format off".into());
+        }
+        let control = self.run_verdict(change, head);
+        judged("Policy with the head as authority", &control, 0, head, head)?;
+        git(&self.work, &["checkout", "-q", change.branch()]);
+        let out = self.run_verdict(change, &self.base);
+        git(&self.work, &["checkout", "-q", "main"]);
+        let label = "Policy with the head checked out";
+        let text = judged(label, &out, 1, head, &self.base)?;
+        refuses_subject(label, &text, &change.subject(&self.token))
+    }
+
+    fn check_journey(&self) -> Result<(), String> {
+        for change in HEAD_CHANGES {
+            self.check(change)?;
+        }
+        Ok(())
+    }
 }
 
 /// A repository whose default branch `main` pins 1.2.3 and allows a
