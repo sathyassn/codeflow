@@ -4285,8 +4285,10 @@ fn commit_msg_blocks_on_invalid_policy_value() {
     assert!(stderr.contains("git.commit_ticket_required"), "{stderr}");
     assert!(stderr.contains("off, warn, allow, block"), "{stderr}");
 
-    // Fixing the value lets the same commit through.
-    write_policy(
+    // Fixing the value lets the same commit through. Committed: the
+    // checked-out policy may only tighten the landed one (TSK-1078), so the
+    // ticket key must be the project's policy.
+    write_agent_policy(
         dir.path(),
         r#"{"schema_version":1,"git":{"commit_ticket_required":"block","commit_ticket_keys":["Refs"]}}"#,
     );
@@ -4309,7 +4311,9 @@ fn commit_msg_blocks_on_invalid_policy_value() {
 fn commit_msg_warn_level_proceeds() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    write_policy(
+    // Committed: the checked-out policy may only tighten the landed one
+    // (TSK-1078), so `warn` must be the project's policy.
+    write_agent_policy(
         dir.path(),
         r#"{"schema_version":1,"git":{"commit_format":"warn"}}"#,
     );
@@ -5923,6 +5927,22 @@ fn answering_destination(dir: &Path, name: &str) {
     git(dir, &["remote", "add", name, bare.to_str().unwrap()]);
 }
 
+/// Record `remote`'s default branch at `rev`, as a clone or a fetch with
+/// `git remote set-head` leaves it. The classic hooks read the landed
+/// policy there and refuse when it is unset (TSK-1078 AC-3, AC-7).
+fn set_remote_head(dir: &Path, remote: &str, branch: &str, rev: &str) {
+    let tracking = format!("refs/remotes/{remote}/{branch}");
+    git(dir, &["update-ref", &tracking, rev]);
+    git(
+        dir,
+        &[
+            "symbolic-ref",
+            &format!("refs/remotes/{remote}/HEAD"),
+            &tracking,
+        ],
+    );
+}
+
 fn push_url(dir: &Path, remote: &str) -> String {
     git_command()
         .args(["remote", "get-url", "--push", remote])
@@ -6078,6 +6098,10 @@ fn installed_push_hook_runs_codeflow_ci_and_no_test_target() {
     }
     assert!(ok("git", dir.path(), &["ls-remote", "upstream"]).contains(&rev(dir.path(), "HEAD")));
     eprintln!("durability push without the quick gate: {elapsed:?}\n{output}");
+    // The destination now has a branch, so the classic hooks read the landed
+    // policy at its recorded default branch (TSK-1078).
+    let probe = rev(dir.path(), "HEAD");
+    set_remote_head(dir.path(), "upstream", "feat/probe", &probe);
 
     // A commit `codeflow ci` refuses still stops the push.
     std::fs::write(dir.path().join("x.txt"), "x\n").unwrap();
@@ -7167,6 +7191,10 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
+    // The landed policy is read locally, so the refusal below is the push
+    // set's own query, never the policy read (TSK-1078).
+    let head = rev(dir.path(), "HEAD");
+    set_remote_head(dir.path(), "dest", "feat/h", &head);
     let (code, err, took) =
         push_hook_over_http(dir.path(), &http_destination(true), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
@@ -7268,6 +7296,7 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     let main = rev(dir.path(), "main");
     answering_destination(dir.path(), "origin");
     git(dir.path(), &["push", "-q", "origin", "main"]);
+    set_remote_head(dir.path(), "origin", "main", &main);
     git(dir.path(), &["checkout", "-q", "--orphan", "feat/orphan"]);
     let orphan = commit_file(dir.path(), "o.txt", "o\n", "chore: start an orphan");
     let (code, err) = push_hook_onto(dir.path(), "origin", "feat/orphan", &orphan, &main);
@@ -7418,6 +7447,8 @@ fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, Stri
         local.path(),
         &["remote", "add", "dest", bare.path().to_str().unwrap()],
     );
+    let stable = rev(local.path(), "main");
+    set_remote_head(local.path(), "dest", "stable", &stable);
     let mut records = Vec::new();
     for (line, id) in [("a", "TSK-001"), ("b", "TSK-002")] {
         git(local.path(), &["checkout", "-q", "-b", line, "main"]);
@@ -8079,6 +8110,10 @@ fn registry_project() -> (tempfile::TempDir, std::path::PathBuf) {
         git_at(&root, &plain, &["push", "-q", "origin", REGISTRY_LINE]),
         "push",
     );
+    // The remote's only branch is its default as this clone records it, so
+    // the registry push's hooks can read the landed policy (TSK-1078).
+    let line = rev(&root, "HEAD");
+    set_remote_head(&root, "origin", REGISTRY_LINE, &line);
     ok(
         codeflow_at(exe, &root, &plain, &["ids", "seed"]),
         "ids seed",
@@ -8573,6 +8608,21 @@ fn an_unreadable_commit_index_is_reported_at_the_configured_level() {
             serde_json::to_string_pretty(&policy).unwrap(),
         )
         .unwrap();
+        // Committed: the checked-out policy may only tighten the landed one
+        // (TSK-1078), so each level must be the project's policy.
+        ok(
+            "git",
+            &root,
+            &[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-am",
+                "chore: set the marker level",
+            ],
+        );
         let out = codeflow()
             .args(["git-hook", "pre-commit"])
             .current_dir(&root)
@@ -8861,6 +8911,7 @@ fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
     assert!(output(&refused).contains("line_adoptions"));
     // The already shared direct commit must not prevent unrelated merges.
     f.git(&["push", "-q", "origin", "main"]);
+    f.track_origin_main();
     f.land_task();
     passes(&f.push(&direct));
     f.land_adoption(&direct);
@@ -8878,6 +8929,7 @@ fn epic_line_first_push_reads_the_full_default_ref_beside_an_origin_main_shadow(
     for shadow in ["branch", "tag", "both"] {
         let f = Line::new();
         f.git(&["push", "-q", "origin", "main"]);
+        f.track_origin_main();
         let direct = f.direct();
         if shadow != "tag" {
             f.git(&["branch", "origin/main", LINE]);
@@ -8904,6 +8956,7 @@ fn epic_line_adoption_pre_push_merge_only_control() {
     let f = Line::new();
     let old = f.git(&["rev-parse", "HEAD"]);
     f.git(&["push", "-q", "origin", "main"]);
+    f.track_origin_main();
     f.land_task();
     passes(&f.push(&old));
     passes(&f.push(ZERO));
@@ -8924,6 +8977,7 @@ fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
     // so the destination holds what that payload claims: the Outcome marker
     // check reads the destination's advertised default branch.
     f.git(&["push", "-q", "origin", "main", LINE]);
+    f.track_origin_main();
     f.write("src/lib.rs", "pub fn again() {}\n");
     f.commit("fix: second direct change");
     passes(&f.push(&first));
@@ -10054,6 +10108,7 @@ fn protected_advertised_target_cannot_hide_a_criterion_from_pre_push() {
     f.protected_target_shadow();
     let destination = f.root().join(".git/destination.git");
     receive(&destination, f.root(), "main:main");
+    f.track_origin_main();
     // Neither a local-only protected name nor one advertised ahead of the
     // destination default may shorten the criteria range.
     blocks(
@@ -12255,7 +12310,9 @@ fn gitleaks_engine_refuses_at_block_when_the_binary_is_missing_or_unpinned() {
 fn gitleaks_engine_warns_at_warn_and_the_builtin_scan_still_runs() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    write_policy(dir.path(), &engine_policy("warn"));
+    // Committed: the checked-out policy may only tighten the landed one
+    // (TSK-1078), so `warn` must be the project's policy.
+    write_agent_policy(dir.path(), &engine_policy("warn"));
     std::fs::write(dir.path().join("leak.txt"), format!("{}\n", fixture_key())).unwrap();
     git(dir.path(), &["add", "leak.txt"]);
 
@@ -12300,14 +12357,14 @@ fn gitleaks_scan_makes_no_network_call_and_authority_refuses_when_the_remote_can
     let empty = tempfile::tempdir().unwrap();
 
     // No tracking ref: the authority step asks the remote, cannot, refuses.
+    // Since TSK-1078 the hook reads its levels at the landed policy, so the
+    // refusal comes from that read, before any check runs (AC-3, AC-7).
     let out = pre_commit_with_path(dir.path(), empty.path());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("git.path_policy"), "{stderr}");
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("cannot read policy"), "{stderr}");
     assert!(stderr.contains("could not be asked"), "{stderr}");
     assert!(stderr.contains("git fetch origin"), "{stderr}");
-    // The scan still runs beside the refused authority step.
-    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
 
     // A tracking ref (what git fetch leaves): no remote contact, so the
     // only refusal left is the engine's own, for the missing binary.
@@ -12469,7 +12526,9 @@ fn a_landing_merge_without_its_ticket_footer_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     init_repo(d, "integration/line");
-    write_policy(
+    // Committed: the checked-out policy may only tighten the landed one
+    // (TSK-1078), so the ticket keys must be the project's policy.
+    write_agent_policy(
         d,
         r#"{"schema_version":1,"git":{"commit_ticket_keys":["Refs"],"commit_ticket_required":"warn","commit_ticket_merges":"block"}}"#,
     );
