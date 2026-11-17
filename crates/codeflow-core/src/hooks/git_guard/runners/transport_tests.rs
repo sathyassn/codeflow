@@ -5,7 +5,9 @@
 //! configuration cut off. Nothing here contacts a remote or starts a helper.
 
 use super::{contacts, select, Contact, Probe, Selected, UNPROVEN};
-use crate::security::git_config::{current_branch, locate, read, Environment, Location};
+use crate::security::git_config::{
+    current_branch, index_gitlinks, locate, read, Environment, Location,
+};
 use std::path::Path;
 
 /// A scratch repository on branch `main` whose local configuration ends
@@ -25,6 +27,10 @@ impl Probe for RootProbe<'_> {
 
     fn branch(&mut self) -> Result<String, String> {
         current_branch(self.0, &[], &Environment::new())
+    }
+
+    fn gitlinks(&mut self) -> Result<bool, String> {
+        index_gitlinks(self.0, &[], &Environment::new())
     }
 }
 

@@ -58,7 +58,7 @@ impl Inputs {
         // clear the parent's repository-location environment for their children.
         let environment = env
             .iter()
-            .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()))
+            .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()) && *name != INDEX_FILE)
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         Ok(Self {
@@ -185,6 +185,7 @@ struct CallProbe<'a> {
     env: &'a crate::security::git_config::Environment,
     location: Option<Result<crate::security::git_config::Location, String>>,
     branch: Option<Result<String, String>>,
+    gitlinks: Option<Result<bool, String>>,
 }
 
 impl<'a> CallProbe<'a> {
@@ -199,6 +200,7 @@ impl<'a> CallProbe<'a> {
             env,
             location: None,
             branch: None,
+            gitlinks: None,
         }
     }
 }
@@ -217,6 +219,14 @@ impl transport::Probe for CallProbe<'_> {
         let globals = self.globals.clone();
         self.branch
             .get_or_insert_with(|| crate::security::git_config::current_branch(cwd, globals?, env))
+            .clone()
+    }
+
+    fn gitlinks(&mut self) -> Result<bool, String> {
+        let (cwd, env) = (self.cwd, self.env);
+        let globals = self.globals.clone();
+        self.gitlinks
+            .get_or_insert_with(|| crate::security::git_config::index_gitlinks(cwd, globals?, env))
             .clone()
     }
 }
@@ -806,6 +816,11 @@ fn known_program(verb: &str) -> bool {
     GIT_BUILTINS.contains(&verb) || command_options(verb) || matches!(verb, "submodule" | "bisect")
 }
 
+/// The variable that selects the index file a Git call reads. The
+/// transport resolution's index probe reads it (TSK-1489); a configuration
+/// reading does not take it.
+const INDEX_FILE: &str = "GIT_INDEX_FILE";
+
 /// The entries of `env` a configuration reading takes. `GIT_CONFIG` names
 /// a file only `git config` reads, and the reader removes it from every
 /// reading, so an entry for it, a launcher removing it included, changes
@@ -815,7 +830,10 @@ fn config_environment(
 ) -> crate::security::git_config::Environment {
     env.iter()
         .filter(|(name, _)| {
-            !catalog::environment(name) && !program_environment(name) && *name != "GIT_CONFIG"
+            !catalog::environment(name)
+                && !program_environment(name)
+                && *name != "GIT_CONFIG"
+                && *name != INDEX_FILE
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
@@ -1350,6 +1368,7 @@ fn note_literals(literals: &mut Literals, tokens: &mut [String]) -> Result<(), S
 /// a location, a program, a runner from the catalog or the configuration.
 fn git_relevant(name: &str) -> bool {
     GIT_LOCATION_VARS.contains(&name)
+        || name == INDEX_FILE
         || program_environment(name)
         || catalog::environment(name)
         || configuration_variable(name)
@@ -1424,6 +1443,7 @@ fn removed_variables(
         } else if GIT_LOCATION_VARS.contains(&name.as_str())
             || program_environment(&name)
             || name == "GIT_CEILING_DIRECTORIES"
+            || name == INDEX_FILE
         {
             return Err(format!(
                 "a launcher removes `{name}`, which the guard reads from its own environment"

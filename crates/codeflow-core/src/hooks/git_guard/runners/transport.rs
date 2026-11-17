@@ -210,6 +210,9 @@ pub(super) trait Probe {
     /// The branch the repository has checked out; an error for a detached
     /// HEAD or any failure.
     fn branch(&mut self) -> Result<String, String>;
+    /// Whether the index the call reads holds a submodule entry (a
+    /// gitlink); an error for any failure.
+    fn gitlinks(&mut self) -> Result<bool, String>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -247,6 +250,7 @@ pub(super) fn contacts(
             resolver.address(word, direction, &mut found);
         }
         resolver.clone_settings(rest)?;
+        resolver.configured_addresses(&mut found)?;
     } else if verb == "archive" {
         for word in remote_values(rest) {
             resolver.word(word, direction, &mut found, probe)?;
@@ -324,7 +328,8 @@ pub(super) fn contacts(
 /// The words of `rest` that may name a remote or an address: every operand,
 /// every word after the first `--` or `--end-of-options`, and the value of
 /// every `--<option>=<value>`. A terminator an option consumes as its value
-/// only makes more words candidates.
+/// only makes more words candidates. Git's option parser keeps a lone `-`
+/// as an operand, so it is one here too.
 fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
     let end = rest
         .iter()
@@ -336,7 +341,7 @@ fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
             None
         } else if let Some(option) = word.strip_prefix("--") {
             option.split_once('=').map(|(_, value)| value)
-        } else if word.starts_with('-') {
+        } else if word.len() > 1 && word.starts_with('-') {
             None
         } else {
             Some(word.as_str())
@@ -432,6 +437,10 @@ const LOCAL_MAINTENANCE_TASKS: &[&str] = &[
     "rerere-gc",
 ];
 
+/// The maintenance subcommands that neither run a task nor set up a
+/// scheduled run; `stop` and `unregister` only remove one.
+const LOCAL_MAINTENANCE_SUBCOMMANDS: &[&str] = &["stop", "unregister", "is-needed"];
+
 /// `maintenance run` contacts every configured remote when its tasks may
 /// include the prefetch task. It passes only when every word after `run`
 /// is a task option, in any abbreviation Git accepts, naming a task that
@@ -446,10 +455,15 @@ fn maintenance(rest: &[String]) -> Result<(), String> {
     let mut words = rest.iter();
     match words.next().map(String::as_str) {
         Some("run") => {}
-        Some(word) if word.starts_with('-') && rest.iter().any(|word| word == "run") => {
-            return Err(refuse())
+        Some(sub) if LOCAL_MAINTENANCE_SUBCOMMANDS.contains(&sub) => return Ok(()),
+        // `start` and `register` set up scheduled runs that prefetch from
+        // every configured remote later, outside both guards; any other
+        // word, or none, is not proven to leave them alone.
+        _ => {
+            return Err(unproven(
+                "a maintenance command other than a proven local run, stop, unregister or is-needed may set up background runs that prefetch from every configured remote outside the guards; the operator runs it",
+            ))
         }
-        _ => return Ok(()),
     }
     let mut tasks = 0;
     while let Some(word) = words.next() {
@@ -993,8 +1007,12 @@ impl<'a> Resolver<'a> {
     }
 
     /// Whether the repository has or may have submodules: a submodule
-    /// setting, the common Git directory's `modules` folder or the work
-    /// tree's `.gitmodules` file, each unless proven absent.
+    /// setting, the common Git directory's `modules` folder, a submodule
+    /// entry in the index the call reads, or the work tree's `.gitmodules`
+    /// file, each unless proven absent. Git fetches inside a repository in
+    /// place at an index entry with no `.gitmodules` entry or setting
+    /// (`submodule.c`), and the index does not move with a work-tree or
+    /// bare setting on the command line, so it is read in every repository.
     fn may_have_submodules(&self, probe: &mut dyn Probe) -> Result<bool, String> {
         if self.keys.iter().any(|key| {
             *key == "submodule.active"
@@ -1006,6 +1024,9 @@ impl<'a> Resolver<'a> {
         }
         let location = probe.location()?;
         if !absent(&location.common.join("modules")) {
+            return Ok(true);
+        }
+        if probe.gitlinks()? {
             return Ok(true);
         }
         if location.bare {
@@ -1051,6 +1072,29 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
+    /// Every address the configuration gives any remote, each judged as
+    /// an address a fetch contacts. A clone writes its operand as the new
+    /// remote's address after any address a wider scope already gives a
+    /// remote of that name, then fetches from the first one
+    /// (`builtin/clone.c`), and the option or setting that names the new
+    /// remote may pick any name, so every configured address counts.
+    fn configured_addresses(&self, found: &mut Vec<Contact>) -> Result<(), String> {
+        self.no_empty_section()?;
+        for key in &self.keys {
+            let Some(name) = key
+                .strip_prefix("remote.")
+                .and_then(|rest| rest.strip_suffix(".url"))
+            else {
+                continue;
+            };
+            for url in values(self.config, key)? {
+                let remote = Remote { url, pushurl: None };
+                self.destinations(name, &remote, Direction::Fetch, found);
+            }
+        }
+        Ok(())
+    }
+
     /// The remotes the `remote` subcommands in `rest` contact.
     fn remote_subcommand(
         &self,
@@ -1067,6 +1111,16 @@ impl<'a> Resolver<'a> {
                 self.recursion("remote", &[], probe)
             }
             Some((sub, names)) if matches!(*sub, "update" | "show" | "prune" | "set-head") => {
+                let mut names = names;
+                if *sub == "update" && names.last() == Some(&"default") && !self.group("default")
+                {
+                    // Git replaces a last `default` with fetching every
+                    // remote when no `default` group is set
+                    // (`builtin/remote.c` `update`), so the word reads as
+                    // the operand-free selection, not as a remote name.
+                    names = &names[..names.len() - 1];
+                    self.default_update(found, probe)?;
+                }
                 for name in names {
                     self.word(name, Direction::Fetch, found, probe)?;
                 }

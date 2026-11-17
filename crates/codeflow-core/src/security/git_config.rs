@@ -554,9 +554,20 @@ fn location_command(
     globals: &[String],
     environment: &Environment,
 ) -> Result<std::process::Command, String> {
+    probe_command(cwd, globals, environment, &[])
+}
+
+/// [`location_command`] that also forwards each variable in `extra` the
+/// same way, the call's own value or else the inherited one.
+fn probe_command(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    extra: &[&str],
+) -> Result<std::process::Command, String> {
     let mut command = crate::git::judging_command();
     command.current_dir(cwd).stdin(Stdio::null());
-    for name in LOCATION_ENVIRONMENT {
+    for name in LOCATION_ENVIRONMENT.iter().chain(extra) {
         if let Some(value) = environment.get(*name) {
             command.env(name, value);
         } else if let Some(value) = std::env::var_os(name) {
@@ -650,6 +661,24 @@ pub(crate) fn locate(
         top,
         bare,
     })
+}
+
+/// Whether the index the call reads holds a submodule entry (mode
+/// `160000`), as Git itself lists the index, read with the call's location
+/// inputs and its index-file variable only. Any probe failure, timeout or
+/// listing over the output limit is an error, so the caller refuses.
+pub(crate) fn index_gitlinks(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<bool, String> {
+    let unread = |_| "cannot read the index of the repository the command works in".to_string();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = probe_command(cwd, globals, environment, &["GIT_INDEX_FILE"])?;
+    probe.args(["--no-pager", "ls-files", "--format=%(objectmode)"]);
+    let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+    let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
+    Ok(text.lines().any(|mode| mode == "160000"))
 }
 
 /// The name of the branch the call's repository has checked out. A
