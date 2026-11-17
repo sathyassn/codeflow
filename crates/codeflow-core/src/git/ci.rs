@@ -757,18 +757,14 @@ mod tests {
     }
 
     #[test]
-    fn test_load_rejects_timeout_astronomical() {
+    fn test_load_accepts_a_large_timeout() {
         let tmp = tempfile::tempdir().unwrap();
         write_ci_wait_config(
             tmp.path(),
             r#"{"timeout_minutes": 1441, "poll_interval_seconds": 30}"#,
         );
-        let err = CiWaitConfig::load(tmp.path()).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("timeout_minutes 1441 out of range"),
-            "expected out-of-range error, got: {msg}"
-        );
+        let cfg = CiWaitConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.timeout_minutes, 1441);
     }
 
     #[test]
@@ -787,23 +783,19 @@ mod tests {
     }
 
     #[test]
-    fn test_load_rejects_poll_too_long() {
+    fn test_load_accepts_a_long_poll() {
         let tmp = tempfile::tempdir().unwrap();
         write_ci_wait_config(
             tmp.path(),
             r#"{"timeout_minutes": 30, "poll_interval_seconds": 301}"#,
         );
-        let err = CiWaitConfig::load(tmp.path()).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("poll_interval_seconds 301 out of range"),
-            "expected out-of-range error, got: {msg}"
-        );
+        let cfg = CiWaitConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.poll_interval_seconds, 301);
     }
 
     #[test]
     fn test_load_accepts_valid_boundaries() {
-        // Min and max of both ranges must load successfully.
+        // The floors and large values both load.
         let cases = [(1u64, 5u64), (1, 300), (1440, 5), (1440, 300)];
         for (t, p) in cases {
             let tmp = tempfile::tempdir().unwrap();
@@ -828,9 +820,14 @@ mod tests {
         assert!(err.starts_with("timeout_minutes 0 out of range"));
 
         cfg = CiWaitConfig::default();
-        cfg.poll_interval_seconds = 10_000;
+        cfg.poll_interval_seconds = 4;
         let err = cfg.validate_bounds().unwrap_err();
-        assert!(err.starts_with("poll_interval_seconds 10000 out of range"));
+        assert!(err.starts_with("poll_interval_seconds 4 out of range"));
+
+        cfg = CiWaitConfig::default();
+        cfg.poll_interval_seconds = 10_000;
+        cfg.timeout_minutes = 100_000;
+        assert!(cfg.validate_bounds().is_ok());
     }
 
     #[test]

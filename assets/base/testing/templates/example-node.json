@@ -14,7 +14,6 @@
       "name": "web",
       "enabled": true,
       "runner": "vitest",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "pnpm test --run"
@@ -36,7 +35,8 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }

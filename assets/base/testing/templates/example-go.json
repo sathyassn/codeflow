@@ -14,7 +14,6 @@
       "name": "go-service",
       "enabled": true,
       "runner": "go",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "go test ./..."
@@ -32,13 +31,13 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     },
     {
       "name": "go-lint",
       "enabled": true,
       "runner": "custom",
-      "timeout_seconds": 300,
       "modes": {
         "essential": {
           "command": "go vet ./..."
@@ -49,7 +48,8 @@
         "quick": {
           "command": "go vet ./..."
         }
-      }
+      },
+      "timeout_seconds": 300
     }
   ]
 }

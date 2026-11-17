@@ -145,6 +145,12 @@ fn missing(reads: &Reads, documented: &str) -> Vec<&'static str> {
         .filter(|key| documented.contains(&format!("`{}`", key.path)))
         .filter(|key| !key.is_unsupported())
         .filter(|key| !reads.0.contains(key.path.rsplit('.').next().unwrap()))
+        // A limit's key is read through its registry entry; the limit check
+        // `every_registry_entry_is_read_outside_the_registry` proves a reader.
+        .filter(|key| {
+            codeflow_core::hooks::limits::for_key(key.path).is_none()
+                || key.path.starts_with("git.")
+        })
         .map(|key| key.path)
         .collect()
 }

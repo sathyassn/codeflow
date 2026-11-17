@@ -14,7 +14,6 @@
       "name": "app",
       "enabled": true,
       "runner": "custom",
-      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "npm test"
@@ -40,7 +39,8 @@
             "remove_when": "Client is hand-written or coverage is added to codegen"
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }

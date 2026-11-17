@@ -226,7 +226,7 @@ pub fn limits_page() -> Generated {
             limit.default,
             limit.unit,
             cell(&bounds),
-            limit.class.name(),
+            limit.class.label(),
             cell(limit.name),
             cell(limit.reason)
         )
