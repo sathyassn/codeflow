@@ -678,7 +678,7 @@ pub(crate) fn index_gitlinks(
     probe.args(["--no-pager", "ls-files", "--format=%(objectmode)"]);
     let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
     let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
-    Ok(text.lines().any(|mode| mode == "160000"))
+    Ok(text.split('\n').any(|mode| mode == "160000"))
 }
 
 /// The name of the branch the call's repository has checked out. A
