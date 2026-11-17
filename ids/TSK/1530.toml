@@ -1,0 +1,11 @@
+id = "TSK-1530"
+uid = "db0c21bd-12d1-4ca0-a43d-e56a09580a79"
+kind = "TSK"
+title = "Line rulesets require the line check names once the placement is on main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T21:55:15Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
