@@ -1,0 +1,11 @@
+id = "TSK-1531"
+uid = "d331900e-6791-4466-b214-4436e6f0c9c6"
+kind = "TSK"
+title = "The TSK-291 merge passes the secret scan after the fixture fix lands"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T23:17:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
