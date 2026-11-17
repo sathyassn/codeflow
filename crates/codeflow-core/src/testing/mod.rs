@@ -13,6 +13,7 @@
 pub mod capacity;
 pub mod config;
 pub mod coverage;
+pub mod declared;
 mod delivery;
 pub mod doctor;
 pub mod error;
@@ -24,5 +25,6 @@ pub mod runner;
 pub mod setup;
 #[cfg(feature = "structural-check")]
 pub mod structural;
+mod target_inputs;
 pub mod threshold;
 pub mod validation;

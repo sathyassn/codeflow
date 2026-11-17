@@ -463,6 +463,7 @@ mod tests {
             schema_version: "1.0".to_string(),
             execution: ExecutionConfig::default(),
             defaults: DefaultsConfig::default(),
+            guards: Vec::new(),
             targets: vec![],
         }
     }

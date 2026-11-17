@@ -11,7 +11,9 @@
 //! the head lands by merge. A push is judged by the hook itself.
 //!
 //! `--line-tip <LINE>` claims the head is that line's next tip: the landing
-//! path's explicit claim. Without the claim, a run whose base is the fetched
+//! path's explicit claim. A pushed landing candidate that `candidate::check`
+//! bound to its line is that line's next tip too (TSK-1351). Without the
+//! claim, a run whose base is the fetched
 //! tip of exactly one epic line is judged the same way: such a run cannot
 //! tell a landing candidate from a change that lands by merge, so a head
 //! that would add a direct commit refuses with a remedy naming each route.
@@ -36,6 +38,9 @@ const RULE: &str = "work.epic_line";
 pub(super) struct Run<'a> {
     /// `--line-tip`: the head is this line's next tip.
     pub line_tip: Option<&'a str>,
+    /// The line a pushed landing candidate is bound to (TSK-1351): the
+    /// head is that line's next tip, though the run is a push.
+    pub candidate: Option<&'a str>,
     /// The resolved base commit.
     pub base: Option<&'a str>,
     pub head: &'a str,
@@ -52,6 +57,7 @@ pub(super) struct Run<'a> {
 #[derive(Clone, PartialEq, Eq)]
 enum Source {
     Flag,
+    Candidate,
     Base { target: Option<String> },
 }
 
@@ -75,6 +81,7 @@ pub(super) fn check(
     ran.push("line-tip");
     let how = match &source {
         Source::Flag => "--line-tip".to_string(),
+        Source::Candidate => "a bound landing candidate's push".to_string(),
         Source::Base { target: None } => "the base is its fetched tip".to_string(),
         Source::Base {
             target: Some(target),
@@ -104,6 +111,9 @@ fn destination(root: &Path, run: &Run<'_>) -> Result<Option<(String, Source)>, (
         line_adoption::epic_id(line)
             .map_err(|reason| (format!("--line-tip {reason}"), Source::Flag))?;
         return Ok(Some((line.to_string(), Source::Flag)));
+    }
+    if let Some(line) = run.candidate {
+        return Ok(Some((line.to_string(), Source::Candidate)));
     }
     if run.pushed || run.merge_landing {
         return Ok(None);
@@ -265,6 +275,9 @@ fn refuse(
     let remedy = match source {
         Source::Flag => format!(
             "fetch the line (`git fetch origin`) and pass --line-tip {shown} for a landing candidate cut from its fetched tip, or --into {shown} for a pull request head that lands by merge"
+        ),
+        Source::Candidate => format!(
+            "fetch the line (`git fetch origin`) and rebuild the candidate on the fetched tip of {shown} from --no-ff merges of reviewed heads"
         ),
         Source::Base { target } => format!(
             "fetch the lines (`git fetch origin`); {}",

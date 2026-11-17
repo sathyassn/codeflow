@@ -15,6 +15,7 @@ pub mod models;
 pub mod new;
 pub mod orient;
 pub mod policy;
+pub mod policy_baseline;
 pub mod portal;
 pub mod present;
 mod push_set;

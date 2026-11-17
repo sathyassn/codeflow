@@ -2487,6 +2487,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:push-bounded-lines",
     ),
+    // Reads for-each-ref LF rows once; each row is one exact branch name, never trimmed (TSK-1351).
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "candidate_at",
+        "split_terminator",
+        1,
+        "framing:push-candidate-ref-lines",
+    ),
     // Trims stderr only to explain why the commit inventory is unknown.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
@@ -5253,6 +5261,37 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1351: parses GitHub's check-runs JSON answer; it reads no shell or git name.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "check_runs",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
+    // TSK-1351: parses GitHub's workflow-runs JSON answer for a check suite; it reads no shell or git name.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "producer",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
+    // TSK-1351: shortens a failed `gh` read to its first line for the refusal a person reads; any failure refuses.
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "unreadable",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/candidate_admission.rs",
+        "unreadable",
+        "trim",
+        1,
+        "display",
+    ),
     // TSK-1308: trims a failed `gh pr list` stderr for the refusal a person reads; it decides nothing beyond refusing.
     (
         "crates/codeflow-cli/src/cmd/work.rs",
@@ -6782,6 +6821,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "bounded_by",
     ),
     (
+        "push-candidate-ref-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "candidate_at",
+    ),
+    (
         "recall-index-file-records",
         "crates/codeflow-core/src/recall.rs",
         "index_file",
@@ -7465,6 +7509,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/lifecycle.rs", "project_table_in", "ErrorKind::NotFound", 1, "Reads no Outcome marker only after proven_absent confirms project.toml is missing; every other read error refuses."),
     ("crates/codeflow-core/src/workgraph/light_paths.rs", "next_adr_id", "ErrorKind::NotFound", 1, "Starts at ADR-0001 only after proven_absent confirms the directory is missing."),
     ("crates/codeflow-core/src/workgraph/record_template.rs", "load", "ErrorKind::NotFound", 1, "Uses the embedded template only when proven_absent confirms the project template is missing; otherwise it refuses."),
+    ("crates/codeflow-core/src/testing/declared.rs", "private_index", "ErrorKind::NotFound", 1, "Only native NotFound on the index's metadata means a repository with no index yet; the private copy is then left absent, which Git reads as empty, the same as the missing original. Every other metadata error refuses the report."),
     ("crates/codeflow-core/src/workgraph/history_graph.rs", "snapshot", "is_file", 1, "Metadata from the opened cache must be a regular file; every other file type refuses, never means absent."),
     ("crates/codeflow-core/src/workgraph/history_graph.rs", "snapshot", "ErrorKind::NotFound", 1, "A missing optional graph, chain or alternates file adds no cached history; every other read failure refuses. A chain-named graph must exist."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "shallow_boundary", "ErrorKind::NotFound", 1, "Missing common or private shallow files contribute no boundary; both files are read, and every other read error refuses."),

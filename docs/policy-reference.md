@@ -36,8 +36,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
 | `git.claim_remotes` | string list | `[]` | an array of configured remote names, none starting with a dash | Additional remotes whose branches count as advisory work claims. | Origin and the target's fetch remote always count. Empty by default; other remote branches are reported as information. Named remotes must be configured when work claim lists their branches. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.candidate_prefix` | string | `candidate/` | a branch name prefix ending in /, such as candidate/, that shares no start with a git.branch_prefixes entry, integration/ or a protected branch | The name prefix of landing candidate branches that `codeflow work remove-candidate` may remove. | Default candidate/. A prefix that equals, contains or is contained by a git.branch_prefixes entry, integration/, or a protected branch name or the part of a protected pattern before its first glob character is refused, by the schema and again by the removal. A protected branch is never removed, whatever its name. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of the line's first-parent history `codeflow work remove-candidate` searches for the candidate's tree. | Default 200. A tree older than the depth is not found, so the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.candidate_prefix` | string | `candidate/` | a branch name prefix ending in /, such as candidate/, that shares no start with a git.branch_prefixes entry, integration/ or a protected branch | The name prefix of landing candidate branches: an allowed branch name, judged at pre-push and by `codeflow ci` against the line it is cut from, and removable by `codeflow work remove-candidate`. | Default candidate/. A prefix that equals, contains or is contained by a git.branch_prefixes entry, integration/, or a protected branch name or the part of a protected pattern before its first glob character is refused, by the schema and again by the removal. A protected branch is never removed, whatever its name. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.candidate_search_depth` | uint | `200` | a positive number of commits | How many commits of first-parent history are searched: a pushed candidate's chain for its line's fetched tip, and the line's history by `codeflow work remove-candidate` for the candidate's tree. | Default 200. A line tip or tree older than the depth is not found, so the push or the removal is refused. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.branch_name_omit_words` | string list | `["secret","credentials"]` | an array of words of lower-case letters and digits | Words that work claim and epic new --integration leave out of a generated branch name. | A loose ref is a file named after its branch, and a sandbox can refuse to read a file by its name; git then reports that ref as broken. An entry matches anywhere inside a title word. The default holds the words the Claude Code sandbox was probed to refuse; set the list your harness needs, or an empty list to keep every word. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.required_checks` | string list | `["codeflow gates","secret scan","security review","trusted: commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and trusted: commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
@@ -1347,6 +1347,81 @@ to its required-checks answer:
 
 The line pattern is C's when C exists, else `integration/**`.
 
+## The policy baseline
+
+The guards read the policy from the remote's default branch as last
+fetched (TSK-1077). Those refs are local state, so a process that can write
+`.git` could point them at a commit with a weaker policy. A policy baseline
+is an operator-confirmed copy of the policy at one commit of that branch
+(TSK-1057). Once one is recorded, the guards enforce the stricter of the
+tracking ref's policy and the baseline's.
+
+Where it lives: `~/.codeflow/authority/baselines/`, under the account's
+home from the password database (`HOME` and `CODEFLOW_HOME` are not read),
+one JSON record per repository plus a ledger of every repository ever
+recorded. Every shipped agent preset keeps `~/.codeflow/authority` read
+only to the harness sandbox: Claude denies writes there (`denyWrite` and an
+`Edit` deny), Codex grants it `read`, and the Grok profiles leave it out of
+`deny` and out of their write set. Edit-guard refuses edits there. That
+write deny is the boundary. The directory stays readable because the guards
+read the baselines and the SSH configuration allow from inside the sandbox.
+A `.grok/sandbox.toml` written by an earlier release denied the directory
+whole. `codeflow update` replaces such a copy only when its bytes equal a
+profile some CodeFlow version shipped, which the binary knows by the
+SHA-256 of each one. No file in the repository is taken as that proof, so
+a copied baseline cannot make update replace an edited profile. Update
+leaves any other copy alone and reports it as kept, with a warning when a
+profile there still denies
+`.codeflow/authority`. Once a baseline exists, every guard in such a Grok
+seat refuses until the operator removes those entries from each profile's
+`deny` list.
+
+What a record binds: the canonical common git directory, the authority
+remote and its configured URL, the branch `refs/remotes/<remote>/HEAD`
+names, the commit, and the policy text with its SHA-256.
+
+| Command | What it does |
+|---|---|
+| `codeflow policy baseline show` | Prints the record and how it bears on the policy read. Read only; runs anywhere. |
+| `codeflow policy baseline init` | Asks the remote for its default branch and commit (`git ls-remote --symref`), fetches that commit's objects without writing a ref, refuses when the branch tip the fetch reports is another commit, and prints the commit and policy digest. With `--confirm <commit>` it writes the record. |
+| `codeflow policy baseline refresh` | The same read, then moves the record to a commit that descends from the recorded one with a policy no weaker. Anything else needs `--reset --reason <text>`, which is recorded. |
+
+`init` and `refresh` refuse when a harness marker is set (`CLAUDECODE`,
+`CODEX_SESSION_ID`, `CODEX_THREAD_ID`, `CODEX_CI`, `GROK_SESSION_ID`), when
+an ancestor process is `claude`, `codex` or `grok`, when the ancestry
+cannot be read, and when standard input is not a terminal. These checks
+refuse early. They cannot stop a process outside the harness sandbox that
+has no marker, no harness ancestor and a pseudo-terminal; the directory
+deny is what holds inside the sandbox.
+
+How a recorded baseline bears on each read:
+
+| State | Policy enforced |
+|---|---|
+| the tracking ref is at the recorded commit | unchanged |
+| the ref descends from the recorded commit | the stricter of the two; doctor names the refresh |
+| the ref does not descend from it | the baseline's |
+| the remote is gone, or advertises no refs | the baseline's; doctor names the removed remote |
+| no record, and the ledger does not list the repository | unchanged; doctor notes that none is recorded |
+| the ledger lists the repository but the record is gone, the record cannot be read, is writable by others, fails its digest, or names another repository, remote URL or default branch | none: the policy check blocks until the operator repairs it |
+
+The stricter of two: every level takes the higher of block, warn, allow
+and off. Lists where more entries refuse more take the union (protected
+branches, blocked names, protected paths, required checks, required
+sections and footers, watched paths, product paths). Lists where more
+entries allow more take the intersection (worktree locations, claim
+remotes, commit types and footer tokens, ticket keys, branch prefixes,
+document indexes, automation profiles, regenerable paths, sandbox retry
+allowances, trusted client configs, ignored-file allowances). A list one
+side leaves at its default keeps the baseline's value.
+`security.text_guard` is `relaxed` only when both say so. Every other
+value is the baseline's until the operator refreshes it, so the result is
+never weaker than the baseline.
+
+No sandbox deny on `refs/remotes` is added: the baseline holds whatever the
+refs say. The hosted verdict reads its policy from the default branch at
+one commit (ADR-0091) and does not read the baseline.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It
@@ -1431,7 +1506,10 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
   One judge reads every writer the table lists, once, with the line's
   option environment, and both guards call it: exec-guard against the
   startup and user git configuration classes, git-guard against the
-  integrity paths and the repository git configuration. It judges the
+  integrity paths and the repository git configuration, and both against
+  the enforcement files a recursive copy or sync reaches under its
+  destination (see "Repository discovery and enforcement targets"). It
+  judges the
   copy's destination, each written path from the command line or the
   option environment (`TAR_OPTIONS="--file=$HOME/.zshrc" tar -c .`,
   `ZIPOPT="-O $HOME/.zshrc"`), each as spelled and joined with the
@@ -1663,6 +1741,51 @@ checked, so a symlink does not remove the target owner's protection.
   empty `rm`, `rmdir` or `find` operand names nothing. Copying a worktree
   does not authorize deleting its source. Use `git worktree move` or
   `git worktree remove` for lifecycle changes.
+- A recursive copy or sync is judged by what it would create, replace or
+  delete, under `git.hook_integrity` in both shell hooks. The commands
+  read are `cp` with `-R`, `-r`, `-a`, `--recursive` or `--archive`,
+  `scp -r`, every `rsync` and every `ditto`. For each source the guard
+  works out where its contents land, by the command's own rules: `cp`
+  into an existing directory at the source's name, into an absent one as
+  that directory, and both when the kind cannot be read; `rsync` at the
+  destination for a source ending in `/` or `/.`, or written as `.`, and
+  at the source's name otherwise; `ditto` at both. It then lists the enforcement files, and
+  the `.git` of every registered checkout, at or below that place.
+  - When there are none, the call keeps its earlier verdict and the
+    source is not read: `cp -R src/ build/`, `rsync -a docs/ site/`, a
+    copy to a folder outside every checkout, and a single-file `cp`.
+  - A source holding an entry on the way to one of them refuses, naming
+    the file and the source: `cp -R /src/.claude .`, `rsync -a /src/ ./`
+    and `ditto /src .` when `/src` holds `.claude` or `.git`. Names are
+    compared ignoring case and, on Windows, without a trailing dot or
+    space, as Windows opens them; there a source entry shaped like a
+    short name is a source the guard cannot verify.
+  - A deleting sync refuses whenever its landing place holds one: `--del`,
+    every option whose name starts with `--delete`, and an abbreviation
+    of `--delete`. A source-removing sync (`--remove-source-files`,
+    `--remove-sent-files` and their abbreviations) refuses when its source
+    is or holds enforcement files.
+  - Cannot verify: a source that is missing, unreadable, filled in at run
+    time, a pattern, or remote (`host:path`, `rsync://`), or an option the
+    guard does not read, refuses when the landing place holds enforcement
+    files. A destination filled in at run time refuses when the source
+    holds `.git`, `.codeflow`, `.claude`, `.github`, `.codex` or `.grok`
+    at any depth, read within 4096 directories, or cannot be read. The
+    search for hidden checkouts under a configured worktree location keeps
+    its 4096-directory bound, and past it the copy refuses.
+  - A dry run (`rsync -n`, `--dry-run`) passes when the guard reads every
+    option on the line, each with its value. The guard does not read
+    filters, so `--exclude .claude` does not clear a refusal; sync a
+    subdirectory, or copy the files you need by name.
+  - A symbolic link at the landing place that a source entry of the same
+    name would be written through refuses when it leads to enforcement
+    files (`./x -> .claude` with a source holding `x/`).
+  - Limits: archive extraction (`tar -x`, `unzip`, `git archive`) names
+    its members inside the archive, so it keeps the destination check.
+    A link deeper in the destination is not followed. The guard reads the
+    source when it judges the call, and a tree that changes before the
+    copy runs is not seen. The OS sandbox's write denies on the
+    enforcement files are the backstop for these.
 - Persistent writes of `core.worktree`, `core.bare` and
   `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
   hooks, regardless of the config file or scope. Reads and command-local

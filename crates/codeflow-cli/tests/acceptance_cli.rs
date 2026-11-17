@@ -7183,3 +7183,6 @@ mod head_tree_records;
 
 #[path = "acceptance_cli/merged_target_changes.rs"]
 mod merged_target_changes;
+
+#[path = "acceptance_cli/candidate_push.rs"]
+mod candidate_push;

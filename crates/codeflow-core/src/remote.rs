@@ -2347,7 +2347,7 @@ impl GithubProvider {
 
 /// Run `gh` with args, optionally piping `input` to stdin. Returns stdout
 /// on success, combined output as the error string on failure.
-fn run_gh(
+pub(crate) fn run_gh(
     gh: &Path,
     repo_dir: &Path,
     host: Option<&str>,
