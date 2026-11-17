@@ -1,0 +1,11 @@
+id = "TSK-1521"
+uid = "6e32d4f4-250c-4e95-8fe0-28b7206b1ffc"
+kind = "TSK"
+title = "The criterion transfer docs name the three cases that fail closed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T00:05:53Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
