@@ -281,6 +281,7 @@
           "command": "python3 -B scripts/test_release.py"
         }
       },
+      "timeout_seconds": 3000,
       "requires": [
         "codeflow-bin",
         "rust-build"
