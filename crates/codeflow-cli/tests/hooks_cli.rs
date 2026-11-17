@@ -12189,7 +12189,10 @@ fn inherited_promisor_settings_never_reach_the_attribute_reader() {
         // The repository's own configuration has no promisor designation.
         git(&work, &["config", "--unset", "remote.origin.promisor"]);
         git(&work, &["config", "--unset", "extensions.partialClone"]);
-        git(&work, &["config", "--unset", "remote.origin.partialCloneFilter"]);
+        git(
+            &work,
+            &["config", "--unset", "remote.origin.partialCloneFilter"],
+        );
         let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
         let out = promisor_hook(&work, &wrapper, false, false, env);
         let stderr = String::from_utf8_lossy(&out.stderr);
