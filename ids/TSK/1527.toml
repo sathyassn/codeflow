@@ -1,0 +1,11 @@
+id = "TSK-1527"
+uid = "b334316b-3694-45ca-8058-606bb4d2ba44"
+kind = "TSK"
+title = "Required check follow-up to TSK-1396"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T03:29:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
