@@ -9,6 +9,16 @@ struct Options {
 }
 
 fn fixture(stale: bool) -> (tempfile::TempDir, tempfile::TempDir, git2::Oid) {
+    fixture_with(stale, true)
+}
+
+/// `remote_head`: whether the clone records the remote's default branch, as
+/// `git clone` does; a hosted `actions/checkout` with fetch-depth 0 leaves
+/// the tracking refs without it.
+fn fixture_with(
+    stale: bool,
+    remote_head: bool,
+) -> (tempfile::TempDir, tempfile::TempDir, git2::Oid) {
     let dir = tempfile::tempdir().unwrap();
     let remote = tempfile::tempdir().unwrap();
     Repository::init_bare(remote.path()).unwrap();
@@ -43,13 +53,15 @@ fn fixture(stale: bool) -> (tempfile::TempDir, tempfile::TempDir, git2::Oid) {
         .unwrap();
     repo.reference("refs/remotes/origin/main", base, true, "fixture")
         .unwrap();
-    repo.reference_symbolic(
-        "refs/remotes/origin/HEAD",
-        "refs/remotes/origin/main",
-        true,
-        "fixture",
-    )
-    .unwrap();
+    if remote_head {
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    }
     std::fs::write(
         &path,
         json!({"git":{"protected_branches":[], "branch_prefixes":["task/", "loose/"]}}).to_string(),
@@ -64,10 +76,10 @@ fn fixture(stale: bool) -> (tempfile::TempDir, tempfile::TempDir, git2::Oid) {
 fn check_range(stale: bool) {
     use clap::Parser;
     let (dir, _remote, base) = fixture(stale);
-    let (policy, _) = range_policy(dir.path()).unwrap();
+    let options = Options::parse_from(["test", "--branch", "task/check"]);
+    let (policy, _) = range_policy(dir.path(), &options.ci, &BTreeMap::new()).unwrap();
     assert_eq!(policy.git.protected_branches, ["main"]);
     assert_eq!(policy.git.branch_prefixes, ["task/"]);
-    let options = Options::parse_from(["test", "--branch", "task/check"]);
     let context = context::resolve(
         dir.path(),
         &options.ci,
@@ -120,5 +132,35 @@ fn range_floor_unreadable_authority_refuses_range_selection() {
         format!("{}\n", "1".repeat(40)),
     )
     .unwrap();
-    assert!(range_policy(dir.path()).is_err());
+    let options = <Options as clap::Parser>::parse_from(["test", "--branch", "task/check"]);
+    assert!(range_policy(dir.path(), &options.ci, &BTreeMap::new()).is_err());
+}
+
+/// A hosted checkout (`actions/checkout` with fetch-depth 0) has the
+/// remote's tracking refs but no remote default branch. The floor is then
+/// read at the commit the run already pins: `--into`, `--base`,
+/// `--policy-from` or the base the CI event names (TSK-1078). With nothing
+/// pinned, the unset remote default still refuses.
+#[test]
+fn range_floor_hosted_clone_without_remote_head_reads_the_pinned_commit() {
+    use clap::Parser;
+    let (dir, _remote, _) = fixture_with(true, false);
+    let none = BTreeMap::new();
+    let event = BTreeMap::from([("GITHUB_BASE_REF".to_string(), "main".to_string())]);
+    for (flags, environment) in [
+        (&["--into", "main"][..], &none),
+        (&["--base", "origin/main"][..], &none),
+        (&["--policy-from", "origin/main"][..], &none),
+        (&[][..], &event),
+    ] {
+        let mut argv = vec!["test", "--branch", "task/check"];
+        argv.extend_from_slice(flags);
+        let options = Options::parse_from(argv);
+        let (policy, _) = range_policy(dir.path(), &options.ci, environment)
+            .unwrap_or_else(|error| panic!("{flags:?}: {error}"));
+        assert_eq!(policy.git.protected_branches, ["main"], "{flags:?}");
+        assert_eq!(policy.git.branch_prefixes, ["task/"], "{flags:?}");
+    }
+    let unpinned = Options::parse_from(["test", "--branch", "task/check"]);
+    assert!(range_policy(dir.path(), &unpinned.ci, &none).is_err());
 }

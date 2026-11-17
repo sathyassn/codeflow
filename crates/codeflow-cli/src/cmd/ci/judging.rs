@@ -108,7 +108,8 @@ pub(super) struct Judging {
 /// levels. Some inputs stay elsewhere, by design: the auto-detected range's
 /// protected branches, and the work prefixes that find a declared target,
 /// are composed by `range_policy` in `ci.rs` before the range is resolved,
-/// from the landed policy at the local tracking ref and the working copy
+/// from the policy at the commit the run pins (else the landed policy at the
+/// local tracking ref) and the working copy
 /// (protected names unioned, prefixes intersected, so the checkout can only
 /// tighten them; the pre-push hook finds the declared target under the
 /// authority's prefixes and passes it), the change class widens the authority's product

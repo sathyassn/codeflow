@@ -370,12 +370,52 @@ fn ci_environment(
     Ok(values)
 }
 
-fn range_policy(root: &Path) -> Result<(Policy, bool), String> {
+/// The working policy with the protected list and work prefixes composed
+/// over a floor (TSK-1078): the policy at the commit this run already pins
+/// ([`pinned_floor`]), else the landed policy at the remote's default
+/// branch, which refuses when that is unset or unreadable.
+fn range_policy(
+    root: &Path,
+    args: &CiArgs,
+    environment: &BTreeMap<String, String>,
+) -> Result<(Policy, bool), String> {
     let (mut working, armed) = Policy::load_effective(root)?;
-    let landed = codeflow_core::hooks::landed_policy::load_local(root)?;
+    let floor = match pinned_floor(root, args, environment)? {
+        Some(sha) => codeflow_core::hooks::landed_policy::checked_policy_at_sha(root, &sha)?,
+        None => codeflow_core::hooks::landed_policy::load_local(root)?.policy,
+    };
     (working.git.protected_branches, working.git.branch_prefixes) =
-        codeflow_core::hooks::landed_policy::compose_branches(&landed.policy.git, &working.git);
+        codeflow_core::hooks::landed_policy::compose_branches(&floor.git, &working.git);
     Ok((working, armed))
+}
+
+/// The commit the run already pins its judgment to, which range selection
+/// takes its floor from: `--policy-from`, else `--base`, else `--into` (read
+/// by exact ref, see [`base_refs`]), else the base the CI event names.
+/// `None` when nothing is pinned or no pin resolves here; the policy
+/// fallback (`ProtectedBranches`) is not a pin. A hosted checkout with
+/// fetch-depth 0 has no remote default branch, and this pin is what it
+/// judges by (TSK-1078 Option A).
+fn pinned_floor(
+    root: &Path,
+    args: &CiArgs,
+    environment: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    let env = |key: &str| environment.get(key).cloned().filter(|v| !v.is_empty());
+    let mut pins: Vec<Vec<String>> = Vec::new();
+    pins.extend(args.policy_from.iter().map(|rev| vec![rev.clone()]));
+    pins.extend(args.base.iter().map(|rev| vec![rev.clone()]));
+    pins.extend(args.into.iter().map(|name| base_refs(name)));
+    let detected = detect_range(env, &[]);
+    if !matches!(detected.source, RangeSource::ProtectedBranches) {
+        pins.push(detected.base_candidates);
+    }
+    for candidates in pins {
+        if let Some(sha) = resolve_base(root, &candidates)? {
+            return Ok(Some(sha));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -424,11 +464,12 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     if !policy_verifiable(&root, args.blocking_rules_out.as_deref()) {
         return 2;
     }
-    // Range selection keeps the landed protected list as a floor and its
-    // prefixes as a ceiling. The range itself is judged with the policy at
+    // Range selection keeps the protected list at the pinned commit, else the
+    // landed one, as a floor and its prefixes as a ceiling (see
+    // `range_policy`). The range itself is judged with the policy at
     // its base (see `judging_policy`). Bootstrap grace cannot occur here:
     // CI always has history.
-    let (working, _armed) = match range_policy(&root) {
+    let (working, _armed) = match range_policy(&root, args, &environment) {
         Ok(value) => value,
         Err(error) => {
             let age = crate::cmd::binary_age(&root);

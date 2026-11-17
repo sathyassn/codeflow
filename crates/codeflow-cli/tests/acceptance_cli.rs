@@ -232,6 +232,57 @@ fn ci_push(root: &Path, branch: &str) -> (i32, String) {
     )
 }
 
+/// A hosted checkout (`actions/checkout` with fetch-depth 0) holds the
+/// remote's tracking refs but records no remote default branch. `codeflow ci
+/// --into main` takes its range floor from the target it names, so it runs
+/// there; with nothing pinned the unset default still refuses (TSK-1078).
+#[test]
+fn a_hosted_clone_without_a_remote_default_runs_ci_into_its_target() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let remote = root.join(".git/destination.git");
+    git(
+        root,
+        &[
+            "init",
+            "--bare",
+            "-q",
+            "-b",
+            "main",
+            remote.to_str().unwrap(),
+        ],
+    );
+    git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(root, &["push", "-q", "origin", "main"]);
+    assert!(!root.join(".git/refs/remotes/origin/HEAD").exists());
+    code_change(root, BRANCH, "pub fn work() {}\n");
+    let run = |pin: &[&str]| {
+        let out = codeflow()
+            .arg("ci")
+            .args(pin)
+            .args(["--head", "HEAD", "--branch", BRANCH])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    assert_passes(&run(&["--into", "main"]), "hosted-shaped ci --into main");
+    let unpinned = run(&[]);
+    assert_eq!(unpinned.0, 2, "unpinned: {}", unpinned.1);
+    assert!(
+        unpinned.1.contains("the policy authority is unset"),
+        "{}",
+        unpinned.1
+    );
+}
+
 fn assert_passes(result: &(i32, String), what: &str) {
     assert_eq!(result.0, 0, "{what}: {}", result.1);
 }

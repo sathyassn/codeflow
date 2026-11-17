@@ -322,7 +322,7 @@ fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool,
 fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> {
     let head = format!("refs/remotes/{remote}/HEAD");
     let set_head = format!(
-        "the operator runs git remote set-head {remote} -a (git fetch {remote} records it too, on git 2.48 or later); no other branch is taken as the default"
+        "the operator records it with git remote set-head {remote} --auto (git fetch {remote} records it too, on git 2.48 or later); no other branch is taken as the default"
     );
     let reference = match repo.find_reference(&head) {
         Ok(reference) => reference,
@@ -584,6 +584,19 @@ pub fn checked_policy_at(repo: &Repository, commit: git2::Oid) -> Result<Policy,
         format!("{INVALID_POLICY} {short}: {}", shown.join("; "))
     })?;
     serde_json::from_str(&text).map_err(|e| format!("{INVALID_POLICY} {short}: {e}"))
+}
+
+/// [`checked_policy_at`] for the commit `sha` names in the repository at
+/// `root`.
+///
+/// # Errors
+/// No repository, `sha` is not a commit id, or as [`checked_policy_at`].
+pub fn checked_policy_at_sha(root: &Path, sha: &str) -> Result<Policy, String> {
+    let repo = super::repo::open(root)?
+        .ok_or_else(|| format!("cannot read the policy at {sha}: no repository"))?;
+    let oid =
+        git2::Oid::from_str(sha).map_err(|e| format!("cannot read the policy at {sha}: {e}"))?;
+    checked_policy_at(&repo, oid)
 }
 
 /// The text of the regular file at `path` in `tree`: `None` when the tree

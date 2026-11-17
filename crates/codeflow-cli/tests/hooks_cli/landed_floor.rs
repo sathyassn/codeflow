@@ -642,6 +642,32 @@ fn landed_floor_unreadable_authority_refuses_every_hook() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A clone with a remote but no recorded remote default branch (an
+/// `actions/checkout`-shaped clone, or one made before git 2.48 recorded it
+/// on fetch) refuses at every hook and names the repair (TSK-1078).
+#[test]
+fn landed_floor_unset_remote_default_refuses_and_names_set_head() {
+    let mut failures = Vec::new();
+    let fixture = Fixture::new(json!({}), json!({}), false);
+    fixture
+        .repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .unwrap()
+        .delete()
+        .unwrap();
+    for stage in ["pre-commit", "pre-merge-commit", "commit-msg", "pre-push"] {
+        let out = fixture.hook(stage, "fix: check", "");
+        collect_refusal(&out, "the policy authority is unset", stage, &mut failures);
+        collect_refusal(
+            &out,
+            "git remote set-head origin --auto",
+            stage,
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn landed_floor_staged_content_refuses_planted_content() {
     let fixture = Fixture::new(
