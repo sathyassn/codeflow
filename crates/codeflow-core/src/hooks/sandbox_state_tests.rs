@@ -82,6 +82,25 @@ impl Fixture {
     }
 }
 
+/// TSK-1299 review finding (Minor 3): at the largest
+/// `limits.sandbox_settings_read_bytes` a project may set, a settings file
+/// still reads whole, with no wrap to an empty read and no overflow panic.
+#[test]
+fn the_largest_settings_read_limit_still_reads_a_file_whole() {
+    use crate::limit_child_tests::{child_passes_within, in_child_with_largest};
+    if in_child_with_largest(&[&codeflow_limits::SANDBOX_SETTINGS_READ_BYTES]) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        assert!(matches!(read_text(&path), Read::Parsed(text) if text == "{}"));
+        return;
+    }
+    assert!(child_passes_within(
+        "hooks::sandbox_state::tests::the_largest_settings_read_limit_still_reads_a_file_whole",
+        std::time::Duration::from_secs(90),
+    ));
+}
+
 fn assert_strict(outcome: &Outcome, needle: &str) {
     match outcome {
         Outcome::Strict(reason) => assert!(reason.contains(needle), "{reason}"),

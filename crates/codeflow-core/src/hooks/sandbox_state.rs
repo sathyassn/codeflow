@@ -343,7 +343,11 @@ fn read_text(path: &Path) -> Read<String> {
     }
     let mut bytes = Vec::new();
     if let Err(error) = file
-        .take(codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value() + 1)
+        .take(
+            codeflow_limits::SANDBOX_SETTINGS_READ_BYTES
+                .value()
+                .saturating_add(1),
+        )
         .read_to_end(&mut bytes)
     {
         return Read::Unreadable(error.to_string());
