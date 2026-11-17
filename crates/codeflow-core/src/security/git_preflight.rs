@@ -123,23 +123,24 @@ const SETTERS: &[&str] = &[
 const NAMESPACE_MARKERS: &[&str] = &["\\\\?\\", "\\\\.\\", "\\??\\", "//?/", "//./", "/??/"];
 
 /// Whether the line runs Git: a simple command, nested ones included, whose
-/// program is `git` or a `git-*` program.
+/// program is `git` or a `git-*` program. The program is found behind the
+/// assignments the shell takes, from the words as written (TSK-1456), so a
+/// word whose name or `=` a quote made literal is the program; its reading
+/// without that word is a segment of its own.
 fn runs_git(command: &str) -> bool {
-    crate::hooks::git_guard::expand_commands(command)
-        .iter()
-        .any(|segment| {
-            let words = crate::hooks::git_guard::command_argv(segment);
-            let words: Vec<String> = words
-                .iter()
-                .skip_while(|word| word.contains('=') && !word.starts_with('-'))
-                .cloned()
-                .collect();
-            // A program word the shell fills in may be Git (`$G commit`).
-            crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, rest)| {
-                crate::hooks::git_guard::unresolved_word(program)
-                    || crate::hooks::git_guard::git_arguments(program, rest).is_some()
-            })
+    use crate::hooks::git_guard as guard;
+    guard::expand_commands(command).iter().any(|segment| {
+        let (mut words, mut marks) = guard::command_argv_marked(segment);
+        let written = words.len();
+        guard::strip_reserved_words(&mut words);
+        marks.drain(..written - words.len());
+        // A program word the shell fills in may be Git (`$G commit`).
+        guard::launched_at_written(&words, Some(&marks)).is_some_and(|(at, _)| {
+            let program = words[at].as_str();
+            guard::unresolved_word(program)
+                || guard::git_arguments(program, &words[at + 1..]).is_some()
         })
+    })
 }
 
 /// The values a word can carry: the word, the text after its first `=`
@@ -652,6 +653,22 @@ mod tests {
         ] {
             assert!(namespace(line).is_none(), "{line}");
         }
+    }
+
+    /// TSK-1456: a word the text reads as an assignment but the shell runs
+    /// as the program, because a quote stands in its name or `=`, is the
+    /// program when the guard decides whether the line runs Git.
+    #[test]
+    fn assignment_shaped_program_words_are_read_as_the_shell_reads_them() {
+        for line in [
+            "'X=/usr/bin/git' -C '//fixture-host/fixture-share' status",
+            "X''=/usr/bin/git -C '//fixture-host/fixture-share' status",
+            "'X=1' git -C '//fixture-host/fixture-share' status",
+            "X=1 git -C '//fixture-host/fixture-share' status",
+        ] {
+            assert!(namespace(line).is_some(), "{line}");
+        }
+        assert!(namespace("X=1 ls '//fixture-host/fixture-share'").is_none());
     }
 
     #[test]
