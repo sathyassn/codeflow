@@ -1,0 +1,11 @@
+id = "TSK-1526"
+uid = "610e6bba-7517-47bb-83ee-f589e6b12f1d"
+kind = "TSK"
+title = "Remove the review provider leftovers from work start"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T01:29:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
