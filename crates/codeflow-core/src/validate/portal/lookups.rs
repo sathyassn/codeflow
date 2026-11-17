@@ -160,9 +160,9 @@ fn classic_hook_note(path: &str) -> &'static str {
         | "git.secret_scan" | "git.conflict_markers" | "git.test_gate_on_push" =>
             "Classic hooks enforce the landed level as a floor; the checked-out policy may only tighten it. Bootstrap grace retains its existing suspensions.",
         "git.protected_branches" =>
-            "In classic hooks and CI range selection, the landed list is the floor: the checked-out policy may add protected entries, never remove them. CI range selection reads that list at the commit the run pins (`--policy-from`, `--base`, `--into` or the CI event's base), else at the remote's default branch.",
+            "In classic hooks and CI range selection, the landed list is the floor: the checked-out policy may add protected entries, never remove them. CI range selection reads that list at the commit the run pins (`--policy-from`, `--base`, `--into`, the CI event's base or `CODEFLOW_DEFAULT_BRANCH`), else at the remote's default branch.",
         "git.branch_prefixes" =>
-            "In classic hooks and CI range selection, the landed list is the ceiling: the checked-out policy may remove prefixes, never add them. CI range selection reads that list at the commit the run pins (`--policy-from`, `--base`, `--into` or the CI event's base), else at the remote's default branch.",
+            "In classic hooks and CI range selection, the landed list is the ceiling: the checked-out policy may remove prefixes, never add them. CI range selection reads that list at the commit the run pins (`--policy-from`, `--base`, `--into`, the CI event's base or `CODEFLOW_DEFAULT_BRANCH`), else at the remote's default branch.",
         "git.commit_required_footers" =>
             "Classic hooks retain every landed requirement; the checked-out policy may only add requirements. A new required footer cannot grant an allowance absent from an active landed body rule.",
         "git.breaking_watch_paths" =>

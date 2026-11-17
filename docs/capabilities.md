@@ -239,8 +239,9 @@ section of `.codeflow/policy.json`.
   only shrink without disabling a check, and commit limits can only decrease.
   An unreadable authority refuses the operation. CI range selection uses the
   same protected-branch floor and work-prefix ceiling, read at the commit
-  the run pins (`--policy-from`, `--base`, `--into` or the CI event's
-  base), else at the remote's default branch. Bootstrap grace
+  the run pins (`--policy-from`, `--base`, `--into`, the CI event's
+  base or `CODEFLOW_DEFAULT_BRANCH`), else at the remote's default branch.
+  Bootstrap grace
   retains its existing suspensions.
 - Agent sessions are judged by the landed policy on the remote, so a local
   edit, commit or branch cannot relax the session checks. The authority is
