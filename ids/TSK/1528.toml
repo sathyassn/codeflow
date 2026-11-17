@@ -1,0 +1,11 @@
+id = "TSK-1528"
+uid = "b956733a-43f2-467c-a122-0e71917b9320"
+kind = "TSK"
+title = "Cargo takes the libz-sys release past the second zlib advisory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T19:37:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
