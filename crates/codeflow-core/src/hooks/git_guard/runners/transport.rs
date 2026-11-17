@@ -1078,8 +1078,7 @@ impl<'a> Resolver<'a> {
             }
             Some((sub, names)) if matches!(*sub, "update" | "show" | "prune" | "set-head") => {
                 let mut names = names;
-                if *sub == "update" && names.last() == Some(&"default") && !self.group("default")
-                {
+                if *sub == "update" && names.last() == Some(&"default") && !self.group("default") {
                     // Git replaces a last `default` with fetching every
                     // remote when no `default` group is set
                     // (`builtin/remote.c` `update`), so the word reads as
