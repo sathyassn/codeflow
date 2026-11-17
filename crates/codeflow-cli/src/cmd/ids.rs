@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use codeflow_core::ids::check::{self, Report};
+use codeflow_core::ids::check::{self, Report, Standalone, StandaloneError};
 use codeflow_core::ids::entry::frontmatter_value;
 use codeflow_core::ids::{issue, record_id_from_path, seed, Git, RegId};
 
@@ -121,44 +121,35 @@ pub fn run(args: &IdsArgs) -> i32 {
             base,
             head,
         } => {
-            match codeflow_core::workgraph::durable_work_tracking_enabled(&root) {
-                Ok(true) => {}
-                Ok(false) => {
+            let range = match (base, head) {
+                (Some(base), Some(head)) => Some((base.as_str(), head.as_str())),
+                _ => None,
+            };
+            match check::standalone(&root, registry.as_deref(), range) {
+                Ok(Standalone::TrackingOff) => {
                     println!("codeflow ids check: durable work tracking is off; no registry rule applies");
-                    return 0;
+                    0
                 }
-                Err(error) => {
-                    eprintln!(
-                        "codeflow ids check: {}",
-                        codeflow_core::workgraph::work_start::tracking_state_message(error)
-                    );
-                    return 2;
+                Ok(Standalone::Judged(report)) => render(&report),
+                Err(StandaloneError::Tracking(message)) => {
+                    eprintln!("codeflow ids check: {message}");
+                    2
                 }
-            }
-            let git = Git::new(&root);
-            let mut report = match check::check(&git, registry.as_deref()) {
-                Ok(report) => report,
-                Err(error) => {
+                Err(StandaloneError::Check(error)) => {
                     eprintln!(
                         "codeflow ids check: could not run: {error}",
                         error = crate::cmd::shown(&error)
                     );
-                    return 2;
+                    2
                 }
-            };
-            if let (Some(base), Some(head)) = (base, head) {
-                match check::merge_rule(&git, base, head) {
-                    Ok(range) => merge(&mut report, range),
-                    Err(error) => {
-                        eprintln!(
-                            "codeflow ids check: could not run the merge rule: {error}",
-                            error = crate::cmd::shown(&error)
-                        );
-                        return 2;
-                    }
+                Err(StandaloneError::MergeRule(error)) => {
+                    eprintln!(
+                        "codeflow ids check: could not run the merge rule: {error}",
+                        error = crate::cmd::shown(&error)
+                    );
+                    2
                 }
             }
-            render(&report)
         }
     }
 }
@@ -280,12 +271,6 @@ fn run_admit(root: &std::path::Path, record: &str) -> i32 {
         }
         Err(error) => fail(&error),
     }
-}
-
-fn merge(into: &mut Report, from: Report) {
-    into.info.extend(from.info);
-    into.warns.extend(from.warns);
-    into.blocks.extend(from.blocks);
 }
 
 /// Print a report; exit 1 when it blocks.

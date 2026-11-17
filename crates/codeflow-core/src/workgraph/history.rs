@@ -78,6 +78,18 @@ fn snapshot(repo: &Repository) -> Snapshot {
 #[cfg(test)]
 thread_local! { static SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+/// Test only: restart this thread's count of snapshot reads.
+#[cfg(test)]
+pub(crate) fn reset_snapshot_reads() {
+    SNAPSHOT_READS.with(|reads| reads.set(0));
+}
+
+/// Test only: how many snapshots this thread has read since the last reset.
+#[cfg(test)]
+pub(crate) fn snapshot_reads() -> usize {
+    SNAPSHOT_READS.with(std::cell::Cell::get)
+}
+
 fn read_snapshot(repo: &Repository) -> Snapshot {
     #[cfg(test)]
     SNAPSHOT_READS.with(|reads| reads.set(reads.get() + 1));
