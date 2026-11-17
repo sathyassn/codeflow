@@ -231,9 +231,8 @@ pub fn limits_page() -> Generated {
             cell(limit.reason)
         )
     };
-    let mut text = format!(
-        "{}\n\nEvery limit CodeFlow applies: timeouts, retries, counts, sizes, waits, parallel numbers and word limits, each with its key, default, bounds and class. The binary generates this page from its limits registry, so a limit a maintainer adds appears here without further work. To choose which models CodeFlow uses, see [model and harness upgrades](model-upgrades.md).\n\nSet a limit by adding its key to the file its section names. An absent key keeps the default. A value of the wrong type or outside the bounds refuses, naming the key and its bounds.\n\n- **Operational** limits tune how long or how much work may take. The bounds are only what correctness needs, and a large value is never refused.\n- **Security** limits keep a control fail-closed. You can tighten one to its floor at any time, and raise it to its ceiling. The ceiling leaves a buffer: the guard deadline always stays inside the guard hook timeout.\n- **Guidance** values are only reported. CodeFlow warns, and never refuses, queues, waits or lowers what you set.\n",
-        begin_marker(LIMITS_PAGE)
+    let mut text = String::from(
+        "Every limit CodeFlow applies: timeouts, retries, counts, sizes, waits, parallel numbers and word limits, each with its key, default, bounds and class. The binary generates this page from its limits registry, so a limit a maintainer adds appears here without further work. To choose which models CodeFlow uses, see [model and harness upgrades](model-upgrades.md).\n\nSet a limit by adding its key to the file its section names. An absent key keeps the default. A value of the wrong type or outside the bounds refuses, naming the key and its bounds.\n\n- **Operational** limits tune how long or how much work may take. The bounds are only what correctness needs, and a large value is never refused.\n- **Security** limits keep a control fail-closed. You can tighten one to its floor at any time, and raise it to its ceiling. The ceiling leaves a buffer: the guard deadline always stays inside the guard hook timeout.\n- **Guidance** values are only reported. CodeFlow warns, and never refuses, queues, waits or lowers what you set.\n"
     );
     let mut rows = 0;
     for (heading, route) in [
@@ -257,7 +256,6 @@ pub fn limits_page() -> Generated {
         )
         .expect("writing to a String cannot fail");
     }
-    writeln!(text, "\n{}", end_marker(LIMITS_PAGE)).expect("writing to a String cannot fail");
     Generated { text, rows }
 }
 
