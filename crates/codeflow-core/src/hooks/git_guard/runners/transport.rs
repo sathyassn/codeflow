@@ -979,9 +979,13 @@ impl<'a> Resolver<'a> {
     /// place at an index entry with no `.gitmodules` entry or setting
     /// (`submodule.c`), and the index does not move with a work-tree or
     /// bare setting on the command line, so it is read in every repository.
+    /// The probe reads only the call's location inputs, so a work-tree
+    /// setting, or a bare setting that gives a bare repository a work tree,
+    /// may place repositories where it does not look; either one counts.
     fn may_have_submodules(&self, probe: &mut dyn Probe) -> Result<bool, String> {
         if self.keys.iter().any(|key| {
             *key == "submodule.active"
+                || *key == "core.worktree"
                 || key
                     .strip_prefix("submodule.")
                     .is_some_and(|rest| rest.contains('.'))
@@ -989,6 +993,13 @@ impl<'a> Resolver<'a> {
             return Ok(true);
         }
         let location = probe.location()?;
+        if location.bare
+            && values(self.config, "core.bare")?
+                .last()
+                .is_some_and(|value| crate::security::git::config_boolean(value) != Some(true))
+        {
+            return Ok(true);
+        }
         if !absent(&location.common.join("modules")) {
             return Ok(true);
         }
