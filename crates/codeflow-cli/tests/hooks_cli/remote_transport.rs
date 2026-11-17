@@ -675,10 +675,10 @@ fn both_guards_refuse_nested_contacts_they_cannot_prove() {
 }
 
 #[test]
-fn a_command_line_setting_does_not_move_the_repository_probe() {
+fn a_location_setting_the_probe_does_not_read_keeps_nested_contacts_refused() {
     // The probe that looks for submodules reads only the call's location
     // inputs, so a work-tree setting on the command line or in the
-    // environment leaves the verdict unchanged.
+    // environment cannot hide a marker the probe found.
     let scratch = Scratch::landed(None);
     scratch.write(".gitmodules", b"");
     let empty = scratch.base.join("empty");
@@ -695,6 +695,15 @@ fn a_command_line_setting_does_not_move_the_repository_probe() {
         &[],
         &[(&environment, CONFIG_OVERRIDE)],
     );
+    // Nor can it move the work tree to a place the probe does not look,
+    // so recursion refuses where it passes without the setting.
+    let plain = Scratch::landed(None);
+    let elsewhere = plain.base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let elsewhere = shell_path(&elsewhere);
+    let setting = format!("git -c core.worktree={elsewhere} fetch origin");
+    let off = format!("git -c core.worktree={elsewhere} fetch --no-recurse-submodules origin");
+    assert_unproven(&plain, &[&setting], &["git fetch origin", &off]);
 }
 
 #[test]

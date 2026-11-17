@@ -54,6 +54,21 @@ impl Scratch {
         Self { _dir: dir, root }
     }
 
+    /// A scratch bare repository whose configuration ends with `config`.
+    fn bare(config: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(dir.path())
+            .unwrap()
+            .join("repo.git");
+        git2::Repository::init_bare(&root).unwrap();
+        let file = root.join("config");
+        let mut bytes = std::fs::read(&file).unwrap();
+        bytes.extend_from_slice(b"\n");
+        bytes.extend_from_slice(config.as_bytes());
+        std::fs::write(&file, bytes).unwrap();
+        Self { _dir: dir, root }
+    }
+
     /// The contacts of a command given word by word, so a word may be empty.
     fn contacts_of(&self, words: &[&str]) -> Result<Vec<Contact>, String> {
         self.contacts_reading(words, "/dev/null")
@@ -62,12 +77,28 @@ impl Scratch {
     /// [`Scratch::contacts_of`] with `global` as the global configuration
     /// file the call reads.
     fn contacts_reading(&self, words: &[&str], global: &str) -> Result<Vec<Contact>, String> {
+        self.contacts_in(words, global, &[])
+    }
+
+    /// [`Scratch::contacts_of`] with `settings` as the call's global
+    /// options, which the configuration read sees and the probe does not.
+    fn contacts_with(&self, words: &[&str], settings: &[&str]) -> Result<Vec<Contact>, String> {
+        self.contacts_in(words, "/dev/null", settings)
+    }
+
+    fn contacts_in(
+        &self,
+        words: &[&str],
+        global: &str,
+        settings: &[&str],
+    ) -> Result<Vec<Contact>, String> {
         let mut env = Environment::new();
         env.insert("GIT_CONFIG_GLOBAL".into(), global.into());
         env.insert("GIT_CONFIG_SYSTEM".into(), "/dev/null".into());
         env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         env.insert("HOME".into(), self.root.display().to_string());
-        let config = read(&self.root, &[], &env)?;
+        let settings: Vec<String> = settings.iter().map(|word| (*word).to_string()).collect();
+        let config = read(&self.root, &settings, &env)?;
         let words: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
         let (verb, rest) = words.split_first().unwrap();
         contacts(verb, rest, &config, &mut RootProbe(&self.root))
@@ -1180,4 +1211,44 @@ fn a_command_that_sets_up_later_contacts_refuses() {
     ] {
         assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
     }
+}
+
+/// Round j, beside the fourth row: a location setting the probe does not
+/// read may place nested repositories where the probe does not look, so
+/// recursion refuses unless the line turns it off.
+#[test]
+fn nested_contacts_refuse_where_the_probe_cannot_look() {
+    let plain = Scratch::new(HTTPS);
+    let elsewhere = plain.root().with_file_name("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let worktree = format!("core.worktree={}", elsewhere.display());
+    assert_eq!(
+        plain
+            .contacts_with(&["fetch", "origin"], &[])
+            .map(helper_names),
+        Ok(vec![])
+    );
+    let error = plain
+        .contacts_with(&["fetch", "origin"], &["-c", &worktree])
+        .expect_err("a work tree the probe does not read must refuse");
+    assert!(error.starts_with(UNPROVEN), "{error}");
+    assert_eq!(
+        plain
+            .contacts_with(
+                &["fetch", "--no-recurse-submodules", "origin"],
+                &["-c", &worktree]
+            )
+            .map(helper_names),
+        Ok(vec![])
+    );
+    let bare = Scratch::bare(HTTPS);
+    assert_eq!(
+        bare.contacts_with(&["fetch", "origin"], &[])
+            .map(helper_names),
+        Ok(vec![])
+    );
+    let error = bare
+        .contacts_with(&["fetch", "origin"], &["-c", "core.bare=false"])
+        .expect_err("a bare repository read as one with a work tree must refuse");
+    assert!(error.starts_with(UNPROVEN), "{error}");
 }
