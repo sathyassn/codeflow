@@ -1,54 +1,20 @@
 //! The transport Git selects for each remote a command contacts (TSK-1489).
 //!
-//! To reach a remote, Git may start a helper program, `git-remote-<name>`.
-//! Both guards read this one resolution through the runner reader, so a
-//! helper program is either admitted by the landed policy and judged as a
-//! program word, or refused.
+//! To reach a remote, Git may start a helper program. Both guards read this
+//! one resolution through the runner reader, so a helper program is either
+//! admitted by the landed policy and judged as a program word, or refused.
 //!
 //! The resolution admits only the forms it can prove Git resolves the same
-//! way, and refuses every other form by name, so a gap between this reading
-//! and Git's refuses instead of passing:
+//! way, and refuses every other form, naming the remote or the setting, so a
+//! gap between this reading and Git's refuses instead of passing. The
+//! admitted forms are an address the command names, a remote the command
+//! names whose configuration has one clear reading, the remotes Git picks
+//! for a command that names none, and the remotes any command may contact.
+//! Each function below names the Git behaviour it follows.
 //!
-//! - an address the command names: the transport its `<name>::` prefix or
-//!   its `<scheme>://` selects after the address rewrites, as Git's
-//!   `transport_get` reads it;
-//! - a remote the command names that the configuration the call reads
-//!   defines with exactly one address, at most one push address, no helper
-//!   setting, and no remote group of the same name;
-//! - for an operand-free `fetch` or `pull`, the remote the current branch
-//!   names, or `origin` when it names none, under the same conditions and
-//!   with fetching every remote turned off;
-//! - for an operand-free `remote update`, the remotes Git selects: the
-//!   `default` group's members, or every remote not set to skip the default
-//!   update, each under the same conditions, when no legacy remote file
-//!   may add one; an empty `default` group refuses;
-//! - the promisor remotes of a partial clone (a remote set as a promisor or
-//!   given a partial clone filter, and the one `extensions.partialClone`
-//!   names), under the same conditions, for every Git command, since a
-//!   missing object can be fetched from them by any command; an empty
-//!   promisor name refuses.
-//!
-//! A key under a remote section with an empty name (`[remote ""]`) refuses
-//! every contact that reads the configuration's remotes, naming the key.
-//!
-//! Refused by name: an operand-free push or `ls-remote`, every other form
-//! that contacts every configured remote, a remote group, a remote with a helper
-//! setting, more than one address value or an empty one, a remote name a
-//! legacy remote file may define, a `remote add` that fetches unless the
-//! new remote's configuration is proven empty, a maintenance run unless
-//! every task is a proven local one, the submodule builtins that update,
-//! add or clone, submodule recursion in a repository that has or may
-//! have submodules unless the command line provably turns it off, and any
-//! other verb the contacting-verb inventory lists that this resolution does
-//! not model.
-//!
-//! Options are read as Git's option parser reads them: a long option may be
-//! any unambiguous abbreviation, so every recursion or task option form is
-//! matched by prefix, and a form the reading cannot place refuses. Git takes
-//! the word after a value-taking option as its value whatever it looks like,
-//! a `--` included, so a word that turns something off counts only where it
-//! is surely an option, and a `--` is read as ending the options only where
-//! no option can have taken it as its value.
+//! Options are read as Git's option parser reads them, abbreviations and
+//! values included. A word an option may take as its value is read as that
+//! value, and a form the reading cannot place refuses.
 
 use super::super::shown_word;
 use crate::security::git_config::{EffectiveConfig, Location};
