@@ -14,6 +14,7 @@
       "name": "python",
       "enabled": true,
       "runner": "pytest",
+      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "pytest -q"

@@ -14,6 +14,7 @@
       "name": "app",
       "enabled": true,
       "runner": "custom",
+      "timeout_seconds": 600,
       "modes": {
         "essential": {
           "command": "npm test"
