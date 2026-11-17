@@ -222,6 +222,7 @@ Set a limit by adding its key to the file its section names. An absent key keeps
 | none | `65536` bytes | fixed | operational | present process command line read | one present service serves every project on the host, so no single project policy can set it |
 | none | `8388608` bytes | fixed | operational | present process command line scan | one present service serves every project on the host, so no single project policy can set it |
 | none | `64` entries | fixed | operational | present process tree walk | one present service serves every project on the host, so no single project policy can set it |
+| none | `4194304` entries | fixed | operational | present process entry scan | Linux's `PID_MAX_LIMIT` on 64-bit systems, the most process ids the kernel can hand out; each entry is read in bounded memory, so a lower count would refuse a busy host |
 | none | `65536` bytes | fixed | operational | present configuration read | one present service serves every project on the host, so no single project policy can set it |
 | none | `262144` bytes | fixed | operational | present token file read | one present service serves every project on the host, so no single project policy can set it |
 | none | `131072` bytes | fixed | operational | present identity image | one present service serves every project on the host, so no single project policy can set it |
@@ -321,6 +322,7 @@ Set a limit by adding its key to the file its section names. An absent key keeps
 | none | `4096` entries | fixed | security | argument walk limit | security bound, not project-settable |
 | none | `8` levels | fixed | security | guard nesting limit | security bound, not project-settable |
 | none | `8` levels | fixed | security | guard alias depth | security bound, not project-settable |
+| none | `64` arguments | fixed | security | guard unread program arguments | security bound, not project-settable |
 | none | `4194304` bytes | fixed | security | policy settings read | the largest policy or settings file read; the policy file cannot set the bound on its own read (TSK-397) |
 | none | `33554432` bytes | fixed | security | hook schema input | bounds the allocation before a hook parses its input, which comes before any policy read; it holds the largest terminal message with every byte escaped |
 | none | `1024` bytes | fixed | security | glob pattern | the longest glob the matcher compiles; policy globs compile while policy is read, so policy cannot set it |

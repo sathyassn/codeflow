@@ -173,6 +173,7 @@ fn these_security_bounds_are_not_project_settable() {
         &STARTUP_LINK_LIMIT,
         &ARGUMENT_WALK_LIMIT,
         &GUARD_ALIAS_DEPTH,
+        &GUARD_UNREAD_ARGS_LIMIT,
         &GUARD_SCRIPT_REPARSE_DEPTH,
     ] {
         assert_eq!(limit.route, Route::Fixed, "{}", limit.name);

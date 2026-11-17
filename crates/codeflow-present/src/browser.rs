@@ -861,7 +861,7 @@ fn process_group_holds_only_exited_members(pgid: i32) -> Result<bool> {
 /// entry is read in bounded memory, so this only ends a scan of a `/proc`
 /// that no real host can show; a fixed lower count would refuse a busy host.
 #[cfg(all(unix, not(target_os = "macos")))]
-const PROC_ENTRY_BOUND: usize = 4_194_304;
+const PROC_ENTRY_BOUND: usize = codeflow_limits::PRESENT_PROC_ENTRIES.default_count();
 
 /// Whether `/proc` shows at least one member of process group `pgid` and
 /// every member it shows has exited: state `Z` (exited, not yet reaped) or

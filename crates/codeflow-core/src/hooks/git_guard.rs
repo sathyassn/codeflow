@@ -9508,7 +9508,7 @@ pub(crate) const PROGRAM_UNREAD: &str = "\u{1}codeflow: a program word the guard
 
 /// The most arguments an unread program word is judged with under each
 /// reading ([`unread_program_readings`]); past it the line is refused.
-const UNREAD_ARGS_LIMIT: usize = 64;
+const UNREAD_ARGS_LIMIT: usize = codeflow_limits::GUARD_UNREAD_ARGS_LIMIT.default_count();
 
 /// Words that leave the shell in command position, so a `(` after them
 /// opens a subshell or a `case` pattern.
@@ -18389,9 +18389,15 @@ mod tests {
     #[test]
     fn leading_words_past_expansion_limits_keep_the_command_and_refuse() {
         let values = [
-            format!("{{{}}}", "x".repeat(BRACE_WORD_BYTES + 1)),
-            format!("{{{}}}", vec!["x"; BRACE_WORD_LIMIT + 1].join(",")),
-            "{1..1}".repeat(BRACE_DEPTH_LIMIT + 1),
+            format!(
+                "{{{}}}",
+                "x".repeat(codeflow_limits::GUARD_BRACE_WORD_BYTES.count() + 1)
+            ),
+            format!(
+                "{{{}}}",
+                vec!["x"; codeflow_limits::GUARD_BRACE_WORD_LIMIT.count() + 1].join(",")
+            ),
+            "{1..1}".repeat(codeflow_limits::GUARD_BRACE_DEPTH_LIMIT.count() + 1),
         ];
         for name in ["X+=", "a[0]="] {
             for value in &values {

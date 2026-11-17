@@ -139,6 +139,7 @@ limits! {
     PRESENT_COMMAND_LINE_BYTES = fixed(LimitClass::Operational, "present process command line read", BYTES, 64 * 1024, SERVICE);
     PRESENT_COMMAND_LINE_SCAN_BYTES = fixed(LimitClass::Operational, "present process command line scan", BYTES, 8 * 1024 * 1024, SERVICE);
     PRESENT_VISITED_PROCESSES = fixed(LimitClass::Operational, "present process tree walk", "entries", 64, SERVICE);
+    PRESENT_PROC_ENTRIES = fixed(LimitClass::Operational, "present process entry scan", "entries", 4_194_304, "Linux's `PID_MAX_LIMIT` on 64-bit systems, the most process ids the kernel can hand out; each entry is read in bounded memory, so a lower count would refuse a busy host");
     PRESENT_CONFIG_BYTES = fixed(LimitClass::Operational, "present configuration read", BYTES, 64 * 1024, SERVICE);
     PRESENT_TOKEN_BYTES = fixed(LimitClass::Operational, "present token file read", BYTES, 256 * 1024, SERVICE);
     PRESENT_IDENTITY_BYTES = fixed(LimitClass::Operational, "present identity image", BYTES, 128 * 1024, SERVICE);
@@ -355,6 +356,7 @@ limits! {
     ARGUMENT_WALK_LIMIT = fixed(LimitClass::Security, "argument walk limit", "entries", 4096, BOUND);
     GUARD_NESTING_LIMIT = fixed(LimitClass::Security, "guard nesting limit", "levels", 8, BOUND);
     GUARD_ALIAS_DEPTH = fixed(LimitClass::Security, "guard alias depth", "levels", 8, BOUND);
+    GUARD_UNREAD_ARGS_LIMIT = fixed(LimitClass::Security, "guard unread program arguments", "arguments", 64, BOUND);
     POLICY_SETTINGS_READ_BYTES = fixed(LimitClass::Security, "policy settings read", BYTES, 4 * 1024 * 1024, "the largest policy or settings file read; the policy file cannot set the bound on its own read (TSK-397)");
     HOOK_SCHEMA_INPUT_BYTES = fixed(LimitClass::Security, "hook schema input", BYTES, 32 * 1024 * 1024, "bounds the allocation before a hook parses its input, which comes before any policy read; it holds the largest terminal message with every byte escaped");
     GLOB_PATTERN_BYTES = fixed(LimitClass::Security, "glob pattern", BYTES, 1024, "the longest glob the matcher compiles; policy globs compile while policy is read, so policy cannot set it");
