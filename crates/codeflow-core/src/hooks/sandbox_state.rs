@@ -316,6 +316,12 @@ impl<T> Read<T> {
 /// followed); it is opened without blocking, so a FIFO cannot stall the
 /// reader, checked again on the open handle, and read up to the limit.
 fn read_text(path: &Path) -> Read<String> {
+    read_text_within(path, codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value())
+}
+
+/// [`read_text`] with its limit given, so a test can pass the largest value
+/// `limits.sandbox_settings_read_bytes` accepts.
+fn read_text_within(path: &Path, limit: u64) -> Read<String> {
     use std::io::Read as _;
     match crate::absence::metadata_optional(path) {
         Ok(None) => return Read::Absent,
@@ -342,21 +348,11 @@ fn read_text(path: &Path) -> Read<String> {
         Err(error) => return Read::Unreadable(error.to_string()),
     }
     let mut bytes = Vec::new();
-    if let Err(error) = file
-        .take(
-            codeflow_limits::SANDBOX_SETTINGS_READ_BYTES
-                .value()
-                .saturating_add(1),
-        )
-        .read_to_end(&mut bytes)
-    {
+    if let Err(error) = file.take(limit.saturating_add(1)).read_to_end(&mut bytes) {
         return Read::Unreadable(error.to_string());
     }
-    if bytes.len() as u64 > codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value() {
-        return Read::Unreadable(format!(
-            "larger than {} bytes",
-            codeflow_limits::SANDBOX_SETTINGS_READ_BYTES.value()
-        ));
+    if bytes.len() as u64 > limit {
+        return Read::Unreadable(format!("larger than {limit} bytes"));
     }
     match String::from_utf8(bytes) {
         Ok(text) => Read::Parsed(text),

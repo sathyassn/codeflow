@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) type Environment = BTreeMap<String, String>;
 type ConfigValue<'a> = (&'a str, &'a str, &'a [u8]);
@@ -475,6 +475,20 @@ pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {
+    bounded_output_polling(
+        command,
+        deadline,
+        codeflow_limits::POLL_CHILD_OUTPUT_MILLIS.wait(),
+    )
+}
+
+/// [`bounded_output`] with its exit poll given, so a test can pass the
+/// largest value `limits.poll_child_output_millis` accepts.
+fn bounded_output_polling(
+    command: &mut std::process::Command,
+    deadline: Instant,
+    poll: Duration,
+) -> Result<Vec<u8>, String> {
     if Instant::now() >= deadline {
         return Err(format!(
             "cannot verify Git configuration: child exceeded {} seconds",
@@ -531,11 +545,7 @@ pub(crate) fn bounded_output(
         }
         // The poll is a policy key with no ceiling; never sleep past the
         // deadline whatever it is set to.
-        std::thread::sleep(
-            codeflow_limits::POLL_CHILD_OUTPUT_MILLIS
-                .wait()
-                .min(deadline.saturating_duration_since(Instant::now())),
-        );
+        std::thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
     };
     if !status.success() {
         return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
@@ -910,29 +920,30 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_largest_child_output_poll_still_ends_at_the_read_deadline() {
-        use crate::limit_child_tests::{child_passes_within, in_child_with_largest, SCHEDULING};
+        // Time allowed for process start, kill and scheduling on a loaded
+        // host; a sleep that ignores the deadline overshoots by far more.
+        const SCHEDULING: Duration = Duration::from_secs(2);
         let poll = &codeflow_limits::POLL_CHILD_OUTPUT_MILLIS;
+        let largest = Duration::from_millis(poll.most());
         let read = codeflow_limits::GUARD_GIT_READ_SECONDS.wait();
-        if in_child_with_largest(&[poll]) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             // The output closes at once and the child stays, so the read
             // waits in its exit poll.
             let mut child = std::process::Command::new("sh");
             child.args(["-c", "exec 1>&-; exec sleep 30"]);
             let start = Instant::now();
-            assert!(bounded_output(&mut child, start + read)
-                .unwrap_err()
-                .contains("seconds"));
-            let elapsed = start.elapsed();
-            assert!(
-                elapsed <= read + Duration::from_millis(poll.default) + SCHEDULING,
-                "the read took {elapsed:?}"
-            );
-            return;
-        }
-        assert!(child_passes_within(
-            "security::git_config::tests::the_largest_child_output_poll_still_ends_at_the_read_deadline",
-            Duration::from_secs(90),
-        ));
+            let result = bounded_output_polling(&mut child, start + read, largest);
+            let _ = sender.send((result, start.elapsed()));
+        });
+        let (result, elapsed) = receiver
+            .recv_timeout(read + Duration::from_secs(20))
+            .expect("the read slept past its deadline");
+        assert!(result.unwrap_err().contains("seconds"));
+        assert!(
+            elapsed <= read + Duration::from_millis(poll.default) + SCHEDULING,
+            "the read took {elapsed:?}"
+        );
     }
 
     #[test]

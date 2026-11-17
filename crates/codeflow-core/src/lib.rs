@@ -67,8 +67,6 @@ pub mod hooks;
 pub mod ids;
 pub mod integrate;
 pub mod ledger;
-#[cfg(test)]
-mod limit_child_tests;
 pub mod model_catalog;
 pub mod model_qualification;
 pub mod models;

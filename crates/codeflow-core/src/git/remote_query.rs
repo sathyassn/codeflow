@@ -702,7 +702,17 @@ fn run(
 
 /// Run `command` with no input, within `deadline` (then its whole process
 /// group is killed) and [`codeflow_limits::REMOTE_ANSWER_BYTES`], and return its answer.
-fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+fn bounded(command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+    bounded_polling(command, deadline, codeflow_limits::POLL_LOCK_MILLIS.wait())
+}
+
+/// [`bounded`] with its poll given, so a test can pass the largest value
+/// `limits.poll_lock_millis` accepts.
+fn bounded_polling(
+    mut command: std::process::Command,
+    deadline: Duration,
+    poll: Duration,
+) -> Result<String, Failure> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -746,14 +756,13 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
     let timed_out = || Failure::Timeout(deadline);
     // The poll is a policy key with no ceiling; no wait outlasts the
     // deadline whatever it is set to.
-    let poll = || {
-        let poll = codeflow_limits::POLL_LOCK_MILLIS.wait();
+    let wait = || {
         until.map_or(poll, |until| {
             poll.min(until.saturating_duration_since(Instant::now()))
         })
     };
     let bytes = loop {
-        match receiver.recv_timeout(poll()) {
+        match receiver.recv_timeout(wait()) {
             Ok(Ok(bytes)) => break bytes,
             Ok(Err(error)) => {
                 kill_group(&mut child);
@@ -783,7 +792,7 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
             kill_group(&mut child);
             return Err(timed_out());
         }
-        std::thread::sleep(poll());
+        std::thread::sleep(wait());
     }
     // Unreadable diagnostics cannot prove an authentication failure, so a
     // failed exit is then reported as a plain one, which still refuses.
@@ -794,7 +803,7 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if !expired() => std::thread::sleep(poll()),
+            Ok(None) if !expired() => std::thread::sleep(wait()),
             _ => {
                 kill_group(&mut child);
                 return Err(timed_out());
@@ -956,44 +965,44 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_largest_lock_poll_still_ends_at_the_lookup_deadline() {
-        use crate::limit_child_tests::{child_passes_within, in_child_with_largest, SCHEDULING};
+        // Time allowed for process start, kill and scheduling on a loaded
+        // host; a wait that ignores the deadline overshoots by far more.
+        const SCHEDULING: Duration = Duration::from_secs(2);
         let poll = &codeflow_limits::POLL_LOCK_MILLIS;
+        let largest = Duration::from_millis(poll.most());
         let deadline = Duration::from_secs(codeflow_limits::GUARD_REMOTE_QUERY_WAIT.value());
-        if in_child_with_largest(&[poll]) {
-            let stubs = [
-                "exec sleep 30",
-                "exec 1>&-; exec sleep 30",
-                "exec 1>&- 2>&-; exec sleep 30",
-            ];
-            let waits: Vec<_> = stubs
-                .into_iter()
-                .map(|script| {
-                    std::thread::spawn(move || {
-                        let mut command = std::process::Command::new("sh");
-                        command.args(["-c", script]);
-                        let start = Instant::now();
-                        let result = bounded(command, deadline);
-                        (script, result, start.elapsed())
-                    })
-                })
-                .collect();
-            for wait in waits {
-                let (script, result, elapsed) = wait.join().unwrap();
-                assert!(
-                    matches!(result, Err(Failure::Timeout(_))),
-                    "{script}: the lookup did not time out"
+        // Each stub holds the lookup in one wait: its answer, its
+        // diagnostics, then its exit.
+        let stubs = [
+            "exec sleep 30",
+            "exec 1>&-; exec sleep 30",
+            "exec 1>&- 2>&-; exec sleep 30",
+        ];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        for script in stubs {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let mut command = std::process::Command::new("sh");
+                command.args(["-c", script]);
+                let start = Instant::now();
+                let timed_out = matches!(
+                    bounded_polling(command, deadline, largest),
+                    Err(Failure::Timeout(_))
                 );
-                assert!(
-                    elapsed <= deadline + Duration::from_millis(poll.default) + SCHEDULING,
-                    "{script}: the lookup took {elapsed:?}"
-                );
-            }
-            return;
+                let _ = sender.send((script, timed_out, start.elapsed()));
+            });
         }
-        assert!(child_passes_within(
-            "git::remote_query::tests::the_largest_lock_poll_still_ends_at_the_lookup_deadline",
-            Duration::from_secs(90),
-        ));
+        let until = Instant::now() + deadline + Duration::from_secs(20);
+        for _ in stubs {
+            let (script, timed_out, elapsed) = receiver
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .expect("a lookup waited past its deadline");
+            assert!(timed_out, "{script}: the lookup did not time out");
+            assert!(
+                elapsed <= deadline + Duration::from_millis(poll.default) + SCHEDULING,
+                "{script}: the lookup took {elapsed:?}"
+            );
+        }
     }
 
     #[test]
