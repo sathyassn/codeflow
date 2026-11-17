@@ -1031,7 +1031,10 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   worktree's `MERGE_MSG`. With `COMMIT_EDITMSG`, `pre-commit` already
   scanned the commit and `commit-msg` does not scan it again. Any other
   message file is refused at the `git.secret_scan` level, and the staged
-  content is still scanned. This holds under both engines.
+  content is still scanned. This holds under both engines. The scan reads
+  the diff from HEAD, for a merge its first parent, to the staged content:
+  a line that only shifts is not added, but a line that moves to a new
+  place in a reordered file is, and it is scanned again.
 - **The pin.** The hook runs gitleaks 8.30.1, the version
   `assets/base/ci/codeflow-ci.yml` pins, and only when the first `gitleaks`
   on `PATH` has the SHA-256 of the official release binary for this
