@@ -1204,11 +1204,18 @@ fn both_guards_refuse_a_nested_repository_with_no_other_marker() {
         .unwrap();
     other.write().unwrap();
     let index = shell_path(&index);
-    assert_unproven(
-        &selected,
-        &[&format!("GIT_INDEX_FILE={index} git fetch origin")],
-        &["git fetch origin"],
+    // exec-guard refuses an index file set on the line first, by its rule
+    // for what Git reads.
+    let line = format!("GIT_INDEX_FILE={index} git fetch origin");
+    let out = selected.judge("git-guard", &line);
+    assert!(unproven_refusal(&out), "git-guard: {}", stderr(&out));
+    let out = selected.judge("exec-guard", &line);
+    let err = stderr(&out);
+    assert!(
+        out.status.code() == Some(2) && err.contains("security.secret_reads"),
+        "exec-guard: {err}"
     );
+    assert_unproven(&selected, &[], &["git fetch origin"]);
     for hook in HOOKS {
         let out = selected.judge_inheriting(hook, "git fetch origin", ("GIT_INDEX_FILE", &index));
         assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
