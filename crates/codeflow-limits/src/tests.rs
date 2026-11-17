@@ -164,6 +164,10 @@ fn these_security_bounds_are_not_project_settable() {
         &DELETION_GLOB_LIMIT,
         &GUARD_SCRIPT_READINGS,
         &GUARD_NESTING_LIMIT,
+        &STARTUP_LINK_LIMIT,
+        &ARGUMENT_WALK_LIMIT,
+        &GUARD_ALIAS_DEPTH,
+        &GUARD_SCRIPT_REPARSE_DEPTH,
     ] {
         assert_eq!(limit.route, Route::Fixed, "{}", limit.name);
         assert_eq!(limit.key, None, "{}", limit.name);
