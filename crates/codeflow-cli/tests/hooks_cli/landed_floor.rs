@@ -386,103 +386,108 @@ fn landed_floor_protected_branch_and_levels_on_each_hook() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// The commit-msg cases: landed policy, checked-out policy, message and the
+/// rule that must refuse it.
+fn commit_message_cases() -> [(Value, Value, &'static str, &'static str); 15] {
+    [
+        (
+            json!({"commit_format":"block"}),
+            json!({"commit_format":"off"}),
+            "bad subject",
+            "git.commit_format",
+        ),
+        (
+            json!({"commit_required_footers":["Signed-off-by"]}),
+            json!({"commit_required_footers":[]}),
+            "fix: check",
+            "git.commit_body",
+        ),
+        (
+            json!({"commit_ticket_keys":["Refs"], "commit_ticket_required":"block"}),
+            json!({"commit_ticket_keys":[]}),
+            "fix: check",
+            "git.commit_ticket_keys",
+        ),
+        (
+            json!({"commit_ticket_keys":["Refs"], "commit_ticket_required":"block"}),
+            json!({"commit_ticket_keys":["Refs", "Closes"], "commit_ticket_required":"off"}),
+            "fix: check\n\nCloses: TSK-1\n",
+            "git.commit_ticket",
+        ),
+        (
+            json!({"commit_body":"block"}),
+            json!({"commit_body":"off"}),
+            "fix: check\n\nPlain paragraph\n",
+            "git.commit_body",
+        ),
+        (
+            json!({"ai_attribution":"block"}),
+            json!({"ai_attribution":"off"}),
+            "fix: check\n\n- Generated with Claude\n",
+            "git.ai_attribution",
+        ),
+        (
+            json!({"commit_emoji":"block"}),
+            json!({"commit_emoji":"off"}),
+            "fix: check \u{1F600}",
+            "git.commit_emoji",
+        ),
+        (
+            json!({"policy_characters":"block"}),
+            json!({"policy_characters":"off"}),
+            "fix: check \u{2014} content",
+            "git.policy_characters",
+        ),
+        (
+            json!({"commit_types":["fix"]}),
+            json!({"commit_types":["fix", "loose"]}),
+            "loose: check",
+            "git.commit_format",
+        ),
+        (
+            json!({"commit_footer_tokens":["Refs"]}),
+            json!({"commit_footer_tokens":["Refs", "Closes"]}),
+            "fix: check\n\nCloses: TSK-1\n",
+            "git.commit_body",
+        ),
+        (
+            json!({"commit_desc_max_len":3}),
+            json!({"commit_desc_max_len":50}),
+            "fix: check",
+            "git.commit_format",
+        ),
+        (
+            json!({"commit_subject_max_len":5}),
+            json!({"commit_subject_max_len":72}),
+            "fix: check",
+            "git.commit_format",
+        ),
+        (
+            json!({"commit_body_max_bullets":0}),
+            json!({"commit_body_max_bullets":3}),
+            "fix: check\n\n- one\n",
+            "git.commit_body",
+        ),
+        (
+            json!({"commit_body_bullet_max_len":3}),
+            json!({"commit_body_bullet_max_len":72}),
+            "fix: check\n\n- text\n",
+            "git.commit_body",
+        ),
+        (
+            json!({"commit_ticket_keys":["Refs"], "commit_ticket_pattern":"^TSK-[0-9]+$"}),
+            json!({"commit_ticket_keys":["Refs"], "commit_ticket_pattern":".*"}),
+            "fix: check\n\nRefs: other\n",
+            "git.commit_ticket",
+        ),
+    ]
+}
+
 #[test]
 fn landed_floor_commit_message_rules_and_lists() {
     let mut failures = Vec::new();
     for stale in [false, true] {
-        let cases = [
-            (
-                json!({"commit_format":"block"}),
-                json!({"commit_format":"off"}),
-                "bad subject",
-                "git.commit_format",
-            ),
-            (
-                json!({"commit_required_footers":["Signed-off-by"]}),
-                json!({"commit_required_footers":[]}),
-                "fix: check",
-                "git.commit_body",
-            ),
-            (
-                json!({"commit_ticket_keys":["Refs"], "commit_ticket_required":"block"}),
-                json!({"commit_ticket_keys":[]}),
-                "fix: check",
-                "git.commit_ticket_keys",
-            ),
-            (
-                json!({"commit_ticket_keys":["Refs"], "commit_ticket_required":"block"}),
-                json!({"commit_ticket_keys":["Refs", "Closes"], "commit_ticket_required":"off"}),
-                "fix: check\n\nCloses: TSK-1\n",
-                "git.commit_ticket",
-            ),
-            (
-                json!({"commit_body":"block"}),
-                json!({"commit_body":"off"}),
-                "fix: check\n\nPlain paragraph\n",
-                "git.commit_body",
-            ),
-            (
-                json!({"ai_attribution":"block"}),
-                json!({"ai_attribution":"off"}),
-                "fix: check\n\n- Generated with Claude\n",
-                "git.ai_attribution",
-            ),
-            (
-                json!({"commit_emoji":"block"}),
-                json!({"commit_emoji":"off"}),
-                "fix: check \u{1F600}",
-                "git.commit_emoji",
-            ),
-            (
-                json!({"policy_characters":"block"}),
-                json!({"policy_characters":"off"}),
-                "fix: check \u{2014} content",
-                "git.policy_characters",
-            ),
-            (
-                json!({"commit_types":["fix"]}),
-                json!({"commit_types":["fix", "loose"]}),
-                "loose: check",
-                "git.commit_format",
-            ),
-            (
-                json!({"commit_footer_tokens":["Refs"]}),
-                json!({"commit_footer_tokens":["Refs", "Closes"]}),
-                "fix: check\n\nCloses: TSK-1\n",
-                "git.commit_body",
-            ),
-            (
-                json!({"commit_desc_max_len":3}),
-                json!({"commit_desc_max_len":50}),
-                "fix: check",
-                "git.commit_format",
-            ),
-            (
-                json!({"commit_subject_max_len":5}),
-                json!({"commit_subject_max_len":72}),
-                "fix: check",
-                "git.commit_format",
-            ),
-            (
-                json!({"commit_body_max_bullets":0}),
-                json!({"commit_body_max_bullets":3}),
-                "fix: check\n\n- one\n",
-                "git.commit_body",
-            ),
-            (
-                json!({"commit_body_bullet_max_len":3}),
-                json!({"commit_body_bullet_max_len":72}),
-                "fix: check\n\n- text\n",
-                "git.commit_body",
-            ),
-            (
-                json!({"commit_ticket_keys":["Refs"], "commit_ticket_pattern":"^TSK-[0-9]+$"}),
-                json!({"commit_ticket_keys":["Refs"], "commit_ticket_pattern":".*"}),
-                "fix: check\n\nRefs: other\n",
-                "git.commit_ticket",
-            ),
-        ];
-        for (landed, working, message, rule) in cases {
+        for (landed, working, message, rule) in commit_message_cases() {
             let fixture = Fixture::new(landed, working, stale);
             collect_refusal(
                 &fixture.hook("commit-msg", message, ""),
