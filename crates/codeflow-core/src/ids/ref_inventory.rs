@@ -21,7 +21,11 @@ pub(super) fn blob_ids(git: &Git, specs: &[String]) -> Result<Vec<String>, IdsEr
         let _ = headers.pop();
     }
     if headers.len() != specs.len() {
-        return Err(IdsError::Git("git cat-file: truncated output".into()));
+        return Err(IdsError::Git(format!(
+            "git cat-file: answer count mismatch (returned {}; requested {})",
+            headers.len(),
+            specs.len()
+        )));
     }
     specs
         .iter()
@@ -99,8 +103,8 @@ pub(super) fn read(
 fn list(repo: &git2::Repository, sha: &str) -> Result<Vec<Copy>, IdsError> {
     let oid = git2::Oid::from_str(sha).map_err(|error| tree_error(&error))?;
     let tree = repo
-        .find_commit(oid)
-        .and_then(|commit| commit.tree())
+        .find_object(oid, None)
+        .and_then(|object| object.peel_to_tree())
         .map_err(|error| tree_error(&error))?;
     let mut copies = Vec::new();
     crate::git::walk_tree(repo, &tree, &mut |name, entry| {
@@ -145,6 +149,57 @@ fn tree_error(error: &git2::Error) -> IdsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn treeish_tip_matches_the_legacy_reader(annotated: bool) {
+        let (dir, repo, commit) = super::super::r22_fixture::repository(
+            super::super::r22_fixture::TASK,
+            super::super::r22_fixture::TEXT,
+        );
+        let object = repo.find_object(commit, None).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tip = if annotated {
+            repo.tag("annotated", &object, &signature, "tag", false)
+                .unwrap()
+        } else {
+            object.peel_to_tree().unwrap().id()
+        };
+        let git = Git::new(dir.path());
+        let sha = tip.to_string();
+        repo.reference("refs/heads/treeish", tip, true, "fixture")
+            .unwrap();
+        let expected = super::super::inventory::copies_at(&git, &sha).unwrap();
+        assert_eq!(expected.len(), 1);
+        let actual = read(
+            &git,
+            vec![("refs/heads/treeish".into(), sha)],
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(actual[0].copies, expected);
+    }
+
+    #[test]
+    fn annotated_tag_tip_matches_the_legacy_reader() {
+        treeish_tip_matches_the_legacy_reader(true);
+    }
+
+    #[test]
+    fn tree_tip_matches_the_legacy_reader() {
+        treeish_tip_matches_the_legacy_reader(false);
+    }
+
+    #[test]
+    fn newline_in_range_path_reports_answer_count() {
+        let path = "project-management/epics/line\nbreak/tasks/TSK-001.md";
+        let (dir, _repo, sha) = super::super::r22_fixture::repository(path.as_bytes(), b"record");
+        let error = blob_ids(&Git::new(dir.path()), &[format!("{sha}:{path}")]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("answer count mismatch (returned 2; requested 1)"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn listings_keep_git_order_and_exact_path_names() {

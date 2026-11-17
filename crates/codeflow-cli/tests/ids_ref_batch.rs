@@ -50,6 +50,57 @@ fn measured(tips: usize) -> usize {
     children
 }
 
+fn treeish_tip_keeps_findings_and_exit(annotated: bool) {
+    let f = refs(1);
+    let repo = git2::Repository::open(f.root()).unwrap();
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+    let tip = if annotated {
+        repo.tag("annotated", commit.as_object(), &signature, "tag", false)
+            .unwrap()
+    } else {
+        commit.tree_id()
+    };
+    let branch = "refs/heads/treeish";
+    repo.reference(branch, commit.id(), true, "fixture")
+        .unwrap();
+    let expected = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["ids", "check"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        expected.status.code(),
+        Some(0),
+        "{}",
+        fixture::output(&expected)
+    );
+    repo.reference(branch, tip, true, "fixture").unwrap();
+    let actual = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["ids", "check"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        actual.status.code(),
+        expected.status.code(),
+        "{}",
+        fixture::output(&actual)
+    );
+    assert_eq!(actual.stdout, expected.stdout);
+    assert_eq!(actual.stderr, expected.stderr);
+}
+
+#[test]
+fn ac9_ids_check_cli_annotated_tag_tip_keeps_findings_and_exit() {
+    treeish_tip_keeps_findings_and_exit(true);
+}
+
+#[test]
+fn ac9_ids_check_cli_tree_tip_keeps_findings_and_exit() {
+    treeish_tip_keeps_findings_and_exit(false);
+}
+
 #[test]
 fn ac9_ids_check_cli_has_fixed_children() {
     assert_eq!(measured(5), measured(50));
