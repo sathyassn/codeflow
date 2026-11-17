@@ -1087,3 +1087,142 @@ fn the_remote_url_list_and_the_helper_list_keep_to_their_own_rules() {
         }
     }
 }
+
+/// Round j, first row, through both guards: a last selection word Git
+/// replaces with a wider selection.
+#[test]
+fn both_guards_read_a_last_selection_word_as_git_reads_it() {
+    let scratch = Scratch::landed(None);
+    scratch.config("remote.backup.url", "fixture::x");
+    assert_rows(
+        &scratch,
+        &["git remote update default", "git remote update -p default"],
+        &["git remote update origin"],
+    );
+}
+
+/// Round j, second row, through both guards: a word Git keeps as an
+/// operand names the remote.
+#[test]
+fn both_guards_read_every_word_git_keeps_as_an_operand() {
+    let scratch = Scratch::landed(None);
+    scratch.config("remote.-.url", "fixture::x");
+    assert_rows(
+        &scratch,
+        &[
+            "git fetch -",
+            "git ls-remote -",
+            "git remote show -",
+            "git push - HEAD:refs/heads/task/x",
+        ],
+        &["git fetch origin"],
+    );
+}
+
+/// Round j, third row, through both guards: a new copy judges the address
+/// a wider configuration scope gives its remote.
+#[test]
+fn both_guards_judge_every_address_a_new_copy_may_use() {
+    let scratch = Scratch::landed(None);
+    let global = scratch.base.join("global.gitconfig");
+    std::fs::write(&global, "[remote \"upstream\"]\n\turl = fixture::x\n").unwrap();
+    let global = shell_path(&global);
+    for command in [
+        "git clone --no-recurse-submodules https://127.0.0.1:9/r copy",
+        "git clone -o upstream --no-recurse-submodules https://127.0.0.1:9/r copy",
+    ] {
+        for hook in HOOKS {
+            let out = scratch.judge_inheriting(hook, command, ("GIT_CONFIG_GLOBAL", &global));
+            assert!(helper_refusal(&out), "{hook} `{command}`: {}", stderr(&out));
+            let out = scratch.judge(hook, command);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook} `{command}`: {}",
+                stderr(&out)
+            );
+        }
+    }
+}
+
+/// Round j, fourth row, through both guards: a nested repository the index
+/// records with no other marker refuses unless the line turns recursion
+/// off, and so does one recorded in the index file the call selects.
+#[test]
+fn both_guards_refuse_a_nested_repository_with_no_other_marker() {
+    let scratch = Scratch::landed(None);
+    git(scratch.root(), &["init", "-q", "lib"]);
+    git(
+        &scratch.root().join("lib"),
+        &["config", "remote.origin.url", "fixture::x"],
+    );
+    let head = git2::Repository::open(scratch.root())
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap()
+        .to_string();
+    git(
+        scratch.root(),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},lib"),
+        ],
+    );
+    assert_unproven(
+        &scratch,
+        &[
+            "git fetch origin",
+            "git fetch --recurse-submodules origin",
+            "git pull origin main",
+            "git fetch",
+        ],
+        &["git fetch --no-recurse-submodules origin"],
+    );
+
+    let selected = Scratch::landed(None);
+    let index = selected.base.join("other-index");
+    let mut other = git2::Index::open(&index).unwrap();
+    other
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160_000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_str(&head).unwrap(),
+            flags: 3,
+            flags_extended: 0,
+            path: b"lib".to_vec(),
+        })
+        .unwrap();
+    other.write().unwrap();
+    let index = shell_path(&index);
+    assert_unproven(
+        &selected,
+        &[&format!("GIT_INDEX_FILE={index} git fetch origin")],
+        &["git fetch origin"],
+    );
+    for hook in HOOKS {
+        let out = selected.judge_inheriting(hook, "git fetch origin", ("GIT_INDEX_FILE", &index));
+        assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
+    }
+}
+
+/// Round j, fifth row, through both guards: a command that sets up later
+/// runs which contact every configured remote refuses.
+#[test]
+fn both_guards_refuse_a_command_that_sets_up_later_contacts() {
+    let scratch = Scratch::landed(None);
+    assert_unproven(
+        &scratch,
+        &["git maintenance start", "git maintenance register"],
+        &["git maintenance unregister", "git maintenance stop"],
+    );
+}

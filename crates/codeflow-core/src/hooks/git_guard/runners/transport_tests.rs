@@ -50,8 +50,14 @@ impl Scratch {
 
     /// The contacts of a command given word by word, so a word may be empty.
     fn contacts_of(&self, words: &[&str]) -> Result<Vec<Contact>, String> {
+        self.contacts_reading(words, "/dev/null")
+    }
+
+    /// [`Scratch::contacts_of`] with `global` as the global configuration
+    /// file the call reads.
+    fn contacts_reading(&self, words: &[&str], global: &str) -> Result<Vec<Contact>, String> {
         let mut env = Environment::new();
-        env.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
+        env.insert("GIT_CONFIG_GLOBAL".into(), global.into());
         env.insert("GIT_CONFIG_SYSTEM".into(), "/dev/null".into());
         env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         env.insert("HOME".into(), self.root.display().to_string());
@@ -69,15 +75,18 @@ impl Scratch {
 
     /// [`Scratch::helpers`] for a command given word by word.
     fn helpers_of(&self, words: &[&str]) -> Result<Vec<String>, String> {
-        Ok(self
-            .contacts_of(words)?
-            .into_iter()
-            .filter_map(|contact| match contact.selected {
-                Selected::Helper(name) => Some(name),
-                Selected::Ext => Some("ext".into()),
-                Selected::Stock => None,
-            })
-            .collect())
+        Ok(helper_names(self.contacts_of(words)?))
+    }
+
+    /// [`Scratch::helpers`] with `global` written as the global
+    /// configuration file the call reads.
+    fn helpers_with_global(&self, command: &str, global: &str) -> Result<Vec<String>, String> {
+        let file = self.root.with_file_name("global-config");
+        std::fs::write(&file, global).unwrap();
+        let words: Vec<&str> = command.split_whitespace().collect();
+        Ok(helper_names(
+            self.contacts_reading(&words, &file.display().to_string())?,
+        ))
     }
 
     /// Assert that `command` refuses as a form the guard cannot prove, with
@@ -93,6 +102,18 @@ impl Scratch {
     fn root(&self) -> &Path {
         &self.root
     }
+}
+
+/// The helper names among `contacts`.
+fn helper_names(contacts: Vec<Contact>) -> Vec<String> {
+    contacts
+        .into_iter()
+        .filter_map(|contact| match contact.selected {
+            Selected::Helper(name) => Some(name),
+            Selected::Ext => Some("ext".into()),
+            Selected::Stock => None,
+        })
+        .collect()
 }
 
 const HTTPS: &str = "[remote \"origin\"]\n\turl = https://example.test/project.git\n";
@@ -952,7 +973,6 @@ fn a_maintenance_run_passes_only_a_proven_local_task_list() {
         "maintenance run --ta=gc --task commit-graph",
         "maintenance run --task=gc --quiet --no-detach",
         "maintenance run -q --task=pack-refs",
-        "maintenance register",
     ] {
         assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
     }
@@ -970,4 +990,188 @@ fn a_legacy_remote_name_with_a_backslash_is_checked() {
     .unwrap();
     scratch.unproven("ls-remote old\\name", "legacy remote file");
     scratch.unproven("fetch old\\name", "legacy remote file");
+}
+
+/// Round j, first row: a last selection word Git replaces with a wider
+/// selection when no group of that name is set.
+#[test]
+fn a_last_selection_word_reads_as_git_reads_it() {
+    let backup = format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n");
+    let scratch = Scratch::new(&backup);
+    for command in [
+        "remote update default",
+        "remote update -p default",
+        "remote update origin default",
+    ] {
+        assert_eq!(
+            scratch.helpers(command),
+            Ok(vec!["fixture".into()]),
+            "{command}"
+        );
+    }
+    // The wider selection skips what the default update skips.
+    let skipped = Scratch::new(&format!("{backup}\tskipDefaultUpdate = true\n"));
+    assert_eq!(skipped.helpers("remote update default"), Ok(vec![]));
+    // A group of that name keeps the group reading.
+    let grouped = Scratch::new(&format!("{backup}[remotes]\n\tdefault = origin\n"));
+    grouped.unproven("remote update default", "remote group");
+    let ordinary = Scratch::new(HTTPS);
+    assert_eq!(ordinary.helpers("remote update default"), Ok(vec![]));
+}
+
+/// Round j, second row: a word Git's option parser keeps as an operand
+/// names the remote, wherever the remote's definition comes from.
+#[test]
+fn every_word_git_keeps_as_an_operand_names_the_remote() {
+    let scratch = Scratch::new(&format!("{HTTPS}[remote \"-\"]\n\turl = fixture::x\n"));
+    for command in [
+        "fetch -",
+        "fetch -q -",
+        "pull - main",
+        "ls-remote -",
+        "push - HEAD",
+        "remote show -",
+        "remote update -",
+    ] {
+        assert_eq!(
+            scratch.helpers(command),
+            Ok(vec!["fixture".into()]),
+            "{command}"
+        );
+    }
+    assert_eq!(scratch.helpers("fetch origin"), Ok(vec![]));
+    let legacy = Scratch::new(HTTPS);
+    std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
+    std::fs::write(legacy.root().join(".git/remotes/-"), "URL: fixture::x\n").unwrap();
+    legacy.unproven("fetch -", "legacy remote file");
+    legacy.unproven("ls-remote -", "legacy remote file");
+    let rewritten = Scratch::new(&format!("{HTTPS}[url \"fixture::x\"]\n\tinsteadOf = -\n"));
+    assert_eq!(rewritten.helpers("fetch -"), Ok(vec!["fixture".into()]));
+}
+
+/// Round j, third row: a new copy uses the first address its remote has,
+/// and a wider configuration scope may give that remote one first.
+#[test]
+fn a_new_copy_judges_every_configured_address() {
+    for name in ["origin", "upstream"] {
+        let scratch = Scratch::new("");
+        let global = format!("[remote \"{name}\"]\n\turl = fixture::x\n");
+        for command in [
+            "clone https://example.test/r copy",
+            "clone -o upstream https://example.test/r copy",
+            "clone --no-recurse-submodules https://example.test/r copy",
+        ] {
+            assert_eq!(
+                scratch.helpers_with_global(command, &global),
+                Ok(vec!["fixture".into()]),
+                "{name} {command}"
+            );
+        }
+    }
+    let rewritten = Scratch::new("");
+    assert_eq!(
+        rewritten.helpers_with_global(
+            "clone https://example.test/r copy",
+            "[remote \"origin\"]\n\turl = https://example.test/o\n[url \"fixture::x\"]\n\tinsteadOf = https://example.test/o\n",
+        ),
+        Ok(vec!["fixture".into()])
+    );
+    let ordinary = Scratch::new("");
+    assert_eq!(
+        ordinary.helpers_with_global(
+            "clone https://example.test/r copy",
+            "[remote \"origin\"]\n\turl = https://example.test/o\n",
+        ),
+        Ok(vec![])
+    );
+    assert_eq!(
+        ordinary.helpers("clone https://example.test/r copy"),
+        Ok(vec![])
+    );
+}
+
+/// Record a repository at `path` under `scratch` in its index only, with no
+/// other marker beside it, the way an older layout leaves one.
+fn nested_in_index_only(scratch: &Scratch, path: &str) {
+    let nested = scratch.root().join(path);
+    git2::Repository::init(&nested).unwrap();
+    let config = nested.join(".git/config");
+    let mut bytes = std::fs::read(&config).unwrap();
+    bytes.extend_from_slice(b"\n[remote \"origin\"]\n\turl = fixture::x\n");
+    std::fs::write(&config, bytes).unwrap();
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let mut index = repo.index().unwrap();
+    index
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160_000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap(),
+            flags: u16::try_from(path.len()).unwrap(),
+            flags_extended: 0,
+            path: path.as_bytes().to_vec(),
+        })
+        .unwrap();
+    index.write().unwrap();
+}
+
+/// Round j, fourth row: a nested repository the index alone records is
+/// one Git may fetch inside, so only a line that turns that off passes.
+#[test]
+fn a_nested_repository_with_no_other_marker_refuses() {
+    let scratch = Scratch::new(HTTPS);
+    nested_in_index_only(&scratch, "lib");
+    for command in [
+        "fetch origin",
+        "fetch --recurse-submodules origin",
+        "fetch",
+        "pull origin main",
+        "remote update origin",
+        "remote update",
+    ] {
+        scratch.unproven(command, "submodule");
+    }
+    assert_eq!(
+        scratch.helpers("fetch --no-recurse-submodules origin"),
+        Ok(vec![])
+    );
+    assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
+    // The index entry alone refuses: the guard does not read whether a
+    // repository is in place.
+    let unpopulated = Scratch::new(HTTPS);
+    nested_in_index_only(&unpopulated, "lib");
+    std::fs::remove_dir_all(unpopulated.root().join("lib")).unwrap();
+    unpopulated.unproven("fetch origin", "submodule");
+}
+
+/// Round j, fifth row: a command that sets up later runs which contact
+/// every configured remote outside the guards refuses; one that only
+/// removes them passes.
+#[test]
+fn a_command_that_sets_up_later_contacts_refuses() {
+    let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
+    for command in [
+        "maintenance start",
+        "maintenance start --scheduler=crontab",
+        "maintenance register",
+        "maintenance register --config-file=other",
+        "maintenance --quiet start",
+        "maintenance",
+        "maintenance unknown",
+    ] {
+        scratch.unproven(command, "background");
+    }
+    for command in [
+        "maintenance stop",
+        "maintenance unregister",
+        "maintenance unregister --force",
+        "maintenance is-needed",
+    ] {
+        assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
+    }
 }
