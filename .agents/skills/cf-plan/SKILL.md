@@ -67,13 +67,15 @@ when a single outcome becomes one standalone task.
    its standalone test decides between an epic and a standalone task, and it
    names the allocation verbs and dependency forms.
    - **Epic breakdown:** on a `plan/` branch, one planning PR creates the epic,
-     every task with its criteria, and the edges. For each multi-task epic,
-     the shared `integration/<epic-id>-<slug>` branch is passed with `--into`
-     for every task; task branches land there and only the integrated body
-     reaches the protected target through one human-reviewed PR. Select this
-     shape without asking the operator to choose the routine landing
-     mechanism; a different landing shape needs an explicit rationale in the
-     approved plan before allocation. Nothing later plans again.
+     every task with its criteria, and the edges. When a human can merge
+     each task PR as it becomes ready, the tasks target the protected
+     branch. Otherwise, for each multi-task epic, the shared
+     `integration/<epic-id>-<slug>` branch is passed with `--into` for every
+     task; task branches land there, and the line reaches the protected
+     target through a checkpoint PR opened or refreshed at every green tip
+     (cf-method "Managing a body of work"). Select this shape without asking
+     the operator to choose the routine landing mechanism. Nothing later
+     plans again.
    - **Standalone task:** on the task branch, allocate the record with
      `codeflow task new --standalone-reason "<why>"`; the record and its code
      are reviewed together and land in one PR.

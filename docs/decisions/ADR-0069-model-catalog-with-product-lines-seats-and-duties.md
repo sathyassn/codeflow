@@ -358,3 +358,18 @@ same-family approval never fills the independent review, and a standing
 review adds a named, labelled participant, so an extra family never votes
 silently. With no file or a schema 1 file every duty resolves exactly as
 before.
+
+## Note (2026-11-10)
+
+ADR-0101 supersedes the project paragraphs of "Local and project
+selection", including its "never" list, and the rule in the 2026-10-04
+note that another family designs only through a task-specific
+`OPERATOR_OVERRIDE`. A project file may now name any seat or line as
+design owner, set the review alternatives and fallback, and choose the
+host seat. The managed catalog keeps the roster, the defaults and the
+designation and evidence fields, and the personal overlay is unchanged.
+The validator rules that the design owner is the standing Claude seat
+and that the host seat is the first seat of the host family apply to the
+catalog as shipped. The task-specific `OPERATOR_OVERRIDE` still works and
+still grants nothing beyond its task. The floors in ADR-0101 are checked
+on the effective result.

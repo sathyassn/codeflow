@@ -75,12 +75,17 @@ impl Default for Limits {
 
 /// Run `work` on a worker thread and wait at most `limit` for it. `None`
 /// when it does not finish in time, panics, or the thread cannot start;
-/// the work is then abandoned (see the module notes).
+/// the work is then abandoned (see the module notes). A zero limit gives the
+/// work no time, so it is not started: the answer must not depend on whether
+/// a fast read beats this thread to the channel.
 pub fn within<T, F>(limit: Duration, work: F) -> Option<T>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
+    if limit.is_zero() {
+        return None;
+    }
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("codeflow-observe".into())
@@ -240,6 +245,13 @@ mod tests {
     #[test]
     fn a_prompt_observer_returns_its_answer() {
         assert_eq!(within(Duration::from_secs(5), || 7_u8), Some(7));
+    }
+
+    #[test]
+    fn a_zero_limit_is_unknown_however_fast_the_work() {
+        for _ in 0..1000 {
+            assert_eq!(within(Duration::ZERO, || 7_u8), None);
+        }
     }
 
     #[test]

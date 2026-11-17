@@ -496,7 +496,9 @@ After the before snapshot and before prompt delivery, `launch` starts
 after these checks, and refuses otherwise:
 
 - the request comes from its own pane, not the subject's, in the trial's
-  Herdr workspace, with the fixture repository as its working directory;
+  Herdr workspace, with an accepted directory as its working directory: the
+  fixture repository, or a registered worktree of it (see "Worktree peers"
+  below);
 - every trial environment variable except TERM and PATH is unchanged, so
   HOME, TMPDIR, the evaluator homes and the memory switches are the trial's
   (another, personal or symlinked home refuses);
@@ -506,8 +508,8 @@ after these checks, and refuses otherwise:
 - for every Codex peer: the dedicated home still turns plugins off and holds
   no remote plugin cache;
 - for Codex with `--codex-hook-trust=bypass`: the dedicated home, user and
-  plugin hook sources and the fixture's shipped hooks are checked again, and
-  the plugin inventory must equal the launch preflight's.
+  plugin hook sources and the shipped hooks in the peer's own directory are
+  checked again, and the plugin inventory must equal the launch preflight's.
 
 The answer is the exact argv and the trial environment: the real executable
 found at launch, the subject's arguments, the kit's state-isolation arguments
@@ -536,16 +538,84 @@ from `/proc`. A launch counts only when:
   same checks as the request, with hook sources and plugins checked again.
 
 A verified launch gets keys only for the dialogs the subject's own startup
-accepts: the exact-path workspace-trust dialog and Claude's renderer prompt.
+accepts: the workspace-trust dialog naming exactly the directory that launch
+was accepted in, and Claude's renderer prompt.
 Before each key the watcher re-reads the screen and the live process; any
 change to its identity, environment or working directory gets no key. It never
 pastes text and never presses Enter in an editor. When Herdr reports the peer
 idle, working or done, the watcher verifies the live process again, hook and
 plugin checks included, and only then writes the pane's ready record, which
 the trial's `herdr` waits for before it types into that pane. The watcher
-keeps polling after readiness: a new process in the pane closes the ready
-record and is a new launch, and a process that ends closes it too. The watcher
+keeps polling after readiness and verifies a ready launch again on every
+poll: a failed check closes its ready record, a new process in the pane closes
+it and is a new launch, and a process that ends closes it too. The watcher
 removes every ready record when it stops.
+
+### Worktree peers
+
+The method puts a review seat in the subject's task worktree, so a peer may
+also start in a registered linked worktree of the fixture. At launch the
+runner records the fixture's identity in `launch.json`
+(`peers.fixture_identity`): the realpath of the repository and of its common
+directory, which must be the repository's own `.git`, a real directory with no
+`commondir` redirect. Launch reads this from the filesystem and starts no
+process; git confirms it at each worktree check. A directory `C` other
+than the repository is accepted only when every check below passes, on the
+raw path first and on realpaths second, using `lstat` so that a symlink is
+seen rather than followed:
+
+- placement: `C` is exactly `<repository>/.worktrees/<name>`, one level down
+  and normalized; the repository, `.worktrees` and `C` are real directories
+  and `C` is its own realpath;
+- link file: `C/.git` is a regular file of at most 4 KiB holding one line
+  `gitdir: <A>`, where `A` is exactly `<repository>/.git/worktrees/<id>`, a
+  real directory that is its own realpath;
+- reciprocal pair: `A/gitdir` names exactly `C/.git`, and `A/commondir`
+  names exactly the fixture's common directory; both are regular files;
+- git's own view, read with every `GIT_*` variable unset, no global or system
+  config and an empty HOME: in the repository `git rev-parse` reports its own
+  `.git` as the common directory, `git worktree list --porcelain` lists `C` once as
+  a non-main entry that is neither bare nor prunable, and in `C`
+  `git rev-parse` reports the fixture's common directory and `C` as the top
+  level.
+
+A git error, a missing file or any doubt refuses. Names are never matched:
+other worktree locations, such as `.claude/worktrees` or a harness home, a
+nested directory, a copy, a symlink and another repository's worktree all
+refuse, wherever they sit.
+
+The accepted identity is pinned to the launch: `C`, `A`, the common
+directory, the SHA-256 of `C/.git`, `A/gitdir` and `A/commondir`, and the
+device and inode of `C` and `A`, so a worktree removed and added again at the
+same path is a different identity. The pin is checked beside the process
+identity, never folded into it. The directory checks, and under the bypass
+option the hook checks against `C/.codex`, run when a request is answered, at
+bind, before every startup key, at readiness and on every later poll of a
+ready launch. A difference from the pin, or any failed check, removes the
+ready record, sets the launch to `unverified` with the failing check in
+`error` and flags `peer_launch_unverified`; no key is sent and nothing
+restores the launch. The decision and launch records carry the accepted
+`directory`: its path, kind (`repository` or `worktree`) and pinned identity.
+
+Hook review depends on the option. Codex keys hook trust by the absolute path
+of `hooks.json`, and a worktree the subject creates during the trial did not
+exist when the operator reviewed the fixture's hooks. Under the default
+`review` option a Codex peer in a worktree therefore stops at "Hooks need
+review"; the watcher never answers that screen, so the launch is
+`peer_startup_refused` with no key and the trial is invalid. A trial whose
+subject opens Codex peers in worktrees is launched with
+`--codex-hook-trust=bypass`: the worktree's own `.codex/hooks.json` must then
+equal the shipped contract-3 definitions, with no other hook source and no
+symlink, and the decision's `hooks_sha256` is the hash of that file.
+
+These checks are bounded evidence, not proof of ownership. The subject runs
+as the operator's user and can write every file they read, git's worktree
+metadata included. The watcher polls: a gap longer than 10 seconds between
+two completed polls invalidates coverage (`peer_watch_incomplete`), but the
+watcher does not guarantee a poll within that interval, cannot see a change
+removed and restored between two polls, and no check-then-use step is atomic
+against an unrestricted same-user writer. This is the same posture as for
+peers in the repository itself.
 
 `finish` stops the watcher (`peers.stop`, then up to 20 seconds) before the
 final snapshot and writes `peers` into `observation.json`, with the watcher's
@@ -557,7 +627,7 @@ poll errors and coverage gaps. These validity flags invalidate a trial:
 | `peer_launch_unanswered` | a request got no answer |
 | `peer_launch_unobserved` | an answered start was never seen running |
 | `peer_launch_unrecorded` | a seat ran in a peer pane without a bound answer: absolute path, another PATH, a raw Herdr call or a forged answer; it got no key |
-| `peer_launch_unverified` | the live process failed verification, for example another home; it got no key |
+| `peer_launch_unverified` | the live process failed verification, for example another home, or its accepted directory or hooks failed a later recheck; it got no key and lost its ready record |
 | `peer_outside_trial_workspace` | an agent in the trial's folders ran in another workspace |
 | `peer_startup_refused` | a hook review, an unknown trust screen, another path, or a process change before a key; no key sent |
 | `peer_not_ready` | a verified peer never became ready |
@@ -571,11 +641,14 @@ Accepting a Codex peer's folder-trust dialog makes Codex write a
 `[projects."<path>"]` entry into the evaluator home's `config.toml`. A
 top-level trial takes its `config_start` snapshot after its own trust
 acceptance, so that write is already in the baseline. A peer accepts later,
-so `finish` allows exactly one change: a `trust_level = "trusted"` entry for
-the exact trial repository, with the rest of the file unchanged, after a
-trust acceptance the watcher recorded for that path. `observation.json` then
-lists it under `config_allowances`. Any other change is
-`evaluator_config_drift`.
+so `finish` allows one `trust_level = "trusted"` entry, with no other key,
+for each path with a folder-trust acceptance the watcher recorded: the exact
+trial repository, and an accepted worktree only for a launch accepted in that
+worktree. The rest of the file, every other project entry included, must
+match the baseline. `observation.json` lists each allowed entry under
+`config_allowances`. Any other change, an entry for a path without its own
+acceptance included, is `evaluator_config_drift`. The allowance covers folder
+trust only; no hook-trust change is allowed at finish.
 
 Without the bypass option a Codex peer meets its hook review; the watcher
 leaves it unanswered and flags the trial. The launchers are not containment.

@@ -331,15 +331,71 @@ pub fn fetch_objects(
     all.extend_from_slice(refs);
     run(root, &all, limits.fetch_timeout)
         .map(|_| ())
-        .map_err(|why| match why {
-            Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
-            Failure::Authentication => AUTHENTICATION_FAILED.into(),
-            Failure::Timeout(deadline) => format!(
-                "no answer within {}; {FETCH_TIMEOUT_KEY} in the policy this run reads sets this",
-                seconds(deadline)
-            ),
-            Failure::Other(why) => why,
-        })
+        .map_err(|why| fetch_failure(url, why))
+}
+
+/// The commit `url` sends for the one ref `remote_ref` (such as
+/// `refs/heads/main`), from `git fetch --dry-run --porcelain` within the
+/// fetch wait `limits` sets. A dry run writes no ref, tag or `FETCH_HEAD`;
+/// the commit is read from the fetch's own answer, never from a file in the
+/// repository. `--porcelain` needs git 2.41 or later.
+///
+/// # Errors
+///
+/// Returns why the fetch did not complete, or that its answer names no
+/// single commit for the ref.
+pub fn fetch_tip(
+    root: &Path,
+    url: &str,
+    remote_ref: &str,
+    limits: QueryLimits,
+) -> Result<String, String> {
+    let all = [
+        "fetch",
+        "--dry-run",
+        "--porcelain",
+        "--no-tags",
+        "--no-recurse-submodules",
+        url,
+        remote_ref,
+    ];
+    let answer = run(root, &all, limits.fetch_timeout).map_err(|why| fetch_failure(url, why))?;
+    fetched_tip(&answer).ok_or_else(|| {
+        format!(
+            "`git fetch --porcelain {}` named no single commit for {}; git 2.41 or later is needed",
+            display_url(url),
+            super::display_text(remote_ref)
+        )
+    })
+}
+
+/// The new object id of the one `FETCH_HEAD` line in a `git fetch
+/// --porcelain` answer (`<flag> <old> <new> FETCH_HEAD`), or `None` when the
+/// answer has no such line, more than one, or an id that is not hex.
+pub(crate) fn fetched_tip(answer: &str) -> Option<String> {
+    let mut tips = answer.lines().filter_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            [.., new, "FETCH_HEAD"] => Some((*new).to_owned()),
+            _ => None,
+        }
+    });
+    let tip = tips.next()?;
+    let hex = tip.len() >= 40 && tip.bytes().all(|b| b.is_ascii_hexdigit());
+    (hex && tips.next().is_none()).then_some(tip)
+}
+
+/// A fetch failure as [`fetch_objects`] and [`fetch_tip`] report it.
+fn fetch_failure(url: &str, why: Failure) -> String {
+    match why {
+        Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
+        Failure::Authentication => AUTHENTICATION_FAILED.into(),
+        Failure::Timeout(deadline) => format!(
+            "no answer within {}; {FETCH_TIMEOUT_KEY} in the policy this run reads sets this",
+            seconds(deadline)
+        ),
+        Failure::Other(why) => why,
+    }
 }
 
 enum Failure {
@@ -497,7 +553,15 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
 
 /// Run `command` with no input, within `deadline` (then its whole process
 /// group is killed) and [`MAX_ANSWER_BYTES`], and return its answer.
-fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+fn bounded(command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+    text_answer(&bounded_bytes(command, deadline)?)
+}
+
+/// [`bounded`], returning the answer's bytes undecoded.
+fn bounded_bytes(
+    mut command: std::process::Command,
+    deadline: Duration,
+) -> Result<Vec<u8>, Failure> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -594,7 +658,33 @@ fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<Str
         }
         return Err(Failure::Exit(status.code()));
     }
-    text_answer(&bytes)
+    Ok(bytes)
+}
+
+fn local_read_failure(why: Failure) -> String {
+    match why {
+        Failure::Exit(_) | Failure::Authentication => "git failed".to_string(),
+        Failure::Timeout(deadline) => format!("git gave no answer within {}", seconds(deadline)),
+        Failure::Other(why) => why,
+    }
+}
+
+/// [`bounded`] for a local git read in another module: the answer, or why
+/// there is none, as text (TSK-1184 `remote_identity`).
+pub(crate) fn bounded_text(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<String, String> {
+    bounded(command, deadline).map_err(local_read_failure)
+}
+
+/// [`bounded_text`] with the answer's bytes undecoded, for a listing whose
+/// unrelated entries need not be text (TSK-1184 `remote_identity`).
+pub(crate) fn bounded_raw(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<Vec<u8>, String> {
+    bounded_bytes(command, deadline).map_err(local_read_failure)
 }
 
 /// Whether git's diagnostics carry an authentication marker. The bytes are

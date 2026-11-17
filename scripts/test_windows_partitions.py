@@ -770,6 +770,28 @@ class CoverageShardTests(unittest.TestCase):
     """TSK-270 AC-2: the Linux coverage shards use this planner with their
     own measurements, results directories and per-shard test lists."""
 
+    def test_a_skipped_case_gets_no_shard_execution_or_pass_credit(self):
+        plan = wp.Plan(DATA)
+        listed = {("cli::fast", "x")}
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(StringIO()):
+            root = Path(directory)
+            reports = {}
+            for partition in range(1, plan.count + 1):
+                report = root / f"coverage-shard-{partition}" / "junit.xml"
+                report.parent.mkdir()
+                body = ('<testsuite name="cli::fast"><testcase name="x"><skipped/></testcase></testsuite>'
+                        if partition == plan.partition_of("cli::fast", "x") else '')
+                report.write_text(f'<testsuites time="1">{body}</testsuites>')
+                reports[partition] = report
+            self.assertTrue(wp.check(plan, listed, reports))
+            cases, _ = wp.ran(reports[plan.partition_of("cli::fast", "x")])
+            self.assertEqual(cases, [])
+            # A second report offering a pass must not hide the skip.
+            other = next(p for p in reports if p != plan.partition_of("cli::fast", "x"))
+            reports[other].write_text(junit(listed))
+            problems = wp.check(plan, listed, reports)
+            self.assertTrue(any("was skipped" in p for p in problems))
+
     def test_the_real_coverage_data_is_balanced_over_two_shards(self):
         plan = wp.Plan(wp.load(cs.DATA))
         self.assertEqual(plan.count, 2)

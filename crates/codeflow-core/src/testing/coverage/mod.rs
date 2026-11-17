@@ -8,6 +8,7 @@ pub mod go_cover;
 pub mod istanbul;
 pub mod lcov;
 pub mod llvm_cov;
+pub mod producer;
 
 /// One coverage measure over the whole report: how many items there are, how
 /// many ran, and the percentage of them that ran.

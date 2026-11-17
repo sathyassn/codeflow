@@ -2160,6 +2160,114 @@ fn text(out: &Output) -> String {
     )
 }
 
+/// TSK-1039 AC-2, issue 494: the push `codeflow work claim` makes for a
+/// branch holding its standalone record runs no test target, though a quick
+/// target fails at the tip. The destination already holds `main`, so the
+/// push is judged by ordinary admission; a commit `codeflow ci` refuses is
+/// still stopped by the same hook.
+#[test]
+#[cfg(unix)]
+fn claim_push_runs_no_failing_target_at_the_tip() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+    );
+    write(
+        root,
+        ".codeflow/test-config.json",
+        r#"{"schema_version":"1.0","targets":[{"name":"failing-check","runner":"custom","modes":{"quick":{"command":"touch ran.marker; false"}}}]}"#,
+    );
+    git(root, &["add", "."]);
+    git(
+        root,
+        &[
+            "commit",
+            "-qm",
+            "chore: add the policy and a failing target",
+        ],
+    );
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
+    let hooks = tempfile::tempdir().unwrap();
+    write(
+        hooks.path(),
+        "pre-push",
+        &format!(
+            "#!/bin/sh\ntouch '{}'\nexec '{}' git-hook pre-push \"$@\"\n",
+            hooks.path().join("hook.ran").display(),
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    );
+    std::fs::set_permissions(
+        hooks.path().join("pre-push"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(
+        root,
+        &["config", "core.hooksPath", hooks.path().to_str().unwrap()],
+    );
+    git(root, &["switch", "-qc", "fix/standalone"]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record standalone"]);
+    // Bind the record in the shared registry and publish it to the
+    // destination, as a repository with an authority remote has it.
+    succeeds(&cli(root, &["ids", "seed"], None));
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "origin",
+            "codeflow/registry",
+        ],
+    );
+    git(root, &["fetch", "-q", "origin"]);
+    let claimed = cli(root, &["work", "claim", "TSK-003"], None);
+    assert!(claimed.status.success(), "{}", text(&claimed));
+    let child = "task/TSK-003-work-tsk-003";
+    assert_eq!(
+        git(
+            origin.path(),
+            &["rev-parse", &format!("refs/heads/{child}")]
+        ),
+        git(root, &["rev-parse", "HEAD"])
+    );
+    // The hook ran during the claim itself, and started no target.
+    assert!(hooks.path().join("hook.ran").exists(), "{}", text(&claimed));
+    assert!(!root.join("ran.marker").exists(), "{}", text(&claimed));
+    // The same fixture refuses a commit `codeflow ci` rejects.
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "Not conventional"],
+    );
+    let refused = Command::new("git")
+        .args(["push", "origin", &format!("HEAD:refs/heads/{child}")])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(!root.join("ran.marker").exists());
+}
+
 /// Issue #69: `work claim --on` accepts a reviewed pin, and the claim's own
 /// push check, from the target to the pin, judges the commits up to the pin
 /// as the predecessor's reviewed pull request. The claim pushes through the

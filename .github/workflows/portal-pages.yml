@@ -64,6 +64,16 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # TSK-1346: GitHub sets GITHUB_RUN_ATTEMPT, and a re-run of failed
+      # jobs or of one job re-runs only them and their dependents, so this
+      # job refuses its own re-run before it can publish.
+      - name: Refuse a re-run of a publishing job
+        shell: bash
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" != 1 ] && [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "::error::This job publishes, and attempt $GITHUB_RUN_ATTEMPT is a re-run. Dispatch a fresh run instead; a re-run would publish without the jobs that passed before."
+            exit 1
+          fi
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

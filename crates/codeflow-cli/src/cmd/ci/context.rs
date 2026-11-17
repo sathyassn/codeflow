@@ -25,6 +25,7 @@ pub(super) fn resolve(
     args: &CiArgs,
     environment: &BTreeMap<String, String>,
     protected: &[String],
+    prefixes: &[String],
 ) -> Result<Context, String> {
     let env = |key: &str| environment.get(key).cloned().filter(|v| !v.is_empty());
     let detected = detect_range(env, protected);
@@ -39,7 +40,7 @@ pub(super) fn resolve(
     // Eligibility is decided once: a declared target that may not select the
     // base selects no acceptance target either.
     let declared = if explicit_target.is_none() {
-        eligible_declared(root, &branch, &head, protected, base_falls_back)?
+        eligible_declared(root, &branch, &head, (protected, prefixes), base_falls_back)?
     } else {
         None
     };
@@ -174,14 +175,19 @@ pub(in crate::cmd) enum Declared {
 /// never binds anything, because the change's author can create one at any
 /// commit; the remote is trusted only as far as the host protects
 /// `integration/*` and every name in `protected_branches`.
+///
+/// The branch's task, and so its declaration, is found under `prefixes`, the
+/// `git.branch_prefixes` of the policy the caller judges with, never the
+/// checkout's (TSK-1257).
 pub(in crate::cmd) fn judged_declared_target(
     root: &Path,
     branch: &str,
     head: &str,
     protected: &[String],
+    prefixes: &[String],
 ) -> Result<Option<Declared>, String> {
     use codeflow_core::workgraph::{epic_line_binding, EpicLineBinding};
-    let Some(target) = declared_target(root, branch, head)? else {
+    let Some(target) = declared_target(root, prefixes, branch, head)? else {
         return Ok(None);
     };
     let name = normalize(&target);
@@ -201,7 +207,8 @@ pub(in crate::cmd) fn judged_declared_target(
         return Ok(Some(Declared::Rejected { target, reason }));
     }
     let bind = |anchor: &str, place: &str| {
-        epic_line_binding(root, branch, head, &name, anchor, place).map_err(|e| e.to_string())
+        epic_line_binding(root, prefixes, branch, head, &name, anchor, place)
+            .map_err(|e| e.to_string())
     };
     let tips = detect_range(|_: &str| None, protected).base_candidates;
     let first = match resolve_base(root, &tips).map_err(|error| base_refusal(&error))? {
@@ -243,10 +250,10 @@ fn eligible_declared(
     root: &Path,
     branch: &str,
     head: &str,
-    protected: &[String],
+    (protected, prefixes): (&[String], &[String]),
     base_falls_back: bool,
 ) -> Result<Option<String>, String> {
-    let (target, reason) = match judged_declared_target(root, branch, head, protected)? {
+    let (target, reason) = match judged_declared_target(root, branch, head, protected, prefixes)? {
         None => return Ok(None),
         Some(Declared::Eligible(target)) => return Ok(Some(target)),
         Some(Declared::Rejected { target, reason }) => (target, reason),
@@ -391,9 +398,14 @@ fn target_candidates(target: &str) -> Vec<String> {
     base_refs(target)
 }
 
-fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<String>, String> {
+fn declared_target(
+    root: &Path,
+    prefixes: &[String],
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, String> {
     if let Some(target) =
-        declared_work_target_at_revision(root, branch, head).map_err(|e| e.to_string())?
+        declared_work_target_at_revision(root, prefixes, branch, head).map_err(|e| e.to_string())?
     {
         return Ok(Some(target));
     }

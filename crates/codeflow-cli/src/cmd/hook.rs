@@ -729,16 +729,40 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         payload.tool_input.sandbox_retry(),
         &policy_reasons,
     );
+    // A client's config file is trusted only when the session project's
+    // committed policy trusts it too (TSK-1346), as `relaxed` needs both.
+    let mut security = policy.security.clone();
+    if let Some(session) = host.session.as_deref() {
+        session_trust(session, &root, &mut security.trusted_client_configs);
+    }
     let violations = exec_guard::evaluate_ruled(
         command,
         exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
-        &policy.security,
+        &security,
         policy.git.hook_integrity,
         &cwd,
         &root,
         &outcome,
     );
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
+}
+
+/// Keep in `trusted` only the tools the session project's committed policy
+/// also trusts, when the session project is not the call's repository; an
+/// unreadable session project trusts none.
+fn session_trust(session: &std::path::Path, root: &std::path::Path, trusted: &mut Vec<String>) {
+    if trusted.is_empty() {
+        return;
+    }
+    let Ok(session_root) = super::project_root(session) else {
+        trusted.clear();
+        return;
+    };
+    if session_root == root {
+        return;
+    }
+    let landed = codeflow_core::hooks::landed_policy::load(&session_root);
+    codeflow_core::hooks::landed_policy::keep_trusted_by(trusted, landed.as_ref());
 }
 
 /// Why the session project's policy keeps a call made from `root` strict:

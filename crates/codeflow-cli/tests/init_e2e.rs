@@ -100,7 +100,7 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new(&exe)
+    without_agent_markers(&mut Command::new(&exe))
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
@@ -122,8 +122,18 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         .expect("codeflow binary runs")
 }
 
+/// The fixtures play a human: a marker inherited from an agent session
+/// would apply the agent-only rules to their commits, so a direct
+/// test-binary run would fail where `cargo test` passes.
+fn without_agent_markers(command: &mut Command) -> &mut Command {
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
+}
+
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = without_agent_markers(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -714,6 +724,56 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
     }
 }
 
+/// TSK-1014 AC-5: test setup on a fresh project writes the detected
+/// stack's coverage producer, and only then: `codeflow update` and a second
+/// setup leave an existing config, one written before producers existed,
+/// byte for byte as it was.
+#[test]
+fn coverage_producers_are_written_at_setup_and_never_by_update() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"proj\"\n").unwrap();
+    assert!(codeflow(&root, &["init", "--yes", "--minimal"])
+        .status
+        .success());
+    let setup = codeflow(&root, &["test", "setup"]);
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/test-config.json")).unwrap();
+    let target = &written["targets"][0];
+    assert_eq!(
+        target["coverage"],
+        serde_json::json!({"format": "lcov", "path": "target/lcov.info", "rules": []}),
+        "{written}"
+    );
+    assert!(
+        target["modes"]["full"]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("cargo llvm-cov"),
+        "{written}"
+    );
+
+    let existing = r#"{"schema_version": "1.0", "targets": [
+  {"name": "rust-core", "runner": "cargo", "modes": {"full": {"command": "cargo test --workspace"}}}]}
+"#;
+    std::fs::write(root.join(".codeflow/test-config.json"), existing).unwrap();
+    let update = codeflow(&root, &["update"]);
+    assert!(
+        update.status.success(),
+        "{}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+    assert_eq!(read(&root, ".codeflow/test-config.json"), existing);
+    assert!(codeflow(&root, &["test", "setup"]).status.success());
+    assert_eq!(read(&root, ".codeflow/test-config.json"), existing);
+}
+
 /// TSK-127: a fresh scaffold at every tier installs the kernel-rendered rule
 /// map, its references and the CLAUDE file through the real binary, and
 /// `codeflow doctor` warns once an AGENTS.md passes Codex's 32 KiB limit.
@@ -867,7 +927,7 @@ fn git_output_with_binary(dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new("git")
+    without_agent_markers(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -3280,7 +3340,7 @@ fn init_standard_completes_in_a_repository_with_many_folders() {
 
     let stdout = std::fs::File::create(tmp.path().join("init.out")).unwrap();
     let stderr = std::fs::File::create(tmp.path().join("init.err")).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+    let mut child = without_agent_markers(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
         .args(["init", "--standard", "--yes"])
         .current_dir(&root)
         .env("CODEFLOW_HOME", isolated_home())

@@ -36,7 +36,17 @@ fn codeflow_cmd(dir: &Path) -> Command {
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    clear_agent_markers(&mut cmd);
     cmd
+}
+
+/// The fixtures play a human: a marker the test run inherits from an agent
+/// session would apply the agent-only rules to their commits, so a direct
+/// test-binary run would fail where `cargo test` passes.
+fn clear_agent_markers(cmd: &mut Command) {
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
 }
 
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
@@ -76,7 +86,9 @@ fn test_path() -> std::ffi::OsString {
 /// Git with the binary under test first on `PATH`, so wired hook shims run
 /// this build rather than an installed codeflow.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let mut cmd = Command::new("git");
+    clear_agent_markers(&mut cmd);
+    let out = cmd
         .args(args)
         .current_dir(dir)
         .env("PATH", test_path())
@@ -668,7 +680,9 @@ fn first_pr(dir: &Path) {
 fn land_policy(dir: &Path) {
     let index = dir.join(".git").join("land-policy.index");
     let run = |args: &[&str]| -> String {
-        let out = Command::new("git")
+        let mut cmd = Command::new("git");
+        clear_agent_markers(&mut cmd);
+        let out = cmd
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

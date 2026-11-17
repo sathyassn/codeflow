@@ -7551,13 +7551,30 @@ class ProcessRepairTests(unittest.TestCase):
         "› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n"
         "  enter confirm · esc skip\n")
 
+    @staticmethod
+    def git(cwd: Path, *args: str) -> str:
+        """Real git, free of the caller's git environment and config."""
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        environment.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+        return subprocess.run(["git", "-c", "user.name=CodeFlow Eval", "-c", "user.email=eval@codeflow.invalid",
+                               "-c", "commit.gpgsign=false", *args], cwd=cwd, env=environment,
+                              check=True, capture_output=True, text=True).stdout
+
     def peer_trial(self, root: Path, option: str = "bypass", workspace: str = "trial-workspace",
-                   subject: str = "subject-pane"):
-        """A materialized-looking trial with fake native executables on PATH."""
+                   subject: str = "subject-pane", worktrees: tuple[str, ...] = ()):
+        """A materialized-looking trial with fake native executables on PATH.
+        `worktrees` makes the fixture a git repository with those registered
+        linked worktrees at `.worktrees/<name>`, before the launch captures it."""
         runner = self.runner()
         repository = root / "subjects/trial/repository"
         (repository / ".codex").mkdir(parents=True)
         (repository / ".codex/hooks.json").write_bytes((ROOT / "assets/base/codex/hooks.json").read_bytes())
+        if worktrees:
+            self.git(repository, "init", "-q", "-b", "main")
+            self.git(repository, "add", "-A")
+            self.git(repository, "commit", "-q", "-m", "chore: fixture")
+            for name in worktrees:
+                self.git(repository, "worktree", "add", "-q", "-b", name, f".worktrees/{name}")
         (repository.parent / "tmp").mkdir()
         (repository.parent / "home").mkdir()
         runner.kit.prepare_eval_homes()
@@ -8578,6 +8595,376 @@ class ProcessRepairTests(unittest.TestCase):
             config.write_text(base + entry)
             (Path(environment["CODEX_HOME"]) / "AGENTS.md").write_text("changed\n")
             self.assertEqual(["evaluator_config_drift"], runner.config_drift(before, snap(), True))
+
+    # TSK-1102: a peer in a registered linked worktree of the fixture, on a
+    # real git fixture made with `git worktree add .worktrees/<name>`.
+    def worktree_trial(self, root: Path, option: str = "bypass", names: tuple[str, ...] = ("review",)):
+        runner, run, repository, scene, record, _calls = self.watch_trial(root, option=option, worktrees=names)
+        return runner, run, repository, scene, record, repository / ".worktrees" / names[0]
+
+    def check_start(self, runner, run, cwd, harness="codex", args=None) -> dict:
+        request = self.peer_request(run, harness, args, cwd=str(cwd))
+        with patch.object(runner, "state", return_value={"workspace_id": run["workspace"]}):
+            return runner.peer_decision(run, request)
+
+    def answer_worktree_start(self, runner, run, worktree, scene, record, pid=4101, pane="peer-pane"):
+        """A Codex start asked for in the worktree, answered while its launcher waits."""
+        self.ask_peer(runner, run, pid, pane, cwd=str(worktree))
+        scene.agent(pane, cwd=str(worktree), status="unknown")
+        launcher = self.launcher_live(run, pid, "codex", self.peer_request(run)["args"], pane)
+        launcher["cwd"] = str(worktree)
+        scene.run(pane, launcher, name="codex")
+        self.poll(runner, run, record, scene)
+        decision = self.answer(record, pid)
+        self.assertTrue(decision["allow"], decision)
+        return decision
+
+    def exec_worktree_peer(self, runner, run, worktree, scene, record, pid=4101, pane="peer-pane"):
+        """The launcher execs the answer in place; the watcher binds it."""
+        live = self.peer_live(run, pid, self.answer(record, pid)["argv"], pane)
+        live["cwd"] = str(worktree)
+        scene.run(pane, live)
+        scene.screens[pane] = ""
+        self.poll(runner, run, record, scene)
+        return record["peers"][pane]["launches"][-1]
+
+    def bound_worktree_peer(self, runner, run, worktree, scene, record, pid=4101, pane="peer-pane"):
+        self.answer_worktree_start(runner, run, worktree, scene, record, pid, pane)
+        launch = self.exec_worktree_peer(runner, run, worktree, scene, record, pid, pane)
+        self.assertEqual(("pending", True), (launch["status"], launch["verification"]["verified"]), launch)
+        return launch
+
+    def ready_worktree_peer(self, runner, run, worktree, scene, record, pid=4101, pane="peer-pane"):
+        """Answered, bound, its folder trust accepted for the worktree, then ready."""
+        launch = self.bound_worktree_peer(runner, run, worktree, scene, record, pid, pane)
+        scene.agent(pane, cwd=str(worktree))
+        scene.screens[pane] = self.CASE_00_PEER_TRUST.format(path=worktree)
+        scene.on_key = lambda where, key: scene.screens.__setitem__(where, self.CODEX_IDLE)
+        self.poll(runner, run, record, scene, 2)
+        return launch
+
+    def test_peer_in_a_registered_fixture_worktree_is_admitted_and_reaches_ready(self):
+        """TSK-1102 AC-1: a registered worktree passes every check, is pinned,
+        and its peer is verified live, trusted at that path and made ready."""
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, worktree = self.worktree_trial(Path(temp).resolve())
+            self.assertEqual({"repository": str(repository), "common_dir": str(repository / ".git")},
+                             run["peers"].get("fixture_identity"))
+            decision = self.check_start(runner, run, worktree)
+            self.assertTrue(decision["allow"], decision)
+            directory = decision["directory"]
+            self.assertEqual((str(worktree), "worktree"), (directory["path"], directory["kind"]))
+            identity = directory["identity"]
+            self.assertEqual((str(repository / ".git"), str(repository / ".git/worktrees/review")),
+                             (identity["common_dir"], identity["admin"]))
+            digest = lambda path: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()  # noqa: E731
+            self.assertEqual(digest(worktree / ".git"), identity["link_sha256"])
+            self.assertEqual(digest(repository / ".git/worktrees/review/gitdir"), identity["gitdir_sha256"])
+            self.assertEqual(digest(worktree / ".codex/hooks.json"), decision["hook_trust"]["hooks_sha256"])
+            self.assertEqual("repository", self.check_start(runner, run, repository)["directory"]["kind"])
+            launch = self.ready_worktree_peer(runner, run, worktree, scene, record)
+            self.assertEqual("ready", launch["status"], launch)
+            self.assertEqual(directory, launch["directory"])
+            self.assertEqual([str(worktree)], [event["path"] for event in launch["trust_acceptances"]])
+            self.assertEqual([("peer-pane", "Enter")], scene.keys)
+            self.assertEqual(launch["identity"], self.gate(run)["identity"])
+            # Later polls recheck a ready peer and keep it while nothing changed.
+            self.poll(runner, run, record, scene, 2)
+            self.assertEqual("ready", launch["status"])
+            flags, summary = runner.peer_findings(run, self.stopped(record))
+            self.assertEqual([], flags)
+            self.assertEqual("worktree", summary["requests"][0]["directory"]["kind"])
+
+    def test_worktree_admission_refuses_unregistered_linked_and_foreign_directories(self):
+        """TSK-1102 AC-2 to AC-4, rejection controls: every case refuses with
+        no answer argv. They refused before TSK-1102 too, as every non-root
+        directory did, and must keep refusing."""
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            root = Path(temp).resolve()
+            runner, run, repository, _scene, _record, worktree = self.worktree_trial(root, names=("review", "second"))
+            worktrees, admin = repository / ".worktrees", repository / ".git/worktrees/review"
+            second = worktrees / "second"
+            outside, other = root / "outside", root / "other"
+            outside.mkdir(); other.mkdir()
+            self.git(other, "init", "-q", "-b", "main")
+            (other / "file.txt").write_text("other\n")
+            self.git(other, "add", "file.txt")
+            self.git(other, "commit", "-q", "-m", "chore: other")
+            # Another repository's worktree placed inside the fixture's .worktrees.
+            self.git(other, "worktree", "add", "-q", "-b", "foreign", str(worktrees / "foreign"))
+            self.git(other, "worktree", "add", "-q", "-b", "far", str(outside / "far"))
+            (worktrees / "plain").mkdir()
+            shutil.copytree(worktree, worktrees / "copy", symlinks=True)
+            (worktree / "sub").mkdir()
+            (worktrees / "link").symlink_to(worktree, target_is_directory=True)
+            (worktrees / "elsewhere").symlink_to(outside / "far", target_is_directory=True)
+            self.git(repository, "worktree", "add", "-q", "-b", "gone", ".worktrees/gone")
+            self.git(repository, "worktree", "remove", "--force", ".worktrees/gone")
+            (worktrees / "gone").mkdir()
+            self.git(repository, "worktree", "add", "-q", "-b", "pruned", ".worktrees/pruned")
+            link = (worktrees / "pruned/.git").read_bytes()
+            shutil.rmtree(worktrees / "pruned")
+            self.git(repository, "worktree", "prune")
+            (worktrees / "pruned").mkdir()
+            (worktrees / "pruned/.git").write_bytes(link)
+            (repository / ".claude/worktrees/review").mkdir(parents=True)
+            directories = {
+                "plain directory": worktrees / "plain",
+                "unregistered copy": worktrees / "copy",
+                "subdirectory of a worktree": worktree / "sub",
+                "removed worktree path": worktrees / "gone",
+                "pruned worktree": worktrees / "pruned",
+                "missing directory": worktrees / "never",
+                "symlink to a worktree": worktrees / "link",
+                "symlink outside the fixture": worktrees / "elsewhere",
+                "worktree outside the fixture": outside / "far",
+                "not normalized": f"{worktrees}/../.worktrees/review",
+                "another repository's worktree": worktrees / "foreign",
+                "another worktree location": repository / ".claude/worktrees/review",
+            }
+            for name, cwd in directories.items():
+                with self.subTest(name):
+                    decision = self.check_start(runner, run, cwd)
+                    self.assertFalse(decision["allow"], decision)
+                    self.assertNotIn("argv", decision)
+
+            def replace(path: Path, write) -> None:
+                data = path.read_bytes()
+                try:
+                    path.unlink()
+                    write(path)
+                    decision = self.check_start(runner, run, worktree)
+                    self.assertFalse(decision["allow"], decision)
+                    self.assertNotIn("argv", decision)
+                finally:
+                    if path.is_symlink() or path.is_file():
+                        path.unlink()
+                    elif path.is_dir():
+                        path.rmdir()
+                    path.write_bytes(data)
+                    path.with_name(path.name + "-real").unlink(missing_ok=True)
+
+            def symlink(path: Path) -> None:
+                real = path.with_name(path.name + "-real")
+                shutil.copyfile(root / "saved", real)
+                path.symlink_to(real)
+
+            chain = {
+                ".git is a symlink": (worktree / ".git", symlink),
+                ".git is a directory": (worktree / ".git", lambda path: path.mkdir()),
+                ".git is not a gitdir link": (worktree / ".git", lambda path: path.write_text("not a link\n")),
+                ".git holds two lines": (worktree / ".git", lambda path: path.write_text(
+                    f"gitdir: {admin}\ngitdir: {admin}\n")),
+                "gitdir backlink is a symlink": (admin / "gitdir", symlink),
+                "gitdir backlink names another worktree": (admin / "gitdir", lambda path: path.write_text(
+                    f"{second}/.git\n")),
+                "commondir is a symlink": (admin / "commondir", symlink),
+                "commondir names another repository": (admin / "commondir", lambda path: path.write_text(
+                    f"{other}/.git\n")),
+            }
+            for name, (path, write) in chain.items():
+                with self.subTest(name):
+                    shutil.copyfile(path, root / "saved")
+                    replace(path, write)
+            with self.subTest(".worktrees is a symlink"):
+                moved = repository / ".worktrees-real"
+                worktrees.rename(moved)
+                worktrees.symlink_to(moved, target_is_directory=True)
+                try:
+                    self.assertFalse(self.check_start(runner, run, worktree)["allow"])
+                finally:
+                    worktrees.unlink()
+                    moved.rename(worktrees)
+
+    def test_worktree_peer_trust_dialogs_must_name_the_accepted_path(self):
+        """TSK-1102 AC-5: each harness's folder-trust dialog is accepted only
+        for the exact path its launch was accepted in."""
+        runner = self.runner()
+        repository = Path("/disposable/trial/repository")
+        worktree = repository / ".worktrees/review"
+        screens = {"claude": lambda path: self.trust_screen("claude", path),
+                   "codex": lambda path: self.CASE_00_PEER_TRUST.format(path=path),
+                   "grok": lambda path: self.grok_trust(path)}
+        for harness, screen in screens.items():
+            for accepted, shown in [(worktree, worktree), (repository, repository), (worktree, repository),
+                                    (repository, worktree)]:
+                keys = []
+
+                def fake(*args, text=False, current=screen(shown), keys=keys):
+                    if args[:2] == ("pane", "send-keys"):
+                        keys.append(args[3])
+                        return ""
+                    return current
+                with self.subTest(harness, accepted=str(accepted), shown=str(shown)), \
+                     patch.object(runner, "herdr", side_effect=fake), patch.object(runner.time, "sleep"):
+                    acceptances = []
+                    if accepted == shown:
+                        self.assertTrue(runner.handle_startup("peer", harness, accepted, screen(shown), acceptances, []))
+                        self.assertEqual((str(accepted), 1), (acceptances[0]["path"], len(keys)))
+                    else:
+                        with self.assertRaises(runner.Refused):
+                            runner.handle_startup("peer", harness, accepted, screen(shown), acceptances, [])
+                        self.assertEqual([], keys)
+        # Through the watcher: a worktree peer's dialog naming the root refuses.
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, worktree = self.worktree_trial(Path(temp).resolve())
+            launch = self.bound_worktree_peer(runner, run, worktree, scene, record)
+            scene.agent("peer-pane", cwd=str(worktree))
+            scene.screens["peer-pane"] = self.CASE_00_PEER_TRUST.format(path=repository)
+            self.poll(runner, run, record, scene)
+            self.assertEqual("startup_refused", launch["status"])
+            self.assertEqual([], scene.keys)
+
+    def test_worktree_hooks_are_checked_in_the_worktree_under_each_option(self):
+        """TSK-1102 AC-6: under bypass the worktree's own hooks decide, however
+        intact the root's are; under review its hook screen still refuses."""
+        flag = "--dangerously-bypass-hook-trust"
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, _scene, _record, worktree = self.worktree_trial(Path(temp).resolve())
+            hooks = worktree / ".codex/hooks.json"
+            shipped = hooks.read_bytes()
+            changed = json.loads(shipped)
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += "; echo injected"
+            hooks.write_text(json.dumps(changed))
+            self.assertIn("shipped", self.check_start(runner, run, worktree)["error"])
+            self.assertTrue(self.check_start(runner, run, repository)["allow"])
+            hooks.write_bytes(shipped)
+            (worktree / ".codex/config.toml").write_text("[hooks]\nsession = 1\n")
+            self.assertFalse(self.check_start(runner, run, worktree)["allow"])
+            (worktree / ".codex/config.toml").unlink()
+            hooks.unlink()
+            hooks.symlink_to(repository / ".codex/hooks.json")
+            self.assertFalse(self.check_start(runner, run, worktree)["allow"])
+            hooks.unlink()
+            hooks.write_bytes(shipped)
+            allowed = self.check_start(runner, run, worktree)
+            self.assertTrue(allowed["allow"], allowed)
+            self.assertIn(flag, allowed["argv"])
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, worktree = self.worktree_trial(Path(temp).resolve(), option="review")
+            launch = self.bound_worktree_peer(runner, run, worktree, scene, record)
+            self.assertNotIn(flag, launch["argv"])
+            scene.agent("peer-pane", cwd=str(worktree))
+            scene.screens["peer-pane"] = self.CASE_11_PEER_HOOKS
+            self.poll(runner, run, record, scene)
+            self.assertEqual("startup_refused", launch["status"])
+            self.assertEqual([], scene.keys)
+            self.assertIsNone(self.gate(run))
+            self.assertIn("peer_startup_refused", runner.peer_findings(run, self.stopped(record))[0])
+
+    def test_worktree_identity_or_hook_change_revokes_the_launch_at_each_moment(self):
+        """TSK-1102 AC-8 (and AC-6's moments): with pid, argv, cwd and
+        environment unchanged, a change to the worktree's registration or, under
+        bypass, its hooks fails the launch at bind, before a key and after
+        readiness. Nothing restores it, and no key is sent."""
+        def rewrite_backlink(repository, worktree):
+            path = repository / ".git/worktrees/review/gitdir"
+            path.write_text(path.read_text().rstrip("\n"))  # the same target, other bytes
+
+        def add_again(repository, worktree):
+            self.git(repository, "worktree", "remove", "--force", ".worktrees/review")
+            self.git(repository, "worktree", "add", "-q", ".worktrees/review", "review")
+
+        def change_hooks(repository, worktree):
+            path = worktree / ".codex/hooks.json"
+            changed = json.loads(path.read_bytes())
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += "; echo injected"
+            path.write_text(json.dumps(changed))
+
+        changes = {"backlink rewritten": rewrite_backlink, "removed and added again": add_again,
+                   "worktree hooks changed": change_hooks}
+        for name, change in changes.items():
+            for moment in ("bind", "before a key", "after readiness"):
+                with self.subTest(name, moment=moment), tempfile.TemporaryDirectory() as temp, \
+                     patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+                    runner, run, repository, scene, record, worktree = self.worktree_trial(Path(temp).resolve())
+                    keys = 0
+                    if moment == "bind":
+                        self.answer_worktree_start(runner, run, worktree, scene, record)
+                        change(repository, worktree)
+                        launch = self.exec_worktree_peer(runner, run, worktree, scene, record)
+                    elif moment == "before a key":
+                        launch = self.bound_worktree_peer(runner, run, worktree, scene, record)
+                        scene.agent("peer-pane", cwd=str(worktree))
+                        scene.screens["peer-pane"] = self.CASE_00_PEER_TRUST.format(path=worktree)
+                        reads = []
+
+                        def alter(pane, reads=reads, change=change, repository=repository, worktree=worktree):
+                            reads.append(pane)
+                            if len(reads) == 2:  # after the first screen read, before the key
+                                change(repository, worktree)
+                        scene.on_read = alter
+                        self.poll(runner, run, record, scene)
+                    else:
+                        launch = self.ready_worktree_peer(runner, run, worktree, scene, record)
+                        self.assertEqual("ready", launch["status"])
+                        self.assertIsNotNone(self.gate(run))
+                        keys = 1
+                        change(repository, worktree)
+                        self.poll(runner, run, record, scene)
+                    self.assertEqual("unverified", launch["status"], launch)
+                    self.assertTrue(launch.get("error"), launch)
+                    self.assertIsNone(self.gate(run))
+                    self.assertEqual(keys, len(scene.keys))
+                    self.assertEqual(1, len(record["peers"]["peer-pane"]["launches"]))
+                    self.poll(runner, run, record, scene, 2)
+                    self.assertEqual("unverified", launch["status"])
+                    self.assertIsNone(self.gate(run))
+                    self.assertIn("peer_launch_unverified", runner.peer_findings(run, self.stopped(record))[0])
+
+    def test_finish_allows_only_trust_entries_for_accepted_worktree_paths(self):
+        """TSK-1102 AC-7: folder trust only. Each recorded acceptance allows
+        its own `trusted` entry; anything else is evaluator_config_drift."""
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            root = Path(temp).resolve()
+            runner, run, repository, _scene, _record, worktree = self.worktree_trial(root, names=("review", "second"))
+            second = repository / ".worktrees/second"
+            environment = run["environment"]
+            config = Path(environment["CODEX_HOME"]) / "config.toml"
+            base = 'model = "gpt-6-astra"\n\n[projects."/private/tmp/earlier/repository"]\ntrust_level = "trusted"\n'
+            config.write_text(base)
+
+            def snap(accepted=()):
+                return runner.config_snapshot(environment, plugin_repository=repository, repository=repository,
+                                              worktrees=[str(path) for path in accepted])
+            before = snap()
+            entry = lambda path: f'\n[projects."{path}"]\ntrust_level = "trusted"\n'  # noqa: E731
+            allowed = {
+                "one worktree": (base + entry(worktree), [worktree], False),
+                "root and a worktree": (base + entry(repository) + entry(worktree), [worktree], True),
+                "two worktrees": (base + entry(worktree) + entry(second), [worktree, second], False),
+            }
+            for name, (text, accepted, root_accepted) in allowed.items():
+                with self.subTest(name):
+                    config.write_text(text)
+                    after = snap(accepted)
+                    self.assertEqual([], runner.config_drift(before, after, root_accepted))
+                    self.assertEqual(len(accepted) + root_accepted, len(runner.config_allowances(before, after)))
+            drifted = {
+                "no recorded acceptance": (base + entry(worktree), []),
+                "two entries, one acceptance": (base + entry(worktree) + entry(second), [worktree]),
+                "root entry without its acceptance": (base + entry(repository) + entry(worktree), [worktree]),
+                "entry for another path": (base + entry(root / "elsewhere"), [worktree]),
+                "extra key on the entry": (base + entry(worktree) + 'sandbox = "danger-full-access"\n', [worktree]),
+                "untrusted entry": (base + f'\n[projects."{worktree}"]\ntrust_level = "untrusted"\n', [worktree]),
+                "an unrelated change alongside": (base.replace("gpt-6-astra", "gpt-5") + entry(worktree), [worktree]),
+                "a baseline project removed": ('model = "gpt-6-astra"\n' + entry(worktree), [worktree]),
+            }
+            for name, (text, accepted) in drifted.items():
+                with self.subTest(name):
+                    config.write_text(text)
+                    self.assertEqual(["evaluator_config_drift"], runner.config_drift(before, snap(accepted), False))
+            # A worktree path counts only for a launch accepted in that directory.
+            codex = lambda path: {"harness": "codex", "path": str(path)}  # noqa: E731
+            record = {"peers": {"peer-pane": {"launches": [
+                {"directory": {"kind": "worktree", "path": str(worktree)}, "trust_acceptances": [codex(worktree)]},
+                {"directory": {"kind": "worktree", "path": str(worktree)}, "trust_acceptances": [codex(second)]},
+                {"directory": {"kind": "repository", "path": str(repository)},
+                 "trust_acceptances": [codex(second), codex(repository)]},
+                {"directory": {"kind": "worktree", "path": str(second)},
+                 "trust_acceptances": [{"harness": "claude", "path": str(second)}]},
+            ]}}}
+            self.assertEqual({str(worktree), str(repository)}, runner.peer_trust_acceptances(record, str(repository)))
 
     def test_peerdry_1_trace_replays_without_flags(self):
         """The native dry trial at e2ba0d226 (peerdry-1): a Claude subject with

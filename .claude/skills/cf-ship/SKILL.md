@@ -86,7 +86,10 @@ description: Land finished work (docs and capability updates, then a PR through 
 8. Merge by target once required *checks* are evidenced green, locally or in
    completed CI jobs (a gate is the check, not the job name; the quality
    contract classifies redness). For red or unfinished CI jobs, follow
-   [PR checks](references/pr-checks.md#redness-classes). The primary merges a
+   [PR checks](references/pr-checks.md#redness-classes). A task PR targets
+   `main` when a human can merge it as it becomes ready; otherwise it targets
+   its epic line, and the line's checkpoint PR to `main` is opened or
+   refreshed at every green line tip (CodeFlow ADR-0098). The primary merges a
    green, reviewed PR into an `integration/` branch no protected-branch policy
    covers (`main`, `master`, `.codeflow/policy.json` globs) without fast
    forward or with `codeflow integrate <branch> --into <target>`, once the
@@ -105,7 +108,8 @@ description: Land finished work (docs and capability updates, then a PR through 
    [release integration](references/release-integration.md).
    Otherwise skip that step. Where the project adopted the `cf-estimate`
    time-box profile, the epic's outcome record was written on the line
-   before its PR to `main` (`cf-method` "Managing a body of work", step 6);
+   before the checkpoint PR to `main` that carries the close (`cf-method`
+   "Managing a body of work", step 6);
    confirm it landed before step 10 deletes the line.
 10. Clean up after every landing, with proof, in the same step: whoever
     landed it runs cleanup, the primary after an integration-line landing
