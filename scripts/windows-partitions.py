@@ -397,7 +397,10 @@ def ran(report: Path) -> tuple[list[tuple[str, str]], float]:
     """The tests a JUnit report holds, and the partition's recorded run time."""
     root = ET.parse(report).getroot()
     suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
-    tests = [(suite.get("name"), case.get("name")) for suite in suites for case in suite.findall("testcase")]
+    # A skipped case did not execute. It cannot satisfy membership when a
+    # reporting job aggregates otherwise successful shard artifacts.
+    tests = [(suite.get("name"), case.get("name")) for suite in suites for case in suite.findall("testcase")
+             if case.find("skipped") is None]
     return tests, float(root.get("time") or 0)
 
 
@@ -422,6 +425,13 @@ def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path], re
     times = {}
     for partition, report in sorted(reports.items()):
         tests, times[partition] = ran(report)
+        root = ET.parse(report).getroot()
+        suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+        for suite in suites:
+            for case in suite.findall("testcase"):
+                test = (suite.get("name"), case.get("name"))
+                if test in listed and case.find("skipped") is not None:
+                    problems.append(f"{test[0]} {test[1]} was skipped in partition {partition}; no execution credit")
         for test in tests:
             where.setdefault(test, []).append(partition)
     for test in sorted(listed):

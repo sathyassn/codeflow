@@ -4444,7 +4444,13 @@ fn check_policy_source(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let (status, message) =
         match crate::hooks::landed_policy::diagnostic(Path::new(&opts.project_dir)) {
-            Ok(message) => (Status::Pass, message),
+            Ok(message) => (
+                Status::Pass,
+                match crate::hooks::landed_policy::baseline_note(Path::new(&opts.project_dir)) {
+                    Some(note) => format!("{message}; {note}"),
+                    None => message,
+                },
+            ),
             Err(message) => (Status::Fail, message),
         };
     CheckResult {

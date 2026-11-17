@@ -78,8 +78,9 @@ records the required interactive seat unavailable and the reduced assurance.
       changed scope (split, redesign, or surface the operator-owned
       decision).
    d. **Verify**: targeted tests, the checks that read what changed as
-      "Prove it at every surface" says (for example `cargo test -p <crate>`,
-      `codeflow test --mode essential --only <target>`),
+      "Prove it at every surface" says (`codeflow test guards` names them
+      for the touched paths and prints any unguarded path; for example
+      `cargo test -p <crate>`, `codeflow test --mode essential --only <target>`),
       `codeflow test --mode quick` once before ready (the pre-push run
       counts for the same tree) and `codeflow validate --docs`, each cited with revision and
       command. The full gate runs once on the landing candidate. Run a
