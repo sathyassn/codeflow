@@ -11961,7 +11961,7 @@ fn git_wrapper(folder: &Path, version: Option<&str>, fail_config: bool) -> std::
         format!("  version) echo 'git version {found}'; exit 0;;\n")
     });
     let config_case = if fail_config {
-        "  config\\ --get-regexp*) echo 'config unreadable' >&2; exit 128;;\n"
+        "  config\\ --null\\ --list*) echo 'config unreadable' >&2; exit 128;;\n"
     } else {
         ""
     };
@@ -12189,6 +12189,7 @@ fn inherited_promisor_settings_never_reach_the_attribute_reader() {
         // The repository's own configuration has no promisor designation.
         git(&work, &["config", "--unset", "remote.origin.promisor"]);
         git(&work, &["config", "--unset", "extensions.partialClone"]);
+        git(&work, &["config", "--unset", "remote.origin.partialCloneFilter"]);
         let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
         let out = promisor_hook(&work, &wrapper, false, false, env);
         let stderr = String::from_utf8_lossy(&out.stderr);
