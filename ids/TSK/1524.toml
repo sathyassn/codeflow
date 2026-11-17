@@ -1,0 +1,11 @@
+id = "TSK-1524"
+uid = "4e591cac-d017-476a-91b1-ef46f879fe41"
+kind = "TSK"
+title = "Guard hardening follow-up to TSK-1518"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-17T00:07:05Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
