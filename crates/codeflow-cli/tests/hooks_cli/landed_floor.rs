@@ -590,6 +590,33 @@ fn landed_floor_pre_push_rejects_added_prefix() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A landing candidate name admits a branch at pre-push (TSK-1351), so the
+/// checkout's `git.candidate_prefix` must not admit a name the landed
+/// prefix does not.
+#[test]
+fn landed_floor_pre_push_rejects_checkout_candidate_prefix() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let fixture = Fixture::new(
+            json!({"branch_prefixes":["task/"]}),
+            json!({"branch_prefixes":["task/"], "candidate_prefix":"loose/"}),
+            stale,
+        );
+        let oid = fixture.repo.head().unwrap().target().unwrap();
+        let input = format!(
+            "refs/heads/task/check {oid} refs/heads/loose/check {}\n",
+            "0".repeat(40)
+        );
+        collect_refusal(
+            &fixture.hook("pre-push", "fix: check", &input),
+            "git.branch_naming",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn landed_floor_unreadable_authority_refuses_every_hook() {
     let mut failures = Vec::new();

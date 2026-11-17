@@ -174,7 +174,8 @@ fn classic_hook_note(path: &str) -> &'static str {
         "git.commit_desc_max_len" | "git.commit_subject_max_len"
         | "git.commit_body_max_bullets" | "git.commit_body_bullet_max_len" =>
             "Classic hooks use the smaller of the landed and checked-out limits; the checked-out policy may only tighten the limit.",
-        "git.root_branch" | "git.commit_ticket_pattern" | "git.push_budget_seconds" =>
+        "git.root_branch" | "git.commit_ticket_pattern" | "git.push_budget_seconds"
+        | "git.candidate_prefix" | "git.candidate_search_depth" =>
             "Classic hooks keep the landed value because this field has no defined strict ordering; the checked-out policy cannot replace it.",
         "git.secret_scan_engine" =>
             "Classic hooks retain gitleaks when either policy requests it; the checked-out policy cannot remove the landed engine's additional scan.",

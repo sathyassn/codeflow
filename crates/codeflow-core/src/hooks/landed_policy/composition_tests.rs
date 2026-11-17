@@ -91,6 +91,20 @@ fn hook_floor_lists_limits_and_unordered_fields() {
     assert_eq!(judged.push_budget_seconds, 60);
 }
 
+/// A candidate name is an allowed branch name (TSK-1351), so the
+/// checkout's candidate prefix cannot widen what the landed policy admits.
+#[test]
+fn hook_floor_candidate_naming_keeps_the_landed_value() {
+    let landed = git(json!({"branch_prefixes":["task/"]}));
+    let local = git(json!({"branch_prefixes":["task/"], "candidate_prefix":"loose/",
+        "candidate_search_depth":5000}));
+    let judged = compose_git(&landed, &local).unwrap();
+    assert_eq!(judged.candidate_prefix, landed.candidate_prefix);
+    assert_eq!(judged.candidate_search_depth, landed.candidate_search_depth);
+    assert!(!judged.branch_name_ok("loose/x"));
+    assert!(judged.branch_name_ok("candidate/x"));
+}
+
 #[test]
 fn hook_floor_empty_ticket_intersection_refuses_instead_of_disabling() {
     let authority = git(json!({"commit_ticket_keys":["Refs"]}));

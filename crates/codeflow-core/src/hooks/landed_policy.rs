@@ -931,6 +931,10 @@ pub fn compose_git(
         .clone_from(&landed.commit_ticket_pattern);
     judged.root_branch.clone_from(&landed.root_branch);
     judged.push_budget_seconds = landed.push_budget_seconds;
+    // A candidate name is an allowed branch name at pre-push (TSK-1351), so
+    // the checkout's prefix must not admit a name the landed one does not.
+    judged.candidate_prefix.clone_from(&landed.candidate_prefix);
+    judged.candidate_search_depth = landed.candidate_search_depth;
     judged.secret_scan_engine = if landed.secret_scan_engine == SecretScanEngine::Gitleaks
         || working.secret_scan_engine == SecretScanEngine::Gitleaks
     {
