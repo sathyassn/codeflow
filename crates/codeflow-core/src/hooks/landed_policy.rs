@@ -33,6 +33,8 @@ pub struct LandedPolicy {
     /// came from the working copy. The size and ignored-file rules
     /// (TSK-323) read their project kind and ignore rules here.
     pub commit: Option<git2::Oid>,
+    /// How the operator's policy baseline bore on this read (TSK-1057).
+    pub baseline: super::policy_baseline::State,
 }
 
 /// The default branch the policy was read from, bound to one commit.
@@ -64,7 +66,27 @@ pub struct Authority {
 /// value from the remote, and the guards, orient and doctor print it
 /// (TSK-388).
 pub fn load(root: &Path) -> Result<LandedPolicy, String> {
-    load_raw(root, true).map_err(|error| crate::git::display_message(&error))
+    load_raw(root, true, account_store().as_ref())
+        .map_err(|error| crate::git::display_message(&error))
+}
+
+/// [`load`] with the policy baselines read from `store` instead of the
+/// account's operator-authority directory; `None` reads no baseline. Tests
+/// and doctor's diagnostics use it.
+///
+/// # Errors
+/// As [`load`].
+pub fn load_with(
+    root: &Path,
+    store: Option<&super::policy_baseline::Store>,
+) -> Result<LandedPolicy, String> {
+    load_raw(root, true, Ok(store.cloned()).as_ref())
+        .map_err(|error| crate::git::display_message(&error))
+}
+
+/// The account's baseline store, or why it cannot be found.
+fn account_store() -> Result<Option<super::policy_baseline::Store>, String> {
+    super::policy_baseline::Store::account()
 }
 
 /// [`load`] without asking the remote: where the remote's tracking refs are
@@ -75,7 +97,8 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
 /// # Errors
 /// As [`load`], and when the tracking namespace is empty.
 pub fn load_local(root: &Path) -> Result<LandedPolicy, String> {
-    load_raw(root, false).map_err(|error| crate::git::display_message(&error))
+    load_raw(root, false, account_store().as_ref())
+        .map_err(|error| crate::git::display_message(&error))
 }
 
 /// Keep in `trusted` only the tools another policy source the guard reads,
@@ -92,8 +115,15 @@ pub fn keep_trusted_by(trusted: &mut Vec<String>, other: Result<&LandedPolicy, &
     }
 }
 
-fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
-    let mut landed = read_raw(root, ask)?;
+fn load_raw(
+    root: &Path,
+    ask: bool,
+    store: Result<&Option<super::policy_baseline::Store>, &String>,
+) -> Result<LandedPolicy, String> {
+    let store = store.map_err(|why| {
+        format!("the policy baseline store cannot be found: {why}; the policy check blocks")
+    })?;
+    let mut landed = read_raw(root, ask, store.as_ref())?;
     // `security.trusted_client_configs` lifts guard refusals, so like
     // `text_guard: relaxed` it is honoured only from the remote's default
     // branch as last fetched (TSK-1346): a working copy, `HEAD` or a doubted
@@ -104,30 +134,20 @@ fn load_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
     Ok(landed)
 }
 
-fn read_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
+fn read_raw(
+    root: &Path,
+    ask: bool,
+    store: Option<&super::policy_baseline::Store>,
+) -> Result<LandedPolicy, String> {
+    use super::policy_baseline::Bound;
     let Some(repo) = super::repo::open(root)? else {
         return working(root, "working copy (unborn HEAD; local only: no remote)");
     };
-    let remotes = repo.remotes().map_err(|e| e.to_string())?;
-    // OS text rule (issue 79, `docs/architecture.md`): kept strict. The remote
-    // picks the policy source, so a remote name that is not valid UTF-8 stops
-    // the read instead of dropping out of the list, where the policy would be
-    // read from `HEAD` as if no remote existed.
-    let names = super::ref_authority::utf8_remote_names(&remotes)?;
-    let names: Vec<_> = names.iter().map(String::as_str).collect();
-    let remote = if names.contains(&"origin") {
-        "origin"
-    } else {
-        match names.as_slice() {
-            [] => return unestablished(&repo, root, "local only: no remote"),
-            [name] => name,
-            _ => {
-                return Err(
-                    "policy source is ambiguous; the operator configures an origin remote".into(),
-                )
-            }
-        }
+    let Some(remote) = authority_remote(&repo)? else {
+        let landed = unestablished(&repo, root, "local only: no remote")?;
+        return with_baseline(&repo, store, None, landed);
     };
+    let remote = remote.as_str();
     let populated = repo
         .references_glob(&format!("refs/remotes/{remote}/*"))
         .map_err(|e| e.to_string())?
@@ -146,11 +166,18 @@ fn read_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
         // yet, so the remote is asked. Only a remote that answers with no
         // refs is initialization; any other answer or a failure refuses.
         return match advertises_refs(&repo, root, remote) {
-            Ok(false) => unestablished(
-                &repo,
-                root,
-                &format!("initialization: {remote} advertises no refs"),
-            ),
+            Ok(false) => {
+                let landed = unestablished(
+                    &repo,
+                    root,
+                    &format!("initialization: {remote} advertises no refs"),
+                )?;
+                let bound = Bound {
+                    remote,
+                    authority: None,
+                };
+                with_baseline(&repo, store, Some(&bound), landed)
+            }
             Ok(true) => Err(format!(
                 "cannot read the policy authority: {remote} has refs but refs/remotes/{remote}/ holds none here; run git fetch {remote}"
             )),
@@ -170,8 +197,64 @@ fn read_raw(root: &Path, ask: bool) -> Result<LandedPolicy, String> {
     let mut landed = finish(root, policy, project, shown)?;
     landed.tracking_doubt = ref_file_doubt(&repo, remote, &authority);
     landed.remote_tracked = landed.tracking_doubt.is_none();
-    landed.authority = Some(authority);
     landed.commit = Some(oid);
+    let bound = Bound {
+        remote,
+        authority: Some(&authority),
+    };
+    let mut landed = with_baseline(&repo, store, Some(&bound), landed)?;
+    landed.authority = Some(authority);
+    Ok(landed)
+}
+
+/// The authority remote: `origin` when configured, else the only remote;
+/// `None` when the repository has no remote.
+///
+/// # Errors
+/// The remotes cannot be read, a name is not valid UTF-8, or several remotes
+/// are configured and none is `origin`.
+pub(crate) fn authority_remote(repo: &Repository) -> Result<Option<String>, String> {
+    let remotes = repo.remotes().map_err(|e| e.to_string())?;
+    // OS text rule (issue 79, `docs/architecture.md`): kept strict. The remote
+    // picks the policy source, so a remote name that is not valid UTF-8 stops
+    // the read instead of dropping out of the list, where the policy would be
+    // read from `HEAD` as if no remote existed.
+    let names = super::ref_authority::utf8_remote_names(&remotes)?;
+    if names.iter().any(|name| name == "origin") {
+        return Ok(Some("origin".into()));
+    }
+    match names.as_slice() {
+        [] => Ok(None),
+        [name] => Ok(Some(name.clone())),
+        _ => Err("policy source is ambiguous; the operator configures an origin remote".into()),
+    }
+}
+
+/// The tracking branch `refs/remotes/<remote>/HEAD` names locally.
+///
+/// # Errors
+/// As the authority read: the remote `HEAD` is unset, malformed or names a
+/// branch that cannot be read.
+pub(crate) fn remote_head_target(repo: &Repository, remote: &str) -> Result<String, String> {
+    default_branch(repo, remote).map(|authority| authority.reference)
+}
+
+/// Apply the operator's policy baseline to a read (TSK-1057): the policy
+/// becomes the baseline's or the stricter of the two, and the source says so.
+fn with_baseline(
+    repo: &Repository,
+    store: Option<&super::policy_baseline::Store>,
+    bound: Option<&super::policy_baseline::Bound<'_>>,
+    mut landed: LandedPolicy,
+) -> Result<LandedPolicy, String> {
+    let applied = super::policy_baseline::apply(repo, store, bound, &landed.policy)?;
+    if let Some(policy) = applied.policy {
+        landed.policy = policy;
+        if let Some(note) = applied.state.note() {
+            landed.source = format!("{} ({note})", landed.source);
+        }
+    }
+    landed.baseline = applied.state;
     Ok(landed)
 }
 
@@ -382,6 +465,7 @@ fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
         remote_tracked: false,
         tracking_doubt: None,
         commit: None,
+        baseline: super::policy_baseline::State::Never,
     })
 }
 
@@ -402,6 +486,7 @@ fn finish(
         remote_tracked: false,
         tracking_doubt: None,
         commit: None,
+        baseline: super::policy_baseline::State::Never,
     })
 }
 
@@ -575,6 +660,12 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
         .authority
         .as_ref()
         .map_or_else(String::new, |a| format!(" at {}", a.sha));
+    // A baseline that changed the policy is already named in the source;
+    // the absence of one is doctor's note ([`baseline_note`]), not orient's.
+    let baseline = match authority.baseline {
+        super::policy_baseline::State::Current => "; policy baseline: current".to_owned(),
+        _ => String::new(),
+    };
     let residual = if authority.authority.is_none() {
         "; residual: no remote default branch; local commits can change policy; only dangerous_commands has a binary floor"
     } else {
@@ -601,9 +692,22 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
         }
     );
     Ok(format!(
-        "policy source: {}{at}{residual}{drift}{path_note}; refresh with git fetch",
+        "policy source: {}{at}{residual}{drift}{path_note}{baseline}; refresh with git fetch",
         authority.source
     ))
+}
+
+/// Doctor's note on the policy baseline when it does not change the read:
+/// none recorded for this repository, or none read on this platform
+/// (TSK-1057). A baseline that changes the read is named in the source.
+#[must_use]
+pub fn baseline_note(root: &Path) -> Option<String> {
+    let landed = load(root).ok()?;
+    if landed.baseline.enforces_policy() {
+        None
+    } else {
+        landed.baseline.note()
+    }
 }
 
 /// Whether the second policy is another landed authority or an untrusted
@@ -897,6 +1001,11 @@ pub fn staged_rules(
         return Err("the repository cannot be opened".into());
     };
     let content = match landed.commit {
+        // A baseline changed the policy: its rules, with the ignore rules of
+        // the commit the read resolved (TSK-1057).
+        Some(commit) if landed.baseline.enforces_policy() => {
+            super::path_policy::ContentRules::at(&repo, &landed.policy.git, Some(commit), None)?
+        }
         Some(commit) => {
             let policy = checked_policy_at(&repo, commit)?;
             super::path_policy::ContentRules::at(&repo, &policy.git, Some(commit), None)?

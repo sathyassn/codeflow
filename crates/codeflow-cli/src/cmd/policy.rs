@@ -28,12 +28,16 @@ pub enum PolicyCommand {
     /// Print the effective policy: each key's current value, its source
     /// (project file or built-in default), and any invalid values.
     Show,
+    /// The operator-confirmed copy of the landed policy that a rewritten
+    /// remote-tracking ref cannot weaken (TSK-1057).
+    Baseline(super::policy_baseline::BaselineArgs),
 }
 
 /// Run `codeflow policy`; returns the process exit code.
 #[must_use]
 pub fn run(args: &PolicyArgs) -> i32 {
-    match args.command {
+    match &args.command {
+        PolicyCommand::Baseline(baseline) => super::policy_baseline::run(baseline),
         PolicyCommand::Explain => explain(),
         PolicyCommand::Show => match super::repo_root() {
             Ok(root) => show(&root),
