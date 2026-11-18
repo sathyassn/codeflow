@@ -1053,7 +1053,7 @@ pub(super) fn probe_arithmetic_words(words: &[String]) -> bool {
                 .any(|word| matches!(word.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge"))
                 || args
                     .windows(2)
-                    .any(|pair| pair[0] == "-v" && pair[1].contains('['))
+                    .any(|pair| pair[0] == "-v" && (expands(&pair[1]) || pair[1].contains('[')))
         }
         "printf" | "read" | "mapfile" | "readarray" | "unset" | "getopts" => {
             args.iter().any(|word| word.contains('['))

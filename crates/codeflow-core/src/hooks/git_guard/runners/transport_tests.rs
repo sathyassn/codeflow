@@ -271,7 +271,6 @@ fn literal_parameter_forms_keep_probe_inputs_known() {
         ": \"${p^}${p^^}${p,}${p,,}\"",
         ": \"${a[@]}${a[*]}\"",
         "echo '${!x}${x@P}${(e)x}'",
-        "git fetch origin # $\\\n((example))",
         "cat <<'EOF'\n$\\\n((example))\nEOF\ngit fetch origin",
     ] {
         let words = super::super::super::command_argv(context);

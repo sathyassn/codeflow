@@ -697,9 +697,12 @@ the form refuses:
     contact needs the probe. Unresolved inputs do not count toward the
     alternate-value bound. More than 3 inputs with known alternate values
     refuse before probing; up to 27 line environments are judged.
-    Arithmetic contexts identified by the shell segmenter, including
-    parameter offsets, element subscripts, carried bodies and substitutions,
-    mark every probe input unresolved, regardless of export or inheritance.
+    Every braced expansion form not known to be literal is a possible
+    evaluation and marks every probe input unresolved, regardless of export
+    or inheritance. Digits-only parameter offsets and subscripts remain
+    known. The shell segmenter retains evaluation evidence through carried
+    bodies and substitutions, and adds evidence from continuation-joined
+    text without changing segmentation.
     The segmenter's quote, comment and heredoc rules distinguish executable
     expressions from data. Recognized arithmetic command operands, setters
     with an expanding destination and whole-shell export options add the

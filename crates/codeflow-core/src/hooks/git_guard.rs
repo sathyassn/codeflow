@@ -7530,7 +7530,15 @@ const ARITHMETIC_READ: &str = "\0arithmetic_read";
 fn command_segments_read(command: &str, depth: usize) -> (Vec<String>, bool) {
     let mut segments = Vec::new();
     split_into_segments(command, &mut segments, depth, false);
-    let arithmetic = segments.iter().any(|segment| segment == ARITHMETIC_READ);
+    let mut arithmetic = segments.iter().any(|segment| segment == ARITHMETIC_READ);
+    let joined = join_continuations(command);
+    if joined != command {
+        // Join only for evidence. The original text owns segmentation,
+        // including the command boundaries after comments and heredocs.
+        let mut evidence = Vec::new();
+        split_into_segments(&joined, &mut evidence, depth, false);
+        arithmetic |= evidence.iter().any(|segment| segment == ARITHMETIC_READ);
+    }
     segments.retain(|segment| segment != ARITHMETIC_READ);
     (segments, arithmetic)
 }
@@ -9066,47 +9074,95 @@ pub(crate) fn shell_inline_code(program: &str, args: &[String]) -> Option<String
     (!bodies.is_empty()).then(|| bodies.join("; "))
 }
 
-/// Parameter offsets and element subscripts can evaluate indirect operands.
-/// Default-value operators and whole-array selectors do not do so themselves.
+/// Every braced form not known to be literal may evaluate an indirect value.
+/// Nested expansions still pass through the segmenter's executable reader.
 fn parameter_arithmetic(chars: &[char], dollar: usize) -> bool {
-    let mut at = dollar + 1;
-    if chars.get(at) == Some(&'[') {
+    if chars.get(dollar + 1) == Some(&'[') {
         return true;
     }
-    let braced = chars.get(at) == Some(&'{');
-    if braced {
-        at += 1;
-        if chars.get(at).is_some_and(|c| matches!(c, '#' | '!')) {
+    if chars.get(dollar + 1) == Some(&'{') {
+        return expansion_end(chars, dollar + 1)
+            .is_none_or(|end| !literal_parameter_form(&chars[dollar + 2..end - 1]));
+    }
+    // Some shells also allow an element subscript without braces.
+    parameter_name_end(chars, dollar + 1)
+        .is_some_and(|at| chars.get(at) == Some(&'[') && literal_subscript_end(chars, at).is_none())
+}
+
+fn parameter_name_end(chars: &[char], start: usize) -> Option<usize> {
+    let first = *chars.get(start)?;
+    let mut at = start + 1;
+    if first.is_ascii_alphabetic() || first == '_' {
+        while chars
+            .get(at)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+        {
             at += 1;
         }
+    } else if first.is_ascii_digit() {
+        while chars.get(at).is_some_and(char::is_ascii_digit) {
+            at += 1;
+        }
+    } else if !matches!(first, '@' | '*' | '?' | '$' | '-' | '#' | '!') {
+        return None;
     }
-    let start = at;
-    if braced && chars.get(at).is_some_and(|c| matches!(c, '@' | '*')) {
-        at += 1;
+    Some(at)
+}
+
+fn literal_subscript_end(chars: &[char], open: usize) -> Option<usize> {
+    let close = open + 1 + chars.get(open + 1..)?.iter().position(|c| *c == ']')?;
+    let index = &chars[open + 1..close];
+    (matches!(index, ['@' | '*']) || literal_digits(index)).then_some(close + 1)
+}
+
+fn literal_digits(chars: &[char]) -> bool {
+    !chars.is_empty() && chars.iter().all(char::is_ascii_digit)
+}
+
+fn literal_parameter_form(body: &[char]) -> bool {
+    let Some(&first) = body.first() else {
+        return false;
+    };
+    if first == '!' && body.len() > 1 && body[1] != ':' {
+        // Enumeration is literal; other indirection can re-evaluate a value.
+        if !body[1].is_ascii_alphabetic() && body[1] != '_' {
+            return false;
+        }
+        return parameter_name_end(body, 1)
+            .is_some_and(|at| matches!(&body[at..], ['@' | '*'] | ['[', '@' | '*', ']']));
     }
-    while chars
-        .get(at)
-        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
-    {
-        at += 1;
+    // A standalone special parameter is distinct from a length prefix.
+    let length = first == '#' && body.len() > 1 && body[1] != ':';
+    let Some(mut at) = parameter_name_end(body, usize::from(length)) else {
+        return false;
+    };
+    if body.get(at) == Some(&'[') {
+        let Some(end) = literal_subscript_end(body, at) else {
+            return false;
+        };
+        at = end;
     }
-    if at == start {
+    if at == body.len() {
+        return true;
+    }
+    if length {
         return false;
     }
-    if chars.get(at) == Some(&'[') {
-        if chars.get(at + 1).is_some_and(|c| matches!(c, '@' | '*'))
-            && chars.get(at + 2) == Some(&']')
-        {
-            at += 3;
-        } else {
-            return true;
-        }
-    }
-    braced
-        && chars.get(at) == Some(&':')
-        && !chars
+    match body[at] {
+        '-' | '=' | '+' | '?' | '#' | '%' | '/' | '^' | ',' => true,
+        ':' if body
             .get(at + 1)
-            .is_some_and(|c| matches!(c, '-' | '=' | '+' | '?'))
+            .is_some_and(|c| matches!(c, '-' | '=' | '+' | '?')) =>
+        {
+            true
+        }
+        ':' => {
+            let fields = &body[at + 1..];
+            fields.split(|c| *c == ':').count() <= 2
+                && fields.split(|c| *c == ':').all(literal_digits)
+        }
+        _ => false,
+    }
 }
 
 /// Split a command into simple-command segments, recursing into `$(…)` and
@@ -9186,9 +9242,9 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             i += 1;
             continue;
         }
-        // Parameter arithmetic executes inside double quotes too. Single
-        // quotes, escapes, comments and data heredocs follow this reader's
-        // existing paths and never contribute executable evidence here.
+        // Parameter evaluation executes inside double quotes too. The
+        // existing paths keep literal quoting, escapes and comments out;
+        // continuation-joined text supplies additional evidence separately.
         if c == '$' && parameter_arithmetic(&chars, i) {
             out.push(ARITHMETIC_READ.into());
         }
