@@ -1321,7 +1321,7 @@ fn both_guards_refuse_a_definition_held_outside_the_work_tree() {
 /// A refusal by this task's rule for nested repositories the guards cannot
 /// rule out.
 fn nested_refusal(out: &Output) -> bool {
-    unproven_refusal(out) && stderr(out).contains("nested repositories")
+    unproven_refusal(out) && stderr(out).contains("may recurse into nested repositories")
 }
 
 /// Through both guards: the definition check reads the top of the
@@ -1412,8 +1412,9 @@ fn both_guards_refuse_a_push_whose_recursion_may_be_on() {
     commit_nested_record(&last, None);
     let plain = Scratch::landed(None);
     for scratch in [&elsewhere, &last, &plain] {
-        assert_unproven(
+        assert_judged_with(
             scratch,
+            nested_refusal,
             &[
                 "git push --recurse-submodules=on-demand origin other:refs/heads/task/x",
                 "git push --recurse-submodules=check origin HEAD:refs/heads/task/x",
@@ -1423,14 +1424,17 @@ fn both_guards_refuse_a_push_whose_recursion_may_be_on() {
                 "git push --no-recurse-submodules origin HEAD:refs/heads/task/x",
                 "git push --recurse-submodules=no origin HEAD:refs/heads/task/x",
             ],
+            &[],
         );
     }
     let set = Scratch::landed(None);
     set.config("push.recurseSubmodules", "on-demand");
-    assert_unproven(
+    assert_judged_with(
         &set,
+        nested_refusal,
         &["git push origin HEAD:refs/heads/task/x"],
         &["git push --no-recurse-submodules origin HEAD:refs/heads/task/x"],
+        &[],
     );
 }
 
@@ -1472,6 +1476,93 @@ fn git_guard_reads_a_replacement_variable_set_on_the_line() {
         "GIT_NO_REPLACE_OBJECTS=1 git fetch --no-recurse-submodules origin",
     );
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
+/// Make a replacement for the last commit: a commit with an empty tree, or
+/// with `with_definition`, one that holds the definition file.
+fn replace_last_commit(scratch: &Scratch, with_definition: bool) {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let original = repo.head().unwrap().target().unwrap();
+    let mut builder = repo.treebuilder(None).unwrap();
+    if with_definition {
+        let blob = repo.blob(b"").unwrap();
+        builder.insert(".gitmodules", blob, 0o100_644).unwrap();
+    }
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    let swap = repo
+        .commit(None, &who, &who, "fixture", &tree, &[])
+        .unwrap();
+    repo.reference(&format!("refs/replace/{original}"), swap, true, "fixture")
+        .unwrap();
+}
+
+/// A refusal by git-guard for the nested repositories the probe found.
+fn git_guard_refuses(scratch: &Scratch, line: &str) {
+    let out = scratch.judge("git-guard", line);
+    assert!(nested_refusal(&out), "{line}: {}", stderr(&out));
+}
+
+/// git-guard allows the line.
+fn git_guard_allows(scratch: &Scratch, line: &str) {
+    let out = scratch.judge("git-guard", line);
+    assert_eq!(out.status.code(), Some(0), "{line}: {}", stderr(&out));
+}
+
+/// Through git-guard: a replacement variable an earlier command of the line
+/// sets reaches the probe only as one view of the call's environment, since
+/// the guard cannot tell whether Git's process has it (a plain assignment,
+/// a read-only variable, an export behind a condition or one removed before
+/// use). The call is judged in each view and refuses if either finds the
+/// definition. A variable the Git command's own prefix or launcher sets is
+/// certain. exec-guard refuses a line that sets such a variable for its own
+/// rule, so these rows cover git-guard only.
+#[test]
+fn git_guard_judges_an_earlier_assignment_in_every_environment_it_may_have() {
+    // The last commit holds no definition; its replacement does. Git
+    // follows the replacement unless the call's own environment turns it off.
+    let reverse = Scratch::landed(None);
+    replace_last_commit(&reverse, true);
+    git_guard_refuses(&reverse, "git fetch origin");
+    for line in [
+        "GIT_NO_REPLACE_OBJECTS=1; git fetch origin",
+        "readonly GIT_NO_REPLACE_OBJECTS=1; git fetch origin",
+        "false && export GIT_NO_REPLACE_OBJECTS=1; git fetch origin",
+        "export GIT_NO_REPLACE_OBJECTS=1; unset GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "export GIT_NO_REPLACE_OBJECTS=1; git fetch origin",
+        "GIT_REPLACE_REF_BASE=refs/none/; git fetch origin",
+    ] {
+        git_guard_refuses(&reverse, line);
+    }
+    // Controls: a prefix or a launcher is certain, so the call does not
+    // follow the replacement and the last commit holds no definition.
+    for line in [
+        "GIT_NO_REPLACE_OBJECTS=1 git fetch origin",
+        "env GIT_NO_REPLACE_OBJECTS=1 git fetch origin",
+        "git fetch --no-recurse-submodules origin",
+        "GIT_NO_REPLACE_OBJECTS=1; git fetch --no-recurse-submodules origin",
+    ] {
+        git_guard_allows(&reverse, line);
+    }
+    // The last commit holds a definition; its replacement does not. An
+    // earlier assignment or export reaches the probe as one view.
+    let forward = Scratch::landed(None);
+    definition_outside_work_tree(&forward, true);
+    replace_last_commit(&forward, false);
+    git_guard_allows(&forward, "git fetch origin");
+    for line in [
+        "GIT_NO_REPLACE_OBJECTS=1; git fetch origin",
+        "export GIT_NO_REPLACE_OBJECTS=1; git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS=1 git fetch origin",
+    ] {
+        git_guard_refuses(&forward, line);
+    }
+    // A Git call a runner starts keeps the variables the line gives Git.
+    git_guard_refuses(
+        &forward,
+        "GIT_NO_REPLACE_OBJECTS=1 git bisect run git fetch origin",
+    );
+    git_guard_allows(&forward, "git bisect run git fetch origin");
 }
 
 /// Through both guards: a command not proven local refuses.
