@@ -1,0 +1,11 @@
+id = "TSK-1535"
+uid = "aa6f6cbb-5477-46d5-ba7d-e2a7b9cd3d86"
+kind = "TSK"
+title = "Add a slow-child test for the second hook guard"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-18T05:59:10Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
