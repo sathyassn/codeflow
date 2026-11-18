@@ -1,0 +1,11 @@
+id = "TSK-1539"
+uid = "2d2e607c-e498-41dc-9fee-28ed56545a7a"
+kind = "TSK"
+title = "Reader of nested command bodies with quoted alias arguments"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-18T22:10:38Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
