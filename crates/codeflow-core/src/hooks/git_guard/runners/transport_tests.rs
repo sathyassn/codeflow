@@ -1369,7 +1369,7 @@ fn an_unreadable_last_commit_refuses() {
         assert!(
             outcome
                 .as_ref()
-                .is_err_and(|error| error.starts_with(UNPROVEN)),
+                .is_err_and(|error| error.starts_with(UNPROVEN) && error.contains("last commit")),
             "{:?}",
             outcome.err()
         );
@@ -1475,7 +1475,8 @@ fn the_last_commit_is_read_as_the_call_reads_it() {
     repo.reference(&format!("refs/replace/{original}"), swap, true, "fixture")
         .unwrap();
     let line = ["fetch", "origin"];
-    nested_refusal(&scratch, scratch.root(), &["--no-replace-objects"], &line);
+    let error = nested_refusal(&scratch, scratch.root(), &["--no-replace-objects"], &line);
+    assert!(error.contains("nested repositories"), "{error}");
     assert!(scratch
         .contacts_from(scratch.root(), &[], &[], &line)
         .is_ok());
