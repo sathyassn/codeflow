@@ -1318,6 +1318,64 @@ fn both_guards_refuse_a_definition_held_outside_the_work_tree() {
     assert_rows(&control, &[], &["git fetch origin", "git fetch"]);
 }
 
+/// A refusal by this task's rule for nested repositories the guards cannot
+/// rule out.
+fn nested_refusal(out: &Output) -> bool {
+    unproven_refusal(out) && stderr(out).contains("nested repositories")
+}
+
+/// Through both guards: the definition check reads the top of the
+/// repository from any directory and through the directory option, with the
+/// nested-repository reason and a recursion-off control.
+#[test]
+fn both_guards_read_the_definition_from_any_directory() {
+    for in_commit in [false, true] {
+        let scratch = Scratch::landed(None);
+        definition_outside_work_tree(&scratch, in_commit);
+        let child = scratch.root().join("sub");
+        std::fs::create_dir(&child).unwrap();
+        for hook in HOOKS {
+            for (cwd, refused, allowed) in [
+                (
+                    child.as_path(),
+                    "git fetch origin",
+                    "git fetch --no-recurse-submodules origin",
+                ),
+                (
+                    scratch.root(),
+                    "git -C sub fetch origin",
+                    "git -C sub fetch --no-recurse-submodules origin",
+                ),
+                (
+                    child.as_path(),
+                    "git -C . pull origin main",
+                    "git -C . pull --no-recurse-submodules origin main",
+                ),
+            ] {
+                let out = Scratch::judge_in(hook, refused, cwd);
+                assert!(nested_refusal(&out), "{hook} `{refused}`: {}", stderr(&out));
+                let out = Scratch::judge_in(hook, allowed, cwd);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{hook} `{allowed}`: {}",
+                    stderr(&out)
+                );
+            }
+        }
+    }
+    // Control: a definition below the top only.
+    let below = Scratch::landed(None);
+    below.write("sub/.gitmodules", b"");
+    git(below.root(), &["add", "sub/.gitmodules"]);
+    for hook in HOOKS {
+        for cwd in [below.root().to_path_buf(), below.root().join("sub")] {
+            let out = Scratch::judge_in(hook, "git fetch origin", &cwd);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {}", stderr(&out));
+        }
+    }
+}
+
 /// Through both guards: a command not proven local refuses.
 #[test]
 fn both_guards_refuse_a_command_that_sets_up_later_contacts() {

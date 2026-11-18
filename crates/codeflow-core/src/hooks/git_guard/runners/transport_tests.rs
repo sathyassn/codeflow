@@ -1279,6 +1279,140 @@ fn a_definition_held_outside_the_work_tree_refuses() {
     assert_eq!(Scratch::new(HTTPS).helpers("fetch origin"), Ok(vec![]));
 }
 
+/// The refusal for nested repositories the guard cannot rule out, from a
+/// command judged in `cwd` with `globals`.
+fn nested_refusal(scratch: &Scratch, cwd: &Path, globals: &[&str], line: &[&str]) -> String {
+    match scratch.contacts_from(cwd, globals, &[], line) {
+        Err(error) => {
+            assert!(error.starts_with(UNPROVEN), "{error}");
+            error
+        }
+        Ok(_) => panic!("{globals:?} {line:?} in {} must refuse", cwd.display()),
+    }
+}
+
+/// The definition check reads the top of the repository, whichever directory
+/// or directory option the command is judged with.
+#[test]
+fn a_definition_outside_the_work_tree_refuses_from_any_directory() {
+    for in_commit in [false, true] {
+        let scratch = Scratch::new(HTTPS);
+        definition_outside_work_tree(&scratch, in_commit);
+        let child = scratch.root().join("sub");
+        std::fs::create_dir(&child).unwrap();
+        for (cwd, globals) in [
+            (child.as_path(), &[][..]),
+            (scratch.root(), &["-C", "sub"][..]),
+        ] {
+            let error = nested_refusal(&scratch, cwd, globals, &["fetch", "origin"]);
+            assert!(error.contains("nested repositories"), "{error}");
+            let off = ["fetch", "--no-recurse-submodules", "origin"];
+            assert!(
+                scratch.contacts_from(cwd, globals, &[], &off).is_ok(),
+                "{globals:?}"
+            );
+        }
+    }
+    // Control: a definition below the top only is no definition at the top.
+    let scratch = Scratch::new(HTTPS);
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    std::fs::create_dir(scratch.root().join("sub")).unwrap();
+    std::fs::write(scratch.root().join("sub/.gitmodules"), "").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("sub/.gitmodules")).unwrap();
+    index.write().unwrap();
+    for cwd in [scratch.root().to_path_buf(), scratch.root().join("sub")] {
+        assert!(
+            scratch
+                .contacts_from(&cwd, &[], &[], &["fetch", "origin"])
+                .is_ok(),
+            "{}",
+            cwd.display()
+        );
+    }
+}
+
+/// Commit an empty tree on the branch `HEAD` names and return the commit.
+fn commit_empty(scratch: &Scratch) -> git2::Oid {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let tree = repo
+        .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+        .unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[])
+        .unwrap()
+}
+
+/// A last commit the probe cannot read is no proof of absence, whatever the
+/// reason; only a branch with no commit at all holds no definition.
+#[test]
+fn an_unreadable_last_commit_refuses() {
+    let missing = Scratch::new(HTTPS);
+    let commit = commit_empty(&missing).to_string();
+    let object = missing
+        .root()
+        .join(".git/objects")
+        .join(&commit[..2])
+        .join(&commit[2..]);
+    std::fs::remove_file(object).unwrap();
+    let error = nested_refusal(&missing, missing.root(), &[], &["fetch", "origin"]);
+    assert!(error.contains("last commit"), "{error}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let hidden = Scratch::new(HTTPS);
+        commit_empty(&hidden);
+        let file = hidden.root().join(".git/refs/heads/main");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0)).unwrap();
+        let outcome = hidden.contacts_from(hidden.root(), &[], &[], &["fetch", "origin"]);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            outcome
+                .as_ref()
+                .is_err_and(|error| error.starts_with(UNPROVEN)),
+            "{:?}",
+            outcome.err()
+        );
+    }
+    // Controls: a readable commit and a branch with no commit pass.
+    let readable = Scratch::new(HTTPS);
+    commit_empty(&readable);
+    assert!(readable
+        .contacts_from(readable.root(), &[], &[], &["fetch", "origin"])
+        .is_ok());
+    let unborn = Scratch::new(HTTPS);
+    assert!(unborn
+        .contacts_from(unborn.root(), &[], &[], &["fetch", "origin"])
+        .is_ok());
+}
+
+/// The probe reads the last commit as the call does: a replacement the call
+/// turns off by option, or by setting, is not followed.
+#[test]
+fn the_last_commit_is_read_as_the_call_reads_it() {
+    let scratch = Scratch::new(HTTPS);
+    definition_outside_work_tree(&scratch, true);
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let original = repo.head().unwrap().target().unwrap();
+    let tree = repo
+        .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+        .unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    let swap = repo
+        .commit(None, &who, &who, "fixture", &tree, &[])
+        .unwrap();
+    repo.reference(&format!("refs/replace/{original}"), swap, true, "fixture")
+        .unwrap();
+    let line = ["fetch", "origin"];
+    nested_refusal(&scratch, scratch.root(), &["--no-replace-objects"], &line);
+    assert!(scratch
+        .contacts_from(scratch.root(), &[], &[], &line)
+        .is_ok());
+    let setting = Scratch::new(&format!("{HTTPS}[core]\n\tuseReplaceRefs = false\n"));
+    let error = nested_refusal(&setting, setting.root(), &[], &line);
+    assert!(error.contains("nested repositories"), "{error}");
+}
+
 /// A command not proven local refuses; one that only removes setup passes.
 #[test]
 fn a_command_that_sets_up_later_contacts_refuses() {
