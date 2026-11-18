@@ -248,8 +248,11 @@ section of `.codeflow/policy.json`.
   work-prefix ceiling, read at the commit
   the run pins (`--policy-from`, `--base`, `--into`, the CI event's
   base or `CODEFLOW_DEFAULT_BRANCH`), else at the remote's default branch.
-  CI candidate classification reads that floor before target or range
-  resolution.
+  CI's early refusal of a candidate hand-off without `--into` classifies
+  the branch under that unchanged floor before target or range resolution.
+  A candidate prefix set only by the checkout no longer triggers that early
+  refusal. Later candidate binding still reads the judging policy, including
+  the destination's default-branch policy on that path.
   Bootstrap grace
   retains its existing suspensions.
 - Agent sessions are judged by the landed policy on the remote, so a local

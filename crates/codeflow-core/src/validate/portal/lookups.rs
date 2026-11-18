@@ -175,7 +175,7 @@ fn classic_hook_note(path: &str) -> &'static str {
         | "git.commit_body_max_bullets" | "git.commit_body_bullet_max_len" =>
             "Classic hooks use the smaller of the landed and checked-out limits; the checked-out policy may only tighten the limit.",
         "git.candidate_prefix" =>
-            "Classic hooks keep the landed value and require candidate eligibility under the landed and composed policies. CI candidate classification reads the policy floor before target or range resolution.",
+            "Classic hooks keep the landed value and require candidate eligibility under the landed and composed policies. CI's early refusal of a candidate hand-off without `--into` classifies the branch under the unchanged range-policy floor before target or range resolution. A candidate prefix set only by the checkout no longer triggers that early refusal. Later candidate binding still reads the judging policy, including the destination's default-branch policy on that path.",
         "git.root_branch" | "git.commit_ticket_pattern" | "git.push_budget_seconds"
         | "git.candidate_search_depth" =>
             "Classic hooks keep the landed value because this field has no defined strict ordering; the checked-out policy cannot replace it.",
