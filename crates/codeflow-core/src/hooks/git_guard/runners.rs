@@ -36,6 +36,8 @@ struct Inputs {
     environment: crate::security::git_config::Environment,
 }
 
+type Descent = (String, PathBuf, Inputs, super::HelperKind, bool);
+
 impl Inputs {
     fn child(
         args: &[String],
@@ -58,10 +60,12 @@ impl Inputs {
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for name in probe_names() {
-            if !environment.contains_key(name) {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                environment.entry(name.into())
+            {
                 match std::env::var(name) {
                     Ok(value) => {
-                        environment.insert(name.into(), value);
+                        entry.insert(value);
                     }
                     Err(std::env::VarError::NotPresent) => {}
                     Err(std::env::VarError::NotUnicode(_)) => {
@@ -100,24 +104,30 @@ impl Inputs {
                 crate::security::git_config::UNREAD_PROBE.into(),
             );
         }
-        let mut cleared = kept.clone();
-        for name in probe_names() {
-            if kept
-                .environment
-                .get(name)
-                .is_some_and(|value| value == crate::security::git_config::UNREAD_PROBE)
-            {
-                continue;
-            }
-            cleared
-                .environment
-                .insert(name.into(), crate::security::git_config::UNSET.into());
+        let uncertain: Vec<_> = probe_names()
+            .filter(|name| {
+                kept.environment.get(*name).is_some_and(|value| {
+                    value != crate::security::git_config::UNSET
+                        && value != crate::security::git_config::UNREAD_PROBE
+                })
+            })
+            .collect();
+        if uncertain.len() > UNCERTAIN_INPUT_LIMIT {
+            return Err("the child has more uncertain index or object inputs than the guard reads; run the commands separately".into());
         }
-        if kept == cleared {
-            Ok(vec![kept])
-        } else {
-            Ok(vec![kept, cleared])
-        }
+        Ok((0..1_usize << uncertain.len())
+            .map(|mask| {
+                let mut child = kept.clone();
+                for (at, name) in uncertain.iter().enumerate() {
+                    if mask & (1 << at) != 0 {
+                        child
+                            .environment
+                            .insert((*name).into(), crate::security::git_config::UNSET.into());
+                    }
+                }
+                child
+            })
+            .collect())
     }
 }
 
@@ -962,6 +972,12 @@ fn probe_line_literals(segments: &[String]) -> Literals {
                     result.0.insert(name.into(), None);
                 }
             }
+            for name in launch.unset.iter().filter(|name| probe_input(name)) {
+                result
+                    .0
+                    .entry(name.clone())
+                    .or_insert_with(|| Some(crate::security::git_config::UNSET.into()));
+            }
         }
         for word in &words {
             for name in probe_names() {
@@ -976,11 +992,7 @@ fn probe_line_literals(segments: &[String]) -> Literals {
                     } else {
                         None
                     })
-                } else if word.starts_with(&format!("{name}+"))
-                    || word.starts_with(&format!("{name}["))
-                    || opaque_setter && word.contains(name)
-                    || word.contains(name) && word.contains(['(', ')'])
-                {
+                } else if word.contains(name) {
                     Some(None)
                 } else {
                     None
@@ -990,7 +1002,12 @@ fn probe_line_literals(segments: &[String]) -> Literals {
                         .0
                         .entry(name.into())
                         .and_modify(|seen| {
-                            if *seen != value {
+                            if value.as_deref() == Some(crate::security::git_config::UNSET) {
+                                return;
+                            }
+                            if seen.as_deref() == Some(crate::security::git_config::UNSET) {
+                                seen.clone_from(&value);
+                            } else if *seen != value {
                                 *seen = None;
                             }
                         })
@@ -1633,11 +1650,12 @@ fn launched_environments(
         .collect();
     if uncertain.len() > UNCERTAIN_INPUT_LIMIT {
         return Err(
-            "an earlier command sets more of the variables that select the index or objects than the guard reads; run the commands separately"
+            "the line changes more of the variables that select the index or objects than the guard reads; run the commands separately"
                 .into(),
         );
     }
     let mut views = Vec::new();
+    let mut identities = Vec::new();
     for mut mask in 0..uncertain.iter().fold(1_usize, |count, _| count * 3) {
         let mut literal_view = Literals(literals.0.clone());
         let mut absent = Vec::new();
@@ -1652,7 +1670,23 @@ fn launched_environments(
             mask /= 3;
         }
         let env = launched_environment(launched, &literal_view, inherited, &absent)?;
-        if !views.contains(&env) {
+        let mut identity = env.clone();
+        for name in probe_names() {
+            if let std::collections::btree_map::Entry::Vacant(entry) = identity.entry(name.into()) {
+                let value = match std::env::var(name) {
+                    Ok(value) => value,
+                    Err(std::env::VarError::NotPresent) => {
+                        crate::security::git_config::UNSET.into()
+                    }
+                    Err(std::env::VarError::NotUnicode(_)) => {
+                        return Err("an inherited index or object input is not UTF-8".into())
+                    }
+                };
+                entry.insert(value);
+            }
+        }
+        if !identities.contains(&identity) {
+            identities.push(identity);
             views.push(env);
         }
     }
@@ -2368,7 +2402,7 @@ fn descend(
     commands: &[String],
     configured: &[Configured],
     bodies: &mut Vec<Body>,
-    seen: &mut Vec<(String, PathBuf, Inputs, super::HelperKind, bool)>,
+    seen: &mut Vec<Descent>,
 ) -> Result<(), String> {
     let commands: Vec<(&String, super::HelperKind, bool)> = commands
         .iter()
@@ -2391,10 +2425,17 @@ fn descend(
         for dir in dirs {
             for (command, helper, admitted_helper) in &commands {
                 for child in &children {
+                    let mut identity = child.clone();
+                    for name in probe_names() {
+                        identity
+                            .environment
+                            .entry(name.into())
+                            .or_insert_with(|| crate::security::git_config::UNSET.into());
+                    }
                     let key = (
                         (*command).clone(),
                         dir.clone(),
-                        child.clone(),
+                        identity,
                         *helper,
                         *admitted_helper,
                     );
