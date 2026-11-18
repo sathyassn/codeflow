@@ -682,9 +682,21 @@ the form refuses:
     That definition is read from the top of the repository whichever
     directory the command runs in, in a bare repository too. A last commit
     that cannot be read, or a branch whose target is present but cannot be
-    resolved, refuses; only a branch proven to have no commit passes. An
-    index too large to read within the probe's limits refuses fetch and
-    pull that leave recursion on, until the command line turns it off;
+    resolved, refuses; only a branch proven to have no commit passes, and
+    that proof reads the place the repository keeps the branch, so a
+    repository that keeps its branches in a form the guard cannot read
+    there refuses even for a branch with no commit, until the command line
+    turns recursion off. A setting that changes which objects the last
+    commit is read through counts as a possible nested repository, since
+    the probe does not follow it. An index too large to read within the
+    probe's limits refuses every command that may recurse and reads the
+    index: fetch, pull, a remote update and adding a remote that fetches,
+    until the command line turns recursion off. A push whose recursion may be on, by its command line or by any
+    setting, refuses without reading the repository, since it recurses into
+    the nested repositories of the revisions it sends, which the guards do
+    not read; a project that sets push recursion on needs the explicit
+    recursion-off option on each push, and a push that leaves recursion off
+    keeps its verdict;
   - a new copy, which is judged by every address the configuration gives
     any remote, since it may use any of them, and by the settings of its
     own command line;
