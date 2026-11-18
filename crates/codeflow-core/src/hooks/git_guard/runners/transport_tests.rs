@@ -77,7 +77,7 @@ fn opaque_probe_mentions_are_unresolved_after_segmentation() {
             format!(": $[{name}=1]"),
             format!("trap 'export {name}=1' DEBUG"),
         ] {
-            let literals = super::super::probe_line_literals(&[segment.clone()]);
+            let literals = super::super::probe_line_literals(std::slice::from_ref(&segment));
             assert_eq!(literals.0.get(name), Some(&None), "{segment}");
         }
     }
