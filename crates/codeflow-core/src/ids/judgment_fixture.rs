@@ -49,9 +49,13 @@ impl Repo {
         assert!(
             out.status.success(),
             "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
+            crate::git::name::GitName::from_bytes(&out.stderr).display()
         );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
+        let mut text = String::from_utf8(out.stdout).expect("fixture git output is text");
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        text
     }
 
     pub fn write(&self, path: &str, text: &str) {
