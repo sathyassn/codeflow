@@ -337,10 +337,8 @@ fn remote_add_fetches(rest: &[String]) -> bool {
 
 /// The values of the option that selects the one remote the command
 /// contacts, read through the one reading every reader of that command's
-/// options shares ([`super::archive_checked`]), so every spelling Git
-/// accepts, abbreviated or not, attached or separate, is read wherever the
-/// word stands. An option the table does not prove, and a word another
-/// option's value may hide, refuse.
+/// options shares ([`super::archive_checked`]). An option reading the guard
+/// cannot prove refuses.
 fn remote_values(rest: &[String]) -> Result<Vec<&str>, String> {
     let parsed = super::archive_checked(rest).map_err(unproven)?;
     if let Some(word) = parsed.unread.first() {
@@ -429,12 +427,10 @@ fn maintenance(rest: &[String]) -> Result<(), String> {
     match words.next().map(String::as_str) {
         Some("run") => {}
         Some(sub) if LOCAL_MAINTENANCE_SUBCOMMANDS.contains(&sub) => return Ok(()),
-        // A subcommand that sets up scheduled runs makes them fetch ahead
-        // from every configured remote later, outside both guards; any
-        // other word, or none, is not proven to leave them alone.
+        // Any subcommand not proven local refuses.
         _ => {
             return Err(unproven(
-                "a maintenance command not proven local may set up background runs that fetch ahead from every configured remote outside the guards; the operator runs it",
+                "a maintenance command not proven local may set up background runs; the operator runs it",
             ))
         }
     }
@@ -541,11 +537,9 @@ fn recursion_on_line(verb: &str, rest: &[String]) -> Option<bool> {
 }
 
 /// Whether a new copy's command line turns recursion on (`Some(true)`) or
-/// off (`Some(false)`); the last such option wins. A new copy reads the
-/// value of its recursion option as a path selection, never as a boolean,
-/// so every recursion option, abbreviation or value turns it on, and only
-/// the full negation turns it off, where [`recursion_words`] proves it an
-/// option.
+/// off (`Some(false)`); the last such option wins. A new copy reads its
+/// recursion option differently from other commands, so only the full
+/// negation turns it off, where [`recursion_words`] proves it an option.
 fn clone_recursion_on_line(rest: &[String]) -> Option<bool> {
     recursion_words("clone", rest, |name, value| {
         name == "no-recurse-submodules" && value.is_none()
@@ -988,11 +982,9 @@ impl<'a> Resolver<'a> {
     /// Whether the repository has or may have nested repositories: a
     /// setting that names one, the common Git directory's store for them, a
     /// record of one in the whole index the call reads, or the work tree's
-    /// definition file, each unless proven absent. Git may fetch inside a
-    /// nested repository the index alone records, so the index is read in
-    /// every repository. The probe reads only the call's location inputs,
-    /// so a setting that places the work tree elsewhere may place nested
-    /// repositories where it does not look; any such setting counts.
+    /// definition file, each unless proven absent. The probe reads only the
+    /// call's location inputs, so a location setting it cannot follow
+    /// counts as a possible nested repository.
     fn may_have_submodules(&self, probe: &mut dyn Probe) -> Result<bool, String> {
         if self.keys.iter().any(|key| {
             *key == "submodule.active"
@@ -1061,10 +1053,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// Every address the configuration gives any remote, each judged as
-    /// an address a fetch contacts. A new copy may fetch from an address a
-    /// wider configuration scope already gives the remote it creates, and
-    /// the name of that remote may come from the command or the
-    /// configuration, so every configured address counts.
+    /// an address a fetch contacts, because the guard cannot prove which one
+    /// the new copy uses.
     fn configured_addresses(&self, found: &mut Vec<Contact>) -> Result<(), String> {
         self.no_empty_section()?;
         for key in &self.keys {
@@ -1100,9 +1090,8 @@ impl<'a> Resolver<'a> {
             Some((sub, names)) if matches!(*sub, "update" | "show" | "prune" | "set-head") => {
                 let mut names = names;
                 if *sub == "update" && names.last() == Some(&"default") && !self.group("default") {
-                    // Git reads a last word that stands for the default
-                    // selection as that selection when no group of that
-                    // name is set, so the word is not a remote name.
+                    // That last word is read as the default selection, not
+                    // as a remote name, when no group of that name is set.
                     names = &names[..names.len() - 1];
                     self.default_update(found, probe)?;
                 }
@@ -1130,12 +1119,8 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The remotes an operand-free update fetches, as Git selects them: the
-    /// members of the default group when one is set, else every configured
-    /// remote not set to skip the default update, as the fetch of every
-    /// remote reads it. A member that names a group, a setting that cannot
-    /// be read, and a legacy remote file the guard cannot rule out each
-    /// refuse.
+    /// The remotes an operand-free update contacts, as Git selects them.
+    /// Anything the guard cannot read or rule out refuses.
     fn default_update(
         &self,
         found: &mut Vec<Contact>,
@@ -1143,8 +1128,7 @@ impl<'a> Resolver<'a> {
     ) -> Result<(), String> {
         self.no_empty_section()?;
         if self.group("default") {
-            // Git splits a group's values at spaces, tabs and newlines
-            // only; any other character stays in the name.
+            // Group values are split the way Git splits them.
             let members = values(self.config, "remotes.default")?;
             let mut listed = false;
             for member in members
@@ -1155,11 +1139,10 @@ impl<'a> Resolver<'a> {
                 listed = true;
                 self.word(member, Direction::Fetch, found, probe)?;
             }
-            // A group that lists no remote makes Git fetch the remote its
-            // own name selects, which the group hides here.
+            // A group that lists no remote cannot be resolved here.
             if !listed {
                 return Err(unproven(
-                    "an update of every remote with an empty default group fetches the remote the group's name selects; name the remote",
+                    "an update of every remote with an empty default group cannot be resolved; name the remote",
                 ));
             }
             return Ok(());
@@ -1177,7 +1160,7 @@ impl<'a> Resolver<'a> {
             // still reads as one is refused rather than dropped.
             if name.is_empty() || variable.is_empty() {
                 return Err(unproven(
-                    "a remote section with an empty name defines a remote an update of every remote fetches; name the remote",
+                    "a remote section with an empty name cannot be resolved for an update of every remote; name the remote",
                 ));
             }
             if !names.contains(&name) {
@@ -1214,11 +1197,9 @@ impl<'a> Resolver<'a> {
         Ok(!skips.is_empty() && skips.iter().all(|skip| *skip))
     }
 
-    /// Adding a remote with fetching uses the new remote's whole
-    /// configuration, which may already hold settings for its name, a helper
-    /// setting among them. It passes only for one name and one address, with
-    /// no other option that takes a value, and a name that no setting,
-    /// remote group or older definition file defines.
+    /// Adding a remote with fetching passes only for one name and one
+    /// address, with no other option that takes a value, and a name that no
+    /// existing definition covers.
     fn added_remote(&self, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
         self.no_empty_section()?;
         let mut operands = Vec::new();

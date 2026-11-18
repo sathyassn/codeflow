@@ -25,10 +25,8 @@ pub(super) struct Body {
     /// `git.admitted_helpers` names, started by a command that contacts a
     /// remote (TSK-1489 AC-7). Exec-guard skips its account finding only.
     pub admitted_helper: bool,
-    /// Whether the command is a `credential.helper` or
-    /// `credential.<url>.helper` value, and whether Git runs it as written
-    /// (a leading `!` or an absolute path) or as `git credential-<name>`
-    /// (TSK-1479).
+    /// Whether the command is a credential helper setting value, and whether
+    /// Git runs it as written or resolves it by name (TSK-1479).
     pub helper: super::HelperKind,
 }
 
@@ -341,15 +339,9 @@ fn checked_mode<'a>(
     Ok(parsed)
 }
 
-/// The one reading of this verb's options for every reader of them: the
-/// remote, command and output options. The option table reads each of them
-/// where the table places it, and a value-taking option before one hides it
-/// from the table, though Git may read it first through a smaller option set
-/// of its own. So every word that may be one of these options, in any prefix
-/// spelling and any position, must be an option the table also read as that
-/// option; a word the table gave to another option as its value refuses,
-/// because the guard cannot tell which reading Git takes. Git's own source is
-/// not read here, so the reading stays the conservative one.
+/// The one reading of this verb's options for every reader of them. Every word
+/// that may be one of the protected options must also be read by the option
+/// table as that option. An option reading the guard cannot prove is refused.
 fn archive_checked(words: &[String]) -> Result<ParsedOptions<'_>, String> {
     let parsed = checked_mode(words, &catalog::ARCHIVE_OPTIONS, false)?;
     let long_words = |name: &str| {
@@ -888,8 +880,7 @@ fn config_environment(
 }
 
 /// How Git runs `value` of a configuration key (TSK-1479): not a credential
-/// helper unless `helper_key`; as written when it starts with `!` or is an
-/// absolute path; any other helper value names `git credential-*`.
+/// helper unless `helper_key`; run as written, or resolved by name.
 fn helper_kind(helper_key: bool, value: &str) -> super::HelperKind {
     match (helper_key, value.starts_with('!') || value.starts_with('/')) {
         (false, _) => super::HelperKind::NotHelper,
@@ -1082,8 +1073,8 @@ fn config_values<'a>(
     Ok(values)
 }
 
-// remote-ext has its own percent expansion and service substitutions. It is
-// not a shell body, so fail closed instead of guessing its resulting argv.
+// One transport class has its own expansion and is not a shell body, so fail
+// closed instead of guessing its resulting argv.
 fn transport(
     args: &[String],
     config: &crate::security::git_config::EffectiveConfig,

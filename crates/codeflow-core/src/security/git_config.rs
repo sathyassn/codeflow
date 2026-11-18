@@ -113,13 +113,11 @@ impl EffectiveConfig {
 /// a key written without `=`), in Git's order. Registered:
 ///
 /// - the remote that the repository-wide partial-copy setting names;
-/// - each remote with a promisor value Git reads as true, or one it does
-///   not read as a boolean; a later false value does not take it back;
-/// - each remote with a partial-copy filter, whatever its promisor value.
+/// - each remote with a promisor setting;
+/// - each remote with a partial-copy filter.
 ///
-/// A key with no subsection, and a repository-wide setting with no value,
-/// give the empty name. Sorted, without duplicates; empty for a repository
-/// that is no partial copy. The guards and the commit-time secret scan both
+/// A setting without a usable name gives the empty name. Sorted, without
+/// duplicates; empty for a repository that is no partial copy. The guards and the commit-time secret scan both
 /// read promisor state through this one function.
 pub(crate) fn promisor_remotes<'a>(
     entries: impl IntoIterator<Item = (&'a [u8], Option<&'a [u8]>)>,
@@ -665,10 +663,8 @@ pub(crate) fn locate(
 
 /// Whether the index the call reads holds a record of a nested repository,
 /// as Git itself lists the index, read with the call's location inputs and
-/// its index-file variable only. The listing covers the whole index, so the
-/// call's own directory, directory option or environment cannot narrow it:
-/// the probe selects from the top of the repository and clears every
-/// variable that changes how such a selection is read. Any probe failure,
+/// its index-file variable only. The listing covers the whole index and is
+/// not narrowed by the call's own settings. Any probe failure,
 /// timeout or listing over the output limit is an error, so the caller
 /// refuses.
 pub(crate) fn index_gitlinks(
