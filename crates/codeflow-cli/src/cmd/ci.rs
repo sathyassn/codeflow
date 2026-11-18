@@ -374,6 +374,8 @@ fn ci_environment(
 /// over a floor (TSK-1078): the policy at the commit this run already pins
 /// ([`pinned_floor`]), else the landed policy at the remote's default
 /// branch, which refuses when that is unset or unreadable.
+/// Returns the unchanged floor's git policy beside the working policy, so
+/// candidate classification before range resolution uses one authority.
 fn range_policy(
     root: &Path,
     args: &CiArgs,
@@ -492,6 +494,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
 
     // A landing candidate's hand-off without `--into` is refused before the
     // target is resolved, so its cause is named first (TSK-1351 AC-3).
+    // All classification inputs come from the floor, before composition.
     if let Some(refusal) = candidate::unnamed_line(
         args.pushed_ref.as_deref(),
         &floor,
