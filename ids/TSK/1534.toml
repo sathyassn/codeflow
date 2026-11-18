@@ -1,0 +1,11 @@
+id = "TSK-1534"
+uid = "42c95856-6e5c-4885-b863-5d607a111f2f"
+kind = "TSK"
+title = "Guard path matching for equivalent path forms"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-18T03:48:24Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
