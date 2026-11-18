@@ -8733,11 +8733,7 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
             .chain(std::iter::once(quote_words(&tokens[assigned..at])))
             .collect::<Vec<_>>()
             .join(" ");
-        return Some(format!(
-            "{} {operand} {}",
-            prefix,
-            quote_words(rest)
-        ));
+        return Some(format!("{prefix} {operand} {}", quote_words(rest)));
     }
 }
 
