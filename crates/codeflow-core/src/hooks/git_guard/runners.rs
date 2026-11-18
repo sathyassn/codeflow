@@ -186,7 +186,7 @@ impl<'a> Admitted<'a> {
 }
 
 /// The resolution's probe of the call's repository, read once each, with
-/// only the call's location inputs.
+/// only the call's location, index and object inputs.
 struct CallProbe<'a> {
     cwd: &'a Path,
     globals: Result<&'a [String], String>,

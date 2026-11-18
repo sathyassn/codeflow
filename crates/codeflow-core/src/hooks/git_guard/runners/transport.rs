@@ -946,7 +946,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// Refuse recursion into nested repositories in a repository that has or
-    /// may have them, unless the command line turns it off.
+    /// may have them, and a push whose recursion may be on whatever the
+    /// repository holds, unless the command line turns it off.
     fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
         // Both the push setting and the general one can turn recursion on,
         // so either one set to a value Git reads as on counts as on.

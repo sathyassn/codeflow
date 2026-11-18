@@ -711,7 +711,9 @@ pub(crate) fn index_gitlinks(
 }
 
 /// The variables that select the objects a call reads, forwarded to the
-/// probes of the last commit as the call has them.
+/// probes of the last commit: the call's own value, else the inherited one.
+/// Whether the call has a value an earlier command of its line set is for the
+/// caller to decide; it judges the call with and without it.
 pub(crate) const OBJECT_INPUTS: &[&str] = &[
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
