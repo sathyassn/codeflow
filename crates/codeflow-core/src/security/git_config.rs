@@ -701,7 +701,9 @@ pub(crate) fn index_gitlinks(
     // Entries are selected from the top of the repository, so the directory
     // the call runs in does not change what is read.
     if listing(":/")?.split('\n').any(|mode| mode == "160000")
-        || !listing(":(top,literal).gitmodules")?.trim().is_empty()
+        || listing(":(top,literal).gitmodules")?
+            .split('\n')
+            .any(|mode| !mode.is_empty())
     {
         return Ok(true);
     }
@@ -758,10 +760,7 @@ fn commit_holds_definition(
                 let path = path.strip_suffix('\n').unwrap_or(&path);
                 let missing = status.success()
                     && Path::new(path).is_absolute()
-                    && matches!(
-                        std::fs::symlink_metadata(path),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-                    );
+                    && crate::absence::proven_absent(Path::new(path)).unwrap_or(false);
                 return if missing {
                     Ok(false)
                 } else {
