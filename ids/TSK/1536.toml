@@ -1,0 +1,11 @@
+id = "TSK-1536"
+uid = "99bc2328-442c-46e9-bb1f-5df315abd231"
+kind = "TSK"
+title = "The guard lets a leading assignment stand before env -S"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-18T16:22:16Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
