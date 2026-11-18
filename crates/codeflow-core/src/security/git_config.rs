@@ -160,6 +160,8 @@ pub(crate) fn promisor_remotes<'a>(
 /// (`env -u NAME`, `env -i`). No real value holds a NUL byte.
 pub(crate) const UNSET: &str = "\0";
 
+pub(crate) const UNREAD_PROBE: &str = "\0unread-probe";
+
 /// Give `command` the entries of `environment`, removing each [`UNSET`] one.
 fn apply_environment(command: &mut std::process::Command, environment: &Environment) {
     for (name, value) in environment {
@@ -568,7 +570,13 @@ fn probe_command(
     command.current_dir(cwd).stdin(Stdio::null());
     for name in LOCATION_ENVIRONMENT.iter().chain(extra) {
         if let Some(value) = environment.get(*name) {
-            command.env(name, value);
+            if value == UNSET {
+                command.env_remove(name);
+            } else if value == UNREAD_PROBE {
+                return Err("cannot establish an index or object input for this child; run the commands separately".into());
+            } else {
+                command.env(name, value);
+            }
         } else if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
         }

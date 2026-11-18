@@ -30,7 +30,7 @@ pub(super) struct Body {
     pub helper: super::HelperKind,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct Inputs {
     globals: Vec<String>,
     environment: crate::security::git_config::Environment,
@@ -52,26 +52,72 @@ impl Inputs {
             };
             globals.extend([name.to_string(), value.to_string()]);
         }
-        // The body directory represents repository setup. Runners clear the
-        // parent's repository-location environment for their children. Only
-        // a runner that starts its children inside a nested repository
-        // clears the variables that select the index and the objects too;
-        // every other runner's children inherit them.
-        let nested = matches!(
-            git_subcommand(args),
-            Some(("submodule" | "submodule--helper", _))
-        );
-        let environment = env
+        let mut environment: crate::security::git_config::Environment = env
             .iter()
-            .filter(|(name, _)| {
-                !(GIT_LOCATION_VARS.contains(&name.as_str()) || nested && probe_input(name))
-            })
+            .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()))
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
+        for name in probe_names() {
+            if !environment.contains_key(name) {
+                match std::env::var(name) {
+                    Ok(value) => {
+                        environment.insert(name.into(), value);
+                    }
+                    Err(std::env::VarError::NotPresent) => {}
+                    Err(std::env::VarError::NotUnicode(_)) => {
+                        return Err("an inherited index or object input is not UTF-8".into());
+                    }
+                }
+            }
+        }
+        if matches!(git_subcommand(args), Some(("filter-branch", _))) {
+            environment.insert(
+                INDEX_FILE.into(),
+                crate::security::git_config::UNREAD_PROBE.into(),
+            );
+        }
         Ok(Self {
             globals,
             environment,
         })
+    }
+
+    fn views(
+        args: &[String],
+        env: &crate::security::git_config::Environment,
+        callback: bool,
+    ) -> Result<Vec<Self>, String> {
+        let mut kept = Self::child(args, env)?;
+        if callback {
+            for (name, value) in env
+                .iter()
+                .filter(|(name, _)| GIT_LOCATION_VARS.contains(&name.as_str()))
+            {
+                kept.environment.insert(name.clone(), value.clone());
+            }
+            kept.environment.insert(
+                INDEX_FILE.into(),
+                crate::security::git_config::UNREAD_PROBE.into(),
+            );
+        }
+        let mut cleared = kept.clone();
+        for name in probe_names() {
+            if kept
+                .environment
+                .get(name)
+                .is_some_and(|value| value == crate::security::git_config::UNREAD_PROBE)
+            {
+                continue;
+            }
+            cleared
+                .environment
+                .insert(name.into(), crate::security::git_config::UNSET.into());
+        }
+        if kept == cleared {
+            Ok(vec![kept])
+        } else {
+            Ok(vec![kept, cleared])
+        }
     }
 }
 
@@ -878,6 +924,84 @@ fn probe_input(name: &str) -> bool {
     name == INDEX_FILE || crate::security::git_config::OBJECT_INPUTS.contains(&name)
 }
 
+fn probe_names() -> impl Iterator<Item = &'static str> {
+    std::iter::once(INDEX_FILE).chain(crate::security::git_config::OBJECT_INPUTS.iter().copied())
+}
+
+fn probe_line_literals(segments: &[String]) -> Literals {
+    let mut result = Literals::default();
+    for segment in segments {
+        let mut words = super::command_argv(segment);
+        strip_reserved_words(&mut words);
+        let builtin = super::builtin_words(&words);
+        let opaque_setter = builtin.first().is_some_and(|word| {
+            matches!(word.as_str(), "read" | "mapfile" | "readarray" | "let")
+                || word == "printf" && builtin.iter().any(|word| word.starts_with("-v"))
+        });
+        let target_builtin = opaque_setter
+            || builtin.first().is_some_and(|word| {
+                matches!(
+                    word.as_str(),
+                    "unset" | "export" | "declare" | "typeset" | "local" | "readonly"
+                )
+            });
+        let unknown_target = target_builtin
+            && builtin
+                .iter()
+                .skip(1)
+                .any(|word| expands(word.split_once('=').map_or(word.as_str(), |(name, _)| name)));
+        let removing = builtin.first().is_some_and(|word| word == "unset");
+        if unknown_target {
+            for name in probe_names() {
+                result.0.insert(name.into(), None);
+            }
+        }
+        if let Ok(launch) = launched(&words) {
+            if launch.cleared {
+                for name in probe_names() {
+                    result.0.insert(name.into(), None);
+                }
+            }
+        }
+        for word in &words {
+            for name in probe_names() {
+                let value = if let Some(value) = word
+                    .strip_prefix(name)
+                    .and_then(|tail| tail.strip_prefix('='))
+                {
+                    Some((!opaque_setter && !expands(value)).then(|| value.to_string()))
+                } else if word == name {
+                    Some(if removing {
+                        Some(crate::security::git_config::UNSET.into())
+                    } else {
+                        None
+                    })
+                } else if word.starts_with(&format!("{name}+"))
+                    || word.starts_with(&format!("{name}["))
+                    || opaque_setter && word.contains(name)
+                    || word.contains(name) && word.contains(['(', ')'])
+                {
+                    Some(None)
+                } else {
+                    None
+                };
+                if let Some(value) = value {
+                    result
+                        .0
+                        .entry(name.into())
+                        .and_modify(|seen| {
+                            if *seen != value {
+                                *seen = None;
+                            }
+                        })
+                        .or_insert(value);
+                }
+            }
+        }
+    }
+    result
+}
+
 /// The entries of `env` a configuration reading takes. `GIT_CONFIG` names
 /// a file only `git config` reads, and the reader removes it from every
 /// reading, so an entry for it, a launcher removing it included, changes
@@ -1449,13 +1573,18 @@ fn launched_environment(
         .filter(|(name, _)| launched.keeps(name))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
+    for name in absent {
+        env.insert(name.clone(), crate::security::git_config::UNSET.into());
+    }
     for (name, value) in &literals.0 {
         if git_relevant(name) && launched.keeps(name) && !absent.contains(name) {
             env.insert(
                 name.clone(),
-                value
-                    .clone()
-                    .ok_or("an unresolved assignment of a variable Git reads")?,
+                match value {
+                    Some(value) => value.clone(),
+                    None if probe_input(name) => crate::security::git_config::UNREAD_PROBE.into(),
+                    None => return Err("an unresolved assignment of a variable Git reads".into()),
+                },
             );
         }
     }
@@ -1465,6 +1594,11 @@ fn launched_environment(
                 return Err(format!("`{name}` expands at run time"));
             }
             env.insert(name.clone(), value.clone());
+        }
+    }
+    for name in probe_names() {
+        if !launched.keeps(name) && !env.contains_key(name) {
+            env.insert(name.into(), crate::security::git_config::UNSET.into());
         }
     }
     removed_variables(launched, &mut env)?;
@@ -1503,17 +1637,26 @@ fn launched_environments(
                 .into(),
         );
     }
-    (0..1_usize << uncertain.len())
-        .map(|mask| {
-            let absent: Vec<String> = uncertain
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| mask & (1 << at) != 0)
-                .map(|(_, name)| name.clone())
-                .collect();
-            launched_environment(launched, literals, inherited, &absent)
-        })
-        .collect()
+    let mut views = Vec::new();
+    for mut mask in 0..uncertain.iter().fold(1_usize, |count, _| count * 3) {
+        let mut literal_view = Literals(literals.0.clone());
+        let mut absent = Vec::new();
+        for name in &uncertain {
+            match mask % 3 {
+                1 => absent.push(name.clone()),
+                2 => {
+                    literal_view.0.remove(name);
+                }
+                _ => {}
+            }
+            mask /= 3;
+        }
+        let env = launched_environment(launched, &literal_view, inherited, &absent)?;
+        if !views.contains(&env) {
+            views.push(env);
+        }
+    }
+    Ok(views)
 }
 
 /// Git's own program search path when `PATH` is unset (`_PATH_DEFPATH`).
@@ -1541,14 +1684,13 @@ fn removed_variables(
         .filter(|name| !launched.keeps(name) && !env.contains_key(name))
         .collect();
     for name in removed {
-        if configuration_variable(&name) {
+        if configuration_variable(&name) || probe_input(&name) {
             env.insert(name, crate::security::git_config::UNSET.to_string());
         } else if name == "PATH" && cfg!(unix) {
             env.insert(name, DEFAULT_PATH.to_string());
         } else if GIT_LOCATION_VARS.contains(&name.as_str())
             || program_environment(&name)
             || name == "GIT_CEILING_DIRECTORIES"
-            || probe_input(&name)
         {
             return Err(format!(
                 "a launcher removes `{name}`, which the guard reads from its own environment"
@@ -2226,8 +2368,8 @@ fn descend(
     commands: &[String],
     configured: &[Configured],
     bodies: &mut Vec<Body>,
+    seen: &mut Vec<(String, PathBuf, Inputs, super::HelperKind, bool)>,
 ) -> Result<(), String> {
-    let child = Inputs::child(args, runner.env)?;
     let commands: Vec<(&String, super::HelperKind, bool)> = commands
         .iter()
         .map(|command| (command, super::HelperKind::NotHelper, false))
@@ -2240,6 +2382,7 @@ fn descend(
         if commands.is_empty() {
             continue;
         }
+        let children = Inputs::views(args, runner.env, callbacks)?;
         let dirs = if callbacks {
             callback_directories(args, runner.at, runner.env)?
         } else {
@@ -2247,7 +2390,20 @@ fn descend(
         };
         for dir in dirs {
             for (command, helper, admitted_helper) in &commands {
-                collect(command, &dir, runner.depth + 1, &child, bodies)?;
+                for child in &children {
+                    let key = (
+                        (*command).clone(),
+                        dir.clone(),
+                        child.clone(),
+                        *helper,
+                        *admitted_helper,
+                    );
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.push(key);
+                    collect(command, &dir, runner.depth + 1, child, bodies)?;
+                }
                 bodies.push(Body {
                     command: (*command).clone(),
                     directory: dir.clone(),
@@ -2949,7 +3105,13 @@ fn normalized_command(args: &[String], env: &crate::security::git_config::Enviro
         words.extend(
             env.iter()
                 .filter(|(_, value)| !unset(value))
-                .map(|(name, value)| format!("{name}={value}")),
+                .map(|(name, value)| {
+                    if value == crate::security::git_config::UNREAD_PROBE {
+                        format!("{name}=${{{name}}}")
+                    } else {
+                        format!("{name}={value}")
+                    }
+                }),
         );
     }
     words.push("git".to_string());
@@ -3057,6 +3219,7 @@ fn collect_segments(
         return Err("a Git runner body contains an unread command word".into());
     }
     let segments = literal_segments(&expanded.segments);
+    let probe_literals = probe_line_literals(&segments);
     let run = run_dirs(&segments, cwd);
     let every = segments.clone();
     let locations = segment_directories(command, &expanded.segments, cwd, &run.dirs);
@@ -3127,8 +3290,12 @@ fn collect_segments(
         launcher_env(&tokens)?;
         let launched = launched(&tokens)?;
         let args = config_env(&args, &literals, &launched)?;
-        let envs = launched_environments(&launched, &literals, &inputs.environment)?;
+        let mut proof_literals = Literals(literals.0.clone());
+        proof_literals.0.retain(|name, _| !probe_input(name));
+        proof_literals.0.extend(probe_literals.0.clone());
+        let envs = launched_environments(&launched, &proof_literals, &inputs.environment)?;
         let mut pending = Vec::new();
+        let mut descended = Vec::new();
         for (env, start) in envs
             .iter()
             .flat_map(|env| locations[index].iter().map(move |start| (env, start)))
@@ -3186,7 +3353,14 @@ fn collect_segments(
             if changed_checkouts && !commands.is_empty() && runs_in_checkouts(&args) {
                 return Err("an earlier command may change the checkouts a Git runner runs its command in; run the commands separately".into());
             }
-            descend(&runner, &args, &commands, &configured, bodies)?;
+            descend(
+                &runner,
+                &args,
+                &commands,
+                &configured,
+                bodies,
+                &mut descended,
+            )?;
         }
         landings.extend(pending);
         changed_checkouts = true;
