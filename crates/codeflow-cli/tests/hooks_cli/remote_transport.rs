@@ -88,6 +88,16 @@ impl Scratch {
         )
     }
 
+    /// Judge `command` as run from the directory `cwd`.
+    fn judge_in(&self, hook: &str, command: &str, cwd: &Path) -> Output {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", hook, "--contract", "3"])
+                .current_dir(cwd),
+            &guard_payload(command, cwd),
+        )
+    }
+
     /// Judge `command` with `inherited` set in the guard's own environment,
     /// as a session that exports it would run the hook.
     fn judge_inheriting(&self, hook: &str, command: &str, inherited: (&str, &str)) -> Output {
@@ -783,6 +793,10 @@ fn an_unreadable_configuration_refuses_naming_the_file() {
         let out = scratch.judge(hook, "git fetch web");
         let err = stderr(&out);
         assert_eq!(out.status.code(), Some(2), "{hook}: {err}");
+        assert!(
+            err.contains("git.hook_integrity") && err.contains("cannot read Git runner"),
+            "{hook}: {err}"
+        );
         assert!(err.contains("extra-config"), "{hook}: {err}");
     }
 }
@@ -1171,12 +1185,9 @@ fn both_guards_judge_every_address_a_copy_may_use() {
     }
 }
 
-/// Round j, fourth row, through both guards: a nested repository the index
-/// records with no other marker refuses unless the line turns recursion
-/// off, and so does one recorded in the index file the call selects.
-#[test]
-fn both_guards_refuse_nested_contacts_with_one_marker() {
-    let scratch = Scratch::landed(None);
+/// Record a nested repository `lib` in the index of `scratch` with no other
+/// marker beside it; the commit it names is the returned one.
+fn record_nested(scratch: &Scratch) -> String {
     git(scratch.root(), &["init", "-q", "lib"]);
     git(
         &scratch.root().join("lib"),
@@ -1198,6 +1209,16 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
             &format!("160000,{head},lib"),
         ],
     );
+    head
+}
+
+/// Round j, fourth row, through both guards: a nested repository the index
+/// records with no other marker refuses unless the line turns recursion
+/// off, and so does one recorded in the index file the call selects.
+#[test]
+fn both_guards_refuse_nested_contacts_with_one_marker() {
+    let scratch = Scratch::landed(None);
+    let head = record_nested(&scratch);
     assert_unproven(
         &scratch,
         &[
@@ -1258,4 +1279,139 @@ fn both_guards_refuse_a_command_that_sets_up_later_contacts() {
         &["git maintenance start", "git maintenance register"],
         &["git maintenance unregister", "git maintenance stop"],
     );
+}
+
+/// Both guards judge a remote option in every spelling Git's option parser
+/// accepts, attached or separate, as they judge its full spelling.
+#[test]
+fn both_guards_read_a_remote_option_in_every_spelling_git_accepts() {
+    let scratch = Scratch::landed(None);
+    assert_rows(
+        &scratch,
+        &[
+            "git archive --remote=fixture::x HEAD",
+            "git archive --rem=fixture::x HEAD",
+            "git archive --r=fixture::x HEAD",
+            "git archive --remote fixture::x HEAD",
+            "git archive --rem fixture::x HEAD",
+            "git archive --r fixture::x HEAD",
+        ],
+        &[
+            "git archive HEAD",
+            "git archive --remote=https://127.0.0.1:9/r HEAD",
+            "git archive --rem=https://127.0.0.1:9/r HEAD",
+            "git archive --rem https://127.0.0.1:9/r HEAD",
+        ],
+    );
+    // A form the option table does not prove refuses.
+    assert_unproven(
+        &scratch,
+        &["git archive --unlisted=1 HEAD", "git archive -z HEAD"],
+        &[],
+    );
+}
+
+/// Both guards read the whole index, whatever directory the call runs in
+/// and whichever way it selects a directory or an index file.
+#[test]
+fn both_guards_read_the_whole_index_from_every_directory() {
+    let scratch = Scratch::landed(None);
+    scratch.write("src/deep/a.txt", b"a\n");
+    let head = record_nested(&scratch);
+    let src = scratch.root().join("src");
+    let deep = src.join("deep");
+    for hook in HOOKS {
+        for (cwd, refused, allowed) in [
+            (
+                scratch.root(),
+                "git fetch origin",
+                "git fetch --no-recurse-submodules origin",
+            ),
+            (
+                src.as_path(),
+                "git fetch origin",
+                "git fetch --no-recurse-submodules origin",
+            ),
+            (
+                deep.as_path(),
+                "git fetch origin",
+                "git fetch --no-recurse-submodules origin",
+            ),
+            (
+                scratch.root(),
+                "git -C src fetch origin",
+                "git -C src fetch --no-recurse-submodules origin",
+            ),
+            (
+                scratch.root(),
+                "git -C src/deep fetch --recurse-submodules origin",
+                "git -C src/deep fetch --no-recurse-submodules origin",
+            ),
+            (
+                src.as_path(),
+                "git -C deep pull origin main",
+                "git -C deep pull --no-recurse-submodules origin main",
+            ),
+        ] {
+            let out = scratch.judge_in(hook, refused, cwd);
+            assert!(
+                unproven_refusal(&out),
+                "{hook} `{refused}` in {}: {}",
+                cwd.display(),
+                stderr(&out)
+            );
+            let out = scratch.judge_in(hook, allowed, cwd);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook} `{allowed}` in {}: {}",
+                cwd.display(),
+                stderr(&out)
+            );
+        }
+    }
+    // Controls: with no record in the index, each directory passes.
+    let plain = Scratch::landed(None);
+    plain.write("src/deep/a.txt", b"a\n");
+    for hook in HOOKS {
+        for cwd in [plain.root().to_path_buf(), plain.root().join("src")] {
+            let out = plain.judge_in(hook, "git fetch origin", &cwd);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {}", stderr(&out));
+        }
+    }
+    // An index file the environment selects is the one read, from a
+    // directory below the root too.
+    let selected = Scratch::landed(None);
+    selected.write("src/a.txt", b"a\n");
+    let index = selected.base.join("sibling-index");
+    let mut other = git2::Index::open(&index).unwrap();
+    other
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160_000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_str(&head).unwrap(),
+            flags: 3,
+            flags_extended: 0,
+            path: b"lib".to_vec(),
+        })
+        .unwrap();
+    other.write().unwrap();
+    let index = shell_path(&index);
+    let selected_src = selected.root().join("src");
+    for hook in HOOKS {
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", hook, "--contract", "3"])
+                .env("GIT_INDEX_FILE", &index)
+                .current_dir(&selected_src),
+            &guard_payload("git fetch origin", &selected_src),
+        );
+        assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
+    }
 }

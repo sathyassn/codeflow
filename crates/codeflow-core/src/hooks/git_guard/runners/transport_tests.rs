@@ -34,9 +34,59 @@ impl Probe for RootProbe<'_> {
     }
 }
 
+/// A probe that reads the repository as a call does from `cwd`, with the
+/// call's global options and environment.
+struct ScopedProbe<'a> {
+    cwd: &'a Path,
+    globals: Vec<String>,
+    env: &'a Environment,
+}
+
+impl Probe for ScopedProbe<'_> {
+    fn location(&mut self) -> Result<Location, String> {
+        locate(self.cwd, &self.globals, self.env)
+    }
+
+    fn branch(&mut self) -> Result<String, String> {
+        current_branch(self.cwd, &self.globals, self.env)
+    }
+
+    fn gitlinks(&mut self) -> Result<bool, String> {
+        index_gitlinks(self.cwd, &self.globals, self.env)
+    }
+}
+
 impl Scratch {
     fn new(config: &str) -> Self {
         Self::bytes(config.as_bytes())
+    }
+
+    /// The contacts of a command run from `cwd`, with `globals` as its
+    /// global options and `extra` set in its environment.
+    fn contacts_from(
+        &self,
+        cwd: &Path,
+        globals: &[&str],
+        extra: &[(&str, &str)],
+        words: &[&str],
+    ) -> Result<Vec<Contact>, String> {
+        let mut env = Environment::new();
+        env.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
+        env.insert("GIT_CONFIG_SYSTEM".into(), "/dev/null".into());
+        env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+        env.insert("HOME".into(), self.root.display().to_string());
+        for (name, value) in extra {
+            env.insert((*name).into(), (*value).into());
+        }
+        let config = read(cwd, &[], &env)?;
+        let words: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
+        let (verb, rest) = words.split_first().unwrap();
+        let mut probe = ScopedProbe {
+            cwd,
+            globals: globals.iter().map(|word| (*word).to_string()).collect(),
+            env: &env,
+        };
+        contacts(verb, rest, &config, &mut probe)
     }
 
     fn bytes(config: &[u8]) -> Self {
@@ -1251,4 +1301,148 @@ fn nested_contacts_refuse_where_the_probe_cannot_look() {
         .contacts_with(&["fetch", "origin"], &["-c", "core.bare=false"])
         .expect_err("a bare repository read as one with a work tree must refuse");
     assert!(error.starts_with(UNPROVEN), "{error}");
+}
+
+/// A command whose remote option Git's option parser reads in any accepted
+/// spelling is judged in every spelling, attached or separate.
+#[test]
+fn a_remote_option_is_read_in_every_spelling_git_accepts() {
+    let scratch = Scratch::new("");
+    for command in [
+        "archive --remote=fixture::x HEAD",
+        "archive --remot=fixture::x HEAD",
+        "archive --rem=fixture::x HEAD",
+        "archive --r=fixture::x HEAD",
+        "archive --remote fixture::x HEAD",
+        "archive --rem fixture::x HEAD",
+        "archive --r fixture::x HEAD",
+        "archive HEAD --rem fixture::x",
+        "archive -o out.tar --rem=fixture::x HEAD",
+    ] {
+        assert_eq!(
+            scratch.helpers(command),
+            Ok(vec!["fixture".into()]),
+            "{command}"
+        );
+    }
+    // Stock controls: an ordinary address in each spelling, and no remote.
+    for command in [
+        "archive --remote=https://example.test/r HEAD",
+        "archive --rem=https://example.test/r HEAD",
+        "archive --rem https://example.test/r HEAD",
+        "archive HEAD",
+        "archive --format=tar -o out.tar HEAD",
+    ] {
+        assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
+    }
+    // A form the option table does not prove refuses.
+    for command in [
+        "archive --a fixture::x HEAD",
+        "archive --rem",
+        "archive --unlisted=1 HEAD",
+        "archive -z HEAD",
+    ] {
+        let error = scratch
+            .helpers(command)
+            .expect_err(&format!("`{command}` must refuse"));
+        assert!(error.starts_with(UNPROVEN), "{command}: {error}");
+    }
+}
+
+/// Add a repository record at `path` to the index file `index`, which holds
+/// no other entry.
+fn gitlink_only_index(index: &Path, path: &str) {
+    let mut other = git2::Index::open(index).unwrap();
+    other
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160_000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap(),
+            flags: u16::try_from(path.len()).unwrap(),
+            flags_extended: 0,
+            path: path.as_bytes().to_vec(),
+        })
+        .unwrap();
+    other.write().unwrap();
+}
+
+/// The index proof covers the whole index, whatever directory the call runs
+/// in and whichever way it selects one.
+#[test]
+fn the_index_proof_covers_the_whole_index() {
+    let scratch = Scratch::new(HTTPS);
+    nested_in_index_only(&scratch, "lib");
+    let nested = scratch.root().join("src/deep");
+    std::fs::create_dir_all(&nested).unwrap();
+    let root = scratch.root();
+    let src = root.join("src");
+    let fetch = ["fetch", "origin"];
+    let off = ["fetch", "--no-recurse-submodules", "origin"];
+    // The root and each nested directory read the same index.
+    for cwd in [root, src.as_path(), nested.as_path()] {
+        let error = scratch
+            .contacts_from(cwd, &[], &[], &fetch)
+            .expect_err("a sibling record must refuse");
+        assert!(error.starts_with(UNPROVEN), "{}: {error}", cwd.display());
+        assert_eq!(
+            scratch.contacts_from(cwd, &[], &[], &off).map(helper_names),
+            Ok(vec![]),
+            "{}",
+            cwd.display()
+        );
+    }
+    // A call that selects a nested directory with its own option reads the
+    // same index too.
+    for globals in [&["-C", "src"][..], &["-C", "src", "-C", "deep"][..]] {
+        let error = scratch
+            .contacts_from(root, globals, &[], &fetch)
+            .expect_err("a sibling record must refuse");
+        assert!(error.starts_with(UNPROVEN), "{globals:?}: {error}");
+        assert_eq!(
+            scratch
+                .contacts_from(root, globals, &[], &off)
+                .map(helper_names),
+            Ok(vec![]),
+            "{globals:?}"
+        );
+    }
+    // Controls: with no record in the index, every directory passes.
+    let plain = Scratch::new(HTTPS);
+    let plain_src = plain.root().join("src");
+    std::fs::create_dir_all(&plain_src).unwrap();
+    for cwd in [plain.root(), plain_src.as_path()] {
+        assert_eq!(
+            plain.contacts_from(cwd, &[], &[], &fetch).map(helper_names),
+            Ok(vec![]),
+            "{}",
+            cwd.display()
+        );
+    }
+    // An index file the call selects is the one read, from every directory.
+    let selected = Scratch::new(HTTPS);
+    let selected_src = selected.root().join("src");
+    std::fs::create_dir_all(&selected_src).unwrap();
+    let alternate = selected.root().with_file_name("alternate-index");
+    gitlink_only_index(&alternate, "lib");
+    let alternate = alternate.display().to_string();
+    for cwd in [selected.root(), selected_src.as_path()] {
+        let error = selected
+            .contacts_from(cwd, &[], &[("GIT_INDEX_FILE", &alternate)], &fetch)
+            .expect_err("a record in the selected index must refuse");
+        assert!(error.starts_with(UNPROVEN), "{}: {error}", cwd.display());
+        assert_eq!(
+            selected
+                .contacts_from(cwd, &[], &[], &fetch)
+                .map(helper_names),
+            Ok(vec![]),
+            "{}",
+            cwd.display()
+        );
+    }
 }
