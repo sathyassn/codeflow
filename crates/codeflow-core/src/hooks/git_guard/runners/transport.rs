@@ -430,7 +430,7 @@ fn maintenance(rest: &[String]) -> Result<(), String> {
         // Any subcommand not proven local refuses.
         _ => {
             return Err(unproven(
-                "a maintenance command not proven local may set up background runs; the operator runs it",
+                "a maintenance command not proven local may set up background runs that fetch ahead from every configured remote; the operator runs it",
             ))
         }
     }
