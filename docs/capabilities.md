@@ -234,11 +234,19 @@ section of `.codeflow/policy.json`.
   of override variables set in-session.
 - Secret scanning fails closed.
 - Pre-commit, commit-msg, pre-merge-commit and pre-push compose their git
-  policy with the default branch's landed policy. Checked-out levels can
-  only rise, requirement lists retain landed entries, admitting lists can
-  only shrink without disabling a check, and commit limits can only decrease.
-  An unreadable authority refuses the operation. CI range selection uses the
-  same protected-branch floor and work-prefix ceiling, read at the commit
+  policy with the default branch's landed policy. A checked-out level cannot
+  fall below the landed one, requirement lists retain landed entries,
+  admitting lists can only shrink without disabling a check, and commit
+  limits can only decrease. A decision that depends on another field is
+  judged under the landed policy and under the composed one, and the
+  stricter result stands: protection decides the force-push rule and the
+  naming exemption, the ticket requirement level never lowers the block on a
+  malformed ticket reference, and the merge ticket rule never lowers the
+  ordinary ticket level. A protected branch the checkout adds only adds
+  prohibitions; it grants no trust, picks no range base or default branch,
+  and exempts nothing from naming. An unreadable authority refuses the
+  operation. CI range selection uses the same protected-branch floor and
+  work-prefix ceiling, read at the commit
   the run pins (`--policy-from`, `--base`, `--into`, the CI event's
   base or `CODEFLOW_DEFAULT_BRANCH`), else at the remote's default branch.
   Bootstrap grace
