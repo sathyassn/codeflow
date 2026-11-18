@@ -283,6 +283,78 @@ fn a_hosted_clone_without_a_remote_default_runs_ci_into_its_target() {
     );
 }
 
+/// TSK-1078 review F1: a protected branch the checkout adds grants no
+/// authority. The task declares `integration/EPC-999-unbound`, which has a
+/// remote-tracking ref but no record binding it, and the checkout adds it to
+/// `git.protected_branches`. A bare `codeflow ci` must still reject it as a
+/// declared target, as it does with the landed list alone, so the checkout
+/// cannot pick the range base or the judging policy. The checkout is an
+/// uncommitted policy file, then the same file committed on the task branch.
+#[test]
+fn a_protected_line_the_checkout_adds_is_not_a_declared_target() {
+    const LINE: &str = "integration/EPC-999-unbound";
+    for committed in [false, true] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n").replace(
+                "integration_target: main",
+                &format!("integration_target: {LINE}"),
+            ),
+        );
+        commit(root, "docs(records): target the unbound line");
+        let remote = root.join(".git/destination.git");
+        git(
+            root,
+            &[
+                "init",
+                "--bare",
+                "-q",
+                "-b",
+                "main",
+                remote.to_str().unwrap(),
+            ],
+        );
+        git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(root, &["branch", LINE, "main"]);
+        git(root, &["push", "-q", "origin", "main", LINE]);
+        git(root, &["branch", "-D", LINE]);
+        git(root, &["remote", "set-head", "origin", "main"]);
+        git_out(root, &["rev-parse", &format!("refs/remotes/origin/{LINE}")]);
+        code_change(root, BRANCH, "pub fn work() {}\n");
+        write(
+            root,
+            ".codeflow/policy.json",
+            &format!(
+                "{{\n  \"schema_version\": 1,\n  \"git\": {{\"product_paths\": [\"src/**\"], \"protected_branches\": [\"main\", \"{LINE}\"]}}\n}}\n"
+            ),
+        );
+        if committed {
+            commit(root, "chore: protect the unbound line");
+        }
+        let out = codeflow()
+            .args(["ci", "--head", "HEAD", "--branch", BRANCH])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            text.contains("is not a bound epic line"),
+            "committed={committed}: the added protection must not make the line a declared target: {text}"
+        );
+        assert!(
+            !text.contains("(branch declared target)"),
+            "committed={committed}: {text}"
+        );
+    }
+}
+
 fn assert_passes(result: &(i32, String), what: &str) {
     assert_eq!(result.0, 0, "{what}: {}", result.1);
 }
