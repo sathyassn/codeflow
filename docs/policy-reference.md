@@ -688,11 +688,21 @@ the form refuses:
     there refuses even for a branch with no commit, until the command line
     turns recursion off. A setting that changes which objects the last
     commit is read through counts as a possible nested repository, since
-    the probe does not follow it. A variable that selects the index or the
-    objects, set by an earlier command on the same line, may or may not
-    reach Git, so the command is judged with it and without it, and
-    refuses if either view finds a nested repository; one set on the Git
-    command itself, or by a launcher in front of it, is certain. An index
+    the probe does not follow it. The guard collects possible index and
+    object inputs across the whole line, including repeated bodies and
+    carried commands. Each input is judged with its recorded value,
+    explicitly absent and inherited, in every combination. A known removal
+    preserves the absent view alongside any recorded value. An input the
+    reader cannot resolve refuses when the contact needs the probe.
+    More than 3 uncertain inputs refuse before probing; up to 27 line
+    environments are judged. An assignment on the current Git command or
+    its direct launcher is certain; a carried prefix remains uncertain.
+    Runner children independently keep or clear each known input, with
+    the same 3-input bound. A generated index or an unproved callback
+    index remains unresolved. A launcher that clears its whole environment
+    marks every probe input unresolved for the line and can exceed the
+    bound. These conservative views can refuse a command even when the
+    actual child would not recurse. An index
     too large to read within the probe's limits refuses every command that
     may recurse and reads the index: fetch, pull, a remote update and
     adding a remote that fetches. The command line clears these with the
