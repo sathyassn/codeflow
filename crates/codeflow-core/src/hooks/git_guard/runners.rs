@@ -64,7 +64,7 @@ impl Inputs {
         let environment = env
             .iter()
             .filter(|(name, _)| {
-                !GIT_LOCATION_VARS.contains(&name.as_str()) && !(nested && probe_input(name))
+                !(GIT_LOCATION_VARS.contains(&name.as_str()) || nested && probe_input(name))
             })
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
@@ -3140,23 +3140,23 @@ fn collect_segments(
             let runner = Runner {
                 segment: &filled,
                 at: &at,
-                env: &env,
+                env,
                 depth,
             };
             let args = runner.resolve(&args, &landings, &mut pending)?;
             if depth > 0 && args != original {
                 bodies.push(Body {
-                    command: normalized_command(&args, &env),
+                    command: normalized_command(&args, env),
                     directory: at.clone(),
                     admitted_helper: false,
                     helper: super::HelperKind::NotHelper,
                 });
             }
-            bodies.extend(external_body(&args, &at, &env)?);
+            bodies.extend(external_body(&args, &at, env)?);
             note_config_write(&args, &mut changed_sources, &mut changed_aliases);
             let mut commands = commands(&args)?;
-            let configured = configured_commands(&args, &at, &env, &earlier)?;
-            commands.extend(saved_commands(&args, &at, &env, &earlier)?);
+            let configured = configured_commands(&args, &at, env, &earlier)?;
+            commands.extend(saved_commands(&args, &at, env, &earlier)?);
             if option_spec(git_subcommand(&args).map_or("", |(verb, _)| verb)).is_some()
                 || !commands.is_empty()
                 || !configured.is_empty()
