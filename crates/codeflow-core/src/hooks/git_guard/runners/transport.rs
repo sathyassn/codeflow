@@ -173,7 +173,8 @@ pub(super) struct Contact {
 }
 
 /// What the resolution learns about the call's repository from Git itself,
-/// read with the call's location inputs only.
+/// read with the call's location inputs, and the inputs that select its
+/// index file and its objects.
 pub(super) trait Probe {
     /// The repository the call works in.
     fn location(&mut self) -> Result<Location, String>;
@@ -985,9 +986,9 @@ impl<'a> Resolver<'a> {
     /// setting that names one, the common Git directory's store for them, a
     /// record of one in the whole index the call reads, or a definition file
     /// in the work tree, the index or the last commit, each unless proven
-    /// absent. The probe reads only the
-    /// call's location inputs, so a location setting it cannot follow
-    /// counts as a possible nested repository.
+    /// absent. The probe reads only the call's location, index and object
+    /// inputs, so a setting it cannot follow, a location or an
+    /// object-reading one, counts as a possible nested repository.
     fn may_have_submodules(&self, probe: &mut dyn Probe) -> Result<bool, String> {
         if self.keys.iter().any(|key| {
             *key == "submodule.active"

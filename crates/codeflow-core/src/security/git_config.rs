@@ -542,10 +542,10 @@ pub(crate) const LOCATION_ENVIRONMENT: &[&str] = &[
 ];
 
 /// A probe of the repository the call works in, built on
-/// [`crate::git::judging_command`]: only the call's location inputs reach
-/// it (the directory, repository, work-tree and bare options, and
-/// [`LOCATION_ENVIRONMENT`], the call's own value or else the inherited one
-/// the call also sees). Its configuration settings, whether given as options
+/// [`crate::git::judging_command`]: only the call's location inputs, and the
+/// inputs a caller names for its own reading, reach it (the directory,
+/// repository, work-tree and bare options, and [`LOCATION_ENVIRONMENT`], the
+/// call's own value or else the inherited one the call also sees). Its configuration settings, whether given as options
 /// or through the environment, never do, so they cannot move what the probe
 /// reports.
 fn location_command(
@@ -665,8 +665,8 @@ pub(crate) fn locate(
 
 /// Whether the index the call reads holds a record of a nested repository
 /// or a definition file for them, or the last commit holds one, as Git itself
-/// lists them, read with the call's location inputs and its index-file
-/// variable only. The listing covers the whole index and is not narrowed by
+/// lists them, read with the call's location inputs and the variables that
+/// select its index file and its objects only. The listing covers the whole index and is not narrowed by
 /// the call's own settings. Any probe failure, timeout or listing over the
 /// output limit is an error, so the caller refuses.
 pub(crate) fn index_gitlinks(
