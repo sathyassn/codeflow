@@ -1535,7 +1535,12 @@ fn both_guards_read_the_whole_index_under_pathspec_settings() {
             "git --glob-pathspecs fetch --no-recurse-submodules origin",
         ] {
             let out = scratch.judge(hook, line);
-            assert_eq!(out.status.code(), Some(0), "{hook} `{line}`: {}", stderr(&out));
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook} `{line}`: {}",
+                stderr(&out)
+            );
         }
     }
 }
