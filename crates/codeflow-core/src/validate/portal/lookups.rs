@@ -158,7 +158,7 @@ fn classic_hook_note(path: &str) -> &'static str {
         | "git.commit_ticket_required" | "git.commit_ticket_merges" | "git.ai_attribution"
         | "git.commit_emoji" | "git.policy_characters" | "git.branch_naming"
         | "git.secret_scan" | "git.conflict_markers" | "git.test_gate_on_push" =>
-            "Classic hooks apply the stricter of the landed and checked-out level. Where a decision also depends on another field (whether a branch is protected for the force-push and naming rules, the ticket requirement for a malformed ticket reference, the merge ticket rule for a merge with its own subject), it is judged under the landed value and under the composed one, and the stricter result stands. Bootstrap grace retains its existing suspensions.",
+            "Classic hooks apply the stricter of the landed and checked-out level. Force-push checks retain both protection classifications. Naming exemptions retain landed protection and require candidate eligibility under the landed and composed policies. Malformed present tickets remain blocking; merge tickets retain the stricter finding. Bootstrap grace retains its existing suspensions.",
         "git.protected_branches" =>
             "In classic hooks and CI range selection, the landed list is the floor: the checked-out policy may add protected entries, never remove them. An added entry only adds prohibitions: what grants trust or picks a base (a declared target's eligibility, the range base, the push range, the default branch) and what exempts a branch from naming read the landed list alone. CI range selection reads that list at the commit the run pins (`--policy-from`, `--base`, `--into`, the CI event's base or `CODEFLOW_DEFAULT_BRANCH`), else at the remote's default branch.",
         "git.branch_prefixes" =>
@@ -174,8 +174,10 @@ fn classic_hook_note(path: &str) -> &'static str {
         "git.commit_desc_max_len" | "git.commit_subject_max_len"
         | "git.commit_body_max_bullets" | "git.commit_body_bullet_max_len" =>
             "Classic hooks use the smaller of the landed and checked-out limits; the checked-out policy may only tighten the limit.",
+        "git.candidate_prefix" =>
+            "Classic hooks keep the landed value and require candidate eligibility under the landed and composed policies. CI candidate classification reads the policy floor before target or range resolution.",
         "git.root_branch" | "git.commit_ticket_pattern" | "git.push_budget_seconds"
-        | "git.candidate_prefix" | "git.candidate_search_depth" =>
+        | "git.candidate_search_depth" =>
             "Classic hooks keep the landed value because this field has no defined strict ordering; the checked-out policy cannot replace it.",
         "git.secret_scan_engine" =>
             "Classic hooks retain gitleaks when either policy requests it; the checked-out policy cannot remove the landed engine's additional scan.",
@@ -219,7 +221,7 @@ pub fn policy_reference() -> Generated {
         }
     }
     let mut text = format!(
-        "{}\n\nEvery key `.codeflow/policy.json` accepts, with its type, built-in default and valid values. A missing file or key means the default applies; `codeflow policy show` prints the values in effect for a repository. ADR means architecture decision record.\n\nLevel keys accept `off`, `warn`, `allow` or `block`: {}\n\nThe classic hooks below are pre-commit, commit-msg, pre-merge-commit and pre-push. Each field is composed with the landed policy in the direction its note gives, and a decision that depends on another field is judged under both policies with the stricter result standing. An unreadable landed authority refuses the operation.\n",
+        "{}\n\nEvery key `.codeflow/policy.json` accepts, with its type, built-in default and valid values. A missing file or key means the default applies; `codeflow policy show` prints the values in effect for a repository. ADR means architecture decision record.\n\nLevel keys accept `off`, `warn`, `allow` or `block`: {}\n\nThe classic hooks below are pre-commit, commit-msg, pre-merge-commit and pre-push. Each field is composed with the landed policy in the direction its note gives. Protection, candidate naming and ticket checks preserve the landed refusals described below. An unreadable landed authority refuses the operation.\n",
         begin_marker(POLICY_REFERENCE),
         cell(LEVEL_LEGEND)
     );
