@@ -75,10 +75,12 @@ impl Scratch {
         env.insert("GIT_CONFIG_SYSTEM".into(), "/dev/null".into());
         env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         env.insert("HOME".into(), self.root.display().to_string());
+        // The configuration read never sees the index-file variable; only
+        // the probe does.
+        let config = read(cwd, &[], &env)?;
         for (name, value) in extra {
             env.insert((*name).into(), (*value).into());
         }
-        let config = read(cwd, &[], &env)?;
         let words: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
         let (verb, rest) = words.split_first().unwrap();
         let mut probe = ScopedProbe {
@@ -1346,6 +1348,48 @@ fn a_remote_option_is_read_in_every_spelling_git_accepts() {
             .helpers(command)
             .expect_err(&format!("`{command}` must refuse"));
         assert!(error.starts_with(UNPROVEN), "{command}: {error}");
+    }
+}
+
+/// Every option the resolution reads is read in each abbreviation Git
+/// accepts as it is read in full, attached or separate.
+#[test]
+fn an_abbreviated_option_reads_as_the_full_option() {
+    let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
+    for refused in [
+        "fetch --all",
+        "fetch --al",
+        "maintenance run --task=prefetch",
+        "maintenance run --ta=prefetch",
+        "maintenance run --t=prefetch",
+        "maintenance run --ta prefetch",
+        "maintenance run --t prefetch",
+        "remote add --fetch backup https://example.test/r",
+        "remote add --fetc backup https://example.test/r",
+        "remote add --f backup https://example.test/r",
+        "clone --config=submodule.recurse=1 https://example.test/r copy",
+        "clone --confi=submodule.recurse=1 https://example.test/r copy",
+        "clone --con=submodule.recurse=1 https://example.test/r copy",
+        "clone --confi submodule.recurse=1 https://example.test/r copy",
+        "clone --con submodule.recurse=1 https://example.test/r copy",
+    ] {
+        let error = scratch
+            .helpers(refused)
+            .expect_err(&format!("`{refused}` must refuse"));
+        assert!(error.starts_with(UNPROVEN), "{refused}: {error}");
+    }
+    // Stock controls: the same options with an ordinary meaning pass.
+    let scratch = Scratch::new(HTTPS);
+    for allowed in [
+        "maintenance run --task=gc",
+        "maintenance run --ta=gc",
+        "maintenance run --ta gc",
+        "remote add --no-fetch fresh https://example.test/r",
+        "remote add --no-fet fresh https://example.test/r",
+        "clone --config=core.autocrlf=false --no-recurse-submodules https://example.test/r copy",
+        "clone --conf=core.autocrlf=false --no-recurse-submodules https://example.test/r copy",
+    ] {
+        assert_eq!(scratch.helpers(allowed), Ok(vec![]), "{allowed}");
     }
 }
 
