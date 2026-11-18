@@ -1633,6 +1633,66 @@ fn git_guard_keeps_removals_in_carried_bodies() {
 }
 
 #[test]
+fn git_guard_judges_runtime_probe_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    for setter in [
+        "y=_OBJECTS; x=GIT_NO_REPLACE$y=1; set -a; ((x))",
+        "y=_OBJECTS; x=GIT_NO_REPLACE$y=1; set -o allexport; declare -i n=x",
+        "y=_OBJECTS; x=GIT_NO_REPLACE$y=1; set -ea; [[ x -eq 1 ]]",
+    ] {
+        let line = format!("{setter}; git fetch origin");
+        let out = scratch.judge("git-guard", &line);
+        assert!(unresolved_probe_refusal(&out), "{line}: {}", stderr(&out));
+        git_guard_allows(
+            &scratch,
+            &format!("{setter}; git fetch --no-recurse-submodules origin"),
+        );
+    }
+}
+
+#[test]
+fn git_guard_judges_inherited_arithmetic_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    for setter in [
+        "y=_BASE; x=GIT_REPLACE_REF$y=1; ((x))",
+        "y=_BASE; x=GIT_REPLACE_REF$y=1; : $((x))",
+        "y=_BASE; x=GIT_REPLACE_REF$y=1; declare -i n=x",
+        "y=_BASE; x=GIT_REPLACE_REF$y=1; [[ x -eq 1 ]]",
+    ] {
+        let line = format!("{setter}; git fetch origin");
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &line,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        assert!(unresolved_probe_refusal(&out), "{line}: {}", stderr(&out));
+        let off = format!("{setter}; git fetch --no-recurse-submodules origin");
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &off,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        assert_eq!(out.status.code(), Some(0), "{off}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn git_guard_keeps_noncontacting_mentions_allowed() {
+    let scratch = Scratch::landed(None);
+    for line in [
+        "git log --grep='GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git status",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git fetch --no-recurse-submodules origin",
+    ] {
+        git_guard_allows(&scratch, line);
+    }
+}
+
+#[test]
 fn git_guard_reads_the_environment_of_carried_bodies() {
     let scratch = Scratch::landed(None);
     definition_outside_work_tree(&scratch, true);

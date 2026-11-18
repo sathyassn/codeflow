@@ -83,6 +83,85 @@ fn opaque_probe_mentions_are_unresolved_after_segmentation() {
     }
 }
 
+#[test]
+fn export_options_make_probe_inputs_unresolved() {
+    for segment in [
+        "set -a",
+        "set -ea",
+        "set -o allexport",
+        "set -eo allexport",
+        "set \"$options\"",
+        "builtin set -a",
+        "bash -ac 'git fetch origin'",
+        "sh -o allexport -c 'git fetch origin'",
+        "env SHELLOPTS=allexport bash -c 'git fetch origin'",
+        "SHELLOPTS=$options bash -c 'git fetch origin'",
+    ] {
+        let literals = super::super::probe_line_literals(&[segment.into()]);
+        for name in super::super::probe_names() {
+            assert_eq!(literals.0.get(name), Some(&None), "{segment}: {name}");
+        }
+    }
+    for segment in ["set +a", "set -- -a", "echo 'set -a'", "bash -c 'echo -a'"] {
+        assert!(
+            super::super::probe_line_literals(&[segment.into()])
+                .0
+                .is_empty(),
+            "{segment}"
+        );
+    }
+}
+
+#[test]
+fn unresolved_probe_inputs_stay_unread_in_every_view() {
+    let mut literals = super::super::super::Literals::default();
+    let mut inherited = Environment::new();
+    for name in super::super::probe_names() {
+        literals.0.insert(name.into(), None);
+        inherited.insert(name.into(), "inherited".into());
+    }
+    let launch = super::super::Launched::default();
+    let views = super::super::launched_environments(&launch, &literals, &inherited).unwrap();
+    assert_eq!(views.len(), 1);
+    for name in super::super::probe_names() {
+        assert_eq!(
+            views[0].get(name).map(String::as_str),
+            Some(crate::security::git_config::UNREAD_PROBE)
+        );
+    }
+    literals.0.insert("GIT_NO_REPLACE_OBJECTS".into(), Some("assigned".into()));
+    let views = super::super::launched_environments(&launch, &literals, &inherited).unwrap();
+    assert_eq!(views.len(), 3);
+    for view in views {
+        for name in super::super::probe_names().filter(|name| *name != "GIT_NO_REPLACE_OBJECTS") {
+            assert_eq!(
+                view.get(name).map(String::as_str),
+                Some(crate::security::git_config::UNREAD_PROBE)
+            );
+        }
+    }
+}
+
+#[test]
+fn noncontacting_probe_mentions_need_no_probe() {
+    let scratch = Scratch::new(HTTPS);
+    for command in [
+        "git commit -m 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git status",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git fetch --no-recurse-submodules origin",
+    ] {
+        let mut bodies = Vec::new();
+        let result = super::super::collect(
+            command,
+            scratch.root(),
+            0,
+            &super::super::Inputs::default(),
+            &mut bodies,
+        );
+        assert!(result.is_ok(), "{command}: {result:?}");
+    }
+}
+
 /// A scratch repository on branch `main` whose local configuration ends
 /// with `config`.
 struct Scratch {
