@@ -678,7 +678,13 @@ the form refuses:
     not read may place nested repositories elsewhere, so they count. A
     repository whose index or last commit holds the definition for nested
     repositories counts too, even when the work tree lacks it, so such a
-    repository also refuses until the command line turns recursion off;
+    repository also refuses until the command line turns recursion off.
+    That definition is read from the top of the repository whichever
+    directory the command runs in, in a bare repository too. A last commit
+    that cannot be read, or a branch whose target is present but cannot be
+    resolved, refuses; only a branch proven to have no commit passes. An
+    index too large to read within the probe's limits refuses fetch and
+    pull that leave recursion on, until the command line turns it off;
   - a new copy, which is judged by every address the configuration gives
     any remote, since it may use any of them, and by the settings of its
     own command line;
