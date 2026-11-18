@@ -4675,9 +4675,8 @@ fn git_output_options_cannot_write_enforcement_files() {
     }
 }
 
-// An option word that another option's value may hide is still read: the
-// command option and the output option of one verb are judged wherever the
-// word stands, and a word the guard cannot place refuses.
+// The command option and the output option of one verb are judged wherever
+// the word stands, and an option reading the guard cannot prove refuses.
 #[test]
 fn an_option_word_a_value_may_consume_is_still_read() {
     let f = Fixture::new();
@@ -4694,14 +4693,18 @@ fn an_option_word_a_value_may_consume_is_still_read() {
         ] {
             let out = f.command(&f.root, hook, &command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr)
+                    .contains("an option word may be read as another option's value"),
+                "{hook} {command}: {out:?}"
+            );
         }
-        // Controls: each option has its own value, and the output stays in
-        // an ordinary place.
+        // Controls in the same directory: a provable reading passes.
         for command in [
             "git archive --format tar -o build/x.tar HEAD",
             "git archive --prefix p/ --output=build/x.tar HEAD",
         ] {
-            let out = f.command(&f.linked, hook, command);
+            let out = f.command(&f.root, hook, command);
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }
