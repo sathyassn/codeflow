@@ -797,20 +797,32 @@ fn an_unreadable_configuration_refuses_by_the_shared_reader() {
     )
     .unwrap();
     let global = shell_path(&global);
-    let _denied = super::RestorePermissions::deny(&extra);
+    {
+        let _denied = super::RestorePermissions::deny(&extra);
+        for hook in HOOKS {
+            let out = scratch.judge_inheriting(
+                hook,
+                "git ls-remote https://127.0.0.1:9/r",
+                ("GIT_CONFIG_GLOBAL", &global),
+            );
+            let err = stderr(&out);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {err}");
+            assert!(
+                err.contains("git.hook_integrity")
+                    && err.contains("cannot read Git runner: cannot verify Git configuration"),
+                "{hook}: {err}"
+            );
+        }
+    }
+    // Control: once the same file is readable, the same line passes, so the
+    // refusal above comes from the unreadable file and not from the line.
     for hook in HOOKS {
         let out = scratch.judge_inheriting(
             hook,
             "git ls-remote https://127.0.0.1:9/r",
             ("GIT_CONFIG_GLOBAL", &global),
         );
-        let err = stderr(&out);
-        assert_eq!(out.status.code(), Some(2), "{hook}: {err}");
-        assert!(
-            err.contains("git.hook_integrity")
-                && err.contains("cannot read Git runner: cannot verify Git configuration"),
-            "{hook}: {err}"
-        );
+        assert_eq!(out.status.code(), Some(0), "{hook}: {}", stderr(&out));
     }
 }
 
@@ -1491,6 +1503,39 @@ fn both_guards_read_the_whole_index_under_pathspec_settings() {
         ] {
             let out = scratch.judge_inheriting(hook, "git fetch origin", (setting, "1"));
             assert!(unproven_refusal(&out), "{hook} {setting}: {}", stderr(&out));
+            // The same setting given on the judged line reads the same.
+            let line = format!("{setting}=1 git fetch origin");
+            let out = scratch.judge(hook, &line);
+            assert!(unproven_refusal(&out), "{hook} `{line}`: {}", stderr(&out));
+        }
+        // Each setting as a top-level option reads the same.
+        for option in [
+            "--literal-pathspecs",
+            "--glob-pathspecs",
+            "--noglob-pathspecs",
+            "--icase-pathspecs",
+        ] {
+            let line = format!("git {option} fetch origin");
+            let out = scratch.judge(hook, &line);
+            if hook == "git-guard" && option == "--icase-pathspecs" {
+                // git-guard's earlier rule refuses this option on its own
+                // terms, before it reads what Git runs.
+                let err = stderr(&out);
+                assert!(
+                    out.status.code() == Some(2) && err.contains("case-insensitive"),
+                    "{hook} `{line}`: {err}"
+                );
+                continue;
+            }
+            assert!(unproven_refusal(&out), "{hook} `{line}`: {}", stderr(&out));
+        }
+        // Controls: the same line with recursion turned off passes.
+        for line in [
+            "GIT_LITERAL_PATHSPECS=1 git fetch --no-recurse-submodules origin",
+            "git --glob-pathspecs fetch --no-recurse-submodules origin",
+        ] {
+            let out = scratch.judge(hook, line);
+            assert_eq!(out.status.code(), Some(0), "{hook} `{line}`: {}", stderr(&out));
         }
     }
 }
