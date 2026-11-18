@@ -386,6 +386,10 @@ fn range_policy(
     };
     (working.git.protected_branches, working.git.branch_prefixes) =
         codeflow_core::hooks::landed_policy::compose_branches(&floor.git, &working.git);
+    // The union only adds prohibitions. The range base and the declared
+    // target's eligibility read the floor's list alone, so a protected branch
+    // the checkout adds cannot grant authority (TSK-1078 review F1).
+    working.git.landed_protected_branches = Some(floor.git.trusted_protected_branches().to_vec());
     Ok((working, armed))
 }
 
@@ -510,7 +514,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         &root,
         args,
         &environment,
-        &working.git.protected_branches,
+        working.git.trusted_protected_branches(),
         &working.git.branch_prefixes,
     ) {
         Ok(context) => context,

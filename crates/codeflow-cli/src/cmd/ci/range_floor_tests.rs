@@ -124,6 +124,34 @@ fn range_floor_uncommitted_policy_cannot_drop_protection_or_add_prefix() {
     check_range(false);
 }
 
+/// A protected entry the checkout adds stays in the union, which only adds
+/// prohibitions, and never reaches what grants trust or picks a range base
+/// (TSK-1078 review F1).
+#[test]
+fn range_floor_added_protected_entry_grants_no_trust() {
+    use clap::Parser;
+    for stale in [false, true] {
+        let (dir, _remote, _) = fixture(stale);
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            json!({"git":{"protected_branches":["main", "integration/EPC-999-unbound"],
+            "branch_prefixes":["task/"]}})
+            .to_string(),
+        )
+        .unwrap();
+        let options = Options::parse_from(["test", "--branch", "task/check"]);
+        let (policy, _) = range_policy(dir.path(), &options.ci, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            policy.git.protected_branches,
+            ["main", "integration/EPC-999-unbound"]
+        );
+        assert_eq!(policy.git.trusted_protected_branches(), ["main"]);
+        assert!(!policy
+            .git
+            .branch_is_landed_protected("integration/EPC-999-unbound"));
+    }
+}
+
 #[test]
 fn range_floor_unreadable_authority_refuses_range_selection() {
     let (dir, _remote, _) = fixture(false);
