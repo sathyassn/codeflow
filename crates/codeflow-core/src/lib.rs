@@ -49,6 +49,7 @@ macro_rules! eprintln {
 }
 
 mod absence;
+pub mod base_checks;
 mod bounded_file;
 pub mod capability;
 pub mod ceremony;

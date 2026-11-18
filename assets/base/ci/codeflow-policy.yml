@@ -41,8 +41,16 @@
 # (actionlint releases up to 1.7.12), so ignore that message in the linter's
 # configuration rather than removing the key.
 #
-# The event pins the head and the base commit: the job fetches both as data
-# and refuses a head that is not the event's. Only the body comes from the
+# Before it judges, the job runs the project checks the default branch
+# declares in .codeflow/base-checks.json from the default branch's own
+# copies (TSK-1103); a pull request cannot skip, replace or weaken them.
+#
+# The event pins the head: the job fetches it as data and refuses a head
+# that is not the event's. The base is the base branch's tip, resolved once
+# when the job fetches it, and the range judged is merge-base(head, tip)..
+# head. A base that moves after that is not seen by this run, and a push to
+# the base fires no pull request event; only strict up-to-date checks or a
+# merge queue close that gap. Only the body comes from the
 # API, read when the job runs, so a queued run can judge a newer body than
 # its event. The job's last read of the pull request, after the checks, fails
 # the run, with its own message, when the head, the base branch or the body
@@ -234,11 +242,17 @@ jobs:
           fi
 
       # The base and the head are git data: fetched to refs, never checked
-      # out or run. Each must be the commit the event names.
+      # out or run. The head must be the commit the event names. The base is
+      # the base branch's current tip, resolved once here, never the event's
+      # base commit, which is the base when the event fired (issue 602);
+      # every later step judges merge-base(head, tip)..head. The merge
+      # commit is passed on only when GitHub's test merge has that tip and
+      # the head as its parents; a conflicting pull request has none.
       - name: Fetch the pull request's base and head as data
+        id: range
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
@@ -247,10 +261,52 @@ jobs:
           if [ "$fetched" != "$HEAD_SHA" ]; then
             echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
           fi
-          git fetch --no-tags origin "+${BASE_SHA}:refs/codeflow/pr-base"
-          if [ "$(git rev-parse refs/codeflow/pr-base)" != "$BASE_SHA" ]; then
-            echo "::error::cannot fetch the pull request's base ${BASE_SHA}; nothing is judged"; exit 1
+          if ! git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/codeflow/pr-base-tip"; then
+            echo "::error::cannot fetch the pull request's base branch ${BASE_REF}; nothing is judged"; exit 1
           fi
+          tip=$(git rev-parse --verify 'refs/codeflow/pr-base-tip^{commit}')
+          if ! base=$(git merge-base "$HEAD_SHA" "$tip"); then
+            echo "::error::the head ${HEAD_SHA} shares no history with ${BASE_REF} at ${tip}; nothing is judged"; exit 1
+          fi
+          git update-ref refs/codeflow/pr-base "$base"
+          merge=
+          if git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/merge:refs/codeflow/pr-merge" 2>/dev/null; then
+            candidate=$(git rev-parse --verify 'refs/codeflow/pr-merge^{commit}')
+            if [ "$(git rev-list --parents -n 1 "$candidate")" = "${candidate} ${tip} ${HEAD_SHA}" ]; then
+              merge=$candidate
+            fi
+          fi
+          { echo "tip=${tip}"; echo "base=${base}"; echo "merge=${merge}"; } >> "$GITHUB_OUTPUT"
+          echo "base ${BASE_REF} resolved once at ${tip}; judged range ${base}..${HEAD_SHA}; merge commit ${merge:-none}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Assert the authority checkout
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse --verify HEAD)
+          if [ "$head" != "$AUTHORITY_SHA" ] || ! git diff --quiet HEAD --; then
+            echo "::error::the checkout is no longer the default branch's ${AUTHORITY_SHA} (HEAD ${head}, or a tracked file changed); nothing is judged"; exit 1
+          fi
+
+      # Project checks (TSK-1103): the checks the default branch declares in
+      # .codeflow/base-checks.json run from the default branch's own copies
+      # of each script and its inputs, before the pull request is judged, so
+      # a head that edits the check, its inputs, the declaration or this
+      # workflow still gets the default branch's decision. Each runs in a
+      # folder outside the checkout with a cleared environment and a git
+      # directory that holds only the named commits, so neither the token
+      # nor the checkout's configuration reaches it. The head, base and
+      # merge commits are passed as commit ids and the head repository as
+      # text, through `env:`, never written into the script.
+      - name: Project checks from the default branch
+        env:
+          AUTHORITY_SHA: ${{ github.sha }}
+          RANGE_BASE: ${{ steps.range.outputs.base }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ steps.range.outputs.merge }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: codeflow ci base-checks --trusted "$AUTHORITY_SHA" --base "$RANGE_BASE" --head "$HEAD_SHA" --merge "$MERGE_SHA" --head-repo "$HEAD_REPO"
 
       - name: Assert the authority checkout
         env:
@@ -310,7 +366,7 @@ jobs:
       - name: codeflow ci (commit + branch + PR-body standards)
         env:
           AUTHORITY_SHA: ${{ github.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.range.outputs.base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BODY_FILE: ${{ runner.temp }}/pr-body.md
@@ -356,7 +412,7 @@ jobs:
 
       - name: codeflow ids check
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.range.outputs.base }}
         run: codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
 
       - name: Assert the authority checkout

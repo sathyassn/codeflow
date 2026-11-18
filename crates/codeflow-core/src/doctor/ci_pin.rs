@@ -40,13 +40,14 @@ const POLICY: &str = ".codeflow/policy.json";
 
 /// Each shipped install doctor recognizes: the template, and the first and
 /// last lines of the span that chooses the target commit and installs the
-/// release it pins, verified against the digest pinned beside it and the
+/// release it pins (in the GitHub workflow, from the step that resolves the
+/// base branch's tip), verified against the digest pinned beside it and the
 /// release's `sha256.sum`. The GitLab, Bitbucket and generic spans end with
 /// the shared pinned run.
 const INSTALLS: [(&str, &str, &str); 5] = [
     (
         include_str!("../../../../assets/base/ci/codeflow-ci.yml"),
-        "- name: Install codeflow (target-pinned, checksum-verified)",
+        "- name: Resolve the base",
         "installed and verified against ${verified}",
     ),
     (

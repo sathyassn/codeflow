@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codeflow.dev/schemas/base-checks.schema.json",
+  "title": "CodeFlow trusted-base project checks",
+  "description": "The project-owned declaration .codeflow/base-checks.json. The managed CI runs each check from the trusted commit's own copies of its script and inputs (the default branch on GitHub, the target commit elsewhere) before it judges a pull request, with the base, head and merge commits and the head repository as arguments; a failing, missing or unreadable check fails the required check. `codeflow update` never writes this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "The declaration format version.",
+      "const": 1
+    },
+    "checks": {
+      "description": "The checks, run in this order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "script", "interpreter"],
+        "properties": {
+          "name": {
+            "description": "A short name, unique in the file.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "script": {
+            "description": "The script, a path from the project root; a regular file on the trusted commit, never a symbolic link or gitlink.",
+            "$ref": "#/$defs/path"
+          },
+          "interpreter": {
+            "description": "A bare command found on the runner's PATH, such as bash, sh, python3 or node; it runs `<interpreter> <script> <base> <head> <merge> <head-repo>`.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._+-]+$"
+          },
+          "inputs": {
+            "description": "Files or folders the script reads, exported from the trusted commit beside it.",
+            "type": "array",
+            "items": { "$ref": "#/$defs/path" }
+          },
+          "timeout_seconds": {
+            "description": "Seconds before the check is stopped and fails; 300 when absent.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 900
+          }
+        }
+      }
+    },
+    "audit_exception_inputs": {
+      "description": "Files the dependency-audit exception hook .codeflow/audit-exceptions.sh reads, such as its register, so `codeflow ci` names a change to them.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/path" }
+    }
+  },
+  "$defs": {
+    "path": {
+      "description": "A relative path inside the repository, written with forward slashes, with no empty, `.` or `..` part and outside .git.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!\\.git(/|$))(?!.*(^|/)\\.{1,2}(/|$))(?!.*//)[^\\\\:\\u0000-\\u001f]+$"
+    }
+  }
+}
