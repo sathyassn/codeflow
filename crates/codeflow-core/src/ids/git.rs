@@ -12,6 +12,15 @@ use super::IdsError;
 #[derive(Debug, Clone)]
 pub struct Git {
     root: PathBuf,
+    #[cfg(test)]
+    pub(super) reads: std::cell::RefCell<ReadCounts>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub(super) struct ReadCounts {
+    pub children: Vec<String>,
+    pub blobs: Vec<String>,
 }
 
 impl Git {
@@ -20,6 +29,8 @@ impl Git {
     pub fn new(root: &Path) -> Git {
         Git {
             root: root.to_path_buf(),
+            #[cfg(test)]
+            reads: std::cell::RefCell::default(),
         }
     }
 
@@ -30,6 +41,8 @@ impl Git {
     }
 
     fn command(&self, args: &[&str]) -> Command {
+        #[cfg(test)]
+        self.reads.borrow_mut().children.push(args.join(" "));
         let mut command = crate::workgraph::history::command();
         command
             .arg("-C")
@@ -287,6 +300,11 @@ impl Git {
                     "git cat-file: requested blob {id} is missing; repair the repository objects, then retry"
                 )));
             }
+            #[cfg(test)]
+            self.reads
+                .borrow_mut()
+                .blobs
+                .push(header.split(' ').next().unwrap_or_default().to_string());
             let size: usize = header
                 .rsplit(' ')
                 .next()
