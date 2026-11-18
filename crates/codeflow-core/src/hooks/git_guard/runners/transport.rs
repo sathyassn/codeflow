@@ -957,7 +957,10 @@ impl<'a> Resolver<'a> {
             }
             None => true,
         };
-        if on && self.may_have_submodules(probe)? {
+        // A push recurses into the nested repositories of the revisions it
+        // sends, which the proof does not read, so a push whose recursion
+        // may be on refuses without it.
+        if on && (verb == "push" || self.may_have_submodules(probe)?) {
             let way = if verb == "remote" {
                 "name the remote in a fetch that turns recursion off"
             } else {

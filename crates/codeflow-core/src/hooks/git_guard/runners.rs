@@ -56,7 +56,7 @@ impl Inputs {
         // clear the parent's repository-location environment for their children.
         let environment = env
             .iter()
-            .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()) && *name != INDEX_FILE)
+            .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()) && !probe_input(name))
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         Ok(Self {
@@ -861,6 +861,14 @@ fn known_program(verb: &str) -> bool {
 /// reading does not take it.
 const INDEX_FILE: &str = "GIT_INDEX_FILE";
 
+/// Whether the variable `name` is one the transport resolution's probes
+/// read besides the location ones: the index file, and the inputs that
+/// select the objects a call reads, replacement of them included. A
+/// configuration reading does not take them.
+fn probe_input(name: &str) -> bool {
+    name == INDEX_FILE || crate::security::git_config::OBJECT_INPUTS.contains(&name)
+}
+
 /// The entries of `env` a configuration reading takes. `GIT_CONFIG` names
 /// a file only `git config` reads, and the reader removes it from every
 /// reading, so an entry for it, a launcher removing it included, changes
@@ -873,7 +881,7 @@ fn config_environment(
             !catalog::environment(name)
                 && !program_environment(name)
                 && *name != "GIT_CONFIG"
-                && *name != INDEX_FILE
+                && !probe_input(name)
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
@@ -1407,7 +1415,7 @@ fn note_literals(literals: &mut Literals, tokens: &mut [String]) -> Result<(), S
 /// a location, a program, a runner from the catalog or the configuration.
 fn git_relevant(name: &str) -> bool {
     GIT_LOCATION_VARS.contains(&name)
-        || name == INDEX_FILE
+        || probe_input(name)
         || program_environment(name)
         || catalog::environment(name)
         || configuration_variable(name)
@@ -1482,7 +1490,7 @@ fn removed_variables(
         } else if GIT_LOCATION_VARS.contains(&name.as_str())
             || program_environment(&name)
             || name == "GIT_CEILING_DIRECTORIES"
-            || name == INDEX_FILE
+            || probe_input(&name)
         {
             return Err(format!(
                 "a launcher removes `{name}`, which the guard reads from its own environment"

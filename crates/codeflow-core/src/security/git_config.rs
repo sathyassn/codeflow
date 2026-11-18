@@ -712,7 +712,7 @@ pub(crate) fn index_gitlinks(
 
 /// The variables that select the objects a call reads, forwarded to the
 /// probes of the last commit as the call has them.
-const OBJECT_INPUTS: &[&str] = &[
+pub(crate) const OBJECT_INPUTS: &[&str] = &[
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_NO_REPLACE_OBJECTS",
