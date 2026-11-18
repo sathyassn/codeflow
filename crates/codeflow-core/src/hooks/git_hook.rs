@@ -659,47 +659,9 @@ pub fn commit_msg_from(
         }
     }
 
-    // Ticket allow-and-require (ADR-0020). Active only when the project has
-    // configured ticket keys; the returned level distinguishes a required-but-
-    // missing ticket (`commit_ticket_required`) from a malformed present one
-    // (block).
-    // A merge whose subject is not git's own is also an ordinary commit, so
-    // the merge rule and the ordinary rule both judge it and the stricter
-    // finding stands: turning the merge rule on can never lower the level the
-    // ordinary rule already applies.
-    let merge_finding = (is_merge && policy.commit_ticket_merges.is_active())
-        .then(|| merge_ticket_violation(policy, &cleaned))
-        .flatten();
-    let ordinary_finding = if policy.commit_ticket_keys.is_empty() {
-        None
-    } else {
-        standards::check_commit_ticket(
-            subject,
-            &cleaned,
-            &policy.commit_ticket_keys,
-            policy.commit_ticket_required,
-            &policy.commit_ticket_pattern,
-        )
-        .map(|(level, reason)| {
-            Violation::new(
-                "git.commit_ticket",
-                level,
-                reason,
-                crate::remedy::COMMIT_TICKET
-                    .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
-            )
-        })
-    };
-    match (merge_finding, ordinary_finding) {
-        (Some(merge), Some(ordinary)) if ordinary.level.stricter(merge.level) != merge.level => {
-            report.violations.push(ordinary);
-        }
-        (Some(merge), _) => report.violations.push(merge),
-        (None, Some(ordinary)) if !(is_merge && policy.commit_ticket_merges.is_active()) => {
-            report.violations.push(ordinary);
-        }
-        (None, _) => {}
-    }
+    report
+        .violations
+        .extend(ticket_finding(policy, subject, &cleaned, is_merge));
 
     if policy.ai_attribution.is_active() {
         if let Some(which) = standards::find_attribution(&cleaned) {
@@ -724,6 +686,56 @@ pub fn commit_msg_from(
     }
 
     report
+}
+
+/// The ticket finding for a commit message past the `Merge ` subject
+/// exemption (ADR-0020). It is active only when the project has configured
+/// ticket keys; the level distinguishes a required-but-missing ticket
+/// (`commit_ticket_required`) from a malformed present one (block).
+///
+/// A merge whose subject is not git's own is also an ordinary commit, so the
+/// merge rule and the ordinary rule both judge it and the stricter finding
+/// stands: turning the merge rule on can never lower the level the ordinary
+/// rule already applies. With the merge rule on, an ordinary finding alone is
+/// not reported, as before.
+fn ticket_finding(
+    policy: &GitPolicy,
+    subject: &str,
+    cleaned: &str,
+    is_merge: bool,
+) -> Option<Violation> {
+    let merge_rule = is_merge && policy.commit_ticket_merges.is_active();
+    let merge_finding = merge_rule
+        .then(|| merge_ticket_violation(policy, cleaned))
+        .flatten();
+    let ordinary_finding = if policy.commit_ticket_keys.is_empty() {
+        None
+    } else {
+        standards::check_commit_ticket(
+            subject,
+            cleaned,
+            &policy.commit_ticket_keys,
+            policy.commit_ticket_required,
+            &policy.commit_ticket_pattern,
+        )
+        .map(|(level, reason)| {
+            Violation::new(
+                "git.commit_ticket",
+                level,
+                reason,
+                crate::remedy::COMMIT_TICKET
+                    .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
+            )
+        })
+    };
+    match (merge_finding, ordinary_finding) {
+        (Some(merge), Some(ordinary)) if ordinary.level.stricter(merge.level) != merge.level => {
+            Some(ordinary)
+        }
+        (Some(merge), _) => Some(merge),
+        (None, ordinary) if !merge_rule => ordinary,
+        (None, _) => None,
+    }
 }
 
 /// The merge ticket rule (`git.commit_ticket_merges`, TSK-1350) over one
