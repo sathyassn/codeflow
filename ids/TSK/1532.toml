@@ -1,0 +1,11 @@
+id = "TSK-1532"
+uid = "c0ee2eb0-ed56-44cf-9192-3a51525de56c"
+kind = "TSK"
+title = "The portal policy lookup count ignores prose tables"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-18T00:47:40Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
