@@ -8721,9 +8721,21 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
         // shell kept inside one word (TSK-242 review round 15).
         let operand = operand.replace("\\_", " ");
         let rest = tokens.get(after..).unwrap_or_default();
+        // Keep shell assignments as assignments when the command is read
+        // again. Quoting the whole word would make it a program instead.
+        let assigned = skip_leading(tokens, Taker::Shell);
+        let prefix = tokens[..assigned]
+            .iter()
+            .map(|word| {
+                let (name, value) = word.split_once('=').expect("shell assignment");
+                format!("{name}={}", quote_words(&[value.to_string()]))
+            })
+            .chain(std::iter::once(quote_words(&tokens[assigned..at])))
+            .collect::<Vec<_>>()
+            .join(" ");
         return Some(format!(
             "{} {operand} {}",
-            quote_words(&tokens[..at]),
+            prefix,
             quote_words(rest)
         ));
     }
@@ -18784,6 +18796,10 @@ mod tests {
                 "leading assignment",
                 "FOO=1 env -S 'git config --global user.name Probe'",
             ),
+            (
+                "two leading assignments",
+                "FOO=1 BAR=2 env -S 'git config --global user.name Probe'",
+            ),
         ] {
             let violations = evaluate(command, &ctx(&p, "feat/x"));
             assert!(violations.is_empty(), "{case}: {violations:?}");
@@ -18803,6 +18819,10 @@ mod tests {
             (
                 "leading assignment",
                 "FOO=1 env -S 'git config --global alias.x !id'",
+            ),
+            (
+                "runner configuration assignment",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/hooks env -S 'git config --global user.name Probe'",
             ),
         ] {
             let violations = evaluate(command, &ctx(&p, "feat/x"));
