@@ -340,6 +340,46 @@ fn checked_mode<'a>(
     Ok(parsed)
 }
 
+/// The one reading of this verb's options for every reader of them: the
+/// remote, command and output options. The option table reads each of them
+/// where the table places it, and a value-taking option before one hides it
+/// from the table, though Git may read it first through a smaller option set
+/// of its own. So every word that may be one of these options, in any prefix
+/// spelling and any position, must be an option the table also read as that
+/// option; a word the table gave to another option as its value refuses,
+/// because the guard cannot tell which reading Git takes. Git's own source is
+/// not read here, so the reading stays the conservative one.
+fn archive_checked(words: &[String]) -> Result<ParsedOptions<'_>, String> {
+    let parsed = checked_mode(words, &catalog::ARCHIVE_OPTIONS, false)?;
+    let long_words = |name: &str| {
+        words
+            .iter()
+            .filter(|word| {
+                word.strip_prefix("--").is_some_and(|option| {
+                    let option = option.split_once('=').map_or(option, |(name, _)| name);
+                    !option.is_empty() && name.starts_with(option)
+                })
+            })
+            .count()
+    };
+    let short_words = words
+        .iter()
+        .filter(|word| !word.starts_with("--") && word.starts_with('-') && word.contains('o'))
+        .count();
+    let hidden = [
+        ("--remote", long_words("remote")),
+        ("--exec", long_words("exec")),
+        ("--output", long_words("output")),
+    ]
+    .iter()
+    .any(|(name, written)| *written > parsed.values_of('\0', name).len())
+        || short_words > parsed.values_of('o', "").len();
+    if hidden {
+        return Err(transport::HIDDEN_OPTION.to_string());
+    }
+    Ok(parsed)
+}
+
 // Revision suffixes can contain the shell reader's `~` and `^` markers.
 // Their literal non-option prefix cannot expand into a Git option. Other
 // patterns remain unread, including patterns in an exec command's value.
@@ -478,7 +518,11 @@ pub(super) fn commands(args: &[String]) -> Result<Vec<String>, String> {
             let Some(spec) = option_spec(verb) else {
                 return Ok(Vec::new());
             };
-            let parsed = checked_mode(rest, spec, verb == "grep")?;
+            let parsed = if verb == "archive" {
+                archive_checked(rest)?
+            } else {
+                checked_mode(rest, spec, verb == "grep")?
+            };
             if verb != "grep" && parsed.operands.iter().any(|word| unresolved_word(word)) {
                 return Err("a Git runner operand expands at run time".into());
             }
@@ -580,7 +624,10 @@ pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, S
         Ok::<_, String>((parsed, found))
     };
     match verb {
-        "archive" => paths.extend(read(&catalog::ARCHIVE_OPTIONS, false, &[('o', "--output")])?.1),
+        "archive" => {
+            archive_checked(rest)?;
+            paths.extend(read(&catalog::ARCHIVE_OPTIONS, false, &[('o', "--output")])?.1);
+        }
         "format-patch" => paths.extend(
             read(
                 &catalog::FORMAT_PATCH_OPTIONS,

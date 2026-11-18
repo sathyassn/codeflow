@@ -337,12 +337,13 @@ fn remote_add_fetches(rest: &[String]) -> bool {
 }
 
 /// The values of the option that selects the one remote the command
-/// contacts, read through the option table both guards read for that
-/// command, so every spelling Git accepts, abbreviated or not, attached or
-/// separate, is read. An option the table does not prove refuses.
+/// contacts, read through the one reading every reader of that command's
+/// options shares ([`super::archive_checked`]), so every spelling Git
+/// accepts, abbreviated or not, attached or separate, is read wherever the
+/// word stands. An option the table does not prove, and a word another
+/// option's value may hide, refuse.
 fn remote_values(rest: &[String]) -> Result<Vec<&str>, String> {
-    let parsed =
-        super::checked_mode(rest, &super::catalog::ARCHIVE_OPTIONS, false).map_err(unproven)?;
+    let parsed = super::archive_checked(rest).map_err(unproven)?;
     if let Some(word) = parsed.unread.first() {
         return Err(unproven(format!(
             "`archive` with the option `{}`, which the guard does not read",
