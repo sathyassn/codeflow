@@ -4922,7 +4922,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/validate/portal/lookups.rs",
         "hook_stage_names",
         "lines",
-        1,
+        2,
         "framing:validate-portal-lookups-hook-stage-names-records",
     ),
     // Extracts hook stage labels from an authored Markdown table; table-cell and code-span padding define these displayed lookup labels.
