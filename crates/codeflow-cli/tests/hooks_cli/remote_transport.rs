@@ -1806,6 +1806,49 @@ fn git_guard_judges_nested_arithmetic_inputs() {
 }
 
 #[test]
+fn git_guard_judges_parameter_evaluation_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for context in [
+        ": \"${?:x}\"",
+        ": \"${$:x}\"",
+        ": \"${-:x}\"",
+        ": \"${#:x}\"",
+        ": \"${!:x}\"",
+        "x=a[x]; : \"${!x}\"",
+        "x='$((x))'; : \"${x@P}\"",
+        "x=a[x]; : \"${(P)x}\"",
+        "x='$((x))'; : \"${(e)x}\"",
+        "x=a[x]; [[ -v $x ]]",
+        "x=a[x]; [ -v \"$x\" ]",
+        "x=a[x]; test -v \"$x\"",
+        ": \"$(\\\n(x))\"",
+        "(\\\n(x))",
+        ": \"$\\\n{s:x}\"",
+    ] {
+        let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; s=abc; {context}");
+        let line = format!("{prefix}; git fetch origin");
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &line,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("contact {context}: {}", stderr(&out)));
+        }
+        let off = format!("{prefix}; git fetch --no-recurse-submodules origin");
+        let out =
+            scratch.judge_inheriting("git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_keeps_arithmetic_data_allowed() {
     let scratch = Scratch::landed(None);
     let mut wrong = Vec::new();
@@ -1816,6 +1859,7 @@ fn git_guard_keeps_arithmetic_data_allowed() {
         "echo '${s:x}'; git fetch origin",
         "echo '${a[x]}'; git fetch origin",
         "echo \"${s:-literal}\"; git fetch origin",
+        "echo \"${sha:0:7}${BASH_SOURCE[0]}${PIPESTATUS[0]}\"; git fetch origin",
     ] {
         let out = scratch.judge("git-guard", line);
         if out.status.code() != Some(0) {

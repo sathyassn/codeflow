@@ -220,6 +220,69 @@ fn arithmetic_contexts_keep_probe_inputs_unread() {
 }
 
 #[test]
+fn parameter_evaluation_keeps_probe_inputs_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        ": \"${?:x}\"",
+        ": \"${$:x}\"",
+        ": \"${-:x}\"",
+        ": \"${#:x}\"",
+        ": \"${!:x}\"",
+        ": \"${!x}\"",
+        ": \"${x@P}\"",
+        ": \"${(P)x}\"",
+        ": \"${(e)x}\"",
+        "[[ -v $x ]]",
+        "[ -v \"$x\" ]",
+        "test -v \"$x\"",
+        ": \"$(\\\n(x))\"",
+        "(\\\n(x))",
+        ": \"$\\\n{s:x}\"",
+        "eval ': \"$(\\\n(x))\"'",
+        "sh -c ': \"$\\\n{s:x}\"'",
+    ] {
+        let words = super::super::super::command_argv(context);
+        if !super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn literal_parameter_forms_keep_probe_inputs_known() {
+    let mut wrong = Vec::new();
+    for context in [
+        ": \"${sha:0:7}\"",
+        ": \"${sha:0}\"",
+        ": \"${BASH_SOURCE[0]}\"",
+        ": \"${PIPESTATUS[0]}\"",
+        ": \"$a[0]\"",
+        ": \"${#a[0]}\"",
+        ": \"${p}\"",
+        ": \"${12}\"",
+        ": \"${?}${$}${-}${#}${!}${@}${*}\"",
+        ": \"${#p}${#?}\"",
+        ": \"${!prefix*}${!prefix@}${!name[@]}${!name[*]}\"",
+        ": \"${p-word}${p=word}${p+word}${p?word}\"",
+        ": \"${p:-word}${p:=word}${p:+word}${p:?word}\"",
+        ": \"${p#word}${p##word}${p%word}${p%%word}\"",
+        ": \"${p/word/data}${p//word/data}\"",
+        ": \"${p^}${p^^}${p,}${p,,}\"",
+        ": \"${a[@]}${a[*]}\"",
+        "echo '${!x}${x@P}${(e)x}'",
+        "git fetch origin # $\\\n((example))",
+        "cat <<'EOF'\n$\\\n((example))\nEOF\ngit fetch origin",
+    ] {
+        let words = super::super::super::command_argv(context);
+        if super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn arithmetic_data_keeps_probe_inputs_known() {
     for context in [
         "git fetch origin # ((example))",
