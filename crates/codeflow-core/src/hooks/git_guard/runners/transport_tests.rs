@@ -22,6 +22,28 @@ fn a_transient_child_index_cannot_prove_absence() {
     );
 }
 
+#[test]
+fn uncertain_probe_views_have_a_fixed_bound() {
+    let names = [
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NO_REPLACE_OBJECTS",
+    ];
+    let mut literals = super::super::super::Literals::default();
+    let mut inherited = Environment::new();
+    for name in &names[..3] {
+        literals.0.insert((*name).into(), Some("assigned".into()));
+        inherited.insert((*name).into(), "inherited".into());
+    }
+    let launch = super::super::Launched::default();
+    let views = super::super::launched_environments(&launch, &literals, &inherited).unwrap();
+    assert_eq!(views.len(), 27);
+    literals.0.insert(names[3].into(), Some("assigned".into()));
+    let why = super::super::launched_environments(&launch, &literals, &inherited).unwrap_err();
+    assert!(why.contains("run the commands separately"));
+}
+
 /// A scratch repository on branch `main` whose local configuration ends
 /// with `config`.
 struct Scratch {

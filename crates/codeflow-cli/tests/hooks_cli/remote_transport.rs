@@ -1660,11 +1660,11 @@ fn git_guard_judges_the_environment_of_parent_callbacks() {
 }
 
 #[test]
-fn git_guard_bounds_uncertain_probe_inputs() {
+fn git_guard_keeps_the_earlier_environment_authority_refusal() {
     let scratch = Scratch::landed(None);
     let out = scratch.judge("git-guard", "GIT_NO_REPLACE_OBJECTS=1; GIT_REPLACE_REF_BASE=refs/none/; GIT_OBJECT_DIRECTORY=objects; GIT_ALTERNATE_OBJECT_DIRECTORIES=alternate; git fetch origin");
     assert!(
-        out.status.code() == Some(2) && stderr(&out).contains("run the commands separately"),
+        out.status.code() == Some(2) && stderr(&out).contains("git.policy_authority"),
         "{}",
         stderr(&out)
     );
