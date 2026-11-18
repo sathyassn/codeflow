@@ -1136,6 +1136,38 @@ mod tests {
     }
 
     #[test]
+    fn test_ticket_malformed_present_blocks_at_every_required_level() {
+        // A malformed present reference blocks whatever the missing-ticket
+        // level is, so the level can be raised without lowering this block
+        // (TSK-1078 review F3). A missing ticket still reports at its level.
+        for required in [
+            PolicyLevel::Off,
+            PolicyLevel::Allow,
+            PolicyLevel::Warn,
+            PolicyLevel::Block,
+        ] {
+            let (level, reason) = check_commit_ticket(
+                "feat: x",
+                "feat: x\n\nRefs: nope",
+                &keys(),
+                required,
+                r"^PROJ-\d+$",
+            )
+            .unwrap();
+            assert_eq!(level, PolicyLevel::Block, "required={required}: {reason}");
+        }
+        let (level, _) = check_commit_ticket(
+            "feat: x",
+            "feat: x",
+            &keys(),
+            PolicyLevel::Warn,
+            r"^PROJ-\d+$",
+        )
+        .unwrap();
+        assert_eq!(level, PolicyLevel::Warn);
+    }
+
+    #[test]
     fn test_ticket_merge_revert_exempt() {
         for subject in ["Revert \"feat: x\"", "fixup! feat: x"] {
             assert_eq!(
