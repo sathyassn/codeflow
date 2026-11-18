@@ -960,9 +960,8 @@ fn indirect_contact_paths_refuse_unless_proven() {
     legacy.unproven(fresh, "legacy remote file");
 }
 
-/// Git takes the word after a value-taking option as its value whatever it
-/// looks like, so in these rows a turn-off word or a terminator it consumes
-/// proves nothing, and the reading goes on past it.
+/// A word an option reading consumes as a value proves nothing, and the
+/// reading goes on past it.
 #[test]
 fn a_word_an_option_consumes_proves_nothing() {
     let listed = Scratch::new(HTTPS);
@@ -1174,7 +1173,7 @@ fn a_copy_judges_every_address_it_may_use() {
     );
 }
 
-/// Record a repository at `path` under `scratch` in its index only.
+/// Build a nested-repository fixture at `path` under `scratch`.
 fn nested_in_index_only(scratch: &Scratch, path: &str) {
     let nested = scratch.root().join(path);
     git2::Repository::init(&nested).unwrap();

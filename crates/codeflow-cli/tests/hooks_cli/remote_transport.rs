@@ -387,7 +387,7 @@ fn both_guards_refuse_a_program_chosen_by_remote_settings() {
 
 #[test]
 fn both_guards_refuse_an_implicit_contact_they_cannot_prove() {
-    // A sole remote other than the one Git falls back to.
+    // A fallback the guards cannot prove refuses.
     let sole = Scratch::landed(None);
     git(sole.root(), &["remote", "rename", "origin", "backup"]);
     git(sole.root(), &["config", "remote.backup.url", "fixture::x"]);
@@ -953,8 +953,8 @@ fn both_guards_read_every_spelling_that_turns_nested_contacts_on() {
         ],
         &["git clone --no-recurse-submodules https://127.0.0.1:9/r copy"],
     );
-    // The option reader both guards share refuses an abbreviated recursion
-    // option of a new copy before the transport resolution reads it.
+    // The option reader both guards share refuses an option it cannot prove
+    // before the transport resolution reads it.
     for hook in HOOKS {
         let out = plain.judge(hook, "git clone --recurs https://127.0.0.1:9/r copy");
         let err = stderr(&out);
@@ -1197,8 +1197,8 @@ fn both_guards_judge_every_address_a_copy_may_use() {
     }
 }
 
-/// Record a nested repository `lib` in the index of `scratch` alone; the
-/// commit it names is the returned one.
+/// Build a nested-repository fixture `lib` under `scratch`; the returned
+/// value is its commit.
 fn record_nested(scratch: &Scratch) -> String {
     git(scratch.root(), &["init", "-q", "lib"]);
     git(
@@ -1507,8 +1507,7 @@ fn both_guards_read_the_whole_index_from_every_directory() {
     }
 }
 
-/// A pathspec setting in the guard's own environment does not change which
-/// index entries the guards read.
+/// The guards read the whole index under any pathspec setting.
 #[test]
 fn both_guards_read_the_whole_index_under_pathspec_settings() {
     let scratch = Scratch::landed(None);
