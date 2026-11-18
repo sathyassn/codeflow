@@ -52,11 +52,20 @@ impl Inputs {
             };
             globals.extend([name.to_string(), value.to_string()]);
         }
-        // The body directory represents repository setup. Submodule runners
-        // clear the parent's repository-location environment for their children.
+        // The body directory represents repository setup. Runners clear the
+        // parent's repository-location environment for their children. Only
+        // a runner that starts its children inside a nested repository
+        // clears the variables that select the index and the objects too;
+        // every other runner's children inherit them.
+        let nested = matches!(
+            git_subcommand(args),
+            Some(("submodule" | "submodule--helper", _))
+        );
         let environment = env
             .iter()
-            .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()) && !probe_input(name))
+            .filter(|(name, _)| {
+                !GIT_LOCATION_VARS.contains(&name.as_str()) && !(nested && probe_input(name))
+            })
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         Ok(Self {
@@ -1426,10 +1435,14 @@ fn git_relevant(name: &str) -> bool {
 /// launcher removes them, then the command's assignments, as its launchers
 /// leave them ([`Launched`]). A variable of the guard's own process that a
 /// launcher removes is removed from the reading too ([`removed_variables`]).
+///
+/// A variable named in `absent` is left out of the shell's own variables, as
+/// when the shell never exported it ([`launched_environments`]).
 fn launched_environment(
     launched: &Launched,
     literals: &Literals,
     inherited: &crate::security::git_config::Environment,
+    absent: &[String],
 ) -> Result<crate::security::git_config::Environment, String> {
     let mut env: crate::security::git_config::Environment = inherited
         .iter()
@@ -1437,12 +1450,12 @@ fn launched_environment(
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
     for (name, value) in &literals.0 {
-        if git_relevant(name) && launched.keeps(name) {
+        if git_relevant(name) && launched.keeps(name) && !absent.contains(name) {
             env.insert(
                 name.clone(),
                 value
                     .clone()
-                    .ok_or("an unresolved Git location assignment")?,
+                    .ok_or("an unresolved assignment of a variable Git reads")?,
             );
         }
     }
@@ -1456,6 +1469,51 @@ fn launched_environment(
     }
     removed_variables(launched, &mut env)?;
     Ok(env)
+}
+
+/// The most variables an earlier command may set that the probes read, each
+/// of which the guard judges both ways.
+const UNCERTAIN_INPUT_LIMIT: usize = 3;
+
+/// Every environment the Git process of a command may have. An assignment
+/// of a variable the probes read made by an earlier command of the line may
+/// not reach Git (the shell did not export it, the command did not run, or
+/// the variable was removed before use), and the guard cannot tell which, so
+/// the command is judged with each such variable present and with it absent,
+/// in every combination. A variable the command's own prefix or launcher
+/// sets is certain and in every view.
+fn launched_environments(
+    launched: &Launched,
+    literals: &Literals,
+    inherited: &crate::security::git_config::Environment,
+) -> Result<Vec<crate::security::git_config::Environment>, String> {
+    let uncertain: Vec<String> = literals
+        .0
+        .keys()
+        .filter(|name| {
+            probe_input(name)
+                && launched.keeps(name)
+                && !launched.assigned.iter().any(|(set, _)| set == *name)
+        })
+        .cloned()
+        .collect();
+    if uncertain.len() > UNCERTAIN_INPUT_LIMIT {
+        return Err(
+            "an earlier command sets more of the variables that select the index or objects than the guard reads; run the commands separately"
+                .into(),
+        );
+    }
+    (0..1_usize << uncertain.len())
+        .map(|mask| {
+            let absent: Vec<String> = uncertain
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| mask & (1 << at) != 0)
+                .map(|(_, name)| name.clone())
+                .collect();
+            launched_environment(launched, literals, inherited, &absent)
+        })
+        .collect()
 }
 
 /// Git's own program search path when `PATH` is unset (`_PATH_DEFPATH`).
@@ -2560,6 +2618,7 @@ fn alias_environment_of(
         launched,
         literals,
         &inputs.environment,
+        &[],
     )?))
 }
 
@@ -3068,9 +3127,12 @@ fn collect_segments(
         launcher_env(&tokens)?;
         let launched = launched(&tokens)?;
         let args = config_env(&args, &literals, &launched)?;
-        let env = launched_environment(&launched, &literals, &inputs.environment)?;
+        let envs = launched_environments(&launched, &literals, &inputs.environment)?;
         let mut pending = Vec::new();
-        for start in &locations[index] {
+        for (env, start) in envs
+            .iter()
+            .flat_map(|env| locations[index].iter().map(move |start| (env, start)))
+        {
             let (changes, uncertain) = launcher_effects(&tokens);
             let at = changes.iter().fold(start.clone(), |at, change| {
                 integrity_shell_path(change, &at)
