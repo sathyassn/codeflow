@@ -192,6 +192,34 @@ fn indirect_writes_keep_inherited_probe_inputs_unread() {
 }
 
 #[test]
+fn arithmetic_contexts_keep_probe_inputs_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        r#": "${s:x}""#,
+        r#": "${s:0:x}""#,
+        r#": "${BASH_VERSINFO[x]}""#,
+        "[[ -v a[x] ]]",
+        "eval '((x))'",
+        "eval ': $((x))'",
+        r"eval \(\(x\)\)",
+        ": \"$( ((x)); git fetch origin )\"",
+        "# don't\n((x))",
+        r"echo $'\''; ((x))",
+        "repeat x do :; done",
+        "float n=x",
+        "typeset -F n=x",
+        "typeset -E n=x",
+        r#": "$s[x]""#,
+    ] {
+        let words = super::super::super::command_argv(context);
+        if !super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn additional_export_options_keep_probe_inputs_unresolved() {
     for segment in [
         "shopt -o -s allexport",
