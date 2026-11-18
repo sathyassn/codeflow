@@ -679,7 +679,9 @@ the form refuses:
   - a new copy, which is judged by every address the configuration gives
     any remote, since it may use any of them, and by the settings of its
     own command line;
-  - a command whose options include one the guard cannot read or place;
+  - a command whose options include one the guard cannot read or place,
+    or a word that one option may take as its value and Git may read as an
+    option of its own;
   - any other command the guards list as contacting a remote whose contact
     they do not resolve.
 
