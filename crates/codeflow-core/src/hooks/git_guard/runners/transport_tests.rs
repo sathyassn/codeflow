@@ -129,7 +129,9 @@ fn unresolved_probe_inputs_stay_unread_in_every_view() {
             Some(crate::security::git_config::UNREAD_PROBE)
         );
     }
-    literals.0.insert("GIT_NO_REPLACE_OBJECTS".into(), Some("assigned".into()));
+    literals
+        .0
+        .insert("GIT_NO_REPLACE_OBJECTS".into(), Some("assigned".into()));
     let views = super::super::launched_environments(&launch, &literals, &inherited).unwrap();
     assert_eq!(views.len(), 3);
     for view in views {
@@ -146,26 +148,43 @@ fn unresolved_probe_inputs_stay_unread_in_every_view() {
 fn indirect_writes_keep_inherited_probe_inputs_unread() {
     let mut wrong = Vec::new();
     for segment in [
-        "((x))", ": $((x))", ": $[x]", "let x", "declare -i n=x",
-        "typeset -i n=x", "integer n=x", "[[ x -eq 1 ]]", "test x -eq 1",
-        "printf -v \"$destination\" %s 1", "declare \"$destination=1\"",
-        "typeset \"$destination=1\"", "local \"$destination=1\"",
-        "readonly \"$destination=1\"", "export \"$destination=1\"",
-        "read \"$destination\"", "mapfile \"$destination\"",
-        "getopts x \"$destination\"", "wait -p \"$destination\"",
-        "array[x]=1", "${destination}=1",
+        "((x))",
+        ": $((x))",
+        ": $[x]",
+        "let x",
+        "declare -i n=x",
+        "typeset -i n=x",
+        "integer n=x",
+        "[[ x -eq 1 ]]",
+        "test x -eq 1",
+        "printf -v \"$destination\" %s 1",
+        "declare \"$destination=1\"",
+        "typeset \"$destination=1\"",
+        "local \"$destination=1\"",
+        "readonly \"$destination=1\"",
+        "export \"$destination=1\"",
+        "read \"$destination\"",
+        "mapfile \"$destination\"",
+        "getopts x \"$destination\"",
+        "wait -p \"$destination\"",
+        "array[x]=1",
+        "${destination}=1",
     ] {
         let literals = super::super::probe_line_literals(&[segment.into()]);
         let inherited = super::super::probe_names()
             .map(|name| (name.into(), "inherited".into()))
             .collect();
         match super::super::launched_environments(
-            &super::super::Launched::default(), &literals, &inherited,
+            &super::super::Launched::default(),
+            &literals,
+            &inherited,
         ) {
-            Ok(views) if views.len() == 1 && super::super::probe_names().all(|name| {
-                views[0].get(name).map(String::as_str)
-                    == Some(crate::security::git_config::UNREAD_PROBE)
-            }) => {}
+            Ok(views)
+                if views.len() == 1
+                    && super::super::probe_names().all(|name| {
+                        views[0].get(name).map(String::as_str)
+                            == Some(crate::security::git_config::UNREAD_PROBE)
+                    }) => {}
             result => wrong.push(format!("{segment}: {result:?}")),
         }
     }
@@ -175,8 +194,12 @@ fn indirect_writes_keep_inherited_probe_inputs_unread() {
 #[test]
 fn additional_export_options_keep_probe_inputs_unresolved() {
     for segment in [
-        "shopt -o -s allexport", "setopt allexport", "setopt ALL_EXPORT",
-        "set -o all_export", "unsetopt noallexport", "setopt No_No_ALL_EXPORT",
+        "shopt -o -s allexport",
+        "setopt allexport",
+        "setopt ALL_EXPORT",
+        "set -o all_export",
+        "unsetopt noallexport",
+        "setopt No_No_ALL_EXPORT",
     ] {
         let literals = super::super::probe_line_literals(&[segment.into()]);
         for name in super::super::probe_names() {
@@ -189,9 +212,9 @@ fn additional_export_options_keep_probe_inputs_unresolved() {
 fn noncontacting_probe_mentions_need_no_probe() {
     let scratch = Scratch::new(HTTPS);
     for command in [
-        "git commit -m 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'",
-        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git status",
-        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git fetch --no-recurse-submodules origin",
+        "git commit -m 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git status",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git fetch --no-recurse-submodules origin",
     ] {
         let mut bodies = Vec::new();
         let result = super::super::collect(

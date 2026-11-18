@@ -938,30 +938,165 @@ fn probe_names() -> impl Iterator<Item = &'static str> {
     std::iter::once(INDEX_FILE).chain(crate::security::git_config::OBJECT_INPUTS.iter().copied())
 }
 
+/// Whether an option name enables whole-shell export for this operation.
+fn probe_export_option(option: &str, mut enabled: bool) -> bool {
+    let normalized = option.replace('_', "").to_ascii_lowercase();
+    let mut name = normalized.as_str();
+    while let Some(rest) = name.strip_prefix("no") {
+        enabled = !enabled;
+        name = rest;
+    }
+    name == "allexport" && enabled
+}
+
+/// Recognized export options add uncertainty; indirect writes do not depend
+/// on recognizing an option or knowing the shell's inherited option state.
+fn probe_export_options(words: &[String]) -> bool {
+    if launched(words).is_ok_and(|launch| {
+        launch.assigned.iter().any(|(name, value)| {
+            name == "SHELLOPTS"
+                && (expands(value)
+                    || value
+                        .split(':')
+                        .any(|option| probe_export_option(option, true)))
+        })
+    }) {
+        return true;
+    }
+    let Some((program, args)) = super::configuration_launch(words, None) else {
+        return false;
+    };
+    let program = super::basename(program);
+    if matches!(program, "setopt" | "unsetopt") {
+        return args
+            .iter()
+            .any(|option| expands(option) || probe_export_option(option, program == "setopt"));
+    }
+    if program == "shopt" {
+        return args.iter().any(|option| expands(option))
+            || args
+                .iter()
+                .any(|option| option.starts_with('-') && option.contains('o'))
+                && args
+                    .iter()
+                    .any(|option| option.starts_with('-') && option.contains('s'))
+                && args.iter().any(|option| probe_export_option(option, true));
+    }
+    if program != "set" && !super::is_shell(program) {
+        return false;
+    }
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--" {
+            break;
+        }
+        if expands(option) {
+            return true;
+        }
+        let enabled = option.starts_with('-');
+        let Some(flags) = option.strip_prefix(['-', '+']) else {
+            break;
+        };
+        if enabled && flags.contains('a') {
+            return true;
+        }
+        if let Some((_, tail)) = flags.split_once('o') {
+            let name = if tail.is_empty() {
+                options.next().map_or("", String::as_str)
+            } else {
+                tail
+            };
+            if expands(name) || probe_export_option(name, enabled) {
+                return true;
+            }
+        }
+        if program != "set" && flags.contains('c') {
+            break;
+        }
+    }
+    false
+}
+
+/// Arithmetic may evaluate values as further assignments to indirect names.
+fn probe_arithmetic(segment: &str, words: &[String]) -> bool {
+    let joined = super::join_continuations(segment);
+    let bytes = joined.as_bytes();
+    let (mut single, mut double) = (false, false);
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            b'\'' if !double => single = !single,
+            b'"' if !single => double = !double,
+            b'\\' if !single => at += 1,
+            _ if !single
+                && ((!double && bytes[at..].starts_with(b"(("))
+                    || bytes[at..].starts_with(b"$((")
+                    || bytes[at..].starts_with(b"$[")) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    if words
+        .iter()
+        .take_while(|word| word.contains('='))
+        .any(|word| {
+            word.split_once('=')
+                .is_some_and(|(name, _)| expands(name) || name.contains('['))
+        })
+    {
+        return true;
+    }
+    let Some((program, args)) = super::configuration_launch(words, None) else {
+        return false;
+    };
+    match program {
+        "let" | "integer" => true,
+        "declare" | "typeset" | "local" | "readonly" | "export" => args
+            .iter()
+            .take_while(|word| word.as_str() != "--")
+            .any(|word| word.starts_with('-') && word.contains('i')),
+        "[[" | "[" | "test" => args
+            .iter()
+            .any(|word| matches!(word.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge")),
+        _ => false,
+    }
+}
+
 fn probe_line_literals(segments: &[String]) -> Literals {
     let mut result = Literals::default();
     for segment in segments {
         let mut words = super::command_argv(segment);
         strip_reserved_words(&mut words);
-        let builtin = super::builtin_words(&words);
-        let opaque_setter = builtin.first().is_some_and(|word| {
-            matches!(word.as_str(), "read" | "mapfile" | "readarray" | "let")
-                || word == "printf" && builtin.iter().any(|word| word.starts_with("-v"))
-        });
+        let (builtin, args) = super::configuration_launch(&words, None).unwrap_or(("", &[]));
+        let opaque_setter = matches!(builtin, "read" | "mapfile" | "readarray" | "let")
+            || builtin == "printf" && args.iter().any(|word| word.starts_with("-v"));
         let target_builtin = opaque_setter
-            || builtin.first().is_some_and(|word| {
-                matches!(
-                    word.as_str(),
-                    "unset" | "export" | "declare" | "typeset" | "local" | "readonly"
-                )
-            });
-        let unknown_target = target_builtin
-            && builtin
+            || matches!(
+                builtin,
+                "unset" | "export" | "declare" | "typeset" | "local" | "readonly" | "getopts"
+            );
+        let unknown_target = (target_builtin
+            && args
                 .iter()
-                .skip(1)
-                .any(|word| expands(word.split_once('=').map_or(word.as_str(), |(name, _)| name)));
-        let removing = builtin.first().is_some_and(|word| word == "unset");
-        if unknown_target {
+                .any(|word| expands(word.split_once('=').map_or(word.as_str(), |(name, _)| name))))
+            || builtin == "wait"
+                && args.iter().enumerate().any(|(at, word)| {
+                    word.strip_prefix('-')
+                        .and_then(|flags| flags.split_once('p'))
+                        .is_some_and(|(_, tail)| {
+                            let target = if tail.is_empty() {
+                                args.get(at + 1).map_or("", String::as_str)
+                            } else {
+                                tail
+                            };
+                            expands(target)
+                        })
+                });
+        let removing = builtin == "unset";
+        if unknown_target || probe_arithmetic(segment, &words) || probe_export_options(&words) {
             for name in probe_names() {
                 result.0.insert(name.into(), None);
             }
@@ -1622,14 +1757,15 @@ fn launched_environment(
     Ok(env)
 }
 
-/// The most uncertain probe inputs in a line or child environment.
+/// The most known alternate probe values in a line or child environment.
 const UNCERTAIN_INPUT_LIMIT: usize = 3;
 
 /// The recorded, absent and inherited states of each candidate input from
 /// the whole line, in every combination. The line can repeat or reorder
-/// bodies, so a recorded value need not reach this call. An unresolved
-/// value stays unread until a contact needs the probe. A variable the
-/// current command's own prefix or launcher sets is certain in every view.
+/// bodies, so a recorded value need not reach this call. Unresolved inputs
+/// stay unread in every view and do not consume the alternate-value bound.
+/// A variable the current command's own prefix or launcher sets is certain
+/// in every view.
 fn launched_environments(
     launched: &Launched,
     literals: &Literals,
@@ -1637,13 +1773,14 @@ fn launched_environments(
 ) -> Result<Vec<crate::security::git_config::Environment>, String> {
     let uncertain: Vec<String> = literals
         .0
-        .keys()
-        .filter(|name| {
-            probe_input(name)
+        .iter()
+        .filter(|(name, value)| {
+            value.is_some()
+                && probe_input(name)
                 && launched.keeps(name)
                 && !launched.assigned.iter().any(|(set, _)| set == *name)
         })
-        .cloned()
+        .map(|(name, _)| name.clone())
         .collect();
     if uncertain.len() > UNCERTAIN_INPUT_LIMIT {
         return Err(
@@ -3257,7 +3394,14 @@ fn collect_segments(
         return Err("a Git runner body contains an unread command word".into());
     }
     let segments = literal_segments(&expanded.segments);
-    let probe_literals = probe_line_literals(&segments);
+    let mut probe_literals = probe_line_literals(&segments);
+    // Segmentation can remove arithmetic delimiters while retaining their
+    // operands, so preserve this uncertainty from the original line too.
+    if probe_arithmetic(command, &[]) {
+        for name in probe_names() {
+            probe_literals.0.insert(name.into(), None);
+        }
+    }
     let run = run_dirs(&segments, cwd);
     let every = segments.clone();
     let locations = segment_directories(command, &expanded.segments, cwd, &run.dirs);

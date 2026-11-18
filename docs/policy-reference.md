@@ -690,23 +690,31 @@ the form refuses:
     commit is read through counts as a possible nested repository, since
     the probe does not follow it. The guard collects possible index and
     object inputs across the whole line, including repeated bodies and
-    carried commands. Each input is judged with its recorded value,
+    carried commands. Each known input is judged with its recorded value,
     explicitly absent and inherited, in every combination. A known removal
     preserves the absent view alongside any recorded value. An input the
-    reader cannot resolve refuses when the contact needs the probe.
-    More than 3 uncertain inputs refuse before probing; up to 27 line
-    environments are judged. An assignment on the current Git command or
-    its direct launcher is certain; a carried prefix remains uncertain.
+    reader cannot resolve stays unread in every view and refuses when the
+    contact needs the probe. Unresolved inputs do not count toward the
+    alternate-value bound. More than 3 inputs with known alternate values
+    refuse before probing; up to 27 line environments are judged.
+    Arithmetic evaluation and setters with an expanding destination mark
+    every probe input unresolved, regardless of export or inheritance.
+    Recognized whole-shell export options also mark those inputs unresolved;
+    the arithmetic protection does not depend on an exhaustive option list.
+    An assignment on the current Git command or its direct launcher is
+    certain; a carried prefix remains uncertain.
     Runner children independently keep or clear each known input, with
     the same 3-input bound. A generated index or an unproved callback
     index remains unresolved. A launcher that clears its whole environment
-    marks every probe input unresolved for the line and can exceed the
-    bound. These conservative views can refuse a command even when the
+    marks every probe input unresolved for the line, without consuming the
+    bound. Its own direct command still has certain absent or assigned
+    inputs. These conservative views can refuse a command even when the
     actual child would not recurse. An index
     too large to read within the probe's limits refuses every command that
     may recurse and reads the index: fetch, pull, a remote update and
     adding a remote that fetches. The command line clears these with the
-    recursion-off option on fetch and pull; a remote update or an added
+    recursion-off option on fetch and pull; earlier authority refusals
+    remain, including those on carried callbacks. A remote update or an added
     remote has no such option, so name the remote in a fetch that turns
     recursion off. A push whose recursion may be on, by its command line or
     by a recursion setting in any configuration scope, a user's own

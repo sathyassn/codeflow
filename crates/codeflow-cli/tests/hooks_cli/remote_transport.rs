@@ -1671,11 +1671,8 @@ fn git_guard_judges_inherited_arithmetic_inputs() {
         );
         assert!(unresolved_probe_refusal(&out), "{line}: {}", stderr(&out));
         let off = format!("{setter}; git fetch --no-recurse-submodules origin");
-        let out = scratch.judge_inheriting(
-            "git-guard",
-            &off,
-            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
-        );
+        let out =
+            scratch.judge_inheriting("git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
         assert_eq!(out.status.code(), Some(0), "{off}: {}", stderr(&out));
     }
 }
@@ -1684,12 +1681,17 @@ fn git_guard_judges_inherited_arithmetic_inputs() {
 fn git_guard_keeps_noncontacting_mentions_allowed() {
     let scratch = Scratch::landed(None);
     for line in [
-        "git log --grep='GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'",
-        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git status",
-        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git fetch --no-recurse-submodules origin",
+        "git log --grep='GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'",
+        "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git status",
     ] {
         git_guard_allows(&scratch, line);
     }
+    let out = scratch.judge("git-guard", "echo 'GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE'; git fetch --no-recurse-submodules origin");
+    assert!(
+        out.status.code() == Some(2) && stderr(&out).contains("git.policy_authority"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -1710,7 +1712,10 @@ fn git_guard_judges_opaque_runtime_inputs() {
         if !unresolved_probe_refusal(&out) {
             wrong.push(format!("{line}: {}", stderr(&out)));
         }
-        git_guard_allows(&scratch, &format!("{setter}; git fetch --no-recurse-submodules origin"));
+        git_guard_allows(
+            &scratch,
+            &format!("{setter}; git fetch --no-recurse-submodules origin"),
+        );
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -1728,12 +1733,17 @@ fn git_guard_judges_opaque_inherited_inputs() {
         "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; [[ x -eq 1 ]]",
     ] {
         let line = format!("{setter}; git fetch origin");
-        let out = scratch.judge_inheriting("git-guard", &line, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &line,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
         if !unresolved_probe_refusal(&out) {
             wrong.push(format!("{line}: {}", stderr(&out)));
         }
         let off = format!("{setter}; git fetch --no-recurse-submodules origin");
-        let out = scratch.judge_inheriting("git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
+        let out =
+            scratch.judge_inheriting("git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
         assert_eq!(out.status.code(), Some(0), "{off}: {}", stderr(&out));
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
