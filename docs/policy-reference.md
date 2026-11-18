@@ -688,15 +688,24 @@ the form refuses:
     there refuses even for a branch with no commit, until the command line
     turns recursion off. A setting that changes which objects the last
     commit is read through counts as a possible nested repository, since
-    the probe does not follow it. An index too large to read within the
-    probe's limits refuses every command that may recurse and reads the
-    index: fetch, pull, a remote update and adding a remote that fetches,
-    until the command line turns recursion off. A push whose recursion may be on, by its command line or by any
-    setting, refuses without reading the repository, since it recurses into
-    the nested repositories of the revisions it sends, which the guards do
-    not read; a project that sets push recursion on needs the explicit
-    recursion-off option on each push, and a push that leaves recursion off
-    keeps its verdict;
+    the probe does not follow it. A variable that selects the index or the
+    objects, set by an earlier command on the same line, may or may not
+    reach Git, so the command is judged with it and without it, and
+    refuses if either view finds a nested repository; one set on the Git
+    command itself, or by a launcher in front of it, is certain. An index
+    too large to read within the probe's limits refuses every command that
+    may recurse and reads the index: fetch, pull, a remote update and
+    adding a remote that fetches. The command line clears these with the
+    recursion-off option on fetch and pull; a remote update or an added
+    remote has no such option, so name the remote in a fetch that turns
+    recursion off. A push whose recursion may be on, by its command line or
+    by a recursion setting in any configuration scope, a user's own
+    included, and in the check mode too, refuses without probing whether
+    nested repositories are present, since it recurses into the nested
+    repositories of the revisions it sends, which the guards do not read.
+    Whoever sets push recursion on, in a project or for their own account,
+    needs the recursion-off option on each push, and a push that leaves
+    recursion off keeps its verdict;
   - a new copy, which is judged by every address the configuration gives
     any remote, since it may use any of them, and by the settings of its
     own command line;
