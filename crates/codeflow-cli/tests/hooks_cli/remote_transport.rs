@@ -254,8 +254,8 @@ fn both_guards_refuse_an_implicit_contact_with_a_helper_program() {
 
 #[test]
 fn both_guards_judge_every_implicit_remote_registration() {
-    // A partial clone filter registers the remote whatever its promisor
-    // setting, and a true value counts even when a later one is false.
+    // Each way of registering an implicit remote counts, and a later
+    // setting never retracts an earlier one.
     let filtered = Scratch::landed(None);
     filtered
         .config("remote.shadow.url", "fixture::x")
@@ -411,8 +411,8 @@ fn both_guards_refuse_an_implicit_contact_they_cannot_prove() {
         ],
         &["git fetch origin", "git maintenance run --task=gc"],
     );
-    // `remote update` reads the remotes Git selects: here every remote,
-    // so the helper remote refuses by name.
+    // An update with no operand reads the remotes Git selects: here every
+    // remote, so the helper remote refuses by name.
     assert_rows(&all, &["git remote update"], &[]);
     let skipped = Scratch::landed(None);
     skipped
@@ -442,8 +442,8 @@ fn both_guards_refuse_an_implicit_contact_they_cannot_prove() {
 
 #[test]
 fn both_guards_refuse_a_selection_that_hides_a_remote() {
-    // An empty `default` group makes Git fetch the remote named `default`,
-    // from the configuration or from a legacy remote file.
+    // An empty default group makes Git fetch the remote of that name, from
+    // the configuration or from an older definition file.
     for group in [&b"\"\""[..], &b"\" \\t \""[..]] {
         let configured = Scratch::landed(None);
         configured
@@ -486,11 +486,11 @@ fn both_guards_refuse_a_selection_that_hides_a_remote() {
 
 #[test]
 fn both_guards_refuse_every_contact_beside_an_unnamed_remote_definition() {
-    // Each key under `[remote ""]` defines a remote the guards do not
-    // resolve, so every contact that reads the configuration's remotes
-    // refuses, whatever name or address the command gives. git-guard
-    // refuses a fetch of a name it cannot read first, by its earlier rule
-    // for a configured remote it cannot read.
+    // Each key under a remote section with an empty name defines a remote
+    // the guards do not resolve, so every contact that reads the
+    // configuration's remotes refuses, whatever name or address the command
+    // gives. git-guard refuses a fetch of a name it cannot read first, by
+    // its earlier rule for a configured remote it cannot read.
     let empty = Scratch::landed(None);
     empty.append_config(
         b"[remote \"\"]\n\turl = fixture::x\n\tpushurl = fixture::x\n\tvcs = fixture\n",
@@ -1023,9 +1023,10 @@ fn both_guards_read_a_consumed_word_as_a_value() {
     );
 }
 
-/// A `remote add` whose `--` an option consumes still fetches; the global
-/// configuration gives the new name a helper setting. git-guard refuses
-/// every `remote add` first by its remote identity rule.
+/// A remote definition whose options may consume a terminator still reads
+/// as one that fetches, and a wider configuration scope may give the new
+/// name a helper setting. git-guard refuses every such definition first by
+/// its remote identity rule.
 #[test]
 fn both_guards_read_a_new_remote_definition_as_git_does() {
     let scratch = Scratch::landed(None);
@@ -1141,8 +1142,8 @@ fn the_two_policy_lists_keep_to_their_own_rules() {
     }
 }
 
-/// Round j, first row, through both guards: a last selection word Git
-/// replaces with a wider selection.
+/// Through both guards: a last word that stands for a wider selection is
+/// read as Git reads it.
 #[test]
 fn both_guards_read_a_selection_word_as_git_reads_it() {
     let scratch = Scratch::landed(None);
@@ -1154,8 +1155,7 @@ fn both_guards_read_a_selection_word_as_git_reads_it() {
     );
 }
 
-/// Round j, second row, through both guards: a word Git keeps as an
-/// operand names the remote.
+/// Through both guards: a word Git keeps as an operand names the remote.
 #[test]
 fn both_guards_read_every_word_git_keeps_as_an_operand() {
     let scratch = Scratch::landed(None);
@@ -1172,8 +1172,8 @@ fn both_guards_read_every_word_git_keeps_as_an_operand() {
     );
 }
 
-/// Round j, third row, through both guards: a new copy judges the address
-/// a wider configuration scope gives its remote.
+/// Through both guards: a new copy judges the address a wider
+/// configuration scope gives its remote.
 #[test]
 fn both_guards_judge_every_address_a_copy_may_use() {
     let scratch = Scratch::landed(None);
@@ -1225,9 +1225,9 @@ fn record_nested(scratch: &Scratch) -> String {
     head
 }
 
-/// Round j, fourth row, through both guards: a nested repository the index
-/// records with no other marker refuses unless the line turns recursion
-/// off, and so does one recorded in the index file the call selects.
+/// Through both guards: a nested repository the index records with no
+/// other marker refuses unless the line turns recursion off, and so does
+/// one recorded in the index file the call selects.
 #[test]
 fn both_guards_refuse_nested_contacts_with_one_marker() {
     let scratch = Scratch::landed(None);
@@ -1282,8 +1282,8 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
     }
 }
 
-/// Round j, fifth row, through both guards: a command that sets up later
-/// runs which contact every configured remote refuses.
+/// Through both guards: a command that sets up later contacts of every
+/// configured remote refuses.
 #[test]
 fn both_guards_refuse_a_command_that_sets_up_later_contacts() {
     let scratch = Scratch::landed(None);

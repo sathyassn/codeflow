@@ -748,8 +748,8 @@ fn remotes_any_command_may_contact_pass_the_same_rule() {
 #[test]
 fn every_registration_of_such_remotes_is_judged() {
     const SHADOW: &str = "[remote \"shadow\"]\n\turl = fixture::x\n";
-    // A partial clone filter registers the remote whatever its promisor
-    // setting, and a true value counts even when a later one is false.
+    // Each way of registering an implicit remote counts, and a later
+    // setting never retracts an earlier one.
     for extra in [
         "\tpartialCloneFilter = blob:none\n",
         "\tpromisor = false\n\tpartialCloneFilter = blob:none\n",
@@ -802,9 +802,10 @@ fn an_empty_word_reads_as_git_reads_it() {
 
 #[test]
 fn an_unnamed_remote_definition_refuses_every_contact() {
-    // Each key under `[remote ""]` defines a remote the guard does not
-    // resolve, so every contact that reads the configuration's remotes
-    // refuses, naming the key, whatever name or address the command gives.
+    // Each key under a remote section with an empty name defines a remote
+    // the guard does not resolve, so every contact that reads the
+    // configuration's remotes refuses, naming the key, whatever name or
+    // address the command gives.
     const CONTACTS: &[&str] = &[
         "fetch origin",
         "ls-remote origin",
@@ -1081,8 +1082,7 @@ fn an_older_definition_name_is_checked_as_git_reads_it() {
     scratch.unproven("fetch old\\name", "legacy remote file");
 }
 
-/// Round j, first row: a last selection word Git replaces with a wider
-/// selection when no group of that name is set.
+/// A last word that stands for a wider selection is read as Git reads it.
 #[test]
 fn a_selection_word_reads_as_git_reads_it() {
     let backup = format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n");
@@ -1108,8 +1108,8 @@ fn a_selection_word_reads_as_git_reads_it() {
     assert_eq!(ordinary.helpers("remote update default"), Ok(vec![]));
 }
 
-/// Round j, second row: a word Git's option parser keeps as an operand
-/// names the remote, wherever the remote's definition comes from.
+/// A word Git's option parser keeps as an operand names the remote,
+/// wherever the remote's definition comes from.
 #[test]
 fn every_word_git_keeps_as_an_operand_names_the_remote() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"-\"]\n\turl = fixture::x\n"));
@@ -1138,8 +1138,8 @@ fn every_word_git_keeps_as_an_operand_names_the_remote() {
     assert_eq!(rewritten.helpers("fetch -"), Ok(vec!["fixture".into()]));
 }
 
-/// Round j, third row: a new copy uses the first address its remote has,
-/// and a wider configuration scope may give that remote one first.
+/// A new copy is judged by every address its remote may have, from any
+/// configuration scope.
 #[test]
 fn a_copy_judges_every_address_it_may_use() {
     for name in ["origin", "upstream"] {
@@ -1209,8 +1209,8 @@ fn nested_in_index_only(scratch: &Scratch, path: &str) {
     index.write().unwrap();
 }
 
-/// Round j, fourth row: a nested repository the index alone records is
-/// one Git may fetch inside, so only a line that turns that off passes.
+/// A nested repository only the index records is judged as one Git may
+/// fetch inside, so only a line that turns that off passes.
 #[test]
 fn nested_contacts_with_one_marker_refuse() {
     let scratch = Scratch::new(HTTPS);
@@ -1238,9 +1238,8 @@ fn nested_contacts_with_one_marker_refuse() {
     unpopulated.unproven("fetch origin", "submodule");
 }
 
-/// Round j, fifth row: a command that sets up later runs which contact
-/// every configured remote outside the guards refuses; one that only
-/// removes them passes.
+/// A command that sets up later contacts outside the guards refuses; one
+/// that only removes such setup passes.
 #[test]
 fn a_command_that_sets_up_later_contacts_refuses() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
@@ -1265,9 +1264,8 @@ fn a_command_that_sets_up_later_contacts_refuses() {
     }
 }
 
-/// Round j, beside the fourth row: a location setting the probe does not
-/// read may place nested repositories where the probe does not look, so
-/// recursion refuses unless the line turns it off.
+/// A setting the probe does not read may place nested repositories where
+/// it does not look, so recursion refuses unless the line turns it off.
 #[test]
 fn nested_contacts_refuse_where_the_probe_cannot_look() {
     let plain = Scratch::new(HTTPS);
