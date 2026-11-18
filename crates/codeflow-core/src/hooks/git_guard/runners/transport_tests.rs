@@ -1363,7 +1363,7 @@ fn an_unreadable_last_commit_refuses() {
         let hidden = Scratch::new(HTTPS);
         commit_empty(&hidden);
         let file = hidden.root().join(".git/refs/heads/main");
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
         let outcome = hidden.contacts_from(hidden.root(), &[], &[], &["fetch", "origin"]);
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
