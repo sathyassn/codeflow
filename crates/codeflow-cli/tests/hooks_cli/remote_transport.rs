@@ -254,8 +254,7 @@ fn both_guards_refuse_an_implicit_contact_with_a_helper_program() {
 
 #[test]
 fn both_guards_judge_every_implicit_remote_registration() {
-    // Each way of registering an implicit remote counts, and a later
-    // setting never retracts an earlier one.
+    // Each way of registering an implicit remote counts.
     let filtered = Scratch::landed(None);
     filtered
         .config("remote.shadow.url", "fixture::x")
@@ -441,8 +440,7 @@ fn both_guards_refuse_an_implicit_contact_they_cannot_prove() {
 
 #[test]
 fn both_guards_refuse_a_selection_that_hides_a_remote() {
-    // An empty default group makes Git fetch the remote of that name, from
-    // the configuration or from an older definition file.
+    // A group the guards cannot resolve refuses.
     for group in [&b"\"\""[..], &b"\" \\t \""[..]] {
         let configured = Scratch::landed(None);
         configured
@@ -461,9 +459,8 @@ fn both_guards_refuse_a_selection_that_hides_a_remote() {
         assert_fetch_without_url(&legacy, "git remote update");
     }
 
-    // A remote section with an empty name defines a remote Git fetches.
-    // git-guard refuses it first, by its earlier rule for a configured
-    // remote it cannot read.
+    // git-guard refuses an unnamed section first, by its earlier rule for a
+    // configured remote it cannot read.
     let empty = Scratch::landed(None);
     empty.append_config(b"[remote \"\"]\n\turl = fixture::x\n");
     assert_judged_with(
@@ -486,11 +483,9 @@ fn both_guards_refuse_a_selection_that_hides_a_remote() {
 
 #[test]
 fn both_guards_refuse_every_contact_beside_an_unnamed_remote_definition() {
-    // Each key under a remote section with an empty name defines a remote
-    // the guards do not resolve, so every contact that reads the
-    // configuration's remotes refuses, whatever name or address the command
-    // gives. git-guard refuses a fetch of a name it cannot read first, by
-    // its earlier rule for a configured remote it cannot read.
+    // A definition the guards cannot resolve refuses every contact that
+    // reads the configuration's remotes. git-guard refuses first, by its
+    // earlier rule for a configured remote it cannot read.
     let empty = Scratch::landed(None);
     empty.append_config(
         b"[remote \"\"]\n\turl = fixture::x\n\tpushurl = fixture::x\n\tvcs = fixture\n",
@@ -686,9 +681,7 @@ fn both_guards_refuse_nested_contacts_they_cannot_prove() {
 
 #[test]
 fn a_location_setting_the_probe_does_not_read_keeps_nested_contacts_refused() {
-    // The probe that looks for nested repositories reads only the call's
-    // location inputs, so a setting that places the work tree elsewhere
-    // cannot hide a record the probe found.
+    // A location setting cannot hide a record the probe found.
     let scratch = Scratch::landed(None);
     scratch.write(".gitmodules", b"");
     let empty = scratch.base.join("empty");
@@ -705,8 +698,7 @@ fn a_location_setting_the_probe_does_not_read_keeps_nested_contacts_refused() {
         &[],
         &[(&environment, CONFIG_OVERRIDE)],
     );
-    // Nor can such a setting move the work tree out of the probe's reach, so
-    // recursion refuses where it passes without the setting.
+    // Recursion refuses with the setting where it passes without it.
     let plain = Scratch::landed(None);
     let elsewhere = plain.base.join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
@@ -1009,9 +1001,8 @@ fn both_guards_refuse_indirect_contacts_they_cannot_prove() {
     );
 }
 
-/// Git takes the word after a value-taking option as its value whatever it
-/// looks like, so a turn-off word or a terminator it consumes proves
-/// nothing in either guard.
+/// A word an option reading consumes as a value proves nothing in either
+/// guard.
 #[test]
 fn both_guards_read_a_consumed_word_as_a_value() {
     let listed = Scratch::landed(None);
@@ -1035,10 +1026,8 @@ fn both_guards_read_a_consumed_word_as_a_value() {
     );
 }
 
-/// A remote definition whose options may consume a terminator still reads
-/// as one that fetches, and a wider configuration scope may give the new
-/// name a helper setting. git-guard refuses every such definition first by
-/// its remote identity rule.
+/// A remote definition the guards cannot prove refuses in both. git-guard
+/// refuses every such definition first by its remote identity rule.
 #[test]
 fn both_guards_read_a_new_remote_definition_as_git_does() {
     let scratch = Scratch::landed(None);
@@ -1154,8 +1143,7 @@ fn the_two_policy_lists_keep_to_their_own_rules() {
     }
 }
 
-/// Through both guards: a last word that stands for a wider selection is
-/// read as Git reads it.
+/// Through both guards: a selection word is read as Git reads it.
 #[test]
 fn both_guards_read_a_selection_word_as_git_reads_it() {
     let scratch = Scratch::landed(None);
@@ -1184,8 +1172,7 @@ fn both_guards_read_every_word_git_keeps_as_an_operand() {
     );
 }
 
-/// Through both guards: a new copy judges the address a wider
-/// configuration scope gives its remote.
+/// Through both guards: a new copy judges every address it may use.
 #[test]
 fn both_guards_judge_every_address_a_copy_may_use() {
     let scratch = Scratch::landed(None);
@@ -1210,8 +1197,8 @@ fn both_guards_judge_every_address_a_copy_may_use() {
     }
 }
 
-/// Record a nested repository `lib` in the index of `scratch` with no other
-/// marker beside it; the commit it names is the returned one.
+/// Record a nested repository `lib` in the index of `scratch` alone; the
+/// commit it names is the returned one.
 fn record_nested(scratch: &Scratch) -> String {
     git(scratch.root(), &["init", "-q", "lib"]);
     git(
@@ -1237,9 +1224,8 @@ fn record_nested(scratch: &Scratch) -> String {
     head
 }
 
-/// Through both guards: a nested repository the index records with no
-/// other marker refuses unless the line turns recursion off, and so does
-/// one recorded in the index file the call selects.
+/// Through both guards: a nested repository the guards cannot rule out
+/// refuses unless the line turns recursion off.
 #[test]
 fn both_guards_refuse_nested_contacts_with_one_marker() {
     let scratch = Scratch::landed(None);
@@ -1294,8 +1280,7 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
     }
 }
 
-/// Through both guards: a command that sets up later contacts of every
-/// configured remote refuses.
+/// Through both guards: a command not proven local refuses.
 #[test]
 fn both_guards_refuse_a_command_that_sets_up_later_contacts() {
     let scratch = Scratch::landed(None);
@@ -1336,19 +1321,17 @@ fn both_guards_read_a_remote_option_in_every_spelling_git_accepts() {
     );
 }
 
-/// The reason a refusal gives for an option word that another option's value
-/// may hide.
+/// The reason a refusal gives for an option reading the guards cannot prove.
 const HIDDEN: &str = "an option word may be read as another option's value";
 
-/// A refusal by this task's rule for an option word a value may hide.
+/// A refusal by this task's rule for an option reading the guards cannot
+/// prove.
 fn hidden_refusal(out: &Output) -> bool {
     let err = stderr(out);
     out.status.code() == Some(2) && err.contains("git.hook_integrity") && err.contains(HIDDEN)
 }
 
-/// Both guards read a word that may be the remote option wherever it stands.
-/// A word another option may take as its value is not set aside: the command
-/// refuses, since Git's own reading may take it as the remote option.
+/// Both guards refuse an option reading they cannot prove.
 #[test]
 fn both_guards_read_a_remote_option_word_a_value_may_consume() {
     let scratch = Scratch::landed(None);
@@ -1362,8 +1345,7 @@ fn both_guards_read_a_remote_option_word_a_value_may_consume() {
             let out = scratch.judge(hook, command);
             assert!(hidden_refusal(&out), "{hook} `{command}`: {}", stderr(&out));
         }
-        // Controls: the option has its own value, so the remote option is
-        // read as it is in every other position.
+        // Controls: a provable reading is judged as usual.
         for command in [
             "git archive --format zip --remote=https://127.0.0.1:9/r HEAD",
             "git archive --prefix p/ --rem https://127.0.0.1:9/r HEAD",

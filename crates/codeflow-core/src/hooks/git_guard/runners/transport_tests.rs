@@ -452,7 +452,7 @@ fn a_default_selection_reads_the_remotes_git_selects() {
     );
     let unclear = Scratch::new(&format!("{backup}\tskipDefaultUpdate = maybe\n"));
     unclear.unproven("remote update", "cannot be read");
-    // The default group, when it is set, replaces every remote.
+    // A set group is read as Git reads it.
     let default = Scratch::new(&format!("{backup}[remotes]\n\tdefault = origin\n"));
     assert_eq!(default.helpers("remote update"), Ok(vec![]));
     let both = Scratch::new(&format!("{backup}[remotes]\n\tdefault = origin backup\n"));
@@ -465,7 +465,7 @@ fn a_default_selection_reads_the_remotes_git_selects() {
         "{backup}[remotes]\n\tdefault = origin mirrors\n\tmirrors = backup\n"
     ));
     nested.unproven("remote update", "remote group");
-    // A remote a legacy remote file may define refuses.
+    // A definition the guard cannot rule out refuses.
     let legacy = Scratch::new(HTTPS);
     assert_eq!(legacy.helpers("remote update"), Ok(vec![]));
     std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
@@ -507,7 +507,7 @@ fn an_unnamed_remote_definition_refuses() {
         "{HTTPS}[remote \"Up\"]\n\turl = fixture::x\n[remote \"up\"]\n\turl = https://example.test/r\n\tskipDefaultUpdate = true\n"
     ));
     assert_eq!(cased.helpers("remote update"), Ok(vec!["fixture".into()]));
-    // The same section, or an empty name, as a promisor remote.
+    // An unusable name refuses for a promisor remote too.
     let promisor = Scratch::new(&format!(
         "{HTTPS}[remote \"\"]\n\turl = https://example.test/r\n\tpromisor = true\n"
     ));
@@ -622,7 +622,7 @@ fn an_address_change_for_one_direction_is_judged_there() {
 
 #[test]
 fn address_changes_apply_in_git_order() {
-    // Both rewrites match: a push reads the push rewrite, a fetch the other.
+    // Each direction reads its own rewrite.
     let scratch = Scratch::new(&format!(
         "{HTTPS}[url \"fixture::https://example.test/\"]\n\tpushInsteadOf = https://example.test/\n[url \"https://mirror.test/\"]\n\tinsteadOf = https://example.test/\n"
     ));
@@ -636,7 +636,7 @@ fn address_changes_apply_in_git_order() {
     ));
     assert_eq!(reversed.helpers("push origin HEAD"), Ok(vec![]));
     assert_eq!(reversed.helpers("fetch origin"), Ok(vec!["fixture".into()]));
-    // A push URL takes the fetch rewrite.
+    // A push address reads the ordinary rewrite.
     let pushurl = Scratch::new(
         "[remote \"origin\"]\n\turl = https://example.test/r\n\tpushurl = https://push.test/r\n[url \"fixture::https://push.test/\"]\n\tinsteadOf = https://push.test/\n",
     );
@@ -748,8 +748,7 @@ fn remotes_any_command_may_contact_pass_the_same_rule() {
 #[test]
 fn every_registration_of_such_remotes_is_judged() {
     const SHADOW: &str = "[remote \"shadow\"]\n\turl = fixture::x\n";
-    // Each way of registering an implicit remote counts, and a later
-    // setting never retracts an earlier one.
+    // Each way of registering an implicit remote counts.
     for extra in [
         "\tpartialCloneFilter = blob:none\n",
         "\tpromisor = false\n\tpartialCloneFilter = blob:none\n",
@@ -780,8 +779,7 @@ fn every_registration_of_such_remotes_is_judged() {
 
 #[test]
 fn an_empty_word_reads_as_git_reads_it() {
-    // Git reads an empty operand as a remote with no address, so the operand
-    // itself is judged as the address, after the rewrites.
+    // An empty operand is judged as Git reads it.
     const REWRITES: &str = "[url \"https://ok.test/\"]\n\tinsteadOf = https://\n[url \"fixture::x\"]\n\tinsteadOf = \"\"\n";
     let scratch = Scratch::new(&format!("{HTTPS}{REWRITES}"));
     assert_eq!(
@@ -801,10 +799,8 @@ fn an_empty_word_reads_as_git_reads_it() {
 
 #[test]
 fn an_unnamed_remote_definition_refuses_every_contact() {
-    // Each key under a remote section with an empty name defines a remote
-    // the guard does not resolve, so every contact that reads the
-    // configuration's remotes refuses, naming the key, whatever name or
-    // address the command gives.
+    // A definition the guard cannot resolve refuses every contact that reads
+    // the configuration's remotes, naming the key.
     const CONTACTS: &[&str] = &[
         "fetch origin",
         "ls-remote origin",
@@ -1178,8 +1174,7 @@ fn a_copy_judges_every_address_it_may_use() {
     );
 }
 
-/// Record a repository at `path` under `scratch` in its index only, with no
-/// other marker beside it, the way an older layout leaves one.
+/// Record a repository at `path` under `scratch` in its index only.
 fn nested_in_index_only(scratch: &Scratch, path: &str) {
     let nested = scratch.root().join(path);
     git2::Repository::init(&nested).unwrap();
@@ -1208,8 +1203,8 @@ fn nested_in_index_only(scratch: &Scratch, path: &str) {
     index.write().unwrap();
 }
 
-/// A nested repository only the index records is judged as one Git may
-/// fetch inside, so only a line that turns that off passes.
+/// A nested repository the guard cannot rule out refuses unless the line
+/// turns recursion off.
 #[test]
 fn nested_contacts_with_one_marker_refuse() {
     let scratch = Scratch::new(HTTPS);
@@ -1229,16 +1224,14 @@ fn nested_contacts_with_one_marker_refuse() {
         Ok(vec![])
     );
     assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
-    // The index entry alone refuses: the guard does not read whether a
-    // repository is in place.
+    // A record the guard cannot confirm refuses.
     let unpopulated = Scratch::new(HTTPS);
     nested_in_index_only(&unpopulated, "lib");
     std::fs::remove_dir_all(unpopulated.root().join("lib")).unwrap();
     unpopulated.unproven("fetch origin", "nested repositories");
 }
 
-/// A command that sets up later contacts outside the guards refuses; one
-/// that only removes such setup passes.
+/// A command not proven local refuses; one that only removes setup passes.
 #[test]
 fn a_command_that_sets_up_later_contacts_refuses() {
     let scratch = Scratch::new(&format!("{HTTPS}[remote \"backup\"]\n\turl = fixture::x\n"));
@@ -1263,8 +1256,8 @@ fn a_command_that_sets_up_later_contacts_refuses() {
     }
 }
 
-/// A setting the probe does not read may place nested repositories where
-/// it does not look, so recursion refuses unless the line turns it off.
+/// Where the probe cannot look, recursion refuses unless the line turns it
+/// off.
 #[test]
 fn nested_contacts_refuse_where_the_probe_cannot_look() {
     let plain = Scratch::new(HTTPS);
@@ -1348,9 +1341,7 @@ fn a_remote_option_is_read_in_every_spelling_git_accepts() {
     }
 }
 
-/// A word that may be the remote option is read wherever it stands. When the
-/// option table gives it to another option as that option's value, Git's own
-/// reading may still take it as the remote option, so the command refuses.
+/// An option reading the guard cannot prove refuses.
 #[test]
 fn a_remote_option_word_another_option_may_consume_refuses() {
     let scratch = Scratch::new("");

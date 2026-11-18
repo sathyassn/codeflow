@@ -1562,8 +1562,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A `promisor` value that is not UTF-8 is no boolean Git reads as
-    // false, so the remote counts as a promisor.
+    // A value that is not UTF-8 is read conservatively as a promisor.
     (
         "crates/codeflow-core/src/security/git_config.rs",
         "promisor_remotes",
@@ -7177,7 +7176,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is reported by doctor's state-root check, which then fails."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run_checks", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
-    ("crates/codeflow-core/src/hooks/git_guard/runners/transport.rs", "no_legacy_remotes", "is_dir", 1, "Type check on metadata from symlink_metadata_optional, read without following a link; its error and every type but a real directory, a link included, refuse an operand-free remote update, and only proven absence passes without a read."),
+    ("crates/codeflow-core/src/hooks/git_guard/runners/transport.rs", "no_legacy_remotes", "is_dir", 1, "Type check on metadata from symlink_metadata_optional, read without following a link; its error and every type but a real directory, a link included, refuse, and only proven absence passes without a read."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard/path_writers.rs", "read_patch", "is_file", 1, "Type check on metadata obtained with its error propagated as a refusal; a patch that is not a regular file also refuses, so a FIFO is never opened and nothing is read as absent (TSK-1390)."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
