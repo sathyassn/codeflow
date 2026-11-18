@@ -107,6 +107,20 @@ fn hook_floor_candidate_naming_keeps_the_landed_value() {
     assert!(judged.branch_name_ok("candidate/x"));
 }
 
+#[test]
+fn hook_floor_candidate_naming_keeps_landed_eligibility() {
+    let landed = git(json!({"protected_branches":["main"],
+        "branch_prefixes":["candidate/work/"]}));
+    let working = git(json!({"protected_branches":["main"], "branch_prefixes":[]}));
+    assert!(!landed.branch_name_ok("candidate/free"));
+    assert!(working.branch_name_ok("candidate/free"));
+    let judged = compose_git(&landed, &working).unwrap();
+    assert!(!judged.is_candidate_branch("candidate/free"));
+    assert!(!judged.branch_name_ok("candidate/free"));
+    let nested = compose_git(&judged, &working).unwrap();
+    assert!(!nested.branch_name_ok("candidate/free"));
+}
+
 /// Protection is a classification: the union only adds prohibitions, and
 /// what grants trust or exempts a branch reads the landed list (TSK-1078).
 #[test]

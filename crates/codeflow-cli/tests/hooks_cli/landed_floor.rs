@@ -304,7 +304,7 @@ fn refused(out: &std::process::Output, rule: &str) {
 
 fn collect_refusal(out: &std::process::Output, rule: &str, case: &str, failures: &mut Vec<String>) {
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if out.status.success() || !stderr.contains(rule) {
+    if out.status.success() || !stderr.contains(&format!("policy rule {rule} (block)")) {
         failures.push(format!("{case}: expected {rule}: {stderr}"));
     }
 }
@@ -698,6 +698,69 @@ fn landed_floor_pre_push_added_protection_does_not_exempt_branch_naming() {
             &format!("stale={stale}"),
             &mut failures,
         );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn landed_floor_pre_push_removed_prefix_keeps_landed_naming() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let mut landed = protection_landed();
+        landed["branch_prefixes"] = json!(["candidate/work/"]);
+        assert!(landed.get("candidate_prefix").is_none());
+        let mut working = landed.clone();
+        working["branch_prefixes"] = json!([]);
+        let fixture = Fixture::new(landed, working, stale);
+        let oid = fixture.repo.head().unwrap().target().unwrap();
+        let input = format!(
+            "refs/heads/task/check {oid} refs/heads/candidate/free {}\n",
+            "0".repeat(40)
+        );
+        collect_refusal(
+            &fixture.hook("pre-push", "fix: check", &input),
+            "git.branch_naming",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn landed_floor_ci_keeps_the_early_missing_line_refusal() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        for added_overlap in [false, true] {
+            let mut landed = protection_landed();
+            landed["candidate_prefix"] = json!("candidate/");
+            let mut working = landed.clone();
+            working["candidate_prefix"] = json!("other/");
+            if added_overlap {
+                working["protected_branches"] = json!(["main", "candidate/*"]);
+            }
+            let fixture = Fixture::new(landed, working, stale);
+            let rules = fixture.dir.path().join("blocking-rules.txt");
+            std::fs::write(&rules, "").unwrap();
+            let out = super::codeflow()
+                .current_dir(fixture.dir.path())
+                .args([
+                    "ci", "--pushed-ref", "refs/heads/candidate/check",
+                    "--branch", "task/check", "--head", "missing-range-head",
+                    "--blocking-rules-out",
+                ])
+                .arg(&rules)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let case = format!("stale={stale}, added_overlap={added_overlap}");
+            if out.status.code() != Some(1)
+                || !stderr.contains("hand-off names no line (`--into`)")
+                || std::fs::read_to_string(&rules).unwrap().trim() != "work.landing_candidate"
+            {
+                failures.push(format!("{case}: expected missing-line block before range resolution: {stderr}"));
+            }
+        }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
