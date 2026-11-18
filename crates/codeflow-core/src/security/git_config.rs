@@ -117,8 +117,9 @@ impl EffectiveConfig {
 /// - each remote with a partial-copy filter.
 ///
 /// A setting without a usable name gives the empty name. Sorted, without
-/// duplicates; empty for a repository that is no partial copy. The guards and the commit-time secret scan both
-/// read promisor state through this one function.
+/// duplicates; empty for a repository that is no partial copy. The guards and
+/// the commit-time secret scan both read promisor state through this one
+/// function.
 pub(crate) fn promisor_remotes<'a>(
     entries: impl IntoIterator<Item = (&'a [u8], Option<&'a [u8]>)>,
 ) -> Vec<Vec<u8>> {

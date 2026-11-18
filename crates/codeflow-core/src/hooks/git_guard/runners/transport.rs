@@ -180,7 +180,8 @@ pub(super) trait Probe {
     /// The branch the repository has checked out; an error for a detached
     /// HEAD or any failure.
     fn branch(&mut self) -> Result<String, String>;
-    /// Whether the index the call reads holds a record of a nested
+    /// Whether the index the call reads, or the last commit, holds a record
+    /// or definition of a nested repository, read from the top of the
     /// repository; an error for any failure.
     fn gitlinks(&mut self) -> Result<bool, String>;
 }
@@ -946,8 +947,8 @@ impl<'a> Resolver<'a> {
     /// Refuse recursion into nested repositories in a repository that has or
     /// may have them, unless the command line turns it off.
     fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
-        // Git reads the push setting and the general one in configuration
-        // order, so either one turning recursion on reads as on.
+        // Both the push setting and the general one can turn recursion on,
+        // so either one set to a value Git reads as on counts as on.
         let on = match recursion_on_line(verb, rest) {
             Some(on) => on,
             None if verb == "push" => {

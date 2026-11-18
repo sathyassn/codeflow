@@ -1280,8 +1280,8 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
     }
 }
 
-/// Hold a definition file in the index, or also in the last commit, and
-/// leave the work tree without it.
+/// Hold a definition file in the index only, or (with `in_commit`) in the
+/// last commit only, and leave the work tree without it.
 fn definition_outside_work_tree(scratch: &Scratch, in_commit: bool) {
     let repo = git2::Repository::open(scratch.root()).unwrap();
     std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
