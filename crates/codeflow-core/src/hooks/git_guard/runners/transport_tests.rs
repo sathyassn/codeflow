@@ -1386,6 +1386,77 @@ fn an_unreadable_last_commit_refuses() {
         .is_ok());
 }
 
+/// Commit a tree holding a nested-repository record named `lib`. With
+/// `branch` the commit goes on that new branch and the checked-out one stays
+/// as it is; without, it becomes the last commit and the index does not hold
+/// the record.
+fn commit_nested_record(scratch: &Scratch, branch: Option<&str>) {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let mut tree = repo.treebuilder(None).unwrap();
+    tree.insert(
+        "lib",
+        git2::Oid::from_str("0123456789012345678901234567890123456789").unwrap(),
+        0o160_000,
+    )
+    .unwrap();
+    let tree = repo.find_tree(tree.write().unwrap()).unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    let update = branch.map_or("HEAD".to_string(), |name| format!("refs/heads/{name}"));
+    repo.commit(Some(&update), &who, &who, "fixture", &tree, &[])
+        .unwrap();
+}
+
+/// A push whose recursion may be on refuses whatever the guard reads in the
+/// index, the last commit and the work tree, since it never reads the
+/// revisions the push sends. A push that leaves recursion off, or turns it
+/// off on the line, keeps its verdict.
+#[test]
+fn a_push_whose_recursion_may_be_on_refuses() {
+    let on = [
+        "push --recurse-submodules=on-demand origin other",
+        "push --recurse-submodules=check origin other",
+        "push --recurse-submodules=only origin other",
+        "push --recurse-submodules origin other",
+    ];
+    // The record is in a revision other than the last commit and the index.
+    let elsewhere = Scratch::new(HTTPS);
+    commit_nested_record(&elsewhere, Some("other"));
+    // The record is in the last commit only.
+    let last = Scratch::new(HTTPS);
+    commit_nested_record(&last, None);
+    // Nothing the guard reads holds a record.
+    let plain = Scratch::new(HTTPS);
+    for scratch in [&elsewhere, &last, &plain] {
+        for command in on {
+            scratch.unproven(command, "nested repositories");
+        }
+        for command in [
+            "push origin other",
+            "push --no-recurse-submodules origin other",
+            "push --recurse-submodules=no origin other",
+        ] {
+            assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
+        }
+    }
+    // The effective mode may come from the settings too.
+    for setting in [
+        "[push]\n\trecurseSubmodules = on-demand\n",
+        "[push]\n\trecurseSubmodules = check\n",
+        "[submodule]\n\trecurse = true\n",
+    ] {
+        let scratch = Scratch::new(&format!("{HTTPS}{setting}"));
+        commit_nested_record(&scratch, Some("other"));
+        scratch.unproven("push origin other", "nested repositories");
+        assert_eq!(
+            scratch.helpers("push --no-recurse-submodules origin other"),
+            Ok(vec![])
+        );
+    }
+    let off = Scratch::new(&format!("{HTTPS}[push]\n\trecurseSubmodules = no\n"));
+    commit_nested_record(&off, Some("other"));
+    assert_eq!(off.helpers("push origin other"), Ok(vec![]));
+}
+
 /// The probe reads the last commit as the call does: a replacement the call
 /// turns off by option, or by setting, is not followed.
 #[test]

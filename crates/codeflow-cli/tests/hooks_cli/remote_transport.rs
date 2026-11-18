@@ -1376,6 +1376,112 @@ fn both_guards_read_the_definition_from_any_directory() {
     }
 }
 
+/// Commit a tree holding a nested-repository record named `lib`, on the new
+/// branch `branch`, or as the last commit with no record in the index.
+fn commit_nested_record(scratch: &Scratch, branch: Option<&str>) {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let mut tree = repo.treebuilder(None).unwrap();
+    tree.insert(
+        "lib",
+        git2::Oid::from_str("0123456789012345678901234567890123456789").unwrap(),
+        0o160_000,
+    )
+    .unwrap();
+    let tree = repo.find_tree(tree.write().unwrap()).unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    match branch {
+        Some(name) => repo
+            .commit(
+                Some(&format!("refs/heads/{name}")),
+                &who,
+                &who,
+                "fixture",
+                &tree,
+                &[],
+            )
+            .unwrap(),
+        None => {
+            let parent = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[&parent])
+                .unwrap()
+        }
+    };
+}
+
+/// Through both guards: a push whose recursion may be on refuses, whether
+/// the nested record is in a pushed revision other than the last commit, in
+/// the last commit only, or nowhere the guards read. A push that leaves
+/// recursion off, or turns it off on the line, keeps its verdict.
+#[test]
+fn both_guards_refuse_a_push_whose_recursion_may_be_on() {
+    let elsewhere = Scratch::landed(None);
+    commit_nested_record(&elsewhere, Some("other"));
+    let last = Scratch::landed(None);
+    commit_nested_record(&last, None);
+    let plain = Scratch::landed(None);
+    for scratch in [&elsewhere, &last, &plain] {
+        assert_unproven(
+            scratch,
+            &[
+                "git push --recurse-submodules=on-demand origin other:refs/heads/task/x",
+                "git push --recurse-submodules=check origin HEAD:refs/heads/task/x",
+            ],
+            &[
+                "git push origin other:refs/heads/task/x",
+                "git push --no-recurse-submodules origin HEAD:refs/heads/task/x",
+                "git push --recurse-submodules=no origin HEAD:refs/heads/task/x",
+            ],
+        );
+    }
+    let set = Scratch::landed(None);
+    set.config("push.recurseSubmodules", "on-demand");
+    assert_unproven(
+        &set,
+        &["git push origin HEAD:refs/heads/task/x"],
+        &["git push --no-recurse-submodules origin HEAD:refs/heads/task/x"],
+    );
+}
+
+/// Through git-guard: a replacement variable the line sets reaches the
+/// probe. exec-guard refuses such a line first, by its rule for what Git
+/// reads, so the row covers git-guard only, and exec-guard is held to
+/// refusing it.
+#[test]
+fn git_guard_reads_a_replacement_variable_set_on_the_line() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let original = repo.head().unwrap().target().unwrap();
+    let tree = repo
+        .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+        .unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    let swap = repo
+        .commit(None, &who, &who, "fixture", &tree, &[])
+        .unwrap();
+    repo.reference(&format!("refs/replace/{original}"), swap, true, "fixture")
+        .unwrap();
+    // Controls: the replacement is followed as the call follows it.
+    for hook in HOOKS {
+        let out = scratch.judge(hook, "git fetch origin");
+        assert_eq!(out.status.code(), Some(0), "{hook}: {}", stderr(&out));
+    }
+    for line in [
+        "GIT_NO_REPLACE_OBJECTS=1 git fetch origin",
+        "env GIT_NO_REPLACE_OBJECTS=1 git fetch origin",
+    ] {
+        let out = scratch.judge("git-guard", line);
+        assert!(nested_refusal(&out), "{line}: {}", stderr(&out));
+        let out = scratch.judge("exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {}", stderr(&out));
+    }
+    let out = scratch.judge(
+        "git-guard",
+        "GIT_NO_REPLACE_OBJECTS=1 git fetch --no-recurse-submodules origin",
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
 /// Through both guards: a command not proven local refuses.
 #[test]
 fn both_guards_refuse_a_command_that_sets_up_later_contacts() {
