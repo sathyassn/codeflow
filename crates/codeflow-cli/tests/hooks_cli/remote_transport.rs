@@ -89,7 +89,7 @@ impl Scratch {
     }
 
     /// Judge `command` as run from the directory `cwd`.
-    fn judge_in(&self, hook: &str, command: &str, cwd: &Path) -> Output {
+    fn judge_in(hook: &str, command: &str, cwd: &Path) -> Output {
         run_with_stdin(
             codeflow()
                 .args(["hook", hook, "--contract", "3"])
@@ -1366,14 +1366,14 @@ fn both_guards_read_the_whole_index_from_every_directory() {
                 "git -C deep pull --no-recurse-submodules origin main",
             ),
         ] {
-            let out = scratch.judge_in(hook, refused, cwd);
+            let out = Scratch::judge_in(hook, refused, cwd);
             assert!(
                 unproven_refusal(&out),
                 "{hook} `{refused}` in {}: {}",
                 cwd.display(),
                 stderr(&out)
             );
-            let out = scratch.judge_in(hook, allowed, cwd);
+            let out = Scratch::judge_in(hook, allowed, cwd);
             assert_eq!(
                 out.status.code(),
                 Some(0),
@@ -1388,7 +1388,7 @@ fn both_guards_read_the_whole_index_from_every_directory() {
     plain.write("src/deep/a.txt", b"a\n");
     for hook in HOOKS {
         for cwd in [plain.root().to_path_buf(), plain.root().join("src")] {
-            let out = plain.judge_in(hook, "git fetch origin", &cwd);
+            let out = Scratch::judge_in(hook, "git fetch origin", &cwd);
             assert_eq!(out.status.code(), Some(0), "{hook}: {}", stderr(&out));
         }
     }
@@ -1426,5 +1426,25 @@ fn both_guards_read_the_whole_index_from_every_directory() {
             &guard_payload("git fetch origin", &selected_src),
         );
         assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
+    }
+}
+
+/// A pathspec setting in the guard's own environment does not change which
+/// index entries the guards read.
+#[test]
+fn both_guards_read_the_whole_index_under_pathspec_settings() {
+    let scratch = Scratch::landed(None);
+    scratch.write("src/a.txt", b"a\n");
+    record_nested(&scratch);
+    for hook in HOOKS {
+        for setting in [
+            "GIT_LITERAL_PATHSPECS",
+            "GIT_GLOB_PATHSPECS",
+            "GIT_NOGLOB_PATHSPECS",
+            "GIT_ICASE_PATHSPECS",
+        ] {
+            let out = scratch.judge_inheriting(hook, "git fetch origin", (setting, "1"));
+            assert!(unproven_refusal(&out), "{hook} {setting}: {}", stderr(&out));
+        }
     }
 }
