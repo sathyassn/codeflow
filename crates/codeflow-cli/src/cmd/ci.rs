@@ -495,11 +495,9 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     // A landing candidate's hand-off without `--into` is refused before the
     // target is resolved, so its cause is named first (TSK-1351 AC-3).
     // All classification inputs come from the floor, before composition.
-    if let Some(refusal) = candidate::unnamed_line(
-        args.pushed_ref.as_deref(),
-        &floor,
-        args.into.as_deref(),
-    ) {
+    if let Some(refusal) =
+        candidate::unnamed_line(args.pushed_ref.as_deref(), &floor, args.into.as_deref())
+    {
         let tagged = vec![refusal];
         if let Some(out) = &args.blocking_rules_out {
             write_blocking_rules(out, &tagged);
