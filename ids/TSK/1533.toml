@@ -1,0 +1,11 @@
+id = "TSK-1533"
+uid = "24dede66-c652-4af3-935a-2099f6ae1a07"
+kind = "TSK"
+title = "The docs portal audit accepts the picomatch advisory until 2026-12-17"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-18T03:05:47Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
