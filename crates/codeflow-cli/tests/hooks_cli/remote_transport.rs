@@ -1690,7 +1690,16 @@ fn git_guard_judges_the_environment_of_parent_callbacks() {
         &format!("GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git -C {root} fetch origin' --paginate submodule status"),
     );
     assert!(unresolved_probe_refusal(&out), "{}", stderr(&out));
-    git_guard_allows(&forward, &format!("GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git -C {root} fetch --no-recurse-submodules origin' --paginate submodule status"));
+    let out = forward.judge("git-guard", &format!("GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git -C {root} fetch --no-recurse-submodules origin' --paginate submodule status"));
+    assert!(
+        out.status.code() == Some(2)
+            && stderr(&out).contains("git.policy_authority")
+            && stderr(&out)
+                .contains("cannot determine the transport repository: the `env` option `-u`"),
+        "{}",
+        stderr(&out)
+    );
+    git_guard_allows(&forward, &format!("git -c core.pager='git -C {root} fetch --no-recurse-submodules origin' --paginate submodule status"));
 }
 
 #[test]
