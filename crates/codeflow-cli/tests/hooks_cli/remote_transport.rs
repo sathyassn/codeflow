@@ -783,21 +783,34 @@ fn both_guards_refuse_a_name_an_older_definition_may_define() {
 
 #[cfg(unix)]
 #[test]
-fn an_unreadable_configuration_refuses_naming_the_file() {
+fn an_unreadable_configuration_refuses_by_the_shared_reader() {
+    // The file sits in a wider scope, which the project-root reader does not
+    // open, so the refusal comes from the shared configuration reader and
+    // not from an earlier check.
     let scratch = Scratch::landed(None);
-    let extra = scratch.root().join(".git/extra-config");
+    let extra = scratch.base.join("extra-config");
     std::fs::write(&extra, "[remote \"web\"]\n\turl = https://127.0.0.1:9/r\n").unwrap();
-    scratch.config("include.path", &shell_path(&extra));
+    let global = scratch.base.join("global.gitconfig");
+    std::fs::write(
+        &global,
+        format!("[include]\n\tpath = {}\n", shell_path(&extra)),
+    )
+    .unwrap();
+    let global = shell_path(&global);
     let _denied = super::RestorePermissions::deny(&extra);
     for hook in HOOKS {
-        let out = scratch.judge(hook, "git fetch web");
+        let out = scratch.judge_inheriting(
+            hook,
+            "git ls-remote https://127.0.0.1:9/r",
+            ("GIT_CONFIG_GLOBAL", &global),
+        );
         let err = stderr(&out);
         assert_eq!(out.status.code(), Some(2), "{hook}: {err}");
         assert!(
-            err.contains("git.hook_integrity") && err.contains("cannot read Git runner"),
+            err.contains("git.hook_integrity")
+                && err.contains("cannot read Git runner: cannot verify Git configuration"),
             "{hook}: {err}"
         );
-        assert!(err.contains("extra-config"), "{hook}: {err}");
     }
 }
 
