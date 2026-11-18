@@ -1750,6 +1750,75 @@ fn git_guard_judges_opaque_inherited_inputs() {
 }
 
 #[test]
+fn git_guard_judges_nested_arithmetic_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for context in [
+        r#": "${s:x}""#,
+        r#": "${s:0:x}""#,
+        r#": "${BASH_VERSINFO[x]}""#,
+        r#"[[ -v a[x] ]]"#,
+        r#"eval '((x))'"#,
+        r#"eval ': $((x))'"#,
+        r#"eval \(\(x\)\)"#,
+        ": \"$( ((x)); git fetch origin )\"",
+        "# don't\n((x))",
+        r#"echo $'\''; ((x))"#,
+        "repeat x do :; done",
+        "float n=x",
+        "typeset -F n=x",
+        "typeset -E n=x",
+        r#": "$s[x]""#,
+        "declare 'a[x]=1'",
+        "printf -v 'a[x]' %s 1",
+        "read 'a[x]'",
+        "unset 'a[x]'",
+        "getopts o 'a[x]'",
+        "wait -p 'a[x]'",
+    ] {
+        let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; s=abc; {context}");
+        let line = format!("{prefix}; git fetch origin");
+        let out = scratch.judge_inheriting(
+            "git-guard", &line, ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        // Some destination forms already have an earlier authority refusal.
+        if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("contact {context}: {}", stderr(&out)));
+        }
+        let off = format!("{}; git fetch --no-recurse-submodules origin", prefix.replace("git fetch origin", "git fetch --no-recurse-submodules origin"));
+        let out = scratch.judge_inheriting(
+            "git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_keeps_arithmetic_data_allowed() {
+    let scratch = Scratch::landed(None);
+    let mut wrong = Vec::new();
+    for line in [
+        "git fetch origin # ((example))",
+        "cat <<'EOF'\n((example))\nEOF\ngit fetch origin",
+        "echo '((example))'; git fetch origin",
+        "echo '${s:x}'; git fetch origin",
+        "echo '${a[x]}'; git fetch origin",
+        "echo \"${s:-literal}\"; git fetch origin",
+    ] {
+        let out = scratch.judge("git-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_reads_the_environment_of_carried_bodies() {
     let scratch = Scratch::landed(None);
     definition_outside_work_tree(&scratch, true);
