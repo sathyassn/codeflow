@@ -817,7 +817,10 @@ pub fn compose_paths(
 }
 
 /// Compose the branch lists used by classic hooks and CI range selection.
-/// Protected entries add requirements; work prefixes admit branch names.
+/// Protected entries add prohibitions, so the list is the union; it must
+/// never grant trust, choose a range base or exempt a branch, which read the
+/// landed list alone (`GitPolicy::trusted_protected_branches`). Work
+/// prefixes admit branch names, so that list is the intersection.
 #[must_use]
 pub fn compose_branches(
     landed: &super::policy::GitPolicy,
@@ -890,6 +893,9 @@ pub fn compose_git(
         test_gate_on_push
     );
     (judged.protected_branches, judged.branch_prefixes) = compose_branches(landed, working);
+    // The union above only adds prohibitions. What grants trust or exempts a
+    // branch reads the landed list through `trusted_protected_branches`.
+    judged.landed_protected_branches = Some(landed.trusted_protected_branches().to_vec());
     judged.commit_required_footers = union(
         &landed.commit_required_footers,
         &working.commit_required_footers,

@@ -663,26 +663,42 @@ pub fn commit_msg_from(
     // configured ticket keys; the returned level distinguishes a required-but-
     // missing ticket (`commit_ticket_required`) from a malformed present one
     // (block).
-    if is_merge && policy.commit_ticket_merges.is_active() {
-        report
-            .violations
-            .extend(merge_ticket_violation(policy, &cleaned));
-    } else if !policy.commit_ticket_keys.is_empty() {
-        if let Some((level, reason)) = standards::check_commit_ticket(
+    // A merge whose subject is not git's own is also an ordinary commit, so
+    // the merge rule and the ordinary rule both judge it and the stricter
+    // finding stands: turning the merge rule on can never lower the level the
+    // ordinary rule already applies.
+    let merge_finding = (is_merge && policy.commit_ticket_merges.is_active())
+        .then(|| merge_ticket_violation(policy, &cleaned))
+        .flatten();
+    let ordinary_finding = if policy.commit_ticket_keys.is_empty() {
+        None
+    } else {
+        standards::check_commit_ticket(
             subject,
             &cleaned,
             &policy.commit_ticket_keys,
             policy.commit_ticket_required,
             &policy.commit_ticket_pattern,
-        ) {
-            report.violations.push(Violation::new(
+        )
+        .map(|(level, reason)| {
+            Violation::new(
                 "git.commit_ticket",
                 level,
                 reason,
                 crate::remedy::COMMIT_TICKET
                     .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
-            ));
+            )
+        })
+    };
+    match (merge_finding, ordinary_finding) {
+        (Some(merge), Some(ordinary)) if ordinary.level.stricter(merge.level) != merge.level => {
+            report.violations.push(ordinary);
         }
+        (Some(merge), _) => report.violations.push(merge),
+        (None, Some(ordinary)) if !(is_merge && policy.commit_ticket_merges.is_active()) => {
+            report.violations.push(ordinary);
+        }
+        (None, _) => {}
     }
 
     if policy.ai_attribution.is_active() {
@@ -1494,25 +1510,38 @@ pub fn pre_push(
             ));
         }
 
-        let (force_level, force_rule, remedy) = if protected {
-            (
-                policy.force_push_protected,
-                "git.force_push_protected",
-                crate::remedy::PROTECTED_BRANCH.remedy(),
-            )
+        // Protection is a classification, so the rule that applies is chosen
+        // under the landed classification and under the composed one, and the
+        // stricter level stands: adding a branch to the protected list can
+        // never remove a landed block.
+        let landed_protected = policy.branch_is_landed_protected(branch);
+        let force_rule_for = |is_protected: bool| {
+            if is_protected {
+                (policy.force_push_protected, "git.force_push_protected")
+            } else {
+                (policy.force_push_unprotected, "git.force_push_unprotected")
+            }
+        };
+        let (landed_level, landed_rule) = force_rule_for(landed_protected);
+        let (composed_level, composed_rule) = force_rule_for(protected);
+        let landed_is_stricter =
+            landed_level != composed_level && landed_level.stricter(composed_level) == landed_level;
+        let (force_level, force_rule, force_protected) = if landed_is_stricter {
+            (landed_level, landed_rule, landed_protected)
         } else {
-            (
-                policy.force_push_unprotected,
-                "git.force_push_unprotected",
-                crate::remedy::FORCE_PUSH.remedy(),
-            )
+            (composed_level, composed_rule, protected)
+        };
+        let remedy = if force_protected {
+            crate::remedy::PROTECTED_BRANCH.remedy()
+        } else {
+            crate::remedy::FORCE_PUSH.remedy()
         };
         if force_level.is_active() {
             match is_force_update(&repo, r) {
                 Ok(false) => {},
                 Ok(true) => report.violations.push(Violation::new(
                     force_rule, force_level,
-                    format!("non-fast-forward (force) push to {}branch '{}'", if protected { "protected " } else { "" }, crate::git::display_text(branch)),
+                    format!("non-fast-forward (force) push to {}branch '{}'", if force_protected { "protected " } else { "" }, crate::git::display_text(branch)),
                     remedy,
                 )),
                 Err(reason) => report.violations.push(Violation::always_blocking(
@@ -1527,7 +1556,8 @@ pub fn pre_push(
             epic_line_push(root, &repo, r, branch, &mut report);
         }
 
-        if !protected && policy.branch_naming.is_active() && !policy.branch_name_ok(branch) {
+        // Only the landed classification exempts a branch from naming.
+        if !landed_protected && policy.branch_naming.is_active() && !policy.branch_name_ok(branch) {
             report.violations.push(Violation::new(
                 "git.branch_naming",
                 policy.branch_naming,

@@ -107,6 +107,51 @@ fn hook_floor_candidate_naming_keeps_the_landed_value() {
     assert!(judged.branch_name_ok("candidate/x"));
 }
 
+/// Protection is a classification: the union only adds prohibitions, and
+/// what grants trust or exempts a branch reads the landed list (TSK-1078).
+#[test]
+fn hook_floor_keeps_the_landed_protected_classification_beside_the_union() {
+    let landed = git(json!({"protected_branches":["main"], "branch_prefixes":["task/"]}));
+    let local = git(
+        json!({"protected_branches":["main", "integration/EPC-999-unbound", "loose/*"],
+        "branch_prefixes":["task/"]}),
+    );
+    let judged = compose_git(&landed, &local).unwrap();
+    assert_eq!(
+        judged.protected_branches,
+        ["main", "integration/EPC-999-unbound", "loose/*"]
+    );
+    assert_eq!(judged.trusted_protected_branches(), ["main"]);
+    // The union protects the added names, so prohibitions apply to them.
+    assert!(judged.branch_is_protected("integration/EPC-999-unbound"));
+    assert!(judged.branch_is_protected("loose/check"));
+    // The landed classification does not, so no exemption or grant follows.
+    assert!(!judged.branch_is_landed_protected("integration/EPC-999-unbound"));
+    assert!(!judged.branch_is_landed_protected("loose/check"));
+    assert!(judged.branch_is_landed_protected("main"));
+    assert!(!judged.branch_name_ok("loose/check"));
+    assert!(judged.branch_name_ok("main"));
+    // Outside composition the two classifications are the same.
+    let plain = git(json!({"protected_branches":["main", "loose/*"]}));
+    assert_eq!(plain.trusted_protected_branches(), ["main", "loose/*"]);
+    assert!(plain.branch_is_landed_protected("loose/check"));
+}
+
+#[test]
+fn hook_floor_the_stricter_level_is_the_higher_one() {
+    use crate::hooks::policy::PolicyLevel::{Allow, Block, Off, Warn};
+    for (a, b, stricter) in [
+        (Off, Block, Block),
+        (Block, Off, Block),
+        (Warn, Allow, Warn),
+        (Allow, Warn, Warn),
+        (Off, Allow, Allow),
+        (Warn, Warn, Warn),
+    ] {
+        assert_eq!(a.stricter(b), stricter, "{a} and {b}");
+    }
+}
+
 #[test]
 fn hook_floor_empty_ticket_intersection_refuses_instead_of_disabling() {
     let authority = git(json!({"commit_ticket_keys":["Refs"]}));

@@ -89,6 +89,18 @@ impl PolicyLevel {
     }
 }
 
+impl PolicyLevel {
+    /// The stricter of two levels, in the order block, warn, allow, off.
+    #[must_use]
+    pub fn stricter(self, other: Self) -> Self {
+        if self.lower(other) == self {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 impl fmt::Display for PolicyLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -339,6 +351,16 @@ pub struct GitPolicy {
     /// `codeflow work remove-candidate` searches for the candidate's tree.
     /// Default 200.
     pub candidate_search_depth: u32,
+    /// The protected branches of the landed policy, set only by the hook
+    /// floor composition ([`landed_policy::compose_git`](super::landed_policy::compose_git))
+    /// and never read from a file. `protected_branches` then holds the union
+    /// with the checkout's list, which only adds prohibitions. Anything that
+    /// grants trust or chooses a range base, an identity or an exemption asks
+    /// [`trusted_protected_branches`](Self::trusted_protected_branches)
+    /// instead, so a checkout cannot grant itself authority by listing a
+    /// branch. `None` outside composition, where the two lists are the same.
+    #[serde(skip)]
+    pub landed_protected_branches: Option<Vec<String>>,
     /// Words a generated branch name leaves out, because a sandbox can refuse
     /// to read a ref file with such a word in its name. A project sets the
     /// list its own harness needs; an empty list keeps every word.
@@ -688,6 +710,7 @@ impl Default for GitPolicy {
             claim_remotes: Vec::new(),
             candidate_prefix: "candidate/".to_string(),
             candidate_search_depth: 200,
+            landed_protected_branches: None,
             branch_name_omit_words: DEFAULT_BRANCH_NAME_OMIT_WORDS
                 .iter()
                 .map(ToString::to_string)
@@ -794,13 +817,17 @@ impl GitPolicy {
     /// Reuses the security plane's matcher so all planes agree (D7).
     #[must_use]
     pub fn branch_is_protected(&self, branch: &str) -> bool {
+        Self::matches_protected(&self.protected_branches, branch)
+    }
+
+    fn matches_protected(protected: &[String], branch: &str) -> bool {
         // A branch whose name is not valid UTF-8 cannot be matched against a
         // glob, and a guard that cannot tell does not allow: it is protected.
         if branch == NON_UTF8_BRANCH {
             return true;
         }
         let sec = SecurityPolicy {
-            protected_branches: self.protected_branches.clone(),
+            protected_branches: protected.to_vec(),
             ..SecurityPolicy::defaults()
         };
         is_on_protected_branch(branch, &sec)
@@ -858,13 +885,35 @@ impl GitPolicy {
             .map_or(true, |text| self.branch_is_protected(text))
     }
 
+    /// The protected names that may grant trust, choose a range base or an
+    /// identity, or exempt a branch from a rule: the landed list when this
+    /// policy was composed with one, else [`Self::protected_branches`].
+    #[must_use]
+    pub fn trusted_protected_branches(&self) -> &[String] {
+        self.landed_protected_branches
+            .as_deref()
+            .unwrap_or(&self.protected_branches)
+    }
+
+    /// [`Self::branch_is_protected`] under the landed classification: the
+    /// branch is matched against [`Self::trusted_protected_branches`] only.
+    /// A decision that depends on whether a branch is protected is judged
+    /// under this and under [`Self::branch_is_protected`], and the stricter
+    /// result stands.
+    #[must_use]
+    pub fn branch_is_landed_protected(&self, branch: &str) -> bool {
+        Self::matches_protected(self.trusted_protected_branches(), branch)
+    }
+
     /// `true` when `branch` starts with one of the sanctioned prefixes
     /// (charter §6.4) or is a landing candidate
-    /// ([`Self::is_candidate_branch`], TSK-1351). Protected branches are
-    /// exempt — they are governed by the protection rules, not naming.
+    /// ([`Self::is_candidate_branch`], TSK-1351). Branches protected under
+    /// the landed classification ([`Self::branch_is_landed_protected`]) are
+    /// exempt — they are governed by the protection rules, not naming. A
+    /// branch only the checkout protects is not.
     #[must_use]
     pub fn branch_name_ok(&self, branch: &str) -> bool {
-        if self.branch_is_protected(branch) {
+        if self.branch_is_landed_protected(branch) {
             return true;
         }
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))

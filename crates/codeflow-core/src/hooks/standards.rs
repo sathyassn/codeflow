@@ -344,7 +344,8 @@ pub fn check_commit_body(
 ///   token via
 ///   [`GitPolicy::allowed_footer_tokens`](super::policy::GitPolicy::allowed_footer_tokens));
 /// - when `required` is `warn`/`block`, at least one *matching* ticket trailer
-///   must be present — else a violation at the `required` level;
+///   must be present — else a violation at the `required` level (at `Block`
+///   when a ticket trailer is present but malformed, whatever `required` is);
 /// - when `pattern` is non-empty, a present ticket trailer whose value does not
 ///   match is a malformed reference and blocks (level `Block`) even when a ticket
 ///   is not required — a botched reference is unambiguously wrong.
@@ -409,8 +410,15 @@ pub fn check_ticket_trailers(
         }
     }
     // Required, but no *matching* ticket trailer present (none at all, or every
-    // present one is malformed): report at the configured `required` level.
+    // present one is malformed): report at the configured `required` level. A
+    // malformed present reference blocks at every `required` level, so raising
+    // the level never turns that block into a warning.
     if required.is_active() && !present_matching {
+        let level = if present_any {
+            PolicyLevel::Block
+        } else {
+            required
+        };
         let reason = if present_any {
             format!(
                 "commit requires a ticket reference matching /{pattern}/ — the present one does not \
@@ -424,7 +432,7 @@ pub fn check_ticket_trailers(
                 ticket_keys.join(", ")
             )
         };
-        return Some((required, reason));
+        return Some((level, reason));
     }
     // Optional-but-present: a present ticket whose value fails the pattern is a
     // malformed reference and blocks regardless of the (off) requirement.
