@@ -18772,6 +18772,51 @@ mod tests {
     }
 
     #[test]
+    fn leading_assignment_before_split_string_allows_allowed_command() {
+        let p = default_policy();
+        for (case, command) in [
+            ("direct control", "git config --global user.name Probe"),
+            (
+                "no-assignment control",
+                "env -S 'git config --global user.name Probe'",
+            ),
+            (
+                "leading assignment",
+                "FOO=1 env -S 'git config --global user.name Probe'",
+            ),
+        ] {
+            let violations = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(violations.is_empty(), "{case}: {violations:?}");
+            eprintln!("{case}: allowed");
+        }
+    }
+
+    #[test]
+    fn leading_assignment_before_split_string_preserves_refusal_rule() {
+        let p = default_policy();
+        for (case, command) in [
+            ("direct control", "git config --global alias.x !id"),
+            (
+                "no-assignment control",
+                "env -S 'git config --global alias.x !id'",
+            ),
+            (
+                "leading assignment",
+                "FOO=1 env -S 'git config --global alias.x !id'",
+            ),
+        ] {
+            let violations = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(
+                violations.iter().any(|violation| {
+                    violation.rule == "git.hook_integrity" && violation.level == PolicyLevel::Block
+                }),
+                "{case}: {violations:?}"
+            );
+            eprintln!("{case}: refused by git.hook_integrity");
+        }
+    }
+
+    #[test]
     fn launcher_table_forms_carry_their_command_string() {
         // Review round fourteen sweep: every launcher in the walker's table
         // that can carry a command string, in front of a shell `-c`, an
