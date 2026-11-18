@@ -135,7 +135,7 @@ fn stands_alone(verb: &str, previous: Option<&str>) -> bool {
 }
 
 /// The transports Git builds in or ships, as address schemes and helper
-/// names. Every other scheme or name starts `git-remote-<name>`.
+/// names. Every other scheme or name starts a separate helper program.
 const NATIVE_SCHEMES: &[&str] = &["file", "git", "ssh", "git+ssh", "ssh+git"];
 const SHIPPED_HELPERS: &[&str] = &["http", "https", "ftp", "ftps"];
 
@@ -180,8 +180,8 @@ pub(super) trait Probe {
     /// The branch the repository has checked out; an error for a detached
     /// HEAD or any failure.
     fn branch(&mut self) -> Result<String, String>;
-    /// Whether the index the call reads holds a submodule entry (a
-    /// gitlink); an error for any failure.
+    /// Whether the index the call reads holds a record of a nested
+    /// repository; an error for any failure.
     fn gitlinks(&mut self) -> Result<bool, String>;
 }
 
@@ -236,9 +236,9 @@ pub(super) fn contacts(
         }
         if DEFAULTING.contains(&verb) && !names_repository(verb, rest) {
             if resolver.names_no_remote() {
-                // Git falls back to `origin` without the user naming it, and
-                // an undefined fallback contacts nothing (`remote.c`
-                // `remotes_remote_get_1`) unless a legacy file defines it.
+                // Git falls back to a default remote without the command
+                // naming it, and an undefined fallback contacts nothing
+                // unless an older definition file defines it.
                 legacy("origin", probe)?;
             } else if !matches!(verb, "fetch" | "pull") {
                 return Err(unproven(format!(
@@ -261,24 +261,23 @@ pub(super) fn contacts(
             .first()
             .is_some_and(|sub| LOCAL_SUBMODULE_HELPERS.contains(&sub.as_str()))
     {
-        // Git's internal builtin behind `submodule` updates, adds and
-        // clones submodules directly; only a subcommand known to stay
-        // local passes.
+        // Git's internal builtin for nested repositories contacts their
+        // remotes directly; only a subcommand known to stay local passes.
         return Err(unproven(
-            "the internal submodule builtin contacts the remotes of submodule repositories, which the guard does not read",
+            "Git's internal builtin for nested repositories contacts their remotes, which the guard does not read",
         ));
     } else if verb == "submodule" {
         let operands: Vec<&str> = candidates(rest).collect();
         if matches!(operands.first(), Some(&("update" | "add"))) {
             return Err(unproven(
-                "a submodule update or add contacts the remotes of submodule repositories, which the guard does not read",
+                "updating or adding nested repositories contacts their remotes, which the guard does not read",
             ));
         }
     } else if verb != "credential" && super::catalog::active(super::catalog::REMOTE, verb) {
-        // Every other verb the inventory lists as contacting a remote, such
-        // as `request-pull`, which runs `ls-remote` on its own operand,
-        // refuses until its contact is resolved here; `credential` talks
-        // only to credential helpers, which the runner reader judges.
+        // Every other verb the inventory lists as contacting a remote,
+        // including one that runs another contacting command on its own
+        // operand, refuses until its contact is resolved here; the one verb
+        // that talks only to helper programs is judged by the runner reader.
         return Err(unproven(format!(
             "`{verb}` contacts a remote through a command of its own, whose transport the guard does not resolve; the operator runs it"
         )));
@@ -296,10 +295,10 @@ pub(super) fn contacts(
 }
 
 /// The words of `rest` that may name a remote or an address: every operand,
-/// every word after the first `--` or `--end-of-options`, and the value of
-/// every option with an attached value. A terminator an option consumes as
-/// its value only makes more words candidates. A word Git's option parser
-/// keeps as an operand is one here too.
+/// every word after the first option terminator, and the value of every
+/// option with an attached value. A terminator an option consumes as its
+/// value only makes more words candidates. A word Git's option parser keeps
+/// as an operand is one here too.
 fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
     let end = rest
         .iter()
@@ -319,8 +318,8 @@ fn candidates(rest: &[String]) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Whether a `remote add` in `rest` may fetch: any option that may select
-/// fetching, in any abbreviation or negation, anywhere after the
+/// Whether adding a remote in `rest` may fetch it: any option that may
+/// select fetching, in any abbreviation or negation, anywhere after the
 /// subcommand. A negation still counts, and a terminator does not end the
 /// reading, since an option may consume it as its value, so the reading
 /// never relies on option order or placement.
@@ -361,7 +360,7 @@ fn every_remote_option(word: &str) -> bool {
 
 /// Whether `rest` surely names the remote: a word that cannot be an
 /// option's value is an operand, and the first operand is the remote. A
-/// `--` after an option that may take a value may be that value, so it
+/// terminator after an option that may take a value may be that value, so it
 /// ends the options only after a word it surely stands apart from.
 fn names_repository(verb: &str, rest: &[String]) -> bool {
     let mut value_may_follow = false;
@@ -381,8 +380,9 @@ fn names_repository(verb: &str, rest: &[String]) -> bool {
     false
 }
 
-/// The subcommands of Git's internal submodule builtin that never contact a
-/// remote themselves; a command `foreach` runs is judged on its own.
+/// The subcommands of Git's internal builtin for nested repositories that
+/// never contact a remote themselves; a command one of them runs is judged
+/// on its own.
 const LOCAL_SUBMODULE_HELPERS: &[&str] = &[
     "foreach",
     "init",
@@ -410,30 +410,31 @@ const LOCAL_MAINTENANCE_TASKS: &[&str] = &[
 ];
 
 /// The maintenance subcommands that neither run a task nor set up a
-/// scheduled run; `stop` and `unregister` only remove one.
+/// scheduled run; two of them only remove one.
 const LOCAL_MAINTENANCE_SUBCOMMANDS: &[&str] = &["stop", "unregister", "is-needed"];
 
-/// `maintenance run` contacts every configured remote when its tasks may
-/// include the prefetch task. It passes only when every word after `run`
-/// is a task option, in any abbreviation Git accepts, naming a task that
-/// never contacts a remote, or a known option that selects no task; any
-/// other word refuses, so no spelling hides a task.
+/// A run of maintenance tasks contacts every configured remote when its
+/// tasks may include the one that fetches ahead. It passes only when every
+/// word after the run subcommand is a task option, in any abbreviation Git
+/// accepts, naming a task that never contacts a remote, or a known option
+/// that selects no task; any other word refuses, so no spelling hides a
+/// task.
 fn maintenance(rest: &[String]) -> Result<(), String> {
     let refuse = || {
         unproven(
-            "a maintenance run may prefetch from every configured remote; name only tasks that do not prefetch, each with --task=<task>",
+            "a maintenance run may fetch ahead from every configured remote; name only tasks that never do",
         )
     };
     let mut words = rest.iter();
     match words.next().map(String::as_str) {
         Some("run") => {}
         Some(sub) if LOCAL_MAINTENANCE_SUBCOMMANDS.contains(&sub) => return Ok(()),
-        // `start` and `register` set up scheduled runs that prefetch from
-        // every configured remote later, outside both guards; any other
-        // word, or none, is not proven to leave them alone.
+        // A subcommand that sets up scheduled runs makes them fetch ahead
+        // from every configured remote later, outside both guards; any
+        // other word, or none, is not proven to leave them alone.
         _ => {
             return Err(unproven(
-                "a maintenance command other than a proven local run, stop, unregister or is-needed may set up background runs that prefetch from every configured remote outside the guards; the operator runs it",
+                "a maintenance command not proven local may set up background runs that fetch ahead from every configured remote outside the guards; the operator runs it",
             ))
         }
     }
@@ -472,10 +473,10 @@ fn maintenance(rest: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the line `rest` of `verb` turns submodule recursion on
-/// (`Some(true)`) or off (`Some(false)`); the last recursion word wins. A
-/// long option `off` reads as turning recursion off counts as off only when
-/// it is surely an option: no `--` or `--end-of-options` comes before it,
+/// Whether the line `rest` of `verb` turns recursion into nested
+/// repositories on (`Some(true)`) or off (`Some(false)`); the last recursion
+/// word wins. A long option that reads as turning recursion off counts as
+/// off only when it is surely an option: no terminator comes before it,
 /// since an option may consume a terminator as its value, and it stands
 /// apart from the word before it ([`stands_alone`]). Every other word that
 /// may be a recursion option counts as on wherever it stands, after a
@@ -509,9 +510,9 @@ fn recursion_words(
     state
 }
 
-/// Whether the option `name` may be a submodule recursion option: one of
-/// them, an abbreviation Git may accept for one, or a longer spelling that
-/// starts with one.
+/// Whether the option `name` may be an option for recursion into nested
+/// repositories: one of them, an abbreviation Git may accept for one, or a
+/// longer spelling that starts with one.
 fn recursion_name(name: &str) -> bool {
     [
         "recurse-submodules",
@@ -523,11 +524,12 @@ fn recursion_name(name: &str) -> bool {
     .any(|full| full.starts_with(name) || name.starts_with(full))
 }
 
-/// Whether the command line of a fetch, pull or push turns submodule
-/// recursion on (`Some(true)`) or off (`Some(false)`); the last such option
-/// wins. Only the full negation, or the full option with a value Git reads
-/// as false, turns it off, and only where [`recursion_words`] proves it an
-/// option; an abbreviation or any other value reads as on.
+/// Whether the command line of a command that fetches or pushes turns
+/// recursion into nested repositories on (`Some(true)`) or off
+/// (`Some(false)`); the last such option wins. Only the full negation, or
+/// the full option with a value Git reads as false, turns it off, and only
+/// where [`recursion_words`] proves it an option; an abbreviation or any
+/// other value reads as on.
 fn recursion_on_line(verb: &str, rest: &[String]) -> Option<bool> {
     recursion_words(verb, rest, |name, value| match (name, value) {
         ("no-recurse-submodules", None) => true,
@@ -538,18 +540,19 @@ fn recursion_on_line(verb: &str, rest: &[String]) -> Option<bool> {
     })
 }
 
-/// Whether a clone's command line turns recursion on (`Some(true)`) or off
-/// (`Some(false)`); the last such option wins. A clone reads the value of
-/// its recursion option as a pathspec, never as a boolean, so every
-/// recursion option, abbreviation or value turns it on, and only the full
-/// negation turns it off, where [`recursion_words`] proves it an option.
+/// Whether a new copy's command line turns recursion on (`Some(true)`) or
+/// off (`Some(false)`); the last such option wins. A new copy reads the
+/// value of its recursion option as a path selection, never as a boolean,
+/// so every recursion option, abbreviation or value turns it on, and only
+/// the full negation turns it off, where [`recursion_words`] proves it an
+/// option.
 fn clone_recursion_on_line(rest: &[String]) -> Option<bool> {
     recursion_words("clone", rest, |name, value| {
         name == "no-recurse-submodules" && value.is_none()
     })
 }
 
-/// The keys of the settings a clone's own options give the new repository;
+/// The keys of the settings a new copy's own options give the new repository;
 /// an option without a value reads as an empty key. A short-option group
 /// that holds the option's letter counts, read from that letter on, and so
 /// does every abbreviation of the long option, so no spelling is missed.
@@ -609,8 +612,9 @@ fn helper(name: &str) -> Selected {
     }
 }
 
-/// Git's `is_urlschemechar`: a letter or digit, or after the first
-/// character also `+`, `-` or `.`.
+/// Whether `c` may stand in an address scheme as Git reads one: a letter or
+/// digit, or after the first character also a plus sign, a hyphen or a full
+/// stop.
 fn scheme_char(first: bool, c: char) -> bool {
     c.is_ascii_alphanumeric() || (!first && matches!(c, '+' | '-' | '.'))
 }
@@ -625,7 +629,7 @@ fn helper_prefix(address: &str) -> Option<&str> {
     address[end..].starts_with("::").then(|| &address[..end])
 }
 
-/// The scheme of a `<scheme>://` address, as Git's `is_url` reads it.
+/// The scheme of an address that names one, as Git reads it.
 fn scheme(address: &str) -> Option<&str> {
     let (scheme, rest) = address.split_once(':')?;
     let mut chars = scheme.chars();
@@ -634,15 +638,15 @@ fn scheme(address: &str) -> Option<&str> {
         .then_some(scheme)
 }
 
-/// Every name Git may look up in the legacy remote files: Git's
-/// `valid_remote_nick` excludes only a slash on POSIX, and also a backslash
-/// on Windows, so this reading holds the names of both.
+/// Every name Git may look up in the older definition files: Git excludes
+/// only the path separator of the platform, and the separators differ, so
+/// this reading holds the names of every platform.
 fn remote_nick(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
 
-/// Refuse a name that a legacy remote file in the common Git directory may
-/// define, unless both files are proven absent.
+/// Refuse a name that an older definition file in the common Git directory
+/// may define, unless both files are proven absent.
 fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
     let location = probe.location()?;
     for folder in ["remotes", "branches"] {
@@ -656,10 +660,10 @@ fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
     Ok(())
 }
 
-/// Refuse when a legacy remote file may define a remote: each of the common
-/// Git directory's `remotes` and `branches` folders must be proven absent,
-/// or be a real folder, read without following a link, that lists no
-/// entry. A link, any other type and any read error refuse.
+/// Refuse when an older definition file may define a remote: each of the
+/// common Git directory's two older-definition folders must be proven
+/// absent, or be a real folder, read without following a link, that lists
+/// no entry. A link, any other type and any read error refuse.
 fn no_legacy_remotes(probe: &mut dyn Probe) -> Result<(), String> {
     let location = probe.location()?;
     for folder in ["remotes", "branches"] {
@@ -674,7 +678,7 @@ fn no_legacy_remotes(probe: &mut dyn Probe) -> Result<(), String> {
         };
         if !empty {
             return Err(unproven(format!(
-                "`remote update` may fetch a remote defined in a legacy remote file in the repository's `{folder}` directory; name the remote"
+                "an update of every remote may fetch a remote defined in a legacy remote file in the repository's `{folder}` directory; name the remote"
             )));
         }
     }
@@ -750,7 +754,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Whether the configuration has any `remote.<name>.<variable>` key.
+    /// Whether the configuration has any setting under the remote's own name.
     fn configured(&self, name: &str) -> bool {
         let prefix = format!("remote.{name}.");
         self.keys.iter().any(|key| {
@@ -759,8 +763,8 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// Whether the configuration names no remote at all: no `remote.*` key
-    /// and no branch setting that names a remote.
+    /// Whether the configuration names no remote at all: no setting under a
+    /// remote's name and no branch setting that names a remote.
     fn names_no_remote(&self) -> bool {
         self.keys.iter().all(|key| {
             let branch = key
@@ -879,7 +883,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// The destinations Git uses for `remote` in `direction`, after its
-    /// rewrites (`remote.c` `alias_all_urls`, `push_url_of_remote`).
+    /// address rewrites.
     fn destinations(
         &self,
         name: &str,
@@ -910,9 +914,9 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The remote an operand-free `fetch` or `pull` contacts: the current
-    /// branch's remote, or `origin` when the branch names none, with
-    /// fetching every remote turned off.
+    /// The remote a fetching command that names none contacts: the current
+    /// branch's remote, or the default remote when the branch names none,
+    /// with fetching every remote turned off.
     fn default_remote(&self, probe: &mut dyn Probe) -> Result<String, String> {
         match self.config.get("fetch.all")? {
             None => {}
@@ -947,8 +951,8 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Refuse submodule recursion in a repository that has or may have
-    /// submodules, unless the command line turns it off.
+    /// Refuse recursion into nested repositories in a repository that has or
+    /// may have them, unless the command line turns it off.
     fn recursion(&self, verb: &str, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
         // Git reads the push setting and the general one in configuration
         // order, so either one turning recursion on reads as on.
@@ -962,12 +966,12 @@ impl<'a> Resolver<'a> {
         };
         if on && self.may_have_submodules(probe)? {
             let way = if verb == "remote" {
-                "name the remote in a fetch with --no-recurse-submodules"
+                "name the remote in a fetch that turns recursion off"
             } else {
-                "turn recursion off with --no-recurse-submodules"
+                "turn recursion off on the command line"
             };
             return Err(unproven(format!(
-                "`{verb}` may recurse into submodule repositories, whose remotes the guard does not read; {way}"
+                "`{verb}` may recurse into nested repositories, whose remotes the guard does not read; {way}"
             )));
         }
         Ok(())
@@ -1022,9 +1026,9 @@ impl<'a> Resolver<'a> {
             .is_none_or(|top| !absent(&top.join(".gitmodules"))))
     }
 
-    /// A clone fetches from its address; refuse a helper setting the
+    /// A new copy fetches from its address; refuse a helper setting the
     /// configuration would give the new remote, and recursion into the
-    /// submodules the cloned project names.
+    /// nested repositories the copied project names.
     fn clone_settings(&self, rest: &[String]) -> Result<(), String> {
         self.no_empty_section()?;
         if self.keys.iter().any(|key| {
@@ -1033,7 +1037,7 @@ impl<'a> Resolver<'a> {
                 .is_some_and(|(_, variable)| variable == "vcs")
         }) {
             return Err(unproven(
-                "the configuration gives a remote a helper setting, which a clone would use",
+                "the configuration gives a remote a helper setting, which a new copy would use",
             ));
         }
         if clone_setting_keys(rest)
@@ -1041,7 +1045,7 @@ impl<'a> Resolver<'a> {
             .any(|key| key.is_empty() || key.starts_with("submodule."))
         {
             return Err(unproven(
-                "a clone's own submodule setting may turn recursion on; clone without it",
+                "a new copy's own setting for nested repositories may turn recursion on; copy without it",
             ));
         }
         let on = match clone_recursion_on_line(rest) {
@@ -1050,7 +1054,7 @@ impl<'a> Resolver<'a> {
         };
         if on {
             return Err(unproven(
-                "a clone that recurses into submodules contacts the addresses the cloned project names; clone without recursion",
+                "a new copy that recurses into nested repositories contacts the addresses the copied project names; copy without recursion",
             ));
         }
         Ok(())
@@ -1078,7 +1082,7 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// The remotes the `remote` subcommands in `rest` contact.
+    /// The remotes the remote-management subcommands in `rest` contact.
     fn remote_subcommand(
         &self,
         rest: &[String],
@@ -1155,7 +1159,7 @@ impl<'a> Resolver<'a> {
             // own name selects, which the group hides here.
             if !listed {
                 return Err(unproven(
-                    "`remote update` with an empty `default` remote group fetches the remote named `default`; name the remote",
+                    "an update of every remote with an empty default group fetches the remote the group's name selects; name the remote",
                 ));
             }
             return Ok(());
@@ -1173,7 +1177,7 @@ impl<'a> Resolver<'a> {
             // still reads as one is refused rather than dropped.
             if name.is_empty() || variable.is_empty() {
                 return Err(unproven(
-                    "a remote section with an empty name defines a remote `remote update` fetches; name the remote",
+                    "a remote section with an empty name defines a remote an update of every remote fetches; name the remote",
                 ));
             }
             if !names.contains(&name) {
@@ -1188,10 +1192,11 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// Whether `fetch --all` skips remote `name`. Git keeps one flag for
-    /// both settings, and the one set last wins; when both are set and read
-    /// differently, the order is not read here, so the remote counts as
-    /// fetched. A value Git would not read as a boolean refuses.
+    /// Whether a fetch of every remote skips remote `name`. Git keeps one
+    /// flag for both of its settings, and the one set last wins; when both
+    /// are set and read differently, the order is not read here, so the
+    /// remote counts as fetched. A value Git would not read as a boolean
+    /// refuses.
     fn skips_default_update(&self, name: &str) -> Result<bool, String> {
         let mut skips = Vec::new();
         for variable in ["skipdefaultupdate", "skipfetchall"] {
@@ -1199,7 +1204,7 @@ impl<'a> Resolver<'a> {
             if let Some(value) = self.config.get(&key)? {
                 let Some(skip) = crate::security::git::config_boolean(value) else {
                     return Err(unproven(format!(
-                        "the setting that makes `remote update` skip remote `{}` cannot be read",
+                        "the setting that makes a fetch of every remote skip remote `{}` cannot be read",
                         shown_word(name)
                     )));
                 };
@@ -1209,11 +1214,11 @@ impl<'a> Resolver<'a> {
         Ok(!skips.is_empty() && skips.iter().all(|skip| *skip))
     }
 
-    /// A `remote add` that fetches uses the new remote's whole
-    /// configuration, which may already hold settings for its name, such as
-    /// a helper setting. It passes only for one name and one address, with
-    /// no other option that takes a value, a name no setting, remote group
-    /// or legacy remote file defines.
+    /// Adding a remote with fetching uses the new remote's whole
+    /// configuration, which may already hold settings for its name, a helper
+    /// setting among them. It passes only for one name and one address, with
+    /// no other option that takes a value, and a name that no setting,
+    /// remote group or older definition file defines.
     fn added_remote(&self, rest: &[String], probe: &mut dyn Probe) -> Result<(), String> {
         self.no_empty_section()?;
         let mut operands = Vec::new();
@@ -1229,7 +1234,7 @@ impl<'a> Resolver<'a> {
                 let known = fetch || matches!(word.as_str(), "-f" | "--tags" | "--no-tags");
                 if !known {
                     return Err(unproven(format!(
-                        "`remote add` with `{}` fetches with settings the guard does not resolve; add the remote, then fetch it by name",
+                        "adding a remote with `{}` fetches with settings the guard does not resolve; add the remote, then fetch it by name",
                         shown_word(word)
                     )));
                 }
@@ -1239,12 +1244,12 @@ impl<'a> Resolver<'a> {
         }
         let [name, _address] = operands.as_slice() else {
             return Err(unproven(
-                "`remote add` that fetches needs exactly one name and one address",
+                "adding a remote with fetching needs exactly one name and one address",
             ));
         };
         if self.configured(name) || self.group(name) {
             return Err(unproven(format!(
-                "the configuration already holds settings for remote `{}`, which the fetch of `remote add` would use",
+                "the configuration already holds settings for remote `{}`, which the fetch that adds it would use",
                 shown_word(name)
             )));
         }
@@ -1254,7 +1259,7 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// The remotes a partial clone fetches missing objects from, as
+    /// The remotes a partial copy fetches missing objects from, as
     /// [`crate::security::git_config::promisor_remotes`] reads Git's
     /// registration. An empty name refuses.
     fn promisors(&self) -> Result<Vec<String>, String> {

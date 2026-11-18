@@ -317,7 +317,7 @@ fn a_program_chosen_by_remote_settings_refuses() {
     let without_url = Scratch::new("[remote \"fixture\"]\n\tvcs = fixture\n");
     without_url.unproven("fetch fixture", "remote `fixture`");
     let clone = Scratch::new("[remote \"other\"]\n\tvcs = fixture\n");
-    clone.unproven("clone https://example.test/r copy", "a clone would use");
+    clone.unproven("clone https://example.test/r copy", "a new copy would use");
 }
 
 #[test]
@@ -419,9 +419,9 @@ fn selections_of_several_remotes_refuse() {
         scratch.helpers("remote update --prune"),
         Ok(vec!["fixture".into()])
     );
-    scratch.unproven("maintenance run", "prefetch");
-    scratch.unproven("maintenance run --task=prefetch", "prefetch");
-    scratch.unproven("maintenance run --task gc --task prefetch", "prefetch");
+    scratch.unproven("maintenance run", "fetch ahead");
+    scratch.unproven("maintenance run --task=prefetch", "fetch ahead");
+    scratch.unproven("maintenance run --task gc --task prefetch", "fetch ahead");
     let group = Scratch::new(&format!(
         "{HTTPS}[remote \"backup\"]\n\turl = https://example.test/b\n[remotes]\n\tmirrors = origin backup\n"
     ));
@@ -481,7 +481,7 @@ fn an_empty_default_selection_refuses() {
         let configured = Scratch::new(&format!(
             "{HTTPS}{FALLBACK}[remotes]\n\tdefault = {group}\n"
         ));
-        configured.unproven("remote update", "empty `default` remote group");
+        configured.unproven("remote update", "empty default group");
         let legacy = Scratch::new(&format!("{HTTPS}[remotes]\n\tdefault = {group}\n"));
         std::fs::create_dir_all(legacy.root().join(".git/remotes")).unwrap();
         std::fs::write(
@@ -489,7 +489,7 @@ fn an_empty_default_selection_refuses() {
             "URL: fixture::x\n",
         )
         .unwrap();
-        legacy.unproven("remote update", "empty `default` remote group");
+        legacy.unproven("remote update", "empty default group");
     }
     // A group that lists a remote still reads its members.
     let listed = Scratch::new(&format!("{HTTPS}{FALLBACK}[remotes]\n\tdefault = origin\n"));
@@ -675,17 +675,17 @@ fn nested_contacts_refuse_unless_the_line_turns_them_off() {
     let cloned = Scratch::new(HTTPS);
     std::fs::create_dir_all(cloned.root().join(".git/modules/lib")).unwrap();
     for scratch in [&configured, &active, &listed, &cloned] {
-        scratch.unproven("fetch origin", "submodule");
-        scratch.unproven("pull origin main", "submodule");
+        scratch.unproven("fetch origin", "nested repositories");
+        scratch.unproven("pull origin main", "nested repositories");
         scratch.unproven(
             "fetch origin --recurse-submodules=no --recurse-submodules",
-            "submodule",
+            "nested repositories",
         );
-        scratch.unproven("remote update origin", "submodule");
-        scratch.unproven("submodule update", "submodule");
+        scratch.unproven("remote update origin", "nested repositories");
+        scratch.unproven("submodule update", "nested repositories");
         scratch.unproven(
             "submodule --quiet add https://example.test/lib lib",
-            "submodule",
+            "nested repositories",
         );
         assert_eq!(
             scratch.helpers("fetch --no-recurse-submodules origin"),
@@ -705,7 +705,7 @@ fn nested_contacts_refuse_unless_the_line_turns_them_off() {
     ] {
         let scratch = Scratch::new(&format!("{HTTPS}{setting}"));
         std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
-        scratch.unproven("push origin HEAD", "submodule");
+        scratch.unproven("push origin HEAD", "nested repositories");
         assert_eq!(
             scratch.helpers("push --no-recurse-submodules origin HEAD"),
             Ok(vec![])
@@ -714,16 +714,16 @@ fn nested_contacts_refuse_unless_the_line_turns_them_off() {
     let plain = Scratch::new("");
     plain.unproven(
         "clone --recurse-submodules https://example.test/r copy",
-        "clone",
+        "new copy",
     );
-    plain.unproven("clone --recursive https://example.test/r copy", "clone");
-    plain.unproven("clone --recurse https://example.test/r copy", "clone");
+    plain.unproven("clone --recursive https://example.test/r copy", "new copy");
+    plain.unproven("clone --recurse https://example.test/r copy", "new copy");
     assert_eq!(
         plain.helpers("clone https://example.test/r copy"),
         Ok(vec![])
     );
     let recursing = Scratch::new("[submodule]\n\trecurse = true\n");
-    recursing.unproven("clone https://example.test/r copy", "clone");
+    recursing.unproven("clone https://example.test/r copy", "new copy");
 }
 
 #[test]
@@ -767,8 +767,7 @@ fn every_registration_of_such_remotes_is_judged() {
     assert_eq!(plain.helpers("status"), Ok(vec![]));
     let unset = Scratch::new(&format!("{HTTPS}{SHADOW}\tpromisor = false\n"));
     assert_eq!(unset.helpers("status"), Ok(vec![]));
-    // The empty name, from an empty section name or from a key with no
-    // section name, refuses.
+    // A name Git reads as empty, in either representation of it, refuses.
     for config in [
         "[remote \"\"]\n\tpartialCloneFilter = blob:none\n",
         "[remote]\n\tpartialCloneFilter = blob:none\n",
@@ -781,15 +780,15 @@ fn every_registration_of_such_remotes_is_judged() {
 
 #[test]
 fn an_empty_word_reads_as_git_reads_it() {
-    // Git gives an empty operand a remote with no address, so it fetches
-    // the operand itself after the rewrites.
+    // Git reads an empty operand as a remote with no address, so the operand
+    // itself is judged as the address, after the rewrites.
     const REWRITES: &str = "[url \"https://ok.test/\"]\n\tinsteadOf = https://\n[url \"fixture::x\"]\n\tinsteadOf = \"\"\n";
     let scratch = Scratch::new(&format!("{HTTPS}{REWRITES}"));
     assert_eq!(
         scratch.helpers_of(&["fetch", ""]),
         Ok(vec!["fixture".into()])
     );
-    // Beside a remote section with an empty name, it refuses.
+    // Beside a remote definition with an empty name, it refuses.
     let section = Scratch::new(&format!(
         "{HTTPS}[remote \"\"]\n\turl = https://example.test/r\n{REWRITES}"
     ));
@@ -862,7 +861,7 @@ fn every_spelling_that_turns_nested_contacts_on_reads_as_on() {
         "clone --recursive=lib https://example.test/r copy",
         "clone --no-recurse-submodules --recurse-submodules=no https://example.test/r copy",
     ] {
-        plain.unproven(command, "clone without recursion");
+        plain.unproven(command, "copy without recursion");
     }
     for command in [
         "clone -c submodule.recurse=true https://example.test/r copy",
@@ -871,7 +870,7 @@ fn every_spelling_that_turns_nested_contacts_on_reads_as_on() {
         "clone --con submodule.recurse=1 https://example.test/r copy",
         "clone -c",
     ] {
-        plain.unproven(command, "submodule setting");
+        plain.unproven(command, "setting for nested repositories");
     }
     assert_eq!(
         plain.helpers("clone --no-recurse-submodules https://example.test/r copy"),
@@ -891,7 +890,7 @@ fn every_spelling_that_turns_nested_contacts_on_reads_as_on() {
         "push --no-recurse-submodules --no-recurse origin HEAD",
         "fetch --no-recurse-submodules --recurse=no origin",
     ] {
-        listed.unproven(command, "submodule");
+        listed.unproven(command, "nested repositories");
     }
     for order in [
         "[push]\n\trecurseSubmodules = no\n[submodule]\n\trecurse = true\n",
@@ -899,7 +898,7 @@ fn every_spelling_that_turns_nested_contacts_on_reads_as_on() {
     ] {
         let scratch = Scratch::new(&format!("{HTTPS}{order}"));
         std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
-        scratch.unproven("push origin HEAD", "submodule");
+        scratch.unproven("push origin HEAD", "nested repositories");
     }
     let off = Scratch::new(&format!("{HTTPS}[push]\n\trecurseSubmodules = no\n"));
     std::fs::write(off.root().join(".gitmodules"), "").unwrap();
@@ -916,7 +915,7 @@ fn indirect_contact_paths_refuse_unless_proven() {
         "submodule--helper --quiet update",
         "submodule--helper",
     ] {
-        plain.unproven(command, "internal submodule builtin");
+        plain.unproven(command, "internal builtin for nested repositories");
     }
     for command in [
         "submodule--helper foreach --quiet true",
@@ -979,7 +978,7 @@ fn a_word_an_option_consumes_proves_nothing() {
         "pull origin main --strategy --no-recurse-submodules",
         "push --recurse-submodules --no-recurse-submodules origin HEAD",
     ] {
-        listed.unproven(command, "submodule");
+        listed.unproven(command, "nested repositories");
     }
     for command in [
         "fetch -q --no-recurse-submodules origin",
@@ -996,11 +995,11 @@ fn a_word_an_option_consumes_proves_nothing() {
         "clone --server-option -- --recurse-submodules https://example.test/r copy",
         "clone --recursive -u --no-recurse-submodules https://example.test/r copy",
     ] {
-        plain.unproven(command, "clone without recursion");
+        plain.unproven(command, "copy without recursion");
     }
     plain.unproven(
         "clone --server-option -- -c submodule.recurse=true https://example.test/r copy",
-        "submodule setting",
+        "setting for nested repositories",
     );
     assert_eq!(
         plain.helpers("clone -q --no-recurse-submodules https://example.test/r copy"),
@@ -1056,7 +1055,7 @@ fn a_batch_task_passes_only_when_proven_local() {
         "maintenance run --quiet",
         "maintenance --quiet run --task=gc",
     ] {
-        scratch.unproven(command, "prefetch");
+        scratch.unproven(command, "fetch ahead");
     }
     for command in [
         "maintenance run --task=GC",
@@ -1223,7 +1222,7 @@ fn nested_contacts_with_one_marker_refuse() {
         "remote update origin",
         "remote update",
     ] {
-        scratch.unproven(command, "submodule");
+        scratch.unproven(command, "nested repositories");
     }
     assert_eq!(
         scratch.helpers("fetch --no-recurse-submodules origin"),
@@ -1235,7 +1234,7 @@ fn nested_contacts_with_one_marker_refuse() {
     let unpopulated = Scratch::new(HTTPS);
     nested_in_index_only(&unpopulated, "lib");
     std::fs::remove_dir_all(unpopulated.root().join("lib")).unwrap();
-    unpopulated.unproven("fetch origin", "submodule");
+    unpopulated.unproven("fetch origin", "nested repositories");
 }
 
 /// A command that sets up later contacts outside the guards refuses; one

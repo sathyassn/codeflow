@@ -411,15 +411,13 @@ pub struct GitPolicy {
     pub hook_integrity: PolicyLevel,
     /// Helper programs the guards admit when Git starts them for a command
     /// that contacts a remote (TSK-1489), each written as the command Git
-    /// runs: a remote helper as `git-remote-<name>`, and a credential helper
-    /// as its configured value without a leading `!`, or as
-    /// `git credential-<name>` when the value is a bare name. An admitted
-    /// remote helper is judged as a program word instead of refused; an
-    /// admitted credential helper's account finding is skipped on a command
-    /// that contacts a remote. The guards read the list only from the
-    /// policy landed at the remote's default branch. Default empty, which
-    /// admits none; a value that is not an array of non-empty strings
-    /// without a control character reads as empty.
+    /// runs, so that a remote helper and a credential helper each have one
+    /// written form. An admitted remote helper is judged as a program word
+    /// instead of refused; an admitted credential helper's account finding
+    /// is skipped on a command that contacts a remote. The guards read the
+    /// list only from the policy landed at the remote's default branch.
+    /// Default empty, which admits none; a value that is not an array of
+    /// non-empty strings without a control character reads as empty.
     #[serde(deserialize_with = "admitted_helpers")]
     pub admitted_helpers: Vec<String>,
     /// The branch the root checkout holds: the repository's main working

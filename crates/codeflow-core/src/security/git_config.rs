@@ -108,19 +108,19 @@ impl EffectiveConfig {
 }
 
 /// The promisor remotes Git registers from the configuration `entries`, as
-/// `promisor-remote.c` reads them. Each entry is a key (section and variable
-/// lower case, subsection as written) and its raw value (`None` for a key
-/// written without `=`), in Git's order. Registered:
+/// Git's own registration reads them. Each entry is a key (section and
+/// variable lower case, subsection as written) and its raw value (`None` for
+/// a key written without `=`), in Git's order. Registered:
 ///
-/// - the remote `extensions.partialClone` names;
-/// - each remote with a `promisor` value Git reads as true, or one it does
+/// - the remote that the repository-wide partial-copy setting names;
+/// - each remote with a promisor value Git reads as true, or one it does
 ///   not read as a boolean; a later false value does not take it back;
-/// - each remote with a `partialCloneFilter`, whatever its `promisor` value.
+/// - each remote with a partial-copy filter, whatever its promisor value.
 ///
-/// A key with no subsection, and an `extensions.partialClone` with no
-/// value, give the empty name. Sorted, without duplicates; empty for a
-/// repository that is no partial clone. The guards and the commit-time
-/// secret scan both read promisor state through this one function.
+/// A key with no subsection, and a repository-wide setting with no value,
+/// give the empty name. Sorted, without duplicates; empty for a repository
+/// that is no partial copy. The guards and the commit-time secret scan both
+/// read promisor state through this one function.
 pub(crate) fn promisor_remotes<'a>(
     entries: impl IntoIterator<Item = (&'a [u8], Option<&'a [u8]>)>,
 ) -> Vec<Vec<u8>> {
@@ -544,11 +544,11 @@ pub(crate) const LOCATION_ENVIRONMENT: &[&str] = &[
 
 /// A probe of the repository the call works in, built on
 /// [`crate::git::judging_command`]: only the call's location inputs reach
-/// it (`-C`, `--git-dir`, `--work-tree`, `--bare` and
+/// it (the directory, repository, work-tree and bare options, and
 /// [`LOCATION_ENVIRONMENT`], the call's own value or else the inherited one
-/// the call also sees). Its configuration settings (`-c`,
-/// `--config-env`, `GIT_CONFIG_*`) never do, so they cannot move what the
-/// probe reports.
+/// the call also sees). Its configuration settings, whether given as options
+/// or through the environment, never do, so they cannot move what the probe
+/// reports.
 fn location_command(
     cwd: &Path,
     globals: &[String],
@@ -663,15 +663,14 @@ pub(crate) fn locate(
     })
 }
 
-/// Whether the index the call reads holds a submodule entry (mode
-/// `160000`), as Git itself lists the index, read with the call's location
-/// inputs and its index-file variable only. The listing covers the whole
-/// index: Git limits an unqualified listing to the directory it runs in, so
-/// the probe names the top of the repository explicitly, and clears every
-/// variable that changes how a pathspec is read, so the call's own
-/// directory, directory option or environment cannot narrow it. Any probe
-/// failure, timeout or listing over the output limit is an error, so the
-/// caller refuses.
+/// Whether the index the call reads holds a record of a nested repository,
+/// as Git itself lists the index, read with the call's location inputs and
+/// its index-file variable only. The listing covers the whole index, so the
+/// call's own directory, directory option or environment cannot narrow it:
+/// the probe selects from the top of the repository and clears every
+/// variable that changes how such a selection is read. Any probe failure,
+/// timeout or listing over the output limit is an error, so the caller
+/// refuses.
 pub(crate) fn index_gitlinks(
     cwd: &Path,
     globals: &[String],

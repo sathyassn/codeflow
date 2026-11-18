@@ -18,9 +18,8 @@ use Source::{
 };
 
 /// Verbs that may contact a remote, so its transport programs and credential
-/// helpers run. `remote` is judged by [`source_verb`]; `maintenance` (its
-/// prefetch task) and `request-pull` (its `ls-remote`) contact one too
-/// (TSK-1479).
+/// helpers run. `remote` is judged by [`source_verb`]; two more contact one
+/// through a task or a command of their own (TSK-1479).
 pub(super) const REMOTE: &str = "clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential remote maintenance request-pull";
 
 /// The verb the source inventory judges a call by. `git remote` contacts a
@@ -52,8 +51,8 @@ fn remote_stays_local(rest: &[String]) -> bool {
     };
     let rest: Vec<&str> = words.collect();
     // Only plain operands, and the options each subcommand lists here that
-    // never fetch. Every word is read: an option such as `-t` may consume a
-    // `--` as its value, so a `--` never ends the reading, and a word after
+    // never fetch. Every word is read: an option may consume a terminator
+    // as its value, so a terminator never ends the reading, and a word after
     // it that looks like an option reads as one (TSK-1489).
     let only = |allowed: &[&str]| {
         rest.iter()

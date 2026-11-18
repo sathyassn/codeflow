@@ -78,7 +78,7 @@ pub(super) fn unread(reason: &str) -> Violation {
     let sanctioned = if reason.starts_with(transport::HELPER_REFUSAL) {
         "reach the remote over a transport Git runs itself (https, ssh or a local path), have the operator run the command, or name the helper in `git.admitted_helpers` in a reviewed policy on the default branch"
     } else if reason.starts_with(transport::UNPROVEN) {
-        "name one configured remote that has a single address and no helper setting, turn submodule recursion off with --no-recurse-submodules, or have the operator run the command"
+        "name one configured remote that has a single address and no helper setting, turn recursion into nested repositories off on the command line, or have the operator run the command"
     } else {
         "use explicit, readable Git runner options and a resolvable checkout"
     };
@@ -90,15 +90,16 @@ pub(super) fn unread(reason: &str) -> Violation {
 }
 
 /// The verbs whose credential helper an admission covers: the verbs that
-/// contact a remote, never `git credential`, which hands the credential to
-/// its caller.
+/// contact a remote, never the verb that hands the credential to its
+/// caller.
 fn contacts_remote(verb: &str) -> bool {
     catalog::active(catalog::REMOTE, verb) && verb != "credential"
 }
 
-/// The command Git runs for the credential helper `value`: a `!` value as
-/// written after the mark, an absolute path as written, and any other
-/// value as `git credential-<value>`.
+/// The command Git runs for the credential helper `value`, by the forms Git
+/// reads: a value marked as a command runs as written after the mark, an
+/// absolute path runs as written, and any other value names a program Git
+/// builds from it.
 fn credential_program(value: &str) -> String {
     match value.strip_prefix('!') {
         Some(command) => command.to_string(),
@@ -123,9 +124,9 @@ fn landed_helpers(args: &[String], cwd: &Path) -> Vec<String> {
 }
 
 /// Whether the call may work in a repository other than the one its
-/// starting folder finds: a Git-directory, work-tree or bare option, or a
-/// location variable the probe also forwards, set on the line or
-/// inherited. An unreadable global option counts too.
+/// starting folder finds: a location option, or a location variable the
+/// probe also forwards, set on the line or inherited. An unreadable global
+/// option counts too.
 fn relocated(args: &[String], env: &crate::security::git_config::Environment) -> bool {
     let Ok(words) = globals(args) else {
         return true;
@@ -256,7 +257,7 @@ pub(super) fn stock_transports(args: &[String], cwd: &Path) -> bool {
 
 /// The remote helper programs the transports of the remotes the command
 /// contacts start, each one the landed policy admits; a helper it does not
-/// admit, and the `ext` transport, refuse.
+/// admit, and a transport that carries a command, refuse.
 fn helper_programs(
     verb: &str,
     rest: &[String],

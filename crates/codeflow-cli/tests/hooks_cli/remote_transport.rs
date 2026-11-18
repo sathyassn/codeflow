@@ -279,8 +279,7 @@ fn both_guards_judge_every_implicit_remote_registration() {
         .config("remote.shadow.url", "fixture::x")
         .config("remote.shadow.promisor", "false");
     assert_rows(&plain, &[], &["git log -1"]);
-    // The empty name, from an empty section name or from a key with no
-    // section name, refuses.
+    // A name Git reads as empty, in either representation of it, refuses.
     for config in [
         &b"[remote \"\"]\n\tpartialCloneFilter = blob:none\n"[..],
         &b"[remote]\n\tpartialCloneFilter = blob:none\n"[..],
@@ -316,7 +315,7 @@ fn ordinary_transports_keep_their_verdict() {
             "git push origin HEAD:refs/heads/task/x",
         ],
     );
-    // The `ext` transport keeps its own refusal and message.
+    // The transport that carries a command keeps its own refusal and message.
     for hook in HOOKS {
         let out = scratch.judge(hook, "git ls-remote 'ext::sh -c true'");
         let err = stderr(&out);
@@ -389,7 +388,7 @@ fn both_guards_refuse_a_program_chosen_by_remote_settings() {
 
 #[test]
 fn both_guards_refuse_an_implicit_contact_they_cannot_prove() {
-    // A sole remote other than `origin`, which Git falls back to.
+    // A sole remote other than the one Git falls back to.
     let sole = Scratch::landed(None);
     git(sole.root(), &["remote", "rename", "origin", "backup"]);
     git(sole.root(), &["config", "remote.backup.url", "fixture::x"]);
@@ -457,7 +456,8 @@ fn both_guards_refuse_a_selection_that_hides_a_remote() {
             .append_config(group)
             .append_config(b"\n")
             .write(".git/remotes/default", b"URL: fixture::x\n");
-        // git-guard refuses first: `default` is not a configured remote.
+        // git-guard refuses first: the selected name is not a configured
+        // remote.
         assert_fetch_without_url(&legacy, "git remote update");
     }
 
@@ -686,9 +686,9 @@ fn both_guards_refuse_nested_contacts_they_cannot_prove() {
 
 #[test]
 fn a_location_setting_the_probe_does_not_read_keeps_nested_contacts_refused() {
-    // The probe that looks for submodules reads only the call's location
-    // inputs, so a work-tree setting on the command line or in the
-    // environment cannot hide a marker the probe found.
+    // The probe that looks for nested repositories reads only the call's
+    // location inputs, so a setting that places the work tree elsewhere
+    // cannot hide a record the probe found.
     let scratch = Scratch::landed(None);
     scratch.write(".gitmodules", b"");
     let empty = scratch.base.join("empty");
@@ -705,8 +705,8 @@ fn a_location_setting_the_probe_does_not_read_keeps_nested_contacts_refused() {
         &[],
         &[(&environment, CONFIG_OVERRIDE)],
     );
-    // Nor can it move the work tree to a place the probe does not look,
-    // so recursion refuses where it passes without the setting.
+    // Nor can such a setting move the work tree out of the probe's reach, so
+    // recursion refuses where it passes without the setting.
     let plain = Scratch::landed(None);
     let elsewhere = plain.base.join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
@@ -747,9 +747,9 @@ fn both_guards_refuse_a_remote_with_ambiguous_addresses() {
 
 #[test]
 fn a_recovery_fetch_is_withheld_for_a_helper_transport() {
-    // Two remotes and no `origin` leave the policy authority unresolved, so
-    // only the recovery fetch of a configured remote may pass, and only over
-    // a transport Git runs itself.
+    // Two remotes and none that Git falls back to leave the policy authority
+    // unresolved, so only the recovery fetch of a configured remote may pass,
+    // and only over a transport Git runs itself.
     let scratch = Scratch::landed(None);
     git(scratch.root(), &["remote", "rename", "origin", "first"]);
     scratch.config("remote.second.url", "fixture::x");
@@ -945,7 +945,7 @@ fn the_landed_policy_skips_the_account_finding_for_a_named_entry() {
     );
 }
 
-/// git-guard's earlier rule that refuses every `remote add`, before it reads
+/// git-guard's earlier rule that refuses adding a remote, before it reads
 /// what Git runs.
 const REMOTE_IDENTITY: &str = "the operator manages remote identity";
 
@@ -961,8 +961,8 @@ fn both_guards_read_every_spelling_that_turns_nested_contacts_on() {
         ],
         &["git clone --no-recurse-submodules https://127.0.0.1:9/r copy"],
     );
-    // The option reader both guards share refuses an abbreviated clone
-    // recursion option before the transport resolution reads it.
+    // The option reader both guards share refuses an abbreviated recursion
+    // option of a new copy before the transport resolution reads it.
     for hook in HOOKS {
         let out = plain.judge(hook, "git clone --recurs https://127.0.0.1:9/r copy");
         let err = stderr(&out);
