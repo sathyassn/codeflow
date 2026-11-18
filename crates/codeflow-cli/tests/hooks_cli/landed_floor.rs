@@ -304,7 +304,10 @@ fn refused(out: &std::process::Output, rule: &str) {
 
 fn collect_refusal(out: &std::process::Output, rule: &str, case: &str, failures: &mut Vec<String>) {
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let expected = if rule.starts_with("git.") {
+    let expected = if matches!(
+        rule,
+        "git.branch_naming" | "git.force_push_protected" | "git.force_push_unprotected"
+    ) {
         format!("policy rule {rule} (block)")
     } else {
         rule.to_string()
