@@ -195,6 +195,10 @@ fn assert_unproven(scratch: &Scratch, refused: &[&str], allowed: &[&str]) {
     assert_judged_with(scratch, unproven_refusal, refused, allowed, &[]);
 }
 
+fn assert_nested(scratch: &Scratch, refused: &[&str], allowed: &[&str]) {
+    assert_judged_with(scratch, nested_refusal, refused, allowed, &[]);
+}
+
 /// git-guard's earlier rule, which refuses a fetch whose source has no
 /// URL before it reads what Git runs.
 const NO_FETCH_URL: &str = "fetch source is not a configured remote or its URL";
@@ -1230,7 +1234,7 @@ fn record_nested(scratch: &Scratch) -> String {
 fn both_guards_refuse_nested_contacts_with_one_marker() {
     let scratch = Scratch::landed(None);
     let head = record_nested(&scratch);
-    assert_unproven(
+    assert_nested(
         &scratch,
         &[
             "git fetch origin",
@@ -1266,7 +1270,7 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
     // for what Git reads.
     let line = format!("GIT_INDEX_FILE={index} git fetch origin");
     let out = selected.judge("git-guard", &line);
-    assert!(unproven_refusal(&out), "git-guard: {}", stderr(&out));
+    assert!(nested_refusal(&out), "git-guard: {}", stderr(&out));
     let out = selected.judge("exec-guard", &line);
     let err = stderr(&out);
     assert!(
@@ -1276,7 +1280,7 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
     assert_unproven(&selected, &[], &["git fetch origin"]);
     for hook in HOOKS {
         let out = selected.judge_inheriting(hook, "git fetch origin", ("GIT_INDEX_FILE", &index));
-        assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
+        assert!(nested_refusal(&out), "{hook}: {}", stderr(&out));
     }
 }
 
@@ -1308,7 +1312,7 @@ fn both_guards_refuse_a_definition_held_outside_the_work_tree() {
     for in_commit in [false, true] {
         let scratch = Scratch::landed(None);
         definition_outside_work_tree(&scratch, in_commit);
-        assert_unproven(
+        assert_nested(
             &scratch,
             &["git fetch origin", "git fetch", "git pull origin main"],
             &["git fetch --no-recurse-submodules origin"],
@@ -1521,6 +1525,10 @@ fn git_guard_reads_removal_from_an_inherited_view() {
         "declare +x GIT_NO_REPLACE_OBJECTS; git fetch origin",
     ] {
         let out = scratch.judge_inheriting("git-guard", line, ("GIT_NO_REPLACE_OBJECTS", "1"));
+        if line.starts_with("declare +x") {
+            assert!(out.status.code() == Some(2) && stderr(&out).contains("git.policy_authority"));
+            continue;
+        }
         if !unproven_refusal(&out)
             || !(nested_refusal(&out) || stderr(&out).contains("run the commands separately"))
         {
@@ -1571,7 +1579,13 @@ fn git_guard_refuses_unresolved_setter_views() {
         "GIT_NO_REPLACE_OBJECTS[0]=1; git fetch origin",
     ] {
         let out = scratch.judge("git-guard", line);
-        if !unproven_refusal(&out) || !stderr(&out).contains("run the commands separately") {
+        let expected = if line.contains("[0]") {
+            out.status.code() == Some(2) && stderr(&out).contains("git.policy_authority")
+        } else {
+            unproven_refusal(&out)
+                && (nested_refusal(&out) || stderr(&out).contains("run the commands separately"))
+        };
+        if !expected {
             wrong.push(format!("{line}: {}", stderr(&out)));
         }
     }
@@ -1584,17 +1598,19 @@ fn git_guard_reads_the_environment_of_carried_bodies() {
     let scratch = Scratch::landed(None);
     definition_outside_work_tree(&scratch, true);
     replace_last_commit(&scratch, false);
+    let root = shell_path(scratch.root());
+    let fetch = format!("git -C {root} fetch origin");
     let mut wrong = Vec::new();
     for line in [
-        "GIT_NO_REPLACE_OBJECTS=1 eval 'git fetch origin'",
-        "GIT_NO_REPLACE_OBJECTS=1 sh -c 'git fetch origin'",
-        "env GIT_NO_REPLACE_OBJECTS=1 sh -c 'git fetch origin'",
-        "GIT_NO_REPLACE_OBJECTS=1 command git fetch origin",
-        "GIT_NO_REPLACE_OBJECTS=1 exec git fetch origin",
-        "GIT_NO_REPLACE_OBJECTS=1 nice git fetch origin",
-        "GIT_NO_REPLACE_OBJECTS=1 time git fetch origin",
+        format!("GIT_NO_REPLACE_OBJECTS=1 eval '{fetch}'"),
+        format!("GIT_NO_REPLACE_OBJECTS=1 sh -c '{fetch}'"),
+        format!("env GIT_NO_REPLACE_OBJECTS=1 sh -c '{fetch}'"),
+        format!("GIT_NO_REPLACE_OBJECTS=1 command {fetch}"),
+        format!("GIT_NO_REPLACE_OBJECTS=1 exec {fetch}"),
+        format!("GIT_NO_REPLACE_OBJECTS=1 nice {fetch}"),
+        format!("GIT_NO_REPLACE_OBJECTS=1 time {fetch}"),
     ] {
-        let out = scratch.judge("git-guard", line);
+        let out = scratch.judge("git-guard", &line);
         if !nested_refusal(&out) {
             wrong.push(format!("{line}: {}", stderr(&out)));
         }
@@ -1602,7 +1618,9 @@ fn git_guard_reads_the_environment_of_carried_bodies() {
     git_guard_allows(&scratch, "sh -c 'git fetch origin'");
     git_guard_allows(
         &scratch,
-        "GIT_NO_REPLACE_OBJECTS=1 eval 'git fetch --no-recurse-submodules origin'",
+        &format!(
+            "GIT_NO_REPLACE_OBJECTS=1 eval 'git -C {root} fetch --no-recurse-submodules origin'"
+        ),
     );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -1620,6 +1638,10 @@ fn git_guard_judges_uncertain_child_inheritance() {
         &reverse,
         "GIT_NO_REPLACE_OBJECTS=1 git for-each-repo --config=fixture.repos fetch --no-recurse-submodules origin",
     );
+}
+
+#[test]
+fn git_guard_judges_the_environment_of_parent_callbacks() {
     let forward = Scratch::landed(None);
     definition_outside_work_tree(&forward, true);
     replace_last_commit(&forward, false);
@@ -1881,7 +1903,7 @@ fn both_guards_read_the_whole_index_from_every_directory() {
                 .current_dir(&selected_src),
             &guard_payload("git fetch origin", &selected_src),
         );
-        assert!(unproven_refusal(&out), "{hook}: {}", stderr(&out));
+        assert!(nested_refusal(&out), "{hook}: {}", stderr(&out));
     }
 }
 
