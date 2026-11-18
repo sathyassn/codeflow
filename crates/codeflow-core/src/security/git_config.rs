@@ -585,6 +585,7 @@ fn probe_command(
             at += 2;
         } else {
             if arg == "--bare"
+                || arg == "--no-replace-objects"
                 || arg.starts_with("--git-dir=")
                 || arg.starts_with("--work-tree=")
                 || (arg.starts_with("-C") && arg.len() > 2)
@@ -674,34 +675,53 @@ pub(crate) fn index_gitlinks(
 ) -> Result<bool, String> {
     let unread = |_| "cannot read the index of the repository the command works in".to_string();
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut probe = probe_command(cwd, globals, environment, &["GIT_INDEX_FILE"])?;
-    probe
-        .env("GIT_LITERAL_PATHSPECS", "0")
-        .env_remove("GIT_GLOB_PATHSPECS")
-        .env_remove("GIT_NOGLOB_PATHSPECS")
-        .env_remove("GIT_ICASE_PATHSPECS");
-    probe.args([
-        "--no-pager",
-        "ls-files",
-        "--format=%(objectmode) %(path)",
-        "--",
-        ":/",
-    ]);
-    let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
-    let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
-    if text.split('\n').any(|entry| {
-        entry.starts_with("160000 ")
-            || entry
-                .split_once(' ')
-                .is_some_and(|(_, p)| p == ".gitmodules")
-    }) {
+    let listing = |paths: &str| -> Result<String, String> {
+        let mut probe = probe_command(
+            cwd,
+            globals,
+            environment,
+            &["GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"],
+        )?;
+        probe
+            .env("GIT_LITERAL_PATHSPECS", "0")
+            .env_remove("GIT_GLOB_PATHSPECS")
+            .env_remove("GIT_NOGLOB_PATHSPECS")
+            .env_remove("GIT_ICASE_PATHSPECS");
+        probe.args([
+            "--no-pager",
+            "ls-files",
+            "--format=%(objectmode)",
+            "--",
+            paths,
+        ]);
+        let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+        String::from_utf8(bytes).map_err(|_| unread(String::new()))
+    };
+    // Entries are selected from the top of the repository, so the directory
+    // the call runs in does not change what is read.
+    if listing(":/")?.split('\n').any(|mode| mode == "160000")
+        || !listing(":(top,literal).gitmodules")?.trim().is_empty()
+    {
         return Ok(true);
     }
     commit_holds_definition(cwd, globals, environment, deadline)
 }
 
-/// Whether the last commit holds a definition file for nested repositories.
-/// A branch with no commit holds none; any other probe failure is an error.
+/// The variables that select the objects a call reads, forwarded to the
+/// probes of the last commit as the call has them.
+const OBJECT_INPUTS: &[&str] = &[
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+];
+
+/// Whether the last commit holds a definition file for nested repositories,
+/// read from the top of the repository. Only a branch whose name is proven to
+/// resolve to nothing holds none; a commit or tree that cannot be read, a ref
+/// that cannot be read and every other probe failure are errors. The probe
+/// never fetches a missing object, so one the call could fetch is an error
+/// too.
 fn commit_holds_definition(
     cwd: &Path,
     globals: &[String],
@@ -710,28 +730,62 @@ fn commit_holds_definition(
 ) -> Result<bool, String> {
     let unread =
         |_| "cannot read the last commit of the repository the command works in".to_string();
-    let mut head = location_command(cwd, globals, environment)?;
-    head.args(["--no-pager", "rev-parse", "-q", "--verify", "HEAD^{tree}"]);
-    let (_, status) = bounded_run(&mut head, deadline).map_err(unread)?;
-    if !status.success() {
-        let mut branch = location_command(cwd, globals, environment)?;
-        branch.args(["--no-pager", "symbolic-ref", "-q", "HEAD"]);
-        let (_, status) = bounded_run(&mut branch, deadline).map_err(unread)?;
-        return if status.success() {
-            Ok(false)
-        } else {
-            Err(unread(String::new()))
-        };
+    let command = |extra: &[&str]| -> Result<std::process::Command, String> {
+        let mut command = probe_command(cwd, globals, environment, OBJECT_INPUTS)?;
+        command.arg("--no-pager").args(extra);
+        Ok(command)
+    };
+    let run = |extra: &[&str]| -> Result<(Vec<u8>, std::process::ExitStatus), String> {
+        bounded_run(&mut command(extra)?, deadline).map_err(unread)
+    };
+    let (branch, status) = run(&["symbolic-ref", "-q", "HEAD"])?;
+    if status.success() {
+        let branch = String::from_utf8(branch).map_err(|_| unread(String::new()))?;
+        let branch = branch.strip_suffix('\n').unwrap_or(&branch);
+        if !branch.starts_with("refs/") || branch.contains('\n') {
+            return Err(unread(String::new()));
+        }
+        let (_, status) = run(&["show-ref", "--verify", "-q", branch])?;
+        match status.code() {
+            Some(0) => {}
+            Some(1) => {
+                // Absent only when no file holds the ref, so a ref that
+                // cannot be read is not taken for a missing one.
+                let (path, status) =
+                    run(&["rev-parse", "--path-format=absolute", "--git-path", branch])?;
+                let path = String::from_utf8(path).map_err(|_| unread(String::new()))?;
+                let path = path.strip_suffix('\n').unwrap_or(&path);
+                let missing = status.success()
+                    && Path::new(path).is_absolute()
+                    && matches!(
+                        std::fs::symlink_metadata(path),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                    );
+                return if missing {
+                    Ok(false)
+                } else {
+                    Err(unread(String::new()))
+                };
+            }
+            _ => return Err(unread(String::new())),
+        }
     }
-    let mut tree = location_command(cwd, globals, environment)?;
-    tree.args([
-        "--no-pager",
+    let (_, status) = run(&["rev-parse", "-q", "--verify", "HEAD^{tree}"])?;
+    if !status.success() {
+        return Err(unread(String::new()));
+    }
+    let mut tree = command(&[
         "ls-tree",
+        "--full-tree",
         "--name-only",
         "HEAD",
         "--",
         ".gitmodules",
-    ]);
+    ])?;
+    tree.env("GIT_LITERAL_PATHSPECS", "1")
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS");
     let bytes = bounded_output(&mut tree, deadline).map_err(unread)?;
     Ok(!bytes.is_empty())
 }

@@ -988,6 +988,7 @@ impl<'a> Resolver<'a> {
         if self.keys.iter().any(|key| {
             *key == "submodule.active"
                 || *key == "core.worktree"
+                || *key == "core.usereplacerefs"
                 || key
                     .strip_prefix("submodule.")
                     .is_some_and(|rest| rest.contains('.'))
@@ -1005,7 +1006,7 @@ impl<'a> Resolver<'a> {
         if !absent(&location.common.join("modules")) {
             return Ok(true);
         }
-        if probe.gitlinks()? {
+        if probe.gitlinks().map_err(unproven)? {
             return Ok(true);
         }
         if location.bare {
