@@ -378,8 +378,8 @@ fn range_policy(
     root: &Path,
     args: &CiArgs,
     environment: &BTreeMap<String, String>,
-) -> Result<(Policy, bool), String> {
-    let (mut working, armed) = Policy::load_effective(root)?;
+) -> Result<(Policy, GitPolicy), String> {
+    let (mut working, _) = Policy::load_effective(root)?;
     let floor = match pinned_floor(root, args, environment)? {
         Some(sha) => codeflow_core::hooks::landed_policy::checked_policy_at_sha(root, &sha)?,
         None => codeflow_core::hooks::landed_policy::load_local(root)?.policy,
@@ -390,7 +390,7 @@ fn range_policy(
     // target's eligibility read the floor's list alone, so a protected branch
     // the checkout adds cannot grant authority (TSK-1078 review F1).
     working.git.landed_protected_branches = Some(floor.git.trusted_protected_branches().to_vec());
-    Ok((working, armed))
+    Ok((working, floor.git))
 }
 
 /// The commit the run already pins its judgment to, which range selection
@@ -473,7 +473,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     // `range_policy`). The range itself is judged with the policy at
     // its base (see `judging_policy`). Bootstrap grace cannot occur here:
     // CI always has history.
-    let (working, _armed) = match range_policy(&root, args, &environment) {
+    let (working, floor) = match range_policy(&root, args, &environment) {
         Ok(value) => value,
         Err(error) => {
             let age = crate::cmd::binary_age(&root);
@@ -494,7 +494,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     // target is resolved, so its cause is named first (TSK-1351 AC-3).
     if let Some(refusal) = candidate::unnamed_line(
         args.pushed_ref.as_deref(),
-        &working.git,
+        &floor,
         args.into.as_deref(),
     ) {
         let tagged = vec![refusal];

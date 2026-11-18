@@ -361,6 +361,11 @@ pub struct GitPolicy {
     /// branch. `None` outside composition, where the two lists are the same.
     #[serde(skip)]
     pub landed_protected_branches: Option<Vec<String>>,
+    /// Whether the landed candidate prefix passed its overlap check before
+    /// composition. Removing work prefixes must not create a naming exemption.
+    /// Set only by composition, never deserialized from the checked-out file.
+    #[serde(skip)]
+    pub landed_candidate_prefix_valid: Option<bool>,
     /// Words a generated branch name leaves out, because a sandbox can refuse
     /// to read a ref file with such a word in its name. A project sets the
     /// list its own harness needs; an empty list keeps every word.
@@ -711,6 +716,7 @@ impl Default for GitPolicy {
             candidate_prefix: "candidate/".to_string(),
             candidate_search_depth: 200,
             landed_protected_branches: None,
+            landed_candidate_prefix_valid: None,
             branch_name_omit_words: DEFAULT_BRANCH_NAME_OMIT_WORDS
                 .iter()
                 .map(ToString::to_string)
@@ -932,6 +938,7 @@ impl GitPolicy {
         let prefix = self.candidate_prefix.as_str();
         prefix.ends_with('/')
             && !prefix.contains(['*', '?', '[', '{', '\\'])
+            && self.landed_candidate_prefix_valid != Some(false)
             && self.candidate_prefix_problem().is_none()
             && branch.len() > prefix.len()
             && branch.starts_with(prefix)
