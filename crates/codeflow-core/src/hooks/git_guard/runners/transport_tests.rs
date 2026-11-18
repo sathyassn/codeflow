@@ -143,6 +143,49 @@ fn unresolved_probe_inputs_stay_unread_in_every_view() {
 }
 
 #[test]
+fn indirect_writes_keep_inherited_probe_inputs_unread() {
+    let mut wrong = Vec::new();
+    for segment in [
+        "((x))", ": $((x))", ": $[x]", "let x", "declare -i n=x",
+        "typeset -i n=x", "integer n=x", "[[ x -eq 1 ]]", "test x -eq 1",
+        "printf -v \"$destination\" %s 1", "declare \"$destination=1\"",
+        "typeset \"$destination=1\"", "local \"$destination=1\"",
+        "readonly \"$destination=1\"", "export \"$destination=1\"",
+        "read \"$destination\"", "mapfile \"$destination\"",
+        "getopts x \"$destination\"", "wait -p \"$destination\"",
+        "array[x]=1", "${destination}=1",
+    ] {
+        let literals = super::super::probe_line_literals(&[segment.into()]);
+        let inherited = super::super::probe_names()
+            .map(|name| (name.into(), "inherited".into()))
+            .collect();
+        match super::super::launched_environments(
+            &super::super::Launched::default(), &literals, &inherited,
+        ) {
+            Ok(views) if views.len() == 1 && super::super::probe_names().all(|name| {
+                views[0].get(name).map(String::as_str)
+                    == Some(crate::security::git_config::UNREAD_PROBE)
+            }) => {}
+            result => wrong.push(format!("{segment}: {result:?}")),
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn additional_export_options_keep_probe_inputs_unresolved() {
+    for segment in [
+        "shopt -o -s allexport", "setopt allexport", "setopt ALL_EXPORT",
+        "set -o all_export", "unsetopt noallexport", "setopt No_No_ALL_EXPORT",
+    ] {
+        let literals = super::super::probe_line_literals(&[segment.into()]);
+        for name in super::super::probe_names() {
+            assert_eq!(literals.0.get(name), Some(&None), "{segment}: {name}");
+        }
+    }
+}
+
+#[test]
 fn noncontacting_probe_mentions_need_no_probe() {
     let scratch = Scratch::new(HTTPS);
     for command in [

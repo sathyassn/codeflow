@@ -1693,6 +1693,53 @@ fn git_guard_keeps_noncontacting_mentions_allowed() {
 }
 
 #[test]
+fn git_guard_judges_opaque_runtime_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for setter in [
+        "printf -v y %s _OBJECTS; x=GIT_NO_REPLACE$y=1; set -a; ((x))",
+        "printf -v y %s _OBJECTS; x=GIT_NO_REPLACE$y=1; shopt -o -s allexport; ((x))",
+        "printf -v y %s _OBJECTS; x=GIT_NO_REPLACE$y=1; setopt ALL_EXPORT; ((x))",
+        "printf -v y %s _OBJECTS; x=GIT_NO_REPLACE$y=1; ((x))",
+        "printf -v y %s _BASE; wait -p \"GIT_REPLACE_REF$y\"",
+    ] {
+        let line = format!("{setter}; git fetch origin");
+        let out = scratch.judge("git-guard", &line);
+        if !unresolved_probe_refusal(&out) {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+        git_guard_allows(&scratch, &format!("{setter}; git fetch --no-recurse-submodules origin"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_judges_opaque_inherited_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for setter in [
+        "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; ((x))",
+        "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; : $((x))",
+        "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; declare -i n=x",
+        "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; [[ x -eq 1 ]]",
+    ] {
+        let line = format!("{setter}; git fetch origin");
+        let out = scratch.judge_inheriting("git-guard", &line, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
+        if !unresolved_probe_refusal(&out) {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+        let off = format!("{setter}; git fetch --no-recurse-submodules origin");
+        let out = scratch.judge_inheriting("git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
+        assert_eq!(out.status.code(), Some(0), "{off}: {}", stderr(&out));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_reads_the_environment_of_carried_bodies() {
     let scratch = Scratch::landed(None);
     definition_outside_work_tree(&scratch, true);
