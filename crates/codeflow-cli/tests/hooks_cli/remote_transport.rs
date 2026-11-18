@@ -1558,11 +1558,16 @@ fn git_guard_judges_an_earlier_assignment_in_every_environment_it_may_have() {
         git_guard_refuses(&forward, line);
     }
     // A Git call a runner starts keeps the variables the line gives Git.
+    let repos = shell_path(forward.root());
+    forward.config("fixture.repos", &repos);
     git_guard_refuses(
         &forward,
-        "GIT_NO_REPLACE_OBJECTS=1 git bisect run git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS=1 git for-each-repo --config=fixture.repos fetch origin",
     );
-    git_guard_allows(&forward, "git bisect run git fetch origin");
+    git_guard_allows(
+        &forward,
+        "git for-each-repo --config=fixture.repos fetch origin",
+    );
 }
 
 /// Through both guards: a command not proven local refuses.
