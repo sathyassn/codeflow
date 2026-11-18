@@ -17,7 +17,7 @@ fn a_transient_child_index_cannot_prove_absence() {
     let child = super::super::Inputs::child(&args, &Environment::new()).unwrap();
     let result = index_gitlinks(&scratch.root, &[], &child.environment);
     assert!(
-        result.is_err(),
+        result.unwrap_err() == "cannot establish an index or object input for this child; run the commands separately",
         "a transient child index was treated as the ordinary index"
     );
 }
@@ -41,7 +41,46 @@ fn uncertain_probe_views_have_a_fixed_bound() {
     assert_eq!(views.len(), 27);
     literals.0.insert(names[3].into(), Some("assigned".into()));
     let why = super::super::launched_environments(&launch, &literals, &inherited).unwrap_err();
-    assert!(why.contains("run the commands separately"));
+    assert_eq!(why, "the line changes more of the variables that select the index or objects than the guard reads; run the commands separately");
+}
+
+#[test]
+fn child_probe_views_include_mixed_inheritance() {
+    let mut env = Environment::new();
+    env.insert("GIT_NO_REPLACE_OBJECTS".into(), "1".into());
+    env.insert("GIT_REPLACE_REF_BASE".into(), "refs/none/".into());
+    let args = vec!["for-each-repo".into()];
+    let views = super::super::Inputs::views(&args, &env, false).unwrap();
+    for (first, second) in [
+        ("1", crate::security::git_config::UNSET),
+        (crate::security::git_config::UNSET, "refs/none/"),
+    ] {
+        assert!(views.iter().any(|view| view
+            .environment
+            .get("GIT_NO_REPLACE_OBJECTS")
+            .map(String::as_str)
+            == Some(first)
+            && view
+                .environment
+                .get("GIT_REPLACE_REF_BASE")
+                .map(String::as_str)
+                == Some(second)));
+    }
+}
+
+#[test]
+fn opaque_probe_mentions_are_unresolved_after_segmentation() {
+    for name in ["GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE"] {
+        for segment in [
+            format!("++{name}"),
+            format!(": ${{{name}:=1}}"),
+            format!(": $[{name}=1]"),
+            format!("trap 'export {name}=1' DEBUG"),
+        ] {
+            let literals = super::super::probe_line_literals(&[segment.clone()]);
+            assert_eq!(literals.0.get(name), Some(&None), "{segment}");
+        }
+    }
 }
 
 /// A scratch repository on branch `main` whose local configuration ends

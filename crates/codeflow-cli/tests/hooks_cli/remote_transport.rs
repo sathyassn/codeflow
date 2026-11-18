@@ -1328,6 +1328,13 @@ fn nested_refusal(out: &Output) -> bool {
     unproven_refusal(out) && stderr(out).contains("may recurse into nested repositories")
 }
 
+fn unresolved_probe_refusal(out: &Output) -> bool {
+    unproven_refusal(out)
+        && stderr(out).contains(
+            "cannot establish an index or object input for this child; run the commands separately",
+        )
+}
+
 /// Through both guards: the definition check reads the top of the
 /// repository from any directory and through the directory option, with the
 /// nested-repository reason and a recursion-off control.
@@ -1529,9 +1536,7 @@ fn git_guard_reads_removal_from_an_inherited_view() {
             assert!(out.status.code() == Some(2) && stderr(&out).contains("git.policy_authority"));
             continue;
         }
-        if !unproven_refusal(&out)
-            || !(nested_refusal(&out) || stderr(&out).contains("run the commands separately"))
-        {
+        if !(nested_refusal(&out) || unresolved_probe_refusal(&out)) {
             wrong.push(format!("{line}: {}", stderr(&out)));
         }
     }
@@ -1578,20 +1583,52 @@ fn git_guard_refuses_unresolved_setter_views() {
         "mapfile GIT_NO_REPLACE_OBJECTS; git fetch origin",
         "((GIT_NO_REPLACE_OBJECTS=1)); git fetch origin",
         "set -a; ((++GIT_NO_REPLACE_OBJECTS)); git fetch origin",
+        "set -a; : ${GIT_NO_REPLACE_OBJECTS:=1}; git fetch origin",
+        "set -a; : $[GIT_NO_REPLACE_OBJECTS=1]; git fetch origin",
+        "trap 'export GIT_NO_REPLACE_OBJECTS=1' DEBUG; git fetch origin",
+        "set -a; ((--GIT_REPLACE_REF_BASE)); git fetch origin",
+        "set -a; : ${GIT_REPLACE_REF_BASE:=1}; git fetch origin",
+        "set -a; : $[GIT_REPLACE_REF_BASE=1]; git fetch origin",
+        "trap 'export GIT_REPLACE_REF_BASE=refs/none/' DEBUG; git fetch origin",
         "GIT_NO_REPLACE_OBJECTS[0]=1; git fetch origin",
     ] {
         let out = scratch.judge("git-guard", line);
         let expected = if line.contains("[0]") {
             out.status.code() == Some(2) && stderr(&out).contains("git.policy_authority")
+        } else if line.starts_with("set -a") || line.starts_with("trap ") {
+            unresolved_probe_refusal(&out)
         } else {
-            unproven_refusal(&out)
-                && (nested_refusal(&out) || stderr(&out).contains("run the commands separately"))
+            nested_refusal(&out) || unresolved_probe_refusal(&out)
         };
         if !expected {
             wrong.push(format!("{line}: {}", stderr(&out)));
         }
     }
     git_guard_allows(&scratch, "git fetch origin");
+    git_guard_allows(
+        &scratch,
+        "set -a; ((++GIT_NO_REPLACE_OBJECTS)); git fetch --no-recurse-submodules origin",
+    );
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_keeps_removals_in_carried_bodies() {
+    let scratch = Scratch::landed(None);
+    replace_last_commit(&scratch, true);
+    let root = shell_path(scratch.root());
+    let mut wrong = Vec::new();
+    for removal in ["-uGIT_NO_REPLACE_OBJECTS", "-u GIT_NO_REPLACE_OBJECTS"] {
+        let line = format!("env {removal} sh -c 'git -C {root} fetch origin'");
+        let out = scratch.judge_inheriting("git-guard", &line, ("GIT_NO_REPLACE_OBJECTS", "1"));
+        if !unresolved_probe_refusal(&out) {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+        let off =
+            format!("env {removal} sh -c 'git -C {root} fetch --no-recurse-submodules origin'");
+        let out = scratch.judge_inheriting("git-guard", &off, ("GIT_NO_REPLACE_OBJECTS", "1"));
+        assert_eq!(out.status.code(), Some(0), "{off}: {}", stderr(&out));
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -1647,16 +1684,13 @@ fn git_guard_judges_the_environment_of_parent_callbacks() {
     let forward = Scratch::landed(None);
     definition_outside_work_tree(&forward, true);
     replace_last_commit(&forward, false);
+    let root = shell_path(forward.root());
     let out = forward.judge(
         "git-guard",
-        "GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git fetch origin' --paginate submodule status",
+        &format!("GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git -C {root} fetch origin' --paginate submodule status"),
     );
-    assert!(
-        unproven_refusal(&out)
-            && (nested_refusal(&out) || stderr(&out).contains("run the commands separately")),
-        "{}",
-        stderr(&out)
-    );
+    assert!(unresolved_probe_refusal(&out), "{}", stderr(&out));
+    git_guard_allows(&forward, &format!("GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git -C {root} fetch --no-recurse-submodules origin' --paginate submodule status"));
 }
 
 #[test]
