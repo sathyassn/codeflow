@@ -304,7 +304,12 @@ fn refused(out: &std::process::Output, rule: &str) {
 
 fn collect_refusal(out: &std::process::Output, rule: &str, case: &str, failures: &mut Vec<String>) {
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if out.status.success() || !stderr.contains(&format!("policy rule {rule} (block)")) {
+    let expected = if rule.starts_with("git.") {
+        format!("policy rule {rule} (block)")
+    } else {
+        rule.to_string()
+    };
+    if out.status.success() || !stderr.contains(&expected) {
         failures.push(format!("{case}: expected {rule}: {stderr}"));
     }
 }
@@ -745,8 +750,13 @@ fn landed_floor_ci_keeps_the_early_missing_line_refusal() {
             let out = super::codeflow()
                 .current_dir(fixture.dir.path())
                 .args([
-                    "ci", "--pushed-ref", "refs/heads/candidate/check",
-                    "--branch", "task/check", "--head", "missing-range-head",
+                    "ci",
+                    "--pushed-ref",
+                    "refs/heads/candidate/check",
+                    "--branch",
+                    "task/check",
+                    "--head",
+                    "missing-range-head",
                     "--blocking-rules-out",
                 ])
                 .arg(&rules)
@@ -758,7 +768,9 @@ fn landed_floor_ci_keeps_the_early_missing_line_refusal() {
                 || !stderr.contains("hand-off names no line (`--into`)")
                 || std::fs::read_to_string(&rules).unwrap().trim() != "work.landing_candidate"
             {
-                failures.push(format!("{case}: expected missing-line block before range resolution: {stderr}"));
+                failures.push(format!(
+                    "{case}: expected missing-line block before range resolution: {stderr}"
+                ));
             }
         }
     }

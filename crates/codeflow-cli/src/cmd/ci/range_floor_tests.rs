@@ -147,8 +147,15 @@ fn range_floor_added_protected_entry_grants_no_trust() {
             let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
             let parent = repo.head().unwrap().peel_to_commit().unwrap();
             let sig = Signature::now("Test", "test@example.invalid").unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "test: update policy", &tree, &[&parent])
-                .unwrap();
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "test: update policy",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
         }
         let options = Options::parse_from(["test", "--branch", "task/check"]);
         let (policy, _) = range_policy(dir.path(), &options.ci, &BTreeMap::new()).unwrap();
