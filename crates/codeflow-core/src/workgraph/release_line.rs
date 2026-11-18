@@ -514,9 +514,10 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Pattern, Str
         .find_commit(tip)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.message().to_string())?;
-    let entry = match tree.get_path(Path::new(POLICY_PATH)) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+    let entry = match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(POLICY_PATH))
+    {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
             return match policy_in_history(repo, tip) {
                 Ok(None) => Ok(Pattern::InitialAdoption),
                 Ok(Some(carried)) => Err(format!(
@@ -530,9 +531,15 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Pattern, Str
         }
         Err(error) => return Err(format!("{POLICY_PATH} cannot be read: {}", error.message())),
     };
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|error| format!("{POLICY_PATH} cannot be read: {}", error.message()))?;
+    let blob = repo.find_blob(entry.id()).map_err(|error| {
+        crate::git::missing_contents::explain_object(
+            repo,
+            POLICY_PATH.as_bytes(),
+            entry.id(),
+            &error,
+            format!("{POLICY_PATH} cannot be read: {}", error.message()),
+        )
+    })?;
     let value: serde_json::Value = serde_json::from_slice(blob.content())
         .map_err(|error| format!("{POLICY_PATH} is not valid JSON: {error}"))?;
     let git = value.get("git");
@@ -1224,9 +1231,12 @@ fn record_of(
     let Some((id, _)) = entry else {
         return Ok(None);
     };
-    let blob = repo
-        .find_blob(*id)
-        .map_err(|error| format!("cannot read record {path}: {error}"))?;
+    let blob = repo.find_blob(*id).map_err(|error| {
+        format!(
+            "cannot read record {path}: {}",
+            crate::git::missing_contents::object_error(repo, path.as_bytes(), *id, &error)
+        )
+    })?;
     let text = std::str::from_utf8(blob.content())
         .map_err(|error| format!("cannot decode record {path}: {error}"))?;
     RecordView::parse(RecordKind::Task, path, text).map(Some)
@@ -1860,9 +1870,9 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<Entry>,
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    match tree.get_path(Path::new(path)) {
-        Ok(entry) => Ok(Some((entry.id(), entry.filemode().cast_unsigned()))),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+    match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(path)) {
+        Ok(Some(entry)) => Ok(Some((entry.id(), entry.filemode().cast_unsigned()))),
+        Ok(None) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -2303,9 +2313,15 @@ fn config_at(
     if let Some(known) = blobs.get(&entry.id()) {
         return Ok(known.clone());
     }
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|error| unavailable(".codeflow/project.toml", entry.id(), &error))?;
+    let blob = repo.find_blob(entry.id()).map_err(|error| {
+        crate::git::missing_contents::explain_object(
+            repo,
+            b".codeflow/project.toml",
+            entry.id(),
+            &error,
+            unavailable(".codeflow/project.toml", entry.id(), &error),
+        )
+    })?;
     let text = std::str::from_utf8(blob.content())
         .map_err(|error| format!("cannot decode .codeflow/project.toml at {commit}: {error}"))?;
     let config = match text.parse::<toml::Value>() {

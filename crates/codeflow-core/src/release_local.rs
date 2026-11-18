@@ -126,6 +126,7 @@ fn preflight_with_draft(
         // An environment variable, not an argument: a project's older
         // release.py ignores it instead of refusing the call.
         .env("CODEFLOW_BIN", codeflow)
+        .env("GIT_NO_LAZY_FETCH", "1")
         .current_dir(root)
         .output()
         .map_err(|error| format!("{PYTHON} {SCRIPT}: {error}"))?;
@@ -238,6 +239,24 @@ mod tests {
         assert_eq!(warn.notes, ["/opt/the-running-codeflow"]);
         let blocked = preflight(dir.path(), "HEAD", "break", "origin", reader).unwrap();
         assert!(blocked.blocked());
+    }
+
+    #[test]
+    fn preflight_keeps_git_object_reads_offline() {
+        assert!(
+            python_available(),
+            "Python is required for the preflight environment fixture"
+        );
+        let dir = project("codeflow", Some("import json, os\nprint(json.dumps({'status': 'warn', 'notes': [os.environ.get('GIT_NO_LAZY_FETCH', 'unset')]}))\n"));
+        let result = preflight(
+            dir.path(),
+            "HEAD",
+            "task/x",
+            "origin",
+            Path::new("codeflow"),
+        )
+        .unwrap();
+        assert_eq!(result.notes, ["1"]);
     }
 
     #[test]

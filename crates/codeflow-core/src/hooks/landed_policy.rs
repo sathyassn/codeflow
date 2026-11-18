@@ -595,9 +595,9 @@ fn file_in(
     path: &str,
     shown: &str,
 ) -> Result<Option<String>, String> {
-    let entry = match tree.get_path(Path::new(path)) {
-        Ok(entry) => entry,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+    let entry = match crate::git::missing_contents::tree_entry(repo, tree, Path::new(path)) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(None),
         Err(e) => return Err(format!("cannot read policy source {shown}: {path}: {e}")),
     };
     if entry.kind() != Some(git2::ObjectType::Blob) || entry.filemode() == 0o120_000 {
@@ -610,16 +610,24 @@ fn file_in(
     let (size, _) = repo
         .odb()
         .and_then(|odb| odb.read_header(entry.id()))
-        .map_err(|e| format!("cannot read policy source {shown}: {path}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "cannot read policy source {shown}: {path}: {}",
+                crate::git::missing_contents::object_error(repo, path.as_bytes(), entry.id(), &e)
+            )
+        })?;
     if size as u64 > super::policy::SETTINGS_READ_LIMIT {
         return Err(format!(
             "cannot read policy source {shown}: {path} is larger than {} bytes",
             super::policy::SETTINGS_READ_LIMIT
         ));
     }
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|e| format!("cannot read policy source {shown}: {path}: {e}"))?;
+    let blob = repo.find_blob(entry.id()).map_err(|e| {
+        format!(
+            "cannot read policy source {shown}: {path}: {}",
+            crate::git::missing_contents::object_error(repo, path.as_bytes(), entry.id(), &e)
+        )
+    })?;
     String::from_utf8(blob.content().to_vec())
         .map(Some)
         .map_err(|e| format!("cannot read policy source {shown}: {path}: {e}"))

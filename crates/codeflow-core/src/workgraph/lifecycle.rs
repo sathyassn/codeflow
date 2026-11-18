@@ -681,9 +681,13 @@ fn project_table_at(repo: &Repository, commit: git2::Oid) -> Result<Option<toml:
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+    let entry = match crate::git::missing_contents::tree_entry(
+        repo,
+        &tree,
+        Path::new(".codeflow/project.toml"),
+    ) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(None),
         Err(error) => return Err(error.to_string()),
     };
     let blob = repo
@@ -795,9 +799,13 @@ fn baseline_at(repo: &Repository, commit: git2::Oid) -> Result<Vec<String>, Stri
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+    let entry = match crate::git::missing_contents::tree_entry(
+        repo,
+        &tree,
+        Path::new(".codeflow/project.toml"),
+    ) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(Vec::new()),
         Err(error) => return Err(error.to_string()),
     };
     let blob = repo
@@ -2013,9 +2021,10 @@ fn implemented_at_a_commit(
             let Some(kind) = record_kind_for_tree_path(path) else {
                 continue;
             };
-            let entry = match tree.get_path(Path::new(path)) {
-                Ok(entry) => entry,
-                Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+            let entry = match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(path))
+            {
+                Ok(Some(entry)) => entry,
+                Ok(None) => continue,
                 Err(error) => return Err(message(error)),
             };
             let view = match parsed.entry(entry.id()) {
@@ -2504,11 +2513,12 @@ fn landing_paths(
     let mut commit = repo.find_commit(tip).map_err(|error| error.to_string())?;
     let status_at = |commit: &git2::Commit<'_>| -> Result<Option<String>, String> {
         let tree = commit.tree().map_err(|error| error.to_string())?;
-        let entry = match tree.get_path(Path::new(&record.path)) {
-            Ok(entry) => entry,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-            Err(error) => return Err(error.to_string()),
-        };
+        let entry =
+            match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(&record.path)) {
+                Ok(Some(entry)) => entry,
+                Ok(None) => return Ok(None),
+                Err(error) => return Err(error.to_string()),
+            };
         let blob = repo
             .find_blob(entry.id())
             .map_err(|error| error.to_string())?;

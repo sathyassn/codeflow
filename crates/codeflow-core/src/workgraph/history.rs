@@ -341,14 +341,8 @@ pub fn merge_base_many(repo: &Repository, commits: &[Oid]) -> Result<Oid, Error>
 /// or repository redirect that the reader did not check.
 #[must_use]
 pub fn command() -> std::process::Command {
-    let mut command = crate::git::command();
-    command
-        .args(["-c", "core.commitGraph=false"])
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env_remove("GIT_WORK_TREE");
+    let mut command = crate::git::judging_command();
+    command.args(["-c", "core.commitGraph=false"]);
     command
 }
 

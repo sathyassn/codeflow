@@ -595,10 +595,16 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
         .map_err(|error| format!("{revision}: {error}"))?;
     if let Some(entry) = committed_state_entry(&repo, &tree, revision)? {
         let blob = repo.find_blob(entry).map_err(|error| {
-            format!(
-                "{revision}: {} cannot be read: {}",
-                crate::scaffold::state::PROJECT_TOML,
-                error.message()
+            crate::git::missing_contents::explain_object(
+                &repo,
+                crate::scaffold::state::PROJECT_TOML.as_bytes(),
+                entry,
+                &error,
+                format!(
+                    "{revision}: {} cannot be read: {}",
+                    crate::scaffold::state::PROJECT_TOML,
+                    error.message()
+                ),
             )
         })?;
         let text = std::str::from_utf8(blob.content())
@@ -619,9 +625,13 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
     }
     // Only a tree without the directory has no records; a read failure is
     // the error, never tracking off (issue 79).
-    let entry = match tree.get_path(Path::new("project-management")) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+    let entry = match crate::git::missing_contents::tree_entry(
+        &repo,
+        &tree,
+        Path::new("project-management"),
+    ) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(false),
         Err(error) => return Err(format!("{revision}: {}", error.message())),
     };
     let home = repo
@@ -2752,9 +2762,9 @@ pub fn anchored_task_content(repo_root: &Path, task_id: &str) -> Result<String, 
         .map_err(|e| e.to_string())?;
     let path = format!("project-management/tasks/{task_id}.md");
     let read = |tree: &git2::Tree<'_>| -> Result<String, String> {
-        let entry = tree
-            .get_path(Path::new(&path))
-            .map_err(|_| format!("task {task_id} not committed"))?;
+        let entry = crate::git::missing_contents::tree_entry(&repo, tree, Path::new(&path))
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("task {task_id} not committed"))?;
         if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
             return Err("task record must be a regular file".into());
         }
@@ -2816,15 +2826,10 @@ pub fn anchored_project_file(
     let record = format!("project-management/tasks/{task_id}.md");
     // Only a record the head does not hold is uncommitted (issue 79): a
     // tree that cannot be read is an error.
-    let entry = match head
-        .tree()
-        .map_err(|e| e.to_string())?
-        .get_path(Path::new(&record))
-    {
-        Ok(entry) => entry,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => {
-            return Err(format!("task {task_id} not committed"))
-        }
+    let tree = head.tree().map_err(|e| e.to_string())?;
+    let entry = match crate::git::missing_contents::tree_entry(&repo, &tree, Path::new(&record)) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Err(format!("task {task_id} not committed")),
         Err(e) => return Err(format!("cannot read task {task_id} at HEAD: {e}")),
     };
     if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
@@ -2873,17 +2878,17 @@ pub fn anchored_project_file(
     // A retarget is not a new arrival.
     // Absence is git's not-found answer only (issue 79): a tree that cannot
     // be read refuses, never reads as a target without the file.
-    match tree.get_path(Path::new(&record)) {
-        Ok(_) => {}
-        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+    match crate::git::missing_contents::tree_entry(&repo, &tree, Path::new(&record)) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
             refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
         }
         Err(e) => return Err(format!("cannot read {record} on {target}: {e}")),
     }
-    let content = match tree.get_path(Path::new(path)) {
-        Err(e) if e.code() == git2::ErrorCode::NotFound => None,
+    let content = match crate::git::missing_contents::tree_entry(&repo, &tree, Path::new(path)) {
+        Ok(None) => None,
         Err(e) => return Err(format!("cannot read {path} on {target}: {e}")),
-        Ok(entry) => {
+        Ok(Some(entry)) => {
             if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
                 return Err(format!("{path} on {target} must be a regular file"));
             }
@@ -2927,9 +2932,9 @@ fn refuse_retarget(
             .and_then(|id| repo.find_commit(id))
             .map_err(|e| unreadable(e.to_string()))?;
         let tree = commit.tree().map_err(|e| unreadable(e.to_string()))?;
-        let entry = match tree.get_path(Path::new(record)) {
-            Ok(entry) => entry,
-            Err(e) if e.code() == git2::ErrorCode::NotFound => continue,
+        let entry = match crate::git::missing_contents::tree_entry(repo, &tree, Path::new(record)) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => continue,
             Err(e) => return Err(unreadable(e.to_string())),
         };
         if !seen.insert(entry.id()) {
@@ -3841,7 +3846,12 @@ fn read_record(
         // so a hostile tip cannot make every reader load it.
         let size = odb
             .read_header(id)
-            .map_err(|error| format!("{path}: cannot read record size: {error}"))?
+            .map_err(|error| {
+                format!(
+                    "{path}: cannot read record size: {}",
+                    crate::git::missing_contents::object_error(repo, path.as_bytes(), id, &error)
+                )
+            })?
             .0;
         if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
             return Err(format!(
@@ -3849,9 +3859,15 @@ fn read_record(
             ));
         }
     }
-    let blob = repo
-        .find_blob(id)
-        .map_err(|_| format!("{path}: cannot read blob"))?;
+    let blob = repo.find_blob(id).map_err(|error| {
+        crate::git::missing_contents::explain_object(
+            repo,
+            path.as_bytes(),
+            id,
+            &error,
+            format!("{path}: cannot read blob"),
+        )
+    })?;
     let content =
         std::str::from_utf8(blob.content()).map_err(|_| format!("{path}: record is not UTF-8"))?;
     parse_record(content, kind).map_err(|error| format!("{path}: {error}"))

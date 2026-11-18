@@ -566,9 +566,10 @@ fn target_files(root: &Path) -> TargetFiles<impl Fn(&str) -> TargetText> {
     };
     let show = move |path: &str| -> TargetText {
         let tree = repo.find_tree(tree).map_err(|error| error.to_string())?;
-        let entry = match tree.get_path(&prefix.join(path)) {
-            Ok(entry) => entry,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        let entry = match crate::git::missing_contents::tree_entry(&repo, &tree, &prefix.join(path))
+        {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return Ok(None),
             Err(error) => return Err(error.to_string()),
         };
         let blob = repo

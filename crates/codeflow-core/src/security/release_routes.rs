@@ -2802,9 +2802,9 @@ const WORKFLOWS: &str = ".github/workflows";
 const READ_LIMIT: usize = 1024 * 1024;
 
 fn flows_in(repo: &git2::Repository, tree: &git2::Tree<'_>) -> Result<Vec<Flow>, String> {
-    let dir = match tree.get_path(Path::new(WORKFLOWS)) {
-        Ok(entry) => entry,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+    let dir = match crate::git::missing_contents::tree_entry(repo, tree, Path::new(WORKFLOWS)) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return Ok(Vec::new()),
         Err(e) => return Err(e.to_string()),
     };
     let dir = dir

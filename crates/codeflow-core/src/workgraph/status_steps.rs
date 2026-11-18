@@ -351,9 +351,13 @@ impl<'r> Walker<'r> {
         path: &str,
     ) -> Result<Option<git2::Tree<'r>>, Unreadable> {
         let missing = |error: git2::Error| Unreadable::new(Cause::MissingObject, error.message());
-        let entry = match tree.get_path(std::path::Path::new(path)) {
-            Ok(entry) => entry,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        let entry = match crate::git::missing_contents::tree_entry(
+            self.repo,
+            tree,
+            std::path::Path::new(path),
+        ) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return Ok(None),
             Err(error) => return Err(missing(error)),
         };
         if entry.kind() != Some(git2::ObjectType::Tree) {

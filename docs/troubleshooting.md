@@ -296,6 +296,29 @@ A merge Git concludes itself is scanned in `commit-msg`, since Git runs no
 merge driver or resolve the merge by hand, and the hand-concluded commit is
 scanned in `pre-commit`.
 
+## A push from a partial clone cannot read file contents
+
+A partial clone can hold a commit and its paths without holding the file
+contents. This includes a fetched commit that was never checked out, or a
+merge whose other side has missing contents. Pre-push and `codeflow ci`
+refuse with `git.path_policy`, list the paths and object IDs, and print
+commands to retrieve the missing contents. The checks do not fetch them.
+Partial clones need Git 2.46 or later so Git subprocesses can disable lazy
+fetching during these checks.
+
+Run the printed commands outside the check, then retry the push. A promisor
+remote is the source Git uses to retrieve omitted objects. The commands ask
+Git for the named objects through those configured remotes, without
+putting a remote name or URL in the diagnostic. The printed command sets
+`GIT_NO_LAZY_FETCH=0` to permit retrieval even if the caller normally
+disables lazy fetching. The commands populate Git's object store without
+changing working-tree files.
+
+If the promisor is offline or cannot supply an object, that object remains
+unreadable and the check still refuses. Repair access to the promisor or
+recover the missing objects before retrying. A full clone with a missing
+object retains its unreadable-object refusal.
+
 ## A cancelled standalone task has no planning anchor
 
 If a standalone task was cancelled before its record reached the target,

@@ -96,10 +96,10 @@ fn message(error: &git2::Error) -> String {
 
 /// The tree at `path` under `tree`: `None` when nothing is there or the
 /// entry is not a directory; an error when the read fails (issue 79).
-fn subtree_id(tree: &git2::Tree<'_>, path: &str) -> Result<Option<Oid>, String> {
-    match tree.get_path(std::path::Path::new(path)) {
-        Ok(entry) => Ok((entry.kind() == Some(git2::ObjectType::Tree)).then(|| entry.id())),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+fn subtree_id(repo: &Repository, tree: &git2::Tree<'_>, path: &str) -> Result<Option<Oid>, String> {
+    match crate::git::missing_contents::tree_entry(repo, tree, std::path::Path::new(path)) {
+        Ok(Some(entry)) => Ok((entry.kind() == Some(git2::ObjectType::Tree)).then(|| entry.id())),
+        Ok(None) => Ok(None),
         Err(error) => Err(format!("cannot read {path}: {}", error.message())),
     }
 }
@@ -120,21 +120,21 @@ pub(super) fn records(repo: &Repository) -> Result<Vec<Record>, String> {
     let head = head.peel_to_commit().map_err(|error| message(&error))?;
     let tree = head.tree().map_err(|error| message(&error))?;
     let mut paths = Vec::new();
-    if let Some(tasks) = subtree_id(&tree, TASKS)? {
+    if let Some(tasks) = subtree_id(repo, &tree, TASKS)? {
         paths.extend(
             markdown_names(repo, tasks)?
                 .into_iter()
                 .map(|name| format!("{TASKS}/{name}")),
         );
     }
-    if let Some(epics) = subtree_id(&tree, EPICS)? {
+    if let Some(epics) = subtree_id(repo, &tree, EPICS)? {
         let epics = repo.find_tree(epics).map_err(|error| message(&error))?;
         for epic in &epics {
             if epic.kind() != Some(git2::ObjectType::Tree) {
                 continue;
             }
             let nested = repo.find_tree(epic.id()).map_err(|error| message(&error))?;
-            let Some(tasks) = subtree_id(&nested, "tasks")? else {
+            let Some(tasks) = subtree_id(repo, &nested, "tasks")? else {
                 continue;
             };
             // An epic directory that holds task records must be named in
@@ -287,12 +287,12 @@ impl<'r> History<'r> {
             if commit.parent_count() > 1 {
                 continue;
             }
-            let now = homes.subtrees(&commit)?;
+            let now = homes.subtrees(repo, &commit)?;
             let before = if commit.parent_count() == 0 {
                 (None, None)
             } else {
                 let parent = commit.parent(0).map_err(|error| message(&error))?;
-                homes.subtrees(&parent)?
+                homes.subtrees(repo, &parent)?
             };
             if now == before {
                 continue;
@@ -636,7 +636,7 @@ struct Homes {
 }
 
 impl Homes {
-    fn subtrees(&mut self, commit: &Commit<'_>) -> Result<Subtrees, String> {
+    fn subtrees(&mut self, repo: &Repository, commit: &Commit<'_>) -> Result<Subtrees, String> {
         if let Some(found) = self.by_commit.get(&commit.id()) {
             return Ok(*found);
         }
@@ -647,7 +647,10 @@ impl Homes {
                 error.message()
             )
         })?;
-        let found = (subtree_id(&tree, TASKS)?, subtree_id(&tree, EPICS)?);
+        let found = (
+            subtree_id(repo, &tree, TASKS)?,
+            subtree_id(repo, &tree, EPICS)?,
+        );
         self.by_commit.insert(commit.id(), found);
         Ok(found)
     }
@@ -724,7 +727,7 @@ fn record_blobs(repo: &Repository, homes: Subtrees) -> Result<Vec<Oid>, String> 
             if epic.kind() != Some(git2::ObjectType::Tree) {
                 continue;
             }
-            if let Some(tasks) = subtree_id(&read(epic.id())?, "tasks")? {
+            if let Some(tasks) = subtree_id(repo, &read(epic.id())?, "tasks")? {
                 entries(&read(tasks)?);
             }
         }

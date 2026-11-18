@@ -146,6 +146,9 @@ fn run_checked_with_binary(
             return Ok(());
         }
     };
+    // Even the advertised-tip lookup can meet a promised object. Refuse
+    // old Git versions before any object-reading subprocess can fetch it.
+    codeflow_core::hooks::gitleaks::require_offline_judgment(root)?;
     let url = url.or(remote);
     // Tracking refs describe the fetch location; they stand in for the push
     // location only when the two are the same.
@@ -1076,7 +1079,7 @@ fn run_check_with(
         .then(|| RulesOut::create_named("codeflow-ci-timings"))
         .flatten();
     let mut command = Command::new(exe);
-    command.args(args);
+    command.args(args).env("GIT_NO_LAZY_FETCH", "1");
     if let Some(out) = &rules_out {
         command.arg("--blocking-rules-out").arg(&out.0);
     }

@@ -778,11 +778,12 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    let entry = match tree.get_path(std::path::Path::new(path)) {
-        Ok(entry) => entry,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
+    let entry =
+        match crate::git::missing_contents::tree_entry(repo, &tree, std::path::Path::new(path)) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
     let blob = repo
         .find_blob(entry.id())
         .map_err(|error| error.to_string())?;

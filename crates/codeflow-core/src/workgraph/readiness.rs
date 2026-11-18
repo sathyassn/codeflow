@@ -1207,19 +1207,21 @@ fn task_record_at(
     commit: &str,
     task_id: &str,
     uid: Option<&str>,
-) -> Option<Record> {
+) -> Result<Option<Record>, String> {
     let tree = git2::Oid::from_str(commit)
         .and_then(|oid| repo.find_commit(oid))
         .and_then(|commit| commit.tree())
-        .ok()?;
+        .map_err(|error| error.to_string())?;
     let file = format!("{task_id}.md");
     let mut paths = vec![format!("project-management/tasks/{file}")];
-    if let Ok(epics) = tree.get_path(Path::new("project-management/epics")) {
-        if let Some(epics) = epics
-            .to_object(repo)
-            .ok()
-            .and_then(|object| object.into_tree().ok())
-        {
+    if let Some(epics) =
+        crate::git::missing_contents::tree_entry(repo, &tree, Path::new("project-management/epics"))
+            .map_err(|error| error.to_string())?
+    {
+        if epics.kind() == Some(git2::ObjectType::Tree) {
+            let epics = repo
+                .find_tree(epics.id())
+                .map_err(|error| error.to_string())?;
             for epic in &epics {
                 if let Ok(name) = epic.name() {
                     paths.push(format!("project-management/epics/{name}/tasks/{file}"));
@@ -1227,16 +1229,27 @@ fn task_record_at(
             }
         }
     }
-    paths.into_iter().find_map(|path| {
-        super::work_start::record_kind_for_tree_path(&path)
-            .filter(|kind| *kind == RecordKind::Task)?;
-        let entry = tree.get_path(Path::new(&path)).ok()?;
-        let blob = repo.find_blob(entry.id()).ok()?;
-        let record =
-            parse_record(std::str::from_utf8(blob.content()).ok()?, RecordKind::Task).ok()?;
-        (record.id == task_id && uid.is_none_or(|uid| record.uid.as_deref() == Some(uid)))
-            .then_some(record)
-    })
+    for path in paths {
+        if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
+            continue;
+        }
+        let Some(entry) = crate::git::missing_contents::tree_entry(repo, &tree, Path::new(&path))
+            .map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|error| error.to_string())?;
+        let record = parse_record(
+            std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?,
+            RecordKind::Task,
+        )?;
+        if record.id == task_id && uid.is_none_or(|uid| record.uid.as_deref() == Some(uid)) {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
 }
 
 /// The commits of `tip`'s first-parent line that change anything under
@@ -1333,7 +1346,19 @@ fn completion_bound(
     let Some(changes) = first_parent_record_changes(repo_root, tip) else {
         return false;
     };
-    let state = |commit: &str| completion_of(task_record_at(repo, commit, task_id, uid).as_ref());
+    let mut states = std::collections::HashMap::new();
+    for (commit, parents) in &changes {
+        for revision in std::iter::once(commit).chain(parents) {
+            if states.contains_key(revision) {
+                continue;
+            }
+            let Ok(record) = task_record_at(repo, revision, task_id, uid) else {
+                return false;
+            };
+            states.insert(revision.clone(), completion_of(record.as_ref()));
+        }
+    }
+    let state = |commit: &str| states[commit].clone();
     // Rule 2: the newest transition.
     let Some((index, transition, parents)) =
         changes
@@ -1409,7 +1434,10 @@ fn completion_bound(
     if on_first_parent_line(repo, head_line, review_line) != Some(true) {
         return false;
     }
-    if completion_of(task_record_at(repo, &review.id().to_string(), task_id, uid).as_ref()).0 {
+    let Ok(review_record) = task_record_at(repo, &review.id().to_string(), task_id, uid) else {
+        return false;
+    };
+    if completion_of(review_record.as_ref()).0 {
         return false;
     }
     let Ok(head_oid) = git2::Oid::from_str(&head) else {
