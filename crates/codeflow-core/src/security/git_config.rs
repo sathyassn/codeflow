@@ -113,7 +113,7 @@ impl EffectiveConfig {
 /// a key written without `=`), in Git's order. Registered:
 ///
 /// - the remote that the repository-wide partial-copy setting names;
-/// - each remote with a promisor setting;
+/// - each remote with a promisor setting, unless Git reads its value as false;
 /// - each remote with a partial-copy filter.
 ///
 /// A setting without a usable name gives the empty name. Sorted, without
@@ -661,12 +661,12 @@ pub(crate) fn locate(
     })
 }
 
-/// Whether the index the call reads holds a record of a nested repository,
-/// as Git itself lists the index, read with the call's location inputs and
-/// its index-file variable only. The listing covers the whole index and is
-/// not narrowed by the call's own settings. Any probe failure,
-/// timeout or listing over the output limit is an error, so the caller
-/// refuses.
+/// Whether the index the call reads holds a record of a nested repository
+/// or a definition file for them, or the last commit holds one, as Git itself
+/// lists them, read with the call's location inputs and its index-file
+/// variable only. The listing covers the whole index and is not narrowed by
+/// the call's own settings. Any probe failure, timeout or listing over the
+/// output limit is an error, so the caller refuses.
 pub(crate) fn index_gitlinks(
     cwd: &Path,
     globals: &[String],
@@ -683,13 +683,57 @@ pub(crate) fn index_gitlinks(
     probe.args([
         "--no-pager",
         "ls-files",
-        "--format=%(objectmode)",
+        "--format=%(objectmode) %(path)",
         "--",
         ":/",
     ]);
     let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
     let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
-    Ok(text.split('\n').any(|mode| mode == "160000"))
+    if text.split('\n').any(|entry| {
+        entry.starts_with("160000 ")
+            || entry
+                .split_once(' ')
+                .is_some_and(|(_, p)| p == ".gitmodules")
+    }) {
+        return Ok(true);
+    }
+    commit_holds_definition(cwd, globals, environment, deadline)
+}
+
+/// Whether the last commit holds a definition file for nested repositories.
+/// A branch with no commit holds none; any other probe failure is an error.
+fn commit_holds_definition(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    deadline: Instant,
+) -> Result<bool, String> {
+    let unread =
+        |_| "cannot read the last commit of the repository the command works in".to_string();
+    let mut head = location_command(cwd, globals, environment)?;
+    head.args(["--no-pager", "rev-parse", "-q", "--verify", "HEAD^{tree}"]);
+    let (_, status) = bounded_run(&mut head, deadline).map_err(unread)?;
+    if !status.success() {
+        let mut branch = location_command(cwd, globals, environment)?;
+        branch.args(["--no-pager", "symbolic-ref", "-q", "HEAD"]);
+        let (_, status) = bounded_run(&mut branch, deadline).map_err(unread)?;
+        return if status.success() {
+            Ok(false)
+        } else {
+            Err(unread(String::new()))
+        };
+    }
+    let mut tree = location_command(cwd, globals, environment)?;
+    tree.args([
+        "--no-pager",
+        "ls-tree",
+        "--name-only",
+        "HEAD",
+        "--",
+        ".gitmodules",
+    ]);
+    let bytes = bounded_output(&mut tree, deadline).map_err(unread)?;
+    Ok(!bytes.is_empty())
 }
 
 /// The name of the branch the call's repository has checked out. A
@@ -720,6 +764,19 @@ pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {
+    let (bytes, status) = bounded_run(command, deadline)?;
+    if !status.success() {
+        return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
+    }
+    Ok(bytes)
+}
+
+/// [`bounded_output`] that also returns the exit status, for a probe whose
+/// failure status is an answer.
+fn bounded_run(
+    command: &mut std::process::Command,
+    deadline: Instant,
+) -> Result<(Vec<u8>, std::process::ExitStatus), String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
     if Instant::now() >= deadline {
         return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
@@ -767,10 +824,7 @@ pub(crate) fn bounded_output(
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    if !status.success() {
-        return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
-    }
-    Ok(bytes)
+    Ok((bytes, status))
 }
 
 #[cfg(test)]

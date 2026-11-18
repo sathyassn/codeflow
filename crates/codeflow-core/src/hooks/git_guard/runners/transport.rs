@@ -632,9 +632,8 @@ fn scheme(address: &str) -> Option<&str> {
         .then_some(scheme)
 }
 
-/// Every name Git may look up in the older definition files: Git excludes
-/// only the path separator of the platform, and the separators differ, so
-/// this reading holds the names of every platform.
+/// Every name Git may look up in the older definition files, read the same
+/// on every platform.
 fn remote_nick(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
@@ -893,9 +892,8 @@ impl<'a> Resolver<'a> {
                 None => addresses.extend(rewritten(&remote.url, &self.rewrites)),
             },
             (Direction::Push, Some(pushurl)) => {
-                // Git applies the fetch rewrite to a push address; a push
-                // rewrite that also matches is kept too, so no reading of
-                // the two drops a destination.
+                // Both readings of the rewrites are kept, so none drops a
+                // destination.
                 addresses.extend(rewritten(pushurl, &self.rewrites));
                 addresses.extend(matched(pushurl, &self.push_rewrites).unwrap_or_default());
             }
@@ -981,8 +979,9 @@ impl<'a> Resolver<'a> {
 
     /// Whether the repository has or may have nested repositories: a
     /// setting that names one, the common Git directory's store for them, a
-    /// record of one in the whole index the call reads, or the work tree's
-    /// definition file, each unless proven absent. The probe reads only the
+    /// record of one in the whole index the call reads, or a definition file
+    /// in the work tree, the index or the last commit, each unless proven
+    /// absent. The probe reads only the
     /// call's location inputs, so a location setting it cannot follow
     /// counts as a possible nested repository.
     fn may_have_submodules(&self, probe: &mut dyn Probe) -> Result<bool, String> {
@@ -1090,8 +1089,7 @@ impl<'a> Resolver<'a> {
             Some((sub, names)) if matches!(*sub, "update" | "show" | "prune" | "set-head") => {
                 let mut names = names;
                 if *sub == "update" && names.last() == Some(&"default") && !self.group("default") {
-                    // That last word is read as the default selection, not
-                    // as a remote name, when no group of that name is set.
+                    // The selection is resolved as Git reads it.
                     names = &names[..names.len() - 1];
                     self.default_update(found, probe)?;
                 }
@@ -1175,11 +1173,9 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// Whether a fetch of every remote skips remote `name`. Git keeps one
-    /// flag for both of its settings, and the one set last wins; when both
-    /// are set and read differently, the order is not read here, so the
-    /// remote counts as fetched. A value Git would not read as a boolean
-    /// refuses.
+    /// Whether a fetch of every remote skips remote `name`. When the
+    /// settings disagree the remote counts as fetched, and a value Git would
+    /// not read as a boolean refuses.
     fn skips_default_update(&self, name: &str) -> Result<bool, String> {
         let mut skips = Vec::new();
         for variable in ["skipdefaultupdate", "skipfetchall"] {
@@ -1261,8 +1257,8 @@ impl<'a> Resolver<'a> {
 }
 
 /// `url` after the longest matching rewrite in `rewrites`, or as written.
-/// Rewrites of the same length that match are all kept, so a tie Git
-/// breaks by configuration order adds a destination instead of guessing.
+/// Rewrites of the same length that match are all kept, so a tie adds a
+/// destination instead of guessing.
 fn rewritten(url: &str, rewrites: &[(String, String)]) -> Vec<String> {
     matched(url, rewrites).unwrap_or_else(|| vec![url.to_string()])
 }

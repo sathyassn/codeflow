@@ -675,7 +675,10 @@ the form refuses:
     off. The guards read the whole index of the repository the call
     selects, from whichever directory it runs in and whichever way it
     selects a directory or an index file, and the settings the probe does
-    not read may place nested repositories elsewhere, so they count;
+    not read may place nested repositories elsewhere, so they count. A
+    repository whose index or last commit holds the definition for nested
+    repositories counts too, even when the work tree lacks it, so such a
+    repository also refuses until the command line turns recursion off;
   - a new copy, which is judged by every address the configuration gives
     any remote, since it may use any of them, and by the settings of its
     own command line;
