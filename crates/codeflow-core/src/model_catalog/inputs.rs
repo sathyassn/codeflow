@@ -9,6 +9,14 @@ const EMBEDDED: &[u8] = include_bytes!(concat!(
 ));
 const RESOURCE: &str = "skills/cf-model-orchestrator/resources/current-ensemble.json";
 
+/// The catalog shipped inside this binary, never an installed copy.
+///
+/// # Errors
+/// Rejects a shipped catalog that does not parse.
+pub fn shipped_catalog() -> Result<Catalog, String> {
+    Catalog::parse(EMBEDDED)
+}
+
 /// Read the installed managed catalog, falling back to the shipped catalog.
 ///
 /// # Errors

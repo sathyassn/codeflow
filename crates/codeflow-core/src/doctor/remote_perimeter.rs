@@ -32,6 +32,8 @@
 //! name to an App, it says that Mode B does not close forgery by a later
 //! producer and that only Mode A does, without changing the status.
 
+pub(super) mod ref_protection;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 

@@ -1964,6 +1964,70 @@ fn moving_the_local_target_does_not_move_the_anchor() {
     }
 }
 
+/// The TSK-416 shape: a completion, an in-place edit of its acceptance
+/// block, a reopen, then a re-completion, all in the task's own pull
+/// request. The edit is a completion of its own (SPC-013 R-119), so the
+/// archive holds the block as made, then the edited block. The status verb
+/// and both `codeflow ci` forms accept that archive and refuse one that
+/// reorders or drops either completion.
+#[test]
+fn a_completion_edited_in_place_is_archived_as_made_then_as_edited() {
+    for order in ["as made", "edit first", "edit only", "made only"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        let first = code_change(root, BRANCH, "pub fn initial() {}\n");
+        let made = fix_block(&first);
+        complete(root, "TSK-001", OWN_JOURNEY, &made);
+        let edited = made.replace("AC-1: verified | unit", "AC-1: verified | unit, rerun");
+        complete(root, "TSK-001", OWN_JOURNEY, &edited);
+        let superseded = |block: &str, reason: &str| {
+            block.replace(
+                "acceptance:\n",
+                &format!("acceptance_superseded:\n  reason: {reason}\n"),
+            )
+        };
+        let made = superseded(&made, "the completion as made");
+        let edited = superseded(&edited, "reopened for the fix");
+        write(root, &path, &task("TSK-001", "todo", OWN_JOURNEY, &edited));
+        commit(root, "docs: reopen the task");
+        let archive = match order {
+            "as made" => format!("{made}{edited}"),
+            "edit first" => format!("{edited}{made}"),
+            "edit only" => edited.clone(),
+            _ => made.clone(),
+        };
+        if archive != edited {
+            write(root, &path, &task("TSK-001", "todo", OWN_JOURNEY, &archive));
+            commit(root, "docs: archive the completion as made");
+        }
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let fixed = commit(root, "fix: repair the regression");
+        let closeout = format!("{archive}{}", fix_block(&fixed));
+        write(
+            root,
+            &path,
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        if order == "as made" {
+            assert_eq!(verb.0, 0, "{order}: {}", verb.1);
+            commit(root, "docs: complete the fixed task");
+            assert_passes(&ci(root, BRANCH, "TSK-001"), order);
+            assert_passes(&ci_push(root, BRANCH), order);
+        } else {
+            assert_ne!(verb.0, 0, "{order}: {}", verb.1);
+            complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+            let needles = [
+                "work.acceptance_binding",
+                "the archive must hold every completion this range made",
+            ];
+            assert_blocks(&ci(root, BRANCH, "TSK-001"), order, &needles);
+            assert_blocks(&ci_push(root, BRANCH), order, &needles);
+        }
+    }
+}
+
 /// TSK-340 review round 5, the coordinator's follow-up: an `integration/`
 /// name earns no authority. TSK-001 declares `integration/EPC-009-rogue`,
 /// which no epic or policy at `main` names. The verb refuses a side-branch
@@ -7052,3 +7116,6 @@ mod line_sync_push;
 
 #[path = "acceptance_cli/own_line_criteria.rs"]
 mod own_line_criteria;
+
+#[path = "acceptance_cli/landed_review.rs"]
+mod landed_review;

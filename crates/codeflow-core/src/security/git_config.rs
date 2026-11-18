@@ -89,11 +89,36 @@ impl EffectiveConfig {
             .collect()
     }
 
+    /// Every entry in Git's precedence order, as its key (section and
+    /// variable folded, subsection as written) and its raw value; `None` for
+    /// a key written without `=`.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&[u8], Option<&[u8]>)> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.key.as_slice(), entry.value.as_deref()))
+    }
+
     pub(crate) fn boolean(&self, key: &str) -> Result<bool, String> {
         match self.get(key)? {
             None => Ok(false),
             Some(value) => super::git::config_boolean(value)
                 .ok_or_else(|| format!("cannot verify Git configuration: {key} is not a boolean")),
+        }
+    }
+}
+
+/// The value of an [`Environment`] entry that removes the variable from the
+/// reading's child process, for a command whose launcher removes it
+/// (`env -u NAME`, `env -i`). No real value holds a NUL byte.
+pub(crate) const UNSET: &str = "\0";
+
+/// Give `command` the entries of `environment`, removing each [`UNSET`] one.
+fn apply_environment(command: &mut std::process::Command, environment: &Environment) {
+    for (name, value) in environment {
+        if value == UNSET {
+            command.env_remove(name);
+        } else {
+            command.env(name, value);
         }
     }
 }
@@ -140,10 +165,8 @@ pub(crate) fn read(
     let deadline = Instant::now() + Duration::from_secs(3);
     validate_environment(environment)?;
     let mut command = crate::git::command();
-    command
-        .current_dir(cwd)
-        .envs(environment)
-        .stdin(Stdio::null());
+    command.current_dir(cwd).stdin(Stdio::null());
+    apply_environment(&mut command, environment);
     // GIT_CONFIG selects a file only for `git config`, not for the command
     // being judged. Keep the runtime configuration environment intact.
     command.env_remove("GIT_CONFIG");
@@ -152,9 +175,9 @@ pub(crate) fn read(
     // not necessarily the caller's directory. Probe with the identical globals
     // and environment. Outside a repository config still works from cwd.
     let mut location = crate::git::command();
+    apply_environment(&mut location, environment);
     location
         .current_dir(cwd)
-        .envs(environment)
         .env_remove("GIT_CONFIG")
         .stdin(Stdio::null())
         .args(command.get_args())
@@ -295,9 +318,9 @@ pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<Effect
         .parent()
         .ok_or("cannot verify Git configuration: include file has no parent")?;
     let mut command = crate::git::command();
+    apply_environment(&mut command, environment);
     command
         .current_dir(directory)
-        .envs(environment)
         .env_remove("GIT_CONFIG")
         .stdin(Stdio::null())
         .arg("--no-pager")
@@ -322,11 +345,12 @@ fn include_path(
     environment: &Environment,
 ) -> Result<PathBuf, String> {
     if let Some(rest) = value.strip_prefix("~/") {
-        let home = environment
-            .get("HOME")
-            .map(std::ffi::OsString::from)
-            .or_else(|| std::env::var_os("HOME"))
-            .ok_or("cannot verify Git configuration: include needs HOME")?;
+        let home = match environment.get("HOME") {
+            Some(home) if home == UNSET => None,
+            Some(home) => Some(std::ffi::OsString::from(home)),
+            None => std::env::var_os("HOME"),
+        }
+        .ok_or("cannot verify Git configuration: include needs HOME")?;
         return Ok(PathBuf::from(home).join(rest));
     }
     if value.starts_with('~') || value.starts_with("%(") {
@@ -547,6 +571,17 @@ mod tests {
         );
         assert_eq!(config.get_all("REMOTE.Mixed.URL")[0].2, b"first");
         assert_eq!(config.get("REMOTE.mixed.URL").unwrap(), Some("second"));
+    }
+
+    /// Git takes `-c` only with its setting as the next word: with the
+    /// setting attached it stops before reading any configuration, so a
+    /// command written that way runs no alias (TSK-1456).
+    #[test]
+    fn git_takes_a_setting_only_after_a_separate_option() {
+        let (dir, env) = fixture();
+        let separate = read(dir.path(), &["-c".into(), "k18.probe=yes".into()], &env).unwrap();
+        assert_eq!(separate.get("k18.probe").unwrap(), Some("yes"));
+        assert!(read(dir.path(), &["-ck18.probe=yes".into()], &env).is_err());
     }
 
     #[test]

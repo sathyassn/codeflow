@@ -42,6 +42,7 @@
       ".claude/settings.json",
       "scripts/proofs/**",
       "scripts/test_gate_contracts.py",
+      "scripts/test_policy_cache.py",
       "scripts/contract-scans.py",
       "scripts/test_contract_scans.py",
       "scripts/windows-partitions.py",

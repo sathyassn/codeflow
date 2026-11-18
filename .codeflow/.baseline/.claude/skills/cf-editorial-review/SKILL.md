@@ -96,7 +96,8 @@ style direction outranks this skill's defaults.
 
 ## Duo review
 
-Within the CodeFlow duo, both primary seats check factual and technical
+Within the CodeFlow duo, the Claude primary and the cross-family seat
+(Codex preferred, any other family counts) check factual and technical
 correctness. The directly invoked `claude-judgment-primary` reviews the
 substantial artifact's design, voice, and final editorial quality, even when
 Claude drafted it, in the same pass as the technical review where one is

@@ -13,8 +13,9 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_into, Criteria, Finding, OwnLine, Replaced, Scope,
-    AUTHORITY_NOTE, COPIES_NOTE, FROZEN_RULE, IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
+    is_correction, is_landed_review, is_landing_marker, pull_request_findings_into, Criteria,
+    Finding, OwnLine, Replaced, Scope, AUTHORITY_NOTE, COPIES_NOTE, FROZEN_RULE, IMPORT_RULE,
+    REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -248,7 +249,12 @@ fn own_line_tip(
     let destination = match (names.destination, names.advertisement) {
         (Some(url), Some(listed)) => release_line::from_advertisement(url, listed)
             .map(|destination| destination.with_limits(names.limits)),
-        _ => release_line::ask_destination(root, names.destination, names.limits),
+        _ => release_line::ask_destination_with(
+            root,
+            names.destination,
+            names.limits,
+            names.token.auth(),
+        ),
     }
     .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
     let tip = release_line::advertised_tip_here(root, &destination, into)
@@ -409,9 +415,14 @@ pub(super) fn release_scope<'n>(
             let destination = match (names.destination, names.advertisement) {
                 (Some(url), Some(listed)) => release_line::from_advertisement(url, listed)
                     .map(|destination| destination.with_limits(names.limits)),
-                _ => release_line::ask_destination(root, names.destination, names.limits),
+                _ => release_line::ask_destination_with(
+                    root,
+                    names.destination,
+                    names.limits,
+                    names.token.auth(),
+                ),
             }
-            .map_err(|why| ScopeError::Destination(credential_hint(why)))?;
+            .map_err(|why| ScopeError::Destination(credential_hint(why, names.token)))?;
             let scope = release_line::scope(root, &destination, names.branch, names.into)
                 .map_err(ScopeError::Scope)?;
             Ok(scope.release().then_some((destination, scope)))
@@ -421,13 +432,18 @@ pub(super) fn release_scope<'n>(
 }
 
 /// `why` the destination could not be asked, with the fix when it refused
-/// for want of a credential (TSK-1267). Release scope is unknown until the
-/// destination answers, so the message names no kind of range.
-fn credential_hint(why: String) -> String {
-    if !why.contains(codeflow_core::git::remote_query::AUTHENTICATION_FAILED) {
+/// for want of a credential (TSK-1267), naming the input that was missing
+/// or refused (TSK-1252). A run that sent the token and still failed (a
+/// token without access can be answered as a missing repository) gets the
+/// same fix. Release scope is unknown until the destination answers, so
+/// the message names no kind of range.
+fn credential_hint(why: String, token: &super::RunToken) -> String {
+    let refused = why.contains(codeflow_core::git::remote_query::AUTHENTICATION_FAILED)
+        || (token.auth().is_some() && why.contains("`git ls-remote` failed"));
+    if !refused {
         return why;
     }
-    format!("{why}: {CREDENTIAL_NEEDED}")
+    format!("{why}: {CREDENTIAL_NEEDED} {}", token.fix())
 }
 
 /// The fix for a destination lookup refused for want of a credential.
@@ -662,6 +678,8 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
         let remedy = match &found.epic_record {
             Some(path) => codeflow_core::remedy::EPIC_ACCEPTANCE_BINDING
                 .with(&[("path", path), ("note", SCOPE_NOTE)]),
+            None if is_landed_review(&found) => codeflow_core::remedy::LANDED_REVIEW.remedy(),
+            None if is_landing_marker(&found) => codeflow_core::remedy::LANDING_MARKER.remedy(),
             None => codeflow_core::remedy::ACCEPTANCE_BINDING.with(&[("note", SCOPE_NOTE)]),
         };
         Violation::new(found.rule, git.work_records_level(), found.message, remedy)
