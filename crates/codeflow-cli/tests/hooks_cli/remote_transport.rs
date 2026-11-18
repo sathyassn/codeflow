@@ -1574,8 +1574,10 @@ fn git_guard_refuses_unresolved_setter_views() {
         "GIT_NO_REPLACE_OBJECTS+=1; export GIT_NO_REPLACE_OBJECTS; git fetch origin",
         "read GIT_NO_REPLACE_OBJECTS; git fetch origin",
         "printf -v GIT_NO_REPLACE_OBJECTS 1; git fetch origin",
+        "printf -vGIT_NO_REPLACE_OBJECTS 1; git fetch origin",
         "mapfile GIT_NO_REPLACE_OBJECTS; git fetch origin",
         "((GIT_NO_REPLACE_OBJECTS=1)); git fetch origin",
+        "set -a; ((++GIT_NO_REPLACE_OBJECTS)); git fetch origin",
         "GIT_NO_REPLACE_OBJECTS[0]=1; git fetch origin",
     ] {
         let out = scratch.judge("git-guard", line);
@@ -1652,6 +1654,17 @@ fn git_guard_judges_the_environment_of_parent_callbacks() {
     assert!(
         unproven_refusal(&out)
             && (nested_refusal(&out) || stderr(&out).contains("run the commands separately")),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn git_guard_bounds_uncertain_probe_inputs() {
+    let scratch = Scratch::landed(None);
+    let out = scratch.judge("git-guard", "GIT_NO_REPLACE_OBJECTS=1; GIT_REPLACE_REF_BASE=refs/none/; GIT_OBJECT_DIRECTORY=objects; GIT_ALTERNATE_OBJECT_DIRECTORIES=alternate; git fetch origin");
+    assert!(
+        out.status.code() == Some(2) && stderr(&out).contains("run the commands separately"),
         "{}",
         stderr(&out)
     );
