@@ -1389,23 +1389,15 @@ fn commit_nested_record(scratch: &Scratch, branch: Option<&str>) {
     .unwrap();
     let tree = repo.find_tree(tree.write().unwrap()).unwrap();
     let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
-    match branch {
-        Some(name) => repo
-            .commit(
-                Some(&format!("refs/heads/{name}")),
-                &who,
-                &who,
-                "fixture",
-                &tree,
-                &[],
-            )
-            .unwrap(),
-        None => {
-            let parent = repo.head().unwrap().peel_to_commit().unwrap();
-            repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[&parent])
-                .unwrap()
-        }
-    };
+    if let Some(name) = branch {
+        let update = format!("refs/heads/{name}");
+        repo.commit(Some(&update), &who, &who, "fixture", &tree, &[])
+            .unwrap();
+    } else {
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[&parent])
+            .unwrap();
+    }
 }
 
 /// Through both guards: a push whose recursion may be on refuses, whether
