@@ -1759,13 +1759,13 @@ fn git_guard_judges_nested_arithmetic_inputs() {
         r#": "${s:x}""#,
         r#": "${s:0:x}""#,
         r#": "${BASH_VERSINFO[x]}""#,
-        r#"[[ -v a[x] ]]"#,
-        r#"eval '((x))'"#,
-        r#"eval ': $((x))'"#,
-        r#"eval \(\(x\)\)"#,
+        r"[[ -v a[x] ]]",
+        r"eval '((x))'",
+        r"eval ': $((x))'",
+        r"eval \(\(x\)\)",
         ": \"$( ((x)); git fetch origin )\"",
         "# don't\n((x))",
-        r#"echo $'\''; ((x))"#,
+        r"echo $'\''; ((x))",
         "repeat x do :; done",
         "float n=x",
         "typeset -F n=x",
@@ -1781,16 +1781,23 @@ fn git_guard_judges_nested_arithmetic_inputs() {
         let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; s=abc; {context}");
         let line = format!("{prefix}; git fetch origin");
         let out = scratch.judge_inheriting(
-            "git-guard", &line, ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+            "git-guard",
+            &line,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
         );
         // Some destination forms already have an earlier authority refusal.
         if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
             wrong.push(format!("contact {context}: {}", stderr(&out)));
         }
-        let off = format!("{}; git fetch --no-recurse-submodules origin", prefix.replace("git fetch origin", "git fetch --no-recurse-submodules origin"));
-        let out = scratch.judge_inheriting(
-            "git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        let off = format!(
+            "{}; git fetch --no-recurse-submodules origin",
+            prefix.replace(
+                "git fetch origin",
+                "git fetch --no-recurse-submodules origin"
+            )
         );
+        let out =
+            scratch.judge_inheriting("git-guard", &off, ("GIT_REPLACE_REF_BASE", "refs/replace/"));
         if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
             wrong.push(format!("control {context}: {}", stderr(&out)));
         }

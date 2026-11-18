@@ -697,10 +697,14 @@ the form refuses:
     contact needs the probe. Unresolved inputs do not count toward the
     alternate-value bound. More than 3 inputs with known alternate values
     refuse before probing; up to 27 line environments are judged.
-    Arithmetic evaluation and setters with an expanding destination mark
-    every probe input unresolved, regardless of export or inheritance.
-    Recognized whole-shell export options also mark those inputs unresolved;
-    the arithmetic protection does not depend on an exhaustive option list.
+    Arithmetic contexts identified by the shell segmenter, including
+    parameter offsets, element subscripts, carried bodies and substitutions,
+    mark every probe input unresolved, regardless of export or inheritance.
+    The segmenter's quote, comment and heredoc rules distinguish executable
+    expressions from data. Recognized arithmetic command operands, setters
+    with an expanding destination and whole-shell export options add the
+    same uncertainty. This is a conservative reader, not a complete shell
+    evaluator; the recognized forms do not establish exhaustive coverage.
     An assignment on the current Git command or its direct launcher is
     certain; a carried prefix remains uncertain.
     Runner children independently keep or clear each known input, with

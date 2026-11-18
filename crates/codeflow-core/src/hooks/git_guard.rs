@@ -7437,6 +7437,8 @@ pub(crate) fn expand_commands(command: &str) -> Vec<String> {
 /// What [`expand_commands_read`] reads from a line.
 #[derive(Debug, Default)]
 pub(crate) struct Expanded {
+    /// Executable arithmetic found by the segmenter, including carried bodies.
+    pub(crate) arithmetic: bool,
     /// The simple commands the line runs ([`expand_commands`]).
     pub(crate) segments: Vec<String>,
     /// Each command word whose expansion the guard cannot fill in (`$CMD`
@@ -7507,8 +7509,11 @@ fn expand_shell_commands(command: &str) -> Expanded {
 }
 
 fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
-    let raw = command_segments(command);
-    let mut out = Expanded::default();
+    let (raw, arithmetic) = command_segments_read(command, 0);
+    let mut out = Expanded {
+        arithmetic,
+        ..Expanded::default()
+    };
     expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies);
     out
 }
@@ -7516,9 +7521,18 @@ fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
 /// Split shell syntax without also expanding the code carried by a command.
 /// Position-aware consumers already visit those bodies with their own state.
 pub(crate) fn command_segments(command: &str) -> Vec<String> {
+    command_segments_read(command, 0).0
+}
+
+// Internal evidence is removed before consumers assign segment positions.
+const ARITHMETIC_READ: &str = "\0arithmetic_read";
+
+fn command_segments_read(command: &str, depth: usize) -> (Vec<String>, bool) {
     let mut segments = Vec::new();
-    split_into_segments(command, &mut segments, 0, false);
-    segments
+    split_into_segments(command, &mut segments, depth, false);
+    let arithmetic = segments.iter().any(|segment| segment == ARITHMETIC_READ);
+    segments.retain(|segment| segment != ARITHMETIC_READ);
+    (segments, arithmetic)
 }
 
 /// Push each segment, then the commands its text carries, unwrapped again
@@ -7792,8 +7806,8 @@ fn expand_bodies(
         return;
     }
     for body in bodies {
-        let mut inner = Vec::new();
-        split_into_segments(&body, &mut inner, depth, false);
+        let (inner, arithmetic) = command_segments_read(&body, depth);
+        out.arithmetic |= arithmetic;
         expand_segments(inner, out, depth + 1, literals, git_bodies);
     }
 }
@@ -9052,6 +9066,49 @@ pub(crate) fn shell_inline_code(program: &str, args: &[String]) -> Option<String
     (!bodies.is_empty()).then(|| bodies.join("; "))
 }
 
+/// Parameter offsets and element subscripts can evaluate indirect operands.
+/// Default-value operators and whole-array selectors do not do so themselves.
+fn parameter_arithmetic(chars: &[char], dollar: usize) -> bool {
+    let mut at = dollar + 1;
+    if chars.get(at) == Some(&'[') {
+        return true;
+    }
+    let braced = chars.get(at) == Some(&'{');
+    if braced {
+        at += 1;
+        if chars.get(at).is_some_and(|c| matches!(c, '#' | '!')) {
+            at += 1;
+        }
+    }
+    let start = at;
+    if braced && chars.get(at).is_some_and(|c| matches!(c, '@' | '*')) {
+        at += 1;
+    }
+    while chars
+        .get(at)
+        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+    {
+        at += 1;
+    }
+    if at == start {
+        return false;
+    }
+    if chars.get(at) == Some(&'[') {
+        if chars.get(at + 1).is_some_and(|c| matches!(c, '@' | '*'))
+            && chars.get(at + 2) == Some(&']')
+        {
+            at += 3;
+        } else {
+            return true;
+        }
+    }
+    braced
+        && chars.get(at) == Some(&':')
+        && !chars
+            .get(at + 1)
+            .is_some_and(|c| matches!(c, '-' | '=' | '+' | '?'))
+}
+
 /// Split a command into simple-command segments, recursing into `$(…)` and
 /// backtick substitutions. Honors single/double quotes; treats unquoted
 /// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
@@ -9129,8 +9186,17 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             i += 1;
             continue;
         }
+        // Parameter arithmetic executes inside double quotes too. Single
+        // quotes, escapes, comments and data heredocs follow this reader's
+        // existing paths and never contribute executable evidence here.
+        if c == '$' && parameter_arithmetic(&chars, i) {
+            out.push(ARITHMETIC_READ.into());
+        }
         // Command substitution executes even inside double quotes.
         if c == '$' && chars.get(i + 1) == Some(&'(') {
+            if chars.get(i + 2) == Some(&'(') {
+                out.push(ARITHMETIC_READ.into());
+            }
             let (inner, ni) = capture_balanced(&chars, i + 2);
             line.substitution(inner, &cur, code_context, out, depth);
             // The segment keeps a placeholder for the text the shell will
@@ -9229,6 +9295,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 line.finish(continues, out, depth);
             }
             '(' if chars.get(i + 1) == Some(&'(') => {
+                out.push(ARITHMETIC_READ.into());
                 arithmetic += 1;
                 line.end_segment(out, &mut cur, false);
                 i += 2;
@@ -9239,6 +9306,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 i += 2;
             }
             '$' if chars.get(i + 1) == Some(&'[') => {
+                out.push(ARITHMETIC_READ.into());
                 bracket_arithmetic += 1;
                 cur.push_str("$[");
                 i += 2;
@@ -9446,6 +9514,9 @@ impl Line {
         // space when its last word does (OS text rule, issue 79).
         let text = text.trim_matches([' ', '\t', '\n']);
         if !text.is_empty() {
+            if runners::probe_arithmetic_words(&command_argv(text)) {
+                out.push(ARITHMETIC_READ.into());
+            }
             out.push(text.to_string());
             self.segments.push((self.pipeline, text.to_string()));
         }
@@ -9805,6 +9876,12 @@ fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
     let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
     while i < chars.len() {
+        if chars[i] == '$'
+            && (parameter_arithmetic(&chars, i)
+                || chars.get(i + 1) == Some(&'(') && chars.get(i + 2) == Some(&'('))
+        {
+            out.push(ARITHMETIC_READ.into());
+        }
         match chars[i] {
             '\\' => i += 2,
             '$' if chars.get(i + 1) == Some(&'[') => {

@@ -220,6 +220,30 @@ fn arithmetic_contexts_keep_probe_inputs_unread() {
 }
 
 #[test]
+fn arithmetic_data_keeps_probe_inputs_known() {
+    for context in [
+        "git fetch origin # ((example))",
+        "cat <<'EOF'\n((example))\nEOF\ngit fetch origin",
+        "echo '((example))'",
+        "echo '${s:x}'",
+        "echo '${a[x]}'",
+        "echo \"${s:-literal}\"",
+        "echo \"${a[@]}\"",
+        "echo \"${a[*]}\"",
+        r"echo \$s[x]",
+        "printf -v result %s 'literal[x]'",
+        "read -p 'literal[x]' result",
+        "getopts 'literal[x]' result",
+    ] {
+        let words = super::super::super::command_argv(context);
+        assert!(
+            !super::super::probe_arithmetic(context, &words),
+            "{context}"
+        );
+    }
+}
+
+#[test]
 fn additional_export_options_keep_probe_inputs_unresolved() {
     for segment in [
         "shopt -o -s allexport",

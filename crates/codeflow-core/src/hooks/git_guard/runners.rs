@@ -1019,26 +1019,13 @@ fn probe_export_options(words: &[String]) -> bool {
 
 /// Arithmetic may evaluate values as further assignments to indirect names.
 fn probe_arithmetic(segment: &str, words: &[String]) -> bool {
-    let joined = super::join_continuations(segment);
-    let bytes = joined.as_bytes();
-    let (mut single, mut double) = (false, false);
-    let mut at = 0;
-    while let Some(&byte) = bytes.get(at) {
-        match byte {
-            b'\'' if !double => single = !single,
-            b'"' if !single => double = !double,
-            b'\\' if !single => at += 1,
-            _ if !single
-                && ((!double && bytes[at..].starts_with(b"(("))
-                    || bytes[at..].starts_with(b"$((")
-                    || bytes[at..].starts_with(b"$[")) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
-        at += 1;
-    }
+    super::expand_shell_commands(segment).arithmetic || probe_arithmetic_words(words)
+}
+
+/// Arithmetic operand positions in commands, after shell syntax is segmented.
+pub(super) fn probe_arithmetic_words(words: &[String]) -> bool {
+    let mut words = words.to_vec();
+    strip_reserved_words(&mut words);
     if words
         .iter()
         .take_while(|word| word.contains('='))
@@ -1049,18 +1036,40 @@ fn probe_arithmetic(segment: &str, words: &[String]) -> bool {
     {
         return true;
     }
-    let Some((program, args)) = super::configuration_launch(words, None) else {
+    let Some((program, args)) = super::configuration_launch(&words, None) else {
         return false;
     };
     match program {
-        "let" | "integer" => true,
-        "declare" | "typeset" | "local" | "readonly" | "export" => args
-            .iter()
-            .take_while(|word| word.as_str() != "--")
-            .any(|word| word.starts_with('-') && word.contains('i')),
-        "[[" | "[" | "test" => args
-            .iter()
-            .any(|word| matches!(word.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge")),
+        "let" | "integer" | "float" | "repeat" => true,
+        "declare" | "typeset" | "local" | "readonly" | "export" => {
+            args.iter()
+                .take_while(|word| word.as_str() != "--")
+                .any(|word| word.starts_with('-') && word.contains(['i', 'E', 'F']))
+                || args.iter().any(|word| word.contains('['))
+                    && super::configuration_builtin_trigger(program, args).is_some()
+        }
+        "[[" | "[" | "test" => {
+            args.iter()
+                .any(|word| matches!(word.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge"))
+                || args
+                    .windows(2)
+                    .any(|pair| pair[0] == "-v" && pair[1].contains('['))
+        }
+        "printf" | "read" | "mapfile" | "readarray" | "unset" | "getopts" => {
+            args.iter().any(|word| word.contains('['))
+                && super::configuration_builtin_trigger(program, args).is_some()
+        }
+        "wait" => args.iter().enumerate().any(|(at, word)| {
+            word.strip_prefix('-')
+                .and_then(|flags| flags.split_once('p'))
+                .is_some_and(|(_, tail)| {
+                    if tail.is_empty() {
+                        args.get(at + 1).is_some_and(|target| target.contains('['))
+                    } else {
+                        tail.contains('[')
+                    }
+                })
+        }),
         _ => false,
     }
 }
@@ -3395,9 +3404,8 @@ fn collect_segments(
     }
     let segments = literal_segments(&expanded.segments);
     let mut probe_literals = probe_line_literals(&segments);
-    // Segmentation can remove arithmetic delimiters while retaining their
-    // operands, so preserve this uncertainty from the original line too.
-    if probe_arithmetic(command, &[]) {
+    // The segmenter owns executable/data distinctions at every body depth.
+    if expanded.arithmetic {
         for name in probe_names() {
             probe_literals.0.insert(name.into(), None);
         }
