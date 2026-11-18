@@ -595,6 +595,167 @@ fn landed_floor_pre_push_rejects_added_prefix() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// The landed git section for the protection cases: `push_to_protected` and
+/// `force_push_protected` are off, `force_push_unprotected` and
+/// `branch_naming` block.
+fn protection_landed() -> Value {
+    json!({
+        "protected_branches": ["main"],
+        "branch_prefixes": ["task/"],
+        "branch_naming": "block",
+        "push_to_protected": "off",
+        "force_push_protected": "off",
+        "force_push_unprotected": "block",
+        "test_gate_on_push": "off"
+    })
+}
+
+/// The pre-push input for a non-fast-forward update of `target`.
+fn non_fast_forward_input(fixture: &Fixture, target: &str) -> String {
+    let head = fixture.repo.head().unwrap().peel_to_commit().unwrap();
+    let sig = Signature::now("Test", "test@example.invalid").unwrap();
+    let next = fixture
+        .repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "test: next",
+            &head.tree().unwrap(),
+            &[&head],
+        )
+        .unwrap();
+    format!(
+        "refs/heads/task/check {} refs/heads/{target} {next}\n",
+        head.id()
+    )
+}
+
+/// Protection is a classification, not a strictness: a checkout that adds a
+/// branch to the protected list must not swap the landed force-push rule for
+/// a protected one that is off (TSK-1078 review F2).
+#[test]
+fn landed_floor_pre_push_added_protection_keeps_the_landed_force_push_rule() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let landed = protection_landed();
+        let mut working = landed.clone();
+        working["protected_branches"] = json!(["main", "task/free"]);
+        let fixture = Fixture::new(landed, working, stale);
+        let input = non_fast_forward_input(&fixture, "task/free");
+        collect_refusal(
+            &fixture.hook("pre-push", "fix: check", &input),
+            "git.force_push_unprotected",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The other direction: with the landed protected force-push rule blocking
+/// and the unprotected one off, added protection still tightens.
+#[test]
+fn landed_floor_pre_push_added_protection_still_applies_the_protected_force_push_rule() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let mut landed = protection_landed();
+        landed["force_push_protected"] = json!("block");
+        landed["force_push_unprotected"] = json!("off");
+        let mut working = landed.clone();
+        working["protected_branches"] = json!(["main", "task/free"]);
+        let fixture = Fixture::new(landed, working, stale);
+        let input = non_fast_forward_input(&fixture, "task/free");
+        collect_refusal(
+            &fixture.hook("pre-push", "fix: check", &input),
+            "git.force_push_protected",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A protected branch is exempt from branch naming, so a checkout that adds
+/// a badly named branch to the protected list must not remove the landed
+/// naming refusal (TSK-1078 review F2).
+#[test]
+fn landed_floor_pre_push_added_protection_does_not_exempt_branch_naming() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let landed = protection_landed();
+        let mut working = landed.clone();
+        working["protected_branches"] = json!(["main", "loose/check"]);
+        let fixture = Fixture::new(landed, working, stale);
+        let oid = fixture.repo.head().unwrap().target().unwrap();
+        let input = format!(
+            "refs/heads/task/check {oid} refs/heads/loose/check {}\n",
+            "0".repeat(40)
+        );
+        collect_refusal(
+            &fixture.hook("pre-push", "fix: check", &input),
+            "git.branch_naming",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A malformed ticket reference blocks whatever the missing-ticket level is,
+/// so raising `commit_ticket_required` over a landed `off` or `allow` must
+/// not turn the landed block into a warning (TSK-1078 review F3).
+#[test]
+fn landed_floor_malformed_ticket_blocks_when_the_checkout_requires_a_ticket() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        for landed_level in ["off", "allow"] {
+            let landed = json!({
+                "commit_ticket_keys": ["Refs"],
+                "commit_ticket_pattern": "^TSK-[0-9]+$",
+                "commit_ticket_required": landed_level
+            });
+            let mut working = landed.clone();
+            working["commit_ticket_required"] = json!("warn");
+            let fixture = Fixture::new(landed, working, stale);
+            collect_refusal(
+                &fixture.hook("commit-msg", "fix: check\n\nRefs: other\n", ""),
+                "git.commit_ticket",
+                &format!("stale={stale}, landed={landed_level}"),
+                &mut failures,
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A merge commit whose subject is not git's own is judged by the ticket
+/// rule of an ordinary commit. A checkout that turns on the merge ticket
+/// rule at `warn` must not replace the landed `block` for it (TSK-1078
+/// sweep: a decision that depends on another field).
+#[test]
+fn landed_floor_merge_ticket_rule_does_not_lower_the_landed_ticket_block() {
+    let mut failures = Vec::new();
+    for stale in [false, true] {
+        let landed = json!({
+            "commit_ticket_keys": ["Refs"],
+            "commit_ticket_required": "block",
+            "commit_ticket_merges": "off"
+        });
+        let mut working = landed.clone();
+        working["commit_ticket_merges"] = json!("warn");
+        let fixture = Fixture::new(landed, working, stale);
+        std::fs::write(fixture.repo.path().join("MERGE_HEAD"), "abc\n").unwrap();
+        collect_refusal(
+            &fixture.hook("commit-msg", "chore: merge the topic\n", ""),
+            "git.commit_ticket",
+            &format!("stale={stale}"),
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A landing candidate name admits a branch at pre-push (TSK-1351), so the
 /// checkout's `git.candidate_prefix` must not admit a name the landed
 /// prefix does not.
