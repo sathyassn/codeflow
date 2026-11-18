@@ -1280,6 +1280,44 @@ fn both_guards_refuse_nested_contacts_with_one_marker() {
     }
 }
 
+/// Hold a definition file in the index, or also in the last commit, and
+/// leave the work tree without it.
+fn definition_outside_work_tree(scratch: &Scratch, in_commit: bool) {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(".gitmodules")).unwrap();
+    index.write().unwrap();
+    if in_commit {
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[&parent])
+            .unwrap();
+        index.remove_path(Path::new(".gitmodules")).unwrap();
+        index.write().unwrap();
+    }
+    std::fs::remove_file(scratch.root().join(".gitmodules")).unwrap();
+}
+
+/// Through both guards: a definition the work tree lacks but the index or
+/// the last commit holds refuses unless the line turns recursion off. The
+/// control holds no definition anywhere.
+#[test]
+fn both_guards_refuse_a_definition_held_outside_the_work_tree() {
+    for in_commit in [false, true] {
+        let scratch = Scratch::landed(None);
+        definition_outside_work_tree(&scratch, in_commit);
+        assert_unproven(
+            &scratch,
+            &["git fetch origin", "git fetch", "git pull origin main"],
+            &["git fetch --no-recurse-submodules origin"],
+        );
+    }
+    let control = Scratch::landed(None);
+    assert_rows(&control, &[], &["git fetch origin", "git fetch"]);
+}
+
 /// Through both guards: a command not proven local refuses.
 #[test]
 fn both_guards_refuse_a_command_that_sets_up_later_contacts() {

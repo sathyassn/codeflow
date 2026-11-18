@@ -1231,6 +1231,55 @@ fn nested_contacts_with_one_marker_refuse() {
     unpopulated.unproven("fetch origin", "nested repositories");
 }
 
+/// Hold a definition file in the index, or also in the last commit, and
+/// leave the work tree without it.
+fn definition_outside_work_tree(scratch: &Scratch, in_commit: bool) {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    std::fs::write(scratch.root().join(".gitmodules"), "").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(".gitmodules")).unwrap();
+    index.write().unwrap();
+    if in_commit {
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+        repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[])
+            .unwrap();
+        index.remove_path(Path::new(".gitmodules")).unwrap();
+        index.write().unwrap();
+    }
+    std::fs::remove_file(scratch.root().join(".gitmodules")).unwrap();
+}
+
+/// A definition the work tree lacks but the index or the last commit holds
+/// is not proof of no nested repositories, so recursion refuses unless the
+/// line turns it off; with no definition anywhere, it passes.
+#[test]
+fn a_definition_held_outside_the_work_tree_refuses() {
+    for in_commit in [false, true] {
+        let scratch = Scratch::new(HTTPS);
+        definition_outside_work_tree(&scratch, in_commit);
+        for command in ["fetch origin", "fetch", "pull origin main", "remote update"] {
+            scratch.unproven(command, "nested repositories");
+        }
+        assert_eq!(
+            scratch.helpers("fetch --no-recurse-submodules origin"),
+            Ok(vec![])
+        );
+        assert_eq!(scratch.helpers("push origin HEAD"), Ok(vec![]));
+    }
+    // Controls: a commit without a definition, and no commit at all.
+    let committed = Scratch::new(HTTPS);
+    let repo = git2::Repository::open(committed.root()).unwrap();
+    let tree = repo
+        .find_tree(repo.index().unwrap().write_tree().unwrap())
+        .unwrap();
+    let who = git2::Signature::now("fixture", "fixture@example.test").unwrap();
+    repo.commit(Some("HEAD"), &who, &who, "fixture", &tree, &[])
+        .unwrap();
+    assert_eq!(committed.helpers("fetch origin"), Ok(vec![]));
+    assert_eq!(Scratch::new(HTTPS).helpers("fetch origin"), Ok(vec![]));
+}
+
 /// A command not proven local refuses; one that only removes setup passes.
 #[test]
 fn a_command_that_sets_up_later_contacts_refuses() {
