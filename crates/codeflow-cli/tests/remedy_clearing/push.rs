@@ -656,6 +656,658 @@ fn clears_ids_sync_failed() {
     assert_published(&dest);
 }
 
+/// TSK-327: a registry push that gives no answer has an unknown outcome,
+/// so it is read back and never taken for an offline authority. The
+/// pre-push hook entry point runs with a `git` first on `PATH` (git itself
+/// would put its own folder first for a hook) that stalls only the
+/// registry push (`push --porcelain`). The authority answers the sync's
+/// fetch; the push runs out of the landed fetch wait (5 s); the sync reads
+/// the registry back, finds the reservation unpublished and blocks under
+/// `registry.sync`, naming the unknown outcome. Before, the timeout read as
+/// offline: a nonblocking "ids sync skipped" note.
+#[cfg(unix)]
+#[test]
+fn a_stalled_registry_push_after_a_good_fetch_blocks_the_push() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let (dest, rewrite) = pending_reservation(&root);
+    git(&root, &["config", "--unset", &rewrite]);
+    land_on_default(&root, &dest, |root| {
+        set_policy(root, &[("remote_fetch_timeout_seconds", 5.into())]);
+    });
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    let bin = dir.path().join("stall-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *push\\ --porcelain*) sleep 60;;\nesac\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let head = text(&run("git", &root, &["rev-parse", "HEAD"]));
+    let url = text(&run(
+        "git",
+        &root,
+        &["remote", "get-url", "--push", "origin"],
+    ));
+    let mut cmd = command(exe().to_str().unwrap(), &root);
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value)
+        .unwrap()
+        .to_owned();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path)))
+            .unwrap();
+    let started = std::time::Instant::now();
+    let mut child = cmd
+        .env("PATH", path)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/plan/work {} refs/heads/plan/work {}",
+        head.trim(),
+        "0".repeat(40)
+    )
+    .unwrap();
+    let ran = child.wait_with_output().unwrap();
+    let took = started.elapsed();
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(!out.contains("ids sync skipped"), "{took:?}: {out}");
+    assert!(
+        out.contains("registry.sync") && out.contains("outcome is unknown"),
+        "{took:?}: {out}"
+    );
+    let listed = text(&run(
+        "git",
+        &dest,
+        &["ls-tree", "-r", "--name-only", "codeflow/registry"],
+    ));
+    assert!(!listed.contains("ids/TSK/001.toml"), "{listed}");
+    assert!(took < std::time::Duration::from_secs(50), "{took:?}: {out}");
+}
+
+/// TSK-327: the registry's append-only check reads with lazy fetch off,
+/// which a git before 2.46 may ignore in a repository with a promisor
+/// remote. A registry-only push (which runs no id sync) through the
+/// pre-push entry point, with a `git` first on `PATH` reporting 2.40, is
+/// refused as the sync and the commit-time scan refuse it. Before, the
+/// check read the range anyway.
+#[cfg(unix)]
+#[test]
+fn a_registry_push_refuses_a_promisor_on_a_git_too_old_to_read_locally() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let (_dest, _rewrite) = pending_reservation(&root);
+    git(&root, &["config", "remote.origin.promisor", "true"]);
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    let bin = dir.path().join("old-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\nif [ \"$*\" = version ]; then echo 'git version 2.40.0'; exit 0; fi\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let registry = text(&run(
+        "git",
+        &root,
+        &["rev-parse", "refs/heads/codeflow/registry"],
+    ));
+    let url = text(&run(
+        "git",
+        &root,
+        &["remote", "get-url", "--push", "origin"],
+    ));
+    let mut cmd = command(exe().to_str().unwrap(), &root);
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value)
+        .unwrap()
+        .to_owned();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path)))
+            .unwrap();
+    let mut child = cmd
+        .env("PATH", path)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/codeflow/registry {} refs/heads/codeflow/registry {}",
+        registry.trim(),
+        "0".repeat(40)
+    )
+    .unwrap();
+    let ran = child.wait_with_output().unwrap();
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{out}");
+    assert!(
+        out.contains("registry.append_only") && out.contains("upgrade git to 2.46"),
+        "{out}"
+    );
+}
+
+/// Run the pre-push hook entry point in `root` for a push of `line` (one
+/// line of git's pre-push input) to `origin`, and how long it took.
+fn pre_push_origin(root: &Path, line: &str) -> (Output, std::time::Duration) {
+    pre_push_origin_with(root, line, None)
+}
+
+/// [`pre_push_origin`], with `first` ahead of everything else on `PATH`
+/// when given.
+fn pre_push_origin_with(
+    root: &Path,
+    line: &str,
+    first: Option<&Path>,
+) -> (Output, std::time::Duration) {
+    use std::io::Write as _;
+    let url = text(&run(
+        "git",
+        root,
+        &["remote", "get-url", "--push", "origin"],
+    ));
+    let mut cmd = command(exe().to_str().unwrap(), root);
+    if let Some(first) = first {
+        let path = cmd
+            .get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .and_then(|(_, value)| value)
+            .unwrap()
+            .to_owned();
+        let path = std::env::join_paths(
+            std::iter::once(first.to_path_buf()).chain(std::env::split_paths(&path)),
+        )
+        .unwrap();
+        cmd.env("PATH", path);
+    }
+    let started = std::time::Instant::now();
+    let mut child = cmd
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.take().unwrap(), "{line}").unwrap();
+    let ran = child.wait_with_output().unwrap();
+    (ran, started.elapsed())
+}
+
+/// A copy of `dest` that leaves out every blob (`--filter=blob:none`),
+/// with its worktree left empty when `checkout` is false.
+fn blobless_clone(dir: &Path, dest: &Path, checkout: bool) -> PathBuf {
+    git(dest, &["config", "uploadpack.allowFilter", "true"]);
+    git(dest, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    let partial = dir.join("partial");
+    let copy = codeflow_fixture::clone(dir, dest, &partial).filter("blob:none");
+    if checkout {
+        copy.run();
+    } else {
+        copy.no_checkout().run();
+    }
+    partial
+}
+
+/// TSK-327: a plain push from a `blob:none` partial clone, with nothing
+/// pending, still passes. The clone fetched no registry blob; the hook
+/// fetches what the registry lacks in one bounded request before
+/// `codeflow ci`, whose registry reads then never fetch lazily. The pushed
+/// range adds a record, so the check reads the registry to bind it.
+#[test]
+fn a_plain_push_from_a_partial_clone_reads_the_filled_registry() {
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    git(&root, &["switch", "-q", "-c", "plan/work"]);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    commit_all(&root, "chore: add a quick target");
+    let seeded = codeflow(&root, &["ids", "seed"]);
+    assert!(!seeded.contains("error"), "{seeded}");
+    let out = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "a fixture",
+            "the work",
+        ],
+    );
+    assert!(out.contains("TSK-001") && !out.contains("pending"), "{out}");
+    commit_all(&root, "docs: plan the work");
+    assert_published(&dest);
+    let clone = blobless_clone(dir.path(), &dest, true);
+    git(
+        &clone,
+        &["fetch", "-q", root.to_str().unwrap(), "plan/work:plan/work"],
+    );
+    git(&clone, &["switch", "-q", "plan/work"]);
+    let listed = text(&run(
+        "git",
+        &clone,
+        &[
+            "rev-list",
+            "--objects",
+            "--no-object-names",
+            "--missing=print",
+            "refs/remotes/origin/codeflow/registry",
+        ],
+    ));
+    assert!(
+        listed.lines().any(|line| line.starts_with('?')),
+        "the clone holds every registry object: {listed}"
+    );
+    let head = text(&run("git", &clone, &["rev-parse", "HEAD"]));
+    let (ran, took) = pre_push_origin(
+        &clone,
+        &format!(
+            "refs/heads/plan/work {} refs/heads/plan/work {}",
+            head.trim(),
+            "0".repeat(40)
+        ),
+    );
+    let out = text(&ran);
+    assert!(ran.status.success(), "{took:?}: {out}");
+    assert!(out.contains("push not stopped"), "{took:?}: {out}");
+}
+
+/// TSK-327: the pre-push `codeflow ci` runs within one deadline, the sum
+/// of the waits the landed policy sets (here 2 s × 1 + 2 s + 2 s = 6 s).
+/// A `blob:none` clone, whose sparse checkout left `sub/f.txt` unfetched,
+/// pushes a commit that changes that file; the check's diff fetches the
+/// earlier blob lazily from the promisor, whose upload-pack stalls for
+/// 60 s. The hook ends the check with its process group at the deadline
+/// and refuses, naming the deadline and the settings that raise it.
+#[cfg(unix)]
+#[test]
+fn a_stalled_promisor_ends_the_pre_push_check_at_its_deadline() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("remote_query_timeout_seconds", 2.into()),
+                ("remote_query_attempts", 1.into()),
+                ("remote_fetch_timeout_seconds", 2.into()),
+                ("push_budget_seconds", 2.into()),
+            ],
+        );
+        write(root, "sub/f.txt", "one\n");
+    });
+    let target = default_branch(&dest);
+    let clone = blobless_clone(dir.path(), &dest, false);
+    git(
+        &clone,
+        &["sparse-checkout", "set", "--no-cone", "/*", "!/sub/"],
+    );
+    git(&clone, &["read-tree", "-mu", "HEAD"]);
+    // A commit that changes sub/f.txt, made without reading its earlier blob.
+    let index = dir.path().join("index");
+    let indexed = |args: &[&str]| {
+        let out = command("git", &clone)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", text(&out));
+        text(&out).trim().to_string()
+    };
+    let base = format!("origin/{target}");
+    let held = command("git", &clone)
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .args(["cat-file", "-e", &format!("{base}:sub/f.txt")])
+        .output()
+        .unwrap();
+    assert!(!held.status.success(), "the clone holds sub/f.txt's blob");
+    indexed(&["read-tree", &base]);
+    std::fs::write(dir.path().join("two.txt"), "two\n").unwrap();
+    let blob = indexed(&[
+        "hash-object",
+        "-w",
+        dir.path().join("two.txt").to_str().unwrap(),
+    ]);
+    indexed(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("100644,{blob},sub/f.txt"),
+    ]);
+    let tree = indexed(&["write-tree"]);
+    let changed = indexed(&["commit-tree", &tree, "-p", &base, "-m", "feat: change f"]);
+    let base_commit = indexed(&["rev-parse", &base]);
+    git(&clone, &["branch", "feat/y", &changed]);
+    let stall = dir.path().join("stall-upload-pack");
+    let chain = dir.path().join("stall-chain");
+    // The stalled upload-pack records itself and the processes above it up
+    // to `codeflow ci`: the lazy fetch's git and the read that started it.
+    std::fs::write(
+        &stall,
+        format!(
+            "#!/bin/sh\npid=$$\nwhile [ \"$pid\" -gt 1 ]; do\n  echo \"$pid $(ps -o command= -p \"$pid\")\" >> '{chain}'\n  case \"$(ps -o command= -p \"$pid\")\" in *' ci '*) break;; esac\n  pid=$(ps -o ppid= -p \"$pid\" | tr -d ' ')\ndone\nexec sleep 60\n",
+            chain = chain.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stall, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &clone,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            stall.to_str().unwrap(),
+        ],
+    );
+    let (ran, took) = pre_push_origin(
+        &clone,
+        &format!(
+            "refs/heads/feat/y {changed} refs/heads/feat/y {}",
+            "0".repeat(40)
+        ),
+    );
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(
+        out.contains("gave no verdict within its deadline")
+            && out.contains("6s: the destination lookup wait 2s × 1 attempts")
+            && out.contains("git.remote_fetch_timeout_seconds"),
+        "{took:?}: {out}"
+    );
+    // A partial clone's refusal leads with the foreground prefetch over the
+    // range the check reads, here from the target's tip.
+    assert!(
+        out.contains(&format!(
+            "run `git log --diff-merges=separate --stat --format= {base_commit}..{changed}` and \
+             `git diff --stat {base_commit}...{changed}`, then push again"
+        )) && out.contains("cannot ask for a password or passphrase"),
+        "{took:?}: {out}"
+    );
+    assert!(took < std::time::Duration::from_secs(40), "{took:?}: {out}");
+    let chain = std::fs::read_to_string(&chain).unwrap();
+    eprintln!("stall chain:\n{chain}");
+    assert_all_ended(&chain);
+}
+
+/// TSK-327: the prefetch a deadline refusal prints covers what the check
+/// reads, and following it lets the push through. `feat/y` already holds a
+/// change to `sub/f.txt`, which a `blob:none` clone's sparse checkout left
+/// unfetched, before the pushed range's base; the new commit changes
+/// another file. The commit checks still read the earlier change, from the
+/// target's tip (`--commits-from`). The promisor's upload-pack answers only
+/// a terminal (here, a process carrying `CODEFLOW_TEST_TERMINAL`) and
+/// stalls inside the check, as a fetch that needs a passphrase does. The
+/// first push is refused at its deadline; the test runs each command the
+/// refusal prints, then the same push passes.
+#[cfg(unix)]
+#[test]
+fn a_partial_clone_push_passes_after_the_printed_prefetch() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("remote_query_timeout_seconds", 2.into()),
+                ("remote_query_attempts", 1.into()),
+                ("remote_fetch_timeout_seconds", 2.into()),
+                ("push_budget_seconds", 2.into()),
+            ],
+        );
+        write(root, "sub/f.txt", "one\n");
+    });
+    let target = default_branch(&dest);
+    // The earlier push: feat/y changes sub/f.txt on the destination.
+    git(
+        &root,
+        &["switch", "-q", "-c", "feat/y", &format!("origin/{target}")],
+    );
+    write(&root, "sub/f.txt", "two\n");
+    commit_all(&root, "feat: change f");
+    git(
+        &dest,
+        &["fetch", "-q", root.to_str().unwrap(), "feat/y:feat/y"],
+    );
+    let clone = blobless_clone(dir.path(), &dest, false);
+    git(
+        &clone,
+        &["sparse-checkout", "set", "--no-cone", "/*", "!/sub/"],
+    );
+    git(&clone, &["read-tree", "-mu", "HEAD"]);
+    let offline = |args: &[&str]| {
+        let out = command("git", &clone)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", text(&out));
+        text(&out).trim().to_string()
+    };
+    offline(&["switch", "-q", "feat/y"]);
+    for rev in [format!("origin/{target}"), "feat/y".to_string()] {
+        let held = command("git", &clone)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .args(["cat-file", "-e", &format!("{rev}:sub/f.txt")])
+            .output()
+            .unwrap();
+        assert!(!held.status.success(), "the clone holds {rev}:sub/f.txt");
+    }
+    // The new commit adds a file and reads no sub/f.txt blob.
+    let earlier = offline(&["rev-parse", "feat/y"]);
+    write(&clone, "three.txt", "three\n");
+    offline(&["add", "three.txt"]);
+    let tree = offline(&["write-tree"]);
+    let pushed = offline(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &earlier,
+        "-m",
+        "feat: add three",
+    ]);
+    offline(&["update-ref", "refs/heads/feat/y", &pushed]);
+    let stall = dir.path().join("terminal-only-upload-pack");
+    std::fs::write(
+        &stall,
+        "#!/bin/sh\nif [ -n \"$CODEFLOW_TEST_TERMINAL\" ]; then exec git upload-pack \"$@\"; fi\nexec sleep 60\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stall, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &clone,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            stall.to_str().unwrap(),
+        ],
+    );
+    let line = format!("refs/heads/feat/y {pushed} refs/heads/feat/y {earlier}");
+    let (ran, took) = pre_push_origin(&clone, &line);
+    let out = text(&ran);
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(
+        out.contains("gave no verdict within its deadline"),
+        "{took:?}: {out}"
+    );
+    // Each command the prefetch sentence names, run as printed.
+    let hint = out
+        .lines()
+        .find(|line| line.contains("cannot ask for a password or passphrase"))
+        .unwrap_or_else(|| panic!("no prefetch hint: {out}"));
+    let hint = hint.split("If the check still").next().unwrap_or(hint);
+    let printed: Vec<&str> = hint
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| span.starts_with("git "))
+        .collect();
+    assert!(!printed.is_empty(), "no command in the hint: {hint}");
+    for step in &printed {
+        let words: Vec<&str> = step.split_whitespace().skip(1).collect();
+        let fetched = command("git", &clone)
+            .env("CODEFLOW_TEST_TERMINAL", "1")
+            .args(&words)
+            .output()
+            .unwrap();
+        assert!(fetched.status.success(), "{step}: {}", text(&fetched));
+    }
+    let (ran, took) = pre_push_origin(&clone, &line);
+    let again = text(&ran);
+    assert!(
+        ran.status.success() && !again.contains("gave no verdict"),
+        "the retry still refuses after {printed:?} ({took:?}):\n{again}"
+    );
+}
+
+/// TSK-327: a bounded read that `codeflow ci` starts late, as the leader
+/// of its own process group, ends when the pre-push hook ends the check at
+/// its deadline (here 5 s × 1 + 1 s + 5 s = 11 s). A `git` first on `PATH`
+/// delays the check's first read 2 s, then stalls the next read that leads
+/// its own group (the secret scan's `git version`, whose guard wait of
+/// 10 s would outlast the hook's). Every process of the stalled read has
+/// ended when the hook returns. Before, the read's deadline lived in
+/// `codeflow ci`, which the hook killed, so the stalled git ran on.
+#[cfg(unix)]
+#[test]
+fn a_late_nested_read_ends_with_the_pre_push_check() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("remote_query_timeout_seconds", 5.into()),
+                ("remote_query_attempts", 1.into()),
+                ("remote_fetch_timeout_seconds", 1.into()),
+                ("push_budget_seconds", 5.into()),
+            ],
+        );
+    });
+    git(&root, &["switch", "-q", "-c", "feat/y"]);
+    write(&root, "y.txt", "y\n");
+    commit_all(&root, "feat: add y");
+    git(&root, &["config", "remote.origin.promisor", "false"]);
+    let head = text(&run("git", &root, &["rev-parse", "HEAD"]));
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    let bin = dir.path().join("late-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.path().join("ci-reads");
+    let late = dir.path().join("late");
+    let chain = dir.path().join("stall-chain");
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\n\
+             case \"$(ps -o command= -p $PPID)\" in *' ci '*)\n\
+             \x20 group=$(ps -o pgid= -p $$ | tr -d ' ')\n\
+             \x20 echo \"$$ $group $*\" >> '{log}'\n\
+             \x20 if [ \"$group\" = \"$$\" ] && [ -e '{late}' ]; then\n\
+             \x20   echo \"$$ git $*\" >> '{chain}'\n\
+             \x20   exec sleep 60\n\
+             \x20 fi\n\
+             \x20 if [ \"$group\" != \"$$\" ] && [ ! -e '{late}' ]; then\n\
+             \x20   : > '{late}'\n\
+             \x20   sleep 2\n\
+             \x20 fi;;\n\
+             esac\n\
+             exec '{real}' \"$@\"\n",
+            log = log.display(),
+            late = late.display(),
+            chain = chain.display(),
+            real = real.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (ran, took) = pre_push_origin_with(
+        &root,
+        &format!(
+            "refs/heads/feat/y {} refs/heads/feat/y {}",
+            head.trim(),
+            "0".repeat(40)
+        ),
+        Some(&bin),
+    );
+    let out = text(&ran);
+    let reads = std::fs::read_to_string(&log).unwrap_or_default();
+    eprintln!("{took:?}\n{out}\nci reads:\n{reads}");
+    let chain = std::fs::read_to_string(&chain).unwrap_or_default();
+    assert!(
+        !chain.is_empty(),
+        "no late nested read stalled:\n{reads}\n{out}"
+    );
+    assert!(!ran.status.success(), "{took:?}: {out}");
+    assert!(
+        out.contains("gave no verdict within its deadline"),
+        "{took:?}: {out}"
+    );
+    // A full clone fetches nothing on demand, so no prefetch is suggested,
+    // even with a remote marked `promisor = false` (git reads it as off).
+    assert!(
+        !out.contains("cannot ask for a password") && !out.contains("git diff --stat"),
+        "{took:?}: {out}"
+    );
+    assert_all_ended(&chain);
+}
+
+/// Every process named on a line of `chain` (`<pid> <command>`) has
+/// ended, allowing a few seconds for an orphan's new parent to reap it.
+#[cfg(unix)]
+fn assert_all_ended(chain: &str) {
+    let gone = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    for line in chain.lines() {
+        let pid: i32 = line.split_whitespace().next().unwrap().parse().unwrap();
+        // SAFETY: signal 0 only asks whether the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < gone,
+                "{line} still runs after the hook returned:\n{chain}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
 #[test]
 fn clears_doctor_id_registry() {
     // The full tier keeps an id registry; with no remote it is local.

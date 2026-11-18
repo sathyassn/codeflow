@@ -432,6 +432,7 @@ pub const SCHEMA: [KeySpec; 90] = [
         valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
         purpose: "How long the pre-push set may take before the hook reports the overrun, naming the slowest step and the slowest checks inside a `codeflow ci` step.",
         notes: "Default 60. It only reports: a push over the budget still lands when its checks pass, and no check is skipped or shortened to meet it. \
+                It is also one term of the deadline each pre-push `codeflow ci` check runs within (see git.test_gate_on_push). \
                 The pre-push hook reads it from the default branch's committed policy as last fetched, never from a pushed head; with no such branch it uses the default. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
@@ -970,8 +971,49 @@ pub const SCHEMA: [KeySpec; 90] = [
                 test-config target, so a push never waits for a heavy run; \
                 cite `codeflow test --mode quick` when the pull request \
                 is made ready. Tag and other non-branch pushes are outside the \
-                push set. Local-config tampering is outside the hook threat \
-                model; hosted CI checks the pushed commit.",
+                push set. The destination lookup asks only the exact URL the \
+                push uses: a `url.<base>.insteadOf` in the repository, global \
+                or system configuration that matches it (an empty one matches \
+                every URL), a remote configured under that URL as its name, \
+                or a legacy remotes or branches file of that name refuses the \
+                push as unverifiable (`ci.destination_unavailable`). Its ssh \
+                transport is the one git's own precedence selects \
+                (`GIT_SSH_COMMAND`, `core.sshCommand`, `GIT_SSH`, then \
+                `ssh`), read as the push read it, `git -c` settings \
+                included; no other transport runs. A destination with no \
+                branches is not taken as initialization when the push \
+                connected with a `git -c` http, protocol, remote, ssh or \
+                transfer setting, or `core.gitProxy`, that the lookup does \
+                not apply. Each pushed range's `codeflow ci` runs within one \
+                deadline, git.remote_query_timeout_seconds times \
+                git.remote_query_attempts, plus \
+                git.remote_fetch_timeout_seconds, plus \
+                git.push_budget_seconds (270 s by default); a check still \
+                running then is ended with its process group and refuses the \
+                push, naming the deadline and these keys. Before it, the hook \
+                fetches the objects the id registry lacks in a partial clone \
+                in one bounded request, and the check reads the registry with \
+                lazy fetching off. The check runs in a process group of its \
+                own, away from the terminal, so in a partial clone a fetch of \
+                a missing object that needs a password or passphrase prompt \
+                stops and is refused at the deadline. The refusal then names \
+                two commands to run in the terminal before pushing again, \
+                built from the range the check read: `git log \
+                --diff-merges=separate --stat --format= <from>..<head>` and \
+                `git diff --stat <from>...<head>`, where `<from>` is the \
+                check's `--commits-from`, else its base. They read both sides \
+                of each commit's changes and of the range's diff, so they \
+                fetch every file version the added-lines, conflict-marker \
+                and size-and-ignore checks read. They fetch no file the check \
+                reads whole at one commit that neither shows changed, such \
+                as the policy at the target's tip, and the refusal says so; \
+                a plain `git fetch` keeps the clone's filter and fetches none \
+                of them. A remote counts as a promisor as git reads it: any \
+                true `remote.<name>.promisor` entry or a \
+                `remote.<name>.partialCloneFilter` makes it one, and \
+                `promisor = false` alone does not. Other local-config \
+                tampering is outside \
+                the hook threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",
