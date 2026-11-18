@@ -665,8 +665,13 @@ pub(crate) fn locate(
 
 /// Whether the index the call reads holds a submodule entry (mode
 /// `160000`), as Git itself lists the index, read with the call's location
-/// inputs and its index-file variable only. Any probe failure, timeout or
-/// listing over the output limit is an error, so the caller refuses.
+/// inputs and its index-file variable only. The listing covers the whole
+/// index: Git limits an unqualified listing to the directory it runs in, so
+/// the probe names the top of the repository explicitly, and clears every
+/// variable that changes how a pathspec is read, so the call's own
+/// directory, directory option or environment cannot narrow it. Any probe
+/// failure, timeout or listing over the output limit is an error, so the
+/// caller refuses.
 pub(crate) fn index_gitlinks(
     cwd: &Path,
     globals: &[String],
@@ -675,7 +680,18 @@ pub(crate) fn index_gitlinks(
     let unread = |_| "cannot read the index of the repository the command works in".to_string();
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut probe = probe_command(cwd, globals, environment, &["GIT_INDEX_FILE"])?;
-    probe.args(["--no-pager", "ls-files", "--format=%(objectmode)"]);
+    probe
+        .env("GIT_LITERAL_PATHSPECS", "0")
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS");
+    probe.args([
+        "--no-pager",
+        "ls-files",
+        "--format=%(objectmode)",
+        "--",
+        ":/",
+    ]);
     let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
     let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
     Ok(text.split('\n').any(|mode| mode == "160000"))

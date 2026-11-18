@@ -218,7 +218,7 @@ pub(super) fn contacts(
         resolver.clone_settings(rest)?;
         resolver.configured_addresses(&mut found)?;
     } else if verb == "archive" {
-        for word in remote_values(rest) {
+        for word in remote_values(rest)? {
             resolver.word(word, direction, &mut found, probe)?;
         }
     } else if FETCHING.contains(&verb) || PUSHING.contains(&verb) {
@@ -332,19 +332,20 @@ fn remote_add_fetches(rest: &[String]) -> bool {
     })
 }
 
-/// The values of `archive`'s `--remote` option, the only remote it contacts.
-fn remote_values(rest: &[String]) -> Vec<&str> {
-    let mut values = Vec::new();
-    for (at, word) in rest.iter().enumerate() {
-        if let Some(value) = word.strip_prefix("--remote=") {
-            values.push(value);
-        } else if word == "--remote" {
-            if let Some(value) = rest.get(at + 1) {
-                values.push(value.as_str());
-            }
-        }
+/// The values of the remote option of `archive`, the only remote it
+/// contacts, read through the option table both guards read for that
+/// command, so every spelling Git accepts, abbreviated or not, attached or
+/// separate, is read. An option the table does not prove refuses.
+fn remote_values(rest: &[String]) -> Result<Vec<&str>, String> {
+    let parsed =
+        super::checked_mode(rest, &super::catalog::ARCHIVE_OPTIONS, false).map_err(unproven)?;
+    if let Some(word) = parsed.unread.first() {
+        return Err(unproven(format!(
+            "`archive` with the option `{}`, which the guard does not read",
+            shown_word(word)
+        )));
     }
-    values
+    Ok(parsed.values_of('\0', "--remote"))
 }
 
 /// `--all` and its unambiguous abbreviation, which make `fetch` contact
