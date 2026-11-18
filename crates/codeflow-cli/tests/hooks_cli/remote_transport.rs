@@ -1509,6 +1509,132 @@ fn git_guard_allows(scratch: &Scratch, line: &str) {
     assert_eq!(out.status.code(), Some(0), "{line}: {}", stderr(&out));
 }
 
+#[test]
+fn git_guard_reads_removal_from_an_inherited_view() {
+    let scratch = Scratch::landed(None);
+    replace_last_commit(&scratch, true);
+    let mut wrong = Vec::new();
+    for line in [
+        "unset GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS=1; unset GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "export -n GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "declare +x GIT_NO_REPLACE_OBJECTS; git fetch origin",
+    ] {
+        let out = scratch.judge_inheriting("git-guard", line, ("GIT_NO_REPLACE_OBJECTS", "1"));
+        if !unproven_refusal(&out)
+            || !(nested_refusal(&out) || stderr(&out).contains("run the commands separately"))
+        {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+    }
+    let out = scratch.judge_inheriting(
+        "git-guard",
+        "unset GIT_NO_REPLACE_OBJECTS; git fetch --no-recurse-submodules origin",
+        ("GIT_NO_REPLACE_OBJECTS", "1"),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_reads_assignments_across_repeated_bodies() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for line in [
+        "for i in 1 2; do git fetch origin; export GIT_NO_REPLACE_OBJECTS=1; done",
+        "f() { git fetch origin; }; export GIT_NO_REPLACE_OBJECTS=1; f",
+        "while false; do git fetch origin; export GIT_NO_REPLACE_OBJECTS=1; done",
+    ] {
+        let out = scratch.judge("git-guard", line);
+        if !nested_refusal(&out) {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+    }
+    git_guard_allows(&scratch, "git fetch origin");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_refuses_unresolved_setter_views() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for line in [
+        "GIT_NO_REPLACE_OBJECTS+=1; export GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "read GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "printf -v GIT_NO_REPLACE_OBJECTS 1; git fetch origin",
+        "mapfile GIT_NO_REPLACE_OBJECTS; git fetch origin",
+        "((GIT_NO_REPLACE_OBJECTS=1)); git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS[0]=1; git fetch origin",
+    ] {
+        let out = scratch.judge("git-guard", line);
+        if !unproven_refusal(&out) || !stderr(&out).contains("run the commands separately") {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+    }
+    git_guard_allows(&scratch, "git fetch origin");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_reads_the_environment_of_carried_bodies() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for line in [
+        "GIT_NO_REPLACE_OBJECTS=1 eval 'git fetch origin'",
+        "GIT_NO_REPLACE_OBJECTS=1 sh -c 'git fetch origin'",
+        "env GIT_NO_REPLACE_OBJECTS=1 sh -c 'git fetch origin'",
+        "GIT_NO_REPLACE_OBJECTS=1 command git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS=1 exec git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS=1 nice git fetch origin",
+        "GIT_NO_REPLACE_OBJECTS=1 time git fetch origin",
+    ] {
+        let out = scratch.judge("git-guard", line);
+        if !nested_refusal(&out) {
+            wrong.push(format!("{line}: {}", stderr(&out)));
+        }
+    }
+    git_guard_allows(&scratch, "sh -c 'git fetch origin'");
+    git_guard_allows(
+        &scratch,
+        "GIT_NO_REPLACE_OBJECTS=1 eval 'git fetch --no-recurse-submodules origin'",
+    );
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_judges_uncertain_child_inheritance() {
+    let reverse = Scratch::landed(None);
+    replace_last_commit(&reverse, true);
+    reverse.config("fixture.repos", &shell_path(reverse.root()));
+    git_guard_refuses(
+        &reverse,
+        "GIT_NO_REPLACE_OBJECTS=1 git for-each-repo --config=fixture.repos fetch origin",
+    );
+    git_guard_allows(
+        &reverse,
+        "GIT_NO_REPLACE_OBJECTS=1 git for-each-repo --config=fixture.repos fetch --no-recurse-submodules origin",
+    );
+    let forward = Scratch::landed(None);
+    definition_outside_work_tree(&forward, true);
+    replace_last_commit(&forward, false);
+    let out = forward.judge(
+        "git-guard",
+        "GIT_NO_REPLACE_OBJECTS=1 git -c core.pager='git fetch origin' --paginate submodule status",
+    );
+    assert!(
+        unproven_refusal(&out)
+            && (nested_refusal(&out) || stderr(&out).contains("run the commands separately")),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// Through git-guard: a replacement variable an earlier command of the line
 /// sets reaches the probe only as one view of the call's environment, since
 /// the guard cannot tell whether Git's process has it (a plain assignment,

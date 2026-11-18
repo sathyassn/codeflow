@@ -10,6 +10,18 @@ use crate::security::git_config::{
 };
 use std::path::Path;
 
+#[test]
+fn a_transient_child_index_cannot_prove_absence() {
+    let scratch = Scratch::new("");
+    let args = vec!["filter-branch".to_string()];
+    let child = super::super::Inputs::child(&args, &Environment::new()).unwrap();
+    let result = index_gitlinks(&scratch.root, &[], &child.environment);
+    assert!(
+        result.is_err(),
+        "a transient child index was treated as the ordinary index"
+    );
+}
+
 /// A scratch repository on branch `main` whose local configuration ends
 /// with `config`.
 struct Scratch {
