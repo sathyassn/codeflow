@@ -1324,6 +1324,52 @@ fn both_guards_read_a_remote_option_in_every_spelling_git_accepts() {
     );
 }
 
+/// The reason a refusal gives for an option word that another option's value
+/// may hide.
+const HIDDEN: &str = "an option word may be read as another option's value";
+
+/// A refusal by this task's rule for an option word a value may hide.
+fn hidden_refusal(out: &Output) -> bool {
+    let err = stderr(out);
+    out.status.code() == Some(2) && err.contains("git.hook_integrity") && err.contains(HIDDEN)
+}
+
+/// Both guards read a word that may be the remote option wherever it stands.
+/// A word another option may take as its value is not set aside: the command
+/// refuses, since Git's own reading may take it as the remote option.
+#[test]
+fn both_guards_read_a_remote_option_word_a_value_may_consume() {
+    let scratch = Scratch::landed(None);
+    for hook in HOOKS {
+        for command in [
+            "git archive --format --remote=fixture::x HEAD",
+            "git archive --prefix --remote fixture::x HEAD",
+            "git archive -9o --remote=fixture::x HEAD",
+            "git archive --out --remote=fixture::x HEAD",
+        ] {
+            let out = scratch.judge(hook, command);
+            assert!(hidden_refusal(&out), "{hook} `{command}`: {}", stderr(&out));
+        }
+        // Controls: the option has its own value, so the remote option is
+        // read as it is in every other position.
+        for command in [
+            "git archive --format zip --remote=https://127.0.0.1:9/r HEAD",
+            "git archive --prefix p/ --rem https://127.0.0.1:9/r HEAD",
+            "git archive -9 -o out.tar --remote=https://127.0.0.1:9/r HEAD",
+        ] {
+            let out = scratch.judge(hook, command);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook} `{command}`: {}",
+                stderr(&out)
+            );
+        }
+        let out = scratch.judge(hook, "git archive --format zip --remote=fixture::x HEAD");
+        assert!(helper_refusal(&out), "{hook}: {}", stderr(&out));
+    }
+}
+
 /// Both guards read the whole index, whatever directory the call runs in
 /// and whichever way it selects a directory or an index file.
 #[test]

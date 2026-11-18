@@ -4,7 +4,7 @@
 //! the same configuration reader the guards use, with the host's Git
 //! configuration cut off. Nothing here contacts a remote or starts a helper.
 
-use super::{contacts, select, Contact, Probe, Selected, UNPROVEN};
+use super::{contacts, select, Contact, Probe, Selected, HIDDEN_OPTION, UNPROVEN};
 use crate::security::git_config::{
     current_branch, index_gitlinks, locate, read, Environment, Location,
 };
@@ -1347,6 +1347,46 @@ fn a_remote_option_is_read_in_every_spelling_git_accepts() {
             .expect_err(&format!("`{command}` must refuse"));
         assert!(error.starts_with(UNPROVEN), "{command}: {error}");
     }
+}
+
+/// A word that may be the remote option is read wherever it stands. When the
+/// option table gives it to another option as that option's value, Git's own
+/// reading may still take it as the remote option, so the command refuses.
+#[test]
+fn a_remote_option_word_another_option_may_consume_refuses() {
+    let scratch = Scratch::new("");
+    for command in [
+        "archive --format --remote=fixture::x HEAD",
+        "archive --prefix --remote fixture::x HEAD",
+        "archive -9o --remote=fixture::x HEAD",
+        "archive --out --remote=fixture::x HEAD",
+        "archive --add-file --remote=fixture::x HEAD",
+        "archive --add-virtual-file --remote=fixture::x HEAD",
+        "archive --mtime --remote=fixture::x HEAD",
+        "archive -o --remote=fixture::x HEAD",
+        "archive -vo --rem fixture::x HEAD",
+        "archive --format --rem=https://example.test/r HEAD",
+    ] {
+        let error = scratch
+            .helpers(command)
+            .expect_err(&format!("`{command}` must refuse"));
+        assert!(error.starts_with(UNPROVEN), "{command}: {error}");
+        assert!(error.contains(HIDDEN_OPTION), "{command}: {error}");
+    }
+    // Controls: an option with its own value, then the remote option; the
+    // remote is judged as in every other spelling.
+    for command in [
+        "archive --format zip --remote=https://example.test/r HEAD",
+        "archive --prefix p/ --rem https://example.test/r HEAD",
+        "archive -9 -o out.tar --remote=https://example.test/r HEAD",
+        "archive --format zip HEAD",
+    ] {
+        assert_eq!(scratch.helpers(command), Ok(vec![]), "{command}");
+    }
+    assert_eq!(
+        scratch.helpers("archive --format zip --remote=fixture::x HEAD"),
+        Ok(vec!["fixture".into()])
+    );
 }
 
 /// Every option the resolution reads is read in each abbreviation Git

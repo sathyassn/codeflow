@@ -147,6 +147,11 @@ pub(super) const HELPER_REFUSAL: &str = "a remote's transport starts a helper pr
 /// cannot prove; the runner reader's message for it names the way through.
 pub(super) const UNPROVEN: &str = "the guard cannot prove which transport Git selects";
 
+/// The reason of a refusal for an option word that another option's value may
+/// hide, so the guard cannot tell which reading Git takes.
+pub(super) const HIDDEN_OPTION: &str =
+    "an option word may be read as another option's value, and the guard cannot tell which reading Git takes";
+
 /// What Git starts to reach one destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Selected {
