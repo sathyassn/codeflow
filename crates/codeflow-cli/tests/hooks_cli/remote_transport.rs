@@ -1713,14 +1713,10 @@ fn git_guard_keeps_the_earlier_environment_authority_refusal() {
     );
 }
 
-/// Through git-guard: a replacement variable an earlier command of the line
-/// sets reaches the probe only as one view of the call's environment, since
-/// the guard cannot tell whether Git's process has it (a plain assignment,
-/// a read-only variable, an export behind a condition or one removed before
-/// use). The call is judged in each view and refuses if either finds the
-/// definition. A variable the Git command's own prefix or launcher sets is
-/// certain. exec-guard refuses a line that sets such a variable for its own
-/// rule, so these rows cover git-guard only.
+/// Through git-guard: line candidates are judged in recorded, absent and
+/// inherited views. Any view that finds the definition refuses. A current
+/// command's own assignment is certain; a carried prefix is not. The
+/// earlier authority rule in exec-guard remains separate.
 #[test]
 fn git_guard_judges_an_earlier_assignment_in_every_environment_it_may_have() {
     // The last commit holds no definition; its replacement does. Git
@@ -1761,7 +1757,7 @@ fn git_guard_judges_an_earlier_assignment_in_every_environment_it_may_have() {
     ] {
         git_guard_refuses(&forward, line);
     }
-    // A Git call a runner starts keeps the variables the line gives Git.
+    // A runner child is judged with each known input kept and cleared.
     let repos = shell_path(forward.root());
     forward.config("fixture.repos", &repos);
     git_guard_refuses(

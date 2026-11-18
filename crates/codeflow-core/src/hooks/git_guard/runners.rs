@@ -1577,8 +1577,8 @@ fn git_relevant(name: &str) -> bool {
 /// leave them ([`Launched`]). A variable of the guard's own process that a
 /// launcher removes is removed from the reading too ([`removed_variables`]).
 ///
-/// A variable named in `absent` is left out of the shell's own variables, as
-/// when the shell never exported it ([`launched_environments`]).
+/// A variable named in `absent` is explicitly removed from the probe's
+/// environment, so it cannot fall back to the guard's inherited value.
 fn launched_environment(
     launched: &Launched,
     literals: &Literals,
@@ -1622,17 +1622,14 @@ fn launched_environment(
     Ok(env)
 }
 
-/// The most variables an earlier command may set that the probes read, each
-/// of which the guard judges both ways.
+/// The most uncertain probe inputs in a line or child environment.
 const UNCERTAIN_INPUT_LIMIT: usize = 3;
 
-/// Every environment the Git process of a command may have. An assignment
-/// of a variable the probes read made by an earlier command of the line may
-/// not reach Git (the shell did not export it, the command did not run, or
-/// the variable was removed before use), and the guard cannot tell which, so
-/// the command is judged with each such variable present and with it absent,
-/// in every combination. A variable the command's own prefix or launcher
-/// sets is certain and in every view.
+/// The recorded, absent and inherited states of each candidate input from
+/// the whole line, in every combination. The line can repeat or reorder
+/// bodies, so a recorded value need not reach this call. An unresolved
+/// value stays unread until a contact needs the probe. A variable the
+/// current command's own prefix or launcher sets is certain in every view.
 fn launched_environments(
     launched: &Launched,
     literals: &Literals,
