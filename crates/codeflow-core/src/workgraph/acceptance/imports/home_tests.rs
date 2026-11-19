@@ -10,6 +10,79 @@ use std::path::Path;
 
 use super::{imported_records, Graph, ImportedRecord, Repository};
 
+const CREDENTIAL_REMOTE: &str = "cred:SECRETVALUE";
+
+fn with_credential_remote(fixture: &Fixture) {
+    fixture.git(&[
+        "config",
+        &format!("remote.{CREDENTIAL_REMOTE}.url"),
+        "file:///nonexistent/repo.git",
+    ]);
+    fixture.git(&["config", "branch.main.remote", CREDENTIAL_REMOTE]);
+}
+
+#[test]
+fn an_unreadable_home_ref_withholds_the_remote_name() {
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.land("main", &[(&path_of("TSK-001"), &moved("TSK-001", "main"))]);
+    with_credential_remote(&fixture);
+    fixture.sync();
+    let said = fixture.judge().unwrap_err();
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+    assert!(said.contains("cannot read the published home"), "{said}");
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "{said}"
+    );
+}
+
+#[test]
+fn an_unconfigured_tracking_target_withholds_the_remote_name() {
+    let fixture = Fixture::new(&[]);
+    with_credential_remote(&fixture);
+    let repo = Repository::open(fixture.root()).unwrap();
+    let declared = format!("refs/remotes/{CREDENTIAL_REMOTE}/main");
+    let said = crate::workgraph::readiness::target_fetch_remote(&repo, &declared).unwrap_err();
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+    assert!(
+        said.contains("names a remote that is not configured"),
+        "{said}"
+    );
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "{said}"
+    );
+}
+
+#[test]
+fn import_path_resolution_withholds_unreadable_revision_names() {
+    let fixture = Fixture::new(&[]);
+    with_credential_remote(&fixture);
+    let repo = Repository::open(fixture.root()).unwrap();
+    let blob = repo.blob(b"not a commit").unwrap();
+    repo.reference("refs/tags/cred-SECRETVALUE", blob, true, "test")
+        .unwrap();
+    let mut refusals = Vec::new();
+    for bad in [
+        "refs/remotes/cred:SECRETVALUE/main",
+        "refs/remotes/cred-SECRETVALUE/main",
+        "cred:SECRETVALUE/main",
+        "refs/tags/cred-SECRETVALUE",
+    ] {
+        for (base, head) in [(bad, "HEAD"), ("HEAD", bad)] {
+            let said = super::imported_record_paths(fixture.root(), base, head).unwrap_err();
+            refusals.push(said);
+        }
+    }
+    assert!(
+        refusals
+            .iter()
+            .all(|said| !said.contains("SECRETVALUE")
+                && said.contains("cannot resolve import revision")),
+        "{refusals:?}"
+    );
+}
+
 pub(super) const LINE: &str = "integration/EPC-001-outcome";
 pub(super) const OTHER: &str = "integration/EPC-002-other";
 pub(super) const THIRD: &str = "integration/EPC-003-third";

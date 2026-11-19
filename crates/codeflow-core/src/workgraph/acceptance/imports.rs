@@ -442,7 +442,7 @@ fn home_source(
         // local branch supplies no import authority (for example a first
         // push of this very line, or a shared planning merge).
         if reference_tip(repo, &format!("refs/heads/{home}"))
-            .map_err(unread)?
+            .map_err(|error| unread(error.to_string()))?
             .is_some()
         {
             return Ok(HomeSource::None);
@@ -517,7 +517,8 @@ pub(super) fn home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, Str
 fn unchecked_home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, String> {
     let remotes = repo.remotes().map_err(|error| error.to_string())?;
     if remotes.is_empty() {
-        return reference_tip(repo, &format!("refs/heads/{home}"));
+        return reference_tip(repo, &format!("refs/heads/{home}"))
+            .map_err(|error| error.to_string());
     }
     let configured = remotes
         .iter()
@@ -536,17 +537,33 @@ fn unchecked_home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, Stri
     else {
         return Ok(None);
     };
-    reference_tip(repo, &format!("refs/remotes/{remote}/{home}"))
+    let reference = format!("refs/remotes/{remote}/{home}");
+    reference_tip(repo, &reference).map_err(|error| unread_home(repo, &remote, &reference, &error))
 }
 
-fn reference_tip(repo: &Repository, name: &str) -> Result<Option<Oid>, String> {
+/// Preserve the condition and recovery without relaying a withheld identity
+/// from either the reference or libgit2's diagnostic.
+fn unread_home(repo: &Repository, remote: &str, reference: &str, error: &git2::Error) -> String {
+    let root = repo.commondir();
+    let shown = crate::security::git::shown_ref(root, reference);
+    if crate::security::git::remote_name_shown(root, remote) {
+        format!(
+            "cannot read the published home {shown}: {}; fetch the configured remote for it, then rerun",
+            crate::git::display_text(error.message())
+        )
+    } else {
+        format!(
+            "cannot read the published home {shown}; {}",
+            crate::security::git::withheld_remote_step(root, remote)
+        )
+    }
+}
+
+fn reference_tip(repo: &Repository, name: &str) -> Result<Option<Oid>, git2::Error> {
     match repo.find_reference(name) {
-        Ok(reference) => reference
-            .peel_to_commit()
-            .map(|commit| Some(commit.id()))
-            .map_err(|error| error.to_string()),
+        Ok(reference) => reference.peel_to_commit().map(|commit| Some(commit.id())),
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(error),
     }
 }
 
@@ -1175,15 +1192,18 @@ pub fn imported_record_paths(
         repo.revparse_single(name)
             .and_then(|object| object.peel_to_commit())
             .map(|commit| commit.id())
-            .map_err(|error| error.to_string())
+            .map_err(|error| format!(
+                "cannot resolve import revision (name and Git diagnostic withheld): class={:?}, code={:?}",
+                error.class(), error.code()
+            ))
     };
-    let graph = Graph::from_revision(&repo, head)?;
-    Ok(
-        imported_records(&repo, resolve(base)?, resolve(head)?, &graph)?
-            .into_values()
-            .map(|record| record.path)
-            .collect(),
-    )
+    let base = resolve(base)?;
+    let head = resolve(head)?;
+    let graph = Graph::from_revision(&repo, &head.to_string())?;
+    Ok(imported_records(&repo, base, head, &graph)?
+        .into_values()
+        .map(|record| record.path)
+        .collect())
 }
 
 #[cfg(test)]

@@ -821,6 +821,18 @@ fn default_target(
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
         let tip = pinned_commit(repo, base)?.map_err(|error| {
+            let remote = super::work_start::remote_of(repo, base);
+            let remote_spelling = base.starts_with("refs/remotes/")
+                || (!base.starts_with("refs/") && base.contains('/'));
+            if remote_spelling
+                && !crate::security::git::remote_name_shown(repo.commondir(), &remote)
+            {
+                return format!(
+                    "`--base` does not name a commit here ({}); {}",
+                    crate::security::git::WITHHELD_REMOTE,
+                    crate::security::git::withheld_remote_step(repo.commondir(), &remote)
+                );
+            }
             let step = fetch_step(repo, &name);
             withheld(
                 repo,
@@ -1548,6 +1560,46 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn a_missing_base_withholds_unconfigured_remote_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        for base in [
+            "refs/remotes/cred:SECRETVALUE/main",
+            "cred:SECRETVALUE/main",
+            "user:p'ass-SECRETVALUE@host/main",
+        ] {
+            let change = StatusChange {
+                base: Some(base.into()),
+                ..StatusChange::default()
+            };
+            let said = default_target(&repo, &change).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            assert!(!said.contains("git fetch"), "{said}");
+            assert!(
+                said.contains(&crate::security::git::withheld_remote_step(
+                    dir.path(),
+                    "cred:SECRETVALUE"
+                )),
+                "{said}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_base_withholds_an_unreadable_remote_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(repo.path().join("config"), "[broken-SECRETVALUE\n").unwrap();
+        let change = StatusChange {
+            base: Some("cred:SECRETVALUE/main".into()),
+            ..StatusChange::default()
+        };
+        let said = default_target(&repo, &change).unwrap_err();
+        assert_eq!(said, crate::security::git::UNREAD_REMOTES_TEXT);
     }
 
     /// TSK-416 review round 2, finding 3: a branch name holding a character
