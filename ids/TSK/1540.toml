@@ -1,0 +1,11 @@
+id = "TSK-1540"
+uid = "cfaa3398-1b0b-487e-a5e4-d6f3c67bcbaf"
+kind = "TSK"
+title = "The git spawn contract test passes on the EPC-022 line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T04:56:25Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
