@@ -1993,7 +1993,11 @@ fn git_guard_judges_unsettled_output_words() {
             ("GIT_REPLACE_REF_BASE", "refs/replace/"),
         );
         if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
-            wrong.push(format!("contact {context}: exit {:?}: {}", out.status.code(), stderr(&out)));
+            wrong.push(format!(
+                "contact {context}: exit {:?}: {}",
+                out.status.code(),
+                stderr(&out)
+            ));
         }
         let out = scratch.judge_inheriting(
             "git-guard",
@@ -2033,6 +2037,10 @@ fn git_guard_judges_expanded_options_and_special_parameters() {
         "o=-f; print $o %d \"$x\"",
         "f=-u; print \"$f\" 1 -f %d \"$x\"",
         ": \"$?\\\n[x]\"",
+        "print \"$msg\"",
+        "o=-f; print $o %s \"$x\"",
+        "f=-u; print \"$f\" 1 -f %s \"$x\"",
+        "o=message; print \"$o\" \"$x\"",
     ] {
         let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}");
         let out = scratch.judge_inheriting(
@@ -2057,11 +2065,7 @@ fn git_guard_judges_expanded_options_and_special_parameters() {
         }
     }
     for context in [
-        "print \"$msg\"",
         "print -r -- \"$a\" \"$b\"",
-        "o=-f; print $o %s \"$x\"",
-        "f=-u; print \"$f\" 1 -f %s \"$x\"",
-        "o=message; print \"$o\" \"$x\"",
         "bash -c 'o=-f; print $o %d \"$x\"'",
         "bash -c 'f=-u; print \"$f\" 1 -f %d \"$x\"'",
         ": \"$?\\\n[0]\"",
@@ -2090,8 +2094,8 @@ fn git_guard_keeps_arithmetic_data_allowed() {
         "echo '((example))'; git fetch origin",
         "echo '${s:x}'; git fetch origin",
         "echo '${a[x]}'; git fetch origin",
-        "echo \"${s:-literal}\"; git fetch origin",
-        "echo \"${sha:0:7}${BASH_SOURCE[0]}${PIPESTATUS[0]}\"; git fetch origin",
+        "echo -- \"${s:-literal}\"; git fetch origin",
+        "echo -- \"${sha:0:7}${BASH_SOURCE[0]}${PIPESTATUS[0]}\"; git fetch origin",
     ] {
         let out = scratch.judge("git-guard", line);
         if out.status.code() != Some(0) {

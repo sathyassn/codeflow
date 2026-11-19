@@ -711,13 +711,18 @@ the form refuses:
     evaluator; the recognized forms do not establish exhaustive coverage.
     Arithmetic operand positions include the supported zsh builtin forms.
     Continued unbraced parameter subscripts, including special parameter names,
-    retain evaluation evidence. Operand checks also read words filled from
-    earlier literals while retaining their shell context.
-    Output builtin readers share option-value boundaries when locating formats
-    and destinations; an uncertain option sequence retains uncertainty.
-    An unresolved output option word that can hide a format retains arithmetic
-    uncertainty; unresolved output builtin options also refuse
-    configuration-dependent decisions.
+    retain evaluation evidence. Operand checks retain the unfilled reading in
+    its shell context; filled words add checks and never suppress that reading.
+    Output builtin readers share option-value boundaries. A nonliteral word in
+    an option or format position, or before the format is settled, is uncertain
+    even when it is the only word. Expansions, substitutions and patterns retain
+    arithmetic and object-input uncertainty there. Uncertain output options
+    also refuse configuration-dependent decisions. Builtin writes invalidate
+    tracked literal values; a write with unread effects invalidates all values.
+    This accepts conservative refusals for single expanding output words and
+    for expanding options or formats even after a straight-line literal
+    assignment. Literal string formats and explicit option terminators keep
+    ordinary data outside this additional check.
     Numeric special parameters remain known in arithmetic operand positions.
     Explicit inline shell bodies retain their shell's operand rules;
     an unspecified shell retains the conservative supported readings.

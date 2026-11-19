@@ -1030,8 +1030,51 @@ pub(super) fn probe_arithmetic_in_context(
     literals: &Literals,
     zsh_operands: bool,
 ) -> bool {
-    let filled = super::command_argv(&literals.fill(segment));
-    probe_arithmetic_words(words, false) || probe_arithmetic_words(&filled, zsh_operands)
+    let read = |text: &str| {
+        let (mut tokens, marks) = super::command_argv_marked(text);
+        let destination_arithmetic = zsh_operands
+            && super::configuration_launch(&tokens, None).is_some_and(|(program, args)| {
+                matches!(program, "print" | "printf")
+                    && super::output_builtin_options(program, args)
+                        .destinations
+                        .iter()
+                        .any(|target| target.contains('['))
+            });
+        for (word, marked) in tokens.iter_mut().zip(marks) {
+            if !super::expands_marked(&marked) && !super::has_glob(&marked) {
+                // Preserve literal metacharacters without mistaking them for
+                // expansions or patterns in the output option walk.
+                *word = word
+                    .chars()
+                    .map(|ch| {
+                        if matches!(
+                            ch,
+                            '$' | '`'
+                                | '*'
+                                | '?'
+                                | '['
+                                | ']'
+                                | '('
+                                | ')'
+                                | '{'
+                                | '}'
+                                | '^'
+                                | '~'
+                                | '#'
+                                | '<'
+                                | '>'
+                        ) {
+                            super::literal_mark(ch)
+                        } else {
+                            ch
+                        }
+                    })
+                    .collect();
+            }
+        }
+        destination_arithmetic || probe_arithmetic_words(&tokens, zsh_operands)
+    };
+    probe_arithmetic_words(words, false) || read(segment) || read(&literals.fill(segment))
 }
 
 /// Arithmetic operand positions in commands, after shell syntax is segmented.
@@ -1099,7 +1142,7 @@ fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
             .find(|word| word.as_str() != "--" && !(program == "shift" && word.as_str() == "-p"))
             .is_some_and(|word| !numeric_operand(word));
     }
-    if !matches!(program, "printf" | "print") {
+    if !matches!(program, "printf" | "print" | "echo") {
         return false;
     }
     let options = super::output_builtin_options(program, args);
@@ -1112,17 +1155,9 @@ fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
         return true;
     }
     let Some(format) = options.format else {
-        return program == "print"
-            && !options.ended
-            && args
-                .get(options.values_at)
-                .is_some_and(|word| super::unresolved_word(word))
-            && options.values_at + 1 < args.len();
+        return false;
     };
     let values = &args[options.values_at..];
-    if expands(format) {
-        return !values.is_empty();
-    }
     let mut chars = format.chars();
     let mut numeric = false;
     let mut setter = false;

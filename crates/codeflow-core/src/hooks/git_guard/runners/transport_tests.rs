@@ -426,11 +426,12 @@ fn continued_special_parameter_inputs_remain_unread() {
 #[test]
 fn expanded_output_and_special_parameter_controls_stay_known() {
     for context in [
-        "print \"$msg\"",
         "print -r -- \"$a\" \"$b\"",
-        "o=-f; print $o %s \"$x\"",
-        "f=-u; print \"$f\" 1 -f %s \"$x\"",
-        "o=message; print \"$o\" \"$x\"",
+        "printf %s \"$x\"",
+        "echo -- \"$x\"",
+        "echo '*'",
+        "printf '%s' '*'",
+        "print -r -- '<->'",
         "bash -c 'o=-f; print $o %d \"$x\"'",
         "bash -c 'f=-u; print \"$f\" 1 -f %d \"$x\"'",
         ": \"$?\\\n[0]\"",
@@ -439,6 +440,23 @@ fn expanded_output_and_special_parameter_controls_stay_known() {
         let segments = super::super::literal_segments(&expanded.segments);
         let literals = super::super::expanded_probe_literals(&segments, expanded.arithmetic);
         assert_ne!(literals.0.get("GIT_INDEX_FILE"), Some(&None), "{context}");
+    }
+}
+
+#[test]
+fn output_word_conservatism_is_explicit() {
+    for context in [
+        "print \"$msg\"",
+        "o=-f; print $o %s \"$x\"",
+        "f=-u; print \"$f\" 1 -f %s \"$x\"",
+        "o=message; print \"$o\" \"$x\"",
+        "echo \"${s:-literal}\"",
+        "echo \"${a[@]}\"",
+        "echo \"${a[*]}\"",
+        r"echo \$s[x]",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        assert!(expanded.arithmetic, "{context}");
     }
 }
 
@@ -548,10 +566,6 @@ fn arithmetic_data_keeps_probe_inputs_known() {
         "echo '((example))'",
         "echo '${s:x}'",
         "echo '${a[x]}'",
-        "echo \"${s:-literal}\"",
-        "echo \"${a[@]}\"",
-        "echo \"${a[*]}\"",
-        r"echo \$s[x]",
         "printf -v result %s 'literal[x]'",
         "read -p 'literal[x]' result",
         "getopts 'literal[x]' result",

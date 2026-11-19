@@ -1792,22 +1792,27 @@ struct OutputOptions<'a> {
     values_at: usize,
     destinations: Vec<&'a str>,
     uncertain: bool,
-    ended: bool,
 }
 
 /// Both readers consume output options with the same operand boundaries.
 fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOptions<'a> {
     let mut result = OutputOptions::default();
     let mut at = 0;
-    while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
-        at += 1;
-        if option == "--" {
-            result.ended = true;
+    while let Some(option) = args.get(at) {
+        if output_word_unsettled(option) {
+            result.uncertain |= result.format.is_none();
             break;
         }
-        result.uncertain |= unresolved_word(option);
+        if !option.starts_with('-') {
+            break;
+        }
+        at += 1;
+        if option == "--" {
+            break;
+        }
         for (index, flag) in option.char_indices().skip(1) {
-            let takes_value = flag == 'v' || program == "print" && "uCxXf".contains(flag);
+            let takes_value =
+                program != "echo" && (flag == 'v' || program == "print" && "uCxXf".contains(flag));
             if !takes_value {
                 result.uncertain |= program == "print" && !"abcDilmnNoOpPrsSzRen".contains(flag);
                 continue;
@@ -1827,7 +1832,7 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
             match flag {
                 'v' => result.destinations.push(value),
                 'f' => result.format = Some(value),
-                _ => result.uncertain |= unresolved_word(value),
+                _ => result.uncertain |= output_word_unsettled(value),
             }
             break;
         }
@@ -1836,8 +1841,13 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
         result.format = args.get(at).map(String::as_str);
         at += usize::from(result.format.is_some());
     }
+    result.uncertain |= result.format.is_some_and(output_word_unsettled);
     result.values_at = at;
     result
+}
+
+fn output_word_unsettled(word: &str) -> bool {
+    unresolved_word(word) || has_glob(word)
 }
 
 fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
@@ -8109,6 +8119,41 @@ impl Literals {
                 .filter(|(name, _)| !name.is_empty() && is_identifier(name))
         }
         let words = builtin_words(words);
+        // These writes can replace tracked values without an assignment word.
+        // Forget all bindings when their complete effects are not established.
+        let writer = words.first().is_some_and(|program| {
+            matches!(
+                program.as_str(),
+                "read"
+                    | "getln"
+                    | "mapfile"
+                    | "readarray"
+                    | "getopts"
+                    | "unset"
+                    | "set"
+                    | "shift"
+                    | "eval"
+                    | "let"
+                    | "integer"
+                    | "float"
+                    | "declare"
+                    | "typeset"
+                    | "local"
+                    | "readonly"
+                    | "export"
+                    | "wait"
+            ) || matches!(program.as_str(), "print" | "printf") && {
+                let options = output_builtin_options(program, &words[1..]);
+                options.uncertain
+                    || !options.destinations.is_empty()
+                    || options.format.is_some_and(|format| format.contains("%n"))
+            }
+        });
+        if writer {
+            for value in self.0.values_mut() {
+                *value = None;
+            }
+        }
         let declaring = matches!(
             words.first().map(String::as_str),
             Some("export" | "declare" | "typeset" | "local" | "readonly")
