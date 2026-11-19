@@ -1956,6 +1956,64 @@ fn git_guard_judges_continued_parameters_and_valued_options() {
 }
 
 #[test]
+fn git_guard_judges_expanded_options_and_special_parameters() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for context in [
+        "o=-f; print $o %d \"$x\"",
+        "f=-u; print \"$f\" 1 -f %d \"$x\"",
+        ": \"$?\\\n[x]\"",
+    ] {
+        let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}");
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!(
+                "contact {context}: exit {:?}: {}",
+                out.status.code(),
+                stderr(&out)
+            ));
+        }
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch --no-recurse-submodules origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("recursion control {context}: {}", stderr(&out)));
+        }
+    }
+    for context in [
+        "print \"$msg\"",
+        "print -r -- \"$a\" \"$b\"",
+        "o=-f; print $o %s \"$x\"",
+        "f=-u; print \"$f\" 1 -f %s \"$x\"",
+        "o=message; print \"$o\" \"$x\"",
+        "bash -c 'o=-f; print $o %d \"$x\"'",
+        "bash -c 'f=-u; print \"$f\" 1 -f %d \"$x\"'",
+        ": \"$?\\\n[0]\"",
+    ] {
+        let line = format!(
+            "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}; git fetch origin"
+        );
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &line,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("data control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_keeps_arithmetic_data_allowed() {
     let scratch = Scratch::landed(None);
     let mut wrong = Vec::new();

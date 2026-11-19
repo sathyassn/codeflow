@@ -342,6 +342,50 @@ fn filled_operator_inputs_remain_unread() {
 }
 
 #[test]
+fn expanded_output_option_inputs_remain_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        "o=-f; print $o %d \"$x\"",
+        "f=-u; print \"$f\" 1 -f %d \"$x\"",
+        "print \"$options\" \"$x\"",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        let segments = super::super::literal_segments(&expanded.segments);
+        let literals = super::super::expanded_probe_literals(&segments, expanded.arithmetic);
+        if literals.0.get("GIT_INDEX_FILE") != Some(&None) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn continued_special_parameter_inputs_remain_unread() {
+    let context = ": \"$?\\\n[x]\"";
+    let words = super::super::super::command_argv(context);
+    assert!(super::super::probe_arithmetic(context, &words), "{context}");
+}
+
+#[test]
+fn expanded_output_and_special_parameter_controls_stay_known() {
+    for context in [
+        "print \"$msg\"",
+        "print -r -- \"$a\" \"$b\"",
+        "o=-f; print $o %s \"$x\"",
+        "f=-u; print \"$f\" 1 -f %s \"$x\"",
+        "o=message; print \"$o\" \"$x\"",
+        "bash -c 'o=-f; print $o %d \"$x\"'",
+        "bash -c 'f=-u; print \"$f\" 1 -f %d \"$x\"'",
+        ": \"$?\\\n[0]\"",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        let segments = super::super::literal_segments(&expanded.segments);
+        let literals = super::super::expanded_probe_literals(&segments, expanded.arithmetic);
+        assert_ne!(literals.0.get("GIT_INDEX_FILE"), Some(&None), "{context}");
+    }
+}
+
+#[test]
 fn valued_output_options_keep_inputs_unread() {
     let mut wrong = Vec::new();
     for context in [
