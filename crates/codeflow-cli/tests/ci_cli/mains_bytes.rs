@@ -375,10 +375,10 @@ fn tsk1185_a_mode_only_difference_keeps_the_full_checks() {
     assert!(!said.contains(TAKEN), "nothing is taken: {said}");
 }
 
-/// AC-12, group H (the TSK-350 shape): the line edited a line-homed record's
-/// criteria; a head that puts main's bytes back stays frozen.
+/// A planning amendment putting main's criteria back declines the byte
+/// exemption and keeps the ordinary planning-amendment checks.
 #[test]
-fn tsk1185_a_line_edit_of_a_line_homed_record_stays_frozen() {
+fn tsk1185_a_line_edit_keeps_the_planning_amendment_checks() {
     let fx = Fixture::new();
     let root = fx.root();
     super::git(root, &["switch", "-q", LINE]);
@@ -419,6 +419,54 @@ fn tsk1185_a_line_edit_of_a_line_homed_record_stays_frozen() {
         &hosted,
         "line edit",
         "the line has edited it since its merge base with the default branch",
+    );
+}
+
+/// AC-12, group H (the TSK-350 shape): a criteria-only edit on the line
+/// keeps its line-homed record frozen on a real sync with the verified tip.
+/// The unedited-record controls are the sync and hand-resolved admit tests
+/// above; this fixture must refuse even though its head holds main's bytes.
+#[test]
+fn tsk1185_a_verified_sync_refuses_a_line_edited_record() {
+    let fx = Fixture::new();
+    let root = fx.root();
+    let amended = task("TSK-001", LINE).replace("shall work.", "shall work well.");
+    super::git(root, &["switch", "-q", LINE]);
+    write(root, "project-management/tasks/TSK-001.md", &amended);
+    commit(root, "docs: the line amends its criteria");
+    super::git(root, &["switch", "-q", "main"]);
+    fx.main_completes();
+    // Main shares the criteria edit and changes a separate paragraph, so
+    // git's clean merge puts main's exact record at the sync head.
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &amended.replace("Work.", "Main's work."),
+    );
+    commit(root, "docs: main updates the line's record");
+    fx.publish();
+    fx.sync();
+    let hosted = fx.hosted(SYNC, "Task: EPC-001");
+    refused(&hosted, "a verified sync of the line's edited record");
+    says(&hosted, "rule on", ON);
+    says(&hosted, "real sync", "pull request class: sync");
+    says(&hosted, "freeze", "work.criteria_frozen");
+    says(
+        &hosted,
+        "line edit",
+        "TSK-001 at project-management/tasks/TSK-001.md matches the default branch's record",
+    );
+    says(
+        &hosted,
+        "line edit reason",
+        "the line has edited it since its merge base with the default branch",
+    );
+    let said = text(&hosted);
+    assert!(
+        !said
+            .lines()
+            .any(|line| line.contains("TSK-001") && line.contains(TAKEN)),
+        "the line's edited record is not taken: {said}"
     );
 }
 
