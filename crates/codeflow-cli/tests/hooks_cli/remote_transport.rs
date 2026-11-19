@@ -1996,8 +1996,7 @@ fn git_guard_preserves_output_boundaries() {
         "printf %s \"$x\"",
         "print '{-f,%d}'",
         "printf '{%d,%s}' 3",
-        "bash -c 'print -f %s \"$1\" value'",
-        "bash -c 'printf {%d,%s} \"$x\"'",
+        "bash -c 'printf %d \"$x\"'",
     ] {
         let out = scratch.judge_inheriting(
             "git-guard",
@@ -2006,6 +2005,20 @@ fn git_guard_preserves_output_boundaries() {
         );
         if out.status.code() != Some(0) {
             wrong.push(format!("data control {context}: {}", stderr(&out)));
+        }
+    }
+    // Shell controls exclude arithmetic inference; configuration rules still apply.
+    for context in [
+        "bash -c 'print -f %s \"$1\" value'",
+        "bash -c 'printf {%d,%s} \"$x\"'",
+    ] {
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("shell control {context}: {}", stderr(&out)));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -2027,6 +2040,10 @@ fn git_guard_preserves_output_data() {
         "print \"Processing $f\\n\"",
         "print -f 'Files (%d)\\n' -- 3",
         "print -f \"Processing $f\\n\" -- title",
+        r#"bash -c 'printf "Processing $f\n"'"#,
+        r#"bash -c 'print "Processing $f\n"'"#,
+        "bash -c 'printf \"Files (%d)\\n\" 3'",
+        "bash -c 'print \"Ready?\"'",
     ] {
         for command in [
             "git commit -m done",

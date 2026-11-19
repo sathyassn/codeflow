@@ -358,6 +358,15 @@ fn output_boundaries_preserve_uncertainty() {
             wrong.push(context);
         }
     }
+    // Existing shell controls: configuration uncertainty is tested separately.
+    for context in [
+        "bash -c 'print -f %s \"$1\" value'",
+        "bash -c 'printf {%d,%s} \"$x\"'",
+    ] {
+        if super::super::super::expand_shell_commands(context).arithmetic {
+            wrong.push(context);
+        }
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -434,6 +443,7 @@ fn indirect_writers_clear_tracked_values() {
         "o=origin; zstat -A o file",
         "o=origin; private o",
         "o=origin; foreach o (x::y)",
+        "o=origin; printf \"prefix$format\" o",
         // Existing supported-writer controls.
         "o=origin; read o",
         "o=origin; getopts a o",
