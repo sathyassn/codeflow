@@ -465,6 +465,31 @@ fn output_option_values_preserve_word_boundaries() {
 }
 
 #[test]
+fn configuration_readers_preserve_quoted_formats() {
+    let mut wrong = Vec::new();
+    // Controls for quote provenance at each configuration reader.
+    for context in [
+        "print -f 'Files (%d)\\n' -- 3",
+        "print -f \"Processing $f\\n\" -- title",
+        "print -f \"* $f\" -- title",
+        "print -f \"? $f\" -- title",
+        "print -f \"[ $f\" -- title",
+        "print -f \"{ $f\" -- title",
+        "print -f \"( $f\" -- title",
+        "print -f \"\\$literal $f\" -- title",
+        "print -f \"\\`literal $f\" -- title",
+    ] {
+        if super::super::super::configuration_shell_change(context).is_some() {
+            wrong.push(format!("shell reader: {context}"));
+        }
+        if super::super::super::configuration_environment_change(context).is_some() {
+            wrong.push(format!("environment reader: {context}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn prefixed_writers_invalidate_tracked_values() {
     let mut wrong = Vec::new();
     for writer in [
