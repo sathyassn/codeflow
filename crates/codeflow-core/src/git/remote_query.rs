@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crate::git::owned::GroupOwner;
 use crate::hooks::limits::{self, Limit};
 
 const fn key_of(limit: Limit) -> &'static str {
@@ -254,6 +255,142 @@ pub fn ls_remote(root: &Path, args: &[&str], limits: QueryLimits) -> Result<Stri
     ls_remote_attempts(args, limits, || run(root, &all, limits.timeout))
 }
 
+/// Refuse, as a destination that cannot be verified, a query of `url` that
+/// the local configuration would send somewhere other than `url` itself
+/// (TSK-327). The pre-push hook is given the URL the push uses, after git
+/// applied its rewrites; `git ls-remote <url>` and `git fetch <url>` read
+/// the same configuration again and would apply a second rewrite, so the
+/// answer could come from a repository the push never reaches. The check
+/// reads the configuration the query itself reads (repository, worktree,
+/// global and system files with their includes, through
+/// [`crate::git::judging_command`], so no command-line overlay counts) and
+/// refuses when any of these would apply to `url`:
+///
+/// - a `url.<base>.insteadOf` value that is a prefix of `url`, which git
+///   rewrites before it connects; an empty value is a prefix of every URL;
+/// - a `remote.<url>.*` section, which makes git read `url` as a configured
+///   remote with its own URL, upload command or helper;
+/// - a `remotes/<url>` or `branches/<url>` file, when `url` has no directory
+///   separator and git could read it as a legacy remote name.
+///
+/// A configuration that cannot be read within the caller's `limits` refuses
+/// too, so a stalled read never holds a guard past its lookup wait. Nothing
+/// is rewritten here: the query either asks `url` exactly or does not ask.
+///
+/// # Errors
+///
+/// Returns what would redirect the query, or why the configuration could not
+/// be read.
+pub fn require_unredirected(root: &Path, url: &str, limits: QueryLimits) -> Result<(), String> {
+    let shown = display_url(url);
+    let refuse = |why: String| {
+        format!(
+            "the destination {shown} cannot be verified: {why}; the hook asks only the exact URL the push uses"
+        )
+    };
+    // Git would read such a URL as an option of the query.
+    if url.is_empty() || url.starts_with('-') {
+        return Err(refuse("the URL is empty or starts with '-'".to_string()));
+    }
+    if let Some(overlay) = destination_overlay(root, url, limits).map_err(refuse)? {
+        return Err(refuse(format!(
+            "{overlay} would send the destination query somewhere other than this URL; remove it, or push to the URL it names"
+        )));
+    }
+    Ok(())
+}
+
+/// What in the configuration at `root` would redirect a query of `url`, if
+/// anything (see [`require_unredirected`]). The listing is read within
+/// `limits` and [`MAX_ANSWER_BYTES`].
+fn destination_overlay(
+    root: &Path,
+    url: &str,
+    limits: QueryLimits,
+) -> Result<Option<String>, String> {
+    let mut command = crate::git::judging_command();
+    command
+        .arg("-C")
+        .arg(root)
+        .args(["config", "-z", "--list"])
+        .env("LC_ALL", "C");
+    let listed = bounded_raw(command, limits.timeout())
+        .map_err(|why| format!("cannot read the git configuration: {why}"))?;
+    if let Some(overlay) = overlay_in(&listed, url) {
+        return Ok(Some(overlay));
+    }
+    legacy_remote_file(root, url)
+}
+
+/// [`destination_overlay`] over `git config -z --list` output: entries end
+/// in NUL, and a key is followed by a newline and its value, or by nothing
+/// for a key with no value. Section and variable names are lowercase there;
+/// a subsection keeps its case, as git compares it. Any `remote.<url>`
+/// setting is found by the shared
+/// [`url_section_in`](super::remote_identity::url_section_in).
+fn overlay_in(listed: &[u8], url: &str) -> Option<String> {
+    for entry in listed.split(|byte| *byte == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        let (key, value) = match entry.iter().position(|byte| *byte == b'\n') {
+            Some(at) => (&entry[..at], Some(&entry[at + 1..])),
+            None => (entry, None),
+        };
+        if let Some(base) = key
+            .strip_prefix(b"url.")
+            .and_then(|rest| rest.strip_suffix(b".insteadof"))
+        {
+            // Git refuses a valueless rewrite when it reads remotes, so the
+            // query would not run as asked either. An empty value is a
+            // prefix of every URL, and git applies it.
+            let rewrites = value.is_none_or(|prefix| url.as_bytes().starts_with(prefix));
+            if rewrites {
+                // Shown only: the base is escaped and any userinfo hidden.
+                let shown = crate::git::GitName::from_bytes(base).display().to_string();
+                return Some(format!(
+                    "the setting url.{}.insteadOf",
+                    display_urls(&shown)
+                ));
+            }
+        }
+    }
+    super::remote_identity::url_section_in(listed, url)
+}
+
+/// A legacy `remotes/<url>` or `branches/<url>` file in the common
+/// directory, which git reads when `url` is a valid remote name: not empty,
+/// not `.` or `..`, and free of directory separators.
+fn legacy_remote_file(root: &Path, url: &str) -> Result<Option<String>, String> {
+    let separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+    if url.is_empty() || url == "." || url == ".." || url.contains(separator) {
+        return Ok(None);
+    }
+    let repo = git2::Repository::discover(root)
+        .map_err(|error| format!("cannot open the repository: {}", error.message()))?;
+    for folder in ["remotes", "branches"] {
+        let file = repo.commondir().join(folder).join(url);
+        // Absent only when proven through its ancestors; anything else that
+        // stops the read refuses, since git might read the file.
+        match crate::absence::symlink_metadata_optional(&file) {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                return Ok(Some(format!(
+                    "the legacy remote file {folder}/{}",
+                    display_url(url)
+                )))
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot read the legacy remote file {folder}/{}: {error}",
+                    display_url(url)
+                ))
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// A duration as messages show it: whole seconds without a fraction.
 fn seconds(duration: Duration) -> String {
     if duration.subsec_nanos() == 0 {
@@ -309,7 +446,9 @@ fn ls_remote_attempts(
 
 /// Fetch `refs` from `url` into the object store only, within the fetch
 /// wait `limits` sets: no tracking ref, tag or `FETCH_HEAD` is written, so
-/// nothing a later check reads as authority changes.
+/// nothing a later check reads as authority changes. A fetch the local
+/// configuration would send elsewhere is refused before it runs
+/// ([`require_unredirected`]).
 ///
 /// # Errors
 ///
@@ -320,6 +459,7 @@ pub fn fetch_objects(
     refs: &[&str],
     limits: QueryLimits,
 ) -> Result<(), String> {
+    require_unredirected(root, url, limits)?;
     let mut all = vec![
         "fetch",
         "--quiet",
@@ -331,15 +471,71 @@ pub fn fetch_objects(
     all.extend_from_slice(refs);
     run(root, &all, limits.fetch_timeout)
         .map(|_| ())
-        .map_err(|why| match why {
-            Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
-            Failure::Authentication => AUTHENTICATION_FAILED.into(),
-            Failure::Timeout(deadline) => format!(
-                "no answer within {}; {FETCH_TIMEOUT_KEY} in the policy this run reads sets this",
-                seconds(deadline)
-            ),
-            Failure::Other(why) => why,
-        })
+        .map_err(|why| fetch_failure(url, why))
+}
+
+/// The commit `url` sends for the one ref `remote_ref` (such as
+/// `refs/heads/main`), from `git fetch --dry-run --porcelain` within the
+/// fetch wait `limits` sets. A dry run writes no ref, tag or `FETCH_HEAD`;
+/// the commit is read from the fetch's own answer, never from a file in the
+/// repository. `--porcelain` needs git 2.41 or later.
+///
+/// # Errors
+///
+/// Returns why the fetch did not complete, or that its answer names no
+/// single commit for the ref.
+pub fn fetch_tip(
+    root: &Path,
+    url: &str,
+    remote_ref: &str,
+    limits: QueryLimits,
+) -> Result<String, String> {
+    let all = [
+        "fetch",
+        "--dry-run",
+        "--porcelain",
+        "--no-tags",
+        "--no-recurse-submodules",
+        url,
+        remote_ref,
+    ];
+    let answer = run(root, &all, limits.fetch_timeout).map_err(|why| fetch_failure(url, why))?;
+    fetched_tip(&answer).ok_or_else(|| {
+        format!(
+            "`git fetch --porcelain {}` named no single commit for {}; git 2.41 or later is needed",
+            display_url(url),
+            super::display_text(remote_ref)
+        )
+    })
+}
+
+/// The new object id of the one `FETCH_HEAD` line in a `git fetch
+/// --porcelain` answer (`<flag> <old> <new> FETCH_HEAD`), or `None` when the
+/// answer has no such line, more than one, or an id that is not hex.
+pub(crate) fn fetched_tip(answer: &str) -> Option<String> {
+    let mut tips = answer.lines().filter_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            [.., new, "FETCH_HEAD"] => Some((*new).to_owned()),
+            _ => None,
+        }
+    });
+    let tip = tips.next()?;
+    let hex = tip.len() >= 40 && tip.bytes().all(|b| b.is_ascii_hexdigit());
+    (hex && tips.next().is_none()).then_some(tip)
+}
+
+/// A fetch failure as [`fetch_objects`] and [`fetch_tip`] report it.
+fn fetch_failure(url: &str, why: Failure) -> String {
+    match why {
+        Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
+        Failure::Authentication => AUTHENTICATION_FAILED.into(),
+        Failure::Timeout(deadline) => format!(
+            "no answer within {}; {FETCH_TIMEOUT_KEY} in the policy this run reads sets this",
+            seconds(deadline)
+        ),
+        Failure::Other(why) => why,
+    }
 }
 
 enum Failure {
@@ -491,7 +687,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
         .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", batch_ssh_command(root)?);
+        .env("GIT_SSH_COMMAND", batch_ssh_command(root, deadline)?);
     bounded(command, deadline)
 }
 
@@ -502,33 +698,128 @@ fn bounded(command: std::process::Command, deadline: Duration) -> Result<String,
 }
 
 /// [`bounded`], returning the answer's bytes undecoded.
-fn bounded_bytes(
-    mut command: std::process::Command,
-    deadline: Duration,
-) -> Result<Vec<u8>, Failure> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
+fn bounded_bytes(command: std::process::Command, deadline: Duration) -> Result<Vec<u8>, Failure> {
+    let (status, bytes, diagnostics) = bounded_run(command, deadline)?;
+    if !status.success() {
+        if diagnostics.as_deref().is_some_and(authentication_failed) {
+            return Err(Failure::Authentication);
+        }
+        return Err(Failure::Exit(status.code()));
     }
-    let mut child = command
-        .spawn()
+    Ok(bytes)
+}
+
+/// A bounded run's exit status, answer and diagnostics, when read.
+type Ran = (std::process::ExitStatus, Vec<u8>, Option<Vec<u8>>);
+
+/// Run `command` with no input, within `deadline` (then its whole process
+/// group is killed) and [`MAX_ANSWER_BYTES`]: git's exit status, its
+/// answer, and up to 64 KiB of its diagnostics when they could be read
+/// before the stderr grace ended. Only a timeout, an oversized answer or a
+/// failure to run or read is an error.
+fn bounded_run(command: std::process::Command, deadline: Duration) -> Result<Ran, Failure> {
+    bounded_run_input(command, None, deadline, Diagnostics::Brief)
+}
+
+/// How much of a bounded child's stderr is kept, and how long it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Diagnostics {
+    /// Up to 64 KiB, read for [`STDERR_GRACE`] after git exits: a helper
+    /// git started can hold stderr open, and git's own stderr only
+    /// classifies a failure.
+    Brief,
+    /// All of it, up to [`MAX_ANSWER_BYTES`], read within the deadline: a
+    /// codeflow child prints its findings there.
+    Full,
+}
+
+/// [`bounded_run`], with `input` written to git's stdin from its own thread
+/// when given ([`crate::git::spawn_with_input_stopping`]), so a stdin-fed
+/// read such as `cat-file --batch` has the same deadline and answer cap.
+/// The write must end within the deadline too: git is reaped only after it
+/// ends, so a descendant that keeps stdin open and never reads is ended
+/// with git's group at the deadline. The writer is then joined for at most
+/// [`STDERR_GRACE`] and otherwise left to its closed pipe, never waited on.
+///
+/// Git leads its own process group, owned by a [`GroupOwner`]: every
+/// completion path ends the whole group before git is reaped, and if this
+/// process itself is killed first (an outer deadline, such as the pre-push
+/// hook's on `codeflow ci`), the group's watcher ends it. The deadline is
+/// capped at the time left on an outer deadline ([`bound_reads_by`]).
+fn bounded_run_input(
+    mut command: std::process::Command,
+    input: Option<&[u8]>,
+    deadline: Duration,
+    diagnostics: Diagnostics,
+) -> Result<Ran, Failure> {
+    let deadline = capped(deadline);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut owner = GroupOwner::prepare(&mut command)
         .map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
+    let started = match input {
+        Some(input) => {
+            crate::git::spawn_with_input_stopping(&mut command, input.to_vec(), |child| {
+                owner.spawned(child);
+                owner.signal();
+                let _ = child.kill();
+            })
+            .map(|(child, writer)| (child, Some(writer)))
+        }
+        None => command
+            .stdin(Stdio::null())
+            .spawn()
+            .map(|child| (child, None)),
+    };
+    let (mut child, writer) =
+        started.map_err(|error| Failure::Other(format!("could not start git: {error}")))?;
+    owner.spawned(&child);
+    let ran = bounded_wait(
+        &mut child,
+        &mut owner,
+        writer.as_ref(),
+        deadline,
+        diagnostics,
+    );
+    if let Some(writer) = writer {
+        // An answer means the write already ended. Every failure above
+        // ended git's group, which closes the pipe, so the write ends at
+        // once unless a process outside the group holds it.
+        let written = writer.finish_within(STDERR_GRACE);
+        if let (Ok(_), Some(written)) = (&ran, written) {
+            written
+                .map_err(|error| Failure::Other(format!("writing its input failed: {error}")))?;
+        }
+    }
+    ran
+}
+
+/// Collect a started git's answer within `deadline`; see [`bounded_run`].
+/// When `writer` feeds git's stdin, git is reaped only after the write
+/// ends, within the same deadline. `mode` says how much of stderr is kept.
+fn bounded_wait(
+    child: &mut std::process::Child,
+    owner: &mut GroupOwner,
+    writer: Option<&crate::git::InputWriter>,
+    deadline: Duration,
+    mode: Diagnostics,
+) -> Result<Ran, Failure> {
     let Some(stdout) = child.stdout.take() else {
-        kill_group(&mut child);
+        owner.end(child);
         return Err(Failure::Other("could not read its answer".to_string()));
     };
-    // Read diagnostics only to classify authentication failures. Never return
-    // remote stderr: a helper or URL could include credential material.
+    // The destination query reads diagnostics only to classify
+    // authentication failures and never shows them: a helper or URL could
+    // include credential material. Only `bounded_output` returns them, to a
+    // caller that redacts URLs before showing any (the id sync).
     let stderr = child.stderr.take();
+    let kept = match mode {
+        Diagnostics::Brief => 64 << 10,
+        Diagnostics::Full => MAX_ANSWER_BYTES as u64 + 1,
+    };
     let diagnostics = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let read = match stderr {
-            Some(stderr) => stderr.take(64 << 10).read_to_end(&mut bytes),
+            Some(stderr) => stderr.take(kept).read_to_end(&mut bytes),
             None => Ok(0),
         };
         read.map(|_| bytes)
@@ -551,58 +842,219 @@ fn bounded_bytes(
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(bytes)) => break bytes,
             Ok(Err(error)) => {
-                kill_group(&mut child);
+                owner.end(child);
                 return Err(Failure::Other(format!(
                     "reading its answer failed: {error}"
                 )));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !expired() => {}
             Err(_) => {
-                kill_group(&mut child);
+                owner.end(child);
                 return Err(timed_out());
             }
         }
     };
     if bytes.len() > MAX_ANSWER_BYTES {
-        kill_group(&mut child);
+        owner.end(child);
         return Err(Failure::Other(format!(
             "its answer is over {} MiB",
             MAX_ANSWER_BYTES >> 20
         )));
     }
-    // A descendant may retain stderr after git exits. Keep git unreaped
-    // until both pipes finish, so its group ID cannot be reused before
-    // timeout cleanup, and keep the same deadline for this pipe too.
-    while !diagnostics.is_finished() {
-        if expired() {
-            kill_group(&mut child);
-            return Err(timed_out());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    // Unreadable diagnostics cannot prove an authentication failure, so a
-    // failed exit is then reported as a plain one, which still refuses.
-    let authentication = match diagnostics.join() {
-        Ok(Ok(bytes)) => authentication_failed(&bytes),
-        Ok(Err(_)) | Err(_) => false,
-    };
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if !expired() => std::thread::sleep(Duration::from_millis(20)),
+    // Git's own exit, observed without reaping it: an unreaped git keeps
+    // its process group ID reserved, so ending the group below can reach
+    // only git's descendants.
+    loop {
+        match has_exited(child) {
+            Ok(true) => break,
+            Ok(false) if !expired() => std::thread::sleep(Duration::from_millis(20)),
             _ => {
-                kill_group(&mut child);
+                owner.end(child);
                 return Err(timed_out());
             }
         }
-    };
-    if !status.success() {
-        if authentication {
-            return Err(Failure::Authentication);
-        }
-        return Err(Failure::Exit(status.code()));
     }
-    Ok(bytes)
+    // Git can exit before its input is written when a descendant it started
+    // keeps stdin open and never reads. Git stays unreaped until the write
+    // ends, so its group can still be ended at the deadline.
+    if let Some(writer) = writer {
+        while !writer.is_finished() {
+            if expired() {
+                owner.end(child);
+                return Err(timed_out());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    collect_diagnostics(child, owner, diagnostics, bytes, until, deadline, mode)
+}
+
+/// The stderr reader of a bounded child.
+type DiagnosticsReader = std::thread::JoinHandle<std::io::Result<Vec<u8>>>;
+
+/// After git exited and its answer was read: read its stderr as `mode`
+/// says, end what is left of its group, reap it and return the run; see
+/// [`bounded_wait`]. A descendant that redirected all its streams and
+/// outlived git is ended here, on success too.
+fn collect_diagnostics(
+    child: &mut std::process::Child,
+    owner: &mut GroupOwner,
+    diagnostics: DiagnosticsReader,
+    bytes: Vec<u8>,
+    until: Option<Instant>,
+    deadline: Duration,
+    mode: Diagnostics,
+) -> Result<Ran, Failure> {
+    // Git's stderr closes when it exits unless a descendant it started, such
+    // as an SSH or credential helper, still holds it (TSK-389). Such a
+    // helper gets a short grace and is then ended with git's group, so the
+    // lookup costs one wait and leaves no process behind, never a timeout
+    // and a retry. Its diagnostics are then not read, so a failed exit is
+    // reported as a plain one, which still refuses. A codeflow child's
+    // stderr holds its findings, so it is read to the end within the
+    // deadline instead.
+    if mode == Diagnostics::Full {
+        while !diagnostics.is_finished() {
+            if until.is_some_and(|until| Instant::now() >= until) {
+                owner.end(child);
+                return Err(Failure::Timeout(deadline));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let read = diagnostics.join();
+        owner.signal();
+        let status = child.wait();
+        return match (read, status) {
+            (Ok(Ok(stderr)), Ok(status)) if stderr.len() <= MAX_ANSWER_BYTES => {
+                Ok((status, bytes, Some(stderr)))
+            }
+            (_, Err(error)) => Err(Failure::Other(format!(
+                "could not read how it exited: {error}"
+            ))),
+            (Ok(Ok(_)), Ok(_)) => Err(Failure::Other(format!(
+                "its error output is over {} MiB",
+                MAX_ANSWER_BYTES >> 20
+            ))),
+            (Ok(Err(error)), _) => Err(Failure::Other(format!(
+                "reading its error output failed: {error}"
+            ))),
+            (Err(_), _) => Err(Failure::Other(
+                "reading its error output failed".to_string(),
+            )),
+        };
+    }
+    let grace = Instant::now() + STDERR_GRACE;
+    while !diagnostics.is_finished() && Instant::now() < grace {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let diagnostics = if diagnostics.is_finished() {
+        match diagnostics.join() {
+            Ok(Ok(bytes)) => Some(bytes),
+            Ok(Err(_)) | Err(_) => None,
+        }
+    } else {
+        None
+    };
+    // Whatever is left of git's group, a helper holding stderr or one that
+    // redirected every stream, ends before git is reaped.
+    owner.signal();
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            return Err(Failure::Other(format!(
+                "could not read how git exited: {error}"
+            )))
+        }
+    };
+    Ok((status, bytes, diagnostics))
+}
+
+/// A bounded run that ended without git's full output: why, and whether
+/// the deadline ran out, which a caller of a network command may treat as
+/// an unreachable remote.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Unanswered {
+    /// The deadline ran out and git's process group was ended.
+    pub timed_out: bool,
+    /// Why there is no output, fit to show.
+    pub reason: String,
+}
+
+/// Run a git command within `deadline` and [`MAX_ANSWER_BYTES`], as the
+/// destination query's own reads run, and return its output whatever the
+/// exit status (TSK-327 pre-push id sync). Its stderr is at most 64 KiB, and
+/// empty when a helper held it past the grace. The caller classifies a
+/// failed exit; a timeout, an oversized answer or a failure to run is
+/// [`Unanswered`], never an output.
+///
+/// # Errors
+///
+/// Why git gave no output within `deadline`.
+pub fn bounded_output(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<std::process::Output, Unanswered> {
+    output_of(bounded_run(command, deadline))
+}
+
+/// [`bounded_output`] for a stdin-fed git command, such as `cat-file
+/// --batch` or `hash-object --stdin`: `input` is written from its own
+/// thread, and the deadline and [`MAX_ANSWER_BYTES`] bound the whole
+/// exchange (TSK-327 pre-push id sync).
+///
+/// # Errors
+///
+/// Why git gave no output within `deadline`.
+pub fn bounded_output_with_input(
+    command: std::process::Command,
+    input: &[u8],
+    deadline: Duration,
+) -> Result<std::process::Output, Unanswered> {
+    output_of(bounded_run_input(
+        command,
+        Some(input),
+        deadline,
+        Diagnostics::Brief,
+    ))
+}
+
+/// Run a codeflow child process with `input` on its stdin, as the pre-push
+/// hook runs `codeflow ci` (TSK-327), within `deadline`: the child leads
+/// its own process group, and at the deadline the whole group is ended, so
+/// every git command it started inside the group ends with it, a lazy
+/// fetch from a stalled promisor included. Its stdout and its full stderr
+/// (where it prints its findings) are returned, each up to
+/// [`MAX_ANSWER_BYTES`], whatever the exit status.
+///
+/// # Errors
+///
+/// Why the child gave no output within `deadline`.
+pub fn bounded_process_output(
+    command: std::process::Command,
+    input: &[u8],
+    deadline: Duration,
+) -> Result<std::process::Output, Unanswered> {
+    match bounded_run_input(command, Some(input), deadline, Diagnostics::Full) {
+        Err(Failure::Timeout(deadline)) => Err(Unanswered {
+            timed_out: true,
+            reason: format!("it gave no verdict within {}", seconds(deadline)),
+        }),
+        ran => output_of(ran),
+    }
+}
+
+fn output_of(ran: Result<Ran, Failure>) -> Result<std::process::Output, Unanswered> {
+    match ran {
+        Ok((status, stdout, stderr)) => Ok(std::process::Output {
+            status,
+            stdout,
+            stderr: stderr.unwrap_or_default(),
+        }),
+        Err(why) => Err(Unanswered {
+            timed_out: matches!(why, Failure::Timeout(_)),
+            reason: local_read_failure(why),
+        }),
+    }
 }
 
 fn local_read_failure(why: Failure) -> String {
@@ -629,6 +1081,38 @@ pub(crate) fn bounded_raw(
     deadline: Duration,
 ) -> Result<Vec<u8>, String> {
     bounded_bytes(command, deadline).map_err(local_read_failure)
+}
+
+/// How a bounded local git read ended when it gave an answer or an exit
+/// status the caller interprets, such as `remote get-url` exiting 2 for a
+/// remote that is not configured.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LocalAnswer {
+    /// Git exited successfully with these bytes on stdout.
+    Answer(Vec<u8>),
+    /// Git ran and exited unsuccessfully with this code.
+    Exit(Option<i32>),
+}
+
+/// Run a local git read within `deadline` and [`MAX_ANSWER_BYTES`], as the
+/// destination query's own reads run, for a caller that reads meaning into
+/// git's exit status (TSK-327 hook, guard and CI destination reads). A
+/// timeout, an oversized answer, a failure to run or a failed exit with an
+/// authentication marker is `Err`, so it can never be taken for a proven
+/// absence.
+///
+/// # Errors
+///
+/// Why git gave no answer or exit status within `deadline`.
+pub fn bounded_local(
+    command: std::process::Command,
+    deadline: Duration,
+) -> Result<LocalAnswer, String> {
+    match bounded_bytes(command, deadline) {
+        Ok(bytes) => Ok(LocalAnswer::Answer(bytes)),
+        Err(Failure::Exit(code)) => Ok(LocalAnswer::Exit(code)),
+        Err(why) => Err(local_read_failure(why)),
+    }
 }
 
 /// Whether git's diagnostics carry an authentication marker. The bytes are
@@ -661,13 +1145,21 @@ fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
 }
 
 /// The SSH command git would use, with password and host-key prompts off.
-/// A configured command is kept: `GIT_SSH_COMMAND`, then `core.sshCommand`,
-/// then `GIT_SSH`, then `ssh`.
+/// A configured command is kept, selected by git's own precedence:
+/// `GIT_SSH_COMMAND`, then `core.sshCommand`, then `GIT_SSH`, then `ssh`
+/// (TSK-327 AC-3). `core.sshCommand` is read as the push read it, through
+/// [`push_view`]: the files every git command reads, and the command-line
+/// configuration (`git -c`) git hands the hook, which the push connected
+/// with. The one selected command is passed on as `GIT_SSH_COMMAND`, which
+/// git prefers to every other selector, so no unselected transport runs and
+/// the query connects with the program the push used. When the selection
+/// cannot be read, the query refuses.
 ///
 /// OS text rule (issue 79): the command is executed, so it must be exactly what
 /// git would run. A value that is not valid UTF-8 cannot be passed on as text,
 /// and a lossy spelling would run a different program, so the query refuses.
-fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
+/// The configuration read runs within `deadline`, as the query does.
+fn batch_ssh_command(root: &Path, deadline: Duration) -> Result<String, Failure> {
     let not_utf8 = |name: &str| {
         Failure::Other(format!(
             "{name} is not valid UTF-8, so the remote is not asked"
@@ -686,27 +1178,31 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     // another program.
     let mut configured = from_env("GIT_SSH_COMMAND")?;
     if configured.is_none() {
-        let out = crate::git::command()
+        let mut command = push_view();
+        command
             .arg("-C")
             .arg(root)
-            .args(["config", "--null", "--get", "core.sshCommand"])
-            .output()
-            .map_err(|error| Failure::Other(format!("cannot read core.sshCommand: {error}")))?;
-        if out.status.success() {
-            // `--null` frames the value with a NUL, so a value that ends in a
-            // carriage return keeps it.
-            let framed = out.stdout.strip_suffix(&[0]).ok_or_else(|| {
-                Failure::Other("cannot read core.sshCommand: missing NUL framing".into())
-            })?;
-            let value = std::str::from_utf8(framed)
-                .map_err(|_| not_utf8("core.sshCommand"))?
-                .to_string();
-            configured = Some(value);
-        } else if out.status.code() != Some(1) {
-            return Err(Failure::Other(format!(
-                "cannot read core.sshCommand: git config failed ({})",
-                out.status
-            )));
+            .args(["config", "--null", "--get", "core.sshCommand"]);
+        match bounded_bytes(command, deadline) {
+            Ok(answer) => {
+                // `--null` frames the value with a NUL, so a value that ends
+                // in a carriage return keeps it.
+                let framed = answer.strip_suffix(&[0]).ok_or_else(|| {
+                    Failure::Other("cannot read core.sshCommand: missing NUL framing".into())
+                })?;
+                let value = std::str::from_utf8(framed)
+                    .map_err(|_| not_utf8("core.sshCommand"))?
+                    .to_string();
+                configured = Some(value);
+            }
+            // Git exits 1 when the key is not set.
+            Err(Failure::Exit(Some(1))) => {}
+            Err(why) => {
+                return Err(Failure::Other(format!(
+                    "cannot read core.sshCommand: {}",
+                    local_read_failure(why)
+                )))
+            }
         }
     }
     if configured.is_none() {
@@ -727,24 +1223,187 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
     Ok(format!("{configured} -o BatchMode=yes"))
 }
 
-/// Kill a child and, on Unix, the process group it leads (an SSH or
-/// credential helper it started), then reap it.
-fn kill_group(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    if let Ok(group) = i32::try_from(child.id()) {
-        // SAFETY: the child leads its own process group (`process_group(0)`),
-        // whose id is its pid; SIGKILL to it is best-effort.
-        unsafe {
-            libc::killpg(group, libc::SIGKILL);
+/// A `git` that reads configuration as the push did: a
+/// [`crate::git::judging_command`] given back the command-line configuration
+/// this process inherited (`git -c`, `--config-env`), which git hands the
+/// hook from the push. Only for reading settings the push connected with;
+/// the destination query itself never runs in this view, since a
+/// command-line rewrite was already applied to the URL the hook is given.
+fn push_view() -> std::process::Command {
+    let mut command = crate::git::judging_command();
+    for (key, setting) in std::env::vars_os() {
+        if crate::git::is_command_line_config(&key) {
+            command.env(key, setting);
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    command
+}
+
+/// The command-line setting the push connected with that the destination
+/// query does not apply and that could change how it connects: a key in the
+/// `http`, `protocol`, `remote`, `ssh` or `transfer` sections, or
+/// `core.gitProxy` (TSK-327). The query reads no command-line configuration
+/// except `core.sshCommand`, which selects its ssh program, and a command-line
+/// rewrite has already been applied to the URL the hook is given, so under
+/// such a setting the query and the push could get different answers for
+/// the same URL. Read through git, which parses the command line.
+///
+/// # Errors
+///
+/// Returns why the command-line configuration could not be read within
+/// `limits`.
+pub fn command_line_transport(root: &Path, limits: QueryLimits) -> Result<Option<String>, String> {
+    let mut command = push_view();
+    command
+        .arg("-C")
+        .arg(root)
+        .args(["config", "-z", "--list", "--show-scope"])
+        .env("LC_ALL", "C");
+    let listed = bounded_raw(command, limits.timeout())
+        .map_err(|why| format!("cannot read the command-line git configuration: {why}"))?;
+    Ok(transport_in(&listed))
+}
+
+/// [`command_line_transport`] over `git config -z --list --show-scope`
+/// output: each entry is its scope and a NUL, then the key with a newline
+/// and its value, or the key alone, and a NUL. Keys are lowercase there.
+fn transport_in(listed: &[u8]) -> Option<String> {
+    const SECTIONS: [&[u8]; 5] = [b"http", b"protocol", b"remote", b"ssh", b"transfer"];
+    let mut fields = listed.split(|byte| *byte == 0);
+    while let (Some(scope), Some(entry)) = (fields.next(), fields.next()) {
+        if scope != b"command" {
+            continue;
+        }
+        let key = entry
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        let section = key.split(|byte| *byte == b'.').next().unwrap_or_default();
+        if SECTIONS.contains(&section) || key == b"core.gitproxy" {
+            // Shown only: the key is escaped and any userinfo in a URL
+            // subsection hidden.
+            let shown = crate::git::GitName::from_bytes(key).display().to_string();
+            return Some(format!("the command-line setting {}", display_urls(&shown)));
+        }
+    }
+    None
+}
+
+/// How long a helper may hold git's stderr open after git has exited before
+/// it is ended with git's process group (TSK-389).
+const STDERR_GRACE: Duration = Duration::from_millis(250);
+
+/// Whether the child has exited, without reaping it on Unix, so its process
+/// group ID cannot be reused while the group may still be signalled.
+///
+/// # Errors
+///
+/// The wait itself failed.
+pub fn has_exited(child: &mut std::process::Child) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        let pid: libc::id_t = child.id();
+        // SAFETY: a zeroed `siginfo_t` is a valid value to pass for `waitid`
+        // to fill; `WNOWAIT` leaves the child waitable, so the later `wait`
+        // still reaps it and reads its status.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let done = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                &raw mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if done != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // With `WNOHANG`, a child that has not exited leaves `info` zeroed.
+        Ok(info.si_signo != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        child.try_wait().map(|status| status.is_some())
+    }
+}
+
+/// An outer deadline every bounded read in this process is capped at, set
+/// once by a caller that is itself bounded: `codeflow ci` run by the
+/// pre-push hook, or a session guard (TSK-327).
+static OUTER_DEADLINE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Cap every later bounded read in this process at `deadline`, so a read
+/// started late ends by itself before the caller's own deadline ends the
+/// process. The first call wins.
+pub fn bound_reads_by(deadline: Instant) {
+    let _ = OUTER_DEADLINE.set(deadline);
+}
+
+/// The outer deadline [`bound_reads_by`] set, if any.
+#[must_use]
+pub fn outer_deadline() -> Option<Instant> {
+    OUTER_DEADLINE.get().copied()
+}
+
+/// `deadline`, or the time left on the outer deadline when that is less.
+fn capped(deadline: Duration) -> Duration {
+    match outer_deadline() {
+        Some(outer) => deadline.min(outer.saturating_duration_since(Instant::now())),
+        None => deadline,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-327: a stdin-fed read has the same deadline and answer cap as
+    /// every other bounded read. A child that never reads its input (1 MiB,
+    /// more than a pipe holds, so the writer blocks) and never answers is
+    /// ended at the deadline with its group, and the blocked writer ends
+    /// with it. A child that answers more than the cap is refused. A child
+    /// that reads its input and answers is returned whole.
+    #[cfg(unix)]
+    #[test]
+    fn a_stdin_fed_read_ends_at_its_deadline_and_cap() {
+        let shell = |script: &str| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script]);
+            command
+        };
+        let input = vec![b'x'; 1 << 20];
+        let started = Instant::now();
+        let stalled = bounded_output_with_input(shell("sleep 30"), &input, Duration::from_secs(1));
+        let took = started.elapsed();
+        let why = stalled.unwrap_err();
+        assert!(why.timed_out, "{why:?}");
+        assert!(why.reason.contains("within 1s"), "{why:?}");
+        assert!(took < Duration::from_secs(10), "took {took:?}");
+        // The parent exits at once, closing its stdout and stderr, while a
+        // descendant keeps stdin open and never reads; the input outgrows
+        // the pipe, so only ending the group frees the writer.
+        let started = Instant::now();
+        let held = bounded_output_with_input(
+            shell("exec 3<&0; sleep 30 <&3 >/dev/null 2>&1 & exit 0"),
+            &input,
+            Duration::from_secs(1),
+        );
+        let took = started.elapsed();
+        let why = held.unwrap_err();
+        assert!(why.timed_out, "{why:?}");
+        assert!(took < Duration::from_secs(10), "took {took:?}");
+        let oversized = bounded_output_with_input(
+            shell("cat >/dev/null; head -c 17000000 /dev/zero"),
+            &input,
+            Duration::from_secs(30),
+        )
+        .unwrap_err();
+        assert!(!oversized.timed_out && oversized.reason.contains("over 16 MiB"));
+        let answered =
+            bounded_output_with_input(shell("wc -c"), &input, Duration::from_secs(30)).unwrap();
+        assert!(answered.status.success());
+        assert_eq!(String::from_utf8_lossy(&answered.stdout).trim(), "1048576");
+    }
 
     #[test]
     fn diagnostics_redact_every_url_without_changing_other_text() {
@@ -800,44 +1459,415 @@ mod tests {
         );
     }
 
+    /// TSK-327: a read that succeeds ends what its child left behind. The
+    /// child starts a sleeper with every stream redirected, so no pipe
+    /// waits for it, and exits 0. Once the read returns, in the brief mode
+    /// of a git read and the full mode of a codeflow child, the sleeper has
+    /// ended. Before, only the failure paths ended the group.
     #[cfg(unix)]
     #[test]
-    fn inherited_stderr_keeps_the_query_within_its_deadline() {
-        use std::os::unix::fs::PermissionsExt as _;
-        if let Some(root) = std::env::var_os("CODEFLOW_STDERR_ONLY_CHILD") {
-            let started = Instant::now();
-            let result = run(
-                Path::new(&root),
-                &["ls-remote", "stub"],
-                Duration::from_millis(200),
+    fn a_successful_read_ends_a_detached_sleeper() {
+        let dir = tempfile::tempdir().unwrap();
+        for full in [false, true] {
+            let pidfile = dir.path().join(format!("sleeper-{full}"));
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args([
+                "-c",
+                &format!(
+                    "/bin/sleep 60 </dev/null >/dev/null 2>&1 & echo $! > '{}'; echo done",
+                    pidfile.display()
+                ),
+            ]);
+            let out = if full {
+                bounded_process_output(command, b"", Duration::from_secs(10))
+            } else {
+                bounded_output(command, Duration::from_secs(10))
+            }
+            .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            assert_eq!(out.stdout, b"done\n");
+            let sleeper: i32 = std::fs::read_to_string(&pidfile)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            // Its new parent reaps it shortly; until then `kill` still
+            // finds the zombie, so the check waits for it to go.
+            let gone = Instant::now() + Duration::from_secs(5);
+            // SAFETY: signal 0 only asks whether the process exists.
+            while unsafe { libc::kill(sleeper, 0) } == 0 {
+                assert!(
+                    Instant::now() < gone,
+                    "the sleeper {sleeper} still runs (full: {full})"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
+    /// TSK-327: a group whose owner dies without ending it is ended by its
+    /// watcher. A child process owns a group whose leader sleeps, and is
+    /// killed with SIGKILL, so nothing in it runs again; the sleeper ends
+    /// all the same.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_ends_when_its_owner_is_killed() {
+        const CHILD: &str = "CODEFLOW_GROUP_OWNER_CHILD";
+        if let Some(pidfile) = std::env::var_os(CHILD) {
+            let mut command = std::process::Command::new("/bin/sleep");
+            command.arg("60");
+            let mut owner = crate::git::owned::GroupOwner::prepare(&mut command).unwrap();
+            let mut child = command.spawn().unwrap();
+            owner.spawned(&child);
+            std::fs::write(&pidfile, child.id().to_string()).unwrap();
+            // The parent kills this process long before the sleep ends.
+            let _ = child.wait();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("sleeper");
+        let mut owner = crate::git::process(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::a_group_ends_when_its_owner_is_killed",
+                "--nocapture",
+            ])
+            .env(CHILD, &pidfile)
+            .spawn()
+            .unwrap();
+        let started = Instant::now() + Duration::from_secs(30);
+        let sleeper: i32 = loop {
+            if let Ok(pid) = std::fs::read_to_string(&pidfile) {
+                if let Ok(pid) = pid.trim().parse() {
+                    break pid;
+                }
+            }
+            assert!(
+                Instant::now() < started,
+                "the owner never started its child"
             );
-            assert!(matches!(result, Err(Failure::Timeout(_))));
-            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: signal 0 only asks whether the process exists.
+        assert_eq!(unsafe { libc::kill(sleeper, 0) }, 0);
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let gone = Instant::now() + Duration::from_secs(5);
+        // SAFETY: as above.
+        while unsafe { libc::kill(sleeper, 0) } == 0 {
+            assert!(
+                Instant::now() < gone,
+                "the sleeper {sleeper} outlived its owner"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// TSK-389 (TSK-327 AC-7 and AC-8): a helper that keeps git's stderr
+    /// open after git has exited costs one wait, well inside the deadline,
+    /// and is ended with git's group. Before, the query waited the whole
+    /// deadline for that pipe and reported a timeout, which `ls_remote`
+    /// then retried. A git that fails still refuses, in the same one wait.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_holding_stderr_costs_one_wait_and_is_ended() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_STDERR_HELPER_CHILD";
+        const DEADLINE: Duration = Duration::from_secs(10);
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = Path::new(&root);
+            for (exit, answered) in [("0", true), ("128", false)] {
+                std::fs::write(root.join("exit"), exit).unwrap();
+                let started = Instant::now();
+                let result = run(root, &["ls-remote", "stub"], DEADLINE);
+                let took = started.elapsed();
+                assert!(took < Duration::from_secs(3), "took {took:?}");
+                if answered {
+                    assert!(matches!(result, Ok(ref answer) if answer.is_empty()));
+                } else {
+                    assert!(matches!(result, Err(Failure::Exit(Some(128)))));
+                }
+                let helper: i32 = std::fs::read_to_string(root.join("helper.pid"))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                // The helper was signalled with git's group. Its new parent
+                // reaps it shortly; until then it is a zombie that `kill`
+                // still finds, so the check waits for it to go.
+                let gone = Instant::now() + Duration::from_secs(5);
+                // SAFETY: signal 0 only asks whether the process exists.
+                while unsafe { libc::kill(helper, 0) } == 0 {
+                    assert!(Instant::now() < gone, "helper {helper} still runs");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let git = bin.join("git");
-        // Git exits and closes stdout while its descendant retains stderr.
-        std::fs::write(&git, "#!/bin/sh\n/bin/sleep 60 >/dev/null &\nexit 0\n").unwrap();
+        // Git answers, starts a helper that keeps stderr, and exits.
+        std::fs::write(
+            &git,
+            format!(
+                "#!/bin/sh\n/bin/sleep 60 >/dev/null </dev/null &\necho $! > '{root}/helper.pid'\nexit $(/bin/cat '{root}/exit')\n",
+                root = dir.path().display()
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
         let out = crate::git::process(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "git::remote_query::tests::inherited_stderr_keeps_the_query_within_its_deadline",
+                "git::remote_query::tests::a_helper_holding_stderr_costs_one_wait_and_is_ended",
                 "--nocapture",
             ])
-            .env("CODEFLOW_STDERR_ONLY_CHILD", dir.path())
+            .env(CHILD, dir.path())
             .env("PATH", bin)
             .env("GIT_SSH_COMMAND", "ssh")
             .output()
             .unwrap();
         assert!(
             out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stdout)
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// The ssh selection cases: (`GIT_SSH_COMMAND`, `core.sshCommand`,
+    /// `GIT_SSH`, command-line overlay, deprecated file) and the one run.
+    #[cfg(unix)]
+    const SSH_SELECTION_CASES: [([bool; 5], &str); 13] = [
+        ([false, false, false, false, false], "ssh"),
+        ([true, false, false, false, false], "rec-command"),
+        ([false, true, false, false, false], "rec-config"),
+        ([false, false, true, false, false], "rec-program"),
+        ([true, true, false, false, false], "rec-command"),
+        ([true, false, true, false, false], "rec-command"),
+        ([false, true, true, false, false], "rec-config"),
+        ([true, true, true, false, false], "rec-command"),
+        ([false, false, false, true, false], "rec-overlay"),
+        ([false, true, false, true, false], "rec-overlay"),
+        ([true, false, false, true, false], "rec-command"),
+        ([false, false, false, false, true], "ssh"),
+        ([false, true, false, false, true], "rec-config"),
+    ];
+
+    /// TSK-327 AC-3: the query runs only the transport git's precedence
+    /// selects among `GIT_SSH_COMMAND`, `core.sshCommand` and `GIT_SSH`,
+    /// for each one alone, each pair and all three, and plain `ssh` with
+    /// none. A `core.sshCommand` given as a command-line overlay is the
+    /// push's own, so it selects as git selects it, over the repository's.
+    /// One named only in the deprecated file that `git config` alone reads
+    /// selects nothing, since the push never read it.
+    #[cfg(unix)]
+    #[test]
+    fn the_query_runs_only_the_selected_ssh_transport() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_SSH_SELECTION_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let limits = QueryLimits::scaled(Duration::from_secs(20), 1);
+            let asked = ls_remote(Path::new(&root), &["ssh://example.invalid/x.git"], limits);
+            assert!(asked.is_err(), "every recorder refuses: {asked:?}");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let log = dir.path().join("ran.log");
+        for name in [
+            "rec-command",
+            "rec-config",
+            "rec-program",
+            "rec-overlay",
+            "rec-file",
+            "ssh",
+        ] {
+            let script = bin.join(name);
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\necho {name} >> '{}'\nexit 255\n", log.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let file = dir.path().join("deprecated-file");
+        std::fs::write(&file, "[core]\n\tsshCommand = rec-file\n").unwrap();
+        for ([command, config, program, overlay, deprecated], expected) in SSH_SELECTION_CASES {
+            let root = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(root.path()).unwrap();
+            if config {
+                repo.config()
+                    .unwrap()
+                    .set_str("core.sshCommand", "rec-config")
+                    .unwrap();
+            }
+            let _ = std::fs::remove_file(&log);
+            let mut child = crate::git::process(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "git::remote_query::tests::the_query_runs_only_the_selected_ssh_transport",
+                    "--nocapture",
+                ])
+                .env(CHILD, root.path())
+                .env("PATH", &path)
+                .env("HOME", dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env_remove("GIT_SSH_COMMAND")
+                .env_remove("GIT_SSH")
+                .env_remove("GIT_SSH_VARIANT")
+                .env_remove("GIT_CONFIG_PARAMETERS")
+                .env_remove("GIT_CONFIG_COUNT");
+            if command {
+                child.env("GIT_SSH_COMMAND", "rec-command");
+            }
+            if program {
+                child.env("GIT_SSH", bin.join("rec-program"));
+            }
+            if overlay {
+                child.env("GIT_CONFIG_PARAMETERS", "'core.sshCommand=rec-overlay'");
+            }
+            if deprecated {
+                child.env("GIT_CONFIG", &file);
+            }
+            let out = child.output().unwrap();
+            assert!(
+                out.status.success(),
+                "{expected}: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let ran = std::fs::read_to_string(&log).unwrap_or_default();
+            let ran: std::collections::BTreeSet<&str> = ran.lines().collect();
+            assert_eq!(
+                ran,
+                std::collections::BTreeSet::from([expected]),
+                "case {:?}",
+                (command, config, program, overlay, deprecated)
+            );
+        }
+    }
+
+    /// TSK-327 AC-1: every configuration that would send a destination
+    /// query elsewhere is named; a rewrite of another URL, a pushInsteadOf
+    /// and a remote under another name are not.
+    #[test]
+    fn a_redirecting_setting_is_named_and_others_are_not() {
+        let url = "/srv/dest.git";
+        let listed = |entries: &[&str]| entries.join("\0").into_bytes();
+        for (entries, named) in [
+            (vec!["url./srv/decoy.git.insteadof\n/srv/dest"], true),
+            (vec!["url./srv/decoy.git.insteadof\n/srv/dest.git"], true),
+            (vec!["url.x.insteadof"], true),
+            (vec!["remote./srv/dest.git.uploadpack\nevil"], true),
+            (vec!["url./srv/decoy.git.insteadof\n"], true),
+            (vec!["url./srv/decoy.git.insteadof\n/srv/other"], false),
+            (
+                vec!["url./srv/decoy.git.pushinsteadof\n/srv/dest.git"],
+                false,
+            ),
+            (
+                vec![
+                    "remote.origin.url\n/srv/dest.git",
+                    "remote.pushdefault\norigin",
+                ],
+                false,
+            ),
+            (vec!["remote./SRV/DEST.GIT.url\nx"], false),
+        ] {
+            assert_eq!(
+                overlay_in(&listed(&entries), url).is_some(),
+                named,
+                "{entries:?}"
+            );
+        }
+    }
+
+    /// TSK-327: a command-line setting that could change how the query
+    /// connects is named; other command-line settings and every file scope
+    /// are not.
+    #[test]
+    fn a_command_line_transport_setting_is_named() {
+        let listed = |entries: &[&str]| entries.join("\0").into_bytes();
+        for (entries, named) in [
+            (vec!["command", "http.proxy\nhttp://proxy.invalid"], true),
+            (
+                vec!["command", "http.https://h.invalid/.extraheader\nx"],
+                true,
+            ),
+            (vec!["command", "protocol.allow\nalways"], true),
+            (vec!["command", "remote.origin.uploadpack\nx"], true),
+            (vec!["command", "ssh.variant\nsimple"], true),
+            (vec!["command", "transfer.fsckobjects"], true),
+            (vec!["command", "core.gitproxy\nx"], true),
+            (
+                vec![
+                    "command",
+                    "maintenance.auto\nfalse",
+                    "command",
+                    "gc.auto\n0",
+                ],
+                false,
+            ),
+            (vec!["command", "core.sshcommand\nx"], false),
+            (vec!["command", "url./srv/a.insteadof\n/srv/b"], false),
+            (vec!["local", "http.proxy\nhttp://proxy.invalid"], false),
+            (vec!["global", "remote.origin.url\n/srv/a"], false),
+        ] {
+            assert_eq!(
+                transport_in(&listed(&entries)).is_some(),
+                named,
+                "{entries:?}"
+            );
+        }
+    }
+
+    /// TSK-327 AC-1: the check reads the repository's own configuration
+    /// and its legacy remote files, and a clean repository passes.
+    #[test]
+    fn a_rewrite_in_the_repository_refuses_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let dest = dir.path().join("dest.git");
+        let url = dest.to_str().unwrap();
+        // The developer's own files could name this path only by accident.
+        if require_unredirected(dir.path(), url, QueryLimits::guard()).is_err() {
+            return;
+        }
+        repo.config()
+            .unwrap()
+            .set_str(
+                &format!("url.{}/decoy.git.insteadOf", dir.path().display()),
+                url,
+            )
+            .unwrap();
+        let refused = require_unredirected(dir.path(), url, QueryLimits::guard()).unwrap_err();
+        assert!(refused.contains("insteadOf"), "{refused}");
+        assert!(refused.contains("cannot be verified"), "{refused}");
+        let clean = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(clean.path()).unwrap();
+        assert!(require_unredirected(clean.path(), "dest", QueryLimits::guard()).is_ok());
+        std::fs::create_dir_all(repo.path().join("remotes")).unwrap();
+        std::fs::write(
+            repo.path().join("remotes").join("dest"),
+            "URL: /elsewhere\n",
+        )
+        .unwrap();
+        let refused = require_unredirected(clean.path(), "dest", QueryLimits::guard()).unwrap_err();
+        assert!(refused.contains("remotes/dest"), "{refused}");
+        assert!(require_unredirected(clean.path(), "./dest", QueryLimits::guard()).is_ok());
+        let refused = require_unredirected(clean.path(), "--upload-pack=x", QueryLimits::guard())
+            .unwrap_err();
+        assert!(refused.contains("starts with '-'"), "{refused}");
     }
 
     #[test]
@@ -1106,11 +2136,11 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
-        assert!(batch_ssh_command(dir.path()).is_ok());
+        assert!(batch_ssh_command(dir.path(), QueryLimits::guard().timeout()).is_ok());
         let path = repo.path().join("config");
         std::fs::write(path, "[broken\n").unwrap();
         assert!(
-            batch_ssh_command(dir.path()).is_err(),
+            batch_ssh_command(dir.path(), QueryLimits::guard().timeout()).is_err(),
             "failed config must not choose ssh"
         );
     }
@@ -1181,7 +2211,9 @@ mod tests {
         let mut text = std::fs::read(&config).unwrap();
         text.extend_from_slice(b"[core]\n\tsshCommand = ssh \xff\n");
         std::fs::write(&config, text).unwrap();
-        let error = batch_ssh_command(dir.path()).err().unwrap();
+        let error = batch_ssh_command(dir.path(), QueryLimits::guard().timeout())
+            .err()
+            .unwrap();
         assert!(
             matches!(error, Failure::Other(ref why) if why.contains("not valid UTF-8")),
             "refused"
@@ -1201,7 +2233,9 @@ mod tests {
         let mut text = std::fs::read(&config).unwrap();
         text.extend_from_slice(b"[core]\n\tsshCommand = \"ssh-wrapper\r\"\n");
         std::fs::write(&config, text).unwrap();
-        let command = batch_ssh_command(dir.path()).ok().unwrap();
+        let command = batch_ssh_command(dir.path(), QueryLimits::guard().timeout())
+            .ok()
+            .unwrap();
         assert_eq!(command, "ssh-wrapper\r -o BatchMode=yes");
     }
 
@@ -1218,7 +2252,9 @@ mod tests {
         let mut text = std::fs::read(&config).unwrap();
         text.extend_from_slice(b"[core]\n\tsshCommand =\n");
         std::fs::write(&config, text).unwrap();
-        let error = batch_ssh_command(dir.path()).err().unwrap();
+        let error = batch_ssh_command(dir.path(), QueryLimits::guard().timeout())
+            .err()
+            .unwrap();
         assert!(
             matches!(error, Failure::Other(ref why) if why.contains("empty")),
             "refused"

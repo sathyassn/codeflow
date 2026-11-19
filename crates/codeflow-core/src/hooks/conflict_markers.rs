@@ -265,9 +265,10 @@ pub fn marker_sizes(
     // A git that refuses its arguments exits before it reads the paths, so
     // the write may fail with a broken pipe, which the helper leaves to the
     // exit status: git's own refusal says why.
-    let out = crate::git::output_with_input(
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = crate::git::owned::owned_output(
         command.args(["check-attr", "-z", "--stdin", &from, ATTRIBUTE]),
-        &input,
+        Some(&input),
     )
     .map_err(|e| failed(&e))?;
     if !out.status.success() {
