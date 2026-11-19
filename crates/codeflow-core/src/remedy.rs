@@ -804,7 +804,7 @@ catalog! {
     /// essential gate on every change (TSK-370). The file is user-owned, so
     /// only an edit moves it.
     DOCTOR_PIPELINE_STAGE = Step::Edit(".claude/workflows/pipeline.workflow.js"),
-        "in .claude/workflows/pipeline.workflow.js, replace the verify stage line that starts 'Run the affected targeted checks, then `codeflow test --mode essential --strict`' with this line, keeping its indentation: {line} Then `codeflow doctor --check pipeline` confirms it. A project that wants an essential run on every change keeps its copy as it is";
+        "in .claude/workflows/pipeline.workflow.js, replace two lines. First the review stage line that starts 'Run `codeflow validate` and `codeflow test --mode quick --strict`;' with this line, keeping its indentation: {review_line} Then the verify stage line that starts 'Run the affected targeted checks, then `codeflow test --mode essential --strict`' with this line, keeping its indentation: {line} Then `codeflow doctor --check pipeline` confirms it. A project that wants an essential run on every change keeps its copy as it is";
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";

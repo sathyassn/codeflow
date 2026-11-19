@@ -221,7 +221,7 @@ const STAGES = {
       rule: "SET your `verdict` from the SecurityFinding enums, never from prose — the gate branches on that verdict: return 'changes_requested' when any finding has severity in {critical,high} AND confidence in {confirmed,likely}; otherwise 'approved'. One finding string per issue.",
     }),
   review: gate('review',
-    'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
+    'Run `codeflow validate`' + (PRESET.includes('verify') ? ' and read the diff and the tests; the verify stage that follows runs the affected targeted checks and then the quick gate once for this revision, so never run `codeflow test` here' : ' and the affected targeted checks (a check defined only in a heavier mode runs alone through `--only`), then `codeflow test --mode quick --strict`') + '; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
   // Optional independent-review consult: a fresh-context second read of the built

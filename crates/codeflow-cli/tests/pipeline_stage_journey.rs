@@ -144,7 +144,11 @@ fn apply_printed_edit(root: &Path, review: &str, verify: &str) {
             }
         })
         .collect();
-    assert_eq!((reviews, verifies), (1, 1), "one old line of each to replace");
+    assert_eq!(
+        (reviews, verifies),
+        (1, 1),
+        "one old line of each to replace"
+    );
     write(root, PIPELINE, &edited.join("\n"));
 }
 
@@ -164,7 +168,9 @@ fn between<'a>(text: &'a str, open: &str, close: &str) -> &'a str {
 /// A stage block of a pipeline source, such as `build` or `verify`.
 fn stage_block<'a>(source: &'a str, name: &str) -> &'a str {
     let head = format!("  {name}: {{");
-    let start = source.find(&head).unwrap_or_else(|| panic!("a {name} stage"));
+    let start = source
+        .find(&head)
+        .unwrap_or_else(|| panic!("a {name} stage"));
     let end = source[start..].find("\n  },").expect("its end") + start;
     &source[start..end]
 }
@@ -275,7 +281,10 @@ fn the_default_sequence_runs_quick_once_after_targeted_checks() {
     let alone = format!("Run `codeflow validate`{without_verify}; {tail}");
     assert_eq!(alone.matches(QUICK).count(), 1, "{alone}");
     assert!(
-        alone.find("the affected targeted checks").expect("targeted") < alone.find(QUICK).unwrap(),
+        alone
+            .find("the affected targeted checks")
+            .expect("targeted")
+            < alone.find(QUICK).unwrap(),
         "{alone}"
     );
 

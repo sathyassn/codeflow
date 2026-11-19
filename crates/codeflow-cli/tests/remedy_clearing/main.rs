@@ -3290,16 +3290,26 @@ fn clears_doctor_pipeline_stage() {
         || doctor(&root, "pipeline"),
         |printed| {
             let flat = printed.split_whitespace().collect::<Vec<_>>().join(" ");
-            let start = flat.find(LEAD).expect("the printed line") + LEAD.len();
-            let end = flat[start..].find("approved.',").expect("its end") + start;
-            let line = &flat[start..end + "approved.',".len()];
+            // The printed edit is two lines: the review line, then the
+            // verify line, each after the lead.
+            let cut = |from: usize, end_mark: &str| -> (String, usize) {
+                let start = flat[from..].find(LEAD).expect("the printed line") + from + LEAD.len();
+                let end = flat[start..].find(end_mark).expect("its end") + start + end_mark.len();
+                (flat[start..end].to_string(), end)
+            };
+            let (review, after) = cut(0, "never as a pass.'),");
+            let (verify, _) = cut(after, "approved.',");
             let copy = read(&root, PIPELINE);
             let edited: Vec<String> = copy
                 .split('\n')
                 .map(|l| {
                     let body = l.trim_start();
-                    if body.starts_with("'Run the affected targeted checks, then") {
-                        format!("{}{line}", &l[..l.len() - body.len()])
+                    let indent = &l[..l.len() - body.len()];
+                    if body.starts_with("'Run `codeflow validate` and `codeflow test --mode quick")
+                    {
+                        format!("{indent}{review}")
+                    } else if body.starts_with("'Run the affected targeted checks, then") {
+                        format!("{indent}{verify}")
                     } else {
                         l.to_string()
                     }
