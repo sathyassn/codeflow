@@ -295,6 +295,31 @@ The workflows apply the table as follows:
   off by the operator while `main` is relaxed, so no line has a scheduled
   run.
 
+### Hash placement of hosted tests
+
+Windows builds one nextest archive and runs it in sixteen `hash:M/16`
+partitions. Linux coverage uses three `hash:M/3` shards. Neither reads a
+measured timing plan. New tests need no plan refresh.
+
+`scripts/partition-check.py check` compares the test listing with every
+JUnit report. A listed test must execute once in its hash partition; a
+missing report, skipped owed test, duplicate, wrong partition or unlisted
+test fails the check. Test time plus setup must stay within 24 minutes:
+2 minutes of setup for Windows, 6 for coverage. A hung Windows test ends
+after 12 minutes under the `windows-hosted` profile; local profiles keep
+their existing behavior.
+
+These changes preserve the placement table above. The first full hosted
+proof after the merge is a daily or dispatched full run on main, with its
+exact SHA and every partition's result recorded in TSK-1321. The task stays
+open until that proof passes. Main's relaxation returns only under the
+conditions in the workspace's
+`coordination/coordinators/parallel/notes/ci-relaxations-2026-11-11.md`:
+the backlog, epic C templates and guard fixes must meet the recorded
+condition and the operator decides. Jobs return before required checks.
+Line pushes never return. The separate daily workflows stay disabled;
+TSK-1321's active-line and admission evidence remain with the Director.
+
 ## Technical
 
 Work through each section below that your release touches.

@@ -213,3 +213,36 @@ operator's decision of 15:34: Windows leaves line pushes. The Decision, the
 table, the Consequences and the history now say so. This record moved from
 PR 631 to the records pull request into `main` so the placement reaches
 `main` ahead of the line.
+
+
+## Note, 2026-11-18: current placement during relaxation
+
+The operator's 2026-11-11 rulings replace the earlier placement where they
+differ. Sources in the workspace repository: `RELEASE-PLAN.md`, entry
+"2026-11-11 19:40 to 20:35", and
+`coordination/coordinators/parallel/notes/ci-relaxations-2026-11-11.md`.
+The operator reaffirmed this placement for the TSK-1321 rebuild on
+2026-11-18. The maintainer page's current table is:
+
+| Event | Short checks | Linux build, lint, tests and coverage | Windows checks, journeys and partitions | Release gates |
+|---|---|---|---|---|
+| Draft pull request, any base | yes; `commit standards` passes only on a ready run | no | no | no |
+| Ready pull request into an integration line | yes | no | no | no |
+| Push to an integration line | no run | no run | no run | no run |
+| Ready pull request into `main`, while `main` is relaxed | yes | no | no | no |
+| Push to `main` | secret scan, security review, image and reuse jobs, and `release state` | no | no | no |
+| Daily run, `main`'s tip | secret scan of the full history and dependency audit | yes | yes | yes |
+| Manual dispatch | as the daily run | yes | yes | yes |
+
+Line pushes permanently start no hosted run. Line PR gates return through
+the route-and-gates line gate and guard fixes (relaxations items 3, 6 and 8).
+Main's full PR suites and Windows workflows return when the backlog, epic C
+templates and guard fixes meet item 4's condition and the operator decides
+(items 4, 5, 7 and 9). The restoration puts jobs back before required checks
+and returns main's schedule to weekly, without restoring line-push runs.
+
+Hash placement changes no event selection. TSK-1321 takes its first full
+hosted proof from the first daily or dispatch full run on main after merge.
+Its unchanged admission criteria AC-14 and AC-15 and the active-line scope
+of AC-11 remain owed for Director reconciliation. This note does not enable
+the separate daily dispatcher or decide those outstanding requirements.
