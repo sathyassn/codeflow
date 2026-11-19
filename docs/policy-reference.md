@@ -718,16 +718,27 @@ the form refuses:
     object-input uncertainty, including words after a literal format while
     options remain open. This includes expansion into several words; quoted
     literal characters keep their provenance. Configuration uncertainty has
-    its own reading of options that may conceal a destination. Fully literal
-    and literal-led data words do not add configuration uncertainty.
-    Supported writes, loops and sourced commands invalidate tracked literals;
-    their unread effects invalidate all tracked values. Coverage remains
+    its own reading of options that may conceal a destination. An option
+    value with an unsettled word count adds configuration uncertainty even
+    when its first character is literal. Quoted scalar formats retain their
+    single-word provenance. Fully literal and literal-led data words do not
+    add configuration uncertainty.
+    Supported top-level writes, loops and sourced commands invalidate tracked
+    literals through leading assignments and recognized precommand modifiers
+    or launchers. Unresolved prefixes and unread writer effects invalidate
+    all tracked values. Writes inside grouped bodies are not fully tracked.
+    Coverage remains
     conservative and does not establish a complete shell evaluator.
     Accepted refusals include a single expanding formatted-output word and
     expanding options or formats after literal assignments. Their unread
     object inputs refuse ordinary fetches and pulls when recursion is on,
     even without inherited inputs. A literal string format and an explicit
     option terminator keep data outside the additional operand check.
+    Unsettled option values can refuse commands even with recursion off.
+    Quoted substitutions, complex quoted parameter forms and unquoted brace
+    forms are conservative refusals in option values. Supported writer forms
+    can lose tracking even when they do not actually write; recognized external launchers can also
+    discard tracking although their child cannot change the parent shell.
     Ordinary output without format or destination operands adds no such check.
     Numeric special parameters remain known in arithmetic operand positions.
     Explicit inline shell bodies retain their shell's operand rules;

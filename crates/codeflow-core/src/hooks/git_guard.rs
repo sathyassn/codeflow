@@ -1833,7 +1833,8 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
                 result.configuration_uncertain = true;
                 break;
             };
-            result.configuration_uncertain |= output_option_unsettled(value);
+            result.configuration_uncertain |=
+                output_option_unsettled(value) || output_value_multiple_words(value);
             match flag {
                 'v' => result.destinations.push(value),
                 'f' => result.format = Some(value),
@@ -1857,6 +1858,7 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
 
 fn output_word_unsettled(word: &str) -> bool {
     unresolved_word(word)
+        || expands_marked(word)
         || has_glob(word)
         || word.contains('{') && (brace_group(word).is_some() || brace_expand(word).is_none())
 }
@@ -1865,11 +1867,42 @@ fn output_word_unsettled(word: &str) -> bool {
 fn output_option_unsettled(word: &str) -> bool {
     output_word_unsettled(word)
         && word.chars().next().is_some_and(|first| {
+            let first = marked_char(first).map_or(first, |(plain, _)| plain);
             matches!(
                 first,
                 '-' | '$' | '`' | '\u{1}' | '\u{2}' | '*' | '?' | '[' | '^' | '(' | '{' | '~' | '<'
             )
         })
+}
+
+/// An option value must stay one word before option parsing resumes.
+fn output_value_multiple_words(word: &str) -> bool {
+    if unresolved_word(word) || has_glob(word) || word.contains('{') {
+        return true;
+    }
+    let mut chars = word.chars();
+    while let Some(ch) = chars.next() {
+        match marked_char(ch) {
+            Some(('`', true)) => return true,
+            Some(('$', true)) => {
+                let tail = unmarked(chars.as_str());
+                if tail.starts_with(['@', '*', '(', '=']) {
+                    return true;
+                }
+                if let Some(braced) = tail.strip_prefix('{') {
+                    // Only a simple quoted scalar has a settled word count.
+                    if !braced
+                        .split_once('}')
+                        .is_some_and(|(name, _)| is_identifier(name))
+                    {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Keep quote provenance on output syntax while leaving flags and formats readable.
@@ -1880,11 +1913,14 @@ fn output_reader_words(segment: &str) -> Vec<String> {
         .map(|word| {
             word.chars()
                 .map(|ch| match marked_char(ch) {
-                    Some((
-                        '$' | '`' | '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | ',' | '^' | '~'
-                        | '#' | '<' | '>',
-                        false,
-                    ))
+                    Some(
+                        (_, true)
+                        | (
+                            '$' | '`' | '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | ',' | '^'
+                            | '~' | '#' | '<' | '>',
+                            false,
+                        ),
+                    )
                     | None => ch,
                     Some((plain, _)) => plain,
                 })
@@ -8181,51 +8217,63 @@ impl Literals {
                 .filter(|(name, _)| !name.is_empty() && is_identifier(name))
         }
         let words = builtin_words(words);
+        let at = launched_at(words).map(|(at, _)| at);
+        let launched = at.and_then(|at| words.get(at..)).unwrap_or_default();
+        let output_args = at
+            .and_then(|at| builtin_words(output_words).get(at + 1..))
+            .unwrap_or_default();
+        let assignments_only = words.iter().all(|word| assignment(word).is_some());
+        let unresolved_launch = !assignments_only
+            && (at.is_none()
+                || launcher_effects(words).1.is_some()
+                || words[..at.map_or(words.len(), |at| at + 1)]
+                    .iter()
+                    .any(|word| output_word_unsettled(word)));
         // These writes can replace tracked values without an assignment word.
         // Forget all bindings when their complete effects are not established.
-        let writer = words.first().is_some_and(|program| {
-            matches!(
-                program.as_str(),
-                "read"
-                    | "getln"
-                    | "mapfile"
-                    | "readarray"
-                    | "getopts"
-                    | "unset"
-                    | "set"
-                    | "shift"
-                    | "eval"
-                    | "let"
-                    | "integer"
-                    | "float"
-                    | "declare"
-                    | "typeset"
-                    | "local"
-                    | "readonly"
-                    | "export"
-                    | "wait"
-                    | "for"
-                    | "select"
-                    | "foreach"
-                    | "source"
-                    | "."
-                    | "vared"
-                    | "coproc"
-                    | "zparseopts"
-                    | "zstyle"
-                    | "zformat"
-                    | "strftime"
-                    | "sysread"
-                    | "zstat"
-                    | "private"
-            ) || matches!(program.as_str(), "print" | "printf") && {
-                let output_words = builtin_words(output_words);
-                let options = output_builtin_options(program, &output_words[1..]);
-                options.uncertain
-                    || !options.destinations.is_empty()
-                    || options.format.is_some_and(|format| format.contains("%n"))
-            }
-        });
+        let writer = unresolved_launch
+            || launched.first().is_some_and(|program| {
+                matches!(
+                    program.as_str(),
+                    "read"
+                        | "getln"
+                        | "mapfile"
+                        | "readarray"
+                        | "getopts"
+                        | "unset"
+                        | "set"
+                        | "shift"
+                        | "eval"
+                        | "let"
+                        | "integer"
+                        | "float"
+                        | "declare"
+                        | "typeset"
+                        | "local"
+                        | "readonly"
+                        | "export"
+                        | "wait"
+                        | "for"
+                        | "select"
+                        | "foreach"
+                        | "source"
+                        | "."
+                        | "vared"
+                        | "coproc"
+                        | "zparseopts"
+                        | "zstyle"
+                        | "zformat"
+                        | "strftime"
+                        | "sysread"
+                        | "zstat"
+                        | "private"
+                ) || matches!(program.as_str(), "print" | "printf") && {
+                    let options = output_builtin_options(program, output_args);
+                    options.uncertain
+                        || !options.destinations.is_empty()
+                        || options.format.is_some_and(|format| format.contains("%n"))
+                }
+            });
         if writer {
             for value in self.0.values_mut() {
                 *value = None;

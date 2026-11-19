@@ -2083,7 +2083,10 @@ fn git_guard_judges_expanding_option_values() {
         "print -f x$=f data",
         "print -f x$(value) data",
     ] {
-        for command in ["git fetch --no-recurse-submodules origin", "git commit -m done"] {
+        for command in [
+            "git fetch --no-recurse-submodules origin",
+            "git commit -m done",
+        ] {
             let out = scratch.judge_inheriting(
                 "git-guard",
                 &format!("{context}; {command}"),

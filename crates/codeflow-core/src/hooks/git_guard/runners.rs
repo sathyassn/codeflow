@@ -1119,7 +1119,7 @@ fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
         || options
             .destinations
             .iter()
-            .any(|target| expands(target) || target.contains('['))
+            .any(|target| super::expands_marked(target) || target.contains('['))
     {
         return true;
     }
@@ -1158,6 +1158,7 @@ fn numeric_operand(word: &str) -> bool {
     let plain: String = word
         .chars()
         .map(|ch| match super::marked_char(ch) {
+            Some((plain, true)) => plain,
             Some((plain, false)) if !matches!(plain, '$' | '`') => plain,
             _ => ch,
         })
