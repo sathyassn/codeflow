@@ -1956,6 +1956,128 @@ fn git_guard_judges_continued_parameters_and_valued_options() {
 }
 
 #[test]
+fn git_guard_preserves_output_boundaries() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for context in [
+        "print -f %s -$1 'a[$x]' 1",
+        "print -f %s \"$1\" 'a[$x]' 1",
+        "print {-f,%d} \"$x\"",
+        "printf {%d,%s} \"$x\"",
+        "print -f {1..2} \"$x\"",
+        "printf {1..2} \"$x\"",
+        // Existing controls: a preceding data command cannot hide a format.
+        "echo message; print -f %d \"$x\"",
+        "echo message; printf %d \"$x\"",
+    ] {
+        let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}");
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("contact {context}: {}", stderr(&out)));
+        }
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch --no-recurse-submodules origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("recursion control {context}: {}", stderr(&out)));
+        }
+    }
+    for context in [
+        "print -f %s -- \"$x\"",
+        "printf %s \"$x\"",
+        "print '{-f,%d}'",
+        "printf '{%d,%s}' 3",
+        "bash -c 'print -f %s \"$1\" value'",
+        "bash -c 'printf {%d,%s} \"$x\"'",
+    ] {
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) {
+            wrong.push(format!("data control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_preserves_output_data() {
+    let scratch = Scratch::landed(None);
+    let mut wrong = Vec::new();
+    for context in [
+        "echo \"$msg\"",
+        "echo \"${s:-literal}\"",
+        "echo $(value)",
+        "printf 'Files (%d)\\n' 3",
+        "printf '# %s\\n' title",
+        "print 'Ready?'",
+        "printf \"Processing $f\\n\"",
+        "print \"Processing $f\\n\"",
+        "print -f 'Files (%d)\\n' -- 3",
+        "print -f \"Processing $f\\n\" -- title",
+    ] {
+        for command in [
+            "git commit -m done",
+            "git fetch --no-recurse-submodules origin",
+            "bash -c 'git commit -m done'",
+        ] {
+            let out = scratch.judge_inheriting(
+                "git-guard",
+                &format!("{context}; {command}"),
+                ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+            );
+            if out.status.code() != Some(0) {
+                wrong.push(format!("{context}; {command}: {}", stderr(&out)));
+            }
+        }
+    }
+    for context in ["echo \"$msg\"", "echo \"${s:-literal}\"", "echo $(value)"] {
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{context}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) {
+            wrong.push(format!("contact {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn git_guard_invalidates_indirect_writers() {
+    let scratch = Scratch::landed(None);
+    let mut wrong = Vec::new();
+    for context in [
+        "r=origin; for r in x::y; do git fetch \"$r\"; done",
+        "r=origin; select r in x::y; do git fetch \"$r\"; done",
+        "r=origin; while read r; do git fetch \"$r\"; done",
+        "r=origin; source file; git fetch \"$r\"",
+        "r=origin; . file; git fetch \"$r\"",
+    ] {
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            context,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() == Some(0) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_judges_unsettled_output_words() {
     let scratch = Scratch::landed(None);
     definition_outside_work_tree(&scratch, true);

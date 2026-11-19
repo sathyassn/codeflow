@@ -342,6 +342,113 @@ fn filled_operator_inputs_remain_unread() {
 }
 
 #[test]
+fn output_boundaries_preserve_uncertainty() {
+    let mut wrong = Vec::new();
+    for context in [
+        "print -f %s -$1 'a[$x]' 1",
+        "print -f %s \"$1\" 'a[$x]' 1",
+        "print {-f,%d} \"$x\"",
+        "printf {%d,%s} \"$x\"",
+        "print -f {1..2} \"$x\"",
+        "printf {1..2} \"$x\"",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        if !expanded.arithmetic {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn output_data_preserves_configuration_provenance() {
+    let mut wrong = Vec::new();
+    for context in [
+        "printf 'Files (%d)\\n' 3",
+        "printf '# %s\\n' title",
+        "print 'Ready?'",
+        "printf \"Processing $f\\n\"",
+        "print \"Processing $f\\n\"",
+        "print -f 'Files (%d)\\n' -- 3",
+        "print -f \"Processing $f\\n\" -- title",
+    ] {
+        if super::super::super::configuration_shell_change(context).is_some() {
+            wrong.push(context);
+        }
+    }
+    // Existing controls: an expanding option can still hide a destination.
+    for context in ["print \"$@\"", "printf \"$@\""] {
+        if super::super::super::configuration_shell_change(context).is_none() {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn output_data_without_operands_stays_known() {
+    let mut wrong = Vec::new();
+    for context in [
+        "echo \"$msg\"",
+        "echo \"${s:-literal}\"",
+        "echo $(value)",
+        "echo \"${a[@]}\"",
+        "echo \"${a[*]}\"",
+        r"echo \$s[x]",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        if expanded.arithmetic {
+            wrong.push(context);
+        }
+    }
+    // A data word cannot conceal another command's operand reader.
+    for context in [
+        "echo message; print -f %d \"$x\"",
+        "echo message; printf %d \"$x\"",
+    ] {
+        if !super::super::super::expand_shell_commands(context).arithmetic {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn indirect_writers_clear_tracked_values() {
+    let mut wrong = Vec::new();
+    for context in [
+        "o=origin; for o in x::y; do :; done",
+        "o=origin; select o in x::y; do :; done",
+        "o=origin; while read o; do :; done",
+        "o=origin; source file",
+        "o=origin; . file",
+        "o=origin; vared o",
+        "o=origin; coproc change",
+        "o=origin; zparseopts -A o a",
+        "o=origin; zstyle -s pattern style o",
+        "o=origin; zformat -f o format",
+        "o=origin; strftime -s o format",
+        "o=origin; sysread -o o",
+        "o=origin; zstat -A o file",
+        "o=origin; private o",
+        "o=origin; foreach o (x::y)",
+        // Existing supported-writer controls.
+        "o=origin; read o",
+        "o=origin; getopts a o",
+        "o=origin; mapfile o",
+        "o=origin; readarray o",
+    ] {
+        let mut segments = super::super::super::expand_shell_commands(context).segments;
+        segments.push("capture \"$o\"".into());
+        let filled = super::super::literal_segments(&segments);
+        if filled.last().unwrap() != "capture \"$o\"" {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn unsettled_output_words_keep_inputs_unread() {
     let mut wrong = Vec::new();
     for context in [
