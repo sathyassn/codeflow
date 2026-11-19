@@ -30,6 +30,8 @@ mod line_tip;
 mod main_sync;
 #[path = "ci_cli/main_sync_home.rs"]
 mod main_sync_home;
+#[path = "ci_cli/mains_bytes.rs"]
+mod mains_bytes;
 #[path = "ci_cli/outcome_marker.rs"]
 mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]

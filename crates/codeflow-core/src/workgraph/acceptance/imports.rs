@@ -1,6 +1,7 @@
 //! Source attribution for unchanged records imported by an ordinary merge.
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::mains_bytes::MainsBytes;
 use super::{
     active_block, bind_completion_with_amendment, bind_epic_completion, commit_of,
     default_target_name, first_parent, history, introduced_at, is_ancestor_or_same,
@@ -51,7 +52,14 @@ const SOURCE_REPAIR: &str = "fetch the home and repair or reopen the work there 
 type Imports = BTreeMap<String, ImportedRecord>;
 // The outer history judgment and an object fetch clear this cache. A graph's
 // contents distinguish callers that have removed records from the same head.
-type ImportKey = (std::path::PathBuf, Oid, Oid, String);
+type ImportKey = (
+    std::path::PathBuf,
+    Oid,
+    Oid,
+    String,
+    Option<MainsBytes>,
+    Option<String>,
+);
 thread_local! {
     static IMPORTS: std::cell::RefCell<BTreeMap<ImportKey, Result<Imports, String>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
 }
@@ -66,6 +74,17 @@ pub(crate) fn clear_cache() {
 /// The receiver may not introduce any change to that record outside the
 /// source's history. Product changes remain in the receiver's own range.
 ///
+/// With `mains`, a record that arrived by merge and that main's bytes
+/// admits ([`super::mains_bytes::judge`], TSK-1185) is imported from the
+/// verified default tip without re-proof; its completion is the one the
+/// default branch admitted.
+///
+/// `receiving` is the epic line the range lands on, as the run names it
+/// (`--into`, or the judged branch when that is the line), never read from
+/// a record or a ref. A task whose line copy names it, or whose copy this
+/// check cannot place because the run names no line, takes a home move on
+/// the default branch only from a verified tip (TSK-1185 AC-16).
+///
 /// # Errors
 /// Refuses unreadable or overlaid history and an invalid source binding.
 pub fn imported_records(
@@ -73,6 +92,8 @@ pub fn imported_records(
     base: Oid,
     head: Oid,
     graph: &Graph,
+    mains: Option<&MainsBytes>,
+    receiving: Option<&str>,
 ) -> Result<BTreeMap<String, ImportedRecord>, String> {
     let _judgment = history::judgment();
     history::check(repo).map_err(|error| error.to_string())?;
@@ -84,21 +105,66 @@ pub fn imported_records(
     let digest = crate::scaffold::sha256_hex(
         &serde_json::to_vec(&contents).map_err(|error| error.to_string())?,
     );
-    let key = (repo.path().to_path_buf(), base, head, digest);
+    let key = (
+        repo.path().to_path_buf(),
+        base,
+        head,
+        digest,
+        mains.cloned(),
+        receiving.map(str::to_string),
+    );
     if let Some(result) = IMPORTS.with(|memo| memo.borrow().get(&key).cloned()) {
         return result;
     }
-    let result = compute_imports(repo, base, head, graph);
+    let result = compute_imports(repo, (base, head), graph, mains, receiving);
     IMPORTS.with(|memo| memo.borrow_mut().insert(key, result.clone()));
     result
+}
+
+/// Main's bytes (TSK-1185 AC-11, AC-13): each record in `changed` the rule
+/// admits is the default branch's, imported from the verified tip without
+/// re-proof and removed from `changed`. A judgment that cannot be read
+/// admits nothing, so every record keeps the full checks.
+fn take_mains_bytes(
+    repo: &Repository,
+    mains: &MainsBytes,
+    (base, head): (Oid, Oid),
+    graph: &Graph,
+    changed: &mut Vec<&RecordView>,
+) -> Imports {
+    let admitted = super::mains_bytes::judge(repo, mains, base, head, graph)
+        .map(|judged| judged.admitted)
+        .unwrap_or_default();
+    let mut imported = BTreeMap::new();
+    changed.retain(|record| {
+        if !admitted.contains(&record.path) {
+            return true;
+        }
+        imported.insert(
+            record.id.clone(),
+            ImportedRecord {
+                path: record.path.clone(),
+                home: record.integration_target.as_deref().map_or_else(
+                    || "the default branch".to_string(),
+                    |declared| super::super::work_start::logical_target(declared).to_string(),
+                ),
+                landing: mains.tip,
+                completion: None,
+                home_anchor: None,
+            },
+        );
+        false
+    });
+    imported
 }
 
 #[allow(clippy::too_many_lines)] // Keep enumeration, home and record refusals in one judgment order.
 fn compute_imports(
     repo: &Repository,
-    base: Oid,
-    head: Oid,
+    (base, head): (Oid, Oid),
     graph: &Graph,
+    mains: Option<&MainsBytes>,
+    receiving: Option<&str>,
 ) -> Result<Imports, String> {
     #[cfg(test)]
     COMPUTATIONS.with(|count| count.set(count.get() + 1));
@@ -108,19 +174,26 @@ fn compute_imports(
     let unenumerated = |error: String| format!("{UNENUMERATED}: {error}");
     let anchor =
         history::merge_base(repo, base, head).map_err(|error| unenumerated(error.to_string()))?;
-    let changed = merged_records(repo, anchor, head, graph).map_err(unenumerated)?;
+    let merged = merged_records(repo, anchor, head, graph).map_err(unenumerated)?;
+    let mut changed = merged.clone();
+    let trusted = mains.map(|mains| mains.tip);
+    let mut imported = match mains {
+        Some(mains) => take_mains_bytes(repo, mains, (base, head), graph, &mut changed),
+        None => BTreeMap::new(),
+    };
     let root = repo.workdir().unwrap_or_else(|| repo.path());
-    // A range that changes no record by a merge reads the default target
-    // only to judge the records it leaves unchanged; without one, nothing
-    // is imported from it.
+    // Only a range that merges no record may skip the default target.
+    // Records admitted from main's bytes still arrived by merge, so an
+    // unreadable default refuses them too, and the walk over the records
+    // the range leaves unchanged always runs.
     let default = match default_target_name(repo) {
         Ok(default) => default,
-        Err(_) if changed.is_empty() => return Ok(BTreeMap::new()),
+        Err(_) if merged.is_empty() => return Ok(BTreeMap::new()),
         Err(error) => return Err(unenumerated(error)),
     };
     let default_tip = match home_tip(repo, &default.name) {
         Ok(Some(tip)) => tip,
-        Ok(None) | Err(_) if changed.is_empty() => return Ok(BTreeMap::new()),
+        Ok(None) | Err(_) if merged.is_empty() => return Ok(BTreeMap::new()),
         Ok(None) => return Err(unenumerated(unavailable_home(&default.name))),
         Err(error) => return Err(unenumerated(error)),
     };
@@ -132,7 +205,7 @@ fn compute_imports(
         refusals.extend(unchanged_refusals(
             repo,
             graph,
-            &changed,
+            &merged,
             &default.name,
             default_tip,
             anchor,
@@ -140,7 +213,7 @@ fn compute_imports(
         ));
     }
     if changed.is_empty() {
-        return finish(BTreeMap::new(), &refusals);
+        return finish(imported, &refusals);
     }
     for record in &changed {
         let home = record.integration_target.as_deref().map_or(
@@ -196,7 +269,6 @@ fn compute_imports(
             Err(HomeRefusal::Record(reason)) => refusals.push(reason),
         }
     }
-    let mut imported = BTreeMap::new();
     for (home, tip) in homes {
         // A source already contained by the shared anchor supplies no new imports.
         let contained = match is_ancestor_or_same(repo, tip, anchor) {
@@ -268,6 +340,7 @@ fn compute_imports(
                     .then_some(Walk {
                         receiver: anchor,
                         default_tip,
+                        receiving,
                     });
             match prove_record(
                 repo,
@@ -279,6 +352,7 @@ fn compute_imports(
                 base,
                 head,
                 walk,
+                trusted,
             ) {
                 Ok(result) => {
                     imported.insert(record.id.clone(), result);
@@ -707,6 +781,10 @@ fn admissible_planning_landing_with(
 /// task is in a permitted state at the landing and at its first parent.
 /// It answers only the home-change question; every other proof still runs.
 ///
+/// TSK-1185 AC-16 adds one exception to TSK-1004 AC-8: the landing may
+/// instead be on the first-parent chain of the default tip this run
+/// verified (`trusted`), never of a home a record or a ref names.
+///
 /// # Errors
 /// Unreadable history is an error, never a planning move.
 fn is_planning_move(
@@ -715,11 +793,258 @@ fn is_planning_move(
     landed: Oid,
     parent: Oid,
     head: Oid,
+    trusted: Option<Oid>,
 ) -> Result<bool, String> {
-    Ok(on_home_chain(repo, landed, head)?
-        && admissible_planning_landing_with(repo, landed, PLANNING_LANDING_PATHS)? == Some(parent)
-        && permitted_at(repo, landed, record)
-        && permitted_at(repo, parent, record))
+    let on_chain = on_home_chain(repo, landed, head)?
+        || match trusted {
+            Some(tip) => on_home_chain(repo, landed, tip)?,
+            None => false,
+        };
+    Ok(on_chain && is_trusted_planning_move(repo, record, landed, parent)?)
+}
+
+/// Whether `landed` is an admissible planning landing over `parent` with
+/// the task in a permitted state at both (TSK-1004 AC-6, AC-7). The caller
+/// supplies the chain `landed` is on.
+pub(super) fn is_trusted_planning_move(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    parent: Oid,
+) -> Result<bool, String> {
+    Ok(
+        admissible_planning_landing_with(repo, landed, PLANNING_LANDING_PATHS)? == Some(parent)
+            && permitted_at(repo, landed, record)
+            && permitted_at(repo, parent, record),
+    )
+}
+
+/// The record as it stood before `landed`, when `landed` corrected a
+/// completed task's declared home to the home that already holds its work
+/// (TSK-1185 AC-10). A task that lands on a home other than the one it
+/// declared is left naming the wrong home, and a planning landing can only
+/// correct it once the task is complete, which [`is_planning_move`] refuses.
+///
+/// All of these must hold on the home's own history: `landed` is on its
+/// first-parent chain, it is an admissible planning landing, the new target
+/// is `home`, the record's only changed line is `integration_target`, and the
+/// record's reviewed commit is already in the landing's first parent. So no
+/// other edit rides along and the claim rests on commit identity, and
+/// [`prove_record`] then proves the completion at its original landing.
+///
+/// # Errors
+/// Unreadable history is an error, never a correction.
+fn home_correction(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    tip: Oid,
+    landed: Oid,
+    parent: Oid,
+) -> Result<Option<RecordView>, String> {
+    let names_home = record
+        .integration_target
+        .as_deref()
+        .is_some_and(|declared| super::super::work_start::logical_target(declared) == home);
+    if record.kind != RecordKind::Task || !names_home {
+        return Ok(None);
+    }
+    let Some(before) = record_at(repo, parent, record)? else {
+        return Ok(None);
+    };
+    let reviewed = active_block(record).and_then(|block| commit_of(repo, &block.reviewed));
+    let Some(reviewed) = reviewed else {
+        return Ok(None);
+    };
+    let admitted = before.integration_target != record.integration_target
+        && changes_only_the_target(&before.content, &record.content)
+        && on_home_chain(repo, landed, tip)?
+        && is_ancestor_or_same(repo, reviewed, parent)?
+        && admissible_planning_landing_with(repo, landed, PLANNING_LANDING_PATHS)? == Some(parent);
+    Ok(admitted.then_some(before))
+}
+
+/// The task's declared home in `view`, by its logical name, or `None` when
+/// the record declares none.
+fn declared_home(view: &RecordView) -> Option<&str> {
+    view.integration_target
+        .as_deref()
+        .map(super::super::work_start::logical_target)
+}
+
+/// The refusal of a task whose record before `at`, on its home's
+/// first-parent history, is not exactly one record with its id and uid at
+/// its path: its home history cannot be followed by identity, so the walk
+/// never reads another record, or the task's absence, in its place.
+fn path_changed(at: Oid) -> String {
+    format!(
+        "the task's record cannot be identified before {at}: it is not one record with the task's id and uid at the same path (another path, another task's record, two copies, an unreadable task record, or a first uid the id registry does not bind to its id), so its earlier home moves cannot be judged; keep the record at one path while another line imports it"
+    )
+}
+
+/// The refusal of a home change where one side declares no home.
+fn home_undeclared(at: Oid) -> String {
+    format!(
+        "{MOVED}: the record declares no home on one side of the change at {at}, so the change cannot be judged; declare the home on both sides"
+    )
+}
+
+/// The task's record at `parent`, the first parent of `at`, found by
+/// identity, never by path alone: `None` when no task record there carries
+/// its id or uid, so `at` introduced it. Otherwise exactly one record there
+/// must carry it, with the same id and at the path of `current`, the
+/// task's record at `at`, which the walk has already tied to the task. Its
+/// uid is `current`'s, or none where `current` carries the first uid the id
+/// registry binds to the id (the backfill, SPC-013 R-24, R-25). Another
+/// path, another task's record at the path, two copies, an unreadable task
+/// record or any other uid change is refused.
+fn version_before(
+    repo: &Repository,
+    current: &RecordView,
+    record: &RecordView,
+    at: Oid,
+    parent: Oid,
+) -> Result<Option<RecordView>, String> {
+    let who = home::Identity::of(record);
+    match home::held_at(repo, parent, &who) {
+        home::Held::Absent => Ok(None),
+        home::Held::One(old) if old.path == current.path && old.id == record.id => {
+            let before = record_uid(&old.content);
+            let after = record_uid(&current.content);
+            let same = before == after
+                || match (before, after) {
+                    (None, Some(uid)) => registered_uid(repo, &record.id)? == Some(uid),
+                    _ => false,
+                };
+            if same {
+                Ok(Some(*old))
+            } else {
+                Err(path_changed(at))
+            }
+        }
+        _ => Err(path_changed(at)),
+    }
+}
+
+/// The uid the id registry binds `id` to, read as `ids check` binds a
+/// backfilled uid (SPC-013 R-24, R-25): the first addition of the id's
+/// entry on the fetched registry, else on the local registry branch. `None`
+/// when there is no registry, no valid entry, or the id is not a registry
+/// id. A shallow repository, whose registry history may be cut short, and
+/// an unreadable registry are refused.
+fn registered_uid(repo: &Repository, id: &str) -> Result<Option<String>, String> {
+    let Some(id) = crate::ids::entry::RegId::parse(id) else {
+        return Ok(None);
+    };
+    let git = crate::ids::git::Git::new(repo.workdir().unwrap_or_else(|| repo.path()));
+    let unreadable = |error: crate::ids::IdsError| {
+        format!("the id registry cannot be read to bind the uid of {id}: {error}")
+    };
+    if git.is_shallow().map_err(unreadable)? {
+        return Err(format!(
+            "the first uid of {id} cannot be bound to the id registry in a shallow clone; fetch the full history"
+        ));
+    }
+    let Some(registry) = crate::ids::check::registry_ref(&git).map_err(unreadable)? else {
+        return Ok(None);
+    };
+    let ledger = crate::ids::ledger::Ledger::read(&git, &registry).map_err(unreadable)?;
+    Ok(ledger.entry(&id).map(|entry| entry.uid.clone()))
+}
+
+/// Refuse a home change an edit landed after it would hide (TSK-1185).
+/// [`matching_landing`] finds only the landing of the record's current text,
+/// whose parent already names the new home, so every commit that moved the
+/// task is found here, on the home's first-parent history past the receiver,
+/// and must be a planning move or a home correction in its own right. A
+/// planning move is judged as [`is_planning_move`] judges one at its own
+/// landing: on the first-parent history of the head under check or of the
+/// default tip this run verified (`trusted`), so a later landing never
+/// lowers the bar (TSK-1004 AC-8, TSK-1185 AC-16). An accepted move or
+/// correction clears only itself: the walk goes on to the receiver. It
+/// stops early only where the record was introduced, proved by identity; a
+/// changed path or a side that declares no home is refused.
+fn verify_earlier_home_move(
+    repo: &Repository,
+    record: &RecordView,
+    (home, tip): (&str, Oid),
+    landed: Oid,
+    (base, head): (Oid, Oid),
+    trusted: Option<Oid>,
+) -> Result<(), String> {
+    if record.kind != RecordKind::Task {
+        return Ok(());
+    }
+    let mut current = record.clone();
+    let mut at = landed;
+    loop {
+        // A commit the receiver holds is past the walk; its child is not, so
+        // a move made right at the fork is still judged.
+        if is_ancestor_or_same(repo, at, base)? {
+            return Ok(());
+        }
+        let Some(parent) = first_parent(repo, at)? else {
+            return Ok(());
+        };
+        let Some(old) = version_before(repo, &current, record, at, parent)? else {
+            return Ok(());
+        };
+        // `verify_record_home` judges the landing's own change.
+        if at != landed && declared_home(&old) != declared_home(&current) {
+            judge_earlier_move(
+                repo,
+                (&current, &old, record),
+                (home, tip),
+                (at, parent),
+                (head, trusted),
+            )?;
+        }
+        current = old;
+        at = parent;
+    }
+}
+
+/// One earlier home move at `at` over `parent`, where `current` is the
+/// record at `at` and `old` at `parent`: a proved home correction (TSK-1185
+/// AC-10), else a planning move in a permitted state on the head's or the
+/// verified tip's first-parent history. A side that declares no home is
+/// refused unless the move is a proved correction.
+fn judge_earlier_move(
+    repo: &Repository,
+    (current, old, record): (&RecordView, &RecordView, &RecordView),
+    (home, tip): (&str, Oid),
+    (at, parent): (Oid, Oid),
+    (head, trusted): (Oid, Option<Oid>),
+) -> Result<(), String> {
+    if home_correction(repo, current, home, tip, at, parent)?.is_some() {
+        return Ok(());
+    }
+    if declared_home(current).is_none() || declared_home(old).is_none() {
+        return Err(home_undeclared(at));
+    }
+    if !is_trusted_planning_move(repo, record, at, parent)? {
+        return Err(MOVED.into());
+    }
+    if is_planning_move(repo, record, at, parent, head, trusted)? {
+        return Ok(());
+    }
+    Err(format!(
+        "{MOVED}: the earlier move at {at} is a planning landing on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself, or on a run that verifies the default branch's tip, as the hosted check does with --policy-from, for a move made there"
+    ))
+}
+
+/// Whether two record texts differ in exactly one line, the
+/// `integration_target` line.
+fn changes_only_the_target(before: &str, after: &str) -> bool {
+    let (before, after): (Vec<_>, Vec<_>) =
+        (before.split('\n').collect(), after.split('\n').collect());
+    let target = |line: &str| line.starts_with("integration_target:");
+    let mut changed = before.iter().zip(&after).filter(|(old, new)| old != new);
+    before.len() == after.len()
+        && changed
+            .next()
+            .is_some_and(|(old, new)| target(old) && target(new))
+        && changed.next().is_none()
 }
 
 /// Whether the task `record` names is in a permitted state at `at`: exactly
@@ -849,6 +1174,7 @@ fn prove_retired_record(
     base: Oid,
     head: Oid,
     parents: &[Oid],
+    trusted: Option<Oid>,
 ) -> Result<Option<ImportedRecord>, String> {
     let Some(declared) = record
         .integration_target
@@ -889,6 +1215,7 @@ fn prove_retired_record(
         base,
         head,
         None,
+        trusted,
     )?;
     Ok(Some(ImportedRecord {
         path: record.path.clone(),
@@ -954,12 +1281,75 @@ fn prove_task_completion(
     Ok(proof)
 }
 
+/// A correction landed no reviewed work, so the completion is proved where it
+/// did land. This calls the proof directly: `prove_record` on the original
+/// would read its old target as a retired home.
+fn prove_corrected_completion(
+    repo: &Repository,
+    original: &RecordView,
+    home: &str,
+    tip: Oid,
+    default_tip: Oid,
+    before_correction: Oid,
+) -> Result<CompletionProof, String> {
+    let origin = matching_landing(repo, original, tip, before_correction, None)?
+        .ok_or("the corrected record has no landing on the home")?;
+    let commit = repo
+        .find_commit(origin)
+        .map_err(|error| error.to_string())?;
+    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+    if parents.len() > 1 && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())? {
+        return Err("the home landing contains an unreviewed merge resolution".into());
+    }
+    prove_task_completion(repo, original, home, tip, default_tip, origin, &parents)
+}
+
 /// The walk of the default branch's home moves for a task homed there
-/// (TSK-1378): the receiving line's state and the trusted default tip.
+/// (TSK-1378): the receiving line's state and the trusted default tip, and
+/// the receiving line's name as the run gives it.
 #[derive(Clone, Copy)]
-struct Walk {
+struct Walk<'a> {
     receiver: Oid,
     default_tip: Oid,
+    receiving: Option<&'a str>,
+}
+
+/// The home checks of one landing: a home correction (TSK-1185 AC-10), the
+/// record's identity and home at the landing with the default branch's walk
+/// (TSK-1378) or the trusted planning move (TSK-1185 AC-16), and, without a
+/// walk, a home move an earlier commit made. With a walk, every home move of
+/// the task on the default branch since the line's merge base with it is
+/// already judged. Returns the walk's anchor and the record before a
+/// correction.
+#[allow(clippy::too_many_arguments)] // The landing, the range, the walk and the trusted tip.
+fn verify_landing_home(
+    repo: &Repository,
+    record: &RecordView,
+    (home, tip): (&str, Oid),
+    landed: Oid,
+    parents: &[Oid],
+    (base, head): (Oid, Oid),
+    walk: Option<Walk<'_>>,
+    trusted: Option<Oid>,
+) -> Result<(Option<HomeAnchor>, Option<RecordView>), String> {
+    let correction = match parents.first() {
+        Some(parent) => home_correction(repo, record, home, tip, landed, *parent)?,
+        None => None,
+    };
+    let home_anchor = verify_record_home(
+        repo,
+        record,
+        landed,
+        parents,
+        base,
+        head,
+        walk,
+        (correction.is_some(), trusted),
+    )?;
+    if walk.is_none() {
+        verify_earlier_home_move(repo, record, (home, tip), landed, (base, head), trusted)?;
+    }
+    Ok((home_anchor, correction))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -972,7 +1362,8 @@ fn prove_record(
     landed: Oid,
     base: Oid,
     head: Oid,
-    walk: Option<Walk>,
+    walk: Option<Walk<'_>>,
+    trusted: Option<Oid>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
         .find_commit(landed)
@@ -981,7 +1372,28 @@ fn prove_record(
     if parents.len() > 1 && !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())? {
         return Err("the home landing contains an unreviewed merge resolution".into());
     }
-    let home_anchor = verify_record_home(repo, record, home, landed, &parents, base, head, walk)?;
+    let (home_anchor, correction) = verify_landing_home(
+        repo,
+        record,
+        (home, tip),
+        landed,
+        &parents,
+        (base, head),
+        walk,
+        trusted,
+    )?;
+    let imported = |completion| ImportedRecord {
+        path: record.path.clone(),
+        home: home.to_string(),
+        landing: landed,
+        completion,
+        home_anchor,
+    };
+    if let Some(original) = correction {
+        let completion =
+            prove_corrected_completion(repo, &original, home, tip, default_tip, parents[0])?;
+        return Ok(imported(Some(completion)));
+    }
     if let Some(proof) = prove_retired_record(
         repo,
         record,
@@ -991,6 +1403,7 @@ fn prove_record(
         base,
         head,
         &parents,
+        trusted,
     )? {
         return Ok(proof);
     }
@@ -1017,6 +1430,7 @@ fn prove_record(
             origin,
             source,
             None,
+            trusted,
         )?
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
@@ -1046,13 +1460,7 @@ fn prove_record(
         }
         None
     };
-    Ok(ImportedRecord {
-        path: record.path.clone(),
-        home: home.to_string(),
-        landing: landed,
-        completion,
-        home_anchor,
-    })
+    Ok(imported(completion))
 }
 
 /// Prove the record's identity and home at its landing, and the accepted
@@ -1063,12 +1471,12 @@ fn prove_record(
 fn verify_record_home(
     repo: &Repository,
     record: &RecordView,
-    home: &str,
     landed: Oid,
     parents: &[Oid],
     base: Oid,
     head: Oid,
-    walk: Option<Walk>,
+    walk: Option<Walk<'_>>,
+    (corrected, trusted): (bool, Option<Oid>),
 ) -> Result<Option<HomeAnchor>, String> {
     let mut anchor = None;
     if record.kind == RecordKind::Task {
@@ -1085,20 +1493,34 @@ fn verify_record_home(
         }
     }
     if let (RecordKind::Task, Some(walk)) = (record.kind, walk) {
-        anchor = home::judge_home(repo, record, walk.default_tip, walk.receiver, head)?;
+        // A home correction proved by `verify_landing_home` (AC-10) is
+        // exempt from the last move's rules; every earlier move is judged.
+        // A task the receiving line holds as its own takes the walk's moves
+        // only from the verified tip (TSK-1185 AC-16).
+        anchor = home::judge_home(
+            repo,
+            record,
+            walk.default_tip,
+            (walk.receiver, head),
+            corrected.then_some(landed),
+            (walk.receiving, trusted),
+        )?;
     } else if record.kind == RecordKind::Task {
         if let Some(parent) = parents.first() {
-            if record_at(repo, *parent, record)?.is_some_and(|old| {
-                old.integration_target.as_deref().is_some_and(|declared| {
-                    super::super::work_start::logical_target(declared)
-                        != record
-                            .integration_target
-                            .as_deref()
-                            .map_or(home, super::super::work_start::logical_target)
-                })
-            }) && !is_planning_move(repo, record, landed, *parent, head)?
-            {
-                return Err(MOVED.into());
+            // The landing's own home change. Absent at its path and by
+            // identity is an introduction; another path, or a side that
+            // declares no home, is refused unless the landing is a proved
+            // correction.
+            if let Some(old) = version_before(repo, record, record, landed, *parent)? {
+                let (was, now) = (declared_home(&old), declared_home(record));
+                if was != now && !corrected {
+                    if was.is_none() || now.is_none() {
+                        return Err(home_undeclared(landed));
+                    }
+                    if !is_planning_move(repo, record, landed, *parent, head, trusted)? {
+                        return Err(MOVED.into());
+                    }
+                }
             }
         }
     }
@@ -1142,6 +1564,8 @@ pub fn imported_record_paths(
     root: &std::path::Path,
     base: &str,
     head: &str,
+    mains: Option<&MainsBytes>,
+    receiving: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let repo = Repository::discover(root).map_err(|error| error.to_string())?;
     let resolve = |name: &str| {
@@ -1151,14 +1575,21 @@ pub fn imported_record_paths(
             .map_err(|error| error.to_string())
     };
     let graph = Graph::from_revision(&repo, head)?;
-    Ok(
-        imported_records(&repo, resolve(base)?, resolve(head)?, &graph)?
-            .into_values()
-            .map(|record| record.path)
-            .collect(),
-    )
+    Ok(imported_records(
+        &repo,
+        resolve(base)?,
+        resolve(head)?,
+        &graph,
+        mains,
+        receiving,
+    )?
+    .into_values()
+    .map(|record| record.path)
+    .collect())
 }
 
+#[cfg(test)]
+mod earlier_tests;
 #[cfg(test)]
 mod home_set_tests;
 #[cfg(test)]
@@ -1180,13 +1611,13 @@ mod tests {
         {
             let _run = history::judgment();
             for _ in 0..3 {
-                assert!(imported_records(&repo, head, head, &graph)
+                assert!(imported_records(&repo, head, head, &graph, None, None)
                     .unwrap()
                     .is_empty());
             }
             assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 1);
         }
-        assert!(imported_records(&repo, head, head, &graph)
+        assert!(imported_records(&repo, head, head, &graph, None, None)
             .unwrap()
             .is_empty());
         assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 2);

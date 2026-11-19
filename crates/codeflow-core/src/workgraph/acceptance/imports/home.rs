@@ -51,13 +51,13 @@ pub struct HomeAnchor {
 }
 
 /// A task's identity, and its record as the range holds it.
-struct Identity<'a> {
+pub(super) struct Identity<'a> {
     record: &'a RecordView,
     uid: Option<String>,
 }
 
 impl<'a> Identity<'a> {
-    fn of(record: &'a RecordView) -> Self {
+    pub(super) fn of(record: &'a RecordView) -> Self {
         Self {
             record,
             uid: record_uid(&record.content),
@@ -66,7 +66,7 @@ impl<'a> Identity<'a> {
 }
 
 /// The task at one commit, found by identity.
-enum Held {
+pub(super) enum Held {
     Absent,
     One(Box<RecordView>),
     /// Two records carry the identity, or a task record there cannot be
@@ -84,7 +84,7 @@ impl Held {
     }
 }
 
-fn held_at(repo: &Repository, at: Oid, who: &Identity<'_>) -> Held {
+pub(super) fn held_at(repo: &Repository, at: Oid, who: &Identity<'_>) -> Held {
     let Ok(entries) = task_entries(repo, at) else {
         return Held::Ambiguous;
     };
@@ -504,6 +504,23 @@ fn judge_moves(
     receiver: Oid,
     line_since: Oid,
 ) -> Result<(), String> {
+    judge_moves_except(repo, who, line, moves, (receiver, line_since), None)
+}
+
+/// [`judge_moves`], where `corrected` names a home correction the caller
+/// has proved (TSK-1185 AC-10). The correction stays in `moves`, so every
+/// move before it is still an earlier move with the permitted check and
+/// none of them takes the last move's rules. When the correction is the
+/// last move, it passes the common proof and is exempt from the last
+/// move's rules; anywhere else it is judged as any other move.
+fn judge_moves_except(
+    repo: &Repository,
+    who: &Identity<'_>,
+    line: &Held,
+    moves: &[(Oid, Oid)],
+    (receiver, line_since): (Oid, Oid),
+    corrected: Option<Oid>,
+) -> Result<(), String> {
     let Some(((last, last_parent), earlier)) = moves.split_last() else {
         return Ok(());
     };
@@ -515,6 +532,9 @@ fn judge_moves(
         if !permitted(*at) || !permitted(*parent) {
             return Err(format!("{MOVED}: the task moved at {at} while it was not todo or blocked, or while it held an acceptance block, before its last move"));
         }
+    }
+    if corrected == Some(*last) {
+        return Ok(());
     }
     let Held::One(arrived) = held_at(repo, *last, who) else {
         return Err(ambiguous(*last));
@@ -581,14 +601,24 @@ fn adoption_anchor(
 /// Judge a record the range imports from the default tip (AC-1, AC-6,
 /// AC-10, AC-13), against the line's copy at `receiver`.
 ///
+/// `corrected` names a home correction the caller has already proved
+/// (TSK-1185 AC-10). As the last move it is exempt from the last move's
+/// rules; every move before it is still judged as an earlier move.
+///
+/// When the line's copy is the receiving line's own task, or is not proved
+/// to be homed elsewhere ([`held_by_receiving_line`]), every move but that
+/// correction must also be on the first-parent history of `verified`, the
+/// default tip this run verified (TSK-1185 AC-16).
+///
 /// # Errors
 /// The refusal names the move and its cause.
 pub(super) fn judge_home(
     repo: &Repository,
     record: &RecordView,
     default_tip: Oid,
-    receiver: Oid,
-    head: Oid,
+    (receiver, head): (Oid, Oid),
+    corrected: Option<Oid>,
+    (receiving, verified): (Option<&str>, Option<Oid>),
 ) -> Result<Option<HomeAnchor>, String> {
     let who = Identity::of(record);
     let start = start_point(repo, receiver, default_tip)?;
@@ -604,8 +634,57 @@ pub(super) fn judge_home(
         (anchor.source_version, anchor.line_landing)
     });
     let found = moves_of(repo, &who, default_tip, since, head)?;
-    judge_moves(repo, &who, &line, &found.moves, receiver, line_since)?;
+    judge_moves_except(
+        repo,
+        &who,
+        &line,
+        &found.moves,
+        (receiver, line_since),
+        corrected,
+    )?;
+    if let Some(held) = held_by_receiving_line(&line, record, receiving) {
+        for (at, _) in &found.moves {
+            if corrected == Some(*at) {
+                continue;
+            }
+            let on_verified = match verified {
+                Some(tip) => super::on_home_chain(repo, *at, tip)?,
+                None => false,
+            };
+            if !on_verified {
+                return Err(format!("{MOVED}: {held}, and the move at {at} is on the first-parent history of no default-branch tip this run verified; the move is taken on a run that verifies the default branch's tip, as the hosted check does with --policy-from, or through the receiving line's own reviewed planning merge of the moved record"));
+            }
+        }
+    }
     Ok(anchor)
+}
+
+/// Why the line's copy counts as the receiving line's own task, whose home
+/// moves on the default branch are taken only from a verified tip
+/// (TSK-1185 AC-16), or `None` when the copy is proved to be homed
+/// elsewhere. The receiving line is named by the run (`receiving`), never
+/// read from a record or a ref. The copy is proved elsewhere only when the
+/// line holds none, or it names the record's own home, or it names a home
+/// other than the receiving line (TSK-1378 AC-6 (a)). A copy with no home,
+/// or a run that names no receiving line, is not proved (fail closed).
+fn held_by_receiving_line(
+    line: &Held,
+    record: &RecordView,
+    receiving: Option<&str>,
+) -> Option<String> {
+    let Held::One(copy) = line else {
+        return None;
+    };
+    let copy_home = declared(copy);
+    if copy_home.is_some() && copy_home == declared(record) {
+        return None;
+    }
+    match (copy_home, receiving.map(logical_target)) {
+        (Some(home), Some(receiving)) if home != receiving => None,
+        (Some(home), Some(_)) => Some(format!("the line's copy names the receiving line `{home}`")),
+        (None, _) => Some("the line's copy names no home, so it is not proved to be homed off the receiving line".into()),
+        (Some(home), None) => Some(format!("the line's copy names `{home}` and the run names no receiving line, so the copy is not proved to be homed off it")),
+    }
 }
 
 /// Judge a record the range leaves unchanged whose home the line changed,

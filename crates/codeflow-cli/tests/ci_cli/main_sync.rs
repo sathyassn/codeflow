@@ -356,7 +356,8 @@ fn a_sync_naming_another_epic_is_refused() {
 /// AC-2: every other refusal still applies. A clean sync that would change
 /// the criteria, status or text of a task whose home is the line, or the
 /// epic's criteria, is refused by the frozen criteria. Under the one-home
-/// rule main never holds such a change; these fixtures force one.
+/// rule main never holds such a change; these fixtures force one. The import
+/// check takes each range, so the freeze is proved on its own here.
 #[test]
 fn a_clean_sync_cannot_change_the_lines_records() {
     for (path, content, what) in [
@@ -400,6 +401,10 @@ fn a_clean_sync_cannot_change_the_lines_records() {
         );
         blocks(&refused, what, "work.criteria_frozen");
         blocks(&refused, what, "whose home is the line");
+        assert!(
+            !said.contains("work.import_authority"),
+            "{what}: the import check takes this range, so the freeze alone refuses it: {said}"
+        );
     }
 }
 
@@ -425,6 +430,70 @@ fn a_clean_sync_cannot_re_home_a_line_task() {
         "a re-homed line task",
         "changes the task's declared home",
     );
+}
+
+/// TSK-1185: the landing of the record's current text is only the later edit,
+/// so the import check walks back to the commit that moved the task and
+/// refuses it there.
+#[test]
+fn a_later_edit_cannot_hide_a_re_home_from_a_clean_sync() {
+    let dir = fixture();
+    let root = dir.path();
+    let path = "project-management/tasks/TSK-001.md";
+    write(root, path, &task("TSK-001", "main"));
+    commit(root, "docs: main re-homes a line task");
+    write(
+        root,
+        path,
+        &task("TSK-001", "main").replace("Work.", "Other work."),
+    );
+    commit(root, "docs: main edits it after the move");
+    sync_branch(root);
+    let refused = ci(root, "Task: EPC-001", None);
+    let what = "a re-home under a later edit";
+    blocks(&refused, what, "work.import_authority");
+    blocks(&refused, what, "changes the task's declared home");
+}
+
+/// TSK-1185: a planning landing's move of a line task is refused at the import
+/// check while it is the record's landing, because a sync brings it in off the
+/// receiving head's chain. Under a later edit the move is still judged at the
+/// commit that made it, so the import check refuses it again. That refusal
+/// comes first and masks the criteria freeze here;
+/// `a_clean_sync_cannot_change_the_lines_records` still proves the freeze on
+/// a sync whose imports pass.
+#[test]
+fn a_planned_re_home_of_a_line_task_stays_frozen_on_a_clean_sync() {
+    let dir = fixture();
+    let root = dir.path();
+    let path = "project-management/tasks/TSK-001.md";
+    let land_plan = |branch: &str, content: &str, message: &str| {
+        super::git(root, &["switch", "-q", "-c", branch, "main"]);
+        write(root, path, content);
+        commit(root, message);
+        super::git(root, &["switch", "-q", "main"]);
+        super::git(root, &["merge", "--no-ff", "-q", "--no-edit", branch]);
+    };
+    land_plan(
+        "plan/move-home",
+        &task("TSK-001", "main"),
+        "docs: move the task to main",
+    );
+    sync_branch(root);
+    let moved = ci(root, "Task: EPC-001", None);
+    blocks(&moved, "a planned re-home", "work.import_authority");
+
+    super::git(root, &["switch", "-q", "main"]);
+    land_plan(
+        "plan/edit-task",
+        &task("TSK-001", "main").replace("Work.", "Other work."),
+        "docs: edit the moved task",
+    );
+    sync_branch(root);
+    let edited = ci(root, "Task: EPC-001", None);
+    let what = "a planned re-home under a later edit";
+    blocks(&edited, what, "work.import_authority");
+    blocks(&edited, what, "no default-branch tip this run verified");
 }
 
 /// A task with no `integration_target`, as a hand-written record may be.

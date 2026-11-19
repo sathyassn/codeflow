@@ -185,10 +185,9 @@ or CI runs.**
 | Epic close | Every task terminal, every criterion verified, every consumed spec implemented or still consumed. The full gate runs every target (`codeflow test --all`) | `codeflow epic status`, `codeflow ci` |
 | Release impact | Required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere optional and checked when present | `codeflow ci` |
 
-Nothing polls by default: the builder's pull request carries its cited
-evidence, and the primary reads hosted results once at batch assembly. The
-pull request cites the full gate by run id and revision, and the review
-verdict lives on the pull request, so the evidence survives the cleanup of
+Nothing polls by default: the primary reads hosted results once at batch
+assembly. The pull request carries the cited evidence, the full gate's run
+id and revision, and the review verdict, so they survive cleanup of
 worktrees and build directories.
 
 ### Completed work imported from another line
@@ -211,14 +210,17 @@ A receiver's first push still proves its own task landings.
   and hosted CI are the backstop.
 - After a home line lands on the default target and is deleted, the exact
   record's first-parent landing on the published default target supplies
-  the proof. The landing and its source span must still pass the guarded
-  checks; a missing home without that landing remains unavailable.
+  the proof, when that landing and its source span pass the guarded checks.
 - A source task that merged its home after review retains its binding only
   when that merge was clean and came from the home line. A task reopened
   before its first landing keeps the criteria accepted at that landing.
 - Criteria amendments, reopenings and records brought unchanged from the
   target stay attributed to its history. A task PR does not claim those
   records as its own additions.
+- When two lines hold different criteria for a task, the check orders them
+  by ancestry on the fetched history and reads no branch name or date. When
+  both lines wrote their own criteria, neither is older and the sync
+  refuses (SPC-013).
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
   an unavailable home without a proven default-target landing, or an
@@ -239,8 +241,8 @@ A receiver's first push still proves its own task landings.
   recorded. A sync of anything the line does not hold, a branch that
   carries no task, a protected branch and the line's own push are judged
   as before.
-  A line push after landing work whose completion is still pending waits
-  until the completion record lands, even if the work was reviewed earlier.
+  A line push after landing work waits until its completion record lands,
+  even if the work was reviewed earlier.
 
 When `work.import_authority` refuses, fetch the named home and its full
 history, or the default target's history if the home has been retired.
@@ -274,16 +276,40 @@ Each task or epic record has one home, where it changes:
 - a task's home is the target it declares in `integration_target`;
 - an epic's home is its own line, or the line its `parent_line` names.
 
-A sync takes `main`'s version only of records whose home is not the line,
-and never changes a record whose home is the line: the epic's record, the
-record of an epic that lands on the line, or the record of a task that
+A sync never changes a record whose home is the line: the epic's record,
+the record of an epic that lands on the line, or the record of a task that
 targets the line. A task with no declared target is judged by its epic, and
 stays frozen when the line does not hold that epic's record. Removing or
-moving such a record is a change too.
-Because each record changes only at its home, `main` never holds a newer
-change to a record whose home is the line, so the refusal applies only when
-that rule was broken. A records-only sync that already passes as a planning
-amendment keeps that class.
+moving such a record is a change too. A records-only sync that already
+passes as a planning amendment keeps that class.
+
+**Main's bytes.** The hosted policy check of a pull request into a line
+takes `main`'s records as `main` holds them, on a sync and on any other
+route into the line. A record whose tree entry at the head, blob and mode,
+equals its entry at `main`'s verified commit is not proved again and not
+frozen.
+
+| Aspect | Rule |
+|---|---|
+| When it is on | The commit `--policy-from` names is the tip the check's own query of `origin` reports for the default branch, and the run is not the pre-push hook's hand-off; a run that cannot verify both keeps the full checks |
+| The pre-push hook | Keeps the full checks, because a pusher can redirect the destination it asks through `pushurl` or `insteadOf` |
+| Where home and edits are read | The line's tip, `main`'s commit and their merge base, never the head |
+| What is reported | Each record this takes, or matches but keeps on the full checks, with its reason |
+| Which pull requests | A sync, and a task's pull request that resolved a merge of `main` by hand; records the line never held are covered too |
+
+The hand-resolved task pull request above and the first four cases below
+change earlier behaviour; the rest are still refused.
+
+| Case | Result |
+|---|---|
+| A completion `main` admitted, including one admitted through an administrator's bypass | The line no longer proves it again |
+| A record whose home is not the line, even when the line edited it | The line takes `main`'s text and criteria |
+| A record whose home is the line and that the line has not edited since its merge base with `main` | A sync takes `main`'s version |
+| A home move made by a planning landing on `main`'s first-parent chain, with the task `todo` or `blocked` and no acceptance block at the landing and its first parent | The move counts (an exception to TSK-1004 AC-8) |
+| A record whose home is the line and that the line edited since the merge base, a criteria-only edit included | Refused |
+| A record whose home differs between the line's tip and `main`'s commit, unless a planning landing on `main`'s chain moved it | Refused |
+| Another path in the same range | Refused; the range is a sync only when its merges are clean merges of `main` |
+| The same blob with another mode, a record that cannot be read, or any run without the verified commit | Refused |
 
 When `main` moved a task's home, the sync keeps that home only if every
 move was a reviewed planning merge of records on `main`, and the line
@@ -324,8 +350,8 @@ original SHA-256 digest, source commit and separate redaction review.
 A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
 `acceptance.criteria` records a changed criterion result. The amendment
 changes that criterion and planning records only, and the completion
-contains it. Other planning records in the same commit, such as the epic
-record, the epic plan or other task records, do not disqualify it. A
+contains it. Other planning records in the same commit do not disqualify
+it. A
 planning record is a file under `project-management/` or `docs/plan/` that
 is not hidden, not a harness instruction file and not an adopter-facing path
 under the target's policy. The waiver accepts the commit for this criterion
@@ -339,10 +365,10 @@ endpoint. In `codeflow task status`, a task whose declared integration line
 is not recorded at the default target's tip has no own range unless `--base`
 and `--into` pin that line. A range that reopens a completion that never landed keeps that
 own-range allowance, whatever caused the reopen; a range that reopens a
-landed completion does not. A waiver refused as not on the target says what
-that requires: a receiving line the run pins holds the commit (the pull
-request's base in `codeflow ci`, `--base` in `task status`). The refusal also
-names the route: amend the criterion through a planning pull request into
+landed completion does not. A waiver refused as not on the target names
+what that requires, a receiving line the run pins that holds the commit (the
+pull request's base in `codeflow ci`, `--base` in `task status`), and the
+route: amend the criterion through a planning pull request into
 the target, merge the target into the branch before the review, and name
 that planning commit.
 

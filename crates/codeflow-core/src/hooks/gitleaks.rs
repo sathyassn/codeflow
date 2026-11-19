@@ -975,7 +975,7 @@ impl TextAttributes {
 
 /// The major and minor version in `git version` output, such as
 /// `git version 2.45.1.windows.1` or `git version 2.39.5 (Apple Git-154)`.
-fn git_version(output: &str) -> Option<(u32, u32)> {
+pub(crate) fn git_version(output: &str) -> Option<(u32, u32)> {
     let number = output
         .strip_prefix("git version ")?
         .split_whitespace()

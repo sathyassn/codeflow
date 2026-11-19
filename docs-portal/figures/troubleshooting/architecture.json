@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-seven checks fall into six groups by the surface they read, and only twelve of them can fail; the other fifteen warn at most.",
-    "title": "The twenty-seven checks, by what they read",
+    "idea": "The twenty-eight checks fall into six groups by the surface they read, and only thirteen of them can fail; the other fifteen warn at most.",
+    "title": "The twenty-eight checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry, the Git version or adopter fit.",
     "states": [
       {
         "name": "canfail",
@@ -23,12 +23,12 @@
     ],
     "facts": [
       {
-        "claim": "twelve checks can fail",
+        "claim": "thirteen checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
+          "text": "Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
         },
         "value": true
       },
@@ -507,6 +507,23 @@
           "style": "mono",
           "for": [
             "g4c2"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 239,
+          "cy": 315,
+          "r": 7,
+          "id": "g4c3"
+        },
+        {
+          "text": "git-version",
+          "x": 255,
+          "y": 320,
+          "style": "mono",
+          "for": [
+            "g4c3"
           ]
         },
         {
@@ -1055,6 +1072,23 @@
           ]
         },
         {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 160,
+          "cy": 479,
+          "r": 7,
+          "id": "g4c3"
+        },
+        {
+          "text": "git-version",
+          "x": 174,
+          "y": 484,
+          "style": "mono",
+          "for": [
+            "g4c3"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1167,7 +1201,7 @@
         ],
         [
           "Repository, managed files",
-          "`repo-integrity`, `id-registry`",
+          "`repo-integrity`, `id-registry`, `git-version`",
           "`managed-drift`"
         ],
         [

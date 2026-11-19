@@ -340,6 +340,305 @@ fn imported_from_home(home: &str, reopen: bool, stack: bool) -> tempfile::TempDi
     dir
 }
 
+/// A task reviewed and closed on its branch lands on its home, and a line
+/// imports it. `catch_up` merges the home into the branch after the review;
+/// `later_edit` edits the record on the home after the landing, which moves
+/// the landing the import finds to the planning merge.
+fn landed_on_a_home(catch_up: bool, later_edit: bool) -> tempfile::TempDir {
+    let home = "integration/EPC-003-source";
+    let dir = repo(
+        &[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)],
+        ",\"test_gate_on_push\":\"block\"",
+    );
+    let root = dir.path();
+    let source_task = |status: &str, closeout: &str| {
+        task("TSK-001", status, OWN_JOURNEY, closeout)
+            .replace(
+                "integration_target: main",
+                &format!("integration_target: {home}"),
+            )
+            .replace("EPC-001", "EPC-003")
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &source_task("todo", "Pending.\n"),
+    );
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        ),
+    );
+    write(
+        root,
+        "project-management/epics/EPC-003.md",
+        &EPIC.replace("EPC-001", "EPC-003"),
+    );
+    commit(root, "docs: plan homes");
+    git(root, &["branch", home]);
+    git(root, &["switch", "-c", LINE]);
+    write(root, "src/receiver.rs", "pub fn previously_reviewed() {}\n");
+    let direct = commit(root, "feat: receiving line work");
+    adopt_receiver(root, &direct);
+    git(root, &["switch", "-c", RECEIVER]);
+    git(root, &["switch", "-c", BRANCH, home]);
+    write(root, "src/lib.rs", "pub fn source() {}\n");
+    let reviewed = commit(root, "feat: source work");
+    let results = ["AC-1: verified | unit", "AC-2: verified | journey"];
+    let closeout = block(&reviewed, &results, "verified | journey", "none: fixture");
+    let completed = source_task("complete", &closeout);
+    write(root, &record_path("TSK-001"), &completed);
+    commit(root, "docs: complete source work");
+    if catch_up {
+        git(root, &["switch", "-c", "plan/home-advance", home]);
+        write(root, "docs/source-note.md", "Home planning.\n");
+        commit(root, "docs: advance home planning");
+        git(root, &["switch", home]);
+        merge(root, "plan/home-advance");
+        git(root, &["switch", BRANCH]);
+        merge(root, home);
+    }
+    git(root, &["switch", home]);
+    merge(root, BRANCH);
+    if later_edit {
+        git(root, &["switch", "-c", "plan/record-edit"]);
+        let edited = completed.replace("work TSK-001", "edited TSK-001");
+        assert_ne!(edited, completed, "the edit changes the record");
+        write(root, &record_path("TSK-001"), &edited);
+        commit(root, "docs: edit the record after landing");
+        git(root, &["switch", home]);
+        merge(root, "plan/record-edit");
+    }
+    git(root, &["switch", RECEIVER]);
+    merge(root, home);
+    write(root, "src/lib.rs", "pub fn later_receiver_work() {}\n");
+    commit(root, "feat: receiving work after import");
+    dir
+}
+
+/// A clean merge of the home into the task branch after review is no change
+/// to the reviewed work, wherever a later record edit moves the landing the
+/// import finds: the recheck of that landing allows it as the task's own
+/// landing does.
+#[test]
+fn tsk1185_a_later_record_edit_keeps_a_catch_up_landing_proved() {
+    for (catch_up, later_edit) in [(false, false), (false, true), (true, false), (true, true)] {
+        let dir = landed_on_a_home(catch_up, later_edit);
+        let (code, said) = check(dir.path(), LINE, Some(RECEIVER), false);
+        assert_eq!(
+            code, 0,
+            "catch_up {catch_up}, later_edit {later_edit}: {said}"
+        );
+    }
+}
+
+/// TSK-1185 AC-10: TSK-001 declares `LINE`, but its reviewed work landed on
+/// main, and a planning merge on main then corrects its home. The receiving
+/// branch merges main. `case` is what the correction carries or rests on.
+#[allow(clippy::too_many_lines)] // One fixture per correction case, sharing the plan and the line.
+fn corrected_home(case: &str) -> tempfile::TempDir {
+    let dir = repo(
+        &[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)],
+        ",\"test_gate_on_push\":\"block\"",
+    );
+    let root = dir.path();
+    let on_line = |status: &str, closeout: &str| {
+        task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        )
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &on_line("todo", "Pending.\n"),
+    );
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        ),
+    );
+    commit(root, "docs: plan the work on the line");
+    git(root, &["switch", "-c", LINE]);
+    write(root, "src/receiver.rs", "pub fn previously_reviewed() {}\n");
+    let direct = commit(root, "feat: receiving line work");
+    adopt_receiver(root, &direct);
+    git(root, &["switch", "-c", RECEIVER]);
+    git(root, &["switch", "-c", "side", "main"]);
+    write(root, "src/side.rs", "pub fn never_on_main() {}\n");
+    let side = commit(root, "feat: work that never reaches main");
+    if case == "planned" {
+        git(root, &["switch", "-c", "plan/move-home", "main"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+        );
+        commit(root, "docs: move the task to main");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/move-home");
+    }
+    let elsewhere = |text: &str| {
+        text.replace(
+            &format!("integration_target: {LINE}"),
+            "integration_target: integration/EPC-009-elsewhere",
+        )
+    };
+    if case == "moved back" {
+        git(root, &["switch", "-c", "plan/move-away", "main"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &elsewhere(&on_line("todo", "Pending.\n")),
+        );
+        commit(root, "docs: move the task to another line");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/move-away");
+    }
+    git(root, &["switch", "-c", BRANCH, "main"]);
+    write(root, "src/lib.rs", "pub fn source() {}\n");
+    let landed = commit(root, "feat: source work");
+    let reviewed = if case == "reviewed elsewhere" {
+        side
+    } else {
+        landed
+    };
+    let results = ["AC-1: verified | unit", "AC-2: verified | journey"];
+    let closeout = block(&reviewed, &results, "verified | journey", "none: fixture");
+    let completed = if case == "planned" {
+        task("TSK-001", "complete", OWN_JOURNEY, &closeout)
+    } else {
+        on_line("complete", &closeout)
+    };
+    if case == "moved back" {
+        write(root, &record_path("TSK-001"), &elsewhere(&completed));
+    } else {
+        write(root, &record_path("TSK-001"), &completed);
+    }
+    commit(root, "docs: complete source work");
+    git(root, &["switch", "main"]);
+    merge(root, BRANCH);
+    if case == "planned" {
+        git(root, &["switch", RECEIVER]);
+        merge(root, "main");
+        return dir;
+    }
+    if case == "moved back" {
+        git(root, &["switch", "-c", "plan/move-back"]);
+        write(root, &record_path("TSK-001"), &completed);
+        commit(root, "docs: move the complete task back to the line");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/move-back");
+    }
+    git(root, &["switch", "-c", "plan/correct-home"]);
+    let mut corrected = completed.replace(
+        &format!("integration_target: {LINE}"),
+        "integration_target: main",
+    );
+    if matches!(case, "other edit" | "filler") {
+        corrected = corrected.replace("work TSK-001", "changed TSK-001");
+    }
+    write(root, &record_path("TSK-001"), &corrected);
+    commit(root, "docs: correct the task's home");
+    git(root, &["switch", "main"]);
+    merge(root, "plan/correct-home");
+    if case == "filler" {
+        git(root, &["switch", "-c", "plan/filler"]);
+        let filler = corrected.replace("changed TSK-001", "filler TSK-001");
+        write(root, &record_path("TSK-001"), &filler);
+        commit(root, "docs: edit the record after the move");
+        git(root, &["switch", "main"]);
+        merge(root, "plan/filler");
+    }
+    git(root, &["switch", RECEIVER]);
+    merge(root, "main");
+    dir
+}
+
+#[test]
+fn tsk1185_a_home_correction_on_the_home_proves_at_the_original_landing() {
+    let dir = corrected_home("plain");
+    assert_passes(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "corrected home",
+    );
+}
+
+/// The proved correction does not promote the move before it: a planning
+/// move back to the line's home made while the task was complete stays an
+/// earlier move, and the permitted check refuses it, though the line's copy
+/// names the home it arrived at.
+#[test]
+fn tsk1185_a_home_correction_does_not_clear_an_earlier_move() {
+    let dir = corrected_home("moved back");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "move back while complete",
+        &[
+            "TSK-001",
+            "while it was not todo or blocked",
+            "before its last move",
+        ],
+    );
+}
+
+#[test]
+fn tsk1185_a_home_correction_needs_the_reviewed_head_on_the_home() {
+    let dir = corrected_home("reviewed elsewhere");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "reviewed head elsewhere",
+        &["TSK-001", "the landing changes the task's declared home"],
+    );
+}
+
+/// A task the line holds as its own, moved by a planning landing on the
+/// default branch and completed there later, is not taken on a run that
+/// verified no default tip: a later landing does not stand in for the move's
+/// proof. The same journey with the verified tip is taken
+/// (`ci_cli` `mains_bytes::tsk1185_a_planned_move_then_completed_on_main_is_taken_with_the_verified_tip`).
+#[test]
+fn tsk1185_a_planned_re_home_completed_on_its_home_needs_the_verified_tip() {
+    let dir = corrected_home("planned");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "planned re-home without a verified tip",
+        &[
+            "TSK-001",
+            "the landing changes the task's declared home",
+            "no default-branch tip this run verified",
+        ],
+    );
+}
+
+/// A later edit must not stand in for a correction that fails the rule: the
+/// home check reads only the landing of the record's current text.
+#[test]
+fn tsk1185_a_later_edit_does_not_clear_a_bad_correction() {
+    let dir = corrected_home("filler");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "edit after a bad correction",
+        &["TSK-001", "the landing changes the task's declared home"],
+    );
+}
+
+#[test]
+fn tsk1185_a_home_correction_changes_nothing_else_in_the_record() {
+    let dir = corrected_home("other edit");
+    assert_blocks(
+        &check(dir.path(), LINE, Some(RECEIVER), false),
+        "edit beside the correction",
+        &["TSK-001", "the landing changes the task's declared home"],
+    );
+}
+
 #[test]
 fn main_and_sibling_imports_keep_home_stacking_and_reopened_criteria() {
     for home in ["main", "integration/EPC-003-source"] {
@@ -1452,7 +1751,7 @@ fn write_move(root: &Path, case: &str, after: &str) {
     }
     write(root, &path, after);
     match case {
-        "product" => write(root, "src/planned.rs", "pub fn planned() {}\n"),
+        "product" | BAD_EDIT_GOOD => write(root, "src/planned.rs", "pub fn planned() {}\n"),
         "agents" => write(root, "project-management/AGENTS.md", "Notes.\n"),
         "hidden" => write(root, "project-management/.agents/notes.md", "Notes.\n"),
         "docs" => write(root, "docs/note.md", "A note.\n"),
@@ -1498,8 +1797,11 @@ fn land_move(root: &Path, case: &str, branch: &str) {
 /// both lines advance, and the home is published. `twice` and `twice bad`
 /// move it on to `LINE_C` (the second landing also carries a product file
 /// for `twice bad`), `back` moves it back to `LINE_A`, and `second parent`
-/// makes the move on `LINE_B`, which `LINE_A` then merges. Returns the
-/// repository on `LINE_A`.
+/// makes the move on `LINE_B`, which `LINE_A` then merges. A case ending in
+/// `later edit` edits the moved record by a later planning merge on the
+/// line that made the move. [`BAD_EDIT_GOOD`] makes the first move with a
+/// product file, edits the record, then moves it on to `LINE_C` by a
+/// reviewed records-only merge. Returns the repository on `LINE_A`.
 fn home_move(case: &str) -> tempfile::TempDir {
     let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
     let root = dir.path();
@@ -1531,7 +1833,8 @@ fn home_move(case: &str) -> tempfile::TempDir {
     merge(root, "plan/home");
     // The line as it stood before the move, for a push that updates it.
     git(root, &["tag", "before-move"]);
-    let mover = if case == "second parent" {
+    let off_line = case.starts_with("second parent");
+    let mover = if off_line {
         git(root, &["branch", LINE_B]);
         LINE_B
     } else {
@@ -1547,8 +1850,21 @@ fn home_move(case: &str) -> tempfile::TempDir {
         git(root, &["switch", mover]);
         land_move(root, case, "plan/move");
     }
+    if case.ends_with("later edit") || case == BAD_EDIT_GOOD {
+        // A later planning merge on the mover edits the moved record, so the
+        // record's landing is that edit and the move is an earlier commit.
+        git(root, &["switch", "-c", "plan/record-edit", mover]);
+        write(
+            root,
+            &record_path("TSK-002"),
+            &homed(LINE_B, "todo", "Pending, with notes.\n"),
+        );
+        commit(root, "docs: edit the moved task");
+        git(root, &["switch", mover]);
+        merge(root, "plan/record-edit");
+    }
     let mut home = LINE_B;
-    if matches!(case, "twice" | "twice bad" | "back") {
+    if matches!(case, "twice" | "twice bad" | "back" | BAD_EDIT_GOOD) {
         home = if case == "back" { LINE_A } else { LINE_C };
         git(root, &["switch", "-c", "plan/move-again", LINE_A]);
         write(
@@ -1563,7 +1879,7 @@ fn home_move(case: &str) -> tempfile::TempDir {
         git(root, &["switch", LINE_A]);
         merge(root, "plan/move-again");
     }
-    if case != "second parent" && home != LINE_A {
+    if !off_line && home != LINE_A {
         git(root, &["branch", home, LINE_A]);
     }
     // Both lines advance past the move, as the 3.2.0 and EPC-025 lines did.
@@ -1577,7 +1893,7 @@ fn home_move(case: &str) -> tempfile::TempDir {
         git(root, &["fetch", "origin"]);
     }
     git(root, &["switch", LINE_A]);
-    if case == "second parent" {
+    if off_line {
         merge(root, LINE_B);
     }
     dir
@@ -1605,8 +1921,45 @@ fn line_into_main(root: &Path) -> (i32, String) {
 
 #[test]
 fn a_planning_merge_moves_a_todo_task_to_another_line() {
+    home_moves_taken(&["todo", "todo to blocked", "twice", "back"]);
+}
+
+/// TSK-1185 AC-16: a move on the checked line's own first-parent chain is
+/// still taken when a later planning merge edits the moved record, so the
+/// record's landing is the edit and the move is an earlier commit.
+#[test]
+fn tsk1185_a_move_on_the_checked_line_is_taken_under_a_later_edit() {
+    home_moves_taken(&["later edit"]);
+}
+
+/// TSK-1185 AC-16: the same journey with the move made off the checked
+/// line's first-parent chain is refused at the move, as it is when the move
+/// is the record's own landing (`second parent`), and the refusal names the
+/// route that takes it.
+#[test]
+fn tsk1185_a_later_edit_does_not_clear_a_move_off_the_checked_line() {
+    home_moves_refused(&[(
+        "second parent, later edit",
+        "on the first-parent history of neither the head under check nor a default-branch tip this run verified; the move is taken when it lands on the checked line itself",
+    )]);
+}
+
+/// The case of a refused move, a later edit, then an accepted move.
+const BAD_EDIT_GOOD: &str = "refused move, edit, accepted move";
+
+/// TSK-1185 AC-16: an accepted move, here the record's own landing, does
+/// not clear an earlier refused move on the home's history, with a records
+/// edit between them.
+#[test]
+fn tsk1185_an_accepted_move_does_not_clear_an_earlier_refused_one() {
+    home_moves_refused(&[(BAD_EDIT_GOOD, MOVED)]);
+}
+
+/// Every case is taken through CI into the default branch and through the
+/// real pre-push entry, with no home-move refusal.
+fn home_moves_taken(cases: &[&str]) {
     let mut failures = Vec::new();
-    for case in ["todo", "todo to blocked", "twice", "back"] {
+    for case in cases {
         let dir = home_move(case);
         let root = dir.path();
         // The receiving range through CI into the default branch, and
@@ -1704,4 +2057,303 @@ fn a_home_move_through_no_planning_landing_stays_refused() {
 #[test]
 fn a_home_move_off_the_checked_line_stays_refused() {
     home_moves_refused(&[("second parent", MOVED), ("twice bad", MOVED)]);
+}
+
+/// `commit` with `date` as its author and committer date, which a requester
+/// controls and the ordering must never read.
+fn commit_dated(root: &Path, message: &str, date: &str) -> String {
+    git(root, &["add", "-A"]);
+    let out = codeflow_core::git::command()
+        .args(["commit", "-m", message])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    head(root)
+}
+
+// TSK-1185: a planning branch can introduce V2 before the merges that
+// reintroduce V1, then land V2 on the source after those merges.
+// `new_version_date` forges the date of the commit that writes V2.
+fn early_fork_import(
+    receiver_second_resolution: bool,
+    divergent: bool,
+    new_version_date: Option<&str>,
+) -> tempfile::TempDir {
+    let diverging: &[&str] = if divergent { &["TSK-001"] } else { &[] };
+    early_fork_import_of(
+        &["TSK-001"],
+        receiver_second_resolution,
+        diverging,
+        new_version_date,
+    )
+}
+
+/// [`early_fork_import`] with each record step applied to every task in
+/// `ids`; the receiving line independently amends only the tasks in
+/// `diverging`.
+fn early_fork_import_of(
+    ids: &[&str],
+    receiver_second_resolution: bool,
+    diverging: &[&str],
+    new_version_date: Option<&str>,
+) -> tempfile::TempDir {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let write_each = |ids: &[&str], criteria: &str| {
+        for id in ids {
+            write(
+                root,
+                &record_path(id),
+                &task(
+                    id,
+                    "todo",
+                    &OWN_JOURNEY.replace("shall work", criteria),
+                    "Pending.\n",
+                ),
+            );
+        }
+    };
+    let older = head(root);
+    write_each(ids, "shall work well");
+    let base = commit(root, "docs: write the criteria the syncs keep");
+    git(root, &["switch", "-c", "plan/new-version"]);
+    write_each(ids, "shall work safely");
+    let introduction = match new_version_date {
+        Some(date) => commit_dated(root, "docs: introduce the superseding criteria", date),
+        None => commit(root, "docs: introduce the superseding criteria"),
+    };
+
+    // M1 keeps V1 against a side parent that still holds the version V1
+    // replaced, as the real sync merges do. The planning branch already
+    // forked at B, so M1 is not an ancestor of C.
+    git(root, &["switch", "-c", "plan/other-version", &older]);
+    write(root, "docs/other.md", "A side line.\n");
+    commit(root, "docs: advance a side line");
+    git(root, &["switch", "main"]);
+    merge(root, "plan/other-version");
+    let first_resolution = head(root);
+
+    // A second line independently keeps V1. The real 1097 and 1062 histories
+    // both have unordered old-version merges; their receiver retains a
+    // different one while the source eventually contains both.
+    git(root, &["switch", "-c", "plan/another-version", &older]);
+    write(root, "docs/another.md", "Another side line.\n");
+    commit(root, "docs: advance another side line");
+    git(root, &["switch", "-c", "test/old-version-line", &base]);
+    merge(root, "plan/another-version");
+    let second_resolution = head(root);
+    let retained = if receiver_second_resolution {
+        &second_resolution
+    } else {
+        &first_resolution
+    };
+    git(root, &["switch", "-c", RECEIVER, retained]);
+    // Keep the receiving tip outside the source's ancestry.
+    write(root, "docs/receiver.md", "The receiving line.\n");
+    commit(root, "docs: advance the receiver");
+    let receiving_base = head(root);
+    git(root, &["branch", "test/receiving-base"]);
+    git(root, &["switch", "main"]);
+    merge(root, "test/old-version-line");
+    merge(root, "plan/new-version");
+    let landing = head(root);
+
+    let repository = git2::Repository::open(root).unwrap();
+    let oid = |text: &str| git2::Oid::from_str(text).unwrap();
+    assert!(!repository
+        .graph_descendant_of(oid(&first_resolution), oid(&second_resolution))
+        .unwrap());
+    assert!(!repository
+        .graph_descendant_of(oid(&second_resolution), oid(&first_resolution))
+        .unwrap());
+    for resolution in [&first_resolution, &second_resolution] {
+        assert!(repository
+            .graph_descendant_of(oid(&landing), oid(resolution))
+            .unwrap());
+        assert!(!repository
+            .graph_descendant_of(oid(&introduction), oid(resolution))
+            .unwrap());
+    }
+    assert!(repository
+        .graph_descendant_of(oid(&landing), oid(&first_resolution))
+        .unwrap());
+    assert!(!repository
+        .graph_descendant_of(oid(&landing), oid(&receiving_base))
+        .unwrap());
+    git(root, &["switch", RECEIVER]);
+    merge(root, "main");
+    // The target independently edits its criteria after the sync branch
+    // forks. Its new tip is outside the candidate, so import ordering must
+    // reject it even though the candidate is a clean merge of source bytes.
+    if !diverging.is_empty() {
+        git(root, &["switch", "test/receiving-base"]);
+        write_each(diverging, "shall work independently");
+        commit(root, "docs: independently amend the receiving criteria");
+        git(root, &["switch", RECEIVER]);
+    }
+    dir
+}
+
+const LONG_AGO: &str = "2001-01-01T00:00:00Z";
+const FAR_AHEAD: &str = "2040-01-01T00:00:00Z";
+
+#[test]
+fn tsk1185_1097_sync_then_early_fork_amendment_orders_the_new_version() {
+    let dir = early_fork_import(true, false, None);
+    assert_passes(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "1097: sync, early-fork planning landing, second sync",
+    );
+}
+
+#[test]
+fn tsk1185_1062_reintroduced_version_yields_to_early_fork_landing() {
+    let dir = early_fork_import(false, false, None);
+    assert_passes(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "1062: main retains one of two old-version reintroductions",
+    );
+}
+
+#[test]
+fn tsk1185_two_sided_criteria_divergence_still_refuses() {
+    let dir = early_fork_import(false, true, None);
+    let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
+    assert_blocks(
+        &result,
+        "independent receiving criteria remain competing authority",
+        &["work.import_authority", "none of them is newer"],
+    );
+    eprintln!("two-sided divergence control:\n{}", result.1);
+}
+
+/// One run lists every record the import judge cannot order: two tasks
+/// diverge on both sides, and both are named, each in its own block. The
+/// run still refuses.
+#[test]
+fn tsk1185_every_unordered_record_is_listed_in_one_run() {
+    let both = ["TSK-001", "TSK-002"];
+    let dir = early_fork_import_of(&both, false, &both, None);
+    let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
+    assert_blocks(
+        &result,
+        "two records with real two-sided divergences",
+        &["work.import_authority", "none of them is newer"],
+    );
+    for id in both {
+        assert!(
+            result
+                .1
+                .contains(&format!("{id}: blocks come from target history")),
+            "{id} is not listed: {}",
+            result.1
+        );
+    }
+    let blocks = result
+        .1
+        .matches("BLOCKED — lifecycle invariant work.import_authority")
+        .count();
+    assert_eq!(blocks, 2, "one block per record: {}", result.1);
+}
+
+/// Of two imported records, only the one that diverged on both sides is
+/// listed; the run still refuses.
+#[test]
+fn tsk1185_only_the_unordered_record_is_listed_and_the_run_refuses() {
+    let dir = early_fork_import_of(&["TSK-001", "TSK-002"], false, &["TSK-001"], None);
+    let result = check(dir.path(), "test/receiving-base", Some(RECEIVER), false);
+    assert_blocks(
+        &result,
+        "one record with a real two-sided divergence",
+        &[
+            "work.import_authority",
+            "TSK-001: blocks come from target history",
+        ],
+    );
+    assert!(
+        !result
+            .1
+            .contains("TSK-002: blocks come from target history"),
+        "the provable record is listed: {}",
+        result.1
+    );
+    let blocks = result
+        .1
+        .matches("BLOCKED — lifecycle invariant work.import_authority")
+        .count();
+    assert_eq!(blocks, 1, "one block for the one record: {}", result.1);
+}
+
+/// AC-6: the same three answers through `--into`, the form a sync uses.
+#[test]
+fn tsk1185_journey_through_into_a_line() {
+    let into = ["--into", "test/receiving-base"];
+    for receiver_second_resolution in [true, false] {
+        let dir = early_fork_import(receiver_second_resolution, false, None);
+        assert_passes(
+            &check_as(
+                dir.path(),
+                "test/receiving-base",
+                Some(RECEIVER),
+                false,
+                &into,
+            ),
+            "a sync over the superseded record",
+        );
+    }
+    let dir = early_fork_import(false, true, None);
+    assert_blocks(
+        &check_as(
+            dir.path(),
+            "test/receiving-base",
+            Some(RECEIVER),
+            false,
+            &into,
+        ),
+        "a real two-sided divergence through --into",
+        &["work.import_authority", "none of them is newer"],
+    );
+}
+
+/// AC-3: V2's commit dated before every V1 resolution is still newer, because
+/// ancestry orders it.
+#[test]
+fn tsk1185_an_old_date_does_not_make_the_new_version_older() {
+    let dir = early_fork_import(true, false, Some(LONG_AGO));
+    assert_passes(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "V2 forged to 2001",
+    );
+}
+
+/// AC-3: a date far ahead does not settle a real divergence for V2.
+#[test]
+fn tsk1185_a_future_date_does_not_settle_a_divergence() {
+    let dir = early_fork_import(false, true, Some(FAR_AHEAD));
+    assert_blocks(
+        &check(dir.path(), "test/receiving-base", Some(RECEIVER), false),
+        "V2 forged to 2040",
+        &["work.import_authority", "none of them is newer"],
+    );
+}
+
+/// AC-3: naming the branch like a line does not settle a real divergence.
+#[test]
+fn tsk1185_a_line_name_does_not_settle_a_divergence() {
+    let dir = early_fork_import(false, true, None);
+    git(dir.path(), &["branch", "-m", RECEIVER, LINE]);
+    assert_blocks(
+        &check(dir.path(), "test/receiving-base", Some(LINE), false),
+        "a branch named like the epic line",
+        &["work.import_authority", "none of them is newer"],
+    );
 }

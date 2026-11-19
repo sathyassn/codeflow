@@ -171,7 +171,14 @@ impl Fixture {
     pub(super) fn judge(&self) -> Result<BTreeMap<String, ImportedRecord>, String> {
         let repo = Repository::open(self.root()).unwrap();
         let graph = Graph::from_revision(&repo, "sync").unwrap();
-        imported_records(&repo, self.oid(LINE), self.oid("sync"), &graph)
+        imported_records(
+            &repo,
+            self.oid(LINE),
+            self.oid("sync"),
+            &graph,
+            None,
+            Some(LINE),
+        )
     }
 }
 

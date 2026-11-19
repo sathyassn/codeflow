@@ -891,8 +891,9 @@ task PR.
   versions and the one the merge keeps; a reviewer confirms which the task
   keeps.
 
-The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
-judges against the pull request's target only.
+The hosted `codeflow-policy.yml` job passes `--policy-from` but no
+`--into`, so it judges these criteria against the pull request's target
+only.
 
 ## Home moves a sync of main accepts
 
@@ -913,6 +914,13 @@ commit since the line's merge base with it:
   only when the task was `todo` or `blocked` with no acceptance block on
   both sides of the move and the line has not changed its copy since the
   merge base.
+- When the line's copy names the line itself as its home, or names no
+  home, or the run names no receiving line (`--into`, or a line as the
+  judged branch), every move except a proved home correction must also
+  stand on the first-parent history of the commit the run verified as
+  `main`'s tip (TSK-1185). This does not apply when the line holds no copy
+  or its copy names the record's own home. The hosted check verifies the
+  tip with `--policy-from`; a run without it refuses such a move.
 - Anything else is refused with "the landing changes the task's declared
   home" and the cause. A later change to the record on `main`, a note or a
   move back included, does not clear an earlier refused move.
@@ -1139,8 +1147,9 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   not hold yet. Git attributes come from the empty tree, with `diff` set on
   every path, so a `.gitattributes` entry (`-diff`, `binary` or a `textconv`
   driver) cannot hide a staged line and a file holding a NUL byte is read as
-  text. This needs git 2.41 or later, as the CI scan does; an older git is a
-  failed scan. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
+  text. This needs git 2.41 or later, as the CI scan and the merge judgment
+  in `codeflow ci` do; an older git is a failed scan and a refused judgment,
+  and `codeflow doctor --check git-version` reports it early. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
   inherited value, so in a partial clone a missing object is a failed scan
   and never a fetch from the promisor remote. A repository with a promisor
   remote (a partial clone) also needs git 2.46 or later: the setting arrives

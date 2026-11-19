@@ -15,7 +15,7 @@ use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
     is_correction, is_landed_review, is_landing_marker, pull_request_findings_into, Criteria,
     Finding, OwnLine, Replaced, Scope, AUTHORITY_NOTE, COPIES_NOTE, FROZEN_RULE, IMPORT_RULE,
-    REMOVAL_RULE, SCOPE_NOTE,
+    MAINS_BYTES_NOTE, REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -90,6 +90,7 @@ pub(super) fn dispatch(
                 Scope {
                     own_line: own_line.as_ref(),
                     replaced: replaced.as_ref(),
+                    trusted: names.trusted,
                 },
             )
         }),
@@ -101,6 +102,8 @@ pub(super) fn dispatch(
                     if let Some(refused) = removal(body, &found) {
                         tagged.push(refused);
                     }
+                } else if found.rule == MAINS_BYTES_NOTE {
+                    println!("codeflow ci: acceptance: {}", found.message);
                 } else if found.note {
                     let remedy = if found.rule == AUTHORITY_NOTE || found.rule == COPIES_NOTE {
                         codeflow_core::remedy::CRITERIA_AUTHORITY.remedy()
