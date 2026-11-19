@@ -1316,6 +1316,12 @@ fn clears_ci_base_refused() {
     let base = text(&run("git", root, &["rev-parse", "main"]));
     let replace = format!(".git/refs/replace/{}", base.trim());
     write(root, &replace, "0123456789012345678901234567890123456789\n");
+    let (status, before) = ci_status(root, &[]);
+    assert_ne!(
+        status,
+        Some(0),
+        "an unreadable policy pin must refuse: {before}"
+    );
     let finding = "git refused it";
     prove(
         "CI_BASE_REFUSED",
@@ -2204,7 +2210,8 @@ fn clears_push_range_unresolved() {
     // The push fetches the default tip (SPC-013 R-120), so only a branch
     // sharing no history with it can lack a base: one from a line with its
     // own history, which moves on in another clone while this clone
-    // forgets its tracking refs.
+    // forgets the archive's tracking ref. Keep the default tracking ref:
+    // the hook must still be able to read its landed policy floor.
     git(&root, &["checkout", "-q", "--orphan", "chore/archive"]);
     git(&root, &["commit", "-q", "-m", "chore: start the archive"]);
     let started = push(&root, &["origin", "chore/archive"]);
@@ -2233,18 +2240,10 @@ fn clears_push_range_unresolved() {
     git(&other, &["push", "-q", "origin", "HEAD"]);
     git(&root, &["switch", "-q", "-c", "feat/archived"]);
     commit(&root, "x.txt", "feat: add x");
-    let refs = String::from_utf8(
-        run(
-            "git",
-            &root,
-            &["for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
-        )
-        .stdout,
-    )
-    .unwrap();
-    for name in refs.lines() {
-        git(&root, &["update-ref", "-d", name]);
-    }
+    git(
+        &root,
+        &["update-ref", "-d", "refs/remotes/origin/chore/archive"],
+    );
     let finding = "range unresolved";
     let before = pushed(&root);
     let printed = block(&before, finding).to_string();
