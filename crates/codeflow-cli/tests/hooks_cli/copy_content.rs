@@ -276,20 +276,20 @@ fn a_destination_past_the_discovery_bound_is_refused_by_both_guards() {
 #[test]
 fn ordinary_copies_and_dry_runs_keep_passing() {
     let f = fixture();
-    let (a, b, e, s) = (&f.claude, &f.hooks, &f.empty, &f.scratch);
+    let (claude, hooks, empty, scratch) = (&f.claude, &f.hooks, &f.empty, &f.scratch);
     let allowed: Vec<String> = vec![
         "cp -R src/ build/".into(),
         "rsync -a docs/ site/".into(),
         "ditto src build".into(),
         "rsync -a --delete out/ dist/".into(),
-        format!("cp -R .claude {s}/backup"),
-        format!("rsync -a .claude/ {s}/backup/"),
+        format!("cp -R .claude {scratch}/backup"),
+        format!("rsync -a .claude/ {scratch}/backup/"),
         "cp README.md notes.md".into(),
-        format!("rsync -an {a}/ ./"),
-        format!("rsync -a --dry-run {b}/ ./"),
-        format!("rsync -an --delete {e}/ .worktrees/w/"),
-        format!("rsync -a --dry-run --delete-after {e}/ .worktrees/w/"),
-        format!("rsync -an --remove-source-files .claude/ {s}/dst/"),
+        format!("rsync -an {claude}/ ./"),
+        format!("rsync -a --dry-run {hooks}/ ./"),
+        format!("rsync -an --delete {empty}/ .worktrees/w/"),
+        format!("rsync -a --dry-run --delete-after {empty}/ .worktrees/w/"),
+        format!("rsync -an --remove-source-files .claude/ {scratch}/dst/"),
     ];
     assert_both(&f.root, &[], &allowed);
 }
