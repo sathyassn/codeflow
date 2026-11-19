@@ -1019,11 +1019,11 @@ fn probe_export_options(words: &[String]) -> bool {
 
 /// Arithmetic may evaluate values as further assignments to indirect names.
 fn probe_arithmetic(segment: &str, words: &[String]) -> bool {
-    super::expand_shell_commands(segment).arithmetic || probe_arithmetic_words(words)
+    super::expand_shell_commands(segment).arithmetic || probe_arithmetic_words(words, false)
 }
 
 /// Arithmetic operand positions in commands, after shell syntax is segmented.
-pub(super) fn probe_arithmetic_words(words: &[String]) -> bool {
+pub(super) fn probe_arithmetic_words(words: &[String], zsh_operands: bool) -> bool {
     let mut words = words.to_vec();
     strip_reserved_words(&mut words);
     if words
@@ -1039,6 +1039,9 @@ pub(super) fn probe_arithmetic_words(words: &[String]) -> bool {
     let Some((program, args)) = super::configuration_launch(&words, None) else {
         return false;
     };
+    if zsh_operands && zsh_arithmetic_operands(program, args) {
+        return true;
+    }
     match program {
         "let" | "integer" | "float" | "repeat" => true,
         "declare" | "typeset" | "local" | "readonly" | "export" => {
@@ -1074,7 +1077,93 @@ pub(super) fn probe_arithmetic_words(words: &[String]) -> bool {
     }
 }
 
+fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
+    let digits = |word: &str| !word.is_empty() && word.chars().all(|c| c.is_ascii_digit());
+    if matches!(
+        program,
+        "shift" | "return" | "break" | "continue" | "exit" | "bye"
+    ) {
+        return args
+            .iter()
+            .find(|word| word.as_str() != "--" && !(program == "shift" && word.as_str() == "-p"))
+            .is_some_and(|word| !digits(word));
+    }
+    if !matches!(program, "printf" | "print") {
+        return false;
+    }
+    let mut formatted = program == "printf";
+    let mut attached_format = None;
+    let mut at = 0;
+    while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
+        at += 1;
+        if option == "--" {
+            break;
+        }
+        let flags = &option[1..];
+        if program == "print" {
+            if let Some((_, tail)) = flags.split_once('f') {
+                formatted = true;
+                if !tail.is_empty() {
+                    attached_format = Some(tail);
+                }
+                break;
+            }
+            continue;
+        }
+        if let Some((_, target)) = flags.split_once('v') {
+            let target = if target.is_empty() {
+                let target = args.get(at).map_or("", String::as_str);
+                at += 1;
+                target
+            } else {
+                target
+            };
+            if expands(target) || target.contains('[') {
+                return true;
+            }
+        }
+    }
+    let Some(format) = attached_format
+        .or_else(|| args.get(at).map(String::as_str))
+        .filter(|_| formatted)
+    else {
+        return false;
+    };
+    let values = &args[at + usize::from(attached_format.is_none())..];
+    if expands(format) {
+        return !values.is_empty();
+    }
+    let mut chars = format.chars();
+    let mut numeric = false;
+    let mut setter = false;
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            continue;
+        }
+        for conversion in chars.by_ref() {
+            match conversion {
+                '%' | 's' | 'c' | 'b' | 'q' => break,
+                'n' => {
+                    setter = true;
+                    break;
+                }
+                '*' | 'd' | 'i' | 'o' | 'u' | 'x' | 'X' | 'e' | 'E' | 'f' | 'F' | 'g' | 'G' => {
+                    numeric = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    !values.is_empty() && (setter || numeric && values.iter().any(|word| !digits(word)))
+}
+
+#[cfg(test)]
 fn probe_line_literals(segments: &[String]) -> Literals {
+    probe_line_literals_in_context(segments, true)
+}
+
+fn probe_line_literals_in_context(segments: &[String], read_arithmetic: bool) -> Literals {
     let mut result = Literals::default();
     for segment in segments {
         let mut words = super::command_argv(segment);
@@ -1105,7 +1194,10 @@ fn probe_line_literals(segments: &[String]) -> Literals {
                         })
                 });
         let removing = builtin == "unset";
-        if unknown_target || probe_arithmetic(segment, &words) || probe_export_options(&words) {
+        if unknown_target
+            || read_arithmetic && probe_arithmetic(segment, &words)
+            || probe_export_options(&words)
+        {
             for name in probe_names() {
                 result.0.insert(name.into(), None);
             }
@@ -3403,7 +3495,8 @@ fn collect_segments(
         return Err("a Git runner body contains an unread command word".into());
     }
     let segments = literal_segments(&expanded.segments);
-    let mut probe_literals = probe_line_literals(&segments);
+    // Expanded arithmetic already carries each body's shell context.
+    let mut probe_literals = probe_line_literals_in_context(&segments, false);
     // The segmenter owns executable/data distinctions at every body depth.
     if expanded.arithmetic {
         for name in probe_names() {

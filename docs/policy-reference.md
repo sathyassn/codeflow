@@ -701,13 +701,17 @@ the form refuses:
     evaluation and marks every probe input unresolved, regardless of export
     or inheritance. Digits-only parameter offsets and subscripts remain
     known. The shell segmenter retains evaluation evidence through carried
-    bodies and substitutions, and adds evidence from continuation-joined
-    text without changing segmentation.
+    bodies and substitutions. It recognizes continued evaluation openers
+    before replacing substitution text, using the segmenter's own lexical
+    state and preserving the original segment boundaries.
     The segmenter's quote, comment and heredoc rules distinguish executable
     expressions from data. Recognized arithmetic command operands, setters
     with an expanding destination and whole-shell export options add the
     same uncertainty. This is a conservative reader, not a complete shell
     evaluator; the recognized forms do not establish exhaustive coverage.
+    Arithmetic operand positions include the supported zsh builtin forms.
+    Explicit inline shell bodies retain their shell's operand rules;
+    an unspecified shell retains the conservative supported readings.
     An assignment on the current Git command or its direct launcher is
     certain; a carried prefix remains uncertain.
     Runner children independently keep or clear each known input, with

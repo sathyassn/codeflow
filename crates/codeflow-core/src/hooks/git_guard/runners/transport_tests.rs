@@ -302,10 +302,21 @@ fn shell_operand_data_keeps_probe_inputs_known() {
         "cat <<'EOF'\nit's $\\\n{s:x}\nEOF",
         "echo '$\\\n{s:x}'",
         "echo data # don't $\\\nword",
+        ": \"$\\\n(echo data)\"",
     ] {
         let words = super::super::super::command_argv(context);
-        assert!(!super::super::probe_arithmetic(context, &words), "{context}");
+        assert!(
+            !super::super::probe_arithmetic(context, &words),
+            "{context}"
+        );
     }
+}
+
+#[test]
+fn continued_substitution_keeps_nested_evaluation_evidence() {
+    let context = ": \"$\\\n(echo data; ((x)))\"";
+    let words = super::super::super::command_argv(context);
+    assert!(super::super::probe_arithmetic(context, &words));
 }
 
 #[test]

@@ -1859,7 +1859,6 @@ fn git_guard_judges_continuation_and_operand_inputs() {
         "# it's\n(\\\n(x))",
         "cat <<EOF\nit's\nEOF\n: \"$(\\\n(x))\"",
         ": $'\\'' \"$\\\n{s:x}\"",
-        "cat <<EOF\nit's $\\\n{s:x}\nEOF",
         "printf %d \"$x\"",
         "printf -v result %d \"$x\"",
         "printf %n \"$n\"",

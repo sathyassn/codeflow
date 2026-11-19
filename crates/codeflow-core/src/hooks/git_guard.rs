@@ -7514,7 +7514,7 @@ fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
         arithmetic,
         ..Expanded::default()
     };
-    expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies);
+    expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies, true);
     out
 }
 
@@ -7530,17 +7530,18 @@ const ARITHMETIC_READ: &str = "\0arithmetic_read";
 fn command_segments_read(command: &str, depth: usize) -> (Vec<String>, bool) {
     let mut segments = Vec::new();
     split_into_segments(command, &mut segments, depth, false);
-    let mut arithmetic = segments.iter().any(|segment| segment == ARITHMETIC_READ);
-    let joined = join_continuations(command);
-    if joined != command {
-        // Join only for evidence. The original text owns segmentation,
-        // including the command boundaries after comments and heredocs.
-        let mut evidence = Vec::new();
-        split_into_segments(&joined, &mut evidence, depth, false);
-        arithmetic |= evidence.iter().any(|segment| segment == ARITHMETIC_READ);
-    }
+    let arithmetic = segments.iter().any(|segment| segment == ARITHMETIC_READ);
     segments.retain(|segment| segment != ARITHMETIC_READ);
     (segments, arithmetic)
+}
+
+fn zsh_operand_context(words: &[String], inherited: bool) -> bool {
+    // Unknown shells retain the conservative supported shell readings.
+    strip_launchers(words).map_or(inherited, |(program, _)| match launcher_name(program) {
+        "zsh" => true,
+        "bash" | "sh" | "dash" | "ash" => false,
+        _ => inherited,
+    })
 }
 
 /// Push each segment, then the commands its text carries, unwrapped again
@@ -7556,6 +7557,7 @@ fn expand_segments(
     depth: usize,
     literals: &mut Literals,
     git_bodies: bool,
+    zsh_operands: bool,
 ) {
     for seg in segments {
         // Each word as written too, for the readings below (TSK-1456).
@@ -7563,6 +7565,8 @@ fn expand_segments(
         let written = toks.len();
         strip_reserved_words(&mut toks);
         marks.drain(..written - toks.len());
+        out.arithmetic |= runners::probe_arithmetic_words(&toks, zsh_operands);
+        let body_zsh = zsh_operand_context(&toks, zsh_operands);
         let carries_git = strip_launchers(&toks)
             .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
         let carried = if !git_bodies && carries_git {
@@ -7648,12 +7652,11 @@ fn expand_segments(
         // its expansions is a reading of its own, with no unread word.
         let joined_first = out.segments.len();
         if let Some(joined) = joined_expansion_reading(&seg) {
-            expand_bodies(vec![joined], out, depth, literals, git_bodies);
+            expand_bodies(vec![joined], out, depth, literals, git_bodies, zsh_operands);
         }
         let joined_within = joined_first..out.segments.len();
-        let first = out.segments.len();
-        expand_bodies(alternatives, out, depth, literals, git_bodies);
-        let within = first..out.segments.len();
+        expand_bodies(alternatives, out, depth, literals, git_bodies, zsh_operands);
+        let within = joined_within.end..out.segments.len();
         // Only the line's own top level: an assignment inside a body or a
         // subshell may not outlive it.
         if depth == 1 {
@@ -7677,7 +7680,7 @@ fn expand_segments(
         if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
             out.segments.push(PROGRAM_UNREAD.to_string());
         }
-        expand_bodies(bodies, out, depth, literals, git_bodies);
+        expand_bodies(bodies, out, depth, literals, git_bodies, body_zsh);
     }
 }
 
@@ -7803,6 +7806,7 @@ fn expand_bodies(
     depth: usize,
     literals: &mut Literals,
     git_bodies: bool,
+    zsh_operands: bool,
 ) {
     if bodies.is_empty() {
         return;
@@ -7816,7 +7820,7 @@ fn expand_bodies(
     for body in bodies {
         let (inner, arithmetic) = command_segments_read(&body, depth);
         out.arithmetic |= arithmetic;
-        expand_segments(inner, out, depth + 1, literals, git_bodies);
+        expand_segments(inner, out, depth + 1, literals, git_bodies, zsh_operands);
     }
 }
 
@@ -9165,6 +9169,60 @@ fn literal_parameter_form(body: &[char]) -> bool {
     }
 }
 
+/// Evaluation evidence at an executable opener split by continuations.
+fn continued_arithmetic(chars: &[char], start: usize, depth: usize, code_context: bool) -> bool {
+    let mut prefix = Vec::new();
+    let mut positions = Vec::new();
+    let mut i = start;
+    let mut continued = false;
+    while i < chars.len() && prefix.len() < 3 {
+        if chars[i] == '\\' && chars.get(i + 1) == Some(&'\n') {
+            continued = true;
+            i += 2;
+        } else {
+            positions.push(i);
+            prefix.push(chars[i]);
+            i += 1;
+        }
+    }
+    if !continued {
+        return false;
+    }
+    if prefix.starts_with(&['(', '(']) || prefix.starts_with(&['$', '(', '(']) {
+        return true;
+    }
+    if prefix.starts_with(&['$', '[']) {
+        return true;
+    }
+    if prefix.starts_with(&['$', '(']) {
+        let (inner, _) = capture_balanced(chars, positions[1] + 1);
+        let mut evidence = Vec::new();
+        split_into_segments(&inner, &mut evidence, depth + 1, code_context);
+        return evidence
+            .iter()
+            .any(|segment| matches!(segment.as_str(), ARITHMETIC_READ | NESTING_UNREAD));
+    }
+    if !prefix.starts_with(&['$', '{']) {
+        return false;
+    }
+    // The caller has already established an executable expansion position.
+    // Read only its parameter text; comments and quoting outside it never
+    // supply lexical state to this evidence.
+    while i < chars.len() {
+        if chars[i] == '\\' && chars.get(i + 1) == Some(&'\n') {
+            i += 2;
+        } else {
+            let c = chars[i];
+            prefix.push(c);
+            i += 1;
+            if c == '}' {
+                break;
+            }
+        }
+    }
+    parameter_arithmetic(&prefix, 0)
+}
+
 /// Split a command into simple-command segments, recursing into `$(…)` and
 /// backtick substitutions. Honors single/double quotes; treats unquoted
 /// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
@@ -9242,10 +9300,18 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             i += 1;
             continue;
         }
-        // Parameter evaluation executes inside double quotes too. The
-        // existing paths keep literal quoting, escapes and comments out;
-        // continuation-joined text supplies additional evidence separately.
-        if c == '$' && parameter_arithmetic(&chars, i) {
+        // Keep evidence before substitutions replace their source syntax.
+        // This position has the segmenter's own quote and escape provenance.
+        if c == '$'
+            && (parameter_arithmetic(&chars, i)
+                || continued_arithmetic(
+                    &chars,
+                    i,
+                    depth,
+                    code_context || substitution_output_runs(&cur),
+                ))
+            || c == '(' && !in_double && continued_arithmetic(&chars, i, depth, code_context)
+        {
             out.push(ARITHMETIC_READ.into());
         }
         // Command substitution executes even inside double quotes.
@@ -9570,7 +9636,7 @@ impl Line {
         // space when its last word does (OS text rule, issue 79).
         let text = text.trim_matches([' ', '\t', '\n']);
         if !text.is_empty() {
-            if runners::probe_arithmetic_words(&command_argv(text)) {
+            if runners::probe_arithmetic_words(&command_argv(text), false) {
                 out.push(ARITHMETIC_READ.into());
             }
             out.push(text.to_string());
@@ -9934,6 +10000,7 @@ fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
     while i < chars.len() {
         if chars[i] == '$'
             && (parameter_arithmetic(&chars, i)
+                || continued_arithmetic(&chars, i, depth, false)
                 || chars.get(i + 1) == Some(&'(') && chars.get(i + 2) == Some(&'('))
         {
             out.push(ARITHMETIC_READ.into());
