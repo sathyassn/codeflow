@@ -254,6 +254,58 @@ fn a_source_the_guard_cannot_read_is_refused_by_both_guards() {
     }
 }
 
+/// Review Q1: a copy that follows links writes a linked directory's
+/// contents, so both hooks read through a source link for a run-time
+/// destination. A link to a directory holding `.claude` refuses, as do a
+/// dangling link and a link cycle; a link to an ordinary directory passes
+/// the source check.
+#[cfg(unix)]
+#[test]
+fn a_run_time_copy_through_a_source_link_is_judged_by_both_guards() {
+    let f = fixture();
+    let o = Path::new(&f.outside);
+    let docs = o.join("docs-target");
+    std::fs::create_dir_all(docs.join("guide")).unwrap();
+    std::fs::write(docs.join("guide/page.txt"), "x\n").unwrap();
+    for (dir, target) in [
+        ("source", Path::new(&f.claude).to_path_buf()),
+        ("harmless", docs),
+        ("dangling", o.join("no-such-target")),
+        ("cycle", o.join("cycle")),
+    ] {
+        std::fs::create_dir_all(o.join(dir)).unwrap();
+        std::os::unix::fs::symlink(target, o.join(dir).join("slot")).unwrap();
+    }
+    let o = &f.outside;
+    // The source check's finding for a run-time destination.
+    let finding = "which the guard cannot resolve, from the source";
+    let refused = vec![
+        row(
+            format!("cp -RL {o}/source/. \"$OUT\""),
+            &["$OUT", finding, "holds the enforcement entry", "/.claude`"],
+        ),
+        row(
+            format!("cp -RL {o}/dangling/. \"$OUT\""),
+            &["$OUT", finding, "cannot read the link"],
+        ),
+        row(
+            format!("cp -RL {o}/cycle/. \"$OUT\""),
+            &["$OUT", finding, "which the guard cannot verify"],
+        ),
+    ];
+    assert_both(&f.root, &refused, &[]);
+    // Inside the session checkout both hooks still refuse a run-time
+    // destination on other rules (a writer word the guard cannot verify,
+    // and exec-guard's strict text and secret-read rules), so the control
+    // shows the source check finds nothing in the harmless source.
+    let command = format!("cp -RL {o}/harmless/. \"$OUT\"");
+    for name in HOOKS {
+        let out = hook(name, &command, &f.root);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("from the source"), "{name}: {command}\n{err}");
+    }
+}
+
 /// AC-3: a destination inside a configured worktree location too large to
 /// search for hidden checkouts is refused as cannot-verify.
 #[test]
