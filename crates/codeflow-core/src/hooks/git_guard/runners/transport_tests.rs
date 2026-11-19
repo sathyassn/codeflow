@@ -468,7 +468,7 @@ fn output_option_values_preserve_word_boundaries() {
 fn configuration_readers_preserve_quoted_formats() {
     let mut wrong = Vec::new();
     // Controls for quote provenance at each configuration reader.
-    for context in [
+    for (index, context) in [
         "print -f 'Files (%d)\\n' -- 3",
         "print -f \"Processing $f\\n\" -- title",
         "print -f \"* $f\" -- title",
@@ -478,11 +478,18 @@ fn configuration_readers_preserve_quoted_formats() {
         "print -f \"( $f\" -- title",
         "print -f \"\\$literal $f\" -- title",
         "print -f \"\\`literal $f\" -- title",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         if super::super::super::configuration_shell_change(context).is_some() {
             wrong.push(format!("shell reader: {context}"));
         }
-        if super::super::super::configuration_environment_change(context).is_some() {
+        // The raw reader's earlier conservative refusals remain controls.
+        let expected_refusal = index >= 2;
+        if super::super::super::configuration_environment_change(context).is_some()
+            != expected_refusal
+        {
             wrong.push(format!("environment reader: {context}"));
         }
     }
