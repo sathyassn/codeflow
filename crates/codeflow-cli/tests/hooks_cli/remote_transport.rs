@@ -1849,6 +1849,51 @@ fn git_guard_judges_parameter_evaluation_inputs() {
 }
 
 #[test]
+fn git_guard_judges_continuation_and_operand_inputs() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for context in [
+        "# don't\n: \"$(\\\n(x))\"",
+        "# it's\n(\\\n(x))",
+        "cat <<EOF\nit's\nEOF\n: \"$(\\\n(x))\"",
+        ": $'\\'' \"$\\\n{s:x}\"",
+        "cat <<EOF\nit's $\\\n{s:x}\nEOF",
+        "printf %d \"$x\"",
+        "printf -v result %d \"$x\"",
+        "printf %n \"$n\"",
+        "print -f %d \"$x\"",
+        "shift \"$x\"",
+        "return \"$x\"",
+        "break \"$x\"",
+        "continue \"$x\"",
+        "exit \"$x\"",
+    ] {
+        let prefix = format!(
+            "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; n=GIT_REPLACE_REF$y; s=abc; {context}"
+        );
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("contact {context}: {}", stderr(&out)));
+        }
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch --no-recurse-submodules origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_keeps_arithmetic_data_allowed() {
     let scratch = Scratch::landed(None);
     let mut wrong = Vec::new();

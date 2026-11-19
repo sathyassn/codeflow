@@ -250,6 +250,65 @@ fn parameter_evaluation_keeps_probe_inputs_unread() {
 }
 
 #[test]
+fn continuation_provenance_keeps_probe_inputs_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        "# don't\n: \"$(\\\n(x))\"",
+        "# it's\n(\\\n(x))",
+        "cat <<EOF\nit's\nEOF\n: \"$(\\\n(x))\"",
+        ": $'\\'' \"$\\\n{s:x}\"",
+        "cat <<EOF\nit's $\\\n{s:x}\nEOF",
+        ": \"$(echo data; # don't\n: \"$(\\\n(x))\")\"",
+    ] {
+        let words = super::super::super::command_argv(context);
+        if !super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn shell_operand_evaluation_keeps_probe_inputs_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        "printf %d \"$x\"",
+        "printf -v result %d \"$x\"",
+        "printf %n \"$n\"",
+        "print -f %d \"$x\"",
+        "shift \"$x\"",
+        "return \"$x\"",
+        "break \"$x\"",
+        "continue \"$x\"",
+        "exit \"$x\"",
+        "zsh -c 'printf %d \"$x\"'",
+    ] {
+        let words = super::super::super::command_argv(context);
+        if !super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn shell_operand_data_keeps_probe_inputs_known() {
+    for context in [
+        "printf '%s\\n' \"$x\"",
+        "print -f %s \"$x\"",
+        "shift 2",
+        "printf %d 2",
+        "bash -c 'printf %d \"$x\"'",
+        "cat <<'EOF'\nit's $\\\n{s:x}\nEOF",
+        "echo '$\\\n{s:x}'",
+        "echo data # don't $\\\nword",
+    ] {
+        let words = super::super::super::command_argv(context);
+        assert!(!super::super::probe_arithmetic(context, &words), "{context}");
+    }
+}
+
+#[test]
 fn literal_parameter_forms_keep_probe_inputs_known() {
     let mut wrong = Vec::new();
     for context in [
