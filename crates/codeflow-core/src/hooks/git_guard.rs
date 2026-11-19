@@ -1793,6 +1793,7 @@ struct OutputOptions<'a> {
     destinations: Vec<&'a str>,
     uncertain: bool,
     configuration_uncertain: bool,
+    configuration_word_count_uncertain: bool,
 }
 
 /// Both readers consume output options with the same operand boundaries.
@@ -1833,8 +1834,8 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
                 result.configuration_uncertain = true;
                 break;
             };
-            result.configuration_uncertain |=
-                output_option_unsettled(value) || output_value_multiple_words(value);
+            result.configuration_uncertain |= output_option_unsettled(value);
+            result.configuration_word_count_uncertain |= output_value_multiple_words(value);
             match flag {
                 'v' => result.destinations.push(value),
                 'f' => result.format = Some(value),
@@ -1867,7 +1868,10 @@ fn output_word_unsettled(word: &str) -> bool {
 fn output_option_unsettled(word: &str) -> bool {
     output_word_unsettled(word)
         && word.chars().next().is_some_and(|first| {
-            let first = marked_char(first).map_or(first, |(plain, _)| plain);
+            let first = match marked_char(first) {
+                Some((plain, true)) => plain,
+                _ => first,
+            };
             matches!(
                 first,
                 '-' | '$' | '`' | '\u{1}' | '\u{2}' | '*' | '?' | '[' | '^' | '(' | '{' | '~' | '<'
@@ -1929,6 +1933,25 @@ fn output_reader_words(segment: &str) -> Vec<String> {
         .collect()
 }
 
+/// Word-count evidence is consumed only with quote provenance. The raw
+/// configuration reading keeps its earlier refusals and remains additive.
+fn configuration_output_trigger(
+    program: &str,
+    args: &[String],
+    quote_provenance: bool,
+) -> Option<String> {
+    let options = output_builtin_options(program, args);
+    options
+        .destinations
+        .iter()
+        .find_map(|word| configuration_destination(program, &unmarked(word)))
+        .or_else(|| {
+            (options.configuration_uncertain
+                || quote_provenance && options.configuration_word_count_uncertain)
+                .then(|| "unresolved output builtin options".into())
+        })
+}
+
 fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
     if matches!(program, "export" | "unset") || is_declare_builtin(program) {
         if is_declare_builtin(program)
@@ -1986,18 +2009,7 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
                 .iter()
                 .find_map(|word| configuration_destination(program, word))
         }
-        "printf" | "print" => {
-            let options = output_builtin_options(program, args);
-            options
-                .destinations
-                .iter()
-                .find_map(|word| configuration_destination(program, &unmarked(word)))
-                .or_else(|| {
-                    options
-                        .configuration_uncertain
-                        .then(|| "unresolved output builtin options".into())
-                })
-        }
+        "printf" | "print" => configuration_output_trigger(program, args, false),
         "getopts" => args
             .get(1)
             .and_then(|word| configuration_destination(program, word)),
@@ -2042,7 +2054,7 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
     if let Some(reason) = strip_launchers(&words).and_then(|(program, args)| {
         if matches!(program, "print" | "printf") {
             strip_launchers(&output_words)
-                .and_then(|(program, args)| configuration_builtin_trigger(program, args))
+                .and_then(|(program, args)| configuration_output_trigger(program, args, true))
         } else {
             configuration_builtin_trigger(program, args)
         }

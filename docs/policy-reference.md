@@ -737,8 +737,11 @@ the form refuses:
     Unsettled option values can refuse commands even with recursion off.
     Quoted substitutions, complex quoted parameter forms and unquoted brace
     forms are conservative refusals in option values. Supported writer forms
-    can lose tracking even when they do not actually write; recognized external launchers can also
-    discard tracking although their child cannot change the parent shell.
+    can lose tracking even when they do not actually write. Recognized external
+    launchers can also discard tracking although their child cannot change
+    the parent shell.
+    The tokens-only configuration reader retains its earlier conservative
+    refusals where quote provenance is unavailable.
     Ordinary output without format or destination operands adds no such check.
     Numeric special parameters remain known in arithmetic operand positions.
     Explicit inline shell bodies retain their shell's operand rules;
