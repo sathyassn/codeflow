@@ -1933,6 +1933,25 @@ fn git_guard_judges_continued_parameters_and_valued_options() {
             wrong.push(format!("control {context}: {}", stderr(&out)));
         }
     }
+    for context in [
+        ": \"$s\\\n[0]\"",
+        "print -u 2 -f %s \"$x\"",
+        "print -vout -f %s \"$x\"",
+        "bash -c 'print -u 2 -f %d \"$x\"'",
+        "exit \"$?\"",
+    ] {
+        let line = format!(
+            "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; s=abc; {context}; git fetch origin"
+        );
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &line,
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("data control {context}: {}", stderr(&out)));
+        }
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 

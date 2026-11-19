@@ -1786,6 +1786,58 @@ fn configuration_launch<'w>(
 }
 
 /// Variable-writing builtins have destination operands, unlike ordinary data.
+#[derive(Default)]
+struct OutputOptions<'a> {
+    format: Option<&'a str>,
+    values_at: usize,
+    destinations: Vec<&'a str>,
+    uncertain: bool,
+}
+
+/// Both readers consume output options with the same operand boundaries.
+fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOptions<'a> {
+    let mut result = OutputOptions::default();
+    let mut at = 0;
+    while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
+        at += 1;
+        if option == "--" {
+            break;
+        }
+        result.uncertain |= unresolved_word(option);
+        for (index, flag) in option.char_indices().skip(1) {
+            let takes_value = flag == 'v' || program == "print" && "uCxXf".contains(flag);
+            if !takes_value {
+                result.uncertain |= program == "print" && !"abcDilmnNoOpPrsSzRen".contains(flag);
+                continue;
+            }
+            let attached = &option[index + flag.len_utf8()..];
+            let value = if attached.is_empty() {
+                let value = args.get(at).map(String::as_str);
+                at += usize::from(value.is_some());
+                value
+            } else {
+                Some(attached)
+            };
+            let Some(value) = value else {
+                result.uncertain = true;
+                break;
+            };
+            match flag {
+                'v' => result.destinations.push(value),
+                'f' => result.format = Some(value),
+                _ => result.uncertain |= unresolved_word(value),
+            }
+            break;
+        }
+    }
+    if program == "printf" {
+        result.format = args.get(at).map(String::as_str);
+        at += usize::from(result.format.is_some());
+    }
+    result.values_at = at;
+    result
+}
+
 fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
     if matches!(program, "export" | "unset") || is_declare_builtin(program) {
         if is_declare_builtin(program)
@@ -1844,25 +1896,16 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
                 .find_map(|word| configuration_destination(program, word))
         }
         "printf" | "print" => {
-            let options = args.iter().take_while(|arg| arg.starts_with('-'));
-            for (index, option) in options.enumerate() {
-                if option == "--" {
-                    break;
-                }
-                if let Some(flags) = option.strip_prefix('-') {
-                    if let Some(position) = flags.find('v') {
-                        let attached = &flags[position + 1..];
-                        let destination = if attached.is_empty() {
-                            args.get(index + 1).map(String::as_str)
-                        } else {
-                            Some(attached)
-                        };
-                        return destination
-                            .and_then(|word| configuration_destination(program, word));
-                    }
-                }
-            }
-            None
+            let options = output_builtin_options(program, args);
+            options
+                .destinations
+                .iter()
+                .find_map(|word| configuration_destination(program, word))
+                .or_else(|| {
+                    options
+                        .uncertain
+                        .then(|| "unresolved output builtin options".into())
+                })
         }
         "getopts" => args
             .get(1)
@@ -9171,6 +9214,9 @@ fn literal_parameter_form(body: &[char]) -> bool {
 
 /// Evaluation evidence at an executable opener split by continuations.
 fn continued_arithmetic(chars: &[char], start: usize, depth: usize, code_context: bool) -> bool {
+    if chars.get(start) == Some(&'$') && continued_parameter_arithmetic(chars, start) {
+        return true;
+    }
     let mut prefix = Vec::new();
     let mut positions = Vec::new();
     let mut i = start;
@@ -9221,6 +9267,30 @@ fn continued_arithmetic(chars: &[char], start: usize, depth: usize, code_context
         }
     }
     parameter_arithmetic(&prefix, 0)
+}
+
+fn continued_parameter_arithmetic(chars: &[char], start: usize) -> bool {
+    let mut parameter = vec!['$'];
+    let mut at = start + 1;
+    let mut continued = false;
+    let mut subscript = false;
+    while let Some(&c) = chars.get(at) {
+        if c == '\\' && chars.get(at + 1) == Some(&'\n') {
+            continued = true;
+            at += 2;
+            continue;
+        }
+        if !(subscript || c.is_ascii_alphanumeric() || c == '_' || c == '[') {
+            break;
+        }
+        subscript |= c == '[';
+        parameter.push(c);
+        at += 1;
+        if c == ']' {
+            break;
+        }
+    }
+    continued && parameter_arithmetic(&parameter, 0)
 }
 
 /// Split a command into simple-command segments, recursing into `$(…)` and

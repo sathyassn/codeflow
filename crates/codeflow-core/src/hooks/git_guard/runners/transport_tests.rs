@@ -337,7 +337,7 @@ fn filled_operator_inputs_remain_unread() {
         "printf -v y %s _BASE; x=PIPESTATUS[GIT_REPLACE_REF$y=1]; f=-v; [ $f \"$x\" ]",
     );
     let segments = super::super::literal_segments(&expanded.segments);
-    let literals = super::super::probe_line_literals_in_context(&segments, false);
+    let literals = super::super::probe_line_literals_in_context(&segments);
     assert_eq!(literals.0.get("GIT_INDEX_FILE"), Some(&None));
 }
 
@@ -369,7 +369,17 @@ fn valued_output_options_keep_inputs_unread() {
 fn numeric_parameter_operands_keep_inputs_known() {
     let mut wrong = Vec::new();
     for operand in ["$?", "$#", "$$", "$!", "${?}", "${#}", "${$}", "${!}"] {
-        for program in ["exit", "shift", "return", "break", "continue", "bye", "logout", "printf %d", "print -f %d"] {
+        for program in [
+            "exit",
+            "shift",
+            "return",
+            "break",
+            "continue",
+            "bye",
+            "logout",
+            "printf %d",
+            "print -f %d",
+        ] {
             let context = format!("{program} \"{operand}\"");
             let words = super::super::super::command_argv(&context);
             if super::super::probe_arithmetic(&context, &words) {
@@ -390,7 +400,10 @@ fn continued_parameter_and_output_controls_keep_inputs_known() {
         "printf %d 123",
     ] {
         let words = super::super::super::command_argv(context);
-        assert!(!super::super::probe_arithmetic(context, &words), "{context}");
+        assert!(
+            !super::super::probe_arithmetic(context, &words),
+            "{context}"
+        );
     }
 }
 

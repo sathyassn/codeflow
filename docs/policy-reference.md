@@ -710,6 +710,11 @@ the form refuses:
     same uncertainty. This is a conservative reader, not a complete shell
     evaluator; the recognized forms do not establish exhaustive coverage.
     Arithmetic operand positions include the supported zsh builtin forms.
+    Continued unbraced parameter subscripts retain evaluation evidence.
+    Shell-neutral operand checks also read words filled from earlier literals.
+    Output builtin readers share option-value boundaries when locating formats
+    and destinations; an uncertain option sequence retains uncertainty.
+    Numeric special parameters remain known in arithmetic operand positions.
     Explicit inline shell bodies retain their shell's operand rules;
     an unspecified shell retains the conservative supported readings.
     An assignment on the current Git command or its direct launcher is
