@@ -430,7 +430,16 @@ fn pinned_floor(
         pins.push(detected.base_candidates);
     }
     for candidates in pins {
-        if let Some(sha) = resolve_base(root, &candidates)? {
+        // This read now precedes range judgment. Keep the base-refusal
+        // remedy when Git refuses the pin, and still refuse the run.
+        let resolved = resolve_base(root, &candidates).map_err(|cause| {
+            format!(
+                "git refused it while resolving the policy pin: {}\n  clear it: {}",
+                cause.trim_end(),
+                codeflow_core::remedy::CI_BASE_REFUSED.remedy()
+            )
+        })?;
+        if let Some(sha) = resolved {
             return Ok(Some(sha));
         }
     }
