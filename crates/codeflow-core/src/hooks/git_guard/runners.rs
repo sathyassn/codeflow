@@ -1031,7 +1031,7 @@ pub(super) fn probe_arithmetic_in_context(
     zsh_operands: bool,
 ) -> bool {
     let read = |text: &str| {
-        let (mut tokens, marks) = super::command_argv_marked(text);
+        let tokens = super::command_argv(text);
         let destination_arithmetic = zsh_operands
             && super::configuration_launch(&tokens, None).is_some_and(|(program, args)| {
                 matches!(program, "print" | "printf")
@@ -1040,38 +1040,7 @@ pub(super) fn probe_arithmetic_in_context(
                         .iter()
                         .any(|target| target.contains('['))
             });
-        for (word, marked) in tokens.iter_mut().zip(marks) {
-            if !super::expands_marked(&marked) && !super::has_glob(&marked) {
-                // Preserve literal metacharacters without mistaking them for
-                // expansions or patterns in the output option walk.
-                *word = word
-                    .chars()
-                    .map(|ch| {
-                        if matches!(
-                            ch,
-                            '$' | '`'
-                                | '*'
-                                | '?'
-                                | '['
-                                | ']'
-                                | '('
-                                | ')'
-                                | '{'
-                                | '}'
-                                | '^'
-                                | '~'
-                                | '#'
-                                | '<'
-                                | '>'
-                        ) {
-                            super::literal_mark(ch)
-                        } else {
-                            ch
-                        }
-                    })
-                    .collect();
-            }
-        }
+        let tokens = super::output_reader_words(text);
         destination_arithmetic || probe_arithmetic_words(&tokens, zsh_operands)
     };
     probe_arithmetic_words(words, false) || read(segment) || read(&literals.fill(segment))
@@ -1142,7 +1111,7 @@ fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
             .find(|word| word.as_str() != "--" && !(program == "shift" && word.as_str() == "-p"))
             .is_some_and(|word| !numeric_operand(word));
     }
-    if !matches!(program, "printf" | "print" | "echo") {
+    if !matches!(program, "printf" | "print") {
         return false;
     }
     let options = super::output_builtin_options(program, args);
@@ -1183,7 +1152,17 @@ fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
     !values.is_empty() && (setter || numeric && values.iter().any(|word| !numeric_operand(word)))
 }
 
-fn numeric_operand(mut word: &str) -> bool {
+fn numeric_operand(word: &str) -> bool {
+    // Literal parameter punctuation stays readable; a literal dollar does not
+    // become a live parameter merely because the surrounding quotes were read.
+    let plain: String = word
+        .chars()
+        .map(|ch| match super::marked_char(ch) {
+            Some((plain, false)) if !matches!(plain, '$' | '`') => plain,
+            _ => ch,
+        })
+        .collect();
+    let mut word = plain.as_str();
     if word.is_empty() {
         return false;
     }
@@ -3420,9 +3399,7 @@ fn literal_segments(segments: &[String]) -> Vec<String> {
         .iter()
         .map(|segment| {
             let filled = bindings.fill(segment);
-            let mut tokens = super::command_argv(&filled);
-            strip_reserved_words(&mut tokens);
-            bindings.note(&tokens);
+            bindings.note_segment(&filled);
             filled
         })
         .collect()

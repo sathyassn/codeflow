@@ -295,7 +295,7 @@ fn shell_operand_evaluation_keeps_probe_inputs_unread() {
 fn shell_operand_data_keeps_probe_inputs_known() {
     for context in [
         "printf '%s\\n' \"$x\"",
-        "print -f %s \"$x\"",
+        "print -f %s -- \"$x\"",
         "shift 2",
         "printf %d 2",
         "bash -c 'printf %d \"$x\"'",
@@ -348,6 +348,7 @@ fn output_boundaries_preserve_uncertainty() {
         "print -f %s -$1 'a[$x]' 1",
         "print -f %s \"$1\" 'a[$x]' 1",
         "print {-f,%d} \"$x\"",
+        // Existing numeric-format control, already unread on the parent.
         "printf {%d,%s} \"$x\"",
         "print -f {1..2} \"$x\"",
         "printf {1..2} \"$x\"",
@@ -419,6 +420,7 @@ fn indirect_writers_clear_tracked_values() {
     for context in [
         "o=origin; for o in x::y; do :; done",
         "o=origin; select o in x::y; do :; done",
+        // Existing supported-writer control, already invalidated on the parent.
         "o=origin; while read o; do :; done",
         "o=origin; source file",
         "o=origin; . file",
@@ -457,24 +459,23 @@ fn unsettled_output_words_keep_inputs_unread() {
         "(f=%s); printf $f %d \"$x\"",
         "true || f=%s; printf $f %d \"$x\"",
         "set -- -f %d \"$x\"; print \"$@\"",
+        // Existing control, already unread before the preceding repair.
         "set -- -f %d \"$x\"; print \"$@\" tail",
         "set -- %d \"$x\"; printf \"$@\"",
+        // Existing control, already unread before the preceding repair.
         "set -- %d \"$x\"; printf \"$@\" tail",
         "o=message; printf -v o %s -f; print \"$o\" %d \"$x\"",
         "n=0; printf -v n GIT_REPLACE_REF%s=1 _BASE; shift \"$n\"",
         "print \"$options\"",
         "printf \"$format\"",
-        "echo \"$options\"",
         "print -r \"$options\"",
+        // Existing destination control, already unread before the preceding repair.
         "printf -v out \"$format\"",
-        "echo -n \"$options\"",
         "print -f \"$format\"",
         "print *",
         "printf *",
-        "echo *",
         "print $(value)",
         "printf $(value)",
-        "echo $(value)",
     ] {
         let expanded = super::super::super::expand_shell_commands(context);
         let segments = super::super::literal_segments(&expanded.segments);
@@ -488,6 +489,7 @@ fn unsettled_output_words_keep_inputs_unread() {
 
 #[test]
 fn literal_values_are_invalidated_by_builtin_writes() {
+    let mut wrong = Vec::new();
     for context in [
         "o=message; printf -v o %s -f",
         "o=message; read o",
@@ -501,8 +503,11 @@ fn literal_values_are_invalidated_by_builtin_writes() {
         let mut segments = expanded.segments;
         segments.push("capture \"$o\"".into());
         let filled = super::super::literal_segments(&segments);
-        assert_eq!(filled.last().unwrap(), "capture \"$o\"", "{context}");
+        if filled.last().unwrap() != "capture \"$o\"" {
+            wrong.push(context);
+        }
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
@@ -535,7 +540,11 @@ fn expanded_output_and_special_parameter_controls_stay_known() {
     for context in [
         "print -r -- \"$a\" \"$b\"",
         "printf %s \"$x\"",
-        "echo -- \"$x\"",
+        "echo \"$x\"",
+        "echo \"$options\"",
+        "echo -n \"$options\"",
+        "echo *",
+        "echo $(value)",
         "echo '*'",
         "printf '%s' '*'",
         "print -r -- '<->'",
@@ -557,10 +566,10 @@ fn output_word_conservatism_is_explicit() {
         "o=-f; print $o %s \"$x\"",
         "f=-u; print \"$f\" 1 -f %s \"$x\"",
         "o=message; print \"$o\" \"$x\"",
-        "echo \"${s:-literal}\"",
-        "echo \"${a[@]}\"",
-        "echo \"${a[*]}\"",
-        r"echo \$s[x]",
+        "print -f %s \"$x\"",
+        "print -u 2 -f %s \"$x\"",
+        "print -vout -f %s \"$x\"",
+        "print -f %d \"$?\"",
     ] {
         let expanded = super::super::super::expand_shell_commands(context);
         assert!(expanded.arithmetic, "{context}");
@@ -604,7 +613,7 @@ fn numeric_parameter_operands_keep_inputs_known() {
             "bye",
             "logout",
             "printf %d",
-            "print -f %d",
+            "print -f %d --",
         ] {
             let context = format!("{program} \"{operand}\"");
             let words = super::super::super::command_argv(&context);
@@ -620,8 +629,8 @@ fn numeric_parameter_operands_keep_inputs_known() {
 fn continued_parameter_and_output_controls_keep_inputs_known() {
     for context in [
         ": \"$s\\\n[0]\"",
-        "print -u 2 -f %s \"$x\"",
-        "print -vout -f %s \"$x\"",
+        "print -u 2 -f %s -- \"$x\"",
+        "print -vout -f %s -- \"$x\"",
         "bash -c 'print -u 2 -f %d \"$x\"'",
         "printf %d 123",
     ] {

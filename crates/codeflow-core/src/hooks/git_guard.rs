@@ -1792,6 +1792,7 @@ struct OutputOptions<'a> {
     values_at: usize,
     destinations: Vec<&'a str>,
     uncertain: bool,
+    configuration_uncertain: bool,
 }
 
 /// Both readers consume output options with the same operand boundaries.
@@ -1800,7 +1801,8 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
     let mut at = 0;
     while let Some(option) = args.get(at) {
         if output_word_unsettled(option) {
-            result.uncertain |= result.format.is_none();
+            result.uncertain = true;
+            result.configuration_uncertain |= output_option_unsettled(option);
             break;
         }
         if !option.starts_with('-') {
@@ -1811,10 +1813,11 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
             break;
         }
         for (index, flag) in option.char_indices().skip(1) {
-            let takes_value =
-                program != "echo" && (flag == 'v' || program == "print" && "uCxXf".contains(flag));
+            let takes_value = flag == 'v' || program == "print" && "uCxXf".contains(flag);
             if !takes_value {
                 result.uncertain |= program == "print" && !"abcDilmnNoOpPrsSzRen".contains(flag);
+                result.configuration_uncertain |=
+                    program == "print" && !"abcDilmnNoOpPrsSzRen".contains(flag);
                 continue;
             }
             let attached = &option[index + flag.len_utf8()..];
@@ -1827,8 +1830,10 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
             };
             let Some(value) = value else {
                 result.uncertain = true;
+                result.configuration_uncertain = true;
                 break;
             };
+            result.configuration_uncertain |= output_option_unsettled(value);
             match flag {
                 'v' => result.destinations.push(value),
                 'f' => result.format = Some(value),
@@ -1847,7 +1852,41 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
 }
 
 fn output_word_unsettled(word: &str) -> bool {
-    unresolved_word(word) || has_glob(word)
+    unresolved_word(word)
+        || has_glob(word)
+        || word.contains('{') && (brace_group(word).is_some() || brace_expand(word).is_none())
+}
+
+/// Only an unsettled option prefix can conceal a destination option.
+fn output_option_unsettled(word: &str) -> bool {
+    output_word_unsettled(word)
+        && word.chars().next().is_some_and(|first| {
+            matches!(
+                first,
+                '-' | '$' | '`' | '\u{1}' | '\u{2}' | '*' | '?' | '[' | '^' | '(' | '{' | '~' | '<'
+            )
+        })
+}
+
+/// Keep quote provenance on output syntax while leaving flags and formats readable.
+fn output_reader_words(segment: &str) -> Vec<String> {
+    command_argv_marked(segment)
+        .1
+        .into_iter()
+        .map(|word| {
+            word.chars()
+                .map(|ch| match marked_char(ch) {
+                    Some((
+                        '$' | '`' | '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | ',' | '^' | '~'
+                        | '#' | '<' | '>',
+                        false,
+                    ))
+                    | None => ch,
+                    Some((plain, _)) => plain,
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
@@ -1912,10 +1951,10 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
             options
                 .destinations
                 .iter()
-                .find_map(|word| configuration_destination(program, word))
+                .find_map(|word| configuration_destination(program, &unmarked(word)))
                 .or_else(|| {
                     options
-                        .uncertain
+                        .configuration_uncertain
                         .then(|| "unresolved output builtin options".into())
                 })
         }
@@ -1958,9 +1997,16 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
     {
         return Some(reason);
     }
-    if let Some(reason) = strip_launchers(&words)
-        .and_then(|(program, args)| configuration_builtin_trigger(program, args))
-    {
+    let mut output_words = output_reader_words(segment);
+    strip_reserved_words(&mut output_words);
+    if let Some(reason) = strip_launchers(&words).and_then(|(program, args)| {
+        if matches!(program, "print" | "printf") {
+            strip_launchers(&output_words)
+                .and_then(|(program, args)| configuration_builtin_trigger(program, args))
+        } else {
+            configuration_builtin_trigger(program, args)
+        }
+    }) {
         return Some(reason);
     }
     // Read expansion syntax before quote removal. Single-quoted or escaped
@@ -7715,7 +7761,7 @@ fn expand_segments(
         // Only the line's own top level: an assignment inside a body or a
         // subshell may not outlive it.
         if depth == 1 {
-            literals.note(&words);
+            literals.note_segment(&seg);
         }
         out.segments.push(seg);
         if !joined_within.is_empty() {
@@ -8112,8 +8158,20 @@ pub(crate) fn builtin_words(mut words: &[String]) -> &[String] {
 }
 
 impl Literals {
+    fn note_segment(&mut self, segment: &str) {
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let mut output_words = output_reader_words(segment);
+        strip_reserved_words(&mut output_words);
+        self.note_with_output(&words, &output_words);
+    }
+
     /// Record the assignments of one segment's words.
     fn note(&mut self, words: &[String]) {
+        self.note_with_output(words, words);
+    }
+
+    fn note_with_output(&mut self, words: &[String], output_words: &[String]) {
         fn assignment(w: &str) -> Option<(&str, &str)> {
             w.split_once('=')
                 .filter(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -8142,9 +8200,24 @@ impl Literals {
                     | "readonly"
                     | "export"
                     | "wait"
+                    | "for"
+                    | "select"
+                    | "foreach"
+                    | "source"
+                    | "."
+                    | "vared"
+                    | "coproc"
+                    | "zparseopts"
+                    | "zstyle"
+                    | "zformat"
+                    | "strftime"
+                    | "sysread"
+                    | "zstat"
+                    | "private"
             ) || matches!(program.as_str(), "print" | "printf") && {
-                let options = output_builtin_options(program, &words[1..]);
-                options.uncertain
+                let output_words = builtin_words(output_words);
+                let options = output_builtin_options(program, &output_words[1..]);
+                options.configuration_uncertain
                     || !options.destinations.is_empty()
                     || options.format.is_some_and(|format| format.contains("%n"))
             }

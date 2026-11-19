@@ -713,16 +713,22 @@ the form refuses:
     Continued unbraced parameter subscripts, including special parameter names,
     retain evaluation evidence. Operand checks retain the unfilled reading in
     its shell context; filled words add checks and never suppress that reading.
-    Output builtin readers share option-value boundaries. A nonliteral word in
-    an option or format position, or before the format is settled, is uncertain
-    even when it is the only word. Expansions, substitutions and patterns retain
-    arithmetic and object-input uncertainty there. Uncertain output options
-    also refuse configuration-dependent decisions. Builtin writes invalidate
-    tracked literal values; a write with unread effects invalidates all values.
-    This accepts conservative refusals for single expanding output words and
-    for expanding options or formats even after a straight-line literal
-    assignment. Literal string formats and explicit option terminators keep
-    ordinary data outside this additional check.
+    The supported formatted-output readers share option-value boundaries.
+    Nonliteral words in option or format positions retain arithmetic and
+    object-input uncertainty, including words after a literal format while
+    options remain open. This includes expansion into several words; quoted
+    literal characters keep their provenance. Configuration uncertainty has
+    its own reading of options that may conceal a destination. Fully literal
+    and literal-led data words do not add configuration uncertainty.
+    Supported writes, loops and sourced commands invalidate tracked literals;
+    their unread effects invalidate all tracked values. Coverage remains
+    conservative and does not establish a complete shell evaluator.
+    Accepted refusals include a single expanding formatted-output word and
+    expanding options or formats after literal assignments. Their unread
+    object inputs refuse ordinary fetches and pulls when recursion is on,
+    even without inherited inputs. A literal string format and an explicit
+    option terminator keep data outside the additional operand check.
+    Ordinary output without format or destination operands adds no such check.
     Numeric special parameters remain known in arithmetic operand positions.
     Explicit inline shell bodies retain their shell's operand rules;
     an unspecified shell retains the conservative supported readings.

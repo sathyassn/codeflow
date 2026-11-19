@@ -1935,8 +1935,8 @@ fn git_guard_judges_continued_parameters_and_valued_options() {
     }
     for context in [
         ": \"$s\\\n[0]\"",
-        "print -u 2 -f %s \"$x\"",
-        "print -vout -f %s \"$x\"",
+        "print -u 2 -f %s -- \"$x\"",
+        "print -vout -f %s -- \"$x\"",
         "bash -c 'print -u 2 -f %d \"$x\"'",
         "exit \"$?\"",
     ] {
@@ -1965,6 +1965,7 @@ fn git_guard_preserves_output_boundaries() {
         "print -f %s -$1 'a[$x]' 1",
         "print -f %s \"$1\" 'a[$x]' 1",
         "print {-f,%d} \"$x\"",
+        // Existing numeric-format control, already unread on the parent.
         "printf {%d,%s} \"$x\"",
         "print -f {1..2} \"$x\"",
         "printf {1..2} \"$x\"",
@@ -2090,24 +2091,23 @@ fn git_guard_judges_unsettled_output_words() {
         "(f=%s); printf $f %d \"$x\"",
         "true || f=%s; printf $f %d \"$x\"",
         "set -- -f %d \"$x\"; print \"$@\"",
+        // Existing control, already unread before the preceding repair.
         "set -- -f %d \"$x\"; print \"$@\" tail",
         "set -- %d \"$x\"; printf \"$@\"",
+        // Existing control, already unread before the preceding repair.
         "set -- %d \"$x\"; printf \"$@\" tail",
         "o=message; printf -v o %s -f; print \"$o\" %d \"$x\"",
         "n=0; printf -v n GIT_REPLACE_REF%s=1 _BASE; shift \"$n\"",
         "print \"$options\"",
         "printf \"$format\"",
-        "echo \"$options\"",
         "print -r \"$options\"",
+        // Existing destination control, already unread before the preceding repair.
         "printf -v out \"$format\"",
-        "echo -n \"$options\"",
         "print -f \"$format\"",
         "print *",
         "printf *",
-        "echo *",
         "print $(value)",
         "printf $(value)",
-        "echo $(value)",
     ] {
         let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}");
         let out = scratch.judge_inheriting(
@@ -2134,7 +2134,11 @@ fn git_guard_judges_unsettled_output_words() {
     for context in [
         "printf %s \"$x\"",
         "print -r -- \"$a\" \"$b\"",
-        "echo -- \"$x\"",
+        "echo \"$x\"",
+        "echo \"$options\"",
+        "echo -n \"$options\"",
+        "echo *",
+        "echo $(value)",
         "bash -c 'print \"$options\"'",
         "bash -c 'printf \"$format\"'",
     ] {
@@ -2217,8 +2221,8 @@ fn git_guard_keeps_arithmetic_data_allowed() {
         "echo '((example))'; git fetch origin",
         "echo '${s:x}'; git fetch origin",
         "echo '${a[x]}'; git fetch origin",
-        "echo -- \"${s:-literal}\"; git fetch origin",
-        "echo -- \"${sha:0:7}${BASH_SOURCE[0]}${PIPESTATUS[0]}\"; git fetch origin",
+        "echo \"${s:-literal}\"; git fetch origin",
+        "echo \"${sha:0:7}${BASH_SOURCE[0]}${PIPESTATUS[0]}\"; git fetch origin",
     ] {
         let out = scratch.judge("git-guard", line);
         if out.status.code() != Some(0) {
