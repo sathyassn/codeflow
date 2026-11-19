@@ -484,6 +484,7 @@ fn quoted_option_values_require_settled_expansions() {
         "print -f \"x${f}\" data",
         "print -f 'x$argv[@]' data",
         "print -f \"x$1$#$?$$$!$-\" data",
+        "print -f \"x$$\" data",
         "echo \"$msg\"",
     ] {
         if super::super::super::configuration_shell_change(context).is_some() {
