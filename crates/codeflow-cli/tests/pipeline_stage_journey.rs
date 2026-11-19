@@ -1,6 +1,7 @@
 //! TSK-370: the shipped pipeline verifies each change with the affected
 //! targeted checks and the quick gate, and an existing copy is never
-//! rewritten: `codeflow update` and `codeflow doctor` name the one-line edit.
+//! rewritten: `codeflow update` and `codeflow doctor` name the two-line edit
+//! (the review line, so the quick gate runs once, and the verify line).
 //!
 //! Every test runs the real binary in a tempdir project.
 
@@ -20,7 +21,17 @@ const SHIPPED: &str = include_str!("../../../assets/base/claude/workflows/pipeli
 const OLD_START: &str =
     "'Run the affected targeted checks, then `codeflow test --mode essential --strict`";
 const OLD_RUN: &str = "`codeflow test --mode essential --strict`";
+/// The 3.1.0 review stage line, which runs the quick gate itself.
+const OLD_REVIEW_START: &str =
+    "'Run `codeflow validate` and `codeflow test --mode quick --strict`;";
+const NEW_REVIEW_START: &str = "'Run `codeflow validate`' + (";
+const QUICK: &str = "`codeflow test --mode quick --strict`";
 const EDIT_LEAD: &str = "keeping its indentation: ";
+/// What doctor says when the copy holds no old stage: only that, since a
+/// user-owned copy's other stages are not checked.
+const DOCTOR_PASS: &str = "the pipeline holds no `codeflow test --mode essential --strict` run (the 3.1.x verify stage); what its stages run otherwise is user-owned and not checked";
+/// The claim doctor used to make without checking it.
+const UNCHECKED_CLAIM: &str = "runs targeted checks and the quick gate";
 
 fn test_path() -> std::ffi::OsString {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -91,40 +102,71 @@ fn doctor(root: &Path) -> String {
     text(&codeflow(root, &["doctor", "--check", "pipeline"]))
 }
 
-/// The verify stage line the output prints, cut from the first line that
-/// carries the edit lead.
-fn printed_line(printed: &str) -> String {
-    let start = printed
-        .find(EDIT_LEAD)
-        .unwrap_or_else(|| panic!("no edit printed:\n{printed}"))
-        + EDIT_LEAD.len();
-    let rest = &printed[start..];
-    let end = rest
-        .find("approved.',")
-        .unwrap_or_else(|| panic!("the printed line is cut short:\n{rest}"))
-        + "approved.',".len();
-    rest[..end].to_string()
+/// The two lines the output prints, in order: the review stage line, then
+/// the verify stage line, each cut after its edit lead.
+fn printed_lines(printed: &str) -> (String, String) {
+    let cut = |from: usize, end_mark: &str| -> (String, usize) {
+        let start = printed[from..]
+            .find(EDIT_LEAD)
+            .unwrap_or_else(|| panic!("no edit printed:\n{printed}"))
+            + from
+            + EDIT_LEAD.len();
+        let rest = &printed[start..];
+        let end = rest
+            .find(end_mark)
+            .unwrap_or_else(|| panic!("the printed line is cut short:\n{rest}"))
+            + end_mark.len();
+        (rest[..end].to_string(), start + end)
+    };
+    let (review, after) = cut(0, "never as a pass.'),");
+    let (verify, _) = cut(after, "approved.',");
+    (review, verify)
 }
 
-/// Apply the printed edit as a person would: replace the line that starts
+/// Apply the printed edit as a person would: replace each line that starts
 /// with the old text, keeping its indentation.
-fn apply_printed_edit(root: &Path, line: &str) {
+fn apply_printed_edit(root: &Path, review: &str, verify: &str) {
     let copy = read(root, PIPELINE);
-    let mut replaced = 0;
+    let (mut reviews, mut verifies) = (0, 0);
     let edited: Vec<String> = copy
         .split('\n')
         .map(|l| {
             let body = l.trim_start();
-            if body.starts_with(OLD_START) {
-                replaced += 1;
-                format!("{}{line}", &l[..l.len() - body.len()])
+            let indent = &l[..l.len() - body.len()];
+            if body.starts_with(OLD_REVIEW_START) {
+                reviews += 1;
+                format!("{indent}{review}")
+            } else if body.starts_with(OLD_START) {
+                verifies += 1;
+                format!("{indent}{verify}")
             } else {
                 l.to_string()
             }
         })
         .collect();
-    assert_eq!(replaced, 1, "one old line to replace");
+    assert_eq!((reviews, verifies), (1, 1), "one old line of each to replace");
     write(root, PIPELINE, &edited.join("\n"));
+}
+
+/// The text between `open` and the first `close` after it.
+fn between<'a>(text: &'a str, open: &str, close: &str) -> &'a str {
+    let start = text
+        .find(open)
+        .unwrap_or_else(|| panic!("no {open:?} in:\n{text}"))
+        + open.len();
+    let end = text[start..]
+        .find(close)
+        .unwrap_or_else(|| panic!("no {close:?} after {open:?} in:\n{text}"))
+        + start;
+    &text[start..end]
+}
+
+/// A stage block of a pipeline source, such as `build` or `verify`.
+fn stage_block<'a>(source: &'a str, name: &str) -> &'a str {
+    let head = format!("  {name}: {{");
+    let start = source.find(&head).unwrap_or_else(|| panic!("a {name} stage"));
+    let end = source[start..].find("\n  },").expect("its end") + start;
+    &source[start..end]
 }
 
 /// The final verification stage of a pipeline source.
@@ -176,17 +218,89 @@ fn the_shipped_verify_stage_runs_targeted_checks_and_quick() {
         assert!(stage.contains(kept), "the stage lost: {kept}\n{stage}");
     }
 
-    // The edit is one line: everything else in the file is the 3.1.0 text.
+    // The edit is two lines, the review line and the verify line:
+    // everything else in the file is the 3.1.0 text.
     let old: Vec<&str> = PIPELINE_3_1_0.lines().collect();
     let new: Vec<&str> = SHIPPED.lines().collect();
     assert_eq!(old.len(), new.len());
     let changed: Vec<usize> = (0..old.len()).filter(|&i| old[i] != new[i]).collect();
-    assert_eq!(changed.len(), 1, "one changed line, got {changed:?}");
-    assert!(old[changed[0]].trim_start().starts_with(OLD_START));
+    assert_eq!(changed.len(), 2, "two changed lines, got {changed:?}");
+    assert!(old[changed[0]].trim_start().starts_with(OLD_REVIEW_START));
+    assert!(new[changed[0]].trim_start().starts_with(NEW_REVIEW_START));
+    assert!(old[changed[1]].trim_start().starts_with(OLD_START));
+}
+
+/// AC-1 over the whole default sequence: build, review and verify together
+/// run the quick gate once, after the affected targeted checks. The review
+/// stage runs it only when no verify stage follows.
+#[test]
+fn the_default_sequence_runs_quick_once_after_targeted_checks() {
+    assert!(
+        SHIPPED.contains("default: ['build', 'review', 'verify'],"),
+        "the default preset is build, review, verify"
+    );
+    let review = review_stage_line(SHIPPED);
+    let with_verify = between(&review, "PRESET.includes('verify') ? '", "' : '");
+    let without_verify = between(&review, "' : '", "') + '");
+    let tail = between(&review, "') + '; ", "'),");
+
+    // The default preset holds verify, so review takes the first branch.
+    let sequence = format!(
+        "{}\nRun `codeflow validate`{with_verify}; {tail}\n{}",
+        stage_block(SHIPPED, "build"),
+        stage_block(SHIPPED, "verify"),
+    );
+    assert_eq!(
+        sequence.matches(QUICK).count(),
+        1,
+        "the default sequence runs the quick gate once:\n{sequence}"
+    );
+    assert_eq!(
+        sequence.matches("--mode quick").count(),
+        1,
+        "no other spelling of the quick gate:\n{sequence}"
+    );
+    let targeted = sequence
+        .find("Run the affected targeted checks")
+        .expect("the targeted checks");
+    let quick = sequence.find(QUICK).expect("the quick gate");
+    assert!(targeted < quick, "targeted checks come first:\n{sequence}");
+    assert!(
+        with_verify.contains("never run `codeflow test` here"),
+        "review leaves the gate to verify: {with_verify}"
+    );
+
+    // A preset with review and no verify still runs targeted checks, then
+    // quick once, in review.
+    let alone = format!("Run `codeflow validate`{without_verify}; {tail}");
+    assert_eq!(alone.matches(QUICK).count(), 1, "{alone}");
+    assert!(
+        alone.find("the affected targeted checks").expect("targeted") < alone.find(QUICK).unwrap(),
+        "{alone}"
+    );
+
+    // AC-2: the review strictness text 3.1.0 shipped is kept word for word.
+    let old_review = PIPELINE_3_1_0
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(OLD_REVIEW_START))
+        .expect("the 3.1.0 review line");
+    let kept = between(old_review, "--strict`; ", "'),");
+    assert_eq!(tail, kept, "the review strictness text changed");
+}
+
+/// The shipped review stage line, without its indentation.
+fn review_stage_line(source: &str) -> String {
+    source
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(NEW_REVIEW_START))
+        .expect("the shipped review line")
+        .to_string()
 }
 
 /// AC-3: update never rewrites an unmodified 3.1.0 copy, and names the
-/// exact one-line edit.
+/// exact edit: the review line, then the verify line.
 #[test]
 fn update_keeps_an_unmodified_3_1_0_copy_and_prints_the_edit() {
     let (_dir, root) = init_standard();
@@ -208,11 +322,10 @@ fn update_keeps_an_unmodified_3_1_0_copy_and_prints_the_edit() {
         printed.contains("still runs `codeflow test --mode essential --strict` on every change"),
         "{printed}"
     );
-    let line = printed_line(&printed);
     assert_eq!(
-        line,
-        verify_stage_line(SHIPPED),
-        "the printed edit is the shipped line"
+        printed_lines(&printed),
+        (review_stage_line(SHIPPED), verify_stage_line(SHIPPED)),
+        "the printed edit is the shipped lines"
     );
 }
 
@@ -236,7 +349,10 @@ fn update_keeps_an_edited_copy_and_prints_the_edit() {
         edited,
         "the edited copy was rewritten"
     );
-    assert_eq!(printed_line(&printed), verify_stage_line(SHIPPED));
+    assert_eq!(
+        printed_lines(&printed),
+        (review_stage_line(SHIPPED), verify_stage_line(SHIPPED))
+    );
 }
 
 /// A fresh copy runs the new stage, so update says nothing about it.
@@ -280,10 +396,7 @@ fn doctor_reports_the_old_stage_and_passes_the_new_one() {
     let (_dir, root) = init_standard();
     let fresh = doctor(&root);
     assert!(fresh.contains("pipeline"), "{fresh}");
-    assert!(
-        fresh.contains("runs targeted checks and the quick gate"),
-        "a fresh copy passes:\n{fresh}"
-    );
+    assert!(fresh.contains(DOCTOR_PASS), "a fresh copy passes:\n{fresh}");
     assert!(!fresh.contains(EDIT_LEAD), "{fresh}");
 
     as_installed_by_3_1_0(&root, PIPELINE_3_1_0);
@@ -293,7 +406,30 @@ fn doctor_reports_the_old_stage_and_passes_the_new_one() {
         "{old}"
     );
     assert!(old.contains(PIPELINE), "{old}");
-    assert_eq!(printed_line(&old), verify_stage_line(SHIPPED));
+    assert_eq!(
+        printed_lines(&old),
+        (review_stage_line(SHIPPED), verify_stage_line(SHIPPED))
+    );
+}
+
+/// Doctor's pass names only what it checked, the absence of the old
+/// stage: an empty copy, a custom workflow with no verification and one
+/// that runs a whole full gate each pass with that message, and none is
+/// told it runs targeted checks and the quick gate.
+#[test]
+fn doctor_claims_only_the_absent_old_stage() {
+    let (_dir, root) = init_standard();
+    for copy in [
+        "",
+        "export const meta = { name: 'ours' };\nawait agent('build the change');\n",
+        "export const meta = { name: 'full' };\nawait agent('run `codeflow test --mode full --strict`');\n",
+    ] {
+        write(&root, PIPELINE, copy);
+        let checked = doctor(&root);
+        assert!(checked.contains(DOCTOR_PASS), "{copy:?}:\n{checked}");
+        assert!(!checked.contains(UNCHECKED_CLAIM), "{copy:?}:\n{checked}");
+        assert!(!checked.contains(EDIT_LEAD), "{copy:?}:\n{checked}");
+    }
 }
 
 /// AC-5: a fresh `init --standard` gets the new stage; a project updated
@@ -313,16 +449,16 @@ fn journey_from_3_1_0_through_update_doctor_and_the_edit() {
 
     let updated = update(&root);
     assert_eq!(read(&root, PIPELINE), PIPELINE_3_1_0);
-    let from_update = printed_line(&updated);
+    let (review, verify) = printed_lines(&updated);
 
     let before = doctor(&root);
     assert_eq!(
-        printed_line(&before),
-        from_update,
+        printed_lines(&before),
+        (review.clone(), verify.clone()),
         "update and doctor name one edit"
     );
 
-    apply_printed_edit(&root, &from_update);
+    apply_printed_edit(&root, &review, &verify);
     assert_eq!(
         read(&root, PIPELINE),
         SHIPPED,
@@ -331,10 +467,10 @@ fn journey_from_3_1_0_through_update_doctor_and_the_edit() {
 
     let after = doctor(&root);
     assert!(
-        after.contains("runs targeted checks and the quick gate"),
+        after.contains(DOCTOR_PASS),
         "doctor passes after the edit:\n{after}"
     );
-    assert!(!after.contains(OLD_RUN), "{after}");
+    assert!(!after.contains(EDIT_LEAD), "{after}");
 
     // A later update still leaves the edited copy alone and says nothing.
     let again = update(&root);
