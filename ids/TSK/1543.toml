@@ -1,0 +1,11 @@
+id = "TSK-1543"
+uid = "17238a8a-d89f-4014-8ab0-f8049a2f2303"
+kind = "TSK"
+title = "The landed hook rules stay on after an orphan branch is created"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:18:38Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
