@@ -1,0 +1,11 @@
+id = "TSK-1544"
+uid = "7ad1dbbe-df9c-489b-8d82-c8626a59eda5"
+kind = "TSK"
+title = "Installed workflows set persist-credentials: false on every checkout"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:20:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
