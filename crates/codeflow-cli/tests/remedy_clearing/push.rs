@@ -1852,6 +1852,11 @@ fn a_branch_cannot_protect_itself_into_its_own_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
+    // Permit protected pushes at the authority so this fixture reaches
+    // the body check after the checkout protects its own branch.
+    land_on_default(&root, &dest, |root| {
+        set_policy(root, &[("push_to_protected", "off".into())]);
+    });
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
@@ -1860,7 +1865,7 @@ fn a_branch_cannot_protect_itself_into_its_own_authority() {
     assert_eq!(there.trim(), head_sha(&root), "{first}");
     protect(&root, "feat/x");
     unguard(&root);
-    commit_all(&root, "chore: protect the branch");
+    // The unchecked history fixture includes this policy change too.
     four_bullets(&root);
     let out = pushed(&root);
     refused(&dest, &out, &head_sha(&root));
