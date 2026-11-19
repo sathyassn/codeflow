@@ -3,8 +3,92 @@
 //! where another guard check would still refuse the whole line (security
 //! review SR6-4).
 
-use super::{lex, Token};
+use super::{
+    leading_word, leading_word_written, lex, skip_leading, skip_leading_written, LeadingWord,
+    Taker, Token,
+};
 use crate::security::outward::{read_line, LEXER_LAUNCHERS, MODELED_LAUNCHERS};
+
+/// TSK-1456: the one decision on a word in front of a command. Only an
+/// identifier name before `=` is an assignment, for both takers, so the set
+/// every guard skips is unchanged; a word some shell or launcher may read
+/// either way is never skipped.
+#[test]
+fn leading_words_skip_only_assignments() {
+    use LeadingWord::{Assignment, Program, Unplaced};
+    for (word, shell, env) in [
+        ("FOO=1", Assignment, Assignment),
+        ("_a1=", Assignment, Assignment),
+        ("A=b=c", Assignment, Assignment),
+        ("git", Program, Program),
+        ("=git", Program, Unplaced),
+        ("=", Program, Unplaced),
+        ("=x=1", Program, Unplaced),
+        ("/tmp/a=b/git", Program, Unplaced),
+        ("((i=1))", Program, Unplaced),
+        ("X+=1", Unplaced, Unplaced),
+        ("a[0]=1", Unplaced, Unplaced),
+        ("a[x/y]=1", Unplaced, Unplaced),
+        ("1X=2", Unplaced, Unplaced),
+        ("X-Y=1", Unplaced, Unplaced),
+        ("{X=1,git}", Unplaced, Unplaced),
+        ("$X=1", Unplaced, Unplaced),
+        ("\u{e9}=1", Unplaced, Unplaced),
+    ] {
+        assert_eq!(leading_word(word, Taker::Shell), shell, "shell: {word}");
+        assert_eq!(leading_word(word, Taker::Env), env, "env: {word}");
+    }
+    let words: Vec<String> = ["A=1", "B=2", "X+=1", "C=3", "git"]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(skip_leading(&words, Taker::Shell), 2);
+    assert_eq!(skip_leading(&words, Taker::Env), 2);
+    assert_eq!(skip_leading(&words[2..], Taker::Shell), 0);
+}
+
+/// TSK-1456: the same decision on a word as written. The shell takes an
+/// assignment only with its name and `=` unquoted; `env` reads the word
+/// after quote removal.
+#[test]
+fn leading_words_as_written_keep_their_quoting() {
+    use LeadingWord::{Assignment, Program, Unplaced};
+    for (line, shell, env) in [
+        ("FOO=1", Assignment, Assignment),
+        ("FOO='a b'", Assignment, Assignment),
+        ("FOO=\"$X\"", Assignment, Assignment),
+        ("'FOO=1'", Unplaced, Assignment),
+        ("\"FOO\"=1", Unplaced, Assignment),
+        ("FOO\\=1", Unplaced, Assignment),
+        ("F'O'O=1", Unplaced, Assignment),
+        ("'X=/usr/bin/git'", Unplaced, Assignment),
+        ("X''=1", Unplaced, Assignment),
+        ("X\"\"=1", Unplaced, Assignment),
+        ("X$''=1", Unplaced, Assignment),
+        ("''X=1", Unplaced, Assignment),
+        ("X=''", Assignment, Assignment),
+        ("X=1''=2", Assignment, Assignment),
+        ("X+=1", Unplaced, Unplaced),
+        ("'=x'", Program, Unplaced),
+        ("git", Program, Program),
+        ("'git'", Program, Program),
+    ] {
+        let (_, marks) = crate::hooks::git_guard::command_argv_marked(line);
+        assert_eq!(
+            leading_word_written(&marks[0], Taker::Shell),
+            shell,
+            "shell: {line}"
+        );
+        assert_eq!(
+            leading_word_written(&marks[0], Taker::Env),
+            env,
+            "env: {line}"
+        );
+    }
+    let (_, marks) = crate::hooks::git_guard::command_argv_marked("A=1 'B=2' C=3 git");
+    assert_eq!(skip_leading_written(&marks, Taker::Shell), 1);
+    assert_eq!(skip_leading_written(&marks, Taker::Env), 3);
+}
 
 fn word(line: &str, command: usize, at: usize) -> Token {
     lex(line).commands[command][at].clone()

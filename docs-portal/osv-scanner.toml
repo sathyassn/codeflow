@@ -1,3 +1,25 @@
 # osv-scanner reads this file for package-lock.json in this directory only.
 # Each entry names one advisory, why it cannot be reached here, and when it
 # must be triaged again.
+
+# picomatch 4.0.7, and 2.3.2 under anymatch, come in through astro, vite,
+# tinyglobby 0.2.17, @astrojs/internal-helpers and unstorage. The advisory is a
+# ReDoS reached through extglob patterns. It has no fixed version, and 4.0.7 is
+# the latest release. This triage covers the portal as shipped. Every pattern
+# its build gives picomatch is fixed text in its own config or in the pinned
+# dependencies, and none comes from a network request, a URL, page content or
+# Markdown. The executable config (astro.config.mjs) is trusted code the
+# owner controls; it sets no vite, cache, session, output or adapter option
+# (astro.config.mjs:12-50). Its one content collection uses Starlight's loader
+# with no pattern argument (src/content.config.ts:6), so the pattern is
+# Starlight's fixed `**/[^_]*.{md,mdx,...}`. The adapter writes plain .md pages
+# (scripts/adapter.mjs:289), and no portal script or component calls a glob
+# matcher. Page files are only matched against patterns, never used as one.
+# A change to the config, plugins, content loaders or dependencies needs this
+# triage again. The entry also ignores any later alias of this id until
+# 2026-12-17; a different advisory id still fails the job. The standalone task
+# that adds this entry records the triage and its evidence.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-17
+reason = "ReDoS through extglob patterns in picomatch, with no fixed release (4.0.7 is the latest). For the portal as shipped, every pattern its build gives picomatch is fixed text in its own config or its pinned dependencies; none comes from a network request, a URL, page content or Markdown. The executable config (astro.config.mjs) is trusted owner-controlled code and sets no vite, cache, session, output or adapter option (astro.config.mjs:12-50), its content collection uses Starlight's loader with no pattern argument (src/content.config.ts:6), the adapter writes plain .md pages (scripts/adapter.mjs:289), and no portal source calls a glob matcher. A change to the config, plugins, content loaders or dependencies needs reassessment. This entry also ignores any later alias of the id until 2026-12-17. The standalone task that adds this entry records the triage and its evidence."
