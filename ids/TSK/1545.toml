@@ -1,0 +1,11 @@
+id = "TSK-1545"
+uid = "82ed63b4-ca1f-4dc7-b410-c44e6deca25d"
+kind = "TSK"
+title = "The TSK-1518 changelog and budget wording match the guard source"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:22:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
