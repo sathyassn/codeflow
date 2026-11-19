@@ -1837,7 +1837,11 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
             match flag {
                 'v' => result.destinations.push(value),
                 'f' => result.format = Some(value),
-                _ => result.uncertain |= output_word_unsettled(value),
+                _ => {
+                    let unsettled = output_word_unsettled(value);
+                    result.uncertain |= unsettled;
+                    result.configuration_uncertain |= unsettled;
+                }
             }
             break;
         }
@@ -8217,7 +8221,7 @@ impl Literals {
             ) || matches!(program.as_str(), "print" | "printf") && {
                 let output_words = builtin_words(output_words);
                 let options = output_builtin_options(program, &output_words[1..]);
-                options.configuration_uncertain
+                options.uncertain
                     || !options.destinations.is_empty()
                     || options.format.is_some_and(|format| format.contains("%n"))
             }

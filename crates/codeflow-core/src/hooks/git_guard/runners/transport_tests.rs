@@ -387,7 +387,11 @@ fn output_data_preserves_configuration_provenance() {
         }
     }
     // Existing controls: an expanding option can still hide a destination.
-    for context in ["print \"$@\"", "printf \"$@\""] {
+    for context in [
+        "print \"$@\"",
+        "printf \"$@\"",
+        "print -u \"2$fd\" -f %s -- data",
+    ] {
         if super::super::super::configuration_shell_change(context).is_none() {
             wrong.push(context);
         }
