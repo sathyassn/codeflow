@@ -2081,6 +2081,7 @@ fn git_guard_judges_expanding_option_values() {
     for context in [
         "printf -v y %s ME; set -- %s -vHO$y; print -f \"x$@\" data",
         "printf -v y %s ME; set -- %s -vHO$y; print -f \"x$argv[@]\" data",
+        "printf -v y %s ME; set -A aé %s -vHO$y; print -f \"x$aé[@]\" data",
         "print -f x$=f data",
         "print -f x$(value) data",
     ] {

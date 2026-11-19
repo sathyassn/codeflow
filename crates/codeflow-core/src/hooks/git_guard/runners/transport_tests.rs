@@ -322,7 +322,14 @@ fn continued_substitution_keeps_nested_evaluation_evidence() {
 #[test]
 fn continued_parameter_inputs_remain_unread() {
     let mut wrong = Vec::new();
-    for context in [": \"$\\\ns[x]\"", ": \"$s\\\n[x]\""] {
+    for context in [
+        ": \"$\\\ns[x]\"",
+        ": \"$s\\\n[x]\"",
+        ": $aé[n=1]",
+        ": \"$aé\\\n[n=1]\"",
+        ": \"$a\\\né[n=1]\"",
+        ": $é[n=1]",
+    ] {
         let words = super::super::super::command_argv(context);
         if !super::super::probe_arithmetic(context, &words) {
             wrong.push(context);
@@ -501,6 +508,22 @@ fn filled_operands_retain_arithmetic_evidence() {
         super::super::super::expand_shell_commands(context).arithmetic,
         "missing arithmetic evidence: {context}"
     );
+}
+
+#[test]
+fn extended_parameter_values_keep_word_count_uncertainty() {
+    let mut wrong = Vec::new();
+    for context in ["print -f \"x$aé[@]\" data", "print -f \"x$é[@]\" data"] {
+        if super::super::super::configuration_shell_change(context).is_none() {
+            wrong.push(format!("missing refusal: {context}"));
+        }
+    }
+    // Existing ASCII subscript refusal and scalar allowance controls.
+    assert!(
+        super::super::super::configuration_shell_change("print -f \"x$a[@]\" data").is_some()
+    );
+    assert!(super::super::super::configuration_shell_change("print -f \"x$a\" data").is_none());
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
