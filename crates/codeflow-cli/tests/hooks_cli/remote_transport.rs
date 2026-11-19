@@ -1956,6 +1956,74 @@ fn git_guard_judges_continued_parameters_and_valued_options() {
 }
 
 #[test]
+fn git_guard_judges_unsettled_output_words() {
+    let scratch = Scratch::landed(None);
+    definition_outside_work_tree(&scratch, true);
+    replace_last_commit(&scratch, false);
+    let mut wrong = Vec::new();
+    for context in [
+        "false && f=%s; printf $f %d \"$x\"",
+        "false && o=--; print $o -f %d \"$x\"",
+        "(f=%s); printf $f %d \"$x\"",
+        "true || f=%s; printf $f %d \"$x\"",
+        "set -- -f %d \"$x\"; print \"$@\"",
+        "set -- -f %d \"$x\"; print \"$@\" tail",
+        "set -- %d \"$x\"; printf \"$@\"",
+        "set -- %d \"$x\"; printf \"$@\" tail",
+        "o=message; printf -v o %s -f; print \"$o\" %d \"$x\"",
+        "n=0; printf -v n GIT_REPLACE_REF%s=1 _BASE; shift \"$n\"",
+        "print \"$options\"",
+        "printf \"$format\"",
+        "echo \"$options\"",
+        "print -r \"$options\"",
+        "printf -v out \"$format\"",
+        "echo -n \"$options\"",
+        "print -f \"$format\"",
+        "print *",
+        "printf *",
+        "echo *",
+        "print $(value)",
+        "printf $(value)",
+        "echo $(value)",
+    ] {
+        let prefix = format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}");
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if !unresolved_probe_refusal(&out) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("contact {context}: exit {:?}: {}", out.status.code(), stderr(&out)));
+        }
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{prefix}; git fetch --no-recurse-submodules origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("recursion control {context}: {}", stderr(&out)));
+        }
+    }
+    for context in [
+        "printf %s \"$x\"",
+        "print -r -- \"$a\" \"$b\"",
+        "echo -- \"$x\"",
+        "bash -c 'print \"$options\"'",
+        "bash -c 'printf \"$format\"'",
+    ] {
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}; git fetch origin"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) && !stderr(&out).contains("git.policy_authority") {
+            wrong.push(format!("data control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_judges_expanded_options_and_special_parameters() {
     let scratch = Scratch::landed(None);
     definition_outside_work_tree(&scratch, true);

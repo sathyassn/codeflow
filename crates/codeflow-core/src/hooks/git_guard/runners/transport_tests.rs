@@ -342,6 +342,63 @@ fn filled_operator_inputs_remain_unread() {
 }
 
 #[test]
+fn unsettled_output_words_keep_inputs_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        "false && f=%s; printf $f %d \"$x\"",
+        "false && o=--; print $o -f %d \"$x\"",
+        "(f=%s); printf $f %d \"$x\"",
+        "true || f=%s; printf $f %d \"$x\"",
+        "set -- -f %d \"$x\"; print \"$@\"",
+        "set -- -f %d \"$x\"; print \"$@\" tail",
+        "set -- %d \"$x\"; printf \"$@\"",
+        "set -- %d \"$x\"; printf \"$@\" tail",
+        "o=message; printf -v o %s -f; print \"$o\" %d \"$x\"",
+        "n=0; printf -v n GIT_REPLACE_REF%s=1 _BASE; shift \"$n\"",
+        "print \"$options\"",
+        "printf \"$format\"",
+        "echo \"$options\"",
+        "print -r \"$options\"",
+        "printf -v out \"$format\"",
+        "echo -n \"$options\"",
+        "print -f \"$format\"",
+        "print *",
+        "printf *",
+        "echo *",
+        "print $(value)",
+        "printf $(value)",
+        "echo $(value)",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        let segments = super::super::literal_segments(&expanded.segments);
+        let literals = super::super::expanded_probe_literals(&segments, expanded.arithmetic);
+        if literals.0.get("GIT_INDEX_FILE") != Some(&None) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn literal_values_are_invalidated_by_builtin_writes() {
+    for context in [
+        "o=message; printf -v o %s -f",
+        "o=message; read o",
+        "o=message; typeset o",
+        "o=message; eval change",
+        "o=message; read \"$target\"",
+        "o=message; set -- data",
+        "o=message; shift",
+    ] {
+        let expanded = super::super::super::expand_shell_commands(context);
+        let mut segments = expanded.segments;
+        segments.push("capture \"$o\"".into());
+        let filled = super::super::literal_segments(&segments);
+        assert_eq!(filled.last().unwrap(), "capture \"$o\"", "{context}");
+    }
+}
+
+#[test]
 fn expanded_output_option_inputs_remain_unread() {
     let mut wrong = Vec::new();
     for context in [
