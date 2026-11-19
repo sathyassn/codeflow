@@ -2013,6 +2013,7 @@ fn git_guard_preserves_output_boundaries() {
 #[test]
 fn git_guard_preserves_output_data() {
     let scratch = Scratch::landed(None);
+    git(scratch.root(), &["checkout", "-qb", "task/output-data"]);
     let mut wrong = Vec::new();
     for context in [
         "echo \"$msg\"",
