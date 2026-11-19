@@ -1691,21 +1691,35 @@ fn origin_on(
         return Ok(None);
     };
     // Git's own answer, after `pushurl` and `pushInsteadOf`.
-    let output = crate::git::process("git")
+    // Read within the guard's wait and answer cap (TSK-327): a read that
+    // stalls, overflows or fails refuses. Git's stderr is not shown; a failed
+    // exit names the command the operator can run to see why.
+    let mut command = crate::git::process("git");
+    command
         .arg("-C")
         .arg(root)
-        .args(["remote", "get-url", "--push", "--all", "origin"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot read the `origin` push URL: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cannot read the `origin` push URL: {}",
-            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
-        ));
-    }
-    let pushes = String::from_utf8(output.stdout)
-        .map_err(|_| "the `origin` push URL is not UTF-8".to_string())?;
+        .args(["remote", "get-url", "--push", "--all", "origin"]);
+    let failed = |why: &str| {
+        format!(
+            "cannot read the `origin` push URL: {why}; run `git remote get-url --push --all origin` in the repository to see why"
+        )
+    };
+    let stdout = match crate::git::remote_query::bounded_local(
+        command,
+        crate::git::remote_query::QueryLimits::guard().timeout(),
+    )
+    .map_err(|why| failed(&why))?
+    {
+        crate::git::remote_query::LocalAnswer::Answer(stdout) => stdout,
+        crate::git::remote_query::LocalAnswer::Exit(code) => {
+            return Err(failed(&format!(
+                "git exited with {}",
+                code.map_or_else(|| "no exit code".to_string(), |code| code.to_string())
+            )))
+        }
+    };
+    let pushes =
+        String::from_utf8(stdout).map_err(|_| "the `origin` push URL is not UTF-8".to_string())?;
     for push in pushes.split('\n').filter(|line| !line.is_empty()) {
         let same = parse(push).is_some_and(|(named_host, named)| {
             named_host == host && named.eq_ignore_ascii_case(&nwo)

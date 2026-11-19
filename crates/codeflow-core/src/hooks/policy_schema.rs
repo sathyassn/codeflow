@@ -159,11 +159,30 @@ impl KeySpec {
 
 /// Valid-values text shared by every Level key.
 const LEVEL_VALID: &str = "off | warn | allow | block";
+/// The three work-record section keys, whose names are checked (TSK-1421).
+const RECORD_SECTION_KEYS: [&str; 3] = [
+    "git.task_required_sections",
+    "git.epic_required_sections",
+    "git.spec_required_sections",
+];
+/// The valid values of the three work-record section keys (TSK-1421).
+const RECORD_SECTIONS_VALID: &str = "an array of heading names without the leading ## (e.g. Risks); each non-empty, on one line, not starting with #";
+/// The notes the three work-record section keys share (TSK-1421).
+const RECORD_SECTIONS_NOTES: &str = "Empty by default. `validate --docs`, `work start` and \
+    `codeflow ci` (CI and the pre-push hook) refuse a record of that kind that lacks one of \
+    them as its own `## <name>` heading line; `task new`, `epic new` and `spec new` write \
+    them into new records. CodeFlow's own sections (task: Description, Acceptance Criteria; \
+    epic: Summary, Acceptance Criteria; spec: Summary, Behavior, Open questions) stay required \
+    whatever this lists. The lists are read from the trusted policy (the range's base in \
+    `codeflow ci`, the landed policy elsewhere) joined with the working copy's, so a change \
+    cannot drop a section it is judged by. A record unchanged since that trusted commit is \
+    warned, not refused, until it next changes. The shipped policy file does not list it, \
+    so an older binary never meets the key.";
 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 87] = [
+pub const SCHEMA: [KeySpec; 90] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -413,6 +432,7 @@ pub const SCHEMA: [KeySpec; 87] = [
         valid: "a whole number of seconds, at least 1; no ceiling beyond what the number can hold",
         purpose: "How long the pre-push set may take before the hook reports the overrun, naming the slowest step and the slowest checks inside a `codeflow ci` step.",
         notes: "Default 60. It only reports: a push over the budget still lands when its checks pass, and no check is skipped or shortened to meet it. \
+                It is also one term of the deadline each pre-push `codeflow ci` check runs within (see git.test_gate_on_push). \
                 The pre-push hook reads it from the default branch's committed policy as last fetched, never from a pushed head; with no such branch it uses the default. \
                 Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. \
                 The shipped policy file does not list it, so an older binary never meets the key.",
@@ -707,6 +727,28 @@ pub const SCHEMA: [KeySpec; 87] = [
                 whose files could not be resolved, counts as code. Enforced \
                 under pr_sections.",
     },
+    // ---- git: work-record sections (TSK-1421) -------------------------------
+    KeySpec {
+        path: "git.task_required_sections",
+        kind: KeyKind::StringList,
+        valid: RECORD_SECTIONS_VALID,
+        purpose: "Extra sections every task record must carry, each as its own ## heading line.",
+        notes: RECORD_SECTIONS_NOTES,
+    },
+    KeySpec {
+        path: "git.epic_required_sections",
+        kind: KeyKind::StringList,
+        valid: RECORD_SECTIONS_VALID,
+        purpose: "Extra sections every epic record must carry, each as its own ## heading line.",
+        notes: RECORD_SECTIONS_NOTES,
+    },
+    KeySpec {
+        path: "git.spec_required_sections",
+        kind: KeyKind::StringList,
+        valid: RECORD_SECTIONS_VALID,
+        purpose: "Extra sections every spec record must carry, each as its own ## heading line.",
+        notes: RECORD_SECTIONS_NOTES,
+    },
     KeySpec {
         path: "git.pr_body_max_words",
         kind: KeyKind::UInt,
@@ -929,8 +971,49 @@ pub const SCHEMA: [KeySpec; 87] = [
                 test-config target, so a push never waits for a heavy run; \
                 cite `codeflow test --mode quick` when the pull request \
                 is made ready. Tag and other non-branch pushes are outside the \
-                push set. Local-config tampering is outside the hook threat \
-                model; hosted CI checks the pushed commit.",
+                push set. The destination lookup asks only the exact URL the \
+                push uses: a `url.<base>.insteadOf` in the repository, global \
+                or system configuration that matches it (an empty one matches \
+                every URL), a remote configured under that URL as its name, \
+                or a legacy remotes or branches file of that name refuses the \
+                push as unverifiable (`ci.destination_unavailable`). Its ssh \
+                transport is the one git's own precedence selects \
+                (`GIT_SSH_COMMAND`, `core.sshCommand`, `GIT_SSH`, then \
+                `ssh`), read as the push read it, `git -c` settings \
+                included; no other transport runs. A destination with no \
+                branches is not taken as initialization when the push \
+                connected with a `git -c` http, protocol, remote, ssh or \
+                transfer setting, or `core.gitProxy`, that the lookup does \
+                not apply. Each pushed range's `codeflow ci` runs within one \
+                deadline, git.remote_query_timeout_seconds times \
+                git.remote_query_attempts, plus \
+                git.remote_fetch_timeout_seconds, plus \
+                git.push_budget_seconds (270 s by default); a check still \
+                running then is ended with its process group and refuses the \
+                push, naming the deadline and these keys. Before it, the hook \
+                fetches the objects the id registry lacks in a partial clone \
+                in one bounded request, and the check reads the registry with \
+                lazy fetching off. The check runs in a process group of its \
+                own, away from the terminal, so in a partial clone a fetch of \
+                a missing object that needs a password or passphrase prompt \
+                stops and is refused at the deadline. The refusal then names \
+                two commands to run in the terminal before pushing again, \
+                built from the range the check read: `git log \
+                --diff-merges=separate --stat --format= <from>..<head>` and \
+                `git diff --stat <from>...<head>`, where `<from>` is the \
+                check's `--commits-from`, else its base. They read both sides \
+                of each commit's changes and of the range's diff, so they \
+                fetch every file version the added-lines, conflict-marker \
+                and size-and-ignore checks read. They fetch no file the check \
+                reads whole at one commit that neither shows changed, such \
+                as the policy at the target's tip, and the refusal says so; \
+                a plain `git fetch` keeps the clone's filter and fetches none \
+                of them. A remote counts as a promisor as git reads it: any \
+                true `remote.<name>.promisor` entry or a \
+                `remote.<name>.partialCloneFilter` makes it one, and \
+                `promisor = false` alone does not. Other local-config \
+                tampering is outside \
+                the hook threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",
@@ -1575,6 +1658,36 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
     }
 }
 
+/// Validate a string-list leaf: an array of strings, and for a record
+/// section key, names that can be headings.
+fn validate_string_list(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    if !value
+        .as_array()
+        .is_some_and(|a| a.iter().all(Value::is_string))
+    {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an array of strings",
+        ));
+    } else if RECORD_SECTION_KEYS.contains(&path)
+        && !value.as_array().is_some_and(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .all(crate::validate::record_sections::is_valid_name)
+        })
+    {
+        // A blank, multi-line or `#`-led name could never match a
+        // heading line, so every record would fail on a typo.
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            RECORD_SECTIONS_VALID,
+        ));
+    }
+}
+
 /// Validate one leaf `path`/`value` pair against its [`KeySpec`]; a path the
 /// schema does not know is an unknown-key error.
 fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
@@ -1622,18 +1735,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                 ));
             }
         }
-        KeyKind::StringList => {
-            if !value
-                .as_array()
-                .is_some_and(|a| a.iter().all(Value::is_string))
-            {
-                errors.push(PolicyError::invalid_value(
-                    path,
-                    value,
-                    "an array of strings",
-                ));
-            }
-        }
+        KeyKind::StringList => validate_string_list(path, value, errors),
         KeyKind::String => match value.as_str() {
             Some(s) => {
                 // The one string key is a regex; an unparseable pattern would
@@ -1958,7 +2060,10 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 13] = [
+        const OPTIONAL: [&str; 16] = [
+            "git.task_required_sections",
+            "git.epic_required_sections",
+            "git.spec_required_sections",
             "security.text_guard",
             "security.trusted_client_configs",
             "git.pr_section_mapping",
@@ -2017,6 +2122,23 @@ mod tests {
         // ...and the shipped scaffold asset validates cleanly.
         let asset = include_str!("../../../../assets/base/policy.json");
         assert!(validate_policy_str(asset).is_ok());
+    }
+
+    #[test]
+    fn record_section_names_must_be_headings() {
+        // TSK-1421: a name that could never be a heading line is refused,
+        // naming the key, instead of failing every record.
+        for key in RECORD_SECTION_KEYS {
+            let leaf = key.trim_start_matches("git.");
+            let good = format!(r#"{{"git":{{"{leaf}":["Risks","Rollback plan"]}}}}"#);
+            validate_policy_str(&good).unwrap();
+            for bad in [r#""""#, r#""  ""#, r###""## Risks""###, r#""Risks\nPlan""#] {
+                let text = format!(r#"{{"git":{{"{leaf}":[{bad}]}}}}"#);
+                let errors = validate_policy_str(&text).unwrap_err();
+                assert_eq!(errors.len(), 1, "{text}");
+                assert_eq!(errors[0].key, key, "{text}");
+            }
+        }
     }
 
     #[test]

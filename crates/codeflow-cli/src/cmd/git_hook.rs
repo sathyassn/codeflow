@@ -418,13 +418,16 @@ fn git_config_values(
             "cannot read commit cleanup configuration: {detail}"
         ))
     };
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["config", "-z"])
-        .args(args)
-        .output()
-        .map_err(|error| unreadable(error.to_string()))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["config", "-z"])
+            .args(args),
+        None,
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
     if out.status.code() == Some(1) {
         return Ok(Vec::new());
     }
@@ -443,12 +446,15 @@ fn merge_in_progress(root: &Path) -> Result<bool, codeflow_core::error::HookErro
     let unreadable = |why: String| {
         codeflow_core::error::HookError::Config(format!("cannot read merge state: {why}"))
     };
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .map_err(|error| unreadable(error.to_string()))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "--git-dir"]),
+        None,
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
     if !out.status.success() {
         return Err(unreadable(out.status.to_string()));
     }
@@ -471,12 +477,15 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
     codeflow_core::hooks::gitleaks::require_offline_objects(root).map_err(unreadable)?;
     let mut command = codeflow_core::git::command();
     codeflow_core::hooks::gitleaks::pin_object_reader(&mut command);
-    let out = command
-        .arg("-C")
-        .arg(root)
-        .args(["diff", "--cached", "--name-only", "-z", "--no-renames"])
-        .output()
-        .map_err(|error| unreadable(error.to_string()))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        command
+            .arg("-C")
+            .arg(root)
+            .args(["diff", "--cached", "--name-only", "-z", "--no-renames"]),
+        None,
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
     if !out.status.success() {
         return Err(unreadable(out.status.to_string()));
     }
