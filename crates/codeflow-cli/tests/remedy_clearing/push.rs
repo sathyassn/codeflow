@@ -334,8 +334,8 @@ fn clears_push_over_budget_builtin() {
     assert!(printed.contains("over its 60s budget"), "{printed}");
     assert_prints_row(&printed, "PUSH_OVER_BUDGET_BUILTIN");
     assert!(printed.contains("built-in `release preflight"), "{printed}");
-    // The remedy changes the authority as well as the checkout: a local
-    // relaxation alone cannot switch off the landed push set.
+    // Follow the printed remedy: land the policy change on the default
+    // branch first, then apply it to the checkout before pushing again.
     land_on_default(&root, &dest, |root| {
         set_policy(root, &[("test_gate_on_push", "off".into())]);
     });
@@ -1735,8 +1735,8 @@ fn head_sha(root: &Path) -> String {
         .to_string()
 }
 
-/// A branch that loosens its own commit-body rules commits under them, but
-/// its first push is judged by the policy at its target.
+/// A branch with looser commit-body rules has a four-bullet commit seeded
+/// without hooks; its first push is judged by the policy at its target.
 #[test]
 fn a_push_is_judged_by_the_policy_the_destination_holds() {
     let dir = scaffolded("--standard");
