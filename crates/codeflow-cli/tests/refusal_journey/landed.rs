@@ -26,6 +26,11 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+/// The recovery step an effective-URL refusal gives: the operator removes
+/// the rewrite rule with an editor, since printing the configuration can
+/// show a credential (`NO_CONFIG_LISTING` in hooks/ref_authority.rs).
+const EDITOR_ADVICE: &str = "removes that rule in the configuration files with an editor, since printing the configuration shows remote URLs";
+
 struct Repo {
     temp: tempfile::TempDir,
 }
@@ -981,10 +986,14 @@ fn r2_f1_prefix_rewrites_from_global_config_cannot_replace_authority() {
             text.contains("git.policy_authority") && text.contains("effective URL"),
             "{text}"
         );
+        // The advice sends the operator to an editor: listing the
+        // configuration would print remote URLs and rewrite bases, which can
+        // hold a credential (TSK-416).
         assert!(
-            text.contains("operator") && text.contains("--show-origin"),
+            text.contains("operator") && text.contains(EDITOR_ADVICE),
             "{text}"
         );
+        assert!(!text.contains("--show-origin"), "{text}");
         assert_eq!(
             repo.git(&["rev-parse", "refs/remotes/origin/main"]),
             original
@@ -1185,7 +1194,8 @@ fn r3_f3_remote_update_checks_every_selected_remote() {
             || (expected == 2
                 && !(text.contains("git.policy_authority")
                     && text.contains("effective URL for secondary")
-                    && text.contains("--show-origin")))
+                    && text.contains(EDITOR_ADVICE)
+                    && !text.contains("--show-origin")))
         {
             failures.push(format!(
                 "{command}: expected {expected}, exit {:?}: {text}",
