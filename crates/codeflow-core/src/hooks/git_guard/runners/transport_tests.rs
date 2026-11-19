@@ -320,6 +320,81 @@ fn continued_substitution_keeps_nested_evaluation_evidence() {
 }
 
 #[test]
+fn continued_parameter_inputs_remain_unread() {
+    let mut wrong = Vec::new();
+    for context in [": \"$\\\ns[x]\"", ": \"$s\\\n[x]\""] {
+        let words = super::super::super::command_argv(context);
+        if !super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn filled_operator_inputs_remain_unread() {
+    let expanded = super::super::super::expand_shell_commands(
+        "printf -v y %s _BASE; x=PIPESTATUS[GIT_REPLACE_REF$y=1]; f=-v; [ $f \"$x\" ]",
+    );
+    let segments = super::super::literal_segments(&expanded.segments);
+    let literals = super::super::probe_line_literals_in_context(&segments, false);
+    assert_eq!(literals.0.get("GIT_INDEX_FILE"), Some(&None));
+}
+
+#[test]
+fn valued_output_options_keep_inputs_unread() {
+    let mut wrong = Vec::new();
+    for context in [
+        "print -v out -f %d \"$x\"",
+        "print -u 2 -f %d \"$x\"",
+        "print -u 1 -f %d \"$x\"",
+        "print -C 2 -f %d \"$x\"",
+        "print -x 2 -f %d \"$x\"",
+        "print -X 2 -f %d \"$x\"",
+        "print -u2 -vout -f %d \"$x\"",
+        "print -ru 2 -f %d \"$x\"",
+        "print -u 2 -v \"$destination\" data",
+        "print -u \"$options\" data",
+        "logout \"$x\"",
+    ] {
+        let words = super::super::super::command_argv(context);
+        if !super::super::probe_arithmetic(context, &words) {
+            wrong.push(context);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn numeric_parameter_operands_keep_inputs_known() {
+    let mut wrong = Vec::new();
+    for operand in ["$?", "$#", "$$", "$!", "${?}", "${#}", "${$}", "${!}"] {
+        for program in ["exit", "shift", "return", "break", "continue", "bye", "logout", "printf %d", "print -f %d"] {
+            let context = format!("{program} \"{operand}\"");
+            let words = super::super::super::command_argv(&context);
+            if super::super::probe_arithmetic(&context, &words) {
+                wrong.push(context);
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn continued_parameter_and_output_controls_keep_inputs_known() {
+    for context in [
+        ": \"$s\\\n[0]\"",
+        "print -u 2 -f %s \"$x\"",
+        "print -vout -f %s \"$x\"",
+        "bash -c 'print -u 2 -f %d \"$x\"'",
+        "printf %d 123",
+    ] {
+        let words = super::super::super::command_argv(context);
+        assert!(!super::super::probe_arithmetic(context, &words), "{context}");
+    }
+}
+
+#[test]
 fn literal_parameter_forms_keep_probe_inputs_known() {
     let mut wrong = Vec::new();
     for context in [
