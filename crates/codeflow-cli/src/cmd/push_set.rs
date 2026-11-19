@@ -446,11 +446,13 @@ fn ci_target(
             dropped = true;
             report.status.push(format!(
                 "declared target '{}' is a protected branch other than the destination's default; the check uses the destination's default target",
-                display_text(&target)
+                super::ci::shown_reference(root, &target)
             ));
             None
         }
         Some(Declared::Rejected { target, reason }) => {
+            let target = super::ci::shown_reference(root, &target);
+            let reason = super::shown_in(root, &reason);
             report.status.push(format!(
                 "declared target '{target}' {reason}; the check uses the destination's default target"
             ));
@@ -475,10 +477,17 @@ fn ci_target(
         if !codeflow_core::workgraph::is_stable_work_target(target) {
             return Err(format!(
                 "target '{}' must name a stable non-task branch",
-                display_text(target)
+                super::ci::shown_reference(root, target)
             ));
         }
-        codeflow_core::hooks::git_guard::read_branch_name(root, None, target)?;
+        codeflow_core::hooks::git_guard::read_branch_name(root, None, target).map_err(
+            |reason| {
+                super::shown_in(
+                    root,
+                    &reason.replace(target, &super::ci::shown_reference(root, target)),
+                )
+            },
+        )?;
     }
     Ok(target)
 }
@@ -1627,6 +1636,7 @@ fn target_base(
             }
             super::ci::Declared::Eligible(target)
             | super::ci::Declared::Rejected { target, .. } => {
+                let target = super::ci::shown_reference(root, &target);
                 let Some((name, _)) = default else {
                     return Err(format!(
                         "declared target '{target}' cannot bound the range and the destination has no default target"
@@ -1634,7 +1644,7 @@ fn target_base(
                 };
                 notices.push(format!(
                     "declared target '{target}' cannot bound the range; using the destination's default target '{}'",
-                    display_text(name)
+                    super::ci::shown_reference(root, name)
                 ));
                 name.clone()
             }

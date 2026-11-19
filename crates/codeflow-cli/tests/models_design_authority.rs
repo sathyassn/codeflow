@@ -147,6 +147,59 @@ fn limitations(participant: &Value) -> Vec<&str> {
         .collect()
 }
 
+#[test]
+fn authority_output_withholds_targets_and_preserves_plain_names() {
+    for target in ["integration/cred@SECRETVALUE", "integration/plain"] {
+        for committed in [true, false] {
+            let block = authority();
+            let project = Project::new(committed.then_some(&block), "");
+            let root = project.root();
+            git(root, &["checkout", "-q", TARGET]);
+            write(
+                root,
+                "project-management/tasks/TSK-900.md",
+                &task("TSK-900", "").replace(TARGET, target),
+            );
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "test: declare target"]);
+            git(root, &["branch", target]);
+            git(root, &["checkout", "-q", "task/TSK-900-fixture"]);
+            git(root, &["merge", "--ff-only", "-q", TARGET]);
+            git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+            if !committed {
+                write(root, SELECTION, &block.to_string());
+            }
+            for as_json in [true, false] {
+                let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+                cmd.current_dir(root)
+                    .env("CODEFLOW_HOME", root.join("personal"))
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                    .args(["models", "resolve", "--host", "claude-code"])
+                    .args(DESIGN);
+                if as_json {
+                    cmd.arg("--json");
+                }
+                let out = cmd.output().unwrap();
+                let said = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                assert_eq!(out.status.code(), Some(i32::from(!committed)), "{said}");
+                assert!(said.contains("committed on"), "{said}");
+                assert!(!said.contains("SECRETVALUE"), "{said}");
+                if target == "integration/plain" {
+                    assert!(
+                        said.contains("committed on integration/plain at "),
+                        "{said}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// AC-1: a block committed on the task's integration target makes its
 /// co-owner design after the owner, with no override and no reduced
 /// assurance; the working tree changes nothing.

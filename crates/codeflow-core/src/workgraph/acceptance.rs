@@ -1923,7 +1923,14 @@ fn landed_adoptions(
         &head.to_string(),
     )?;
     if let Some(error) = report.record_error {
-        return Err(format!("{line}'s line_adoptions cannot be read: {error}"));
+        let root = repo.workdir().unwrap_or_else(|| repo.path());
+        return Err(crate::security::git::without_remote_names(
+            root,
+            &format!(
+                "{}'s line_adoptions cannot be read: {error}",
+                crate::security::git::shown_ref(root, line)
+            ),
+        ));
     }
     Ok(report.adopted)
 }
@@ -6387,6 +6394,35 @@ mod tests {
         assert!(criteria_delta(&split, &split).is_empty());
     }
     const ADOPTION_TASK: &str = "project-management/tasks/TSK-001.md";
+    #[test]
+    fn adoption_errors_withhold_declared_lines_and_keep_plain_names() {
+        for line in [
+            "integration/EPC-001-cred@SECRETVALUE",
+            "integration/EPC-001-plain",
+        ] {
+            let f = AdoptionFixture::new();
+            let root = f.dir.path();
+            let repo = Repository::open(root).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            f.write(
+                ADOPTION_EPIC,
+                "---\nid: EPC-001\nstatus: planning\nline_adoptions: invalid\n---\n",
+            );
+            let head = f.commit();
+            let graph = Graph::from_revision(&repo, &head.to_string()).unwrap();
+            let mut task = graph.records["TSK-001"].clone();
+            task.integration_target = Some(line.into());
+            let said = landed_adoptions(&repo, &task, f.merge, head, Some(f.base)).unwrap_err();
+            assert!(said.contains("line_adoptions cannot be read"), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if line.ends_with("plain") {
+                assert!(said.contains(line), "{said}");
+            }
+        }
+    }
     const ADOPTION_EPIC: &str = "project-management/epics/EPC-001.md";
     const ADOPTION_LINE: &str = "integration/EPC-001-line";
 

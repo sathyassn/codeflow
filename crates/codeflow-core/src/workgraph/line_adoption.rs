@@ -275,13 +275,13 @@ pub fn check_range(
     head: &str,
 ) -> Result<AdoptionReport, String> {
     let _judgment = history::judgment();
-    let epic = epic_id(branch)?;
+    let epic = epic_id(branch).map_err(|reason| reference_error(root, branch, &reason))?;
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let resolve = |revision: &str| {
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
             .map(|commit| commit.id())
-            .map_err(|e| format!("{revision}: {e}"))
+            .map_err(|e| reference_error(root, revision, &format!("{revision}: {e}")))
     };
     let head = resolve(head)?;
     let target = resolve(target)?;
@@ -378,7 +378,28 @@ pub fn reference_tip(root: &Path, name: &str) -> Result<Option<String>, String> 
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
         Err(error) => Err(format!("{name}: {error}")),
     };
-    tip
+    tip.map_err(|reason| reference_error(root, name, &reason))
+}
+
+fn reference_error(root: &Path, name: &str, reason: &str) -> String {
+    let shown = crate::security::git::shown_ref(root, name);
+    let reason = reason.replace(name, &shown);
+    let reason = if name.starts_with("refs/remotes/") {
+        let remote = Repository::discover(root).map_or_else(
+            |_| {
+                name.trim_start_matches("refs/remotes/")
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            },
+            |repo| super::work_start::remote_of(&repo, name),
+        );
+        crate::security::git::without_remote_name(root, &remote, &reason)
+    } else {
+        reason
+    };
+    crate::security::git::without_remote_names(root, &reason)
 }
 
 /// The epic lines (`integration/EPC-*`) whose fetched tip is exactly
@@ -393,7 +414,7 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
         .revparse_single(commit)
         .and_then(|object| object.peel_to_commit())
         .map(|commit| commit.id())
-        .map_err(|e| format!("{commit}: {e}"))?;
+        .map_err(|e| reference_error(root, commit, &format!("{commit}: {e}")))?;
     let mut lines = Vec::new();
     let references = repo
         .references_glob("refs/remotes/origin/integration/*")
@@ -410,18 +431,26 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
             // commit refuses rather than being skipped.
             Err(_) => None,
         };
-        let tip = reference
-            .peel_to_commit()
-            .map_err(|e| format!("cannot read the tip of '{}': {e}", full.display()))?;
+        let tip = reference.peel_to_commit().map_err(|e| {
+            reference_error(
+                root,
+                &full.display().to_string(),
+                &format!("cannot read the tip of '{}': {e}", full.display()),
+            )
+        })?;
         if tip.id() != commit {
             continue;
         }
         match line {
             Some(name) => lines.push(name),
             None => {
-                return Err(format!(
-                    "a fetched line at {commit} has a name that is not UTF-8: '{}'",
-                    full.display()
+                return Err(reference_error(
+                    root,
+                    &full.display().to_string(),
+                    &format!(
+                        "a fetched line at {commit} has a name that is not UTF-8: '{}'",
+                        full.display()
+                    ),
                 ))
             }
         }
@@ -441,7 +470,7 @@ pub fn descends_from(root: &Path, tip: &str, head: &str) -> Result<bool, String>
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
             .map(|commit| commit.id())
-            .map_err(|e| format!("{revision}: {e}"))
+            .map_err(|e| reference_error(root, revision, &format!("{revision}: {e}")))
     };
     let tip = resolve(tip)?;
     let head = resolve(head)?;
@@ -450,6 +479,23 @@ pub fn descends_from(root: &Path, tip: &str, head: &str) -> Result<bool, String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reference_errors_withhold_tracking_names_and_keep_local_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap();
+        for name in [
+            "refs/remotes/unknown-SECRETVALUE/blob",
+            "refs/heads/ordinary",
+        ] {
+            repo.reference(name, blob, true, "test").unwrap();
+            let said = super::reference_tip(dir.path(), name).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if name == "refs/heads/ordinary" {
+                assert!(said.contains(name), "{said}");
+            }
+        }
+    }
     use super::direct_commit_refusal;
 
     /// TSK-416 review round 2, finding 1: the `git reset --keep` step gives

@@ -355,12 +355,12 @@ fn judge(
     // pre-push hook states a release push's scope itself.
     eprintln!(
         "codeflow ci: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
-        codeflow_core::git::display_text(names.branch),
+        super::shown_reference(root, names.branch),
         names
             .into
-            .map(|into| format!(" into '{}'", codeflow_core::git::display_text(into)))
+            .map(|into| format!(" into '{}'", super::shown_reference(root, into)))
             .unwrap_or_default(),
-        codeflow_core::git::display_text(&scope.pattern),
+        codeflow_core::security::git::without_remote_names(root, &codeflow_core::git::display_text(&scope.pattern)),
         scope.source
     );
     let head = match release_head(root, range, scope) {

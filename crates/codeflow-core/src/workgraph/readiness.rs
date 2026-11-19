@@ -1090,7 +1090,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let shown = |name: &GitName| withheld.scrub(&name.display().to_string());
     let machine_shown = |name: &GitName| withheld.scrub(&exact_text(name));
     let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
-    let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
+    let default = super::default_work_target(repo_root).map_err(|error| error.shown(repo_root))?;
     let mut out = Backlog {
         fetched_at: fetched_at(&repo),
         ..Backlog::default()
@@ -1203,7 +1203,8 @@ pub struct TargetTask {
     pub uid: Option<String>,
     /// The declared target (`main`, `integration/EPC-NNN-<slug>`).
     pub target: String,
-    /// The ref read (`origin/main`).
+    /// Display form of the ref read (`origin/main`), with withheld remote
+    /// names replaced. `target` and `tip` retain the decision identities.
     pub reference: String,
     /// The tip commit read.
     pub tip: String,
@@ -1571,7 +1572,7 @@ fn completion_bound(
 pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
+    let default = super::default_work_target(repo_root).map_err(|error| error.shown(repo_root))?;
     let lines = default_tip_lines(repo_root, &repo);
     // A declared target as the one remote-tracking ref it names:
     // `origin/main` is origin's `main` and a bare name is `origin`'s. Unlike
@@ -1663,7 +1664,10 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                         status: record.status.clone(),
                         uid: record.uid.clone(),
                         target: branch.clone(),
-                        reference: shown(reference),
+                        reference: crate::security::git::without_remote_names(
+                            repo_root,
+                            &shown(reference),
+                        ),
                         tip: tip.to_string(),
                         claimed: active.contains(&record.id),
                         accepted: record.reviewed.is_some()
@@ -2177,6 +2181,15 @@ pub fn claim_on(
     task_id: &str,
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Claim, String> {
+    claim_on_exact(repo_root, task_id, pins)
+        .map_err(|reason| crate::security::git::without_remote_names(repo_root, &reason))
+}
+
+fn claim_on_exact(
+    repo_root: &Path,
+    task_id: &str,
+    pins: &[super::work_start::ReviewedPin],
+) -> Result<Claim, String> {
     refresh_claim(repo_root, task_id)?;
     let declared = claim_target(repo_root, task_id)?
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
@@ -2422,7 +2435,7 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Result<Vec<
         return Ok(Vec::new());
     };
     let declared = super::declared_work_target(repo_root, task_id)
-        .map_err(|error| format!("cannot read task target: {error}"))?;
+        .map_err(|error| format!("cannot read task target: {}", error.shown(repo_root)))?;
     let remotes = claim_remotes(&repo, repo_root, declared.as_deref())?;
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes =
@@ -2446,7 +2459,9 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Result<Vec<
         .filter(|name| *name != own)
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(|name| name.display().to_string())
+        .map(|name| {
+            crate::security::git::without_remote_names(repo_root, &name.display().to_string())
+        })
         .collect())
 }
 

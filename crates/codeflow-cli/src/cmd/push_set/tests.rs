@@ -208,6 +208,27 @@ fn command(root: &Path, args: &[&str]) -> String {
 const NEW: &str = "0000000000000000000000000000000000000000";
 
 #[test]
+fn rejected_target_notices_withhold_names_and_keep_plain_names() {
+    for target in [
+        "integration/EPC-999-cred@SECRETVALUE",
+        "integration/EPC-999-plain",
+    ] {
+        let h = History::new();
+        h.git(&["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
+        h.task(target);
+        let head = h.git(&["rev-parse", "HEAD"]);
+        let range = h.range("task/TSK-001-change", &head, NEW);
+        let said = range.notices.join("\n");
+        assert!(said.contains("cannot bound the range"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if target.ends_with("plain") {
+            assert!(said.contains(target), "{said}");
+        }
+    }
+}
+
+#[test]
 fn push_set_declared_advertisements_require_eligibility_and_protected_tip_agreement() {
     for (target, same_tip) in [
         ("master", true),

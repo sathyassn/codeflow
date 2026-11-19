@@ -91,13 +91,16 @@ fn status() -> i32 {
     };
     match codeflow_core::worktree_inventory::inventory(&cwd) {
         Ok(inventory) => {
-            print_block!(codeflow_core::worktree_inventory::render(&inventory));
+            print_block!(super::shown_block(
+                &cwd,
+                &codeflow_core::worktree_inventory::render(&inventory)
+            ));
             0
         }
         Err(error) => {
             eprintln!(
                 "work status: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&cwd, &error))
             );
             1
         }
@@ -117,7 +120,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         Err(error) => {
             eprintln!(
                 "work next: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -293,7 +296,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         if let Err(error) = readiness::refresh_claim(&root, task_id) {
             eprintln!(
                 "work claim: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -303,7 +306,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         Err(error) => {
             eprintln!(
                 "work claim: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -338,7 +341,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         Err(error) => {
             eprintln!(
                 "work claim: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             1
         }
@@ -383,7 +386,10 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     // Fetch before resolving pins, as `work claim` does, so a replacement pin
     // is judged against the pushed predecessor head.
     if let Err(error) = readiness::refresh_claim(&root, task_id) {
-        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        eprintln!(
+            "work start: error: {}",
+            crate::cmd::shown(&super::shown_in(&root, &error))
+        );
         return 1;
     }
     // Explicit review evidence is required even when planning findings warn.
@@ -393,7 +399,7 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         Err(error) => {
             eprintln!(
                 "work start: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -413,7 +419,7 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
                 Err(error) => {
                     eprintln!(
                         "work start: error: recording reviewed claim base failed: {}",
-                        crate::cmd::shown(&error)
+                        crate::cmd::shown(&super::shown_in(&root, &error))
                     );
                     return 1;
                 }
@@ -425,7 +431,10 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let warn = level == PolicyLevel::Warn;
     let label = if warn { "warning" } else { "error" };
     for finding in &findings {
-        eprintln!("work start: {label}: {}", crate::cmd::shown(finding));
+        eprintln!(
+            "work start: {label}: {}",
+            crate::cmd::shown(&super::shown_in(&root, finding))
+        );
     }
     if warn {
         eprintln!(
@@ -474,7 +483,7 @@ fn plan_check(
         "work start: {} anchored at {} for {} -> {}",
         report.task_id,
         report.merge_base,
-        report.branch,
+        codeflow_core::security::git::without_remote_names(root, &report.branch),
         // A fork's tracking ref holds its remote's name, shown only when
         // plain (TSK-416 review round 7).
         codeflow_core::security::git::without_remote_names(

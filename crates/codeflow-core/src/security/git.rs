@@ -509,6 +509,26 @@ pub fn without_remote_names(root: &Path, text: &str) -> String {
     WithheldRemotes::read(root).scrub(text)
 }
 
+/// Scrub a completed display block, preserving known line boundaries and
+/// the exact data its renderer used. A proven non-repository has no remote
+/// names; an unreadable remote inventory withholds the whole block.
+#[must_use]
+pub fn without_remote_names_block(
+    root: &Path,
+    block: &crate::git::TextBlock,
+) -> crate::git::TextBlock {
+    let text = if matches!(crate::hooks::repo::open(root), Ok(None)) {
+        block.as_str().to_owned()
+    } else {
+        without_remote_names(root, block.as_str())
+    };
+    let mut shown = crate::git::TextBlock::new();
+    for line in text.split_inclusive('\n') {
+        shown.push_str(line);
+    }
+    shown
+}
+
 /// Whether `word`, one raw value a printed command would carry, holds no
 /// name of a remote that messages withhold. It is judged on the raw word,
 /// before the command is rendered: rendering quotes a value and can split
@@ -690,6 +710,30 @@ pub fn is_on_protected_branch(branch: &str, policy: &crate::security::SecurityPo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rendered_blocks_keep_structure_and_withhold_unreadable_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut block = crate::git::TextBlock::new();
+        block.push_str("branch: integration/cred@SECRETVALUE\n");
+        block.push_str("  ordinary: task/TSK-001-café@topic\n");
+        assert_eq!(
+            without_remote_names_block(root, &block).as_str(),
+            block.as_str()
+        );
+        let repo = git2::Repository::init(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        assert_eq!(
+            without_remote_names_block(root, &block).as_str(),
+            "branch: integration/<a remote, name withheld>\n  ordinary: task/TSK-001-café@topic\n"
+        );
+        std::fs::write(repo.path().join("config"), "[unterminated").unwrap();
+        let said = without_remote_names_block(root, &block);
+        assert_eq!(said.as_str(), UNREAD_REMOTES_TEXT);
+    }
     use super::*;
     use crate::security::SecurityPolicy;
 

@@ -407,7 +407,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         Err(error) => {
             eprintln!(
                 "codeflow: cannot read policy: {}",
-                codeflow_core::git::display_message(&error)
+                shown_error(&root, &error)
             );
             return 2;
         }
@@ -418,10 +418,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     {
         Ok(context) => context,
         Err(error) => {
-            eprintln!(
-                "codeflow ci: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            eprintln!("codeflow ci: {}", shown_error(&root, &error));
             return 2;
         }
     };
@@ -452,19 +449,13 @@ fn run_checks(args: &CiArgs) -> i32 {
     // Every range reader below, including body-less, task-less CI, shares
     // this refusal. A history error is never a skipped check or clean range.
     if let Err(error) = codeflow_core::workgraph::history::check_command(&root) {
-        eprintln!(
-            "codeflow ci: {}",
-            codeflow_core::git::display_message(&error)
-        );
+        eprintln!("codeflow ci: {}", shown_error(&root, &error));
         return 2;
     }
     let split = match split_range(&root, args.commits_from.as_deref(), base_sha.as_deref()) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!(
-                "codeflow ci: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            eprintln!("codeflow ci: {}", shown_error(&root, &error));
             return 2;
         }
     };
@@ -496,10 +487,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     ) {
         Ok(adoption) => adoption,
         Err(error) => {
-            eprintln!(
-                "codeflow ci: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            eprintln!("codeflow ci: {}", shown_error(&root, &error));
             return 2;
         }
     };
@@ -529,10 +517,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         let from = match rev_parse(&root, from) {
             Ok(value) => value.unwrap_or_else(|| from.to_string()),
             Err(error) => {
-                eprintln!(
-                    "codeflow ci: {}",
-                    codeflow_core::git::display_message(&error)
-                );
+                eprintln!("codeflow ci: {}", shown_error(&root, &error));
                 return 2;
             }
         };
@@ -542,7 +527,11 @@ fn run_checks(args: &CiArgs) -> i32 {
         );
         println!(
             "codeflow ci: the commit checks run over {}..{head} (--commits-from), the other checks over {others}",
-            short(&from)
+            if from.len() == 40 && from.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                short(&from).to_string()
+            } else {
+                shown_reference(&root, &from)
+            }
         );
     }
     let (commit_bases, commit_source) = args.commits_from.clone().map_or_else(
@@ -586,7 +575,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     }) {
         Ok(paths) => {
             for note in paths.notes {
-                eprintln!("codeflow ci: {}", super::shown(&note));
+                eprintln!("codeflow ci: {}", shown_error(&root, &note));
             }
             tagged.extend(
                 paths
@@ -617,10 +606,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         None => match origin_url(&root) {
             Ok(url) => url,
             Err(error) => {
-                eprintln!(
-                    "codeflow ci: {}",
-                    codeflow_core::git::display_message(&error)
-                );
+                eprintln!("codeflow ci: {}", shown_error(&root, &error));
                 return 2;
             }
         },
@@ -703,10 +689,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
+                    eprintln!("codeflow ci: {}", shown_error(&root, &error));
                     return 2;
                 }
             },
@@ -772,10 +755,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             let inventory = match change_class::range_inventory(&root, base, &head) {
                 Ok(inventory) => inventory,
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
+                    eprintln!("codeflow ci: {}", shown_error(&root, &error));
                     return 2;
                 }
             };
@@ -786,10 +766,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             ) {
                 Ok(project) => project,
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
+                    eprintln!("codeflow ci: {}", shown_error(&root, &error));
                     return 2;
                 }
             };
@@ -863,10 +840,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         }) {
             Ok(protected) => protected,
             Err(error) => {
-                eprintln!(
-                    "codeflow ci: {}",
-                    codeflow_core::git::display_message(&error)
-                );
+                eprintln!("codeflow ci: {}", shown_error(&root, &error));
                 return 2;
             }
         } || git.branch_is_protected(&line_target);
@@ -1475,7 +1449,10 @@ fn target_containment_warning(
             return Ok(None);
         }
         Ok(Some((
-            format!("head does not contain target '{target}' at {tip}"),
+            format!(
+                "head does not contain target '{}' at {tip}",
+                shown_reference(root, target)
+            ),
             tip.clone(),
         )))
     })();
@@ -1486,7 +1463,10 @@ fn target_containment_warning(
             codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
         ),
         Err(error) => (
-            format!("target '{target}' tip is unverified: {error}"),
+            format!(
+                "target '{}' tip is unverified: {error}",
+                shown_reference(root, target)
+            ),
             codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
         ),
     };
@@ -1683,7 +1663,7 @@ fn evaluate_commit_range(
         }
     };
     let Some(base_sha) = base_sha else {
-        let tried = base_candidates.join(", ");
+        let tried = shown_candidates(root, base_candidates);
         let finding = match base_refusal(root, base_candidates) {
             Some(cause) => codeflow_core::remedy::Finding::new(
                 format!(
@@ -1696,7 +1676,7 @@ fn evaluate_commit_range(
                 codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
             ),
         };
-        eprintln!("{}", finding.line("codeflow ci", "warning"));
+        eprintln!("{}", shown_finding(root, &finding, "warning"));
         return CommitRangeEvaluation {
             base_sha: None,
             violations: Vec::new(),
@@ -1735,7 +1715,7 @@ fn evaluate_commit_range(
                             ),
                             codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
                         );
-                        eprintln!("{}", finding.line("codeflow ci", "warning"));
+                        eprintln!("{}", shown_finding(root, &finding, "warning"));
                         Some(false)
                     }
                 }
@@ -1757,7 +1737,7 @@ fn evaluate_commit_range(
                 format!("could not enumerate commits ({error}); commit checks skipped"),
                 codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
             );
-            eprintln!("{}", finding.line("codeflow ci", "warning"));
+            eprintln!("{}", shown_finding(root, &finding, "warning"));
             CommitRangeEvaluation {
                 base_sha: None,
                 violations: Vec::new(),
@@ -1790,11 +1770,27 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
     )
 }
 
-fn shown_reference(root: &Path, reference: &str) -> String {
+pub(super) fn shown_reference(root: &Path, reference: &str) -> String {
     codeflow_core::security::git::without_remote_names(
         root,
         &codeflow_core::security::git::shown_ref(root, reference),
     )
+}
+
+fn shown_finding(root: &Path, finding: &codeflow_core::remedy::Finding, level: &str) -> String {
+    super::shown_in(root, &finding.line("codeflow ci", level))
+}
+
+fn shown_candidates(root: &Path, candidates: &[String]) -> String {
+    candidates
+        .iter()
+        .map(|candidate| shown_reference(root, candidate))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn shown_error(root: &Path, text: &str) -> String {
+    codeflow_core::git::display_message(&super::shown_in(root, text))
 }
 
 /// A work branch carrying a task id (any sanctioned prefix) may contain
@@ -3032,7 +3028,12 @@ fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
             .ok()?;
         let said = String::from_utf8_lossy(&out.stderr);
         let first = said.lines().map(str::trim).find(|line| !line.is_empty())?;
-        (!out.status.success()).then(|| first.to_string())
+        (!out.status.success()).then(|| {
+            super::shown_in(
+                root,
+                &first.replace(candidate, &shown_reference(root, candidate)),
+            )
+        })
     })
 }
 
@@ -3061,14 +3062,26 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
         .args(["rev-parse", "--verify", "--quiet"])
         .arg(format!("{rev}^{{commit}}"))
         .output()
-        .map_err(|error| format!("cannot read revision {rev}: {error}"))?;
+        .map_err(|error| {
+            super::shown_in(
+                root,
+                &format!(
+                    "cannot read revision {}: {error}",
+                    shown_reference(root, rev)
+                ),
+            )
+        })?;
     if !out.status.success() {
         if out.status.code() == Some(1) && out.stderr.is_empty() {
             return Ok(None);
         }
-        return Err(format!(
-            "cannot read revision {rev}: {}",
-            String::from_utf8_lossy(&out.stderr)
+        return Err(super::shown_in(
+            root,
+            &format!(
+                "cannot read revision {}: {}",
+                shown_reference(root, rev),
+                String::from_utf8_lossy(&out.stderr)
+            ),
         ));
     }
     let text = String::from_utf8(out.stdout)
@@ -3095,11 +3108,20 @@ pub(super) fn exact_ref_exists(root: &Path, name: &str) -> Result<bool, String> 
         .args(["show-ref", "--verify", "--quiet"])
         .arg(name)
         .output()
-        .map_err(|error| format!("cannot read ref {name}: {error}"))?;
+        .map_err(|error| {
+            super::shown_in(
+                root,
+                &format!("cannot read ref {}: {error}", shown_reference(root, name)),
+            )
+        })?;
     match out.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(format!("cannot read ref {name}: Git exited {}", out.status)),
+        _ => Err(format!(
+            "cannot read ref {}: Git exited {}",
+            shown_reference(root, name),
+            out.status
+        )),
     }
 }
 
@@ -3584,6 +3606,64 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn revision_diagnostics_withhold_names_and_keep_plain_names() {
+        let dir = r24_range(&[], &[]);
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        for name in ["refs/heads/cred@SECRETVALUE-bad", "refs/heads/ordinary-bad"] {
+            let file = repo.path().join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, format!("{}\n", "1".repeat(40))).unwrap();
+            let said = super::exact_ref_exists(dir.path(), name).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if name.contains("ordinary") {
+                assert!(said.contains(name), "{said}");
+            }
+        }
+    }
+
+    #[test]
+    fn containment_warning_withholds_unknown_tracking_target() {
+        let dir = r24_range(&[], &[]);
+        let names = super::Names {
+            branch: "feat/x",
+            into: None,
+            into_flag: None,
+            destination: None,
+            advertisement: None,
+            candidate: None,
+            limits: codeflow_core::git::remote_query::QueryLimits::default(),
+            token: &super::RunToken::Absent,
+            release: std::cell::OnceCell::default(),
+        };
+        for target in [
+            "refs/remotes/unknown-SECRETVALUE/missing",
+            "ordinary-target",
+        ] {
+            let mut tagged = Vec::new();
+            super::target_containment_warning(
+                dir.path(),
+                target,
+                "HEAD",
+                &Err(super::NoTarget {
+                    message: "unavailable".into(),
+                    remedy: "retry".into(),
+                }),
+                &names,
+                &mut tagged,
+            );
+            assert_eq!(tagged.len(), 1);
+            let said = &tagged[0].violation.message;
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if target == "ordinary-target" {
+                assert!(said.contains("target 'ordinary-target'"), "{said}");
+            }
+        }
+    }
     /// A repository whose `main` holds `base` and whose `HEAD` (`feat/x`)
     /// then commits `head`, each a list of (path, text).
     fn r24_range(base: &[(&str, &str)], head: &[(&str, &str)]) -> tempfile::TempDir {

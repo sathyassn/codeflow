@@ -113,7 +113,7 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
         &mut out,
     );
     append_open_epics(root, &backlog, &mut out);
-    out
+    crate::security::git::without_remote_names_block(root, &out)
 }
 
 /// The remote whose tracking `integration/*` refs the line rows read, as last

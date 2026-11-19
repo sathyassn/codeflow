@@ -198,7 +198,7 @@ pub(in crate::cmd) fn judged_declared_target(
     if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
         let reason = format!(
             "is not a protected branch or a valid epic line distinct from '{}'",
-            codeflow_core::git::display_text(branch)
+            super::shown_reference(root, branch)
         );
         return Ok(Some(Declared::Rejected { target, reason }));
     }
@@ -218,9 +218,10 @@ pub(in crate::cmd) fn judged_declared_target(
     // line's tip is read even when the protected branch binds, and a
     // refusal or an unreadable record there wins (TSK-1286).
     let remote = format!("origin/{name}");
+    let remote_shown = super::shown_reference(root, &remote);
     let second = match rev_parse(root, &format!("refs/remotes/{remote}"))? {
         None => None,
-        Some(tip) => Some(bind(&tip, &format!("'{remote}'"))?),
+        Some(tip) => Some(bind(&tip, &format!("'{remote_shown}'"))?),
     };
     if let Some(EpicLineBinding::Refused(reason)) = &second {
         let reason = format!("{reason}, so it is not a bound epic line");
@@ -231,12 +232,18 @@ pub(in crate::cmd) fn judged_declared_target(
             return Ok(Some(Declared::Eligible(target)));
         }
         (EpicLineBinding::Unbound(unbound), None) => {
-            format!("{unbound}, and '{remote}' does not exist (a local-only line never counts)")
+            format!(
+                "{unbound}, and '{}' does not exist (a local-only line never counts)",
+                super::shown_reference(root, &remote)
+            )
         }
         (_, Some(EpicLineBinding::Unbound(reason) | EpicLineBinding::Refused(reason)))
         | (EpicLineBinding::Refused(reason), None) => reason,
     };
-    let reason = format!("{reason}, so it is not a bound epic line");
+    let reason = codeflow_core::security::git::without_remote_names(
+        root,
+        &format!("{reason}, so it is not a bound epic line"),
+    );
     Ok(Some(Declared::Rejected { target, reason }))
 }
 
@@ -336,7 +343,7 @@ fn head_context(
     let head = rev_parse(root, head_ref)?.ok_or_else(|| {
         format!(
             "head '{}' does not name a commit; nothing was verified",
-            codeflow_core::git::display_text(head_ref)
+            super::shown_reference(root, head_ref)
         )
     })?;
     let head_source = if args.head.is_some() {

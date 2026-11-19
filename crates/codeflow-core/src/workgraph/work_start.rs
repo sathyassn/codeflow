@@ -508,9 +508,21 @@ pub fn fetch_origin(root: &Path, branch: &str) -> String {
     if branch.starts_with("refs/remotes/")
         && crate::security::git::shown_escaped_ref(root, branch) != branch
     {
+        let remote = Repository::discover(root).map_or_else(
+            |_| {
+                branch
+                    .strip_prefix("refs/remotes/")
+                    .unwrap_or(branch)
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            },
+            |repo| remote_of(&repo, branch),
+        );
         return format!(
             "fetch its owning remote after checking the target; {}",
-            crate::security::git::WITHHELD_REMOTE_STEP
+            crate::security::git::withheld_remote_step(root, &remote)
         );
     }
     format!(
@@ -3416,6 +3428,8 @@ fn refuse_retarget(
             .filter(|declared| !declared.trim_matches([' ', '\t']).is_empty())
             .filter(|declared| logical_target(declared) != logical_target(target))
         {
+            let declared = shown_ref(repo.commondir(), declared);
+            let target = shown_ref(repo.commondir(), target);
             return Err(format!(
                 "an earlier version of task {task_id} declares integration target \
                  '{declared}', not '{target}'; {RETARGET_REFUSAL}"
@@ -4808,6 +4822,48 @@ mod tests {
         let said = fetch_origin(dir.path(), "refs/remotes/unknown-SECRETVALUE/main");
         assert!(!said.contains("SECRETVALUE"), "{said}");
         assert!(!said.contains("git fetch origin refs/remotes"), "{said}");
+        assert!(
+            said.contains("no remote is configured under that name now"),
+            "{said}"
+        );
+        let plain = fetch_origin(dir.path(), "integration/plain");
+        assert!(plain.contains("integration/plain"), "{plain}");
+        assert!(plain.contains("git fetch"), "{plain}");
+    }
+
+    #[test]
+    fn retarget_refusal_withholds_names_and_preserves_plain_targets() {
+        for declared in ["integration/cred@SECRETVALUE", "integration/plain"] {
+            let dir = fixture();
+            let root = dir.path();
+            let repo = Repository::open(root).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            let record = "project-management/tasks/TSK-002.md";
+            let path = root.join(record);
+            let text = fs::read_to_string(&path).unwrap().replace(
+                "integration_target: main",
+                &format!("integration_target: {declared}"),
+            );
+            fs::write(&path, text).unwrap();
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "test: previous target"]);
+            let said = refuse_retarget(
+                &repo,
+                repo.head().unwrap().target().unwrap(),
+                record,
+                "TSK-002",
+                "main",
+            )
+            .unwrap_err();
+            assert!(said.contains(RETARGET_REFUSAL), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if declared == "integration/plain" {
+                assert!(said.contains("'integration/plain', not 'main'"), "{said}");
+            }
+        }
     }
 
     #[test]

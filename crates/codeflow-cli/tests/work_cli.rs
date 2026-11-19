@@ -247,6 +247,252 @@ fn next_json_withholds_remote_names_inside_claim_branches() {
         "{json}"
     );
     assert!(!text(&out).contains("SECRETVALUE"), "{}", text(&out));
+    assert!(
+        task["branches"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("task/TSK-001-other")),
+        "{json}"
+    );
+    assert!(
+        json["conflicts"]["TSK-001"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("task/TSK-001-other")),
+        "{json}"
+    );
+}
+
+#[test]
+fn start_output_withholds_branch_names_and_preserves_plain_names() {
+    for own in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let (dir, _bare, _) = withheld_start_fixture();
+        let root = dir.path();
+        git(root, &["branch", "task/TSK-001-cred@SECRETVALUE-sibling"]);
+        git(root, &["branch", "task/TSK-001-other"]);
+        git(
+            root,
+            &[
+                "update-ref",
+                "refs/remotes/cred@SECRETVALUE/task/TSK-001-remote",
+                "HEAD",
+            ],
+        );
+        git(root, &["switch", "-qc", own]);
+        let out = cli(root, &["work", "start", "TSK-001"], None);
+        succeeds(&out);
+        let said = text(&out);
+        assert!(said.contains("anchored at"), "{said}");
+        assert!(said.contains("task/TSK-001-other"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if !own.contains("SECRETVALUE") {
+            assert!(said.contains(&format!("for {own} ->")), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_head_refusal_withholds_names_and_preserves_plain_names() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    for name in ["refs/remotes/cred@SECRETVALUE/missing", "ordinary-missing"] {
+        let out = cli(root, &["ci", "--head", name], None);
+        let said = text(&out);
+        assert!(!out.status.success(), "{said}");
+        assert!(said.contains("does not name a commit"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if name == "ordinary-missing" {
+            assert!(said.contains("head 'ordinary-missing'"), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_base_warning_withholds_candidates_and_keeps_plain_names() {
+    let dir = fixture();
+    let root = dir.path();
+    for base in [
+        "refs/remotes/unknown-SECRETVALUE/missing",
+        "ordinary-missing",
+    ] {
+        let out = cli(root, &["ci", "--base", base, "--head", "HEAD"], None);
+        let said = text(&out);
+        assert!(said.contains("could not resolve a base ref"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if base == "ordinary-missing" {
+            assert!(said.contains("tried: ordinary-missing"), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_split_range_does_not_print_a_truncated_remote_name() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    for from in ["cred@SECRETVALUE-missing", "ordinary-missing"] {
+        let out = cli(
+            root,
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--commits-from",
+                from,
+            ],
+            None,
+        );
+        let said = text(&out);
+        assert!(said.contains("--commits-from"), "{said}");
+        assert!(!said.contains("cred@SEC"), "{said}");
+        if from == "ordinary-missing" {
+            assert!(said.contains("ordinary-missing"), "{said}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ci_revision_diagnostic_withholds_names_and_keeps_plain_names() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    let bin = tempfile::tempdir().unwrap();
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    write(bin.path(), "git", &format!("#!/bin/sh\nfor arg do\n case \"$arg\" in\n 'cred@SECRETVALUE-diagnostic^{{commit}}'|'ordinary-diagnostic^{{commit}}')\n printf 'fatal: fixture cannot read %s\\n' \"$arg\" >&2\n exit 128;;\n esac\ndone\nexec '{}' \"$@\"\n", real.trim()));
+    std::fs::set_permissions(
+        bin.path().join("git"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    for name in ["cred@SECRETVALUE-diagnostic", "ordinary-diagnostic"] {
+        let out = cli(root, &["ci", "--head", name], Some(bin.path()));
+        let said = text(&out);
+        assert!(!out.status.success(), "{said}");
+        assert!(said.contains("cannot read revision"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if name.contains("ordinary") {
+            assert!(said.contains(name), "{said}");
+        }
+    }
+}
+
+#[test]
+fn status_output_withholds_branch_names_and_keeps_plain_names() {
+    for branch in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        git(root, &["switch", "-qc", branch]);
+        write(root, "dirty", "uncommitted\n");
+        for args in [vec!["status"], vec!["work", "status"]] {
+            let out = cli(root, &args, None);
+            succeeds(&out);
+            let said = text(&out);
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if branch.ends_with("topic") {
+                assert!(said.contains(branch), "{said}");
+            }
+        }
+    }
+}
+
+#[test]
+fn orient_output_withholds_branch_names_and_keeps_plain_names() {
+    for branch in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        git(root, &["switch", "-qc", branch]);
+        let out = cli(root, &["orient"], None);
+        succeeds(&out);
+        let said = text(&out);
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if branch.ends_with("topic") {
+            assert!(said.contains(branch), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_release_announcement_withholds_names_and_keeps_plain_names() {
+    for branch in [
+        "integration/release-cred@SECRETVALUE",
+        "integration/release-plain",
+    ] {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        let out = cli(
+            root,
+            &[
+                "ci", "--base", "main", "--head", "HEAD", "--branch", branch, "--into", branch,
+            ],
+            None,
+        );
+        let said = text(&out);
+        assert!(said.contains("acceptance: release range"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if branch.ends_with("plain") {
+            assert!(
+                said.contains(
+                    "release range ('integration/release-plain' into 'integration/release-plain')"
+                ),
+                "{said}"
+            );
+        }
+    }
+}
+
+#[test]
+fn next_preserves_ordinary_dependency_line_text() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: integration/EPC-999-ordinary",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: ordinary line"]);
+    let out = cli(root, &["work", "next"], None);
+    succeeds(&out);
+    let said = text(&out);
+    assert!(
+        said.contains("'integration/EPC-999-ordinary', which is not fetched here: unknown"),
+        "{said}"
+    );
+}
+
+#[test]
+fn start_preserves_ordinary_missing_source_text() {
+    let dir = fixture();
+    let root = dir.path();
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", bare.path().to_str().unwrap()],
+    );
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("source 'main' is not fetched here; fetch its remote"),
+        "{said}"
+    );
 }
 
 #[test]
