@@ -1,0 +1,11 @@
+id = "TSK-1547"
+uid = "c478f558-e6fc-47a0-8ce8-ad3bb53818cb"
+kind = "TSK"
+title = "The line's test suites pass at its tip"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:27:46Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
