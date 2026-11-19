@@ -493,6 +493,7 @@ fn git_guard(stdin: &str) -> i32 {
         "git-guard",
         &report.violations,
         &authority.source,
+        Some(&root),
     );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
@@ -542,6 +543,7 @@ fn grok_deny(
     plane: &str,
     violations: &[codeflow_core::hooks::Violation],
     source: &dyn std::fmt::Display,
+    root: Option<&std::path::Path>,
 ) {
     if !codeflow_core::hooks::any_blocking(violations) {
         return;
@@ -552,7 +554,13 @@ fn grok_deny(
     if !from_grok {
         return;
     }
-    let mut reason: Vec<String> = violations.iter().map(|v| v.render(plane)).collect();
+    let mut reason: Vec<String> = violations
+        .iter()
+        .map(|v| {
+            let text = v.render(plane);
+            root.map_or_else(|| text.clone(), |root| super::shown_in(root, &text))
+        })
+        .collect();
     reason.push(format!("policy source: {source}"));
     let decision = serde_json::json!({"decision": "deny", "reason": reason.join("\n")});
     let _ = term_writeln!(
@@ -651,7 +659,7 @@ fn exec_guard_answer(
     if !violations.is_empty() {
         let _ = term_writeln!(err, "policy source: {source}");
     }
-    grok_deny(out, stdin, "exec-guard", violations, source);
+    grok_deny(out, stdin, "exec-guard", violations, source, root);
     super::render_outcome_to(err, "exec-guard", root, violations, &[], 2)
 }
 
@@ -837,6 +845,7 @@ fn edit_guard(stdin: &str) -> i32 {
                 "edit-guard",
                 &findings,
                 &authority.source,
+                Some(&root),
             );
             super::render_outcome("edit-guard", &root, &findings, &[], 2)
         }
@@ -933,6 +942,55 @@ fn session_summary(stdin: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grok_deny_uses_the_rooted_violation_rendering() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("cred@SECRETVALUE", "/unused").unwrap();
+        let violations = [codeflow_core::hooks::Violation::always_blocking(
+            "work.target",
+            "target cred@SECRETVALUE refused".into(),
+            "use ordinary-target",
+        )];
+        for plane in ["git-guard", "exec-guard", "edit-guard"] {
+            let mut output = Vec::new();
+            super::grok_deny(
+                &mut output,
+                r#"{"hookEventName":"BeforeTool"}"#,
+                plane,
+                &violations,
+                &"working copy",
+                Some(dir.path()),
+            );
+            let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(value["decision"], "deny");
+            let reason = value["reason"].as_str().unwrap();
+            let expected = crate::cmd::shown_in(dir.path(), &violations[0].render(plane));
+            assert_eq!(reason, format!("{expected}\npolicy source: working copy"));
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+            assert!(reason.contains("use ordinary-target"), "{reason}");
+            let ordinary = [codeflow_core::hooks::Violation::always_blocking(
+                "work.target",
+                "target ordinary refused".into(),
+                "use ordinary-target",
+            )];
+            let mut output = Vec::new();
+            super::grok_deny(
+                &mut output,
+                r#"{"hookEventName":"BeforeTool"}"#,
+                plane,
+                &ordinary,
+                &"working copy",
+                Some(dir.path()),
+            );
+            let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(
+                value["reason"],
+                format!("{}\npolicy source: working copy", ordinary[0].render(plane))
+            );
+        }
+    }
+
     /// TSK-1082 review nit 3: the deadline's reason is written without the
     /// lock `std::io::stderr()` holds, so a main thread holding that lock
     /// cannot keep the refusal from being written.

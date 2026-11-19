@@ -351,6 +351,46 @@ pub(crate) fn shown_block(
 #[cfg(test)]
 mod root_tests {
     #[test]
+    fn hook_findings_keep_non_repository_text_and_withhold_unreadable_remotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let violations = [codeflow_core::hooks::Violation::always_blocking(
+            "git.hook_integrity",
+            "guard cannot inspect checkout".into(),
+            "the operator inspects the named path",
+        )];
+        let render = || {
+            let mut output = Vec::new();
+            assert_eq!(
+                super::render_outcome_to(
+                    &mut output,
+                    "git-guard",
+                    Some(dir.path()),
+                    &violations,
+                    &[],
+                    2,
+                ),
+                2
+            );
+            String::from_utf8(output).unwrap()
+        };
+        let said = render();
+        assert!(said.contains("git.hook_integrity"), "{said}");
+        assert!(said.contains("guard cannot inspect checkout"), "{said}");
+        assert!(
+            said.contains("the operator inspects the named path"),
+            "{said}"
+        );
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(repo.path().join("config"), "[unterminated").unwrap();
+        let said = render();
+        assert!(
+            said.contains(codeflow_core::security::git::UNREAD_REMOTES_TEXT),
+            "{said}"
+        );
+        assert!(!said.contains("guard cannot inspect checkout"), "{said}");
+    }
+
+    #[test]
     fn hook_findings_withhold_names_and_keep_plain_text_exact() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();

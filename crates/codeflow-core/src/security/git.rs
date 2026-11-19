@@ -504,6 +504,8 @@ pub fn shown_git_remote(root: &Path, name: &crate::git::GitName) -> String {
 
 /// `text` with the name of every configured remote of the repository at
 /// `root` that messages withhold replaced by [`shown_remote`]'s form.
+/// Proven repository absence keeps the text; unreadable repository state
+/// withholds it.
 #[must_use]
 pub fn without_remote_names(root: &Path, text: &str) -> String {
     WithheldRemotes::read(root).scrub(text)
@@ -517,11 +519,7 @@ pub fn without_remote_names_block(
     root: &Path,
     block: &crate::git::TextBlock,
 ) -> crate::git::TextBlock {
-    let text = if matches!(crate::hooks::repo::open(root), Ok(None)) {
-        block.as_str().to_owned()
-    } else {
-        without_remote_names(root, block.as_str())
-    };
+    let text = without_remote_names(root, block.as_str());
     let mut shown = crate::git::TextBlock::new();
     for line in text.split_inclusive('\n') {
         shown.push_str(line);
@@ -558,9 +556,15 @@ pub const UNREAD_REMOTES_TEXT: &str =
 impl WithheldRemotes {
     /// Read the remotes of the repository at `root`. A name that is not
     /// valid UTF-8 cannot appear in text as itself, so only its escaped
-    /// form is replaced.
+    /// form is replaced. Proven repository absence has an empty inventory;
+    /// discovery failures and unreadable inventories remain unavailable.
     #[must_use]
     pub fn read(root: &Path) -> Self {
+        // Only proven absence means there are no remote names. Discovery
+        // errors and unreadable inventories remain unavailable.
+        if matches!(crate::hooks::repo::open(root), Ok(None)) {
+            return Self(Some(Vec::new()));
+        }
         let Some(remotes) = configured_remote_names(root) else {
             return Self(None);
         };

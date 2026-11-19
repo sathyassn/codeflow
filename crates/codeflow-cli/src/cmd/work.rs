@@ -511,15 +511,19 @@ fn plan_check(
             "  conflict: other visible branches carry {task_id}: {} (reported, not refused)",
             others.join(", ")
         ),
-        Err(error) => println!(
-            "  note: other branches were not checked: {error}",
-            error = crate::cmd::shown(&error)
-        ),
+        Err(error) => println!("{}", other_branches_note(root, &error)),
     }
     Ok(VerifiedClaim {
         branch: report.branch,
         target: report.target,
     })
+}
+
+fn other_branches_note(root: &std::path::Path, error: &str) -> String {
+    format!(
+        "  note: other branches were not checked: {}",
+        crate::cmd::shown(&crate::cmd::shown_in(root, error))
+    )
 }
 
 fn resolve_pins(
@@ -776,4 +780,32 @@ fn pr_review(
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("cannot parse predecessor review: {error}"))
+}
+
+#[cfg(test)]
+mod output_tests {
+    #[test]
+    fn branch_scan_note_withholds_missing_object_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        for remote in ["cred@SECRETVALUE", "ordinary"] {
+            repo.remote(remote, "/unused").unwrap();
+            let name = format!("refs/remotes/{remote}/task/TSK-001-other");
+            let path = repo.path().join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "1111111111111111111111111111111111111111\n").unwrap();
+            let error = repo
+                .find_reference(&name)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap_err();
+            assert!(error.to_string().contains(&name), "{error}");
+            let said = super::other_branches_note(dir.path(), &error.to_string());
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            assert!(said.contains("other branches were not checked"), "{said}");
+            if remote == "ordinary" {
+                assert!(said.contains(&name), "{said}");
+            }
+        }
+    }
 }

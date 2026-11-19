@@ -351,7 +351,7 @@ fn ci_split_range_does_not_print_a_truncated_remote_name() {
         assert!(said.contains("--commits-from"), "{said}");
         assert!(!said.contains("cred@SEC"), "{said}");
         if from == "ordinary-missing" {
-            assert!(said.contains("ordinary-missing"), "{said}");
+            assert!(said.contains("run over ordinary-missing.."), "{said}");
         }
     }
 }
