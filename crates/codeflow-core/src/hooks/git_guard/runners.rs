@@ -1023,6 +1023,17 @@ fn probe_arithmetic(segment: &str, words: &[String]) -> bool {
     super::expand_shell_commands(segment).arithmetic || probe_arithmetic_words(words, false)
 }
 
+/// Read filled operands before flattening discards the body's shell context.
+pub(super) fn probe_arithmetic_in_context(
+    segment: &str,
+    words: &[String],
+    literals: &Literals,
+    zsh_operands: bool,
+) -> bool {
+    let filled = super::command_argv(&literals.fill(segment));
+    probe_arithmetic_words(words, false) || probe_arithmetic_words(&filled, zsh_operands)
+}
+
 /// Arithmetic operand positions in commands, after shell syntax is segmented.
 pub(super) fn probe_arithmetic_words(words: &[String], zsh_operands: bool) -> bool {
     let mut words = words.to_vec();
@@ -1101,7 +1112,12 @@ fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
         return true;
     }
     let Some(format) = options.format else {
-        return false;
+        return program == "print"
+            && !options.ended
+            && args
+                .get(options.values_at)
+                .is_some_and(|word| super::unresolved_word(word))
+            && options.values_at + 1 < args.len();
     };
     let values = &args[options.values_at..];
     if expands(format) {

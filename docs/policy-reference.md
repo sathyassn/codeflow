@@ -710,10 +710,14 @@ the form refuses:
     same uncertainty. This is a conservative reader, not a complete shell
     evaluator; the recognized forms do not establish exhaustive coverage.
     Arithmetic operand positions include the supported zsh builtin forms.
-    Continued unbraced parameter subscripts retain evaluation evidence.
-    Shell-neutral operand checks also read words filled from earlier literals.
+    Continued unbraced parameter subscripts, including special parameter names,
+    retain evaluation evidence. Operand checks also read words filled from
+    earlier literals while retaining their shell context.
     Output builtin readers share option-value boundaries when locating formats
     and destinations; an uncertain option sequence retains uncertainty.
+    An unresolved output option word that can hide a format retains arithmetic
+    uncertainty; unresolved output builtin options also refuse
+    configuration-dependent decisions.
     Numeric special parameters remain known in arithmetic operand positions.
     Explicit inline shell bodies retain their shell's operand rules;
     an unspecified shell retains the conservative supported readings.

@@ -1792,6 +1792,7 @@ struct OutputOptions<'a> {
     values_at: usize,
     destinations: Vec<&'a str>,
     uncertain: bool,
+    ended: bool,
 }
 
 /// Both readers consume output options with the same operand boundaries.
@@ -1801,6 +1802,7 @@ fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOption
     while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
         at += 1;
         if option == "--" {
+            result.ended = true;
             break;
         }
         result.uncertain |= unresolved_word(option);
@@ -7608,7 +7610,7 @@ fn expand_segments(
         let written = toks.len();
         strip_reserved_words(&mut toks);
         marks.drain(..written - toks.len());
-        out.arithmetic |= runners::probe_arithmetic_words(&toks, zsh_operands);
+        out.arithmetic |= runners::probe_arithmetic_in_context(&seg, &toks, literals, zsh_operands);
         let body_zsh = zsh_operand_context(&toks, zsh_operands);
         let carries_git = strip_launchers(&toks)
             .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
@@ -9273,17 +9275,30 @@ fn continued_parameter_arithmetic(chars: &[char], start: usize) -> bool {
     let mut parameter = vec!['$'];
     let mut at = start + 1;
     let mut continued = false;
-    let mut subscript = false;
     while let Some(&c) = chars.get(at) {
         if c == '\\' && chars.get(at + 1) == Some(&'\n') {
             continued = true;
             at += 2;
             continue;
         }
-        if !(subscript || c.is_ascii_alphanumeric() || c == '_' || c == '[') {
+        if !(c.is_ascii_alphanumeric()
+            || c == '_'
+            || parameter.len() == 1 && parameter_name_end(&[c], 0).is_some())
+        {
             break;
         }
-        subscript |= c == '[';
+        parameter.push(c);
+        at += 1;
+    }
+    if parameter_name_end(&parameter, 1) != Some(parameter.len()) || chars.get(at) != Some(&'[') {
+        return false;
+    }
+    while let Some(&c) = chars.get(at) {
+        if c == '\\' && chars.get(at + 1) == Some(&'\n') {
+            continued = true;
+            at += 2;
+            continue;
+        }
         parameter.push(c);
         at += 1;
         if c == ']' {

@@ -1998,9 +1998,8 @@ fn git_guard_judges_expanded_options_and_special_parameters() {
         "bash -c 'f=-u; print \"$f\" 1 -f %d \"$x\"'",
         ": \"$?\\\n[0]\"",
     ] {
-        let line = format!(
-            "printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}; git fetch origin"
-        );
+        let line =
+            format!("printf -v y %s _BASE; x=GIT_REPLACE_REF$y=1; {context}; git fetch origin");
         let out = scratch.judge_inheriting(
             "git-guard",
             &line,
