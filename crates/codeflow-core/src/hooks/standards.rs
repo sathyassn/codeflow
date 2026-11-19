@@ -361,11 +361,28 @@ pub fn check_commit_ticket(
     required: PolicyLevel,
     pattern: &str,
 ) -> Option<(PolicyLevel, String)> {
-    if ticket_keys.is_empty()
-        || FORMAT_EXEMPT_PREFIXES
-            .iter()
-            .any(|p| subject.starts_with(p))
+    if FORMAT_EXEMPT_PREFIXES
+        .iter()
+        .any(|p| subject.starts_with(p))
     {
+        return None;
+    }
+    check_ticket_trailers(message, ticket_keys, required, pattern)
+}
+
+/// The ticket trailer rule of [`check_commit_ticket`] without its subject
+/// exemption: the merge ticket rule (`git.commit_ticket_merges`, TSK-1350)
+/// judges every merge commit, whatever its subject, so a `fixup!` or
+/// `Revert ` merge subject does not skip it. A message with no lines has no
+/// ticket. `None` when `ticket_keys` is empty.
+#[must_use]
+pub fn check_ticket_trailers(
+    message: &str,
+    ticket_keys: &[String],
+    required: PolicyLevel,
+    pattern: &str,
+) -> Option<(PolicyLevel, String)> {
+    if ticket_keys.is_empty() {
         return None;
     }
     let re = (!pattern.is_empty())

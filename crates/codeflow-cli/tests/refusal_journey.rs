@@ -18,6 +18,11 @@ impl Project {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
+        // The fixture plays a human: a marker inherited from an agent
+        // session would apply the agent-only rules to its commits.
+        for name in codeflow_core::root_checkout::AGENT_MARKERS {
+            command.env_remove(name);
+        }
         command
             .current_dir(&self.root)
             .env("PATH", path)

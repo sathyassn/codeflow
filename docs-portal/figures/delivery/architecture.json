@@ -58,12 +58,12 @@
         "value": true
       },
       {
-        "claim": "the primary proves the epic once, closes it and raises the pull request into main",
+        "claim": "the primary proves the epic once and closes it, and the next checkpoint pull request carries it into main",
         "source": "docs/delivery.md#architecture",
         "derive": "the primary bullet",
         "check": {
           "kind": "contains",
-          "text": "the primary proves the epic once on the"
+          "text": "When the last batch has landed, it proves the epic"
         },
         "value": true
       },
@@ -650,7 +650,7 @@
         [
           "close",
           "the primary",
-          "proves the epic once on the integration line, closes it and raises one pull request into `main`"
+          "opens or refreshes the checkpoint pull request into `main` at every green line tip; proves the epic once on the line and closes it"
         ],
         [
           "main",

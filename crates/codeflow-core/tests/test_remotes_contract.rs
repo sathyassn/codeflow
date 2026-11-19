@@ -72,9 +72,34 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a unit test that classifies a URL's host name; it asks no remote",
     ),
     (
+        "codeflow-core/src/remote.rs",
+        "github.com",
+        "unit tests that read the repository an `origin` URL names; `gh` is a stub and only `git remote get-url` runs, which asks no remote",
+    ),
+    (
+        "codeflow-core/src/remote.rs",
+        "ghe.example.invalid",
+        "unit tests that read the host an `origin` URL names; `gh` is a stub and only `git remote get-url` runs, which asks no remote",
+    ),
+    (
+        "codeflow-cli/tests/remote_protect_cli.rs",
+        "github.com",
+        "the origin URL only names the repository to a gh stub on PATH; the repository sets protocol.https.allow=never, so git never contacts the host",
+    ),
+    (
         "codeflow-core/src/doctor/remote_perimeter.rs",
         "gitlab.com",
         "a unit test that classifies a URL's host name; it asks no remote",
+    ),
+    (
+        "codeflow-core/src/security/release_routes_tests.rs",
+        "github.com",
+        "the guard reads the repository name from a github.com remote URL; the fixture reads refs and blobs locally and never fetches or pushes",
+    ),
+    (
+        "codeflow-core/src/security/release_routes_tests.rs",
+        "api.github.com",
+        "an API URL inside a curl, wget or HTTPie command string the guard judges as text; nothing is sent",
     ),
     (
         "codeflow-core/src/hooks/ref_authority.rs",

@@ -259,7 +259,7 @@ pub(crate) struct Record {
 }
 
 /// The three durable record kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordKind {
     Epic,
     Spec,
@@ -879,6 +879,9 @@ pub fn declared_work_target(
 /// Read a work branch's target from the pushed revision, not the checkout.
 /// Uses readiness's bounded reader and supported layouts for the matching
 /// task only. Returns a logical branch name for destination resolution.
+/// The work prefixes come from `prefixes`, the `git.branch_prefixes` of the
+/// policy the caller judges with, never from the checkout's policy
+/// (TSK-1257).
 ///
 /// # Errors
 ///
@@ -886,11 +889,12 @@ pub fn declared_work_target(
 /// caller can distinguish an unavailable target from an absent declaration.
 pub fn declared_work_target_at_revision(
     repo_root: &Path,
+    prefixes: &[String],
     branch: &str,
     revision: &str,
 ) -> Result<Option<String>, WorkStartError> {
     Ok(
-        declared_work_record_at_revision(repo_root, branch, revision)?
+        declared_work_record_at_revision(repo_root, prefixes, branch, revision)?
             .and_then(|record| record.integration_target)
             .filter(|target| !target.is_empty())
             .map(|target| logical_target(&target).to_owned()),
@@ -900,10 +904,11 @@ pub fn declared_work_target_at_revision(
 /// The task record a work branch claims, read at `revision`.
 fn declared_work_record_at_revision(
     repo_root: &Path,
+    prefixes: &[String],
     branch: &str,
     revision: &str,
 ) -> Result<Option<Record>, WorkStartError> {
-    let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
+    let Some(suffix) = work_suffix(&judged_work_prefixes(prefixes), branch) else {
         return Ok(None);
     };
     let repo = Repository::discover(repo_root)
@@ -919,7 +924,8 @@ fn declared_work_record_at_revision(
                 .next()
                 .and_then(markdown_stem)
                 .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
-    })?;
+    })
+    .map_err(|error| at_revision(error, revision))?;
     Ok(records
         .into_values()
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
@@ -953,13 +959,16 @@ pub enum EpicLineBinding {
 /// only from the anchor, and a head whose copy of the declaring epic
 /// declares anything else is refused. The caller selects the protected tip
 /// or the remote line's tip as the anchor. Head-record membership never
-/// replaces this anchor check.
+/// replaces this anchor check. The branch's task is found under `prefixes`,
+/// the `git.branch_prefixes` of the policy the caller judges with
+/// (TSK-1257).
 ///
 /// # Errors
 ///
 /// Returns why the repository, a revision or a record could not be read.
 pub fn epic_line_binding(
     repo_root: &Path,
+    prefixes: &[String],
     branch: &str,
     head: &str,
     line: &str,
@@ -980,7 +989,9 @@ pub fn epic_line_binding(
         } else {
             return Ok(EpicLineBinding::Refused(not_own));
         }
-    } else if let Some(record) = declared_work_record_at_revision(repo_root, branch, head)? {
+    } else if let Some(record) =
+        declared_work_record_at_revision(repo_root, prefixes, branch, head)?
+    {
         if let Some(refusal) = task_parent_line_refusal(&record) {
             return Ok(EpicLineBinding::Refused(refusal));
         }
@@ -1507,11 +1518,23 @@ pub(crate) fn task_record_at_revision(
         .map_err(|error| WorkStartError::Repository(format!("{revision}: {error}")))?;
     let records = records_from_tree_matching(&repo, &tree, |path, kind| {
         kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task)
-    })?;
+    })
+    .map_err(|error| at_revision(error, revision))?;
     Ok(records
         .into_iter()
         .find(|(id, _)| id == task)
         .map(|(_, record)| record))
+}
+
+/// A record read failure at `revision`, naming the commit beside the path
+/// the reader names (TSK-1257).
+fn at_revision(error: WorkStartError, revision: &str) -> WorkStartError {
+    match error {
+        WorkStartError::InvalidGraph(message) => {
+            WorkStartError::InvalidGraph(format!("{message} (at commit {revision})"))
+        }
+        other => other,
+    }
 }
 
 /// The `integration_target` task `task`'s record declares at `revision`,
@@ -1966,12 +1989,7 @@ pub fn judged_task_id(
     branch: &str,
     head: &str,
 ) -> Result<Option<String>, WorkStartError> {
-    let prefixes: Vec<String> = prefixes
-        .iter()
-        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
-        .cloned()
-        .collect();
-    let Some(suffix) = work_suffix(&prefixes, branch) else {
+    let Some(suffix) = work_suffix(&judged_work_prefixes(prefixes), branch) else {
         return Ok(None);
     };
     task_id_in_head(repo_root, suffix, head)
@@ -2018,13 +2036,33 @@ fn task_id_in_head(
 ///
 /// Returns an error if work prefixes or the task inventory cannot be read.
 pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> Result<bool, WorkStartError> {
-    Ok(
-        work_branch_suffix(repo_root, branch)?.is_some_and(|suffix| {
-            suffix
-                .strip_prefix("TSK-")
-                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        }),
-    )
+    Ok(work_branch_suffix(repo_root, branch)?.is_some_and(claims_task_id))
+}
+
+/// [`branch_claims_task_id`] as `codeflow ci` judges a range (TSK-1257):
+/// the work prefixes come from `prefixes`, the `git.branch_prefixes` of the
+/// policy the run judges with, never from the checkout's policy.
+#[must_use]
+pub fn judged_branch_claims_task_id(prefixes: &[String], branch: &str) -> bool {
+    work_suffix(&judged_work_prefixes(prefixes), branch).is_some_and(claims_task_id)
+}
+
+/// The work prefixes among a judging policy's `git.branch_prefixes`: every
+/// entry except `plan/` and `integration/`, as [`work_prefixes`] reads them
+/// from the checkout.
+fn judged_work_prefixes(prefixes: &[String]) -> Vec<String> {
+    prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Whether a work branch suffix starts with a task id by shape.
+fn claims_task_id(suffix: &str) -> bool {
+    suffix
+        .strip_prefix("TSK-")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// A reviewed predecessor pin. The lookup names its exact branch and commit;
@@ -3681,6 +3719,26 @@ thread_local! {
     pub(crate) static TREE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// Each record blob's parse, kept while a read-only judgment is open
+    /// (TSK-1306). A blob id names its bytes, so a blob read as one kind
+    /// always parses to the same record; only successful parses are kept.
+    static PARSED: std::cell::RefCell<std::collections::HashMap<(Oid, RecordKind), Record>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Drop the kept record parses; the judgment scope calls this when it
+/// closes or refreshes.
+pub(crate) fn clear_parse_memo() {
+    PARSED.with(|memo| memo.borrow_mut().clear());
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many record blobs `records_from_tree_matching` has parsed on this thread.
+    pub(crate) static BLOB_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
@@ -3728,42 +3786,35 @@ pub(crate) fn records_from_tree_matching(
         if !include(path, kind) {
             return crate::git::Walk::Continue;
         }
-        // A record's size is read from its object header before its bytes,
-        // so a hostile tip cannot make every reader load it.
-        let size = match odb.read_header(entry.id()) {
-            Ok((size, _)) => size,
-            Err(error) => {
-                failure = Some(format!("{path}: cannot read record size: {error}"));
-                return crate::git::Walk::Stop;
-            }
-        };
-        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
-            failure = Some(format!(
-                "{path}: record exceeds the 4 MiB bound for a work record"
-            ));
-            return crate::git::Walk::Stop;
-        }
-        let Ok(blob) = repo.find_blob(entry.id()) else {
-            failure = Some(format!("{path}: cannot read blob"));
-            return crate::git::Walk::Stop;
-        };
-        let Ok(content) = std::str::from_utf8(blob.content()) else {
-            failure = Some(format!("{path}: record is not UTF-8"));
-            return crate::git::Walk::Stop;
-        };
-        match parse_record(content, kind) {
-            Ok(record) => {
-                if records.insert(record.id.clone(), record).is_some() {
-                    failure = Some(format!("{path}: duplicate work id"));
-                    crate::git::Walk::Stop
-                } else {
-                    crate::git::Walk::Continue
+        let memo = history::in_judgment();
+        let kept = memo
+            .then(|| PARSED.with(|parsed| parsed.borrow().get(&(entry.id(), kind)).cloned()))
+            .flatten();
+        let record = if let Some(record) = kept {
+            record
+        } else {
+            match read_record(repo, &odb, entry.id(), path, kind) {
+                Ok(record) => {
+                    if memo {
+                        PARSED.with(|parsed| {
+                            parsed
+                                .borrow_mut()
+                                .insert((entry.id(), kind), record.clone());
+                        });
+                    }
+                    record
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    return crate::git::Walk::Stop;
                 }
             }
-            Err(error) => {
-                failure = Some(format!("{path}: {error}"));
-                crate::git::Walk::Stop
-            }
+        };
+        if records.insert(record.id.clone(), record).is_some() {
+            failure = Some(format!("{path}: duplicate work id"));
+            crate::git::Walk::Stop
+        } else {
+            crate::git::Walk::Continue
         }
     });
     if let Some(error) = failure {
@@ -3771,6 +3822,39 @@ pub(crate) fn records_from_tree_matching(
     }
     walk_result.map_err(|error| WorkStartError::Repository(error.to_string()))?;
     Ok(records)
+}
+
+/// The record blob `id` at `path`, read as `kind`: its size checked from
+/// the object header before its bytes, then parsed. An error carries the
+/// path.
+fn read_record(
+    repo: &Repository,
+    odb: &git2::Odb<'_>,
+    id: Oid,
+    path: &str,
+    kind: RecordKind,
+) -> Result<Record, String> {
+    #[cfg(test)]
+    BLOB_PARSES.with(|parses| parses.set(parses.get() + 1));
+    {
+        // A record's size is read from its object header before its bytes,
+        // so a hostile tip cannot make every reader load it.
+        let size = odb
+            .read_header(id)
+            .map_err(|error| format!("{path}: cannot read record size: {error}"))?
+            .0;
+        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
+            return Err(format!(
+                "{path}: record exceeds the 4 MiB bound for a work record"
+            ));
+        }
+    }
+    let blob = repo
+        .find_blob(id)
+        .map_err(|_| format!("{path}: cannot read blob"))?;
+    let content =
+        std::str::from_utf8(blob.content()).map_err(|_| format!("{path}: record is not UTF-8"))?;
+    parse_record(content, kind).map_err(|error| format!("{path}: {error}"))
 }
 
 pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
@@ -4120,6 +4204,51 @@ fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String>
 
 #[cfg(test)]
 mod tests {
+    /// A tree holding `project-management/tasks/<id>.md` for each record.
+    fn records_tree(repo: &git2::Repository, records: &[(&str, &str)]) -> git2::Oid {
+        let mut tasks = repo.treebuilder(None).unwrap();
+        for (id, text) in records {
+            let blob = repo.blob(text.as_bytes()).unwrap();
+            tasks.insert(format!("{id}.md"), blob, 0o100_644).unwrap();
+        }
+        let tasks = tasks.write().unwrap();
+        let mut management = repo.treebuilder(None).unwrap();
+        management.insert("tasks", tasks, 0o040_000).unwrap();
+        let management = management.write().unwrap();
+        let mut root = repo.treebuilder(None).unwrap();
+        root.insert("project-management", management, 0o040_000)
+            .unwrap();
+        root.write().unwrap()
+    }
+
+    /// Inside one judgment a record blob two anchors share is parsed once,
+    /// and each anchor still reads the records it reads alone (TSK-1306).
+    #[test]
+    fn a_judgment_parses_each_record_blob_once_and_reads_the_same_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let first = "---\nid: TSK-001\nstatus: todo\n---\n# One\n";
+        let second = |status: &str| format!("---\nid: TSK-002\nstatus: {status}\n---\n# Two\n");
+        let older = records_tree(&repo, &[("TSK-001", first), ("TSK-002", &second("todo"))]);
+        let newer = records_tree(&repo, &[("TSK-001", first), ("TSK-002", &second("doing"))]);
+        let read = |tree: git2::Oid| {
+            let tree = repo.find_tree(tree).unwrap();
+            format!("{:?}", super::records_from_tree(&repo, &tree).unwrap())
+        };
+        super::BLOB_PARSES.with(|parses| parses.set(0));
+        let alone = [read(older), read(newer)];
+        assert_eq!(super::BLOB_PARSES.with(std::cell::Cell::get), 4);
+        super::BLOB_PARSES.with(|parses| parses.set(0));
+        {
+            let _judgment = super::history::judgment();
+            assert_eq!([read(older), read(newer)], alone);
+            assert_eq!(super::BLOB_PARSES.with(std::cell::Cell::get), 3);
+            assert_eq!([read(older), read(newer)], alone);
+            assert_eq!(super::BLOB_PARSES.with(std::cell::Cell::get), 3);
+        }
+        assert!(super::PARSED.with(|parsed| parsed.borrow().is_empty()));
+    }
+
     /// Issue 79: an object id that names no commit is told apart from a
     /// commit object that cannot be read, which the lookup used to report
     /// alike as "not a commit in this repository".
@@ -4470,6 +4599,7 @@ mod tests {
             git(root, &["commit", "-am", "declare target"]);
             let binding = epic_line_binding(
                 root,
+                &crate::hooks::policy::GitPolicy::default().branch_prefixes,
                 "task/TSK-002-work",
                 "HEAD",
                 line,
@@ -4486,8 +4616,16 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    epic_line_binding(root, branch, "HEAD", line, "main", "protected branch")
-                        .unwrap(),
+                    epic_line_binding(
+                        root,
+                        &crate::hooks::policy::GitPolicy::default().branch_prefixes,
+                        branch,
+                        "HEAD",
+                        line,
+                        "main",
+                        "protected branch"
+                    )
+                    .unwrap(),
                     EpicLineBinding::Refused(_)
                 ),
                 "{branch}"
@@ -4547,6 +4685,7 @@ mod tests {
     fn bind_declared(root: &Path) -> EpicLineBinding {
         epic_line_binding(
             root,
+            &crate::hooks::policy::GitPolicy::default().branch_prefixes,
             "task/TSK-002-work",
             "HEAD",
             DECLARED_LINE,
@@ -5211,6 +5350,7 @@ mod tests {
         git(root, &["switch", "-q", "task/TSK-002-work"]);
         let binding = epic_line_binding(
             root,
+            &crate::hooks::policy::GitPolicy::default().branch_prefixes,
             "task/TSK-002-work",
             "HEAD",
             DECLARED_LINE,

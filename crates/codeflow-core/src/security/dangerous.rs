@@ -91,7 +91,7 @@ pub(super) fn program_name(token: &str) -> String {
 /// stop at `sudo`, Windows `runas`/`gsudo`, a shell `-c`, or `PowerShell`'s
 /// `Start-Process`. This deliberately handles only structured, well-known
 /// launch forms; it is not intended to emulate a shell.
-pub(super) fn effective_invocation(tokens: &[String]) -> Vec<String> {
+pub(crate) fn effective_invocation(tokens: &[String]) -> Vec<String> {
     let mut current = tokens.to_vec();
     for _ in 0..4 {
         let Some(program) = current.first().map(|token| program_name(token)) else {

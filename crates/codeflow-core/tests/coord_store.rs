@@ -50,7 +50,11 @@ fn paths(dir: &Path) -> Paths {
     Paths::discover(dir).unwrap().0
 }
 
-const WAIT: Duration = Duration::from_secs(10);
+/// How long a commit waits for the store's lock. Only the test itself takes
+/// that lock, so a commit gets it at once; the bound is generous so a loaded
+/// runner does not read as `Busy` (TSK-1253). The test that proves `Busy`
+/// holds the lock and passes its own 300 ms wait.
+const WAIT: Duration = Duration::from_secs(60);
 
 fn item(title: &str, stream: &str, holder: &str) -> FollowUp {
     FollowUp {

@@ -26,7 +26,9 @@ use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
+pub(crate) mod data_operands;
 pub(crate) mod line_home;
+pub(crate) mod parallel_options;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -135,7 +137,9 @@ pub fn read_branch_name(
         None => {}
     }
     cmd.args(["check-ref-format", "--branch", name]);
-    match cmd.output() {
+    // An owned group: the guard's deadline exit must not leave it running
+    // (TSK-327).
+    match crate::git::owned::owned_output(&mut cmd, None) {
         // OS text rule (issue 79): the name is judged against protected
         // branch globs. One that is not valid UTF-8 reads as the sentinel
         // every branch rule treats as protected, as the hook plane does.
@@ -967,6 +971,11 @@ fn evaluate_report_with_runners(
     cwd: &Path,
     read_runners: bool,
 ) -> Evaluation {
+    // Bracket arithmetic that holds only integer arithmetic is read as the
+    // value the shell gives it, so `HEAD:v$[2]` is judged as `HEAD:v2`;
+    // any other `$[…]` stays unresolved and refuses (TSK-326).
+    let rewritten = data_operands::resolve_bracket_arithmetic(command);
+    let command = rewritten.as_deref().unwrap_or(command);
     // A Git line naming a share, verbatim or device path refuses before any
     // repository or configuration lookup (TSK-1002 Codex review 10).
     if let Some(finding) = crate::security::git_preflight::namespace_violation(command) {
@@ -1188,9 +1197,58 @@ fn evaluate_report_with_runners(
         if top_level {
             shell.observe(program, args);
         }
+        // A program, a git environment assignment or a command `xargs` or
+        // `find` runs that the line supplies as data refuses as unresolved,
+        // before any decision reads it; an operand of a git subcommand is
+        // judged in `check_git` with that subcommand's rules (TSK-326).
+        let no_vars = HashMap::new();
+        let marked = data_operands::mark_text(
+            &words,
+            &command_argv_live(segment),
+            &command_argv_braces(segment),
+        );
+        let data = {
+            let moved = line.moves_for(&shell, top_level, &tokens);
+            data_operands::command_data(
+                &marked,
+                moved.vars.unwrap_or(&no_vars),
+                data_operands::Reader::GitGuard,
+            )
+        };
+        match data {
+            Err(form) if !form.operand && !form.substitution => {
+                violations.extend(unclassifiable_violation(
+                    ctx.policy,
+                    form.sub.as_deref(),
+                    &form.what,
+                    form.clearing(),
+                ));
+                continue;
+            }
+            // `PROG=git; $PROG push …`: the program is git, read through the
+            // literal the line assigned.
+            Ok(Some(call))
+                if call.program_filled && !matches!(program_kind(program), ProgramKind::Git) =>
+            {
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                check_git(
+                    &call.args,
+                    &mut branches,
+                    &moved,
+                    ctx,
+                    violations,
+                    &mut notes,
+                    0,
+                    cwd,
+                );
+                continue;
+            }
+            _ => {}
+        }
         match program_kind(program) {
             ProgramKind::Git => {
-                let moved = line.moves_for(&shell, top_level, &tokens);
+                let mut moved = line.moves_for(&shell, top_level, &tokens);
+                moved.marked = Some(marked);
                 check_git(
                     args,
                     &mut branches,
@@ -6849,17 +6907,23 @@ fn direct_write_violation(
     if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
         return Some(v);
     }
-    if let Some(p) = write_args.and_then(|paths| {
+    if let Some(named) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
             token_integrity_path(".", cwd, payload_cwd)
+                .map(|path| Named::Spelled(spelled(".", &path)))
         } else {
-            arg_integrity_path(paths, cwd, payload_cwd)
-                .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
+            named_integrity(paths, line, cwd, payload_cwd)
         }
     }) {
+        // The refusal names the operand it rests on (TSK-1187).
         return Some(hook_integrity_violation(
             level,
-            format!("`{cmd}` targets the integrity path `{p}`"),
+            match named {
+                Named::Spelled(shown) => format!("`{cmd}` targets {shown}"),
+                Named::Unresolved { word, path } => format!(
+                    "`{cmd}` targets `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                ),
+            },
         ));
     }
     if let Some(p) = output_writer_paths(cmd, args)
@@ -6971,17 +7035,131 @@ impl GitWriter<'_> {
             .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
     }
 
+    /// [`GitWriter::integrity`], saying which operand the match rests on.
+    fn named(&self, paths: &[String]) -> Option<Named> {
+        named_integrity(paths, self.line, self.cwd, self.payload_cwd)
+    }
+
     fn refuse(&self, message: String) -> Violation {
         hook_integrity_violation(self.level, message)
     }
+
+    /// The role an integrity path named on the line plays in `copy`.
+    fn role(&self, path: &str, copy: &crate::security::unresolved::CopyRead) -> &'static str {
+        let source = copy.sources.iter().any(|source| {
+            arg_integrity_path(std::slice::from_ref(source), self.cwd, self.payload_cwd)
+                .is_some_and(|named| named == path)
+                || normalize_path(source).ends_with(&normalize_path(path))
+        });
+        if source {
+            "as its source"
+        } else {
+            "elsewhere on the line"
+        }
+    }
+
+    /// A move, or a sync that removes its source, judged by the sources it
+    /// removes; the refusal names the source and its role (TSK-1187).
+    fn removes_source(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let cmd = self.cmd;
+        if let Some(finding) = copy
+            .sources
+            .iter()
+            .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
+        {
+            return Some(finding);
+        }
+        match self.named(&copy.sources) {
+            Some(Named::Spelled(shown)) => {
+                return Some(self.refuse(format!("`{cmd}` removes {shown} as its source")))
+            }
+            Some(Named::Unresolved { word, path }) => {
+                return Some(self.refuse(format!(
+                    "`{cmd}` removes its source `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`"
+                )))
+            }
+            None => {}
+        }
+        let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
+        worktree_delete_check(
+            &format!("`{cmd}` removes its source"),
+            &sources,
+            self.level,
+            self.cwd,
+            self.payload_cwd,
+            self.line,
+            None,
+        )
+    }
+
+    /// A recursive copy or sync judged by what it would create, replace or
+    /// delete under its destination (TSK-408).
+    fn copy_reach(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let resolve = |word: &str| {
+            (!unresolved_word(word) && unknown_tilde_rest(word).is_none())
+                .then(|| integrity_shell_path(word, self.cwd))
+        };
+        let roots: Vec<&Path> = if self.cwd == self.payload_cwd {
+            vec![self.cwd]
+        } else {
+            vec![self.cwd, self.payload_cwd]
+        };
+        let place = crate::security::copy_reach::Place {
+            resolve: &resolve,
+            roots: &roots,
+        };
+        crate::security::copy_reach::judge(self.cmd, copy, &place).map(|m| self.refuse(m))
+    }
+}
+
+/// How an integrity path is named among a command's write operands
+/// (TSK-1187): spelled by one of them, or named elsewhere on a line where
+/// one of them is filled in at run time.
+enum Named {
+    /// The operand that spells it, as a refusal shows the two together
+    /// ([`spelled`]).
+    Spelled(String),
+    Unresolved {
+        word: String,
+        path: String,
+    },
+}
+
+/// The operand `word` and the integrity path `path` it names, for a
+/// refusal: the path alone when the word spells it, else both.
+fn spelled(word: &str, path: &str) -> String {
+    if normalize_path(word) == normalize_path(path) {
+        format!("the integrity path `{path}`")
+    } else {
+        format!("`{word}`, which names the integrity path `{path}`")
+    }
+}
+
+fn named_integrity(paths: &[String], line: &str, cwd: &Path, payload_cwd: &Path) -> Option<Named> {
+    if let Some((word, path)) = paths.iter().find_map(|word| {
+        arg_integrity_path(std::slice::from_ref(word), cwd, payload_cwd).map(|path| (word, path))
+    }) {
+        return Some(Named::Spelled(spelled(word, &path)));
+    }
+    let word = paths.iter().find(|word| unresolved_word(word))?;
+    let path = unresolved_names_enforcement(std::slice::from_ref(word), line, cwd, payload_cwd)?;
+    Some(Named::Unresolved {
+        word: word.clone(),
+        path,
+    })
 }
 
 impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
     type Found = Violation;
 
     fn writes(&self, path: &str) -> Option<Violation> {
-        let p = self.integrity(&[path.to_string()])?;
-        Some(self.refuse(format!("`{}` writes the integrity path `{p}`", self.cmd)))
+        Some(self.refuse(match self.named(&[path.to_string()])? {
+            Named::Spelled(shown) => format!("`{}` writes {shown}", self.cmd),
+            Named::Unresolved { word, path } => format!(
+                "`{}` writes to `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}`",
+                self.cmd
+            ),
+        }))
     }
 
     fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
@@ -7005,40 +7183,52 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             flags: copy.flags.clone(),
             unknown: copy.unknown.clone(),
         };
-        // A dry run writes nothing at its destination.
-        if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
+        // A dry run writes nothing at its destination. After an option the
+        // reader does not know, `-n` may be that option's value.
+        if cmd == "rsync" && crate::security::copy_reach::dry_run(copy) {
             return None;
         }
         if cmd == "mv"
             || (cmd == "rsync" && copy.flags.iter().any(|flag| rsync_removes_source(flag)))
         {
-            if let Some(finding) = copy
-                .sources
-                .iter()
-                .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
-            {
-                return Some(finding);
-            }
-            if let Some(path) = self.integrity(&copy.sources) {
-                return Some(self.refuse(format!("`{cmd}` removes the integrity source `{path}`")));
-            }
-            let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
-            if let Some(finding) = worktree_delete_check(
-                &format!("`{cmd}` removes its source"),
-                &sources,
-                self.level,
-                self.cwd,
-                self.payload_cwd,
-                self.line,
-                None,
-            ) {
+            if let Some(finding) = self.removes_source(copy) {
                 return Some(finding);
             }
         }
-        if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
-            return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
+        // The refusal names the operand it rests on and its role
+        // (TSK-1187): a destination that spells the path, an operand that
+        // could be the destination, or a run-time destination on a line
+        // that names the path elsewhere.
+        let destinations = copy_destinations(cmd, copy);
+        match self.named(&destinations) {
+            Some(Named::Spelled(shown)) => {
+                let only_destinations: Vec<String> = destinations
+                    .iter()
+                    .filter(|word| !copy.sources.contains(word) || copy.dest.as_ref() == Some(word))
+                    .cloned()
+                    .collect();
+                let role = if arg_integrity_path(&only_destinations, self.cwd, self.payload_cwd)
+                    .is_some()
+                {
+                    "as its destination"
+                } else {
+                    "in an operand that could be its destination"
+                };
+                return Some(self.refuse(format!("`{cmd}` writes {shown} {role}")));
+            }
+            Some(Named::Unresolved { word, path }) => {
+                let role = self.role(&path, copy);
+                return Some(self.refuse(format!(
+                    "`{cmd}` writes to `{word}`, which the guard cannot resolve, on a line that names the integrity path `{path}` {role}"
+                )));
+            }
+            None => {}
         }
-        if cmd == "rsync" && copy.flags.iter().any(|flag| flag.starts_with("--delete")) {
+        if let Some(flag) = copy
+            .flags
+            .iter()
+            .find(|flag| cmd == "rsync" && rsync_deletes(flag))
+        {
             if let Some(finding) = copy
                 .dest
                 .iter()
@@ -7050,7 +7240,7 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             // as a recursive removal does (TSK-379 security round 8).
             let dests: Vec<_> = copy.dest.iter().map(String::as_str).collect();
             if let Some(finding) = worktree_delete_check(
-                &format!("`{cmd} --delete` removes from its destination"),
+                &format!("`{cmd} {flag}` removes from its destination"),
                 &dests,
                 self.level,
                 self.cwd,
@@ -7060,6 +7250,9 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             ) {
                 return Some(finding);
             }
+        }
+        if let Some(finding) = self.copy_reach(copy) {
+            return Some(finding);
         }
         let p = git_config_destination(cmd, copy, self.cwd)?;
         Some(self.refuse(format!(
@@ -7183,13 +7376,18 @@ fn contained_git_directory_violation(
 /// whose arity is unknown, every operand could be the destination and
 /// each is returned.
 fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) -> Vec<String> {
-    let inside = |dir: &str, source: &str| {
-        let base = source
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(source);
-        format!("{}/{base}", dir.trim_end_matches('/'))
+    // The entry is named as the host's filesystem opens it
+    // (`copy_reach::Host`), so on Windows `src\policy.json:notes` lands at
+    // `policy.json` inside the directory. A name the guard cannot map is
+    // judged as written and as the directory itself.
+    let host = crate::security::copy_reach::Host::THIS;
+    let inside = |dir: &str, source: &str| -> Vec<String> {
+        let dir = dir.trim_end_matches(host.separators());
+        match host.entry_name(source) {
+            Some(Ok(name)) => vec![format!("{dir}/{name}")],
+            Some(Err(_)) => vec![format!("{dir}/{}", host.last_name(source)), dir.to_string()],
+            None => vec![format!("{dir}/{}", host.last_name(source))],
+        }
     };
     let mut paths = read.written.clone();
     if read.directories || read.unknown.is_some() {
@@ -7208,7 +7406,7 @@ fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) ->
         // case that is a directory (review round 19). For `cp`, `ln` and
         // `rsync` the destination directory itself is judged.
         if read.target || cmd == "install" {
-            paths.extend(read.sources.iter().map(|source| inside(dest, source)));
+            paths.extend(read.sources.iter().flat_map(|source| inside(dest, source)));
         }
     }
     paths
@@ -7226,6 +7424,19 @@ fn git_config_destination(
     read: &crate::security::unresolved::CopyRead,
     cwd: &Path,
 ) -> Option<String> {
+    git_config_destination_on(cmd, read, cwd, crate::security::copy_reach::Host::THIS)
+}
+
+/// [`git_config_destination`] with every name read as `host` reads it
+/// (`copy_reach::Host`), so each host's reading is tested on every host.
+fn git_config_destination_on(
+    cmd: &str,
+    read: &crate::security::unresolved::CopyRead,
+    cwd: &Path,
+    host: crate::security::copy_reach::Host,
+) -> Option<String> {
+    let separators = host.separators();
+    let entry = |dir: &Path, source: &str| entry_in(dir, source, host);
     if !matches!(
         cmd,
         "ln" | "cp" | "mv" | "rsync" | "scp" | "ditto" | "install"
@@ -7235,12 +7446,12 @@ fn git_config_destination(
     let mut destinations: Vec<PathBuf> = match (&read.dest, read.target) {
         (Some(dir), true) => {
             let dir = integrity_shell_path(dir, cwd);
-            read.sources.iter().map(|op| entry_in(&dir, op)).collect()
+            read.sources.iter().map(|op| entry(&dir, op)).collect()
         }
         (Some(dest), false) => {
             let path = integrity_shell_path(dest, cwd);
-            let entries = || read.sources.iter().map(|op| entry_in(&path, op));
-            if dest.ends_with('/') {
+            let entries = || read.sources.iter().map(|op| entry(&path, op));
+            if dest.ends_with(separators) {
                 entries().collect()
             } else {
                 match crate::absence::is_kind(&path, true) {
@@ -7253,7 +7464,7 @@ fn git_config_destination(
             }
         }
         (None, _) if cmd == "ln" && read.sources.len() == 1 => {
-            vec![entry_in(cwd, &read.sources[0])]
+            vec![entry(cwd, &read.sources[0])]
         }
         (None, _) => Vec::new(),
     };
@@ -7270,28 +7481,34 @@ fn git_config_destination(
     destinations.into_iter().find_map(|path| {
         // OS text rule (issue 79): a name that is not text is neither
         // `config` nor `config.worktree`, as its bytes are not. A git
-        // directory the guard cannot read may be one, so it refuses.
+        // directory the guard cannot read may be one, so it refuses. The
+        // name is compared as `host` opens it (`Host::compared`); a name
+        // the guard cannot map may be either, so it is judged as one.
         let config = |p: &Path| {
             p.file_name()
                 .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|name| {
-                    matches!(name.to_lowercase().as_str(), "config" | "config.worktree")
+                .is_some_and(|name| match host.compared(name) {
+                    Ok(name) => matches!(name.as_str(), "config" | "config.worktree"),
+                    Err(_) => true,
                 })
-                && repository_config_file(p, true) != Some(false)
+                && repository_config_file_on(p, true, host) != Some(false)
         };
         (config(&path) || real(&path).as_deref().is_some_and(config))
             .then(|| path.display().to_string())
     })
 }
 
-/// The entry a link, copy or move of `source` makes in the directory `dir`.
-fn entry_in(dir: &Path, source: &str) -> PathBuf {
-    let name = source
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(source);
-    dir.join(name)
+/// The entry a link, copy or move of `source` makes in the directory `dir`,
+/// named as `host` opens it (`Host::entry_name`): on Windows
+/// `payload\config` and `payload\config:notes` make `config`. A name the
+/// guard cannot map (`config::$DATA`) is judged as the directory's
+/// `config`, so it refuses wherever that would.
+fn entry_in(dir: &Path, source: &str, host: crate::security::copy_reach::Host) -> PathBuf {
+    match host.entry_name(source) {
+        Some(Ok(name)) => dir.join(name),
+        Some(Err(_)) => dir.join("config"),
+        None => dir.join(host.last_name(source)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -7777,6 +7994,11 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
             .map(quote_words)
             .into_iter()
             .collect(),
+        "fd" | "fdfind" => data_operands::fd_command(args)
+            .filter(|words| judged(words))
+            .map(quote_words)
+            .into_iter()
+            .collect(),
         "find" => args
             .iter()
             .enumerate()
@@ -7940,82 +8162,31 @@ fn watch_command(args: &[String]) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" "))
 }
 
-/// The commands `parallel` runs: its command template, and the template
-/// with each `:::` input, quoted as one word, put in for `{}` or after it;
-/// with no template,
-/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
-/// same way. `::::` names input files, which the guard cannot read.
-/// The options GNU `parallel` reads a value for, as a separate word.
-const PARALLEL_VALUED: &[&str] = &[
-    "-j",
-    "-P",
-    "-S",
-    "-a",
-    "-d",
-    "-E",
-    "-I",
-    "-N",
-    "-n",
-    "-L",
-    "-l",
-    "-s",
-    "-C",
-    "--jobs",
-    "--sshlogin",
-    "--arg-file",
-    "--delimiter",
-    "--colsep",
-    "--max-args",
-    "--max-lines",
-    "--max-chars",
-    "--tmpdir",
-    "--results",
-    "--joblog",
-    "--timeout",
-    "--delay",
-    "--retries",
-    "--tagstring",
-    "--workdir",
-    "--wd",
-    "--basefile",
-    "--return",
-    "--halt",
-    "--memfree",
-    "--load",
-    "--block",
-    "--sshloginfile",
-    "--env",
-];
-
-/// A GNU `parallel` input separator, or the `--` that ends its options.
-fn parallel_separator(word: &str) -> bool {
-    matches!(word, ":::" | ":::+" | "::::" | "::::+" | "--")
-}
-
 /// Where GNU `parallel`'s command template starts in `args`, after its
-/// options, and whether `-q` or `--quote` is given, so the template's
-/// words reach the command as written rather than through a shell.
-pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
-    let mut at = 0;
-    let mut quoted = false;
-    while let Some(a) = args.get(at).map(String::as_str) {
-        if parallel_separator(a) || !a.starts_with('-') || a.len() < 2 {
-            break;
-        }
-        quoted |= matches!(a, "-q" | "--quote");
-        at += 1 + usize::from(PARALLEL_VALUED.contains(&a));
-    }
-    (at.min(args.len()), quoted)
+/// options and a `--`, and whether `-q` or `--quote` is given, so the
+/// template's words reach the command as written rather than through a
+/// shell. The options are read as `parallel` reads them
+/// ([`parallel_options::ParallelCall`]).
+fn parallel_template(args: &[String]) -> (usize, bool) {
+    let call = parallel_options::ParallelCall::read(args);
+    (call.template, call.quoted)
 }
 
+/// The commands `parallel` runs: its command template, and the template
+/// with each `:::` input (or the separator an option sets), quoted as one
+/// word, put in for the replacement string or after it; with no template,
+/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
+/// same way. `::::` names input files, which the guard cannot read. A
+/// replacement string for part of the input is judged by the data reader.
 fn parallel_commands(args: &[String]) -> Vec<String> {
-    let separator = parallel_separator;
-    let (at, quoted) = parallel_template(args);
-    let rest = args.get(at..).unwrap_or_default();
+    use parallel_options::{ParallelCall, Separator};
+    let call = ParallelCall::read(args);
+    let separator = |word: &str| call.separator(word).is_some() || word == "--";
+    let rest = args.get(call.template..).unwrap_or_default();
     let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
     // With `-q` each word of the command reaches it as written; without,
     // parallel joins them into a shell line.
-    let template = if quoted {
+    let template = if call.quoted {
         quote_words(&rest[..end])
     } else {
         rest[..end].join(" ")
@@ -8024,7 +8195,7 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
     let mut files = false;
     for word in &rest[end..] {
         if separator(word) {
-            files = word.starts_with("::::");
+            files = call.separator(word) == Some(Separator::Files);
         } else if !files {
             inputs.push(word.as_str());
         }
@@ -8032,12 +8203,13 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
     if template.is_empty() {
         return inputs.into_iter().map(str::to_string).collect();
     }
+    let token = call.whole.as_deref().unwrap_or("{}");
     let mut commands = vec![template.clone()];
     for input in inputs {
         // parallel quotes an input it puts into the template.
         let input = quote_words(&[input.to_string()]);
-        commands.push(if template.contains("{}") {
-            template.replace("{}", &input)
+        commands.push(if template.contains(token) {
+            template.replace(token, &input)
         } else {
             format!("{template} {input}")
         });
@@ -9548,6 +9720,7 @@ impl LineFacts {
             git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
+            marked: None,
         }
     }
 }
@@ -9572,6 +9745,10 @@ struct Moves<'r> {
     narrows: bool,
     /// The op's full token list (its leading assignments and launchers).
     tokens: &'r [String],
+    /// The op's argument vector with each `$` and backtick the shell
+    /// passes as text marked ([`data_operands::mark_text`]), when the
+    /// segment loop read it.
+    marked: Option<Vec<String>>,
 }
 
 fn check_authority(
@@ -9650,6 +9827,17 @@ fn check_authority(
     }
 }
 
+/// The words the segment loop marked for this op ([`Moves::marked`]) that
+/// stand for `words`, its last words, when they are the same words.
+fn marked_tail<'m>(moved: &'m Moves<'_>, words: &[String]) -> Option<&'m [String]> {
+    let marked = moved.marked.as_deref()?;
+    let tail = marked.get(marked.len().checked_sub(words.len())?..)?;
+    tail.iter()
+        .zip(words)
+        .all(|(mark, word)| data_operands::unmark(mark) == *word)
+        .then_some(tail)
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
 fn check_git(
     args: &[String],
@@ -9680,7 +9868,37 @@ fn check_git(
 
     // Classification uncertainty adds its own verdict; it never ends the
     // judgment, so every other applicable rule still runs (R4-1).
-    let mut unclassified = unclassifiable_git(args);
+    // A word a judged decision reads is filled in from the literals the
+    // line assigned before it; one the line supplies as data refuses as
+    // unresolved before the alias, transport and push decisions read it
+    // (TSK-326).
+    let no_vars = HashMap::new();
+    let mut data_form = None;
+    let filled_args;
+    // The words as the segment loop marked them, when they are these
+    // words: a `$` the shell passes as text is never read as a variable.
+    let marked = marked_tail(moved, args)
+        .filter(|_| depth == 0)
+        .unwrap_or(args);
+    let args = match data_operands::git_args(
+        marked,
+        moved.vars.unwrap_or(&no_vars),
+        data_operands::Reader::GitGuard,
+    ) {
+        Ok((filled, true)) => {
+            filled_args = filled;
+            filled_args.as_slice()
+        }
+        Ok(_) => args,
+        // A substitution written on the command is judged by the reader
+        // below with its alias and message rules (TSK-112).
+        Err(form) if form.substitution => args,
+        Err(form) => {
+            data_form = Some(Unclassified::Data(form.what));
+            args
+        }
+    };
+    let mut unclassified = unclassifiable_git(args).or(data_form);
     let Some((sub, rest)) = git_subcommand(args) else {
         if let Some(u) = &unclassified {
             out.extend(u.violation(ctx.policy, None));
@@ -9818,7 +10036,7 @@ fn check_git(
     if let Some(u) = &unclassified {
         let known = match u {
             Unclassified::Subcommand(_) | Unclassified::Alias(_) => None,
-            Unclassified::Arguments(_) => Some(sub),
+            Unclassified::Arguments(_) | Unclassified::Data(_) => Some(sub),
         };
         // A subcommand that acts on the branch it runs on can only reach a
         // protected branch through its target, which is judged below; its
@@ -10041,6 +10259,9 @@ enum Unclassified {
     Arguments(&'static str),
     /// An alias the guard cannot resolve; the reason. Any git command may run.
     Alias(String),
+    /// A word of a judged subcommand that the line supplies as data
+    /// (TSK-326); the form, in words.
+    Data(String),
 }
 
 impl Unclassified {
@@ -10055,6 +10276,9 @@ impl Unclassified {
             ),
             Self::Alias(reason) => {
                 unclassifiable_violation(policy, sub, reason, &crate::remedy::GUARD_ALIAS)
+            }
+            Self::Data(form) => {
+                unclassifiable_violation(policy, sub, form, &crate::remedy::GUARD_UNCLASSIFIABLE)
             }
         }
     }
@@ -10100,17 +10324,20 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
             "an unquoted position, where word splitting can add arguments",
         ));
     }
+    let messages = message_values(sub, rest);
     let mut i = 0;
     while i < rest.len() {
         let a = rest[i].as_str();
-        let takes_message = a == "-m"
-            || a == "--message"
-            || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('m'));
+        let takes_message = messages
+            && (a == "-m"
+                || a == "--message"
+                || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('m')));
         if takes_message {
             i += 2; // the message value may hold a quoted substitution
             continue;
         }
-        let message_inline = a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2);
+        let message_inline =
+            messages && (a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2));
         if has_substitution(a) && !message_inline {
             return Some(Unclassified::Arguments(
                 "an argument other than the message",
@@ -10119,6 +10346,36 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
         i += 1;
     }
     None
+}
+
+/// Whether `-m` and `--message` of `git <sub>` (with `rest` after it) take
+/// a message, which no decision reads: `commit`, `tag`, `merge`, `notes add`
+/// and `notes append`, and a `stash` that saves (`push`, `save`, or no
+/// action word). Elsewhere `-m` is an action whose names are operands (`git
+/// branch -fm main`) or a flag (`git checkout -m`), and the words after it
+/// are judged (TSK-326).
+pub(crate) fn message_values(sub: &str, rest: &[String]) -> bool {
+    match sub {
+        "commit" | "tag" | "merge" => true,
+        "notes" => rest
+            .iter()
+            .any(|word| matches!(word.as_str(), "add" | "append")),
+        "stash" => !rest.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "list"
+                    | "show"
+                    | "drop"
+                    | "pop"
+                    | "apply"
+                    | "branch"
+                    | "clear"
+                    | "create"
+                    | "store"
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// The rules an unknown part of a git invocation could break: every branch
@@ -11021,13 +11278,7 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     key_write && names_hooks_path
 }
 
-fn rsync_removes_source(flag: &str) -> bool {
-    flag.starts_with("--")
-        && flag.len() > 2
-        && ["--remove-source-files", "--remove-sent-files"]
-            .iter()
-            .any(|full| full.starts_with(flag))
-}
+use crate::security::copy_reach::{rsync_deletes, rsync_removes_source};
 
 pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) -> Option<Violation> {
     if launcher_name(cmd) != "xargs" || !level.is_active() {
@@ -11343,10 +11594,28 @@ fn real(path: &Path) -> Option<PathBuf> {
 /// on the case-insensitive file systems git runs on. `None` when the disk
 /// cannot answer: each caller reads that as the answer that refuses.
 fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
+    repository_config_file_on(path, on_disk, crate::security::copy_reach::Host::THIS)
+}
+
+/// [`repository_config_file`] with each name read as `host` reads it.
+fn repository_config_file_on(
+    path: &Path,
+    on_disk: bool,
+    host: crate::security::copy_reach::Host,
+) -> Option<bool> {
     // OS text rule (issue 79): the names compare as text. A name that is
-    // not text is none of the ASCII names below, as its bytes are not.
-    let text = |part: &std::ffi::OsStr| part.to_str().map(str::to_lowercase);
-    let name = path.file_name().and_then(text);
+    // not text is none of the ASCII names below, as its bytes are not. Each
+    // name compares as the filesystem opens it (`Host::compared`); a name
+    // the guard cannot map leaves the answer unknown.
+    let text = |part: &std::ffi::OsStr| -> Result<Option<String>, ()> {
+        part.to_str()
+            .map(|name| host.compared(name).map_err(|_| ()))
+            .transpose()
+    };
+    let name = match path.file_name().map(text).transpose() {
+        Ok(name) => name.flatten(),
+        Err(()) => return None,
+    };
     if matches!(name.as_deref(), Some(".gitmodules" | ".lfsconfig")) {
         return Some(true);
     }
@@ -11357,7 +11626,11 @@ fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
     };
-    let parts: Vec<Option<String>> = dir.components().map(|c| text(c.as_os_str())).collect();
+    let parts: Vec<Option<String>> = dir
+        .components()
+        .map(|c| text(c.as_os_str()))
+        .collect::<Result<_, ()>>()
+        .ok()?;
     let is = |part: &Option<String>, name: &str| part.as_deref() == Some(name);
     if let Some(at) = parts.iter().rposition(|part| is(part, ".git")) {
         let inner = &parts[at + 1..];
@@ -13477,6 +13750,7 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
 /// One shell word after quote removal, with the length of its leading run of
 /// unquoted, unescaped characters: a redirection operator only counts when it
 /// was written there (`2>/dev/null` redirects, `'2>/dev/null'` is text).
+#[allow(clippy::struct_excessive_bools)] // One flag per shell feature the parse records.
 struct ShellWord {
     text: String,
     unquoted_prefix: usize,
@@ -13490,6 +13764,10 @@ struct ShellWord {
     /// Whether such an expansion stands outside double quotes too, where
     /// the shell may split its value into several words or glob it.
     splits: bool,
+    /// Whether the word holds a brace list (`{a,b}`) or sequence (`{1..3}`)
+    /// outside quotes and escapes, which the shell expands into several
+    /// words. `${...}` is a parameter, not a brace group (TSK-326).
+    braces: bool,
 }
 
 impl ShellWord {
@@ -13613,6 +13891,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut expands = false;
     let mut unquoted_expansions: usize = 0;
     let mut pattern = false;
+    let mut braces = BraceScan::default();
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -13693,6 +13972,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
                         splits: std::mem::take(&mut unquoted_expansions) > 0,
+                        braces: std::mem::take(&mut braces).found,
                     });
                     started = false;
                 }
@@ -13703,6 +13983,9 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 cur.push(c);
                 started = true;
                 pattern |= !in_single && !in_double && pattern_character(c);
+                if !in_single && !in_double {
+                    braces.read(c, dollar);
+                }
                 if prefix_open && !in_single && !in_double {
                     unquoted_prefix += c.len_utf8();
                 }
@@ -13720,9 +14003,42 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             pattern,
             expands,
             splits: unquoted_expansions > 0,
+            braces: braces.found,
         });
     }
     words
+}
+
+/// The brace syntax of one word read outside quotes and escapes: the groups
+/// open, whether one holds a `,` or `..`, and whether a list or sequence
+/// closed.
+#[derive(Default)]
+struct BraceScan {
+    open: usize,
+    separated: bool,
+    dot: bool,
+    found: bool,
+}
+
+impl BraceScan {
+    /// Reads `c`, a character outside quotes; `dollar` when an unquoted `$`
+    /// stands just before it.
+    fn read(&mut self, c: char, dollar: bool) {
+        let dot = std::mem::take(&mut self.dot);
+        match c {
+            '{' if !dollar => self.open += 1,
+            ',' if self.open > 0 => self.separated = true,
+            '.' if self.open > 0 => {
+                self.separated |= dot;
+                self.dot = true;
+            }
+            '}' if self.open > 0 => {
+                self.open -= 1;
+                self.found |= self.separated;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The shell words of `line` that hold any quoted part, as the shell joins
@@ -13802,6 +14118,25 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
             (word.text, literal)
         })
         .unzip()
+}
+
+/// For each word of [`command_argv`], whether the shell fills in part of it
+/// when the command runs: a `$` or backtick outside single quotes and not
+/// escaped, or a command substitution.
+pub(crate) fn command_argv_live(segment: &str) -> Vec<bool> {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| word.expands || has_substitution(&word.text))
+        .collect()
+}
+
+/// For each word of [`command_argv`], whether it holds a brace list or
+/// sequence the shell expands into several words ([`ShellWord::braces`]).
+pub(crate) fn command_argv_braces(segment: &str) -> Vec<bool> {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| word.braces)
+        .collect()
 }
 
 /// The words of [`command_argv`] with their parse.
@@ -14224,7 +14559,7 @@ pub(crate) const PREFIX_LAUNCHERS: &[&str] = &[
 /// The programs [`launcher_commands`] reads a carried command from. The exec
 /// guard's lexer must know each as a wrapper too, which a test asserts.
 pub(crate) const COMMAND_CARRIERS: &[&str] = &[
-    "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find",
+    "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find", "fd", "fdfind",
 ];
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
@@ -14617,6 +14952,54 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Measures the work this thread does, for the tests that bound the
+    /// cost of a pure computation (TSK-1413 AC-6). On Unix it reads the
+    /// thread's CPU clock, which a busy host does not stretch the way it
+    /// stretches wall-clock time; elsewhere it reads the wall clock.
+    struct WorkTimer {
+        #[cfg(unix)]
+        start: std::time::Duration,
+        #[cfg(not(unix))]
+        start: std::time::Instant,
+    }
+
+    impl WorkTimer {
+        #[cfg(unix)]
+        fn thread_cpu() -> std::time::Duration {
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            // SAFETY: `now` is a valid, writable timespec for the call.
+            let status =
+                unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &raw mut now) };
+            assert_eq!(status, 0, "the thread CPU clock is readable");
+            std::time::Duration::new(
+                u64::try_from(now.tv_sec).unwrap(),
+                u32::try_from(now.tv_nsec).unwrap(),
+            )
+        }
+
+        fn start() -> Self {
+            Self {
+                #[cfg(unix)]
+                start: Self::thread_cpu(),
+                #[cfg(not(unix))]
+                start: std::time::Instant::now(),
+            }
+        }
+
+        #[cfg(unix)]
+        fn elapsed(&self) -> std::time::Duration {
+            Self::thread_cpu().saturating_sub(self.start)
+        }
+
+        #[cfg(not(unix))]
+        fn elapsed(&self) -> std::time::Duration {
+            self.start.elapsed()
+        }
+    }
+
     /// TSK-1002 Fable review 16: a `^` after a literal part of its
     /// component matches only names that start with that part.
     #[test]
@@ -15041,7 +15424,7 @@ mod tests {
     /// chain of single-word groups recursed once per group.
     #[test]
     fn brace_expansion_stays_bounded_on_long_words() {
-        let started = std::time::Instant::now();
+        let started = WorkTimer::start();
         // Unmatched `{` inside the length bound read as text, in one pass.
         let unmatched = "{".repeat(BRACE_WORD_BYTES);
         assert_eq!(brace_expand(&unmatched), Some(vec![unmatched.clone()]));
@@ -15724,10 +16107,114 @@ mod tests {
                 }
             }
         }
-        for (line, fresh) in corpus.iter().zip(&fresh_verdicts) {
-            let kept = format!("{:?}", super::evaluate_report_at(line, &context, &root));
-            assert_eq!(&kept, fresh, "{line}");
+        // Every line's cached verdict is compared with its fresh one. A
+        // verdict that needs a Git child can meet the guard's fail-closed
+        // 3 s bound on a busy host, which decides that verdict by timing
+        // alone; such a pair is read again until neither side carries that
+        // refusal, so no line goes uncompared (TSK-1413 AC-2). Any other
+        // difference fails at once.
+        let verdict = |line: &str, off: bool| {
+            set_off(off);
+            let report = format!("{:?}", super::evaluate_report_at(line, &context, &root));
+            set_off(false);
+            report
+        };
+        let safety = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut compared = 0;
+        for (line, first_fresh) in corpus.iter().zip(fresh_verdicts) {
+            let mut fresh = first_fresh;
+            loop {
+                let kept = verdict(line, false);
+                if !slow_git_child_refusal(&fresh) && !slow_git_child_refusal(&kept) {
+                    assert_eq!(kept, fresh, "{line}");
+                    compared += 1;
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < safety,
+                    "{line}: the Git child bound decided every reading: {kept}"
+                );
+                fresh = verdict(line, true);
+            }
         }
+        assert_eq!(compared, corpus.len());
+    }
+
+    /// Whether a guard verdict, as text, carries the refusal the guard gives
+    /// when a Git child it runs outlives its fail-closed 3 s bound
+    /// (`security/git_config.rs`), and only that refusal: its two
+    /// messages, for a child that does not exit and for output not read in
+    /// time (TSK-1413 AC-2).
+    fn slow_git_child_refusal(verdict: &str) -> bool {
+        verdict.contains("cannot verify Git configuration: child exceeded 3 seconds")
+            || verdict
+                .contains("cannot verify Git configuration: read failed or exceeded 3 seconds")
+    }
+
+    /// TSK-1413 AC-2: a `git` that sleeps past the 3 s bound makes the Git
+    /// child reader refuse with the bound's message, which
+    /// [`slow_git_child_refusal`] recognizes; the same reader's other
+    /// refusals, and a guard refusal for any other reason, are not
+    /// recognized. A unit test cannot change this process's `PATH`
+    /// without changing it for every test running beside it, so the case
+    /// with a slow `git` on `PATH` behind a whole verdict is the
+    /// `hooks_cli` test
+    /// `a_slow_git_child_is_the_only_refusal_a_verdict_comparison_reads_again`.
+    #[cfg(unix)]
+    #[test]
+    fn only_the_git_child_bound_is_read_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let slow = temp.path().join("git");
+        std::fs::write(&slow, "#!/bin/sh\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The deadline is the caller's; the messages name the guard's 3 s.
+        // A longer deadline here lets a loaded host start the script, so
+        // each case reaches the refusal it is written for. Each fake `git`
+        // is built by the one git constructor, as every Git child is.
+        let bounded = |program: &Path| {
+            let mut command = crate::git::process(program);
+            command.current_dir(temp.path());
+            crate::security::git_config::bounded_output(
+                &mut command,
+                std::time::Instant::now() + std::time::Duration::from_secs(8),
+            )
+        };
+        let refused = bounded(&slow).unwrap_err();
+        assert!(
+            refused.contains("read failed or exceeded 3 seconds"),
+            "{refused}"
+        );
+        assert!(slow_git_child_refusal(&refused), "{refused}");
+        // A child that closes its output and then outlives the bound.
+        let lingering = temp.path().join("lingering-git");
+        std::fs::write(&lingering, "#!/bin/sh\nexec >&-\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&lingering, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let refused = bounded(&lingering).unwrap_err();
+        assert!(refused.contains("child exceeded 3 seconds"), "{refused}");
+        assert!(slow_git_child_refusal(&refused), "{refused}");
+        // A child that cannot start fails at once, whatever the host load.
+        let missing = bounded(&temp.path().join("no-such-git")).unwrap_err();
+        assert!(
+            missing.starts_with("cannot verify Git configuration"),
+            "{missing}"
+        );
+        assert!(!slow_git_child_refusal(&missing), "{missing}");
+        let root = temp.path().join("repo");
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+        let policy = default_policy();
+        let other = format!(
+            "{:?}",
+            evaluate_report_at(
+                "rm -f .codeflow/policy.json",
+                &ctx(&policy, "feat/x"),
+                &root
+            )
+        );
+        assert!(other.contains("git.hook_integrity"), "{other}");
+        assert!(!slow_git_child_refusal(&other), "{other}");
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
@@ -15770,6 +16257,322 @@ mod tests {
 
     fn default_policy() -> GitPolicy {
         GitPolicy::default()
+    }
+
+    /// TSK-326: the policy of the data-operand tests. Hook integrity is
+    /// relaxed so the runner reader's own refusal of an expanding operand
+    /// does not stand in for the data-operand refusal under test, and `v2`
+    /// is protected for the bracket arithmetic cases.
+    fn data_policy() -> GitPolicy {
+        GitPolicy {
+            hook_integrity: PolicyLevel::Allow,
+            protected_branches: vec!["main".into(), "master".into(), "v2".into()],
+            ..GitPolicy::default()
+        }
+    }
+
+    /// The refusal a data-supplied form gets: unresolved, naming the form,
+    /// with the sanctioned path.
+    fn data_refusal(command: &str) -> Option<Violation> {
+        let policy = data_policy();
+        evaluate(command, &ctx(&policy, "feat/x"))
+            .into_iter()
+            .find(|v| v.message.contains("is filled in at run time"))
+    }
+
+    /// TSK-326 AC-1 and AC-2: a variable assigned from a substitution or
+    /// `read`, and `xargs` input, refuse as unresolved wherever they reach a
+    /// git ref, a remote, an environment assignment or the program.
+    #[test]
+    fn data_supplied_git_operands_refuse_as_unresolved() {
+        for command in [
+            "V=$(cat refs); git push origin \"$V\"",
+            "V=$(cat cmdfile); $V push origin HEAD:main",
+            "V=$(cat envpush3); env \"$V\" git push origin",
+            "read V < refs; git push origin \"$V\"",
+            "V=$(cat refs); git push \"$V\" HEAD",
+            "V=$(cat refs); git -c \"$V\" push origin",
+            "V=$(cat refs); GIT_DIR=\"$V\" git push origin",
+            "git push origin \"$INHERITED\"",
+            "V=$(cat refs); git ship \"$V\"",
+            "xargs git push origin < refs",
+            "xargs -I{} env {} git push origin < envpush2",
+            "cat refs | xargs -I{} git push origin HEAD:{}",
+            "find . -name x -exec git push origin {} ;",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert_eq!(found.level, PolicyLevel::Block, "{command}");
+            assert!(
+                found.message.starts_with("command unresolved: `"),
+                "{command}: {}",
+                found.message
+            );
+            assert!(
+                found.remedy.to_string().contains("pass it as a literal"),
+                "{command}: names the sanctioned path"
+            );
+        }
+        // The push decision itself is not what refuses the first form.
+        let found = data_refusal("V=$(cat refs); git push origin \"$V\"").unwrap();
+        assert_eq!(found.rule, "git.push_to_protected");
+        assert!(found.message.contains("`$V` in a `git push` operand"));
+    }
+
+    /// TSK-326 AC-2 siblings: `parallel` and `fd -x` supply input as
+    /// `xargs` does, and a launcher's git child (`watch`, `flock`, `script
+    /// -c`) is judged as AC-1 and AC-2 judge git; literal forms still pass.
+    #[test]
+    /// TSK-326 AC-2 siblings: `fd -x` supplies input as `xargs` does, and a
+    /// launcher's git child (`watch`, `flock`, `script -c`) is judged as AC-1
+    /// and AC-2 judge git; literal forms still pass.
+    fn fd_and_launcher_children_supplied_as_data_refuse() {
+        for command in [
+            "fd -x git push origin {}",
+            "fd --exec git push origin {.}",
+            "fd . refs -X git push origin",
+            "fd --exec-batch git push origin",
+            "V=$(cat refs); watch git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l git push origin \"$V\"",
+            "V=$(cat refs); flock /tmp/l -c \"git push origin $V\"",
+            "V=$(cat refs); script -q -c \"git push origin $V\" /dev/null",
+            "V=$(cat cmdfile); watch \"$V\" push origin HEAD:main",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert!(
+                found.message.starts_with("command unresolved: `"),
+                "{command}: {}",
+                found.message
+            );
+            assert!(found.remedy.to_string().contains("pass it as a literal"));
+        }
+        let policy = data_policy();
+        for command in [
+            "fd -x git log {}",
+            "watch git push origin feat/x",
+            "flock /tmp/l git push origin feat/x",
+            "script -q -c \"git push origin feat/x\" /dev/null",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 review F1: a shell or `eval` that `find`, `fd` or `xargs`
+    /// runs reads the input through a replacement string or a positional
+    /// parameter, so a git command in the script that takes one
+    /// refuses as unresolved; input spliced into the script and a script the
+    /// guard cannot read refuse too. A literal script passes.
+    #[test]
+    fn shell_scripts_a_supplier_runs_read_its_input_as_data() {
+        for command in [
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            "find . -name main -execdir bash -c 'git push origin \"$1\"' _ {} \\;",
+            "fd -x sh -c 'git push --no-verify origin {}'",
+            "fd main -X bash -c 'git push origin \"$@\"' _",
+            "xargs -I{} sh -c 'git push --no-verify origin {}' < refs",
+            "xargs -I % dash -c 'git push origin HEAD:%' < refs",
+            "xargs sh -c 'git push origin \"$1\"' _ < refs",
+            "xargs -n1 sh -c 'git push origin ${0}' < refs",
+            "find . -exec env sh -c 'git push origin \"$1\"' _ {} \\;",
+            "xargs -I{} sh -c 'echo {}' < refs",
+            "find . -exec sh {} \\;",
+            "xargs bash < scripts",
+            "find . -exec sh -c \"$SCRIPT\" \\;",
+        ] {
+            assert!(
+                data_refusal(command).is_some(),
+                "{command}: refused as unresolved"
+            );
+        }
+        // At the default policy, hook integrity at block, the find form
+        // still refuses.
+        let p = default_policy();
+        let found = evaluate(
+            "find main -exec sh -c 'git push --no-verify origin {}' \\;",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(
+            found
+                .iter()
+                .any(|v| v.message.contains("is filled in at run time")),
+            "{found:?}"
+        );
+        let policy = data_policy();
+        for command in [
+            "find . -exec sh -c 'git log' \\;",
+            "xargs sh -c 'git log \"$1\"' _ < refs",
+            "fd -x sh -c 'git status'",
+            "find . -exec sh -c 'wc -l \"$1\"' _ {} \\;",
+            "sh -c 'git push origin feat/x'",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 delta 5: `parallel`, `sem` and `env_parallel` build the
+    /// commands they run at run time, so git-guard refuses each in every
+    /// literal spelling and behind the launchers it unwraps, and names the
+    /// human route.
+    #[test]
+    fn command_builders_refuse_in_every_spelling() {
+        let policy = data_policy();
+        let p = default_policy();
+        for command in super::data_operands::refused_command_builder_lines() {
+            for found in [
+                evaluate(&command, &ctx(&policy, "feat/x")),
+                evaluate(&command, &ctx(&p, "feat/x")),
+            ] {
+                assert!(
+                    found
+                        .iter()
+                        .any(|v| v.message.contains("refused in agent sessions")
+                            && v.remedy.to_string().contains("a human runs")),
+                    "{command}: refused as a command builder: {found:?}"
+                );
+            }
+        }
+        // A word that only names a builder, as data, is not the program.
+        for command in [
+            "echo parallel sem env_parallel",
+            "grep -n parallel notes.md",
+            "git log --grep parallel",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(
+                !found
+                    .iter()
+                    .any(|v| v.message.contains("refused in agent sessions")),
+                "{command}: {found:?}"
+            );
+        }
+    }
+
+    /// TSK-326 review F2: on `git branch`, `-m` renames and its names are
+    /// operands, so a forced rename onto a protected name held in a variable
+    /// is judged; a message stays a message on `commit` and `stash`.
+    #[test]
+    fn branch_rename_names_are_judged_not_skipped_as_messages() {
+        let p = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        for command in [
+            "V=main; git branch -fm \"$V\"",
+            "V=main; git branch -f -m \"$V\"",
+            "V=main; git branch -fm feat/x \"$V\"",
+        ] {
+            let v = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.local_ref_protection"), "{command}: {v:?}");
+        }
+        // A name read from data is unresolved, under the branch rules.
+        let v = evaluate("V=$(cat refs); git branch -fm \"$V\"", &ctx(&p, "feat/x"));
+        assert!(
+            v.iter()
+                .any(|v| v.message.contains("is filled in at run time")),
+            "{v:?}"
+        );
+        for command in [
+            "V=feat/y; git branch -fm \"$V\"",
+            "V=$(cat msg); git commit -m \"$V\"",
+            "V=$(cat msg); git commit -am \"$V\"",
+        ] {
+            let v = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{command}: {v:?}");
+        }
+    }
+
+    /// TSK-326 review F3: the shell expands an unquoted brace list or
+    /// sequence into several words, so a judged git word holding one refuses
+    /// as unresolved; a quoted or escaped brace is text and passes.
+    #[test]
+    fn brace_lists_in_judged_git_words_refuse() {
+        for command in [
+            "git push --no-verify origin {feat/x,main}",
+            "V=main; git push origin {feat/x,$V}",
+            "git push origin feat/{x..z}",
+            "git push origin HEAD:{feat/x,main}",
+            "git -C {.,..} push origin feat/x",
+        ] {
+            let found =
+                data_refusal(command).unwrap_or_else(|| panic!("{command}: refused as unresolved"));
+            assert!(
+                found.message.contains("brace expansion"),
+                "{command}: {found:?}"
+            );
+        }
+        let p = default_policy();
+        let v = evaluate(
+            "git push --no-verify origin {feat/x,main}",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(has_rule(&v, "git.push_to_protected"), "{v:?}");
+        let policy = data_policy();
+        for command in [
+            "git push origin 'feat/{x,y}'",
+            "git push origin \"feat/{x,y}\"",
+            "git push origin feat/\\{x,y\\}",
+            "B=feat/y; git push origin ${B}",
+            "git log {a,b}",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+    }
+
+    /// TSK-326 AC-4: bracket arithmetic in a ref resolves as the shell
+    /// computes it and the resolved ref is judged; `$((2))` stays refused.
+    #[test]
+    fn bracket_arithmetic_refs_are_judged_resolved() {
+        let policy = data_policy();
+        let judged = |command: &str| evaluate(command, &ctx(&policy, "feat/x"));
+        let protected = judged("git push origin HEAD:v$[2]");
+        assert!(
+            protected
+                .iter()
+                .any(|v| v.rule == "git.push_to_protected" && v.message.contains("'v2'")),
+            "{protected:?}"
+        );
+        assert!(!judged("git push origin HEAD:v$((2))").is_empty());
+        assert!(judged("git push origin HEAD:v$[3]").is_empty());
+        assert!(judged("git push origin HEAD:v$[1+2]").is_empty());
+        assert!(data_refusal("git push origin HEAD:v$[x]").is_some());
+    }
+
+    /// TSK-326 AC-5: operands in the command's own text, variables assigned
+    /// literals, and data pipelines that reach no git operand still pass; a
+    /// literal that names a protected branch is judged as that branch.
+    #[test]
+    fn literal_operands_and_data_pipelines_stay_allowed() {
+        let policy = data_policy();
+        for command in [
+            "git push origin HEAD",
+            "git push origin HEAD:feat/x",
+            "V=feat/x; git push origin \"$V\"",
+            "B=feat/x && git push origin \"HEAD:$B\"",
+            "PROG=git; $PROG push origin feat/x",
+            "cat refs | grep x | wc -l",
+            "V=$(cat refs); echo \"$V\"",
+            "git commit -m \"$(cat msg)\"",
+            "V=$(cat refs); git log \"$V\"",
+            "git ls-files | xargs git add",
+            // A `$` in single quotes or escaped is text, not a variable.
+            "git push origin 'HEAD:feat/a$b'",
+            "git push origin HEAD:feat/a\\$b",
+            // A program with no sign of git is exec-guard's to judge.
+            "$CMD args",
+            "$TOOL < data/in.txt",
+        ] {
+            let found = evaluate(command, &ctx(&policy, "feat/x"));
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+        let found = evaluate("V=main; git push origin \"$V\"", &ctx(&policy, "feat/x"));
+        assert!(
+            found.iter().any(|v| v.message.contains("'main'")),
+            "{found:?}"
+        );
     }
 
     /// A resolver answer for a directory inside the session repository.
@@ -17223,7 +18026,6 @@ mod tests {
             "script -q /dev/null git status",
             "script -q /dev/null git -c color.ui=never log",
             "watch git status",
-            "parallel echo ::: a b",
             "setsid git config --global user.name Test",
             "find . -name '*.rs' -exec ls {} \\;",
         ] {
@@ -17683,6 +18485,7 @@ mod tests {
                 git_config_var: mentions,
                 narrows: false,
                 tokens,
+                marked: None,
             };
             format!(
                 "{:?}|{:?}|{:?}",
@@ -18067,7 +18870,7 @@ mod tests {
         assert_eq!(one.dirs, [PathBuf::from("/r"), PathBuf::from("/r/d29")]);
         let commands: Vec<String> = (0..30).map(|n| format!("env -C d{n} true")).collect();
         let line = commands.join("; ");
-        let started = std::time::Instant::now();
+        let started = WorkTimer::start();
         let run = run_dirs(&expand_commands(&line), Path::new("/r"));
         assert!(run.dirs.len() <= RUN_DIR_LIMIT, "{}", run.dirs.len());
         assert!(run.unknown.is_some());
@@ -18395,7 +19198,7 @@ mod tests {
     #[test]
     fn test_nested_word_groups_are_read_once_per_level() {
         let nested = |n: usize| format!("{}x{}", "@(".repeat(n), ")".repeat(n));
-        let start = std::time::Instant::now();
+        let start = WorkTimer::start();
         let segments = expand_commands(&format!("bash -O extglob -c 'echo {}'", nested(24)));
         assert!(
             start.elapsed() < std::time::Duration::from_secs(2),
@@ -18425,6 +19228,11 @@ mod tests {
     #[test]
     fn test_folder_names_above_a_word_stay_literal() {
         for folder in ["RUNNER~1", "Program Files (x86)", "a#b^c"] {
+            // One guard invocation reads each folder above the word once, in
+            // its facts scope (`cmd/hook.rs`). Without one, every check here
+            // read and case-normalized each ancestor folder again, 40 to 100
+            // s on a busy host with a crowded temporary folder (TSK-1413).
+            let _scope = super::super::edit_guard::RepoFactsScope::enter();
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().join(folder).join("repo");
             std::fs::create_dir_all(root.join("build")).unwrap();
@@ -18444,11 +19252,8 @@ mod tests {
             // short name stays plain, while `(`, `#` or `^` there is read
             // as pattern syntax, since quotes are gone by then.
             let absolute = crate::portable_path::slashed(&root.join("build/a.o"));
-            assert_eq!(
-                token_integrity_path(&absolute, &root, &root).is_none(),
-                folder == "RUNNER~1",
-                "{folder}"
-            );
+            let found = token_integrity_path(&absolute, &root, &root);
+            assert_eq!(found.is_none(), folder == "RUNNER~1", "{folder}: {found:?}");
             assert!(
                 token_integrity_path(".codeflow/policy.json~x", &root, &root).is_some(),
                 "{folder}"
@@ -21676,6 +22481,117 @@ mod tests {
     }
 }
 
+/// TSK-408 review F1 (round d) and F2 (round e): the entry a link or copy
+/// makes in a destination directory is named as the host's filesystem
+/// opens it (`copy_reach::Host`). The Windows reading is checked on every
+/// host through the host-taking helpers.
+#[cfg(test)]
+mod entry_name_tests {
+    use super::*;
+    use crate::security::copy_reach::Host;
+
+    fn read(line: &str) -> crate::security::unresolved::CopyRead {
+        let all: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+        crate::security::unresolved::copy_read(&all[0], &all[1..]).unwrap()
+    }
+
+    /// A git directory with `HEAD` and `objects` and no `refs`, which the
+    /// guard knows only from the disk (the shape of `gd2` in the round
+    /// twelve test).
+    fn bare_git_dir(root: &Path) -> PathBuf {
+        let dir = root.join("gd2");
+        std::fs::create_dir_all(dir.join("objects")).unwrap();
+        std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_entry_is_named_as_the_host_opens_it() {
+        let dir = Path::new("gd");
+        let w = Host::WINDOWS;
+        for source in [
+            "payload\\config",
+            "payload\\config\\",
+            "payload/config",
+            "payload\\config:notes",
+            "payload\\config.",
+            "C:config",
+        ] {
+            assert_eq!(entry_in(dir, source, w), dir.join("config"), "{source}");
+        }
+        // A name the guard cannot map is judged as the directory's config.
+        for source in [
+            "payload\\config::$DATA",
+            "payload\\x:$I30",
+            "payload\\CONFIG~1",
+        ] {
+            assert_eq!(entry_in(dir, source, w), dir.join("config"), "{source}");
+        }
+        // Elsewhere `\` and `:` are parts of a name.
+        let p = Host::POSIX;
+        assert_eq!(
+            entry_in(dir, "payload\\config", p),
+            dir.join("payload\\config")
+        );
+        assert_eq!(
+            entry_in(dir, "payload/config:notes", p),
+            dir.join("config:notes")
+        );
+        assert_eq!(entry_in(dir, "payload/config/", p), dir.join("config"));
+    }
+
+    #[test]
+    fn a_source_into_a_git_directory_is_its_config_as_windows_opens_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let gd = bare_git_dir(&root);
+        let shown = gd.display().to_string();
+        // The path the guard builds, normalized as the destination word is,
+        // compared by components so a separator spelling cannot differ.
+        let config = integrity_shell_path(&shown, &root).join("config");
+        let same =
+            |found: Option<String>| found.map(PathBuf::from).as_deref() == Some(config.as_path());
+        let mut lines = Vec::new();
+        for source in [
+            "payload\\config",
+            "payload\\config:notes",
+            "payload\\config::$DATA",
+            "payload\\config.",
+        ] {
+            lines.push(format!("ln -s {source} {shown}/"));
+            lines.push(format!("ln -s {source} {shown}"));
+            lines.push(format!("cp {source} {shown}/"));
+            lines.push(format!("cp {source} {shown}"));
+            lines.push(format!("cp -t {shown} {source}"));
+            lines.push(format!("install {source} {shown}/"));
+        }
+        for line in &lines {
+            let cmd = line.split_whitespace().next().unwrap();
+            let found = git_config_destination_on(cmd, &read(line), &root, Host::WINDOWS);
+            assert!(same(found.clone()), "{line}: {found:?}");
+        }
+        // The same words on a host where `\` and `:` are parts of a name
+        // make an entry that is no configuration.
+        for source in ["payload\\config", "payload\\config:notes"] {
+            let line = format!("cp {source} {shown}/");
+            assert_eq!(
+                git_config_destination_on("cp", &read(&line), &root, Host::POSIX),
+                None,
+                "{line}"
+            );
+        }
+        // A plain source name keeps its verdict on either reading.
+        let line = format!("ln -s payload/config {shown}/");
+        for host in [Host::WINDOWS, Host::POSIX] {
+            let found = git_config_destination_on("ln", &read(&line), &root, host);
+            assert!(same(found.clone()), "{host:?}: {found:?}");
+        }
+        // A destination word with a named stream is the file it names.
+        let line = format!("cp payload {shown}/config:notes");
+        assert!(git_config_destination_on("cp", &read(&line), &root, Host::WINDOWS).is_some());
+    }
+}
+
 /// State required for a destructive command, at its composed repository target.
 pub struct DiscardQuery<'a> {
     pub target: Option<Retarget<'a>>,
@@ -21712,14 +22628,34 @@ fn discard_intent(
     }
     let no_vars = HashMap::new();
     let vars = moved.vars.unwrap_or(&no_vars);
+    // A branch name the shell passes as text (a quoted or escaped `$`) is
+    // read as written, never expanded (TSK-326). Other operands, such as a
+    // worktree path, keep refusing a `$` they cannot resolve.
+    let marked = marked_tail(moved, rest).filter(|_| sub == "branch");
+    let text_at = |at: usize| marked.is_some_and(|marked| !expands(&marked[at]));
+    // The words that hold a `$` only as text, unless the same word is also
+    // written where the shell expands it.
+    let text_words: Vec<&str> = rest
+        .iter()
+        .enumerate()
+        .filter(|(at, word)| {
+            text_at(*at)
+                && !rest
+                    .iter()
+                    .enumerate()
+                    .any(|(i, w)| w == *word && !text_at(i))
+        })
+        .map(|(_, word)| word.as_str())
+        .collect();
     let mut operands_only = false;
     let rest: Vec<String> = rest
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(at, s)| {
             if s == "--" || s == END_OF_OPTIONS {
                 operands_only = true;
             }
-            if operands_only && matches!(sub, "branch" | "switch") {
+            if text_at(at) || (operands_only && matches!(sub, "branch" | "switch")) {
                 Ok(s.clone())
             } else if has_substitution(s) {
                 Err("a generated argument can change what would be discarded".into())
@@ -21823,7 +22759,7 @@ fn discard_intent(
                 && parsed
                     .operands
                     .iter()
-                    .any(|s| has_substitution(s) || s.contains('$'))
+                    .any(|s| (has_substitution(s) || s.contains('$')) && !text_words.contains(s))
             {
                 return Err(
                     "cannot resolve the branch whose unique work would be discarded".into(),
@@ -22107,6 +23043,31 @@ mod discard_integration_tests {
             .into_iter()
             .filter(|v| v.rule == "git.discard_uncommitted")
             .collect()
+    }
+    /// TSK-326: a `$` in single quotes or escaped is part of the branch name
+    /// the discard check asks about; an unquoted `$b` stays data.
+    #[test]
+    fn quoted_dollar_in_a_deleted_branch_is_its_name() {
+        let policy = GitPolicy::default();
+        // Clean only for the literal name, so a wrong reading shows.
+        let probe = |query: &DiscardQuery<'_>| match query.intent {
+            super::super::git_discard::Intent::ForceDeleteBranches(names)
+                if names.as_slice() == ["feat/a$b"] =>
+            {
+                Ok(None)
+            }
+            other => Ok(Some(format!("unexpected intent {other:?}"))),
+        };
+        let ctx = context(&policy, Some(&probe));
+        for command in ["git branch -D 'feat/a$b'", "git branch -D feat/a\\$b"] {
+            let found = discard_only(command, &ctx);
+            assert!(found.is_empty(), "{command}: {found:?}");
+        }
+        let found = discard_only("git branch -D feat/a$b", &ctx);
+        assert!(
+            found.iter().any(|v| v.message.contains("`$b`")),
+            "{found:?}"
+        );
     }
     #[test]
     fn parser_recognizes_the_destructive_forms_and_preserves_controls() {
