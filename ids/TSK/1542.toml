@@ -1,0 +1,11 @@
+id = "TSK-1542"
+uid = "605b5add-f844-4b75-9041-d4643f027be1"
+kind = "TSK"
+title = "The hook docs say what the floor is when no remote default exists"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:16:54Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
