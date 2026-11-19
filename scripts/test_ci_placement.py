@@ -1231,8 +1231,8 @@ class CancelledExpression(Expression):
 
 
 class CancelledRunTests(unittest.TestCase):
-    """A cancelled run starts no more work, since that would hold its concurrency
-    group and keep the new head waiting. A job that failed still reaches its verdict."""
+    """A cancelled PR starts no always-running job that could hold its group.
+    Main's scheduled reports keep their existing always() behavior."""
 
     READY = {"github.event_name": "pull_request", "github.event.pull_request.draft": False}
     SCHEDULED = {"github.event_name": "schedule", "github.event.pull_request.draft": None}
@@ -1255,13 +1255,31 @@ class CancelledRunTests(unittest.TestCase):
                 found[job] = condition.group(1)
         return found
 
+    def check_cancelled_pr(self, file, conditions=None):
+        jobs = parity.workflow_jobs((WORKFLOWS / file).read_text(encoding="utf-8"))
+        for job, condition in (self.conditions(file) if conditions is None else conditions).items():
+            if file == "codeflow-ci.yml" and "always()" in condition:
+                direct = job_fields(jobs[job])[1]
+                needs = {name: {"result": "success", "outputs": {}} for name in direct}
+                self.assertFalse(truthy(CancelledExpression(condition, self.READY, needs, direct).evaluate()),
+                                 f"{file} {job} starts on a cancelled pull request")
+            else:
+                self.assertNotIn("always()", condition)
+
+    def test_scheduled_reports_are_allowed_but_widening_them_to_prs_is_refused(self):
+        conditions = self.conditions("codeflow-ci.yml")
+        self.check_cancelled_pr("codeflow-ci.yml", conditions)
+        for job in ("gates-coverage-report", "windows-journeys"):
+            condition = conditions[job]
+            self.assertIn("always()", condition)
+            widened = condition.replace("github.event_name == 'schedule'", "github.event_name == 'pull_request'")
+            self.assertNotEqual(condition, widened)
+            with self.subTest(job=job), self.assertRaises(AssertionError):
+                self.check_cancelled_pr("codeflow-ci.yml", {job: widened})
+
     def test_no_job_of_a_workflow_that_cancels_starts_after_the_cancel(self):
         for file in ("codeflow-ci.yml", "codeflow-line-pr.yml"):
-            for job, condition in self.conditions(file).items():
-                with self.subTest(file=file, job=job):
-                    if file == "codeflow-ci.yml" and condition == self.RELAXED:
-                        continue
-                    self.assertNotIn("always()", condition)
+            self.check_cancelled_pr(file)
         self.assertIn("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
                       (WORKFLOWS / "codeflow-ci.yml").read_text(encoding="utf-8"))
 
