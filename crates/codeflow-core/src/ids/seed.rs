@@ -155,7 +155,7 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
             report.standing = Some(Standing::Local);
             return Ok(report);
         }
-        match issue::push(git, AUTHORITY, &commit)? {
+        match issue::push(git, AUTHORITY, &commit) {
             Pushed::Accepted => {
                 issue::adopt(git, AUTHORITY, &commit)?;
                 report.standing = Some(Standing::Reserved);

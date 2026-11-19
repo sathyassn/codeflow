@@ -23,6 +23,7 @@
 pub mod assets;
 pub mod detect;
 pub mod diff_redact;
+pub mod hooks_path;
 pub mod init;
 pub mod json_edit;
 pub mod manifest;

@@ -229,11 +229,54 @@ fn run_target_checks(config: &TestConfig, project_dir: &Path) -> Vec<DoctorCheck
             });
         }
 
+        // Check 3h: the coverage producer the full command runs is installed.
+        if let Some(check) = producer_check(target, project_dir) {
+            checks.push(check);
+        }
+
         // Check 4: dry-run probe
         checks.push(run_probe(&target.runner, &target.name));
     }
 
     checks
+}
+
+/// A target with a coverage block whose full command runs a producer that
+/// needs installing is checked for it; a full gate cannot pass without it,
+/// so a missing one is named with its install command (TSK-1014).
+fn producer_check(target: &config::TargetConfig, project_dir: &Path) -> Option<DoctorCheck> {
+    use crate::testing::coverage::producer::{self, Probe};
+    target.coverage.as_ref()?;
+    let command = &target.modes.get("full")?.command;
+    let producer = producer::in_command(command)?;
+    let installed = match producer.probe {
+        Probe::BuiltIn => return None,
+        Probe::Command(argv) => matches!(
+            run_with_timeout(argv[0], &argv[1..], Duration::from_secs(PROBE_TIMEOUT_SECS)),
+            ProbeResult::Success
+        ),
+        Probe::File(relative) => project_dir
+            .join(target.cwd.as_deref().unwrap_or("."))
+            .join(relative)
+            .is_file(),
+    };
+    let name = format!("{}.coverage-producer", target.name);
+    Some(if installed {
+        DoctorCheck {
+            name,
+            status: CheckStatus::Pass,
+            message: format!("coverage producer {} found", producer.tool),
+        }
+    } else {
+        DoctorCheck {
+            name,
+            status: CheckStatus::Warn,
+            message: format!(
+                "{} needs coverage producer {}, which is not installed; install it with `{}` before a full gate",
+                target.name, producer.tool, producer.install
+            ),
+        }
+    })
 }
 
 fn check_path_safety(name: &str, path: &str) -> DoctorCheck {
@@ -338,34 +381,48 @@ enum ProbeResult {
 }
 
 fn run_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> ProbeResult {
-    let mut child = match Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .args(args)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+        .stderr(std::process::Stdio::null());
+    // The probe leads its own group, owned here: every path ends the group
+    // before the probe is reaped, and the group's watcher ends it if doctor
+    // is killed first (TSK-327). It reads no input: a probe in its own
+    // group must not wait on the terminal.
+    let mut owner = match crate::git::owned::GroupOwner::prepare(&mut command) {
+        Ok(owner) => owner,
+        Err(e) => return ProbeResult::SpawnError(e.to_string()),
+    };
+    let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => return ProbeResult::SpawnError(e.to_string()),
     };
+    owner.spawned(&child);
 
     let start = std::time::Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if status.success() {
-                    return ProbeResult::Success;
-                }
-                return ProbeResult::NonZeroExit(status.code().unwrap_or(-1));
+        match crate::git::remote_query::has_exited(&mut child) {
+            Ok(true) => {
+                owner.signal();
+                return match child.wait() {
+                    Ok(status) if status.success() => ProbeResult::Success,
+                    Ok(status) => ProbeResult::NonZeroExit(status.code().unwrap_or(-1)),
+                    Err(e) => ProbeResult::SpawnError(e.to_string()),
+                };
             }
-            Ok(None) => {
+            Ok(false) => {
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    owner.end(&mut child);
                     return ProbeResult::Timeout;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return ProbeResult::SpawnError(e.to_string()),
+            Err(e) => {
+                owner.end(&mut child);
+                return ProbeResult::SpawnError(e.to_string());
+            }
         }
     }
 }
@@ -420,6 +477,7 @@ mod tests {
             schema_version: "1.0".to_string(),
             execution: ExecutionConfig::default(),
             defaults: DefaultsConfig::default(),
+            guards: Vec::new(),
             targets: vec![],
         }
     }
@@ -885,5 +943,61 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed[0]["status"], "fail");
+    }
+
+    /// TSK-1014 AC-5: a target whose full command runs a coverage producer is
+    /// checked for that producer, with the install command when it is absent.
+    #[test]
+    fn a_coverage_producer_is_found_or_named_with_its_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = make_valid_target();
+        target.cwd = Some(".".to_string());
+        target.modes.insert(
+            "full".to_string(),
+            ModeCommand {
+                command: "./node_modules/.bin/vitest run --coverage.enabled".to_string(),
+            },
+        );
+        target.coverage = Some(CoverageConfig {
+            format: CoverageFormat::Lcov,
+            path: "coverage/lcov.info".to_string(),
+            transform: None,
+            rules: Vec::new(),
+            exceptions: Vec::new(),
+        });
+        let mut config = make_minimal_config();
+        config.targets = vec![target];
+        let producer = |config: &TestConfig| {
+            run_all_checks_on_config(config, dir.path())
+                .into_iter()
+                .find(|check| check.name == "test.coverage-producer")
+                .expect("a producer check")
+        };
+        let missing = producer(&config);
+        assert_eq!(missing.status, CheckStatus::Warn, "{}", missing.message);
+        assert!(
+            missing.message.contains("@vitest/coverage-v8")
+                && missing
+                    .message
+                    .contains("npm install --save-dev @vitest/coverage-v8"),
+            "{}",
+            missing.message
+        );
+        let package = dir.path().join("node_modules/@vitest/coverage-v8");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("package.json"), "{}").unwrap();
+        let found = producer(&config);
+        assert_eq!(found.status, CheckStatus::Pass, "{}", found.message);
+
+        // A full command that runs no listed producer gets no producer check.
+        config.targets[0].modes.insert(
+            "full".to_string(),
+            ModeCommand {
+                command: "echo test".to_string(),
+            },
+        );
+        assert!(run_all_checks_on_config(&config, dir.path())
+            .iter()
+            .all(|check| check.name != "test.coverage-producer"));
     }
 }

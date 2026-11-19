@@ -198,6 +198,20 @@ class RustResultTests(unittest.TestCase):
             with patch.object(gate.subprocess, "run", side_effect=AssertionError("cargo was rerun")):
                 self.assertIsNone(gate.run(("cargo", "codeflow-cli", "--test", "journeys", False), ["passes"], None, report))
 
+    def test_a_skipped_shard_does_not_get_credit_from_another_passing_shard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for shard, case in [(1, '<testcase name="declined"><skipped/></testcase>'),
+                                (2, '<testcase name="passes"/>')]:
+                report = root / f"coverage-shard-{shard}" / "junit.xml"
+                report.parent.mkdir()
+                report.write_text('<testsuites><testsuite name="codeflow-cli::journeys">'
+                                  + case + '</testsuite></testsuites>')
+            failure = gate.result_failure(("cargo", "codeflow-cli", "--test", "journeys", False),
+                                          ["declined", "passes"], root)
+            self.assertIn("declined", failure)
+            self.assertIn("1 of 2", failure)
+
 
 class PartTests(unittest.TestCase):
     """TSK-265: the Windows Python journeys run beside the partitions and the

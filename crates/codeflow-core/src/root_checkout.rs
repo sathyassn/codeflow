@@ -15,7 +15,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use crate::git::GitName;
 use crate::hooks::policy::{GitPolicy, PolicyLevel};
@@ -654,11 +653,13 @@ fn escape_ignore_path(path: &str) -> String {
 
 /// Run git in `root` with `input` on stdin; stdout on success. Stdin is
 /// written while stdout is drained, so output larger than a pipe cannot
-/// deadlock the exchange ([`crate::git::output_with_input`]).
+/// deadlock the exchange. Git runs as an owned group
+/// ([`crate::git::owned::owned_output`]): a guard reaches this, and its
+/// deadline exit must not leave git running (TSK-327).
 fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
     let mut command = crate::git::command();
     command.arg("-C").arg(root).args(args);
-    let out = crate::git::output_with_input(&mut command, input)
+    let out = crate::git::owned::owned_output(&mut command, Some(input))
         .map_err(|error| format!("cannot read Git ignore rules: {error}"))?;
     // check-ignore exits 1 when nothing matched, which is still an answer.
     if out.status.success() || out.status.code() == Some(1) {
@@ -697,13 +698,11 @@ impl ScratchRepo {
         #[cfg(unix)]
         builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
         let scratch = Self(builder.tempdir().ok()?);
-        let made = crate::git::command()
-            .args(["init", "--quiet"])
-            .arg(scratch.0.path())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+        let mut init = crate::git::command();
+        init.args(["init", "--quiet"]).arg(scratch.0.path());
+        let made = crate::git::owned::owned_output(&mut init, None)
             .ok()?
+            .status
             .success();
         made.then_some(scratch)
     }
@@ -747,11 +746,12 @@ fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String
 /// (`git -c`, `GIT_CONFIG_COUNT`) included; git's default, false, when it
 /// is unset. Unreadable configured values refuse.
 fn effective_ignore_case(root: &Path) -> Result<bool, String> {
-    let out = crate::git::command()
+    let mut command = crate::git::command();
+    command
         .arg("-C")
         .arg(root)
-        .args(["config", "--get", "--type=bool", "core.ignoreCase"])
-        .output()
+        .args(["config", "--get", "--type=bool", "core.ignoreCase"]);
+    let out = crate::git::owned::owned_output(&mut command, None)
         .map_err(|error| format!("cannot read core.ignoreCase: {error}"))?;
     if out.status.code() == Some(1) {
         return Ok(false);

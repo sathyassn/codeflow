@@ -1499,6 +1499,78 @@ pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool
     Ok(false)
 }
 
+/// The enforcement paths a write at or below `base` reaches, from every
+/// checkout sharing the repository at `root` ([`enforcement_reached`]).
+#[derive(Debug, Default)]
+pub(crate) struct Reached {
+    /// The enforcement path `base` is, or lies inside when that path is a
+    /// protected directory: anything written at `base` lands in it.
+    pub(crate) inside: Option<PathBuf>,
+    /// Each enforcement path below `base`, a checkout's `.git` included,
+    /// relative to `base`.
+    pub(crate) below: Vec<PathBuf>,
+}
+
+impl Reached {
+    /// Whether a write at or below `base` reaches no enforcement path.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inside.is_none() && self.below.is_empty()
+    }
+}
+
+/// What a copy or sync landing at `base` can reach (TSK-408): the
+/// enforcement path `base` is or lies in, and every enforcement path and
+/// checkout `.git` below it, read lexically and with symlinks resolved. A
+/// checkout hidden from Git's list under a configured worktree location is
+/// found by [`super::repo::hidden_checkout_under`], whose walk is bounded;
+/// past the bound this returns its error.
+pub(crate) fn enforcement_reached(base: &Path, root: &Path) -> Result<Reached, String> {
+    let mut reached = Reached::default();
+    let mut push = |relative: PathBuf| {
+        if !reached.below.contains(&relative) {
+            reached.below.push(relative);
+        }
+    };
+    let mut inside = None;
+    for owner in super::repo::target_roots(base, root)? {
+        if let Some(protected) = protected_at(&owner)? {
+            for (reading, resolve) in [false, true].into_iter().enumerate() {
+                let base = normalized(base, resolve).map_err(|e| e.to_string())?;
+                let depth = base.components().count();
+                for entry in protected.iter() {
+                    let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
+                    let (at, holds) = if entry.git_owned {
+                        (
+                            under_ignoring_case(&base, path),
+                            under_ignoring_case(path, &base),
+                        )
+                    } else {
+                        (base.starts_with(path), path.starts_with(&base))
+                    };
+                    if holds {
+                        let relative: PathBuf = path.components().skip(depth).collect();
+                        if relative.as_os_str().is_empty() {
+                            inside.get_or_insert_with(|| path.clone());
+                        } else {
+                            push(relative);
+                        }
+                    } else if at && entry.directory {
+                        inside.get_or_insert_with(|| path.clone());
+                    }
+                }
+            }
+        }
+        if let Some(hidden) = super::repo::hidden_checkout_under(base, &owner)? {
+            let base = normalized(base, true).map_err(|e| e.to_string())?;
+            if let Ok(relative) = hidden.join(".git").strip_prefix(&base) {
+                push(relative.to_path_buf());
+            }
+        }
+    }
+    reached.inside = inside;
+    Ok(reached)
+}
+
 /// The working tree of the checkout holding `dir`, when it is one.
 pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
     super::repo::open(dir)

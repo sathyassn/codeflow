@@ -152,6 +152,12 @@ pub fn run(args: &HookArgs) -> i32 {
 /// guard that decides in time exits first and the thread dies with it.
 fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
     use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
+    // Every bounded read the guard starts ends by this deadline too, and
+    // each read's group watcher ends what is left if the exit comes first
+    // (TSK-327).
+    codeflow_core::git::remote_query::bound_reads_by(
+        std::time::Instant::now() + std::time::Duration::from_secs(GUARD_DEADLINE_SECS),
+    );
     std::thread::Builder::new()
         .name("guard-deadline".into())
         .spawn(move || {
@@ -729,16 +735,40 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         payload.tool_input.sandbox_retry(),
         &policy_reasons,
     );
+    // A client's config file is trusted only when the session project's
+    // committed policy trusts it too (TSK-1346), as `relaxed` needs both.
+    let mut security = policy.security.clone();
+    if let Some(session) = host.session.as_deref() {
+        session_trust(session, &root, &mut security.trusted_client_configs);
+    }
     let violations = exec_guard::evaluate_ruled(
         command,
         exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
-        &policy.security,
+        &security,
         policy.git.hook_integrity,
         &cwd,
         &root,
         &outcome,
     );
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
+}
+
+/// Keep in `trusted` only the tools the session project's committed policy
+/// also trusts, when the session project is not the call's repository; an
+/// unreadable session project trusts none.
+fn session_trust(session: &std::path::Path, root: &std::path::Path, trusted: &mut Vec<String>) {
+    if trusted.is_empty() {
+        return;
+    }
+    let Ok(session_root) = super::project_root(session) else {
+        trusted.clear();
+        return;
+    };
+    if session_root == root {
+        return;
+    }
+    let landed = codeflow_core::hooks::landed_policy::load(&session_root);
+    codeflow_core::hooks::landed_policy::keep_trusted_by(trusted, landed.as_ref());
 }
 
 /// Why the session project's policy keeps a call made from `root` strict:
@@ -852,26 +882,22 @@ fn edit_guard(stdin: &str) -> i32 {
 /// [`GUARD_PR_LOOKUP_SECS`](codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS)
 /// and best-effort: any failure returns `None`, which the guard treats as
 /// doubt and blocks.
+/// The base branch of the pull request `arg` names, asked of `gh` within
+/// the guard's lookup wait. `gh` and anything it starts end with its
+/// process group when the wait ends or the guard exits (TSK-327); no
+/// answer leaves the base unproven.
 fn gh_pr_base(arg: &str) -> Option<String> {
-    let arg = arg.to_string();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(gh_pr_base_blocking(&arg));
-    });
-    rx.recv_timeout(std::time::Duration::from_secs(
-        codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS,
-    ))
-    .unwrap_or(None)
-}
-
-fn gh_pr_base_blocking(arg: &str) -> Option<String> {
     let mut cmd = std::process::Command::new("gh");
     cmd.args(["pr", "view"]);
     if !arg.is_empty() {
         cmd.arg(arg);
     }
     cmd.args(["--json", "baseRefName", "-q", ".baseRefName"]);
-    let out = cmd.output().ok()?;
+    let out = codeflow_core::git::remote_query::bounded_output(
+        cmd,
+        std::time::Duration::from_secs(codeflow_core::hooks::guard_deadline::GUARD_PR_LOOKUP_SECS),
+    )
+    .ok()?;
     if !out.status.success() {
         return None;
     }

@@ -422,6 +422,13 @@ fn cf_builder_home_writes_are_only_the_lock_folder() {
             .any(|(key, value)| key.starts_with("~/.codeflow") && value.as_str() == Some("write")),
         "cf-guard grants a CodeFlow home folder"
     );
+    // TSK-1057: the guards read the policy baselines and the SSH allow
+    // there, so the directory is granted read, never write.
+    assert_eq!(
+        guard.get("~/.codeflow/authority").and_then(|v| v.as_str()),
+        Some("read"),
+        "cf-guard does not grant read of the authority directory"
+    );
     let roots = fs[":workspace_roots"].as_table().unwrap();
     assert_eq!(roots[".git"].as_str(), Some("write"));
     assert_eq!(roots[".git/hooks"].as_str(), Some("read"));
