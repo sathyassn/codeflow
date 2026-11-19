@@ -1055,7 +1055,7 @@ pub(super) fn probe_arithmetic_words(words: &[String], zsh_operands: bool) -> bo
         .take_while(|word| word.contains('='))
         .any(|word| {
             word.split_once('=')
-                .is_some_and(|(name, _)| expands(name) || name.contains('['))
+                .is_some_and(|(name, _)| super::expands_marked(name) || name.contains('['))
         })
     {
         return true;
@@ -1078,9 +1078,9 @@ pub(super) fn probe_arithmetic_words(words: &[String], zsh_operands: bool) -> bo
         "[[" | "[" | "test" => {
             args.iter()
                 .any(|word| matches!(word.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge"))
-                || args
-                    .windows(2)
-                    .any(|pair| pair[0] == "-v" && (expands(&pair[1]) || pair[1].contains('[')))
+                || args.windows(2).any(|pair| {
+                    pair[0] == "-v" && (super::expands_marked(&pair[1]) || pair[1].contains('['))
+                })
         }
         "printf" | "read" | "mapfile" | "readarray" | "unset" | "getopts" => {
             args.iter().any(|word| word.contains('['))

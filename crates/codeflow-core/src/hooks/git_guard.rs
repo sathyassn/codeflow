@@ -1885,14 +1885,13 @@ fn output_value_multiple_words(word: &str) -> bool {
         return true;
     }
     let mut chars = word.chars();
+    let mut dollar_parameter_next = false;
     while let Some(ch) = chars.next() {
+        let dollar_parameter_character = std::mem::take(&mut dollar_parameter_next);
         match marked_char(ch) {
             Some(('`', true)) => return true,
             Some(('$', true)) => {
                 let tail = unmarked(chars.as_str());
-                if tail.starts_with(['@', '*', '(', '=']) {
-                    return true;
-                }
                 if let Some(braced) = tail.strip_prefix('{') {
                     // Only a simple quoted scalar has a settled word count.
                     if !braced
@@ -1901,6 +1900,26 @@ fn output_value_multiple_words(word: &str) -> bool {
                     {
                         return true;
                     }
+                } else {
+                    // Keep the earlier conservative reading of the second
+                    // character of a scalar special parameter.
+                    if dollar_parameter_character {
+                        if tail.starts_with(['@', '*', '(', '=']) {
+                            return true;
+                        }
+                        continue;
+                    }
+                    let end = tail
+                        .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .unwrap_or(tail.len());
+                    let plain_name = is_identifier(&tail[..end]) && !tail[end..].starts_with('[');
+                    let special = tail.chars().next().is_some_and(|ch| {
+                        ch.is_ascii_digit() || matches!(ch, '#' | '?' | '$' | '!' | '-')
+                    });
+                    if !plain_name && !special {
+                        return true;
+                    }
+                    dollar_parameter_next = special && tail.starts_with('$');
                 }
             }
             _ => {}
