@@ -511,10 +511,6 @@ WINDOWS_VERDICT_JOB = """\
 """
 
 
-# TSK-1242: the switch is the one value of this job that may differ, off or on.
-# A pull request into an integration line takes the reduced tier only when it
-# is on; any other value, base or event takes the full tier.
-TIER_SWITCH = re.compile(r'^( {10}REDUCED_TIER: )"(?:on|off)"$', re.M)
 def windows_tier_problems(workflow: str) -> list[str]:
     """Hash partitions have no reduced tier or tier-dependent skip."""
     jobs = workflow_jobs(workflow)
